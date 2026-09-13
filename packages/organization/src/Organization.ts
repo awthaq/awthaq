@@ -969,9 +969,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const afterRemoveTeamMember = yield* OrganizationHooks.AfterRemoveTeamMember;
 
       /** Static statements plus, when dynamic access control is enabled, every custom role this organization has defined. */
-      const statementsByRole = (
-        organizationId: string,
-      ): Effect.Effect<ReadonlyMap<string, PermissionEngine.Statements>> =>
+      const statementsByRole = (organizationId: string) =>
         orgConfig.dynamicAccessControl.enabled
           ? orgRoles.listByOrganization(organizationId).pipe(
               Effect.map((rows) => {
@@ -988,7 +986,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const effectivePermissionsOf = (
         organizationId: string,
         membership: MembershipRecords.MembershipRecord,
-      ): Effect.Effect<PermissionEngine.Statements> =>
+      ) =>
         statementsByRole(organizationId).pipe(
           Effect.map((byRole) => PermissionEngine.effectivePermissions(membership.role, byRole)),
         );
@@ -999,10 +997,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         organizationId: string,
         resource: string,
         action: string,
-      ): Effect.Effect<
-        MembershipRecords.MembershipRecord,
-        OrganizationApi.OrganizationPermissionDenied
-      > =>
+      ) =>
         Effect.gen(function* () {
           const membership = yield* members.findByUserAndOrg(callerId, organizationId);
           if (Option.isNone(membership)) {
@@ -1016,13 +1011,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         });
 
       /** Fails `OrganizationPermissionDenied` if the caller isn't a member — no statement check, for read endpoints any member may use. */
-      const requireMembership = (
-        callerId: Users.UserId,
-        organizationId: string,
-      ): Effect.Effect<
-        MembershipRecords.MembershipRecord,
-        OrganizationApi.OrganizationPermissionDenied
-      > =>
+      const requireMembership = (callerId: Users.UserId, organizationId: string) =>
         members.findByUserAndOrg(callerId, organizationId).pipe(
           Effect.flatMap(
             Option.match({
@@ -1032,12 +1021,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           ),
         );
 
-      const requireOrganization = (
-        organizationId: string,
-      ): Effect.Effect<
-        OrganizationRecords.OrganizationRecord,
-        OrganizationApi.OrganizationNotFound
-      > =>
+      const requireOrganization = (organizationId: string) =>
         orgs.findById(organizationId).pipe(
           Effect.flatMap(
             Option.match({
@@ -1333,9 +1317,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         return membership;
       });
 
-      const activeOrganizationOf = (
-        caller: Api.UserPrincipal,
-      ): Effect.Effect<string, OrganizationApi.NoActiveOrganization> =>
+      const activeOrganizationOf = (caller: Api.UserPrincipal) =>
         activeContext.findBySessionId(caller.sessionId).pipe(
           Effect.map(Option.flatMap((row) => row.activeOrganizationId)),
           Effect.flatMap(
@@ -1483,12 +1465,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         },
       );
 
-      const requirePendingInvitation = (
-        invitationId: string,
-      ): Effect.Effect<
-        InvitationRecords.InvitationRecord,
-        OrganizationApi.InvitationNotFound | OrganizationApi.InvitationNotPending
-      > =>
+      const requirePendingInvitation = (invitationId: string) =>
         invitations.findById(invitationId).pipe(
           Effect.flatMap(
             Option.match({
@@ -1704,10 +1681,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         },
       );
 
-      const requireOrgRole = (
-        organizationId: string,
-        roleId: string,
-      ): Effect.Effect<OrgRoleRecords.OrgRoleRecord, OrganizationApi.OrgRoleNotFound> =>
+      const requireOrgRole = (organizationId: string, roleId: string) =>
         orgRoles.findById(organizationId, roleId).pipe(
           Effect.flatMap(
             Option.match({
@@ -1791,10 +1765,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         ? Effect.void
         : Effect.fail(new OrganizationApi.TeamsDisabled());
 
-      const requireTeam = (
-        organizationId: string,
-        teamId: string,
-      ): Effect.Effect<TeamRecords.TeamRecord, OrganizationApi.TeamNotFound> =>
+      const requireTeam = (organizationId: string, teamId: string) =>
         teams.findTeamById(organizationId, teamId).pipe(
           Effect.flatMap(
             Option.match({

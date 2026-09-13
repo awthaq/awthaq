@@ -440,7 +440,7 @@ export const layerSql = Layer.effect(
         `,
     });
 
-    const adjustMemberCount = (teamId: string, delta: number): Effect.Effect<void> =>
+    const adjustMemberCount = (teamId: string, delta: number) =>
       sql`UPDATE organization_team SET memberCount = memberCount + ${delta} WHERE id = ${teamId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
