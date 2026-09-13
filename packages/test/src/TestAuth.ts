@@ -5,13 +5,12 @@
 // **What is deliberately not built here, and why:**
 // - BEH-EA-193's "permissive `RateLimiter`" is wired in below
 //   (`RateLimiter.layerPermissive`, `@effect-auth/ports`'s own BEH-EA-112
-//   default) now that the port exists; `RateLimits.ts` (`@effect-auth/core`,
-//   the per-plugin rule *registry* half) exists too, but `TestAuth.layer`
-//   does not provide `RateLimits.layer` for it — no plugin built so far
-//   calls `RateLimits.rule`, so there is nothing yet for a test to need a
-//   registry instance for; a plugin that starts calling it will need
-//   `TestAuth.layer` to grow a `RateLimits.layer` the same way this change
-//   grew `RateLimiter.layerPermissive` in.
+//   default). `RateLimits.layer` (`@effect-auth/core`'s per-plugin rule
+//   *registry* half) is provided too, as of the shipping-gap map's ticket
+//   12 — `Password` is the first real `RateLimits.rule` consumer, so
+//   building `Password.layer` (and, by extension, `TestAuth.layer(built)`
+//   for any composition that includes it) now genuinely needs a
+//   `RateLimitsRegistry` instance to register into.
 // - BEH-EA-194 (`TestClock`) and BEH-EA-195 (`Layer.mock`) are `effect`'s own
 //   exports, not effect-auth's — nothing to wrap; a test simply imports them
 //   directly (`effect/testing/TestClock`, `effect/Layer`).
@@ -58,7 +57,7 @@
 // caller that has installed `Roles` passes `onSignedUp: (userId) =>
 // roles.assign(userId, "member")`; `signInAs` runs it, if given, right after
 // issuing the user and before minting the session.
-import { Accounts, Auth, AuthPlugin, Sessions, Users } from "@effect-auth/core";
+import { Accounts, Auth, AuthPlugin, RateLimits, Sessions, Users } from "@effect-auth/core";
 import { Mailer, RateLimiter } from "@effect-auth/ports";
 import { AuthHttp } from "@effect-auth/server";
 import { NodeCrypto } from "@effect/platform-node";
@@ -76,7 +75,11 @@ import * as HttpServer from "effect/unstable/http/HttpServer";
  * `RateLimiter.layerPermissive` (BEH-EA-112) is included too — a test that
  * signs in fifty times in a loop shouldn't fail for a reason unrelated to
  * what it's testing; see this module's own header comment for what
- * BEH-EA-193's rate-limiting piece still leaves out.
+ * BEH-EA-193's rate-limiting piece still leaves out. `RateLimits.layer`
+ * (the registry half, `@effect-auth/core`) rides along in the same merge —
+ * it's not a "port," but every plugin composition needs it satisfied the
+ * same way, and a second, separately-named layer here would be a
+ * distinction with no practical difference for callers of this module.
  */
 const MemoryPorts = Layer.mergeAll(
   Users.layerMemory,
@@ -84,6 +87,7 @@ const MemoryPorts = Layer.mergeAll(
   Sessions.layerMemory,
   Mailer.layerMemory,
   RateLimiter.layerPermissive,
+  RateLimits.layer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 /**

@@ -120,20 +120,24 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // (`HttpApiEndpoint.ts`'s own `getErrorResponse`); a `Schema.Union`
       // here would be stored as a single member whose own AST carries no
       // `httpApiStatus` annotation, silently falling back to 500.
-      error: [WeakPassword, EmailAlreadyExists],
+      // Shipping-gap map (.scratch/shipping-gaps), ticket 12: rate-limited.
+      error: [WeakPassword, EmailAlreadyExists, Api.RateLimited],
     }),
   )
   .add(
     HttpApiEndpoint.post("signIn", "/password/sign-in", {
       payload: SignInPayload,
       success: SessionContract.SessionDto,
-      error: Api.InvalidCredentials,
+      // Ticket 12: rate-limited.
+      error: [Api.InvalidCredentials, Api.RateLimited],
     }),
   )
   .add(
     HttpApiEndpoint.post("requestReset", "/password/request-reset", {
       payload: RequestResetPayload,
       success: HttpApiSchema.Empty(202),
+      // Ticket 12: rate-limited.
+      error: Api.RateLimited,
     }),
   )
   .add(
@@ -142,7 +146,8 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // BEH-EA-120: the new password is checked against the same policy
       // (`minLength`/`breachCheck`) any other newly-set password is. A
       // plain array, not `Schema.Union` — see `signUp`'s own comment above.
-      error: [TokenConsumed, WeakPassword],
+      // Ticket 12: rate-limited.
+      error: [TokenConsumed, WeakPassword, Api.RateLimited],
     }),
   )
   .add(

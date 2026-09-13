@@ -17,8 +17,8 @@
 // only actually runs as part of the full handled-request lifecycle
 // (`HttpEffect.toHandled`'s `sendResponse`), which `toWebHandler` goes
 // through and a bare `router.asHttpEffect()` call does not.
-import { AuthEvents, Sessions, Users, Verification, Accounts } from "@effect-auth/core";
-import { Mailer, PasswordHasher } from "@effect-auth/ports";
+import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@effect-auth/core";
+import { Mailer, PasswordHasher, RateLimiter } from "@effect-auth/ports";
 import { Authentication, AuthHttp } from "@effect-auth/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
@@ -71,10 +71,11 @@ const buildAppLayer = (mailerLayer: Layer.Layer<Mailer.Mailer>) =>
     Layer.provideMerge(AuthenticationLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
-      Layer.mergeAll(PasswordHasher.layerArgon2id, mailerLayer).pipe(
+      Layer.mergeAll(PasswordHasher.layerArgon2id, mailerLayer, RateLimiter.layerPermissive).pipe(
         Layer.provideMerge(NodeCrypto.layer),
       ),
     ),
+    Layer.provideMerge(RateLimits.layer),
     Layer.provide(NoBreachHttpClient),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),

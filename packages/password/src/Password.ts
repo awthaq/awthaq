@@ -8,8 +8,16 @@
 // silently die or guessed at without a comment explaining the choice.
 
 import { Api, SessionContract } from "@effect-auth/api";
-import { AuthEvents, AuthPlugin, Accounts, Sessions, Users, Verification } from "@effect-auth/core";
-import { Mailer, PasswordHasher } from "@effect-auth/ports";
+import {
+  AuthEvents,
+  AuthPlugin,
+  Accounts,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@effect-auth/core";
+import { Mailer, PasswordHasher, RateLimiter } from "@effect-auth/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -56,19 +64,24 @@ export interface PasswordShape {
   readonly signUp: (input: {
     readonly email: string;
     readonly password: Redacted.Redacted<string>;
-  }) => Effect.Effect<IssuedSession, PasswordApi.WeakPassword | PasswordApi.EmailAlreadyExists>;
+  }) => Effect.Effect<
+    IssuedSession,
+    PasswordApi.WeakPassword | PasswordApi.EmailAlreadyExists | Api.RateLimited
+  >;
   /** BEH-EA-114/116: uniform `InvalidCredentials`, constant real hashing cost regardless of which of the three reasons applied; rehashes opportunistically on success. */
   readonly signIn: (input: {
     readonly email: string;
     readonly password: Redacted.Redacted<string>;
-  }) => Effect.Effect<IssuedSession, Api.InvalidCredentials>;
+  }) => Effect.Effect<IssuedSession, Api.InvalidCredentials | Api.RateLimited>;
   /** BEH-EA-064/117: identical response whether or not `email` resolves to an account — the caller (the HTTP handler) always answers 202. */
-  readonly requestReset: (input: { readonly email: string }) => Effect.Effect<void>;
+  readonly requestReset: (input: {
+    readonly email: string;
+  }) => Effect.Effect<void, Api.RateLimited>;
   /** BEH-EA-117: consumes the reset token and sets the new password in one call, then revokes every other session. */
   readonly confirmReset: (input: {
     readonly token: Redacted.Redacted<string>;
     readonly password: Redacted.Redacted<string>;
-  }) => Effect.Effect<void, PasswordApi.TokenConsumed | PasswordApi.WeakPassword>;
+  }) => Effect.Effect<void, PasswordApi.TokenConsumed | PasswordApi.WeakPassword | Api.RateLimited>;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 08: consumes the
    * verify-email token `signUp` already dispatches and flips
@@ -94,6 +107,26 @@ export interface PasswordShape {
 
 const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+/**
+ * Shipping-gap map (.scratch/shipping-gaps), ticket 12: one rule per
+ * rate-limited endpoint — mirrors `usage-examples-v4.md` §16's own worked
+ * `signin:${email}` example for `signIn`'s numbers exactly. Every rule
+ * here keys on identity/email, never IP: this codebase has no client-IP-
+ * extraction mechanism anywhere yet (no handler threads a request's
+ * origin into a domain capability today), and building one speculatively
+ * for this one rate-limit key would be exactly the kind of unrequested
+ * infrastructure this codebase's own standing preference warns against.
+ * IP-based keying (ticket 02's own "sign-in keys on both identity and
+ * IP") is real follow-on work, not silently dropped — tracked, not built
+ * here.
+ */
+const RATE_LIMITS = {
+  signUp: { limit: 5, window: Duration.hours(1) },
+  signIn: { limit: 5, window: Duration.minutes(15) },
+  requestReset: { limit: 5, window: Duration.minutes(15) },
+  confirmReset: { limit: 5, window: Duration.minutes(15) },
+} as const satisfies Record<string, { readonly limit: number; readonly window: Duration.Duration }>;
 
 /**
  * The mailed reset/verification link's token embeds `Verification`'s own
@@ -296,6 +329,58 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const config = yield* PasswordConfig;
       const crypto = yield* Crypto.Crypto;
       const httpClient = yield* HttpClient.HttpClient;
+      const limiter = yield* RateLimiter.RateLimiter;
+      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
+
+      /**
+       * Ticket 12: registers this plugin's own limits into the
+       * introspectable registry (BEH-EA-107/110/111) — declarative,
+       * matching the `limit`/`window` each `rateLimit(...)` call below
+       * actually enforces (`RATE_LIMITS` is the single source of truth
+       * both sides draw from). A `RateLimitScopeViolation` here is only
+       * reachable if `group` below ever named something other than this
+       * plugin's own `"password"` contract group — a coding defect in
+       * this file, not a condition any caller composing `Password` could
+       * trigger, hence `Effect.orDie` rather than adding it to this
+       * plugin's own public error surface.
+       */
+      yield* Effect.all(
+        (
+          [
+            {
+              endpoint: "signUp",
+              key: (input) => `password:signup:${(input as { readonly email: string }).email}`,
+              ...RATE_LIMITS.signUp,
+            },
+            {
+              endpoint: "signIn",
+              key: (input) => `password:signin:${(input as { readonly email: string }).email}`,
+              ...RATE_LIMITS.signIn,
+            },
+            {
+              endpoint: "requestReset",
+              key: (input) =>
+                `password:reset-request:${(input as { readonly email: string }).email}`,
+              ...RATE_LIMITS.requestReset,
+            },
+            {
+              endpoint: "confirmReset",
+              // Keyed on the token's own decoded identifier at enforcement
+              // time, not a payload field — this description is necessarily
+              // approximate.
+              key: (input) => `password:reset-confirm:${JSON.stringify(input)}`,
+              ...RATE_LIMITS.confirmReset,
+            },
+          ] satisfies ReadonlyArray<{
+            readonly endpoint: string;
+            readonly key: RateLimits.RateLimitKey;
+            readonly limit: number;
+            readonly window: Duration.Duration;
+          }>
+        ).map((rule): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
+          rateLimitsRegistry.register(Password, { group: "password", ...rule }),
+        ),
+      ).pipe(Effect.orDie);
 
       // BEH-EA-114: paid once at boot, not once per unsuccessful attempt —
       // a real PHC/scrypt-encoded string this plugin's own configured
@@ -306,7 +391,29 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         yield* hasher.hash(Redacted.make("effect-auth/password/dummy")),
       );
 
+      /**
+       * Ticket 12: every call site below passes its own `key`/`limit`/
+       * `window` from `RATE_LIMITS`, and maps the port's own domain
+       * `RateLimited` (`@effect-auth/ports`) onto the wire-level
+       * `Api.RateLimited` — the same class `PasswordShape`'s own error
+       * unions declare and `PasswordApi`'s endpoints carry, so no separate
+       * mapping is needed again at the HTTP handler layer.
+       */
+      const rateLimit = (
+        key: string,
+        rule: { readonly limit: number; readonly window: Duration.Duration },
+      ): Effect.Effect<void, Api.RateLimited> =>
+        limiter
+          .consume({ key, limit: rule.limit, window: rule.window })
+          .pipe(
+            Effect.catchTag(
+              "RateLimited",
+              (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
+            ),
+          );
+
       const signUp: PasswordShape["signUp"] = Effect.fnUntraced(function* (input) {
+        yield* rateLimit(`password:signup:${input.email.toLowerCase()}`, RATE_LIMITS.signUp);
         const hints = yield* checkPolicy(httpClient, crypto, input.password, config);
         if (hints.length > 0) {
           return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
@@ -352,6 +459,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       });
 
       const signIn: PasswordShape["signIn"] = Effect.fnUntraced(function* (input) {
+        yield* rateLimit(`password:signin:${input.email.toLowerCase()}`, RATE_LIMITS.signIn);
         const userOpt = yield* users.findByEmail(input.email);
         const accountOpt = yield* Option.match(userOpt, {
           onNone: () => Effect.succeed(Option.none<Accounts.AccountRecord>()),
@@ -396,6 +504,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       });
 
       const requestReset: PasswordShape["requestReset"] = Effect.fnUntraced(function* (input) {
+        yield* rateLimit(
+          `password:reset-request:${input.email.toLowerCase()}`,
+          RATE_LIMITS.requestReset,
+        );
         const userOpt = yield* users.findByEmail(input.email);
         // BEH-EA-064: nothing distinguishes this branch from "no such
         // email" in the response either handler produces — only whether
@@ -421,6 +533,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
         }
         const { identifier, value } = decoded.value;
+        // Keyed on the token's own decoded identifier (e.g.
+        // `reset-password:<userId>`) rather than email — already available
+        // for free at this point, and ties the limit to the specific
+        // account the token names, matching `signIn`/`requestReset`'s own
+        // identity-keyed posture without a second lookup.
+        yield* rateLimit(`password:reset-confirm:${identifier}`, RATE_LIMITS.confirmReset);
         yield* verification.consume(identifier, value).pipe(
           Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
           Effect.catchTag("PlatformError", Effect.die),

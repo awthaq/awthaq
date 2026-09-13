@@ -80,6 +80,20 @@ export class InvalidCredentials extends Schema.TaggedError<InvalidCredentials>()
 ) {}
 
 /**
+ * Shipping-gap map (.scratch/shipping-gaps), ticket 12. BEH-EA-106: the
+ * wire counterpart of `@effect-auth/ports`' `RateLimiter.RateLimited` —
+ * `retryAfterMillis` carried as a typed field (not folded into a message
+ * string) so a client can render "try again in n seconds" without parsing
+ * text. Declared here, not per-plugin, since every rate-limited endpoint
+ * across every plugin answers with this same shape.
+ */
+export class RateLimited extends Schema.TaggedError<RateLimited>()(
+  "RateLimited",
+  { retryAfterMillis: Schema.Number },
+  { httpApiStatus: 429 },
+) {}
+
+/**
  * BEH-EA-065: cookie name matches `@effect-auth/core`'s `Sessions.SESSION_COOKIE_NAME`
  * exactly (`api` cannot import `core`, so the literal is repeated here rather
  * than shared — both are `"__Host-session"` by construction, not by convention).

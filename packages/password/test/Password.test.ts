@@ -9,8 +9,8 @@
 // transport (the same category of swap `TestClock` is for time — not a
 // business-logic mock).
 import { createHash } from "node:crypto";
-import { AuthEvents, Sessions, Users, Verification, Accounts } from "@effect-auth/core";
-import { Mailer, PasswordHasher } from "@effect-auth/ports";
+import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@effect-auth/core";
+import { Mailer, PasswordHasher, RateLimiter } from "@effect-auth/ports";
 import { Authentication } from "@effect-auth/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
@@ -57,9 +57,17 @@ const CoreLive = Layer.mergeAll(
   Verification.layerMemory,
 ).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(NodeCrypto.layer));
 
-const PortsLive = Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
-  Layer.provideMerge(NodeCrypto.layer),
-);
+/**
+ * `changePassword` (ticket 11) needs `RateLimiter.layerPermissive` too
+ * (ticket 12's own `rateLimit(...)` call sites use it), same reasoning:
+ * a real, working default so an ordinary test loop never trips a limit
+ * tuned for production, mirroring `TestAuth`'s own default.
+ */
+const PortsLive = Layer.mergeAll(
+  PasswordHasher.layerArgon2id,
+  Mailer.layerMemory,
+  RateLimiter.layerPermissive,
+).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 /**
  * `changePassword` (shipping-gap map, ticket 11) is the one endpoint in
@@ -75,6 +83,7 @@ const TestLayer = Password.Password.layer.pipe(
   Layer.provideMerge(AuthenticationLive),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(PortsLive),
+  Layer.provideMerge(RateLimits.layer),
   Layer.provide(NoBreachHttpClient),
 );
 
@@ -313,6 +322,7 @@ describe("Password", () => {
             Layer.provideMerge(AuthenticationLive),
             Layer.provideMerge(CoreLive),
             Layer.provideMerge(PortsLive),
+            Layer.provideMerge(RateLimits.layer),
             Layer.provide(BreachedHttpClient),
             Layer.provideMerge(Password.config({ breachCheck: true })),
           ),
@@ -332,6 +342,7 @@ describe("Password", () => {
           Layer.provideMerge(AuthenticationLive),
           Layer.provideMerge(CoreLive),
           Layer.provideMerge(PortsLive),
+          Layer.provideMerge(RateLimits.layer),
           Layer.provide(UnavailableHttpClient),
           Layer.provideMerge(Password.config({ breachCheck: true })),
         ),
@@ -350,6 +361,7 @@ describe("Password", () => {
           Layer.provideMerge(AuthenticationLive),
           Layer.provideMerge(CoreLive),
           Layer.provideMerge(PortsLive),
+          Layer.provideMerge(RateLimits.layer),
           Layer.provide(UnavailableHttpClient),
           Layer.provideMerge(Password.config({ breachCheck: { onUnavailable: "reject" } })),
         ),
@@ -407,5 +419,50 @@ describe("Password", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WeakPassword");
     }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "shipping-gaps/12: signIn is actually throttled once its own rule's limit is exceeded",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        yield* password.signUp({ email, password: strongPassword });
+
+        // `RATE_LIMITS.signIn` is `{ limit: 5, window: 15 minutes }` —
+        // exhaust it with wrong-password attempts (each still a real,
+        // uniform-cost `InvalidCredentials` up to the limit), then prove
+        // the 6th is rejected by the limiter itself, before credential
+        // verification ever runs.
+        for (let i = 0; i < 5; i++) {
+          const attempt = yield* password
+            .signIn({ email, password: Redacted.make("wrong password") })
+            .pipe(Effect.flip);
+          assert.strictEqual(attempt._tag, "InvalidCredentials");
+        }
+
+        const throttled = yield* password
+          .signIn({ email, password: Redacted.make("wrong password") })
+          .pipe(Effect.flip);
+        assert.strictEqual(throttled._tag, "RateLimited");
+      }).pipe(
+        // A real, enforcing limiter for this one test — every other test
+        // in this file uses `RateLimiter.layerPermissive` via `TestLayer`'s
+        // own `PortsLive`, deliberately, so this is the one place that
+        // opts back into real enforcement.
+        Effect.provide(
+          Password.Password.layer.pipe(
+            Layer.provideMerge(AuthenticationLive),
+            Layer.provideMerge(CoreLive),
+            Layer.provideMerge(
+              Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
+                Layer.provideMerge(NodeCrypto.layer),
+              ),
+            ),
+            Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
+            Layer.provideMerge(RateLimits.layer),
+            Layer.provide(NoBreachHttpClient),
+          ),
+        ),
+      ),
   );
 });
