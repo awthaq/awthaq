@@ -24,6 +24,7 @@
 //
 // See spec/overview.md for the full package map.
 
+export * as Encryption from "./Encryption.ts";
 export * as KeyProvider from "./KeyProvider.ts";
 export * as Mailer from "./Mailer.ts";
 export * as PasswordHasher from "./PasswordHasher.ts";

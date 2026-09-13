@@ -6,8 +6,11 @@
 // MySQL-backed deployment would use, so a passing test here is evidence
 // against the real encode/decode/SQL round-trip, not just against an
 // in-memory stand-in.
+import { Encryption, KeyProvider } from "@effect-auth/ports";
+import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -28,9 +31,31 @@ const Migrated = Layer.effectDiscard(
   Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
 ).pipe(Layer.provide(SqlLive));
 
+// Shipping-gap map (.scratch/shipping-gaps), ticket 18:
+// `Repositories.AccountsRepositoryLive` now requires `Encryption` — a
+// fixed test key, isolated from the real `process.env`.
+const EncryptionLive = Encryption.layer.pipe(
+  Layer.provide(
+    KeyProvider.layerEnv.pipe(
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { EFFECT_AUTH_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+          }),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
+const AccountsRepositoryLive = Repositories.AccountsRepositoryLive.pipe(
+  Layer.provide(EncryptionLive),
+);
+
 const RepositoriesLive = Layer.mergeAll(
   Repositories.UsersRepositoryLive,
-  Repositories.AccountsRepositoryLive,
+  AccountsRepositoryLive,
   Repositories.SessionsRepositoryLive,
   Repositories.VerificationRepositoryLive,
   Repositories.VerificationReservationsRepositoryLive,
@@ -90,6 +115,50 @@ describe("Repositories", () => {
         assert.notProperty(json, "passwordHash");
         assert.notProperty(json, "accessToken");
         assert.notProperty(json, "refreshToken");
+      }).pipe(Effect.provide(RepositoriesLive)),
+  );
+
+  it.effect(
+    "Ticket 18: accessToken/refreshToken round-trip through the repository, but the raw persisted bytes are not the plaintext",
+    () =>
+      Effect.gen(function* () {
+        const accounts = yield* Repositories.AccountsRepository;
+        const users = yield* Repositories.UsersRepository;
+        const sql = yield* SqlClient.SqlClient;
+        const user = yield* users.insert(
+          yield* Models.User.insert.makeEffect({ email: "encrypted@example.com", name: "Enc" }),
+        );
+        const account = yield* accounts.insert(
+          yield* Models.Account.insert.makeEffect({
+            userId: user.id,
+            providerId: "github",
+            subject: "gh-encrypted",
+            issuer: "",
+            passwordHash: null,
+            accessToken: "plaintext-access-token",
+            refreshToken: "plaintext-refresh-token",
+          }),
+        );
+        // Transparent to this repository's own interface: `insert` handed
+        // back the original plaintext, decrypted.
+        assert.strictEqual(account.accessToken, "plaintext-access-token");
+        assert.strictEqual(account.refreshToken, "plaintext-refresh-token");
+
+        // `findById` decrypts too, not just `insert`'s own return value.
+        const reread = yield* accounts.findById(account.id);
+        assert.strictEqual(reread.accessToken, "plaintext-access-token");
+        assert.strictEqual(reread.refreshToken, "plaintext-refresh-token");
+
+        // But the actual bytes on disk are demonstrably not the plaintext —
+        // a raw query bypassing this repository's own decrypt step.
+        const rows = yield* sql<{
+          readonly accessToken: string;
+          readonly refreshToken: string;
+        }>`SELECT accessToken, refreshToken FROM accounts WHERE id = ${account.id}`;
+        const row = rows[0];
+        assert.isDefined(row);
+        assert.notInclude(row?.accessToken, "plaintext-access-token");
+        assert.notInclude(row?.refreshToken, "plaintext-refresh-token");
       }).pipe(Effect.provide(RepositoriesLive)),
   );
 

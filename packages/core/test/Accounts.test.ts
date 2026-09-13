@@ -3,10 +3,12 @@
 // The same contract suite runs against both `Layer`s — `layerMemory` (a
 // `Ref`) and `layerSql` (a real, in-memory SQLite database via
 // `@effect/sql-sqlite-node`).
+import { Encryption, KeyProvider } from "@effect-auth/ports";
 import { Repositories } from "@effect-auth/sql";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -17,6 +19,25 @@ import { Accounts, Users } from "../src/index.ts";
 const MemoryLayer = Accounts.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+
+// Shipping-gap map (.scratch/shipping-gaps), ticket 18:
+// `Repositories.AccountsRepositoryLive` now requires `Encryption` to
+// encrypt/decrypt `accessToken`/`refreshToken` transparently — a fixed
+// test key, isolated from the real `process.env` via `ConfigProvider.fromEnv`.
+const EncryptionLive = Encryption.layer.pipe(
+  Layer.provide(
+    KeyProvider.layerEnv.pipe(
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { EFFECT_AUTH_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+          }),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
 
 const Migrated = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -44,7 +65,7 @@ const Migrated = Layer.effectDiscard(
 ).pipe(Layer.provide(SqlLive));
 
 const SqlTestLayer = Accounts.layerSql.pipe(
-  Layer.provide(Repositories.AccountsRepositoryLive),
+  Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );

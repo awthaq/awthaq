@@ -10,12 +10,14 @@
 // commit together (BEH-EA-058). Every paginated query takes an opaque
 // `(createdAt, id)` cursor, never an offset (BEH-EA-036).
 
+import { Encryption } from "@effect-auth/ports";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { SqlClient, SqlModel, SqlSchema } from "effect/unstable/sql";
 import type { SqlError } from "effect/unstable/sql/SqlError";
@@ -138,49 +140,167 @@ export class AccountsRepository extends Context.Service<
   AccountsRepositoryShape
 >()("effect-auth/sql/AccountsRepository") {}
 
-export const AccountsRepositoryLive: Layer.Layer<AccountsRepository, never, SqlClient.SqlClient> =
-  Layer.effect(
-    AccountsRepository,
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const repo = yield* SqlModel.makeRepository(Account, {
-        tableName: "accounts",
-        spanPrefix: "Accounts",
-        idColumn: "id",
+/**
+ * Shipping-gap map (.scratch/shipping-gaps), ticket 18: `accessToken`/
+ * `refreshToken` are encrypted at rest via `@effect-auth/ports`'
+ * `Encryption`, transparently to every caller of this repository —
+ * `AccountsRepositoryShape` itself is unchanged, still taking/returning
+ * the same plain nullable strings `Model.Sensitive` already types them
+ * as; only the bytes actually written to `accounts.accessToken`/
+ * `accounts.refreshToken` differ. AAD binds each ciphertext to the
+ * specific row *and* column it belongs to (`providerId:userId:field`),
+ * per ticket 18's own requirement that ciphertext can't be silently
+ * swapped between rows (or between the access- and refresh-token columns
+ * of the very same row) undetected.
+ */
+const tokenAad = (
+  providerId: string,
+  userId: string,
+  field: "accessToken" | "refreshToken",
+): string => `${providerId}:${userId}:${field}`;
+
+export const AccountsRepositoryLive: Layer.Layer<
+  AccountsRepository,
+  never,
+  SqlClient.SqlClient | Encryption.Encryption
+> = Layer.effect(
+  AccountsRepository,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const encryption = yield* Encryption.Encryption;
+    const repo = yield* SqlModel.makeRepository(Account, {
+      tableName: "accounts",
+      spanPrefix: "Accounts",
+      idColumn: "id",
+    });
+
+    const encryptToken = (
+      providerId: string,
+      userId: string,
+      field: "accessToken" | "refreshToken",
+      value: string | null,
+    ): Effect.Effect<string | null> =>
+      value === null
+        ? Effect.succeed(null)
+        : encryption.encrypt(Redacted.make(value), tokenAad(providerId, userId, field));
+
+    const decryptToken = (
+      providerId: string,
+      userId: string,
+      field: "accessToken" | "refreshToken",
+      value: string | null,
+    ): Effect.Effect<string | null> =>
+      value === null
+        ? Effect.succeed(null)
+        : encryption
+            .decrypt(value, tokenAad(providerId, userId, field))
+            .pipe(Effect.map(Redacted.value), Effect.orDie);
+
+    const decryptRow = (row: Account): Effect.Effect<Account> =>
+      Effect.gen(function* () {
+        const accessToken = yield* decryptToken(
+          row.providerId,
+          row.userId,
+          "accessToken",
+          row.accessToken,
+        );
+        const refreshToken = yield* decryptToken(
+          row.providerId,
+          row.userId,
+          "refreshToken",
+          row.refreshToken,
+        );
+        return Account.make({ ...row, accessToken, refreshToken });
       });
 
-      const findByProviderSubject = SqlSchema.findOneOption({
-        Request: Schema.Struct({
-          providerId: Schema.String,
-          subject: Schema.String,
-          issuer: Schema.String,
-        }),
-        Result: Account,
-        execute: (request) =>
-          sql`SELECT * FROM accounts WHERE providerId = ${request.providerId} AND subject = ${request.subject} AND issuer = ${request.issuer}`,
+    const insert: AccountsRepositoryShape["insert"] = (input) =>
+      Effect.gen(function* () {
+        const accessToken = yield* encryptToken(
+          input.providerId,
+          input.userId,
+          "accessToken",
+          input.accessToken,
+        );
+        const refreshToken = yield* encryptToken(
+          input.providerId,
+          input.userId,
+          "refreshToken",
+          input.refreshToken,
+        );
+        const row = yield* repo.insert({ ...input, accessToken, refreshToken });
+        return yield* decryptRow(row);
       });
 
-      const listByUser = SqlSchema.findAll({
-        Request: UserId,
-        Result: Account,
-        execute: (userId) => sql`SELECT * FROM accounts WHERE userId = ${userId}`,
+    const update: AccountsRepositoryShape["update"] = (input) =>
+      Effect.gen(function* () {
+        // A vanished row between the caller's own existence check and this
+        // call is an unexpected condition — `update`'s own contract has
+        // always presupposed the row still exists (see
+        // `AccountsShape.updateCredentialHash`'s own `repo.findById` call
+        // in `@effect-auth/core`) — not a new recoverable outcome this
+        // repository method's signature needs to grow a case for.
+        const existing = yield* repo
+          .findById(input.id)
+          .pipe(Effect.catchTag("NoSuchElementError", Effect.die));
+        const accessToken = yield* encryptToken(
+          existing.providerId,
+          existing.userId,
+          "accessToken",
+          input.accessToken,
+        );
+        const refreshToken = yield* encryptToken(
+          existing.providerId,
+          existing.userId,
+          "refreshToken",
+          input.refreshToken,
+        );
+        const row = yield* repo.update({ ...input, accessToken, refreshToken });
+        return yield* decryptRow(row);
       });
 
-      const deleteAllByUser: AccountsRepositoryShape["deleteAllByUser"] = (userId) =>
-        sql`DELETE FROM accounts WHERE userId = ${userId}`.pipe(Effect.asVoid);
+    const findById: AccountsRepositoryShape["findById"] = (id) =>
+      repo.findById(id).pipe(Effect.flatMap(decryptRow));
 
-      return {
-        insert: repo.insert,
-        update: repo.update,
-        findById: repo.findById,
-        delete: repo.delete,
-        findByProviderSubject: (providerId, subject, issuer) =>
-          findByProviderSubject({ providerId, subject, issuer }),
-        listByUser,
-        deleteAllByUser,
-      };
-    }),
-  );
+    const findByProviderSubject = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        providerId: Schema.String,
+        subject: Schema.String,
+        issuer: Schema.String,
+      }),
+      Result: Account,
+      execute: (request) =>
+        sql`SELECT * FROM accounts WHERE providerId = ${request.providerId} AND subject = ${request.subject} AND issuer = ${request.issuer}`,
+    });
+
+    const listByUser = SqlSchema.findAll({
+      Request: UserId,
+      Result: Account,
+      execute: (userId) => sql`SELECT * FROM accounts WHERE userId = ${userId}`,
+    });
+
+    const deleteAllByUser: AccountsRepositoryShape["deleteAllByUser"] = (userId) =>
+      sql`DELETE FROM accounts WHERE userId = ${userId}`.pipe(Effect.asVoid);
+
+    return {
+      insert,
+      update,
+      findById,
+      delete: repo.delete,
+      findByProviderSubject: (providerId, subject, issuer) =>
+        findByProviderSubject({ providerId, subject, issuer }).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.succeedNone,
+              onSome: (row) => decryptRow(row).pipe(Effect.map(Option.some)),
+            }),
+          ),
+        ),
+      listByUser: (userId) =>
+        listByUser(userId).pipe(Effect.flatMap((rows) => Effect.forEach(rows, decryptRow))),
+      deleteAllByUser,
+    };
+  }),
+);
 
 // ---- Sessions -----------------------------------------------------------
 
