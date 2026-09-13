@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-RMP |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed gate-count and M7 Bearer omission; clarified milestone-to-gate mapping (gates cluster at M0/M1/M6/M8, other milestones certified retroactively); reworded M0 to not overclaim gate 5's mechanized proof (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed gate-count and M7 Bearer omission; clarified milestone-to-gate mapping (gates cluster at M0/M1/M6/M8, other milestones certified retroactively); reworded M0 to not overclaim gate 5's mechanized proof (CCR-EA-002) <br> 1.2 (2026-09-14): Replaced the stale "pre-implementation, no source exists" current-state line — implementation has since progressed through M4 and beyond; pointed readers to `README.md` and the shipping-gaps map instead of restating a milestone checklist here |
 
 ---
 
-Current state: pre-implementation, spec-first. No package has been published; no line of source exists. This specification is the only artifact.
+Current state: this specification remains the normative source of *why* things are built the way they are, but it is no longer the only artifact — `packages/` has a real, tested implementation of every milestone through M4 (Core, Password, the qadi bridge, OAuth and Passkey), plus Organization, Admin, and Jwt beyond the milestones originally scoped here, and partial progress on M6/M8's tooling and release gates. No package is published to npm yet (`README.md`'s own "Publishing status" section). This document still records the milestone plan and each phase's done-criteria; for what has actually shipped, see the root [`README.md`](../README.md) and, for the most recent gap-closure pass against this roadmap, [`.scratch/shipping-gaps/map.md`](../.scratch/shipping-gaps/map.md) — that map, not a milestone checklist restated here, is what stays current as work lands.
 
 This document restates the milestone roadmap of `archive/PRD.md` §23 as this specification's own phases, records what gates each phase must pass once `spec/process/definitions-of-done.md` exists to enforce them, and carries forward the open decisions of `archive/PRD.md` §25 and the non-goals of `archive/PRD.md` §4 as things this roadmap deliberately does not resolve or include.
 
