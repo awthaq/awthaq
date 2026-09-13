@@ -35,9 +35,13 @@
     "@effect-auth/ports": "workspace:*",
     "@effect-auth/server": "workspace:*",
     "@effect-auth/sql": "workspace:*",
+    "@qadi/core": "^0.6.2",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect-auth/test": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

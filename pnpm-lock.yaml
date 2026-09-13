@@ -416,10 +416,22 @@ importers:
       '@effect-auth/sql':
         specifier: workspace:*
         version: link:../sql
+      '@qadi/core':
+        specifier: ^0.6.2
+        version: 0.6.2
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.115
     devDependencies:
+      '@effect-auth/test':
+        specifier: workspace:*
+        version: link:../test
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.115(effect@4.0.0-rc.115)(redis@6.2.1)
+      '@effect/sql-sqlite-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.115(effect@4.0.0-rc.115)
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.115(effect@4.0.0-rc.115)(vitest@5.0.0)

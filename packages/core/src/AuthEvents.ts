@@ -79,6 +79,136 @@ export interface AdminImpersonationDeniedEvent {
   readonly adminUserId: UserId;
 }
 
+/** Published by `@effect-auth/organization`'s `create`. */
+export interface OrganizationCreatedEvent {
+  readonly _tag: "auth.organization.created";
+  readonly organizationId: string;
+  readonly creatorUserId: UserId;
+}
+
+/** Published by `@effect-auth/organization`'s `update`. */
+export interface OrganizationUpdatedEvent {
+  readonly _tag: "auth.organization.updated";
+  readonly organizationId: string;
+}
+
+/** Published by `@effect-auth/organization`'s `delete`. */
+export interface OrganizationDeletedEvent {
+  readonly _tag: "auth.organization.deleted";
+  readonly organizationId: string;
+}
+
+/** Published by `@effect-auth/organization`'s `create` (the creator's own membership) and `addMember`. */
+export interface OrganizationMemberAddedEvent {
+  readonly _tag: "auth.organization.memberAdded";
+  readonly organizationId: string;
+  readonly userId: UserId;
+  readonly role: ReadonlyArray<string>;
+}
+
+/** Published by `@effect-auth/organization`'s `removeMember`/`leave`. */
+export interface OrganizationMemberRemovedEvent {
+  readonly _tag: "auth.organization.memberRemoved";
+  readonly organizationId: string;
+  readonly userId: UserId;
+}
+
+/** Published by `@effect-auth/organization`'s `updateMemberRole`. */
+export interface OrganizationMemberRoleUpdatedEvent {
+  readonly _tag: "auth.organization.memberRoleUpdated";
+  readonly organizationId: string;
+  readonly userId: UserId;
+  readonly role: ReadonlyArray<string>;
+}
+
+/** Published by `@effect-auth/organization`'s `invite`. */
+export interface OrganizationInvitationCreatedEvent {
+  readonly _tag: "auth.organization.invitationCreated";
+  readonly invitationId: string;
+  readonly organizationId: string;
+  readonly email: string;
+}
+
+/** Published by `@effect-auth/organization`'s `accept`. */
+export interface OrganizationInvitationAcceptedEvent {
+  readonly _tag: "auth.organization.invitationAccepted";
+  readonly invitationId: string;
+  readonly organizationId: string;
+  readonly userId: UserId;
+}
+
+/** Published by `@effect-auth/organization`'s `reject`. */
+export interface OrganizationInvitationRejectedEvent {
+  readonly _tag: "auth.organization.invitationRejected";
+  readonly invitationId: string;
+  readonly organizationId: string;
+}
+
+/** Published by `@effect-auth/organization`'s `cancel`. */
+export interface OrganizationInvitationCanceledEvent {
+  readonly _tag: "auth.organization.invitationCanceled";
+  readonly invitationId: string;
+  readonly organizationId: string;
+}
+
+/** Published by `@effect-auth/organization`'s `createRole`. */
+export interface OrganizationRoleCreatedEvent {
+  readonly _tag: "auth.organization.roleCreated";
+  readonly organizationId: string;
+  readonly role: string;
+}
+
+/** Published by `@effect-auth/organization`'s `updateRole`. */
+export interface OrganizationRoleUpdatedEvent {
+  readonly _tag: "auth.organization.roleUpdated";
+  readonly organizationId: string;
+  readonly role: string;
+}
+
+/** Published by `@effect-auth/organization`'s `deleteRole`. */
+export interface OrganizationRoleDeletedEvent {
+  readonly _tag: "auth.organization.roleDeleted";
+  readonly organizationId: string;
+  readonly role: string;
+}
+
+/** Published by `@effect-auth/organization`'s `createTeam`. */
+export interface OrganizationTeamCreatedEvent {
+  readonly _tag: "auth.organization.teamCreated";
+  readonly organizationId: string;
+  readonly teamId: string;
+}
+
+/** Published by `@effect-auth/organization`'s `updateTeam`. */
+export interface OrganizationTeamUpdatedEvent {
+  readonly _tag: "auth.organization.teamUpdated";
+  readonly organizationId: string;
+  readonly teamId: string;
+}
+
+/** Published by `@effect-auth/organization`'s `removeTeam`. */
+export interface OrganizationTeamDeletedEvent {
+  readonly _tag: "auth.organization.teamDeleted";
+  readonly organizationId: string;
+  readonly teamId: string;
+}
+
+/** Published by `@effect-auth/organization`'s `addTeamMember` (and `acceptInvitation` for a team-targeted invitation). */
+export interface OrganizationTeamMemberAddedEvent {
+  readonly _tag: "auth.organization.teamMemberAdded";
+  readonly organizationId: string;
+  readonly teamId: string;
+  readonly userId: UserId;
+}
+
+/** Published by `@effect-auth/organization`'s `removeTeamMember`. */
+export interface OrganizationTeamMemberRemovedEvent {
+  readonly _tag: "auth.organization.teamMemberRemoved";
+  readonly organizationId: string;
+  readonly teamId: string;
+  readonly userId: UserId;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
@@ -87,7 +217,25 @@ export type AuthEvent =
   | PasskeyCounterAnomalyEvent
   | AdminImpersonationStartedEvent
   | AdminImpersonationStoppedEvent
-  | AdminImpersonationDeniedEvent;
+  | AdminImpersonationDeniedEvent
+  | OrganizationCreatedEvent
+  | OrganizationUpdatedEvent
+  | OrganizationDeletedEvent
+  | OrganizationMemberAddedEvent
+  | OrganizationMemberRemovedEvent
+  | OrganizationMemberRoleUpdatedEvent
+  | OrganizationInvitationCreatedEvent
+  | OrganizationInvitationAcceptedEvent
+  | OrganizationInvitationRejectedEvent
+  | OrganizationInvitationCanceledEvent
+  | OrganizationRoleCreatedEvent
+  | OrganizationRoleUpdatedEvent
+  | OrganizationRoleDeletedEvent
+  | OrganizationTeamCreatedEvent
+  | OrganizationTeamUpdatedEvent
+  | OrganizationTeamDeletedEvent
+  | OrganizationTeamMemberAddedEvent
+  | OrganizationTeamMemberRemovedEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */
