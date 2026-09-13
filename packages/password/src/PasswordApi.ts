@@ -173,7 +173,8 @@ export const PasswordGroup = HttpApiGroup.make("password")
     // `204`.
     HttpApiEndpoint.post("changePassword", "/change-password", {
       payload: ChangePasswordPayload,
-      error: [WrongPassword, WeakPassword],
+      // Ticket 14: rate-limited.
+      error: [WrongPassword, WeakPassword, Api.RateLimited],
     }).middleware(Api.Authentication),
   );
 

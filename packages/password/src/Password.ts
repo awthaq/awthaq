@@ -102,7 +102,7 @@ export interface PasswordShape {
     readonly userId: Users.UserId;
     readonly currentPassword: Redacted.Redacted<string>;
     readonly newPassword: Redacted.Redacted<string>;
-  }) => Effect.Effect<void, PasswordApi.WrongPassword | PasswordApi.WeakPassword>;
+  }) => Effect.Effect<void, PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited>;
 }
 
 const toHex = (bytes: Uint8Array): string =>
@@ -126,6 +126,8 @@ const RATE_LIMITS = {
   signIn: { limit: 5, window: Duration.minutes(15) },
   requestReset: { limit: 5, window: Duration.minutes(15) },
   confirmReset: { limit: 5, window: Duration.minutes(15) },
+  // Shipping-gap map (.scratch/shipping-gaps), ticket 14.
+  changePassword: { limit: 5, window: Duration.minutes(15) },
 } as const satisfies Record<string, { readonly limit: number; readonly window: Duration.Duration }>;
 
 /**
@@ -371,6 +373,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               key: (input) => `password:reset-confirm:${JSON.stringify(input)}`,
               ...RATE_LIMITS.confirmReset,
             },
+            {
+              endpoint: "changePassword",
+              // Keyed on `CurrentPrincipal`'s own userId at enforcement
+              // time (the authenticated caller), not a payload field.
+              key: (input) => `password:change-password:${JSON.stringify(input)}`,
+              ...RATE_LIMITS.changePassword,
+            },
           ] satisfies ReadonlyArray<{
             readonly endpoint: string;
             readonly key: RateLimits.RateLimitKey;
@@ -606,6 +615,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       });
 
       const changePassword: PasswordShape["changePassword"] = Effect.fnUntraced(function* (input) {
+        // Keyed on `userId` directly — this endpoint is authenticated, so
+        // (unlike `signIn`/`requestReset`) there's no need to look up an
+        // email first.
+        yield* rateLimit(`password:change-password:${input.userId}`, RATE_LIMITS.changePassword);
         const accountOpt = yield* accounts.findByProviderSubject(
           Accounts.PASSWORD_PROVIDER_ID,
           input.userId,

@@ -465,4 +465,49 @@ describe("Password", () => {
         ),
       ),
   );
+
+  it.effect(
+    "shipping-gaps/14: changePassword is actually throttled once its own rule's limit is exceeded",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const issued = yield* password.signUp({ email, password: strongPassword });
+        const userId = issued.session.userId;
+
+        for (let i = 0; i < 5; i++) {
+          const attempt = yield* password
+            .changePassword({
+              userId,
+              currentPassword: Redacted.make("wrong password"),
+              newPassword: Redacted.make("a whole new strong password"),
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(attempt._tag, "WrongPassword");
+        }
+
+        const throttled = yield* password
+          .changePassword({
+            userId,
+            currentPassword: Redacted.make("wrong password"),
+            newPassword: Redacted.make("a whole new strong password"),
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(throttled._tag, "RateLimited");
+      }).pipe(
+        Effect.provide(
+          Password.Password.layer.pipe(
+            Layer.provideMerge(AuthenticationLive),
+            Layer.provideMerge(CoreLive),
+            Layer.provideMerge(
+              Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
+                Layer.provideMerge(NodeCrypto.layer),
+              ),
+            ),
+            Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
+            Layer.provideMerge(RateLimits.layer),
+            Layer.provide(NoBreachHttpClient),
+          ),
+        ),
+      ),
+  );
 });
