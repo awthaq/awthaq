@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { AuthEvents, Sessions, Users, Verification, Accounts } from "@effect-auth/core";
 import { Mailer, PasswordHasher } from "@effect-auth/ports";
+import { Authentication } from "@effect-auth/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -60,7 +61,18 @@ const PortsLive = Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemor
   Layer.provideMerge(NodeCrypto.layer),
 );
 
+/**
+ * `changePassword` (shipping-gap map, ticket 11) is the one endpoint in
+ * this plugin's contract carrying `Authentication` middleware — building
+ * `Password.layer` at all now needs it satisfied, even for these
+ * domain-level tests that never go through HTTP.
+ */
+const AuthenticationLive = Authentication.AuthenticationLive.pipe(
+  Layer.provide(Authentication.PrincipalResolverLive),
+);
+
 const TestLayer = Password.Password.layer.pipe(
+  Layer.provideMerge(AuthenticationLive),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(PortsLive),
   Layer.provide(NoBreachHttpClient),
@@ -298,6 +310,7 @@ describe("Password", () => {
       }).pipe(
         Effect.provide(
           Password.Password.layer.pipe(
+            Layer.provideMerge(AuthenticationLive),
             Layer.provideMerge(CoreLive),
             Layer.provideMerge(PortsLive),
             Layer.provide(BreachedHttpClient),
@@ -316,6 +329,7 @@ describe("Password", () => {
     }).pipe(
       Effect.provide(
         Password.Password.layer.pipe(
+          Layer.provideMerge(AuthenticationLive),
           Layer.provideMerge(CoreLive),
           Layer.provideMerge(PortsLive),
           Layer.provide(UnavailableHttpClient),
@@ -333,6 +347,7 @@ describe("Password", () => {
     }).pipe(
       Effect.provide(
         Password.Password.layer.pipe(
+          Layer.provideMerge(AuthenticationLive),
           Layer.provideMerge(CoreLive),
           Layer.provideMerge(PortsLive),
           Layer.provide(UnavailableHttpClient),
@@ -340,5 +355,57 @@ describe("Password", () => {
         ),
       ),
     ),
+  );
+
+  it.effect(
+    "shipping-gaps/11: changePassword rotates the hash and rejects a wrong current password",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const issued = yield* password.signUp({ email, password: strongPassword });
+        const userId = issued.session.userId;
+
+        const wrong = yield* password
+          .changePassword({
+            userId,
+            currentPassword: Redacted.make("totally wrong password"),
+            newPassword: Redacted.make("a whole new strong password"),
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(wrong._tag, "WrongPassword");
+
+        yield* password.changePassword({
+          userId,
+          currentPassword: strongPassword,
+          newPassword: Redacted.make("a whole new strong password"),
+        });
+
+        const oldFails = yield* password
+          .signIn({ email, password: strongPassword })
+          .pipe(Effect.flip);
+        assert.strictEqual(oldFails._tag, "InvalidCredentials");
+
+        const newWorks = yield* password.signIn({
+          email,
+          password: Redacted.make("a whole new strong password"),
+        });
+        assert.strictEqual(newWorks.session.userId, userId);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("shipping-gaps/11: changePassword rejects a weak new password", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const issued = yield* password.signUp({ email, password: strongPassword });
+
+      const failure = yield* password
+        .changePassword({
+          userId: issued.session.userId,
+          currentPassword: strongPassword,
+          newPassword: Redacted.make("short"),
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "WeakPassword");
+    }).pipe(Effect.provide(TestLayer)),
   );
 });

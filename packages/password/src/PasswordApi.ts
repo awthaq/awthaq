@@ -78,6 +78,25 @@ export const VerifyEmailPayload = Schema.Struct({
 });
 export type VerifyEmailPayload = typeof VerifyEmailPayload.Type;
 
+export const ChangePasswordPayload = Schema.Struct({
+  currentPassword: Schema.Redacted(Schema.String),
+  newPassword: Schema.Redacted(Schema.String),
+});
+export type ChangePasswordPayload = typeof ChangePasswordPayload.Type;
+
+/**
+ * Shipping-gap map (.scratch/shipping-gaps), ticket 11: a wrong current
+ * password is a distinct condition from "not authenticated at all"
+ * (`Api.Unauthenticated`, from this endpoint's own `Authentication`
+ * middleware) — this plugin's own error, not that contract-stratum one,
+ * mirroring `Api.InvalidCredentials`'s own shape for `signIn`.
+ */
+export class WrongPassword extends Schema.TaggedError<WrongPassword>()(
+  "WrongPassword",
+  {},
+  { httpApiStatus: 401 },
+) {}
+
 /**
  * BEH-EA-113: `signUp`/`signIn`'s success shape reuses `@effect-auth/api`'s
  * `SessionContract.SessionDto` rather than inventing a second, competing
@@ -138,6 +157,19 @@ export const PasswordGroup = HttpApiGroup.make("password")
       payload: VerifyEmailPayload,
       error: TokenConsumed,
     }),
+  )
+  .add(
+    // Shipping-gap map (.scratch/shipping-gaps), ticket 11: authenticated
+    // change-password, distinct from the unauthenticated forgot-password
+    // pair (`requestReset`/`confirmReset`) above — per-endpoint
+    // `Authentication` middleware, since this is the one endpoint in this
+    // group that requires a live session. Top-level route, matching
+    // `verifyEmail`'s own convention. No `success` schema — defaults to
+    // `204`.
+    HttpApiEndpoint.post("changePassword", "/change-password", {
+      payload: ChangePasswordPayload,
+      error: [WrongPassword, WeakPassword],
+    }).middleware(Api.Authentication),
   );
 
 export const PasswordApi = HttpApi.make("auth").add(PasswordGroup);

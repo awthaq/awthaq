@@ -19,7 +19,7 @@
 // through and a bare `router.asHttpEffect()` call does not.
 import { AuthEvents, Sessions, Users, Verification, Accounts } from "@effect-auth/core";
 import { Mailer, PasswordHasher } from "@effect-auth/ports";
-import { AuthHttp } from "@effect-auth/server";
+import { Authentication, AuthHttp } from "@effect-auth/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -53,6 +53,14 @@ const CoreLive = Layer.mergeAll(
   Verification.layerMemory,
 ).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(NodeCrypto.layer));
 
+/**
+ * `changePassword` (shipping-gap map, ticket 11) is the one endpoint in
+ * this plugin's contract carrying `Authentication` middleware.
+ */
+const AuthenticationLive = Authentication.AuthenticationLive.pipe(
+  Layer.provide(Authentication.PrincipalResolverLive),
+);
+
 const buildAppLayer = (mailerLayer: Layer.Layer<Mailer.Mailer>) =>
   Layer.mergeAll(
     AuthHttp.routes(PasswordApi.PasswordApi, { openapiPath: "/openapi.json" }).pipe(
@@ -60,6 +68,7 @@ const buildAppLayer = (mailerLayer: Layer.Layer<Mailer.Mailer>) =>
     ),
     AuthHttp.docs(PasswordApi.PasswordApi),
   ).pipe(
+    Layer.provideMerge(AuthenticationLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
       Layer.mergeAll(PasswordHasher.layerArgon2id, mailerLayer).pipe(
@@ -331,6 +340,74 @@ describe("AuthHttp + Password (real HTTP)", () => {
         post(handler, "/verify-email", { token: "not-a-real-token" }),
       );
       assert.strictEqual(response.status, 410);
+    }),
+  );
+
+  it.effect("shipping-gaps/11: change-password rotates the hash for the authenticated caller", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const signUp = yield* Effect.promise(() =>
+        post(handler, "/password/sign-up", {
+          email: "change@example.com",
+          password: strongPassword,
+        }),
+      );
+      assert.strictEqual(signUp.status, 200);
+      const cookie = cookieFrom(signUp);
+
+      const authed = (path: string, body: unknown) =>
+        handler(
+          new Request(`http://localhost${path}`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie },
+            body: JSON.stringify(body),
+          }),
+        );
+
+      const wrongCurrent = yield* Effect.promise(() =>
+        authed("/change-password", {
+          currentPassword: "totally wrong password",
+          newPassword: "a whole new strong password",
+        }),
+      );
+      assert.strictEqual(wrongCurrent.status, 401);
+
+      const changed = yield* Effect.promise(() =>
+        authed("/change-password", {
+          currentPassword: strongPassword,
+          newPassword: "a whole new strong password",
+        }),
+      );
+      assert.strictEqual(changed.status, 204);
+
+      const oldPassword = yield* Effect.promise(() =>
+        post(handler, "/password/sign-in", {
+          email: "change@example.com",
+          password: strongPassword,
+        }),
+      );
+      assert.strictEqual(oldPassword.status, 401);
+
+      const newPassword = yield* Effect.promise(() =>
+        post(handler, "/password/sign-in", {
+          email: "change@example.com",
+          password: "a whole new strong password",
+        }),
+      );
+      assert.strictEqual(newPassword.status, 200);
+    }),
+  );
+
+  it.effect("shipping-gaps/11/401: change-password without a session is rejected", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const response = yield* Effect.promise(() =>
+        post(handler, "/change-password", {
+          currentPassword: strongPassword,
+          newPassword: "a whole new strong password",
+        }),
+      );
+      assert.strictEqual(response.status, 401);
     }),
   );
 

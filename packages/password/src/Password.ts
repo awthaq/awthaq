@@ -79,6 +79,17 @@ export interface PasswordShape {
   readonly verifyEmail: (input: {
     readonly token: Redacted.Redacted<string>;
   }) => Effect.Effect<void, PasswordApi.TokenConsumed>;
+  /**
+   * Shipping-gap map (.scratch/shipping-gaps), ticket 11: authenticated
+   * change-password — distinct from the unauthenticated `requestReset`/
+   * `confirmReset` pair, which no capability here provided at all before
+   * this ticket.
+   */
+  readonly changePassword: (input: {
+    readonly userId: Users.UserId;
+    readonly currentPassword: Redacted.Redacted<string>;
+    readonly newPassword: Redacted.Redacted<string>;
+  }) => Effect.Effect<void, PasswordApi.WrongPassword | PasswordApi.WeakPassword>;
 }
 
 const toHex = (bytes: Uint8Array): string =>
@@ -229,6 +240,30 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.VerifyEmailPayload;
       }) {
         yield* password.verifyEmail(payload);
+      }),
+
+      changePassword: Effect.fnUntraced(function* ({
+        payload,
+      }: {
+        payload: PasswordApi.ChangePasswordPayload;
+      }) {
+        const principal = yield* Api.CurrentPrincipal;
+        // `changePassword`'s own `Authentication` middleware already
+        // refused an unauthenticated request; a non-`User` principal
+        // reaching it is a wiring defect, mirroring `Session.ts`'s own
+        // `currentUserPrincipal` guard.
+        if (principal._tag !== "User") {
+          return yield* Effect.die(
+            new Error(
+              `effect-auth: change-password reached with a non-User principal: ${principal._tag}`,
+            ),
+          );
+        }
+        yield* password.changePassword({
+          userId: Users.UserId(principal.ref.id),
+          currentPassword: payload.currentPassword,
+          newPassword: payload.newPassword,
+        });
       }),
     });
   }),
@@ -452,7 +487,46 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           );
       });
 
-      return Password.of({ signUp, signIn, requestReset, confirmReset, verifyEmail });
+      const changePassword: PasswordShape["changePassword"] = Effect.fnUntraced(function* (input) {
+        const accountOpt = yield* accounts.findByProviderSubject(
+          Accounts.PASSWORD_PROVIDER_ID,
+          input.userId,
+        );
+        const hashOpt = yield* Option.match(accountOpt, {
+          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
+          onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
+        });
+        // Same uniform-cost shape as `signIn`'s own `dummyHash` check —
+        // this endpoint is authenticated (no enumeration concern), but
+        // there is no reason to let a caller with no password credential
+        // at all distinguish "wrong password" from "no password set" by
+        // timing, so the real hasher call always runs regardless.
+        const verified = yield* hasher.verify(
+          input.currentPassword,
+          Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+        );
+        if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
+          return yield* Effect.fail(new PasswordApi.WrongPassword());
+        }
+        const account = accountOpt.value;
+
+        const hints = yield* checkPolicy(httpClient, crypto, input.newPassword, config);
+        if (hints.length > 0) {
+          return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
+        }
+
+        const hash = yield* hasher.hash(input.newPassword);
+        yield* accounts.updateCredentialHash(account.id, Redacted.make(hash)).pipe(Effect.orDie);
+      });
+
+      return Password.of({
+        signUp,
+        signIn,
+        requestReset,
+        confirmReset,
+        verifyEmail,
+        changePassword,
+      });
     }),
   });
 }
