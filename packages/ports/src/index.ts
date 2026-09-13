@@ -7,17 +7,13 @@
 // Ports stratum yet — spec/traceability.md — so both cite spec/overview.md
 // and archive/design directly).
 //
-// `WebAuthn` is deliberately not yet implemented: unlike `PasswordHasher`
-// (given a concrete interface in `archive/design/api-design-v4.md` §3),
-// nothing in `spec/` or `archive/` names WebAuthn's own port methods —
-// `spec/models/03-passkey-webauthn.md` states its whole passkey plugin
-// sketch, port included, is "speculative — it is not quoted from
-// `archive/PRD.md`". Designing this port's shape is better done alongside
-// the `@effect-auth/passkey` plugin that will be its only consumer, where
-// the plugin's actual ceremony calls (registration/authentication options,
-// response verification, challenge storage — see `research/06-webauthn-passkeys.md`)
-// will settle what the port actually needs to expose, rather than guessed
-// at now with no caller to validate the guess against.
+// `WebAuthn` (spec/behaviors/17-passkey.md, BEH-EA-129) is implemented too,
+// wrapping `@simplewebauthn/server` — see that module's own header comment.
+// A prior revision of this comment claimed WebAuthn's port was "deliberately
+// not yet implemented" because "nothing in spec/ or archive/ names WebAuthn's
+// own port methods"; that was already stale by the time it was corrected —
+// `spec/behaviors/17-passkey.md`'s BEH-EA-129 names the exact four-method
+// interface this module implements.
 //
 // `RateLimiter` (spec/behaviors/14-rate-limiting.md, BEH-EA-105/106/109/112)
 // is implemented below too — see that module's own header comment for why
@@ -28,3 +24,4 @@
 export * as Mailer from "./Mailer.ts";
 export * as PasswordHasher from "./PasswordHasher.ts";
 export * as RateLimiter from "./RateLimiter.ts";
+export * as WebAuthn from "./WebAuthn.ts";

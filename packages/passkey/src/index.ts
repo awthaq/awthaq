@@ -2,9 +2,10 @@
 //
 // The Passkey plugin against the WebAuthn port.
 //
-// Planned first module: Passkey.ts (spec/behaviors/17-passkey.md, BEH-EA-129–136)
+// spec/behaviors/17-passkey.md, BEH-EA-129 through BEH-EA-136.
 // See spec/overview.md for the full package map.
-//
-// Empty placeholder — effect-auth is pre-implementation. No exported symbols yet.
 
-export {};
+export * as ChallengeStore from "./ChallengeStore.ts";
+export * as Passkey from "./Passkey.ts";
+export * as PasskeyApi from "./PasskeyApi.ts";
+export * as PasskeyCredentials from "./PasskeyCredentials.ts";

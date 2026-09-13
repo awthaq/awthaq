@@ -38,8 +38,25 @@ export interface UserSignedInEvent {
   readonly strategy: string;
 }
 
+/**
+ * Published by `@effect-auth/passkey`'s authentication ceremony (BEH-EA-131,
+ * ticket 08): a verified assertion's reported counter did not exceed the
+ * stored one — "log + step-up, not an instant kill" per that ticket's own
+ * language, so the session still issues and this event is the whole
+ * response to the anomaly, not a request-level failure.
+ */
+export interface PasskeyCounterAnomalyEvent {
+  readonly _tag: "auth.passkey.counterAnomaly";
+  readonly userId: UserId;
+  readonly credentialId: string;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
-export type AuthEvent = TokenReplayEvent | UserCreatedEvent | UserSignedInEvent;
+export type AuthEvent =
+  | TokenReplayEvent
+  | UserCreatedEvent
+  | UserSignedInEvent
+  | PasskeyCounterAnomalyEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */
