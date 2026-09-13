@@ -149,6 +149,9 @@ importers:
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.115(effect@4.0.0-rc.115)(vitest@5.0.0)
+      '@qadi/core':
+        specifier: ^0.6.2
+        version: 0.6.2
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.2
