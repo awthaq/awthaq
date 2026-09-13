@@ -73,6 +73,11 @@ export const ConfirmResetPayload = Schema.Struct({
 });
 export type ConfirmResetPayload = typeof ConfirmResetPayload.Type;
 
+export const VerifyEmailPayload = Schema.Struct({
+  token: Schema.Redacted(Schema.String),
+});
+export type VerifyEmailPayload = typeof VerifyEmailPayload.Type;
+
 /**
  * BEH-EA-113: `signUp`/`signIn`'s success shape reuses `@effect-auth/api`'s
  * `SessionContract.SessionDto` rather than inventing a second, competing
@@ -119,6 +124,19 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // (`minLength`/`breachCheck`) any other newly-set password is. A
       // plain array, not `Schema.Union` — see `signUp`'s own comment above.
       error: [TokenConsumed, WeakPassword],
+    }),
+  )
+  .add(
+    // Shipping-gap map (.scratch/shipping-gaps), ticket 08: a top-level
+    // route, not nested under `/password/*` — account-lifecycle actions
+    // apply regardless of which auth method a user signed up with, even
+    // though this particular capability happens to be implemented here
+    // (it reuses this module's own `VERIFY_PREFIX`/token-encoding, which
+    // already exists only in this file). No `success` schema — defaults
+    // to `204`, matching `signOut`'s own convention.
+    HttpApiEndpoint.post("verifyEmail", "/verify-email", {
+      payload: VerifyEmailPayload,
+      error: TokenConsumed,
     }),
   );
 

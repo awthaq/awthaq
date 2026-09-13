@@ -69,6 +69,16 @@ export interface PasswordShape {
     readonly token: Redacted.Redacted<string>;
     readonly password: Redacted.Redacted<string>;
   }) => Effect.Effect<void, PasswordApi.TokenConsumed | PasswordApi.WeakPassword>;
+  /**
+   * Shipping-gap map (.scratch/shipping-gaps), ticket 08: consumes the
+   * verify-email token `signUp` already dispatches and flips
+   * `Users.emailVerified`. No prior local capability existed to consume
+   * that token at all — this is the wiring gap the map's own ticket 01
+   * audit identified.
+   */
+  readonly verifyEmail: (input: {
+    readonly token: Redacted.Redacted<string>;
+  }) => Effect.Effect<void, PasswordApi.TokenConsumed>;
 }
 
 const toHex = (bytes: Uint8Array): string =>
@@ -211,6 +221,14 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.ConfirmResetPayload;
       }) {
         yield* password.confirmReset(payload);
+      }),
+
+      verifyEmail: Effect.fnUntraced(function* ({
+        payload,
+      }: {
+        payload: PasswordApi.VerifyEmailPayload;
+      }) {
+        yield* password.verifyEmail(payload);
       }),
     });
   }),
@@ -405,7 +423,36 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         yield* sessions.revokeOthers(userId, Sessions.SessionId(""));
       });
 
-      return Password.of({ signUp, signIn, requestReset, confirmReset });
+      const verifyEmail: PasswordShape["verifyEmail"] = Effect.fnUntraced(function* (input) {
+        const decoded = decodeVerificationToken(Redacted.value(input.token));
+        if (Option.isNone(decoded)) {
+          return yield* Effect.fail(new PasswordApi.TokenConsumed());
+        }
+        const { identifier, value } = decoded.value;
+        yield* verification.consume(identifier, value).pipe(
+          Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
+          Effect.catchTag("PlatformError", Effect.die),
+        );
+
+        // Mirrors `confirmReset`'s own posture on the analogous case: this
+        // token was only ever issued right after `signUp` created this
+        // exact user (BEH-EA-113), so a missing user here is a defect, not
+        // a request-level condition the caller can act on — never
+        // re-surfaced as `TokenConsumed`, which would misleadingly imply a
+        // bad/replayed token rather than a genuine invariant violation.
+        const userId = Users.UserId(identifier.slice(VERIFY_PREFIX.length));
+        yield* users
+          .verifyEmail(userId)
+          .pipe(
+            Effect.catchTag("UserNotFound", () =>
+              Effect.die(
+                new Error(`effect-auth: verify-email token's own user missing: ${userId}`),
+              ),
+            ),
+          );
+      });
+
+      return Password.of({ signUp, signIn, requestReset, confirmReset, verifyEmail });
     }),
   });
 }

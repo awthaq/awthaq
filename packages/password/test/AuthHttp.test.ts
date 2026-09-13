@@ -100,6 +100,16 @@ const capturingMailer = (): {
 
 const strongPassword = "correct horse battery staple";
 
+/**
+ * `signUp`'s verification mail is dispatched via `Effect.forkDetach`
+ * (BEH-EA-113: never awaited) — a few cooperative scheduler turns give
+ * that detached fiber a chance to run its two effectful steps to
+ * completion, mirroring `Password.test.ts`'s own `letForkedFibersRun`.
+ */
+const letForkedFibersRun = Effect.gen(function* () {
+  for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+});
+
 const post = (
   handler: (request: Request) => Promise<Response>,
   path: string,
@@ -279,6 +289,49 @@ describe("AuthHttp + Password (real HTTP)", () => {
         );
         assert.strictEqual(replayed.status, 410);
       }),
+  );
+
+  it.effect(
+    // Shipping-gap map (.scratch/shipping-gaps), ticket 08: verify-email
+    // wiring gap. Domain rules (uniform response, defect-not-request-error
+    // for a missing user) are proven in `Password.test.ts`; this only
+    // checks the HTTP plumbing.
+    "shipping-gaps/08: verify-email consumes the sign-up mail's token and flips emailVerified",
+    () =>
+      Effect.gen(function* () {
+        const mailer = capturingMailer();
+        const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+
+        const signUp = yield* Effect.promise(() =>
+          post(handler, "/password/sign-up", {
+            email: "verify@example.com",
+            password: strongPassword,
+          }),
+        );
+        assert.strictEqual(signUp.status, 200);
+
+        yield* letForkedFibersRun;
+        const messages = yield* mailer.sent;
+        const verifyMail = messages.findLast((m) => m.template === "verify-email");
+        if (verifyMail === undefined) throw new Error("expected a verify-email mail");
+        const token = (verifyMail.data as { token: string }).token;
+
+        const verified = yield* Effect.promise(() => post(handler, "/verify-email", { token }));
+        assert.strictEqual(verified.status, 204);
+
+        const replayed = yield* Effect.promise(() => post(handler, "/verify-email", { token }));
+        assert.strictEqual(replayed.status, 410);
+      }),
+  );
+
+  it.effect("shipping-gaps/08/410: verifying with a garbage token answers TokenConsumed", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const response = yield* Effect.promise(() =>
+        post(handler, "/verify-email", { token: "not-a-real-token" }),
+      );
+      assert.strictEqual(response.status, 410);
+    }),
   );
 
   it.effect(
