@@ -118,6 +118,13 @@ export class Session extends Model.Class<Session>("Session")({
   idleExpiresAt: Model.DateTimeUpdate,
   createdAt: Model.DateTimeInsert,
   lastActiveAt: Model.DateTimeUpdate,
+  // BEH-EA-209: the caller's own identity, immutable once issued — no
+  // `update`/`jsonUpdate` variant, the same insert-only shape `secretHash`/
+  // `absoluteExpiresAt` already have. Two plain nullable columns rather than
+  // one JSON column: this table's own choice, not one this field's shape
+  // forces on any other persistence layer.
+  actingAsType: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
+  actingAsId: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
 }) {}
 
 /**

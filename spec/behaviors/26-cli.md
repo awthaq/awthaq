@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-26 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-13 |
 > | Status | Effective |
 > | Author | effect-auth Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Softened BEH-EA-207 to a deferred, unvalidated CLI feature, matching BEH-EA-039's hedged framing (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Softened BEH-EA-207 to a deferred, unvalidated CLI feature, matching BEH-EA-039's hedged framing (CCR-EA-002) <br> 1.2 (2026-09-13): Retargeted BEH-EA-208's footer link now that [27-admin-impersonation.md](27-admin-impersonation.md) follows it (CCR-EA-004) |
 ---
 
 > This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
@@ -161,4 +161,4 @@ REQUIREMENT: Every CLI command MUST operate on `Auth.make`'s statically
 
 PRD §21 states this as the CLI's defining boundary: "The CLI reads `Auth.make`'s derived manifest; it never runs the application." Because contracts, tables and migrations are static class members (ADR-EA-005, ADR-EA-008), the manifest a command like `doctor`, `routes`, or `plugin list --graph` needs already exists the moment `Auth.make` is evaluated — no server needs to be listening, no database connection needs to be live, for any of these commands to answer correctly. This keeps the CLI usable in CI and in pre-deploy checks, where standing up the full application merely to inspect it would be exactly the kind of accidental coupling the rest of this specification's Layer-boundary discipline (file 04, the Contract Stratum) is designed to avoid.
 
-_Previous: [BEH-EA-207](26-cli.md#beh-ea-207-import-migrates-users-from-a-named-source-framework) | Next: none — this is the final behavior file._
+_Previous: [BEH-EA-207](26-cli.md#beh-ea-207-import-migrates-users-from-a-named-source-framework) | Next: [BEH-EA-209](27-admin-impersonation.md#beh-ea-209-actingas-becomes-a-real-generic-field-on-session-issuance)_

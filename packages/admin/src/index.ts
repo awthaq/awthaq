@@ -2,9 +2,9 @@
 //
 // Impersonation: off by default, admin-gated, reason required, hard expiry, dual identity, fully audited (NFR-EA-007).
 //
-// Planned first module: not yet specified — see spec/models/15-admin-impersonation.md (non-normative adoption record) and spec/roadmap.md M7
+// spec/behaviors/27-admin-impersonation.md, BEH-EA-209 through BEH-EA-220.
 // See spec/overview.md for the full package map.
-//
-// Empty placeholder — effect-auth is pre-implementation. No exported symbols yet.
 
-export {};
+export * as Admin from "./Admin.ts";
+export * as AdminApi from "./AdminApi.ts";
+export * as ImpersonationRecords from "./ImpersonationRecords.ts";

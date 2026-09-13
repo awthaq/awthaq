@@ -9,6 +9,7 @@ import { Api } from "@effect-auth/api";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import { HttpApiMiddleware } from "effect/unstable/httpapi";
 
@@ -26,7 +27,14 @@ export class PrincipalResolver extends Context.Service<PrincipalResolver, Princi
   "effect-auth/server/PrincipalResolver",
 ) {}
 
-/** The ordinary case: a session resolves to the `UserPrincipal` it belongs to. */
+/**
+ * The ordinary case: a session resolves to the `UserPrincipal` it belongs to.
+ * BEH-EA-211: a session's own `actingAs` (BEH-EA-209/210) is placed onto the
+ * resolved `UserPrincipal` unconditionally, closing the loop BEH-EA-142
+ * (`@effect-auth/qadi`'s `SubjectResolver`) already anticipates — omitted
+ * entirely, not `undefined`, when the session carries none
+ * (`exactOptionalPropertyTypes`).
+ */
 export const PrincipalResolverLive: Layer.Layer<PrincipalResolver> = Layer.succeed(
   PrincipalResolver,
   {
@@ -35,6 +43,14 @@ export const PrincipalResolverLive: Layer.Layer<PrincipalResolver> = Layer.succe
         new Api.UserPrincipal({
           ref: new Api.PrincipalRef({ type: "user", id: session.userId }),
           sessionId: session.id,
+          ...(Option.isSome(session.actingAs)
+            ? {
+                actingAs: new Api.PrincipalRef({
+                  type: session.actingAs.value.type,
+                  id: session.actingAs.value.id,
+                }),
+              }
+            : {}),
         }),
       ),
   },

@@ -57,7 +57,9 @@ const Migrated = Layer.effectDiscard(
         absoluteExpiresAt TEXT NOT NULL,
         idleExpiresAt TEXT NOT NULL,
         createdAt TEXT NOT NULL,
-        lastActiveAt TEXT NOT NULL
+        lastActiveAt TEXT NOT NULL,
+        actingAsType TEXT,
+        actingAsId TEXT
       )
     `;
     yield* sql`
@@ -222,6 +224,8 @@ describe("Repositories", () => {
           userAgent: "test-agent",
           absoluteExpiresAt: now,
           idleExpiresAt: Model.Override(now),
+          actingAsType: null,
+          actingAsId: null,
         }),
       );
       assert.strictEqual(session.secretHash, "hashed-secret-value");
@@ -247,6 +251,8 @@ describe("Repositories", () => {
             userAgent: null,
             absoluteExpiresAt: now,
             idleExpiresAt: Model.Override(now),
+            actingAsType: null,
+            actingAsId: null,
           }),
         );
       }
@@ -292,6 +298,8 @@ describe("Repositories", () => {
             userAgent: null,
             absoluteExpiresAt: now,
             idleExpiresAt: Model.Override(now),
+            actingAsType: null,
+            actingAsId: null,
           }),
         );
       const keep = yield* make();

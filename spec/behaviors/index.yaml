@@ -80,3 +80,6 @@ entries:
   - id: "BEH-EA-201"
     file: "26-cli.md"
     title: "CLI"
+  - id: "BEH-EA-209"
+    file: "27-admin-impersonation.md"
+    title: "Admin and Impersonation"

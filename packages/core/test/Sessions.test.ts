@@ -14,6 +14,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import { SqlClient } from "effect/unstable/sql";
@@ -46,7 +47,9 @@ const Migrated = Layer.effectDiscard(
         absoluteExpiresAt TEXT NOT NULL,
         idleExpiresAt TEXT NOT NULL,
         createdAt TEXT NOT NULL,
-        lastActiveAt TEXT NOT NULL
+        lastActiveAt TEXT NOT NULL,
+        actingAsType TEXT,
+        actingAsId TEXT
       )
     `;
   }),
@@ -181,6 +184,97 @@ const suite = (
         const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
         assert.strictEqual(aFails._tag, "SessionNotFound");
       }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("BEH-EA-209: actingAs round-trips through issue/verify", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session, token } = yield* sessions.issue({
+          userId,
+          actingAs: { type: "user", id: "admin-1" },
+        });
+        assert.deepStrictEqual(session.actingAs, Option.some({ type: "user", id: "admin-1" }));
+        const verified = yield* sessions.verify(token);
+        assert.deepStrictEqual(verified.actingAs, Option.some({ type: "user", id: "admin-1" }));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("an ordinary session issued with no actingAs carries none", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId });
+        assert.deepStrictEqual(session.actingAs, Option.none());
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "BEH-EA-210: a session issued with actingAs gets idleExpiresAt = absoluteExpiresAt",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { session } = yield* sessions.issue({
+            userId,
+            actingAs: { type: "user", id: "admin-1" },
+          });
+          assert.strictEqual(
+            DateTime.toEpochMillis(session.idleExpiresAt),
+            DateTime.toEpochMillis(session.absoluteExpiresAt),
+          );
+        }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    it.effect("BEH-EA-210: verify never advances idleExpiresAt for an actingAs session", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session, token } = yield* sessions.issue({
+          userId,
+          actingAs: { type: "user", id: "admin-1" },
+        });
+        // Cross several touchEvery windows (100ms) — an ordinary session
+        // would have its idleExpiresAt pushed forward each time.
+        yield* TestClock.adjust(Duration.millis(200));
+        const verified = yield* sessions.verify(token);
+        assert.strictEqual(
+          DateTime.toEpochMillis(verified.idleExpiresAt),
+          DateTime.toEpochMillis(session.idleExpiresAt),
+        );
+        assert.strictEqual(
+          DateTime.toEpochMillis(verified.lastActiveAt),
+          DateTime.toEpochMillis(session.lastActiveAt),
+        );
+      }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    it.effect(
+      "BEH-EA-212: absoluteDuration overrides SessionConfig.absolute for this one call",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const now = yield* DateTime.now;
+          const { session } = yield* sessions.issue({
+            userId,
+            absoluteDuration: Duration.millis(50),
+          });
+          assert.strictEqual(
+            DateTime.toEpochMillis(session.absoluteExpiresAt),
+            DateTime.toEpochMillis(now) + 50,
+          );
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "an ordinary session's own idle-refresh is unaffected by the actingAs skip logic",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { session, token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.millis(200));
+          const verified = yield* sessions.verify(token);
+          assert.isTrue(
+            DateTime.toEpochMillis(verified.lastActiveAt) >
+              DateTime.toEpochMillis(session.lastActiveAt),
+          );
+        }).pipe(Effect.provide(shortLivedLayer)),
     );
   });
 };

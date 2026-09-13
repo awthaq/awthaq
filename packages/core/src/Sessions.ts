@@ -76,6 +76,16 @@ export const SessionConfig: Context.Reference<SessionConfig> = Context.Reference
   },
 );
 
+/**
+ * BEH-EA-209: the caller's own identity, immutably attached to a session
+ * minted on someone else's behalf (e.g. `@effect-auth/admin`'s `impersonate`)
+ * — a generic, `Admin`-agnostic field any future plugin could reuse.
+ */
+export interface ActingAs {
+  readonly type: string;
+  readonly id: string;
+}
+
 /** What `Sessions.verify`/`issue` return — never the secret, never the stored hash. */
 export interface SessionView {
   readonly id: SessionId;
@@ -86,6 +96,8 @@ export interface SessionView {
   readonly idleExpiresAt: DateTime.Utc;
   readonly ipAddress: Option.Option<string>;
   readonly userAgent: Option.Option<string>;
+  /** BEH-EA-209/210: present only for a session minted with `actingAs`; such a session never idle-refreshes. */
+  readonly actingAs: Option.Option<ActingAs>;
 }
 
 /** BEH-EA-054: one row of `Sessions.list`. */
@@ -126,6 +138,10 @@ export interface SessionsShape {
     readonly userId: UserId;
     readonly request?: { readonly ip?: string; readonly userAgent?: string };
     readonly supersedes?: SessionId;
+    /** BEH-EA-209/210: sets a hard expiry (`idleExpiresAt = absoluteExpiresAt`) and disables idle-refresh for this session's whole lifetime. */
+    readonly actingAs?: ActingAs;
+    /** BEH-EA-212: overrides `SessionConfig.absolute` for this one call — e.g. `@effect-auth/admin`'s own `AdminConfig.maxDuration`, generally shorter than an ordinary session's absolute lifetime. */
+    readonly absoluteDuration?: Duration.Duration;
   }) => Effect.Effect<
     { readonly session: SessionView; readonly token: Redacted.Redacted<string> },
     PlatformError.PlatformError
@@ -163,6 +179,7 @@ interface SessionRow {
   readonly idleExpiresAt: DateTime.Utc;
   readonly ipAddress: Option.Option<string>;
   readonly userAgent: Option.Option<string>;
+  readonly actingAs: Option.Option<ActingAs>;
 }
 
 const toView = (row: SessionRow): SessionView => row;
@@ -182,7 +199,17 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
       const secret = toHex(yield* crypto.randomBytes(32));
       const secretHash = yield* hashSecret(crypto, secret);
       const now = yield* DateTime.now;
-      const absoluteExpiresAt = DateTime.addDuration(now, config.absolute);
+      const absoluteExpiresAt = DateTime.addDuration(
+        now,
+        input.absoluteDuration ?? config.absolute,
+      );
+      // BEH-EA-210: a session minted with `actingAs` gets a hard expiry —
+      // `idleExpiresAt` set equal to `absoluteExpiresAt` at issuance, never
+      // pushed further out by `verify`'s idle-refresh touch.
+      const idleExpiresAt =
+        input.actingAs === undefined
+          ? DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt)
+          : absoluteExpiresAt;
       const row: SessionRow = {
         id,
         userId: input.userId,
@@ -190,9 +217,10 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
         createdAt: now,
         lastActiveAt: now,
         absoluteExpiresAt,
-        idleExpiresAt: DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt),
+        idleExpiresAt,
         ipAddress: Option.fromNullishOr(input.request?.ip),
         userAgent: Option.fromNullishOr(input.request?.userAgent),
+        actingAs: Option.fromNullishOr(input.actingAs),
       };
       yield* Ref.update(state, (s) => HashMap.set(s, id, row));
       return { session: toView(row), token: Redacted.make(`${id}.${secret}`) };
@@ -234,6 +262,11 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
         return yield* Effect.fail(
           new SessionNotFound({ message: `effect-auth: no such session: ${id}` }),
         );
+      }
+      // BEH-EA-210: a session carrying `actingAs` never idle-refreshes — its
+      // hard expiry is the whole mechanism, so `verify` never touches it.
+      if (Option.isSome(row.value.actingAs)) {
+        return toView(row.value);
       }
       // BEH-EA-052: throttled idle refresh — at most one write per `touchEvery`.
       const dueForTouch =
@@ -308,6 +341,10 @@ const toSessionView = (row: SqlModels.Session): SessionView => ({
   idleExpiresAt: row.idleExpiresAt,
   ipAddress: Option.fromNullishOr(row.ipAddress),
   userAgent: Option.fromNullishOr(row.userAgent),
+  actingAs:
+    row.actingAsType === null || row.actingAsId === null
+      ? Option.none()
+      : Option.some({ type: row.actingAsType, id: row.actingAsId }),
 });
 
 /** Generous enough for `Sessions.list`'s realistic device-list sizes; real UI-facing pagination (BEH-EA-036) is a repository-level concern this Shape doesn't itself expose. */
@@ -331,8 +368,16 @@ export const layerSql: Layer.Layer<
       const secret = toHex(yield* crypto.randomBytes(32));
       const secretHash = yield* hashSecret(crypto, secret);
       const now = yield* DateTime.now;
-      const absoluteExpiresAt = DateTime.addDuration(now, config.absolute);
-      const idleExpiresAt = DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt);
+      const absoluteExpiresAt = DateTime.addDuration(
+        now,
+        input.absoluteDuration ?? config.absolute,
+      );
+      // BEH-EA-210: a session minted with `actingAs` gets a hard expiry —
+      // `idleExpiresAt` set equal to `absoluteExpiresAt` at issuance.
+      const idleExpiresAt =
+        input.actingAs === undefined
+          ? DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt)
+          : absoluteExpiresAt;
       const insert = yield* SqlModels.Session.insert
         .makeEffect({
           userId: input.userId,
@@ -341,6 +386,8 @@ export const layerSql: Layer.Layer<
           userAgent: input.request?.userAgent ?? null,
           absoluteExpiresAt,
           idleExpiresAt: Model.Override(idleExpiresAt),
+          actingAsType: input.actingAs?.type ?? null,
+          actingAsId: input.actingAs?.id ?? null,
         })
         .pipe(Effect.orDie);
       const row = yield* repo.insert(insert).pipe(Effect.orDie);
@@ -385,6 +432,10 @@ export const layerSql: Layer.Layer<
         return yield* Effect.fail(
           new SessionNotFound({ message: `effect-auth: no such session: ${id}` }),
         );
+      }
+      // BEH-EA-210: a session carrying `actingAs` never idle-refreshes.
+      if (row.actingAsType !== null || row.actingAsId !== null) {
+        return toSessionView(row);
       }
       // BEH-EA-052: throttled idle refresh — at most one write per `touchEvery`.
       const dueForTouch =

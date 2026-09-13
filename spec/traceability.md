@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-RTM |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-09-13 |
 > | Status | Effective |
 > | Author | effect-auth Engineering |
 > | Classification | Verification Record |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added §2 URS/NFR → behavior crosswalk; renumbered subsequent sections; fixed several stale decision-file links and mismatched anchors; updated banners to note the new verify-traceability.sh script (CCR-EA-002) <br> 1.2 (2026-09-12): Populated §6 — a Gherkin acceptance suite now exists at `features/features/*.feature`, allocating `REQ-EA-001` through `REQ-EA-602`; added the file-level `REQ-EA` crosswalk table and a pointer to the full per-scenario manifest at `features/traceability.md` (CCR-EA-003) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added §2 URS/NFR → behavior crosswalk; renumbered subsequent sections; fixed several stale decision-file links and mismatched anchors; updated banners to note the new verify-traceability.sh script (CCR-EA-002) <br> 1.2 (2026-09-12): Populated §6 — a Gherkin acceptance suite now exists at `features/features/*.feature`, allocating `REQ-EA-001` through `REQ-EA-602`; added the file-level `REQ-EA` crosswalk table and a pointer to the full per-scenario manifest at `features/traceability.md` (CCR-EA-003) <br> 1.3 (2026-09-13): Added §1 row for [27 Admin and Impersonation](behaviors/27-admin-impersonation.md), BEH-EA-209 through 220 (CCR-EA-004) |
 
 ---
 
@@ -50,6 +50,7 @@ One row per `spec/behaviors/NN-*.md` file. The planned module column names a pla
 | [24 Next.js Server Rendering](behaviors/24-nextjs-ssr.md) | 185-192 | `@effect-auth/next/src/index.ts` |
 | [25 Testing Harness](behaviors/25-testing-harness.md) | 193-200 | `@effect-auth/test/src/TestAuth.ts` |
 | [26 CLI](behaviors/26-cli.md) | 201-208 | `@effect-auth/cli/src/cli.ts` |
+| [27 Admin and Impersonation](behaviors/27-admin-impersonation.md) | 209-220 | `@effect-auth/admin/src/Admin.ts` (BEH-EA-209/210/211 also extend `@effect-auth/core/src/Sessions.ts` and `@effect-auth/server/src/Authentication.ts`) |
 
 ---
 

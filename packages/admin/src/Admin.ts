@@ -1,0 +1,307 @@
+// @effect-auth/admin — Admin
+//
+// spec/behaviors/27-admin-impersonation.md, BEH-EA-209 through BEH-EA-220.
+// `Auth.make([Admin])` composes: `dependsOn` is left unset on
+// `AuthPlugin.layer` — `Sessions`/`Users`/`AuthEvents` are core domain
+// services this plugin's own `make` Effect simply `yield*`s directly, the
+// same established convention `@effect-auth/passkey`'s own ticket 06
+// corrected `Passkey.ts` to (see that file's own header comment).
+//
+// `AdminConfig.canImpersonate` takes a `@qadi/core` `AuthSubject`, but this
+// plugin never depends on `@effect-auth/qadi` (that would put a plugin
+// sitting at the same stratum as `@effect-auth/passkey`/`password` above
+// `@effect-auth/server`, breaking the stratum ordering `spec/overview.md`
+// fixes) — so the subject passed to the predicate is a bare, identity-only
+// one this plugin builds itself (`subjectOf`, below), the same "id only, no
+// roles, no permissions" shape `@effect-auth/qadi`'s own `SubjectResolver.ts`
+// documents as its own *default* resolution. A host application whose
+// `canImpersonate` needs more than an id looks the rest up itself (e.g. by
+// closing over its own `Roles`/`SubjectResolver` at `config()` call time) —
+// this plugin has no way to reach a fuller subject without the layering
+// violation above.
+
+import { Api, SessionContract } from "@effect-auth/api";
+import { AuthEvents, AuthPlugin, Sessions, Users } from "@effect-auth/core";
+import type { AuthSubject } from "@qadi/core";
+import { makeSubject } from "@qadi/core";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
+import * as AdminApi from "./AdminApi.ts";
+import * as ImpersonationRecords from "./ImpersonationRecords.ts";
+
+export interface AdminConfigShape {
+  /** BEH-EA-210: the hard expiry every impersonation session gets at issuance. */
+  readonly maxDuration: Duration.Duration;
+  /** BEH-EA-212: fail-closed by default — an application that installs this plugin but never configures a gate denies every attempt. */
+  readonly canImpersonate: (subject: AuthSubject) => Effect.Effect<boolean>;
+}
+
+const defaultAdminConfig: AdminConfigShape = {
+  maxDuration: Duration.hours(1),
+  canImpersonate: () => Effect.succeed(false),
+};
+
+/** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
+export const AdminConfig: Context.Reference<AdminConfigShape> = Context.Reference(
+  "effect-auth/admin/Config",
+  { defaultValue: () => defaultAdminConfig },
+);
+
+export const config = (partial: Partial<AdminConfigShape>) =>
+  Layer.succeed(AdminConfig, { ...defaultAdminConfig, ...partial });
+
+export interface IssuedSession {
+  readonly session: Sessions.SessionView;
+  readonly token: Redacted.Redacted<string>;
+}
+
+/**
+ * BEH-EA-137-style "identity-only" subject — this plugin's own, independent
+ * copy (see this module's own header comment for why it cannot import
+ * `@effect-auth/qadi`'s real `SubjectResolver` default instead).
+ */
+const subjectOf = (principal: Api.UserPrincipal): AuthSubject =>
+  makeSubject({ id: principal.ref.id });
+
+export interface AdminShape {
+  /**
+   * BEH-EA-213/214/218: validates self/nested-impersonation first (neither
+   * ever reaches the gate or publishes `impersonationDenied`), then the
+   * configured gate, then issues a dual-identity session for `targetUserId`
+   * and records a durable audit row — `caller`'s own session is never
+   * touched.
+   */
+  readonly impersonate: (input: {
+    readonly caller: Api.UserPrincipal;
+    readonly targetUserId: Users.UserId;
+    readonly reason: string;
+  }) => Effect.Effect<
+    IssuedSession,
+    | AdminApi.AdminImpersonationDenied
+    | AdminApi.AdminSelfImpersonationRefused
+    | AdminApi.AdminAlreadyImpersonating
+  >;
+  /** BEH-EA-216: `caller`'s own session must itself carry `actingAs`, or there is nothing to stop. */
+  readonly stopImpersonating: (
+    caller: Api.UserPrincipal,
+  ) => Effect.Effect<void, AdminApi.AdminImpersonationNotFound>;
+  /** BEH-EA-217: gated by the same predicate as `impersonate`; `sessionId` names the episode to end, not `caller`'s own. */
+  readonly forceStop: (
+    caller: Api.UserPrincipal,
+    sessionId: string,
+  ) => Effect.Effect<void, AdminApi.AdminImpersonationDenied | AdminApi.AdminImpersonationNotFound>;
+  /** BEH-EA-219: gated by the same predicate; full history by default, `active` narrows to unended episodes. */
+  readonly list: (
+    caller: Api.UserPrincipal,
+    input?: { readonly active?: boolean },
+  ) => Effect.Effect<
+    ReadonlyArray<ImpersonationRecords.ImpersonationRecord>,
+    AdminApi.AdminImpersonationDenied
+  >;
+}
+
+const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto =>
+  new SessionContract.SessionDto({
+    id: session.id,
+    createdAt: DateTime.formatIso(session.createdAt),
+    lastActiveAt: DateTime.formatIso(session.lastActiveAt),
+    expiresAt: DateTime.formatIso(session.absoluteExpiresAt),
+    userAgent: Option.getOrNull(session.userAgent),
+    current: true,
+  });
+
+const toRecordDto = (
+  record: ImpersonationRecords.ImpersonationRecord,
+): AdminApi.ImpersonationRecordDto =>
+  new AdminApi.ImpersonationRecordDto({
+    id: record.id,
+    adminUserId: record.adminUserId,
+    targetUserId: record.targetUserId,
+    sessionId: record.sessionId,
+    reason: record.reason,
+    startedAt: DateTime.formatIso(record.startedAt),
+    endedAt: Option.match(record.endedAt, { onNone: () => null, onSome: DateTime.formatIso }),
+    endedBy: Option.getOrNull(record.endedBy),
+  });
+
+/** Same forward-reference pattern `@effect-auth/passkey`'s own `Passkey.ts` documents. */
+const currentUserPrincipal = Effect.gen(function* () {
+  const principal = yield* Api.CurrentPrincipal;
+  if (principal._tag !== "User") {
+    return yield* Effect.die(
+      new Error(`effect-auth: admin group reached with a non-User principal: ${principal._tag}`),
+    );
+  }
+  return principal;
+});
+
+export const AdminHandlers = HttpApiBuilder.group(
+  AdminApi.AdminApi,
+  "admin",
+  Effect.fnUntraced(function* (handlers) {
+    const admin = yield* Admin;
+    return handlers.handleAll({
+      impersonate: Effect.fnUntraced(function* ({
+        params,
+        payload,
+      }: {
+        params: AdminApi.UserIdParams;
+        payload: AdminApi.ImpersonatePayload;
+      }) {
+        const caller = yield* currentUserPrincipal;
+        const issued = yield* admin.impersonate({
+          caller,
+          targetUserId: Users.UserId(params.userId),
+          reason: payload.reason,
+        });
+        yield* HttpApiBuilder.securitySetCookie(
+          Api.SessionCookie,
+          Redacted.value(issued.token),
+          Sessions.SESSION_COOKIE_ATTRIBUTES,
+        );
+        return toSessionDto(issued.session);
+      }),
+      stopImpersonating: Effect.fnUntraced(function* () {
+        const caller = yield* currentUserPrincipal;
+        yield* admin.stopImpersonating(caller);
+      }),
+      forceStop: Effect.fnUntraced(function* ({ params }: { params: AdminApi.SessionIdParams }) {
+        const caller = yield* currentUserPrincipal;
+        yield* admin.forceStop(caller, params.sessionId);
+      }),
+      list: Effect.fnUntraced(function* ({ query }: { query: AdminApi.ListQuery }) {
+        const caller = yield* currentUserPrincipal;
+        const records = yield* admin.list(caller, { active: query.active === "true" });
+        return records.map(toRecordDto);
+      }),
+    });
+  }),
+);
+
+export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
+  apiVersion: 1,
+  contract: AdminApi.AdminApi,
+  tables: ["admin_impersonation"],
+}) {
+  static readonly layer = AuthPlugin.layer(Admin, {
+    handlers: AdminHandlers,
+    make: Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const events = yield* AuthEvents.AuthEvents;
+      const records = yield* ImpersonationRecords.ImpersonationRecords;
+      const adminConfig = yield* AdminConfig;
+
+      const impersonate: AdminShape["impersonate"] = Effect.fnUntraced(function* ({
+        caller,
+        targetUserId,
+        reason,
+      }) {
+        // BEH-EA-214/218: validation refusals never reach the gate and never
+        // publish `impersonationDenied`.
+        if (caller.ref.id === targetUserId) {
+          return yield* Effect.fail(new AdminApi.AdminSelfImpersonationRefused());
+        }
+        if (caller.actingAs !== undefined) {
+          return yield* Effect.fail(new AdminApi.AdminAlreadyImpersonating());
+        }
+
+        const allowed = yield* adminConfig.canImpersonate(subjectOf(caller));
+        if (!allowed) {
+          yield* events.publish({
+            _tag: "auth.admin.impersonationDenied",
+            adminUserId: Users.UserId(caller.ref.id),
+          });
+          return yield* Effect.fail(new AdminApi.AdminImpersonationDenied());
+        }
+
+        const issued = yield* sessions
+          .issue({
+            userId: targetUserId,
+            actingAs: { type: caller.ref.type, id: caller.ref.id },
+            absoluteDuration: adminConfig.maxDuration,
+          })
+          .pipe(Effect.orDie);
+        const trimmedReason = reason.trim();
+        yield* records.create({
+          adminUserId: Users.UserId(caller.ref.id),
+          targetUserId,
+          sessionId: issued.session.id,
+          reason: trimmedReason,
+        });
+        yield* events.publish({
+          _tag: "auth.admin.impersonationStarted",
+          adminUserId: Users.UserId(caller.ref.id),
+          targetUserId,
+          reason: trimmedReason,
+          sessionId: issued.session.id,
+        });
+        return issued;
+      });
+
+      const stopImpersonating: AdminShape["stopImpersonating"] = Effect.fnUntraced(
+        function* (caller) {
+          if (caller.actingAs === undefined) {
+            return yield* Effect.fail(new AdminApi.AdminImpersonationNotFound());
+          }
+          yield* records
+            .endEpisode(caller.sessionId, "self")
+            .pipe(
+              Effect.catchTag("ImpersonationRecordNotFound", () =>
+                Effect.fail(new AdminApi.AdminImpersonationNotFound()),
+              ),
+            );
+          yield* sessions.revoke(Sessions.SessionId(caller.sessionId)).pipe(Effect.orDie);
+          yield* events.publish({
+            _tag: "auth.admin.impersonationStopped",
+            sessionId: caller.sessionId,
+            endedBy: "self",
+          });
+        },
+      );
+
+      const forceStop: AdminShape["forceStop"] = Effect.fnUntraced(function* (caller, sessionId) {
+        const allowed = yield* adminConfig.canImpersonate(subjectOf(caller));
+        if (!allowed) {
+          yield* events.publish({
+            _tag: "auth.admin.impersonationDenied",
+            adminUserId: Users.UserId(caller.ref.id),
+          });
+          return yield* Effect.fail(new AdminApi.AdminImpersonationDenied());
+        }
+        yield* records
+          .endEpisode(sessionId, "forcedByAdmin")
+          .pipe(
+            Effect.catchTag("ImpersonationRecordNotFound", () =>
+              Effect.fail(new AdminApi.AdminImpersonationNotFound()),
+            ),
+          );
+        yield* sessions.revoke(Sessions.SessionId(sessionId)).pipe(Effect.orDie);
+        yield* events.publish({
+          _tag: "auth.admin.impersonationStopped",
+          sessionId,
+          endedBy: "forcedByAdmin",
+        });
+      });
+
+      const list: AdminShape["list"] = Effect.fnUntraced(function* (caller, input) {
+        const allowed = yield* adminConfig.canImpersonate(subjectOf(caller));
+        if (!allowed) {
+          yield* events.publish({
+            _tag: "auth.admin.impersonationDenied",
+            adminUserId: Users.UserId(caller.ref.id),
+          });
+          return yield* Effect.fail(new AdminApi.AdminImpersonationDenied());
+        }
+        return yield* records.list(input);
+      });
+
+      return Admin.of({ impersonate, stopImpersonating, forceStop, list });
+    }),
+  });
+}

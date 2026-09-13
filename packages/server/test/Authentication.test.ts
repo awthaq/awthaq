@@ -45,6 +45,12 @@ const TestApi = HttpApi.make("test")
           success: Schema.String,
         }),
       )
+      .add(
+        HttpApiEndpoint.get("whoIsActingAs", "/who-is-acting-as", {
+          headers: RequestHeaders,
+          success: Schema.NullOr(Schema.String),
+        }),
+      )
       .middleware(Api.Authentication),
   )
   .add(
@@ -64,8 +70,16 @@ const whoAmI = () =>
     return principal._tag === "User" ? principal.ref.id : principal._tag;
   });
 
+const whoIsActingAs = () =>
+  Effect.gen(function* () {
+    const principal = yield* Api.CurrentPrincipal;
+    return principal._tag === "User" && principal.actingAs !== undefined
+      ? principal.actingAs.id
+      : null;
+  });
+
 const RequiredLayer = HttpApiBuilder.group(TestApi, "required", (handlers) =>
-  handlers.handle("whoAmI", whoAmI),
+  handlers.handle("whoAmI", whoAmI).handle("whoIsActingAs", whoIsActingAs),
 );
 
 const OptionalLayer = HttpApiBuilder.group(TestApi, "optional", (handlers) =>
@@ -155,5 +169,34 @@ describe("Authentication", () => {
         });
         assert.strictEqual(result, userId);
       }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "BEH-EA-211: a session issued with actingAs resolves to a UserPrincipal carrying the identical actingAs",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({
+          userId,
+          actingAs: { type: "user", id: "admin-1" },
+        });
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+        const result = yield* client.required.whoIsActingAs({
+          headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+        });
+        assert.strictEqual(result, "admin-1");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("an ordinary session (no actingAs) resolves to a UserPrincipal with no actingAs", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const { token } = yield* sessions.issue({ userId });
+      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      const result = yield* client.required.whoIsActingAs({
+        headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+      });
+      assert.strictEqual(result, null);
+    }).pipe(Effect.provide(TestLayer)),
   );
 });

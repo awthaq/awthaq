@@ -51,12 +51,43 @@ export interface PasskeyCounterAnomalyEvent {
   readonly credentialId: string;
 }
 
+/** Published by `@effect-auth/admin`'s `impersonate`, on success (BEH-EA-218). */
+export interface AdminImpersonationStartedEvent {
+  readonly _tag: "auth.admin.impersonationStarted";
+  readonly adminUserId: UserId;
+  readonly targetUserId: UserId;
+  readonly reason: string;
+  readonly sessionId: string;
+}
+
+/** Published by `@effect-auth/admin`'s `stopImpersonating`/`forceStop` (BEH-EA-218). */
+export interface AdminImpersonationStoppedEvent {
+  readonly _tag: "auth.admin.impersonationStopped";
+  readonly sessionId: string;
+  readonly endedBy: "self" | "forcedByAdmin" | "expired";
+}
+
+/**
+ * Published by `@effect-auth/admin`'s `impersonate`/`forceStop`/`list`, but
+ * only for a genuine `AdminConfig.canImpersonate` rejection — never for
+ * self-impersonation, nested-impersonation, or an unknown target/session,
+ * which are ordinary validation failures (BEH-EA-218's own "not diluted with
+ * input-error noise" reasoning).
+ */
+export interface AdminImpersonationDeniedEvent {
+  readonly _tag: "auth.admin.impersonationDenied";
+  readonly adminUserId: UserId;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
   | UserCreatedEvent
   | UserSignedInEvent
-  | PasskeyCounterAnomalyEvent;
+  | PasskeyCounterAnomalyEvent
+  | AdminImpersonationStartedEvent
+  | AdminImpersonationStoppedEvent
+  | AdminImpersonationDeniedEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-INV |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-13 |
 > | Status | Effective |
 > | Author | effect-auth Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) |
 
 ---
 
@@ -150,13 +150,13 @@ These are properties intended to hold at runtime once the corresponding domain s
 
 ## INV-EA-014: An impersonation session carries a hard expiry with no sliding refresh
 
-**Source**: `Admin` plugin, impersonation (planned) — `archive/PRD.md` §17 and §18 describe impersonation as "off by default, admin-gated, reason required, hard expiry, dual identity, audit events"; the intended rule is that an impersonation session's expiry is fixed at issuance and is never extended by activity, unlike an ordinary session's idle-refresh behavior (INV-EA-008). The `Admin` plugin itself has no behavior file yet — its only record is the non-normative [MOD-EA-015](models/15-admin-impersonation.md) adoption record.
+**Source**: `Admin` plugin, impersonation — [BEH-EA-209/210](behaviors/27-admin-impersonation.md) now normatively fix this: an impersonation session's expiry is fixed at issuance (`idleExpiresAt = absoluteExpiresAt`) and is never extended by activity, unlike an ordinary session's idle-refresh behavior (INV-EA-008). `archive/PRD.md` §17 and §18 originally named it as "off by default, admin-gated, reason required, hard expiry, dual identity, audit events."
 
 **Implication**: Without a hard ceiling, an admin impersonating a user during an active support session could remain impersonating indefinitely simply by continuing to act, which is a materially worse blast radius than an ordinary session outliving its absolute expiry. With it, impersonation is bounded no matter how continuously it is used.
 
-**Enforcement**: Planned — no behaviors file has been allocated for the `Admin` plugin yet, so there is no `BEH-EA` range for this invariant to cite; the previously-cited `packages/core/test/Impersonation.test.ts` remains the intended test file, but it is planned against a plugin that does not yet have a normative specification. See [MOD-EA-015](models/15-admin-impersonation.md).
+**Enforcement**: Planned against [BEH-EA-209/210](behaviors/27-admin-impersonation.md) — `packages/core/test/Sessions.test.ts` (the `actingAs` idle-refresh-skip behavior) and `packages/admin/test/Admin.test.ts` (the end-to-end impersonation session), neither of which exists yet; `Admin` itself remains unimplemented.
 
-**Related**: [MOD-EA-015](models/15-admin-impersonation.md) (non-normative adoption record — not a behavior file). [BEH-EA-049 through 056](behaviors/07-sessions.md) covers ordinary session expiry/idle-refresh only, by contrast (INV-EA-008); it does not cover impersonation.
+**Related**: [BEH-EA-209 through 220](behaviors/27-admin-impersonation.md), [MOD-EA-015](models/15-admin-impersonation.md) (superseded non-normative sketch). [BEH-EA-049 through 056](behaviors/07-sessions.md) covers ordinary session expiry/idle-refresh only, by contrast (INV-EA-008); BEH-EA-210 is the one place that contrast is bridged.
 
 ## INV-EA-015: The `(provider, subject, issuer)` tuple is unique per account, and the OAuth state / PKCE verifier is single-use
 
