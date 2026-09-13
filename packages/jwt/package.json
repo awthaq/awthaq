@@ -1,8 +1,9 @@
 {
   "name": "@effect-auth/jwt",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Short-lived, self-contained, cryptographically signed JWTs representing an already-authenticated caller — EdDSA/ES256, JWKS with grace-period key rotation, a standalone lite verifier for downstream services, and general-purpose signing primitives.",
+  "license": "MIT",
   "files": [
     "lib",
     "src",

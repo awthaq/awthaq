@@ -1,8 +1,9 @@
 {
   "name": "@effect-auth/password",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Sign-up, sign-in, password reset, verification, and optional breach check as the Password plugin.",
+  "license": "MIT",
   "files": [
     "lib",
     "src",

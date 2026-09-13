@@ -1,8 +1,9 @@
 {
   "name": "@effect-auth/magic-link",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Passwordless sign-in via a single-use emailed link.",
+  "license": "MIT",
   "files": [
     "lib",
     "src",

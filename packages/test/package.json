@@ -1,8 +1,9 @@
 {
   "name": "@effect-auth/test",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "TestAuth test harness and the plugin contract-test suite (runPluginContractTests) — runs the whole plugin pipeline over an in-memory backend.",
+  "license": "MIT",
   "files": [
     "lib",
     "src",

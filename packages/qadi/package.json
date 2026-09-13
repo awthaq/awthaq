@@ -1,8 +1,9 @@
 {
   "name": "@effect-auth/qadi",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "AuthorizedSubject middleware, SubjectExtractor layer, obligation handlers — the bridge to qadi, not an authorizer of its own (ADR-EA-009).",
+  "license": "MIT",
   "files": [
     "lib",
     "src",

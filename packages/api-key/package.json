@@ -1,8 +1,9 @@
 {
   "name": "@effect-auth/api-key",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Long-lived API keys resolving to service principals.",
+  "license": "MIT",
   "files": [
     "lib",
     "src",

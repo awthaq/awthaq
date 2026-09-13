@@ -1,8 +1,9 @@
 {
   "name": "@effect-auth/oauth",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "OAuth providers as Layers, PKCE, explicit account linking.",
+  "license": "MIT",
   "files": [
     "lib",
     "src",

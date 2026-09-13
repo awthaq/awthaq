@@ -1,8 +1,9 @@
 {
   "name": "@effect-auth/organization",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Multi-tenancy: membership, invitations, a relationship resolver for qadi.",
+  "license": "MIT",
   "files": [
     "lib",
     "src",

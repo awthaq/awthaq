@@ -1,8 +1,9 @@
 {
   "name": "@effect-auth/two-factor",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "TOTP-based two-factor authentication with a divert hook and hashed recovery codes.",
+  "license": "MIT",
   "files": [
     "lib",
     "src",

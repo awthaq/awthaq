@@ -2,10 +2,35 @@
   "$schema": "https://unpkg.com/@changesets/config@4.0.0/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [],
+  "fixed": [
+    [
+      "@effect-auth/admin",
+      "@effect-auth/api",
+      "@effect-auth/api-key",
+      "@effect-auth/cli",
+      "@effect-auth/client",
+      "@effect-auth/core",
+      "@effect-auth/jwt",
+      "@effect-auth/magic-link",
+      "@effect-auth/next",
+      "@effect-auth/oauth",
+      "@effect-auth/organization",
+      "@effect-auth/passkey",
+      "@effect-auth/password",
+      "@effect-auth/ports",
+      "@effect-auth/qadi",
+      "@effect-auth/react",
+      "@effect-auth/roles",
+      "@effect-auth/server",
+      "@effect-auth/sql",
+      "@effect-auth/test",
+      "@effect-auth/two-factor"
+    ]
+  ],
   "linked": [],
   "access": "restricted",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": []
+  "ignore": [],
+  "privatePackages": { "version": true, "tag": false }
 }

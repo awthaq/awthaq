@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "effect-auth: a TypeScript authentication runtime built natively on Effect v4",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "prepare": "effect-tsgo patch",
