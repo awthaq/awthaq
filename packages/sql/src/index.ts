@@ -10,5 +10,6 @@
 // Planned next: migration records/linker input (BEH-EA-037/038).
 // See spec/overview.md for the full package map.
 
+export * as CoreMigrations from "./CoreMigrations.ts";
 export * as Models from "./Models.ts";
 export * as Repositories from "./Repositories.ts";

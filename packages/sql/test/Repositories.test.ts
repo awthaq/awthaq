@@ -15,75 +15,17 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Model } from "effect/unstable/schema";
-import { SqlClient } from "effect/unstable/sql";
-import { Models, Repositories } from "../src/index.ts";
+import { Migrator, SqlClient } from "effect/unstable/sql";
+import { CoreMigrations, Models, Repositories } from "../src/index.ts";
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
+// Shipping-gap map (.scratch/shipping-gaps), ticket 15: the real
+// framework `Migrator`, run against `CoreMigrations.coreMigrations` —
+// proves the migration set itself is correct, not just the repositories
+// built on top of a hand-maintained-in-the-test-file schema.
 const Migrated = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      CREATE TABLE users (
-        id TEXT PRIMARY KEY,
-        email TEXT NOT NULL,
-        emailVerified INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL
-      )
-    `;
-    yield* sql`
-      CREATE TABLE accounts (
-        id TEXT PRIMARY KEY,
-        userId TEXT NOT NULL,
-        providerId TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        issuer TEXT NOT NULL DEFAULT '',
-        passwordHash TEXT,
-        accessToken TEXT,
-        refreshToken TEXT,
-        createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL
-      )
-    `;
-    yield* sql`
-      CREATE TABLE sessions (
-        id TEXT PRIMARY KEY,
-        userId TEXT NOT NULL,
-        secretHash TEXT NOT NULL,
-        ipAddress TEXT,
-        userAgent TEXT,
-        absoluteExpiresAt TEXT NOT NULL,
-        idleExpiresAt TEXT NOT NULL,
-        createdAt TEXT NOT NULL,
-        lastActiveAt TEXT NOT NULL,
-        actingAsType TEXT,
-        actingAsId TEXT
-      )
-    `;
-    yield* sql`
-      CREATE TABLE verification_tokens (
-        id TEXT PRIMARY KEY,
-        identifier TEXT NOT NULL,
-        valueHash TEXT NOT NULL,
-        expiresAt TEXT NOT NULL,
-        consumedAt TEXT,
-        createdAt TEXT NOT NULL,
-        payload TEXT NOT NULL
-      )
-    `;
-    yield* sql`
-      CREATE UNIQUE INDEX verification_tokens_live_identifier
-      ON verification_tokens(identifier) WHERE consumedAt IS NULL
-    `;
-    yield* sql`
-      CREATE TABLE verification_reservations (
-        identifier TEXT PRIMARY KEY,
-        expiresAt TEXT NOT NULL
-      )
-    `;
-  }),
+  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
 ).pipe(Layer.provide(SqlLive));
 
 const RepositoriesLive = Layer.mergeAll(

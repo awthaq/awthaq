@@ -29,7 +29,7 @@ export * as Auth from "./Auth.ts";
 export * as AuthEvents from "./AuthEvents.ts";
 export * as AuthPlugin from "./AuthPlugin.ts";
 export * as HookPoint from "./HookPoint.ts";
-export type { Migration, Migrations } from "./Migrations.ts";
+export * as Migrations from "./Migrations.ts";
 export * as RateLimits from "./RateLimits.ts";
 export * as Sessions from "./Sessions.ts";
 export * as Slots from "./Slots.ts";

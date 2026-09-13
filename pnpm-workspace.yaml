@@ -13,6 +13,7 @@ catalog:
   effect: 4.0.0-rc.115
   "@effect/platform-node": 4.0.0-rc.115
   "@effect/sql-sqlite-node": 4.0.0-rc.115
+  "@effect/sql-pg": 4.0.0-rc.115
   "@effect/vitest": 4.0.0-rc.115
   "@effect/atom-react": 4.0.0-rc.115
   vitest: 5.0.0
@@ -36,6 +37,7 @@ minimumReleaseAgeExclude:
   - "@effect/platform-node-shared@4.0.0-rc.115"
   - "@effect/platform-node@4.0.0-rc.115"
   - "@effect/sql-sqlite-node@4.0.0-rc.115"
+  - "@effect/sql-pg@4.0.0-rc.115"
   - "@effect/vitest@4.0.0-rc.115"
   - effect@4.0.0-rc.115
   - "@effect/atom-react@4.0.0-rc.115"
