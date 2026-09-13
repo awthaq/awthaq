@@ -1,6 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
   "compilerOptions": {
     "composite": true,
     "noEmit": false,
@@ -9,10 +9,14 @@
     "tsBuildInfoFile": "./.tsbuildinfo",
     "paths": {
       "@/*": ["./src/*"],
+      "@effect-auth/api": ["../api/src/index.ts"],
       "@effect-auth/client": ["../client/src/index.ts"]
     }
   },
   "references": [
+    {
+      "path": "../api/tsconfig.src.json"
+    },
     {
       "path": "../client/tsconfig.src.json"
     }

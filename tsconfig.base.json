@@ -3,7 +3,13 @@
   "compilerOptions": {
     "types": ["node"],
     // Enable latest features
-    "lib": ["ESNext"],
+    // `DOM` is a superset addition for `@effect-auth/react`'s `@types/react`
+    // (whose own types reference `HTMLElement`/etc. pervasively) — harmless
+    // for every other package, which simply never references any DOM global.
+    "lib": ["ESNext", "DOM"],
+    // `react-jsx` only takes effect for a `.tsx` file; every other package's
+    // `.ts` files are unaffected by this setting being on globally.
+    "jsx": "react-jsx",
     "target": "ESNext",
     "moduleDetection": "force",
     "allowJs": false,

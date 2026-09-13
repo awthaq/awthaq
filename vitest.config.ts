@@ -1,33 +1,26 @@
 import { defineConfig } from "vitest/config";
 
-// Scoped to packages/*/test explicitly (currently empty — see
-// spec/roadmap.md, package creation is gated to M1 Core onward) so this run
-// never crosses into features/**/*.steps.test.ts, which is its own separate
-// workspace package with its own `pnpm test:bdd` command and vitest config
-// (features/vitest.config.ts). Without this scoping, plain `vitest run` from
-// the repo root would otherwise discover *.steps.test.ts files too, since
-// Vitest's default include pattern matches them and there is no other
-// config telling it not to.
-//
-// Deliberately a flat `include`, not Vitest 5's `test.projects` API: with
-// zero packages today, `projects: ["packages/*"]` is a hard "No projects
-// were found" startup error (an empty glob match is not tolerated the way a
-// plain `include` glob's empty match is, even with `passWithNoTests: true`).
-// Switch to `projects: ["packages/*"]` once each package has its own
-// vitest.config.ts to run as an isolated project (see qadi's root
-// vitest.config.ts for that pattern).
+// Vitest 5's `test.projects` API: every package under `packages/*` now has
+// its own `vitest.config.ts` (each package created since the 20-package
+// scaffold carries one), so each runs as its own isolated project with its
+// own settings honored — `packages/react/vitest.config.ts`'s
+// `environment: "happy-dom"` in particular, which a flat root `include`
+// (this config's own previous shape) would have silently ignored, running
+// every package's tests under one shared "node" environment regardless of
+// what each package's own config asked for. `features/` is a sibling
+// directory, not under `packages/*`, so this glob never reaches its own
+// separate `pnpm test:bdd` suite (features/vitest.config.ts) — no explicit
+// exclude needed the way the flat `include` shape required one.
 export default defineConfig({
   test: {
-    include: ["packages/*/test/**/*.test.ts"],
-    exclude: ["**/node_modules/**", "features/**"],
-    passWithNoTests: true,
+    projects: ["packages/*"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],
-      include: ["packages/*/src/**/*.ts"],
-      // Per-package thresholds belong here once packages/* is real (see
-      // qadi's own vitest.config.ts for the pattern: a workspace-wide floor
-      // plus per-package overrides for anything held to a stricter bar).
+      include: ["packages/*/src/**/*.ts", "packages/*/src/**/*.tsx"],
+      // Per-package thresholds belong here once a package needs a bar other
+      // than the workspace-wide default (see qadi's own vitest.config.ts for
+      // that pattern).
     },
   },
 });

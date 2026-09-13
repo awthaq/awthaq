@@ -14,11 +14,21 @@ catalog:
   "@effect/platform-node": 4.0.0-rc.115
   "@effect/sql-sqlite-node": 4.0.0-rc.115
   "@effect/vitest": 4.0.0-rc.115
+  "@effect/atom-react": 4.0.0-rc.115
   vitest: 5.0.0
   "@vitest/coverage-v8": 5.0.0
   typescript: ^7.0.0
   "@types/node": ^22.12.0
   hash-wasm: ^4.12.0
+  # Same versions qadi's own root catalog (../qadi/pnpm-workspace.yaml) pins
+  # for its @qadi/react package — kept identical so both repos exercise one
+  # real, matching React version rather than two independently-drifting ones.
+  react: 19.3.0
+  react-dom: 19.3.0
+  "@types/react": 19.3.0
+  "@types/react-dom": 19.3.0
+  "@testing-library/react": ^16.3.2
+  happy-dom: ^20.11.1
 
 minimumReleaseAgeExclude:
   - "@effect-cucumber/gherkin@0.10.0"
@@ -28,5 +38,7 @@ minimumReleaseAgeExclude:
   - "@effect/sql-sqlite-node@4.0.0-rc.115"
   - "@effect/vitest@4.0.0-rc.115"
   - effect@4.0.0-rc.115
+  - "@effect/atom-react@4.0.0-rc.115"
   - "@qadi/core@0.6.2"
   - "@qadi/http@0.6.2"
+  - "@qadi/react@0.6.2"

@@ -1,9 +1,24 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["features/**/*.steps.test.ts", "packages/*/test/**/*.test.ts"],
+  "include": [
+    "features/**/*.steps.test.ts",
+    "packages/*/test/**/*.test.ts",
+    "packages/*/test/**/*.test.tsx"
+  ],
   "compilerOptions": {
     "noEmit": true,
     "composite": false,
+    // `declaration: true` is inherited from `tsconfig.base.json` for the
+    // composite package builds — it has no purpose here (`noEmit` already
+    // means nothing is ever written), but TS's own "is this declaration
+    // portable" check (TS2883, "cannot be named without a reference to...")
+    // still runs whenever it is nominally on, independent of `noEmit` —
+    // surfaced only once `@effect-auth/react`'s `AuthClientAtom.ts` (a
+    // deeply generic `AtomHttpApi.Service<Self>()(...)` return type) joined
+    // this shared program via its own `.tsx` test file. Overriding it off
+    // here (this config never emits anyway) turns the check off with it.
+    "declaration": false,
+    "declarationMap": false,
     "types": ["node"],
     // Same rationale as tsconfig.base.json's `paths`: lets test files resolve
     // a sibling workspace package by source rather than by built output.

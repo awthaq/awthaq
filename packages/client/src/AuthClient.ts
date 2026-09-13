@@ -10,18 +10,19 @@
 // precision the real functions carry, and would create a second place a
 // future `HttpApiClient` API change would need to be mirrored by hand.
 //
-// **BEH-EA-169's "or `AtomHttpApi.Service` for the reactive binding" is
-// deliberately not implemented.** `@effect-atom/atom` — the only published
-// package providing `AtomHttpApi` — currently declares a peer dependency on
-// `effect: ^3.22.1` (verified against its own published `package.json`),
-// not the `effect@4.0.0-rc.115` this entire project targets. Building
-// against it today would mean either a second, incompatible `effect`
-// installed alongside this repo's own, or vendoring a v4 port of a package
-// this project does not own — the same class of gap `@effect-auth/ports`'s
-// deferred `WebAuthn` interface already documents, not a swallowed one.
-// `@effect-auth/react`'s own reactive
-// bindings (M5, not yet built) are the right place to revisit this once
-// `@effect-atom/atom` ships v4 support.
+// **BEH-EA-169's "or `AtomHttpApi.Service` for the reactive binding" is not
+// implemented in this module, but is no longer blocked.** An earlier
+// revision of this comment said the only published `AtomHttpApi` was
+// `@effect-atom/atom`, pinned to `effect: ^3.22.1` and therefore unusable
+// against this project's `effect@4.0.0-rc.115` — that reasoning no longer
+// holds: `effect` itself now ships `AtomHttpApi`/`Atom`/`AtomRegistry`
+// natively at `effect/unstable/reactivity` (confirmed present in this
+// repo's own installed `effect` dependency, no external package needed).
+// `@effect-auth/react`'s own reactive bindings (M5, not yet built) are the
+// right place to build the actual `AtomHttpApiClient` service over this
+// package's `Api` contract — this module stays the plain, non-reactive
+// `HttpApiClient` binding either way (BEH-EA-169 offers both forms; this
+// file is only the first of them).
 //
 // **BEH-EA-171's `{ csrf: false }` contract variant has nothing to build
 // against yet.** No plugin's `HttpApiGroup` in this repository currently

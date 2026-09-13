@@ -27,7 +27,16 @@ export class JwtVerificationError extends Data.TaggedError("JwtVerificationError
   readonly reason: string;
 }> {}
 
-const base64UrlToUint8Array = (segment: string): Uint8Array => {
+/**
+ * `Uint8Array<ArrayBuffer>`, not the bare (`ArrayBufferLike`-defaulted)
+ * `Uint8Array` alias: `Uint8Array.from` here always allocates a fresh
+ * regular `ArrayBuffer`, never a `SharedArrayBuffer` — the same real
+ * distinction `lib.dom.d.ts`'s `BufferSource` (what `crypto.subtle.verify`
+ * below actually requires) already draws, surfaced only once this
+ * package's shared `tsconfig` gained the `"DOM"` lib for
+ * `@effect-auth/react`'s sake.
+ */
+const base64UrlToUint8Array = (segment: string): Uint8Array<ArrayBuffer> => {
   const padded = segment.replaceAll("-", "+").replaceAll("_", "/");
   const withPadding = padded + "=".repeat((4 - (padded.length % 4)) % 4);
   return Uint8Array.from(atob(withPadding), (char) => char.charCodeAt(0));
@@ -39,8 +48,8 @@ const decodeJson = (segment: string): unknown =>
 export interface DecodedJwt {
   readonly header: { readonly alg?: string; readonly kid?: string };
   readonly payload: Record<string, unknown>;
-  readonly signingInput: Uint8Array;
-  readonly signature: Uint8Array;
+  readonly signingInput: Uint8Array<ArrayBuffer>;
+  readonly signature: Uint8Array<ArrayBuffer>;
 }
 
 /** Splits and decodes a compact JWS/JWT without verifying its signature. */
@@ -63,8 +72,8 @@ export const decode = (token: string): Effect.Effect<DecodedJwt, JwtVerification
 /** Verifies an RS256 signature against one JWKS entry (matched by `kid` beforehand). */
 export const verifyRs256 = (
   jwk: Jwk,
-  signingInput: Uint8Array,
-  signature: Uint8Array,
+  signingInput: Uint8Array<ArrayBuffer>,
+  signature: Uint8Array<ArrayBuffer>,
 ): Effect.Effect<boolean, JwtVerificationError> =>
   Effect.tryPromise({
     try: async () => {
