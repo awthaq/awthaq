@@ -52,7 +52,7 @@ The system is organized into seven strata plus client, tooling, and plugin packa
 | 7 Composition | (application code) | `Auth.make([...])` and the application's own `Layer.provide` stack. |
 | client | `@effect-auth/client`, `@effect-auth/react`, `@effect-auth/next` | `AtomHttpApi` client, session atom, provider glue, framework adapters. |
 | tools | `@effect-auth/test`, `@effect-auth/cli` | `TestAuth`, contract tests, `doctor`, migrations, `openapi`. |
-| plugins | `@effect-auth/password`, `oauth`, `passkey`, `magic-link`, `two-factor`, `organization`, `roles`, `api-key`, `admin` | One `AuthPlugin.Service` class each. |
+| plugins | `@effect-auth/password`, `oauth`, `passkey`, `magic-link`, `two-factor`, `organization`, `roles`, `api-key`, `admin`, `jwt` | One `AuthPlugin.Service` class each. |
 
 ## Planned public API surface
 

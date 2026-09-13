@@ -7,13 +7,16 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiTest from "effect/unstable/httpapi/HttpApiTest";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { Authentication } from "../src/index.ts";
 
 // `HttpApiTest.groups` needs these platform services regardless of which
@@ -199,4 +202,81 @@ describe("Authentication", () => {
       assert.strictEqual(result, null);
     }).pipe(Effect.provide(TestLayer)),
   );
+
+  // .scratch/jwt/issues/16-automatic-response-mirroring.md: `PostAuthResponseHook`
+  // defaults to a no-op (every test above already proves this — none of
+  // them override it, and all pass unchanged). This is the one test
+  // proving a tapped override is actually consulted, with the correctly-
+  // resolved principal, and that its result is what the request ultimately
+  // returns — the mechanism `@effect-auth/jwt` builds on, exercised here
+  // with no knowledge of that plugin at all.
+  it.effect("a tapped PostAuthResponseHook is consulted with the resolved principal", () => {
+    const seen = Effect.runSync(Ref.make<Option.Option<string>>(Option.none()));
+    const TappedHook = Layer.succeed(Authentication.PostAuthResponseHook, {
+      decorate: (principal: Api.Principal, response: HttpServerResponse.HttpServerResponse) =>
+        Ref.set(
+          seen,
+          Option.some(principal._tag === "User" ? principal.ref.id : principal._tag),
+        ).pipe(Effect.as(HttpServerResponse.setHeader(response, "x-tapped", "yes"))),
+    });
+    return Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const { token } = yield* sessions.issue({ userId });
+      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      const result = yield* client.required.whoAmI({
+        headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+      });
+      assert.strictEqual(result, userId);
+      assert.deepStrictEqual(yield* Ref.get(seen), Option.some(userId));
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
+          Layer.provideMerge(Authentication.AuthenticationLive),
+          Layer.provideMerge(Authentication.OptionalAuthenticationLive),
+          Layer.provide(Authentication.PrincipalResolverLive),
+          Layer.provide(TappedHook),
+          Layer.provideMerge(Sessions.layerMemory),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provideMerge(TestServices),
+        ),
+      ),
+    );
+  });
+
+  // Spec-fidelity fix: `.scratch/jwt/spec.md`'s own "Automatic response
+  // mirroring" decision consults `PostAuthResponseHook` only "immediately
+  // after a successful `resolvePrincipal`" — the anonymous principal
+  // `OptionalAuthenticationLive`'s `bearer` branch falls back to on a
+  // missing/invalid credential is a *recovery* from failure, not a success,
+  // and must never reach the hook (an unauthenticated caller must never be
+  // handed a decorated response, e.g. a `@effect-auth/jwt`-minted token
+  // asserting "anonymous" identity).
+  it.effect("a tapped PostAuthResponseHook is NOT consulted for the anonymous fallback", () => {
+    const seen = Effect.runSync(Ref.make<Option.Option<string>>(Option.none()));
+    const TappedHook = Layer.succeed(Authentication.PostAuthResponseHook, {
+      decorate: (principal: Api.Principal, response: HttpServerResponse.HttpServerResponse) =>
+        Ref.set(
+          seen,
+          Option.some(principal._tag === "User" ? principal.ref.id : principal._tag),
+        ).pipe(Effect.as(HttpServerResponse.setHeader(response, "x-tapped", "yes"))),
+    });
+    return Effect.gen(function* () {
+      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      const result = yield* client.optional.whoAmI({ headers: {} });
+      assert.strictEqual(result, "Anonymous");
+      assert.deepStrictEqual(yield* Ref.get(seen), Option.none());
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
+          Layer.provideMerge(Authentication.AuthenticationLive),
+          Layer.provideMerge(Authentication.OptionalAuthenticationLive),
+          Layer.provide(Authentication.PrincipalResolverLive),
+          Layer.provide(TappedHook),
+          Layer.provideMerge(Sessions.layerMemory),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provideMerge(TestServices),
+        ),
+      ),
+    );
+  });
 });

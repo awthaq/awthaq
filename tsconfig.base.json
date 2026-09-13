@@ -62,7 +62,8 @@
       "@effect-auth/two-factor": ["./packages/two-factor/src/index.ts"],
       "@effect-auth/organization": ["./packages/organization/src/index.ts"],
       "@effect-auth/api-key": ["./packages/api-key/src/index.ts"],
-      "@effect-auth/admin": ["./packages/admin/src/index.ts"]
+      "@effect-auth/admin": ["./packages/admin/src/index.ts"],
+      "@effect-auth/jwt": ["./packages/jwt/src/index.ts"]
     },
     "plugins": [
       {

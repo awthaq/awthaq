@@ -60,6 +60,9 @@
     },
     {
       "path": "packages/admin/tsconfig.src.json"
+    },
+    {
+      "path": "packages/jwt/tsconfig.src.json"
     }
   ]
 }

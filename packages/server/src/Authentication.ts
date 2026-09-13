@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import { HttpApiMiddleware } from "effect/unstable/httpapi";
+import type { HttpServerResponse } from "effect/unstable/http/HttpServerResponse";
 
 /**
  * BEH-EA-069: derives a `Principal` from a resolved `Session` alone, with no
@@ -54,6 +55,32 @@ export const PrincipalResolverLive: Layer.Layer<PrincipalResolver> = Layer.succe
         }),
       ),
   },
+);
+
+/**
+ * `.scratch/jwt/spec.md`'s "Automatic response mirroring" decision (and
+ * `.scratch/jwt/issues/02-mint-delivery-mechanism.md`'s own resolution): a
+ * second overridable slot, mirroring `PrincipalResolver` immediately
+ * above — an application/plugin may decorate the response of any
+ * successfully-authenticated request, without this middleware knowing or
+ * caring who's listening. Defaults to a true identity no-op, so installing
+ * a plugin that never overrides this reference (i.e. every plugin except
+ * `@effect-auth/jwt` today) changes nothing about existing behavior.
+ * `decorate`'s own type — `Effect.Effect<HttpServerResponse>`, no error
+ * channel — forces any override to handle its own failures internally
+ * (e.g. minting a JWT must never be able to fail an otherwise-successful
+ * response); this middleware never adds its own recovery for it.
+ */
+export interface PostAuthResponseHookShape {
+  readonly decorate: (
+    principal: Api.Principal,
+    response: HttpServerResponse,
+  ) => Effect.Effect<HttpServerResponse>;
+}
+
+export const PostAuthResponseHook = Context.Reference<PostAuthResponseHookShape>(
+  "effect-auth/server/PostAuthResponseHook",
+  { defaultValue: () => ({ decorate: (_principal, response) => Effect.succeed(response) }) },
 );
 
 /**
@@ -100,7 +127,21 @@ export const AuthenticationLive: Layer.Layer<
     >["cookie"] = (httpEffect, { credential }) =>
       resolvePrincipal(sessions, resolver, credential).pipe(
         Effect.flatMap((principal) =>
-          Effect.provideService(httpEffect, Api.CurrentPrincipal, principal),
+          Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
+            Effect.flatMap((response) =>
+              // `PostAuthResponseHook` is resolved here, per request, not
+              // captured once above alongside `sessions`/`resolver` — a
+              // plugin overriding it (e.g. `@effect-auth/jwt`) may itself
+              // need `Api.Authentication` for its own endpoints, which
+              // would make capturing the override at THIS layer's own
+              // build time an unresolvable circular build order. Resolved
+              // per request instead, from whatever the request's own full
+              // ambient context already has — no such ordering constraint
+              // applies there, and a `Context.Reference` lookup costs
+              // nothing beyond a context read.
+              Effect.flatMap(PostAuthResponseHook, (hook) => hook.decorate(principal, response)),
+            ),
+          ),
         ),
       );
     return { cookie: handle, bearer: handle };
@@ -130,14 +171,31 @@ export const OptionalAuthenticationLive: Layer.Layer<
     >["cookie"] = (httpEffect, { credential }) =>
       resolvePrincipal(sessions, resolver, credential).pipe(
         Effect.flatMap((principal) =>
-          Effect.provideService(httpEffect, Api.CurrentPrincipal, principal),
+          Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
+            Effect.flatMap((response) =>
+              // Per request, not captured at build time — see the identical
+              // note on `AuthenticationLive` above.
+              Effect.flatMap(PostAuthResponseHook, (hook) => hook.decorate(principal, response)),
+            ),
+          ),
         ),
       );
     const bearer: typeof cookie = (httpEffect, { credential }) =>
       resolvePrincipal(sessions, resolver, credential).pipe(
-        Effect.catchTag("Unauthenticated", () => Effect.succeed(Api.anonymousPrincipal)),
         Effect.flatMap((principal) =>
-          Effect.provideService(httpEffect, Api.CurrentPrincipal, principal),
+          Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
+            Effect.flatMap((response) =>
+              Effect.flatMap(PostAuthResponseHook, (hook) => hook.decorate(principal, response)),
+            ),
+          ),
+        ),
+        // The anonymous fallback below is a *recovery* from resolution
+        // failure, never a success `resolvePrincipal` itself produced —
+        // `PostAuthResponseHook` is only ever consulted above, on the
+        // genuine success path, so an anonymous/no-credential caller never
+        // gets a decorated (e.g. `@effect-auth/jwt`-minted) response.
+        Effect.catchTag("Unauthenticated", () =>
+          Effect.provideService(httpEffect, Api.CurrentPrincipal, Api.anonymousPrincipal),
         ),
       );
     return { cookie, bearer };
