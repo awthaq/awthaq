@@ -1,0 +1,597 @@
+// @effect-auth/oauth — OAuth
+//
+// spec/behaviors/16-oauth.md, BEH-EA-121 through BEH-EA-128.
+// spec/models/02-oauth-oidc.md's plugin sketch, made runnable — the
+// generic authorization-code + PKCE + (for `"oidc"` providers) `id_token`
+// flow every provider shares, with the provider-specific parts
+// (`OAuthProvider.ts`) and the flow-state/linking machinery kept apart the
+// way `research/05-oauth-oidc.md`'s Q54 recommends ("model per-provider
+// divergence as data presets over one core, not one class per provider").
+//
+// Scoped deliberately, documented rather than silently assumed: no
+// `google()`/`github()`/`apple()` vendor presets (see `OAuthProvider.ts`'s
+// own header), no token refresh operation (nothing in BEH-EA-121..128
+// requires it — a real gap for a production deployment, the same category
+// of documented deferral as `Verification.layerSql`), and `Jwt.ts`'s own
+// header documents its RS256-only signature-verification scope.
+
+import { Api } from "@effect-auth/api";
+import { AuthEvents, AuthPlugin, Accounts, Sessions, Users, Verification } from "@effect-auth/core";
+import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
+import * as HttpBody from "effect/unstable/http/HttpBody";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as Jwt from "./Jwt.ts";
+import * as OAuthApi from "./OAuthApi.ts";
+import * as OAuthProvider from "./OAuthProvider.ts";
+
+export interface OAuthConfigShape {
+  readonly providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>;
+  /** BEH-EA-123/124: `"explicit"` (default) or an opt-in, per-provider trusted-email-match auto-link list. */
+  readonly linking: "explicit" | { readonly trustedProviders: ReadonlyArray<string> };
+  /** BEH-EA-128: the allowlist a `callbackURL` must resolve to an origin in, or fall back to `defaultCallbackURL`. */
+  readonly trustedOrigins: ReadonlyArray<string>;
+  /** BEH-EA-128/354: `redirect_uri` is always derived from this, never from request input. */
+  readonly baseUrl: string;
+  readonly defaultCallbackURL: string;
+}
+
+const defaultOAuthConfig: OAuthConfigShape = {
+  providers: [],
+  linking: "explicit",
+  trustedOrigins: [],
+  baseUrl: "http://localhost:3000",
+  defaultCallbackURL: "/",
+};
+
+/** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
+export const OAuthConfig: Context.Reference<OAuthConfigShape> = Context.Reference(
+  "effect-auth/oauth/Config",
+  { defaultValue: () => defaultOAuthConfig },
+);
+
+export const config = (partial: Partial<OAuthConfigShape>): Layer.Layer<never> =>
+  Layer.succeed(OAuthConfig, { ...defaultOAuthConfig, ...partial });
+
+const OAUTH_STATE_COOKIE = "__Host-oauth-state";
+const FLOW_TTL = Duration.minutes(10);
+const FLOW_PREFIX = "oauth.flow:";
+
+const toBase64Url = (bytes: Uint8Array): string => {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+};
+
+/**
+ * BEH-EA-122: the same `${identifier}.${secret}` round trip
+ * `@effect-auth/password`'s `Password.ts` uses for its mailed tokens,
+ * reproduced here rather than shared — the two callers travel through
+ * different transports (a mailed link vs. an OAuth provider's own `state`
+ * round trip) and duplicating six lines was judged simpler than a shared
+ * abstraction two call sites don't yet justify.
+ */
+const encodeState = (identifier: string, value: Redacted.Redacted<string>): string =>
+  `${identifier}.${Redacted.value(value)}`;
+
+const decodeState = (
+  raw: string,
+): Option.Option<{ readonly identifier: string; readonly value: Redacted.Redacted<string> }> => {
+  const separator = raw.lastIndexOf(".");
+  if (separator === -1) return Option.none();
+  return Option.some({
+    identifier: raw.slice(0, separator),
+    value: Redacted.make(raw.slice(separator + 1)),
+  });
+};
+
+/** BEH-EA-122's own payload sketch: `{ codeVerifier, nonce?, callbackURL, link?, providerId }`. */
+interface FlowPayload {
+  readonly providerId: string;
+  readonly codeVerifier: string;
+  readonly nonce: string | undefined;
+  readonly callbackURL: string;
+  readonly link: { readonly userId: string } | undefined;
+}
+
+const isFlowPayload = (value: unknown): value is FlowPayload =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as Record<string, unknown>)["providerId"] === "string" &&
+  typeof (value as Record<string, unknown>)["codeVerifier"] === "string" &&
+  typeof (value as Record<string, unknown>)["callbackURL"] === "string";
+
+const generatePkce = (
+  crypto: Crypto.Crypto,
+): Effect.Effect<{ readonly verifier: string; readonly challenge: string }> =>
+  Effect.gen(function* () {
+    const verifier = toBase64Url(yield* crypto.randomBytes(32));
+    const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier));
+    return { verifier, challenge: toBase64Url(digest) };
+  }).pipe(Effect.orDie);
+
+/** Only present when there is an issuer — spreading this avoids ever assigning `issuer: undefined` under `exactOptionalPropertyTypes`. */
+const issuerField = (issuer: Option.Option<string>): { readonly issuer: string } | {} =>
+  Option.isSome(issuer) ? { issuer: issuer.value } : {};
+
+/**
+ * BEH-EA-128: a relative (same-origin) destination is always safe; an
+ * absolute one is honored only when its origin is on the configured
+ * allowlist — anything else silently falls back to the safe default rather
+ * than failing the whole request (REQ-EA-353: the handler simply never
+ * redirects there, it does not need to error either).
+ */
+const resolveCallbackURL = (
+  raw: string | undefined,
+  trustedOrigins: ReadonlyArray<string>,
+  fallback: string,
+): string => {
+  if (raw === undefined) return fallback;
+  if (raw.startsWith("/")) return raw;
+  const parsed = Option.fromNullOr(URL.parse(raw));
+  return parsed.pipe(
+    Option.filter((url) => trustedOrigins.includes(url.origin)),
+    Option.match({ onNone: () => fallback, onSome: () => raw }),
+  );
+};
+
+const buildAuthorizeUrl = (
+  provider: OAuthProvider.ResolvedProvider,
+  params: {
+    readonly state: string;
+    readonly redirectUri: string;
+    readonly codeChallenge: string | undefined;
+    readonly nonce: string | undefined;
+  },
+): string => {
+  const url = new URL(provider.authorizationEndpoint);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id", provider.clientId);
+  url.searchParams.set("redirect_uri", params.redirectUri);
+  url.searchParams.set("scope", provider.scopes.join(" "));
+  url.searchParams.set("state", params.state);
+  if (params.codeChallenge !== undefined) {
+    url.searchParams.set("code_challenge", params.codeChallenge);
+    url.searchParams.set("code_challenge_method", "S256");
+  }
+  if (params.nonce !== undefined) url.searchParams.set("nonce", params.nonce);
+  return url.toString();
+};
+
+interface TokenSet {
+  readonly accessToken: string;
+  readonly idToken: string | undefined;
+}
+
+const exchangeCode = (
+  httpClient: HttpClient.HttpClient,
+  provider: OAuthProvider.ResolvedProvider,
+  input: { readonly code: string; readonly codeVerifier: string; readonly redirectUri: string },
+): Effect.Effect<TokenSet, OAuthApi.OAuthCallbackFailed> =>
+  Effect.gen(function* () {
+    const form: Record<string, string> = {
+      grant_type: "authorization_code",
+      code: input.code,
+      redirect_uri: input.redirectUri,
+      client_id: provider.clientId,
+    };
+    if (!provider.skipPkce) form["code_verifier"] = input.codeVerifier;
+    if (Option.isSome(provider.clientSecret)) {
+      form["client_secret"] = Redacted.value(provider.clientSecret.value);
+    }
+    const response = yield* httpClient.post(provider.tokenEndpoint, {
+      body: HttpBody.urlParams(form),
+    });
+    const body = (yield* response.json) as {
+      readonly access_token?: string;
+      readonly id_token?: string;
+    };
+    if (typeof body.access_token !== "string") {
+      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+    }
+    return { accessToken: body.access_token, idToken: body.id_token };
+  }).pipe(Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())));
+
+/**
+ * BEH-EA-127 (claims side): `iss`/`aud`/`exp`/`nonce` are checked against
+ * the provider's own configured issuer/client id and the flow's stored
+ * nonce; the signature itself is verified against the provider's JWKS via
+ * `Jwt.ts` (RS256 only — see that module's own header comment).
+ */
+const verifyIdToken = (
+  httpClient: HttpClient.HttpClient,
+  jwksCache: Ref.Ref<HashMap.HashMap<string, Jwt.Jwks>>,
+  provider: OAuthProvider.ResolvedProvider,
+  idToken: string,
+  nonce: string | undefined,
+): Effect.Effect<Record<string, unknown>, OAuthApi.OAuthCallbackFailed> =>
+  Effect.gen(function* () {
+    if (Option.isNone(provider.jwksUri)) {
+      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+    }
+    const jwksUri = provider.jwksUri.value;
+    const decoded = yield* Jwt.decode(idToken).pipe(
+      Effect.mapError(() => new OAuthApi.OAuthCallbackFailed()),
+    );
+    if (decoded.header.alg !== "RS256") {
+      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+    }
+
+    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(
+      Effect.flatMap((response) => response.json),
+      Effect.map((body) => body as unknown as Jwt.Jwks),
+      Effect.tap((jwks) => Ref.update(jwksCache, (cache) => HashMap.set(cache, provider.id, jwks))),
+      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),
+    );
+
+    const cached = HashMap.get(yield* Ref.get(jwksCache), provider.id);
+    const jwks = Option.isSome(cached) ? cached.value : yield* fetchAndCacheJwks;
+
+    const verified = yield* Jwt.findKey(jwks, decoded.header.kid).pipe(
+      // A `kid` cache miss gets exactly one refetch — the provider may
+      // have rotated keys since this process last cached them.
+      Effect.catch(() =>
+        fetchAndCacheJwks.pipe(Effect.flatMap((fresh) => Jwt.findKey(fresh, decoded.header.kid))),
+      ),
+      Effect.flatMap((jwk) => Jwt.verifyRs256(jwk, decoded.signingInput, decoded.signature)),
+      Effect.mapError(() => new OAuthApi.OAuthCallbackFailed()),
+    );
+    if (!verified) return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+
+    const claims = decoded.payload;
+    const expectedIssuer = Option.getOrUndefined(provider.issuer);
+    const exp = typeof claims["exp"] === "number" ? claims["exp"] : undefined;
+    if (
+      claims["iss"] !== expectedIssuer ||
+      claims["aud"] !== provider.clientId ||
+      exp === undefined ||
+      Date.now() >= exp * 1000 ||
+      (nonce !== undefined && claims["nonce"] !== nonce)
+    ) {
+      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+    }
+    return claims;
+  });
+
+export const OAuthHandlers = HttpApiBuilder.group(
+  OAuthApi.OAuthApi,
+  "oauth",
+  Effect.fnUntraced(function* (handlers) {
+    const oauth = yield* OAuth;
+
+    return handlers.handleAll({
+      authorize: Effect.fnUntraced(function* ({
+        params,
+        query,
+      }: {
+        params: OAuthApi.AuthorizeParams;
+        query: OAuthApi.AuthorizeQuery;
+      }) {
+        const principal = yield* Api.CurrentPrincipal;
+        const wantsLink = query.link === "true";
+        if (wantsLink && principal._tag !== "User") {
+          return yield* Effect.fail(new Api.Unauthenticated());
+        }
+        const link =
+          wantsLink && principal._tag === "User" ? { userId: principal.ref.id } : undefined;
+        const url = yield* oauth.authorize(params.provider, {
+          callbackURL: query.callbackURL,
+          link,
+        });
+        const response = HttpServerResponse.redirect(url.location);
+        return yield* HttpServerResponse.setCookie(response, OAUTH_STATE_COOKIE, url.state, {
+          httpOnly: true,
+          secure: true,
+          sameSite: "lax",
+          path: "/oauth",
+          maxAge: FLOW_TTL,
+        }).pipe(Effect.orDie);
+      }),
+
+      callback: Effect.fnUntraced(function* ({
+        params,
+        query,
+        request,
+      }: {
+        params: OAuthApi.CallbackParams;
+        query: OAuthApi.CallbackQuery;
+        request: HttpServerRequest.HttpServerRequest;
+      }) {
+        const cookieState = request.cookies[OAUTH_STATE_COOKIE];
+        const outcome = yield* oauth.callback(params.provider, {
+          code: query.code,
+          state: query.state,
+          iss: query.iss,
+          cookieState,
+        });
+        if (outcome.session !== undefined) {
+          const response = HttpServerResponse.redirect(outcome.callbackURL);
+          return yield* HttpServerResponse.setCookie(
+            response,
+            Sessions.SESSION_COOKIE_NAME,
+            Redacted.value(outcome.session.token),
+            Sessions.SESSION_COOKIE_ATTRIBUTES,
+          ).pipe(Effect.orDie);
+        }
+        return HttpServerResponse.redirect(outcome.callbackURL);
+      }),
+    });
+  }),
+);
+
+export interface OAuthShape {
+  readonly authorize: (
+    providerId: string,
+    input: {
+      readonly callbackURL: string | undefined;
+      readonly link: { readonly userId: string } | undefined;
+    },
+  ) => Effect.Effect<
+    { readonly location: string; readonly state: string },
+    OAuthApi.ProviderNotFound
+  >;
+  readonly callback: (
+    providerId: string,
+    input: {
+      readonly code: string;
+      readonly state: string;
+      readonly iss: string | undefined;
+      readonly cookieState: string | undefined;
+    },
+  ) => Effect.Effect<
+    {
+      readonly callbackURL: string;
+      readonly session:
+        | { readonly session: Sessions.SessionView; readonly token: Redacted.Redacted<string> }
+        | undefined;
+    },
+    OAuthApi.ProviderNotFound | OAuthApi.OAuthCallbackFailed | OAuthApi.AccountExists
+  >;
+}
+
+export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
+  apiVersion: 1,
+  contract: OAuthApi.OAuthApi,
+  // BEH-EA-125: an OAuth account is an ordinary `accounts` row (extended
+  // with `issuer`, per BEH-EA-125) — this plugin owns no table of its own,
+  // the same reasoning `@effect-auth/password`'s own `tables: []` documents.
+  tables: [],
+}) {
+  static readonly layer = AuthPlugin.layer(OAuth, {
+    handlers: OAuthHandlers,
+    make: Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const accounts = yield* Accounts.Accounts;
+      const sessions = yield* Sessions.Sessions;
+      const verification = yield* Verification.Verification;
+      const events = yield* AuthEvents.AuthEvents;
+      const config_ = yield* OAuthConfig;
+      const crypto = yield* Crypto.Crypto;
+      const httpClient = yield* HttpClient.HttpClient;
+      const jwksCache = yield* Ref.make(HashMap.empty<string, Jwt.Jwks>());
+
+      // BEH-EA-127: resolved once, at boot — a mismatched or unfetchable
+      // discovery document dies here, before any request is ever served.
+      const resolved = yield* Effect.all(
+        config_.providers.map((provider) => OAuthProvider.resolve(httpClient, provider)),
+      );
+      const registry = new Map(resolved.map((provider) => [provider.id, provider] as const));
+
+      const trustedProviders =
+        config_.linking === "explicit" ? [] : config_.linking.trustedProviders;
+
+      const authorize: OAuthShape["authorize"] = Effect.fnUntraced(function* (providerId, input) {
+        const provider = registry.get(providerId);
+        if (provider === undefined) {
+          return yield* Effect.fail(new OAuthApi.ProviderNotFound({ providerId }));
+        }
+        const callbackURL = resolveCallbackURL(
+          input.callbackURL,
+          config_.trustedOrigins,
+          config_.defaultCallbackURL,
+        );
+        const { verifier, challenge } = yield* generatePkce(crypto);
+        const nonce =
+          provider.kind === "oidc"
+            ? toBase64Url(yield* crypto.randomBytes(16).pipe(Effect.orDie))
+            : undefined;
+        const identifier = `${FLOW_PREFIX}${yield* crypto.randomUUIDv7.pipe(Effect.orDie)}`;
+        const payload: FlowPayload = {
+          providerId,
+          codeVerifier: verifier,
+          nonce,
+          callbackURL,
+          link: input.link,
+        };
+        const { value } = yield* verification
+          .issue({ identifier, ttl: FLOW_TTL, payload })
+          .pipe(Effect.orDie);
+        const state = encodeState(identifier, value);
+        const redirectUri = `${config_.baseUrl}/oauth/${providerId}/callback`;
+        const location = buildAuthorizeUrl(provider, {
+          state,
+          redirectUri,
+          codeChallenge: provider.skipPkce ? undefined : challenge,
+          nonce,
+        });
+        return { location, state };
+      });
+
+      const callback: OAuthShape["callback"] = Effect.fnUntraced(function* (providerId, input) {
+        const provider = registry.get(providerId);
+        if (provider === undefined) {
+          return yield* Effect.fail(new OAuthApi.ProviderNotFound({ providerId }));
+        }
+        // BEH-EA-122: the correlation cookie and the returned `state` must
+        // agree before the (single-use) Verification entry is even
+        // consumed — an attacker who tricks a victim's browser into
+        // visiting a callback URL carrying the attacker's own `state`
+        // fails here, since the victim's browser never held that cookie.
+        const decoded = decodeState(input.state);
+        if (Option.isNone(decoded) || input.cookieState !== input.state) {
+          return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+        }
+        const { identifier, value } = decoded.value;
+        const consumed = yield* verification.consume(identifier, value).pipe(
+          Effect.catchTag("TokenConsumed", () => new OAuthApi.OAuthCallbackFailed()),
+          Effect.catchTag("PlatformError", Effect.die),
+        );
+        if (!isFlowPayload(consumed.payload) || consumed.payload.providerId !== providerId) {
+          return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+        }
+        const flow = consumed.payload;
+
+        // RFC 9207 mix-up countermeasure: validated whenever the provider sends `iss`.
+        if (
+          input.iss !== undefined &&
+          Option.isSome(provider.issuer) &&
+          input.iss !== provider.issuer.value
+        ) {
+          return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+        }
+
+        const redirectUri = `${config_.baseUrl}/oauth/${providerId}/callback`;
+        const tokens = yield* exchangeCode(httpClient, provider, {
+          code: input.code,
+          codeVerifier: flow.codeVerifier,
+          redirectUri,
+        });
+
+        const idClaims: Record<string, unknown> | undefined =
+          provider.kind === "oidc"
+            ? tokens.idToken === undefined
+              ? yield* Effect.fail(new OAuthApi.OAuthCallbackFailed())
+              : yield* verifyIdToken(httpClient, jwksCache, provider, tokens.idToken, flow.nonce)
+            : undefined;
+
+        // A plain `"oauth2"` provider (no `id_token` at all, e.g. GitHub)
+        // gets its claims from `userinfoEndpoint` instead; an `"oidc"`
+        // provider that also exposes one gets both merged, userinfo
+        // winning on overlap (the more current of the two — an `id_token`
+        // can be minutes old by the time this call happens).
+        const userinfoClaims: Record<string, unknown> | undefined = Option.isSome(
+          provider.userinfoEndpoint,
+        )
+          ? yield* httpClient
+              .get(provider.userinfoEndpoint.value, {
+                headers: { authorization: `Bearer ${tokens.accessToken}` },
+              })
+              .pipe(
+                Effect.flatMap((response) => response.json),
+                Effect.map((body) => body as Record<string, unknown>),
+                Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),
+              )
+          : undefined;
+
+        const profile = provider.mapProfile({ ...idClaims, ...userinfoClaims });
+
+        const userIdIfLinked = yield* accounts
+          .findByProviderSubject(
+            providerId,
+            profile.subject,
+            Option.getOrUndefined(provider.issuer),
+          )
+          .pipe(Effect.map(Option.map((account) => account.userId)));
+
+        const targetUserId: Users.UserId = yield* Option.match(userIdIfLinked, {
+          onSome: (userId) => Effect.succeed(userId),
+          onNone: () =>
+            Effect.gen(function* () {
+              if (flow.link !== undefined) {
+                const userId = Users.UserId(flow.link.userId);
+                yield* accounts
+                  .link({
+                    userId,
+                    providerId,
+                    subject: profile.subject,
+                    ...issuerField(provider.issuer),
+                  })
+                  .pipe(
+                    Effect.catchTag(
+                      "AccountAlreadyLinked",
+                      () => new OAuthApi.OAuthCallbackFailed(),
+                    ),
+                    Effect.orDie,
+                  );
+                return userId;
+              }
+
+              const existing =
+                profile.email === undefined
+                  ? Option.none()
+                  : yield* users.findByEmail(profile.email);
+
+              if (Option.isSome(existing)) {
+                const autoLink =
+                  trustedProviders.includes(providerId) && profile.emailVerified === true;
+                if (!autoLink) {
+                  return yield* Effect.fail(
+                    new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),
+                  );
+                }
+                yield* accounts
+                  .link({
+                    userId: existing.value.id,
+                    providerId,
+                    subject: profile.subject,
+                    ...issuerField(provider.issuer),
+                  })
+                  .pipe(Effect.orDie);
+                return existing.value.id;
+              }
+
+              // BEH-EA-113-adjacent silent sign-up (research/05-oauth-oidc.md
+              // Q55): the ecosystem norm for a first-time, non-conflicting
+              // OAuth sign-in — no separate "confirm sign-up" step in v1.
+              const name = profile.name ?? profile.email ?? profile.subject;
+              const created = yield* users
+                .create({ email: profile.email ?? `${providerId}:${profile.subject}`, name })
+                .pipe(
+                  Effect.catchTag(
+                    "EmailAlreadyExists",
+                    () => new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),
+                  ),
+                  Effect.catchTag("PlatformError", Effect.die),
+                );
+              yield* accounts
+                .link({
+                  userId: created.id,
+                  providerId,
+                  subject: profile.subject,
+                  ...issuerField(provider.issuer),
+                })
+                .pipe(Effect.orDie);
+              yield* events.publish({ _tag: "auth.user.created", userId: created.id });
+              return created.id;
+            }),
+        });
+
+        if (flow.link !== undefined) {
+          // Linking an already-authenticated caller's own account: no new
+          // session, the caller's existing one is untouched.
+          return { callbackURL: flow.callbackURL, session: undefined };
+        }
+
+        const issued = yield* sessions.issue({ userId: targetUserId }).pipe(Effect.orDie);
+        yield* events.publish({
+          _tag: "auth.user.signedIn",
+          userId: targetUserId,
+          strategy: providerId,
+        });
+        return { callbackURL: flow.callbackURL, session: issued };
+      });
+
+      return OAuth.of({ authorize, callback });
+    }),
+  });
+}

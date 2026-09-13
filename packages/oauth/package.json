@@ -1,0 +1,49 @@
+{
+  "name": "@effect-auth/oauth",
+  "version": "0.0.0",
+  "private": true,
+  "description": "OAuth providers as Layers, PKCE, explicit account linking.",
+  "files": [
+    "lib",
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./lib/index.js",
+      "default": "./lib/index.js"
+    },
+    "./*": {
+      "types": "./lib/*.d.ts",
+      "bun": "./src/*.ts",
+      "import": "./lib/*.js",
+      "default": "./lib/*.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect-auth/api": "workspace:*",
+    "@effect-auth/core": "workspace:*",
+    "@effect-auth/ports": "workspace:*",
+    "@effect-auth/server": "workspace:*",
+    "@effect-auth/sql": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

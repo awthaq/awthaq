@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src/**/*.ts"],
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": false,
+    "outDir": "./lib",
+    "rootDir": "./src",
+    "tsBuildInfoFile": "./.tsbuildinfo",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@effect-auth/sql": ["../sql/src/index.ts"],
+      "@effect-auth/ports": ["../ports/src/index.ts"],
+      "@effect-auth/api": ["../api/src/index.ts"]
+    }
+  },
+  "references": [
+    {
+      "path": "../sql/tsconfig.src.json"
+    },
+    {
+      "path": "../ports/tsconfig.src.json"
+    },
+    {
+      "path": "../api/tsconfig.src.json"
+    }
+  ]
+}

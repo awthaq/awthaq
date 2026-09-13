@@ -1,0 +1,68 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/api"
+    },
+    {
+      "path": "packages/ports"
+    },
+    {
+      "path": "packages/sql"
+    },
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/server"
+    },
+    {
+      "path": "packages/qadi"
+    },
+    {
+      "path": "packages/client"
+    },
+    {
+      "path": "packages/react"
+    },
+    {
+      "path": "packages/next"
+    },
+    {
+      "path": "packages/test"
+    },
+    {
+      "path": "packages/cli"
+    },
+    {
+      "path": "packages/password"
+    },
+    {
+      "path": "packages/oauth"
+    },
+    {
+      "path": "packages/passkey"
+    },
+    {
+      "path": "packages/roles"
+    },
+    {
+      "path": "packages/magic-link"
+    },
+    {
+      "path": "packages/two-factor"
+    },
+    {
+      "path": "packages/organization"
+    },
+    {
+      "path": "packages/api-key"
+    },
+    {
+      "path": "packages/admin"
+    },
+    {
+      "path": "features"
+    }
+  ]
+}

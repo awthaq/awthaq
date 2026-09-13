@@ -1,0 +1,137 @@
+# CSRF Protection
+
+> **Document Control**
+>
+> | Property | Value |
+> |---|---|
+> | Document ID | EFAUTH-BEH-10 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-12 |
+> | Status | Effective |
+> | Author | effect-auth Engineering |
+> | Classification | Functional Specification |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a paragraph on the double-submit-cookie vs. synchronizer-token tradeoff (CCR-EA-002) |
+
+---
+
+> effect-auth is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §14 and §18 — not code that has shipped.
+
+## BEH-EA-073: `Sec-Fetch-Site` is the primary CSRF signal
+
+```text
+REQUIREMENT: `CsrfProtection` MUST inspect the `Sec-Fetch-Site` request
+             header, when present, as its first signal, rejecting a
+             cross-site request (`cross-site`) on an unsafe method before
+             any other CSRF check runs.
+```
+
+`archive/PRD.md` §14 names `Sec-Fetch-Site` first among the mechanisms `CsrfProtection` composes. Because this header is set by the browser itself and cannot be forged by page script, it is a stronger signal than anything derived from request body or query content, and the design intent is to prefer it whenever the requesting browser sends it.
+
+## BEH-EA-074: `Origin` is the fallback signal when `Sec-Fetch-Site` is absent
+
+```text
+REQUIREMENT: When a request carries no `Sec-Fetch-Site` header,
+             `CsrfProtection` MUST fall back to comparing the `Origin`
+             header against the application's configured allowed origins,
+             rejecting a mismatch on an unsafe method.
+```
+
+`archive/PRD.md` §14 lists "Origin fallback" as the second layer of the same check, covering older or non-browser clients that do not send `Sec-Fetch-Site` at all. The two checks are designed to compose, not substitute for each other: `Sec-Fetch-Site` is preferred when available, and `Origin` is the documented fallback rather than an alternative a deployment must choose between.
+
+## BEH-EA-075: A signed double-submit `__Host-csrf` cookie backs the header-based check
+
+```
+__Host-csrf=<signed-token>; Secure; SameSite=Strict; Path=/
+x-csrf-token: <token read from the __Host-csrf cookie>
+```
+
+```text
+REQUIREMENT: `CsrfProtection` MUST issue a signed `__Host-csrf` cookie
+             readable by client-side script, and MUST require an unsafe
+             request to echo that same token in an `x-csrf-token` header;
+             a request presenting a mismatched or missing header value MUST
+             be rejected.
+```
+
+`archive/PRD.md` §14 names "signed double-submit `__Host-csrf`" as the third mechanism `CsrfProtection` composes alongside `Sec-Fetch-Site`/`Origin`. The double-submit pattern's guarantee is that only a script running on the application's own origin can read the cookie and therefore reproduce it in a header — signing the cookie value additionally prevents a network attacker who cannot read the cookie from forging a plausible-looking token of their own.
+
+A synchronizer-token pattern (a per-session, server-stored token embedded in every rendered form and checked against server-side state on submission) was the alternative available here, and it is not what effect-auth chose. Synchronizer tokens require the server to hold per-session token state and require every response that could lead to a subsequent unsafe request to embed that token in the page — a model that fits a server-rendered form naturally but fits poorly against `HttpApi`'s JSON contract surface, where a client is a generated `HttpApiClient`/`AtomHttpApi.Service`, not a rendered HTML form with a hidden field to embed a token into. The signed double-submit cookie needs no server-side token store at all (the signature is what a synchronizer token's server-side lookup would otherwise verify), composes naturally with the same `Redacted`/stateless design the rest of the session and CSRF surface already uses, and lets the client-side requirement be enforced at the type level (BEH-EA-076) by a client library reading a cookie and setting a header — an operation a synchronizer token's "read the token out of the last rendered page" model has no equivalent of for a pure API client that never rendered a page in the first place. The cost accepted in choosing double-submit over a synchronizer token is that double-submit's security rests entirely on the cookie's signature and on `Secure`/`HttpOnly`-adjacent isolation of the origin (an attacker who can read cookies via a same-origin script bug reads a valid token directly), whereas a synchronizer token stored only server-side is not readable through a cookie-read primitive at all — a narrower, but real, difference in what a same-origin script-injection bug exposes.
+
+## BEH-EA-076: `requiredForClient: true` is enforced at the type level, not merely documented
+
+> **Invariant:** [INV-EA-011](../invariants.md#inv-ea-011-csrf-protection-is-required-by-the-generated-clients-type-not-merely-documented)
+
+```ts
+export const CsrfClient = HttpApiMiddleware.layerClient(CsrfProtection, ({ next, request }) =>
+  next(HttpClientRequest.setHeader(request, "x-csrf-token", readCookie("__Host-csrf") ?? "")))
+```
+
+```text
+REQUIREMENT: An `HttpApiClient` / `AtomHttpApi.Service` built over a
+             contract group carrying `CsrfProtection` MUST fail to
+             type-check unless `HttpApiMiddleware.layerClient(CsrfProtection,
+             ...)` is supplied to the client build.
+```
+
+`archive/design/usage-examples-v4.md` §11.1 shows the intended failure directly: removing the `CsrfClient` layer from the client program's provided layers is designed to produce a compile error ("`ForClient<CsrfProtection>` is required"), not a runtime 403 a user discovers by submitting a form. This restates BEH-EA-030 from the client's point of view, since the same requirement governs both the server-side middleware definition and every client generated against it.
+
+## BEH-EA-077: Only unsafe methods are protected; safe methods are exempt by construction
+
+```text
+REQUIREMENT: `CsrfProtection` MUST enforce its checks only on state-changing
+             (unsafe) HTTP methods — `POST`, `PUT`, `PATCH`, `DELETE`; a
+             `GET` or `HEAD` request MUST NOT be subject to CSRF rejection.
+```
+
+`archive/design/usage-examples-v4.md` §1.1 shows an unauthenticated `GET /auth/session` succeeding with no CSRF header at all, while §1.2's `POST /auth/password/sign-up` requires one — the standard CSRF scoping rule (only requests that change state are worth protecting against forgery) applied consistently across every group that carries the middleware, so a read-only endpoint never needs a client to manage the CSRF header at all.
+
+## BEH-EA-078: A rejected CSRF check fails with a typed `CsrfRejected` error at `403`
+
+```ts
+class CsrfRejected extends Schema.TaggedError<CsrfRejected>()("CsrfRejected", {}, { httpApiStatus: 403 }) {}
+```
+
+```text
+REQUIREMENT: A request failing any of `CsrfProtection`'s checks (BEH-EA-073
+             through BEH-EA-075) MUST fail with a `Schema.TaggedError`
+             tagged `CsrfRejected`, annotated `httpApiStatus: 403`, uniformly
+             across every group the middleware protects.
+```
+
+This follows BEH-EA-027's general rule (every contract error is a `Schema.TaggedError` with its own `httpApiStatus`) applied to the specific failure `CsrfProtection` produces, so that a client's `Effect.catchTag("CsrfRejected", ...)` (`archive/design/usage-examples-v4.md` §11.2 shows the same pattern for other tagged errors) works identically regardless of which group or which of the three underlying checks caused the rejection.
+
+## BEH-EA-079: A client may opt out of CSRF by choosing a bearer-only contract variant
+
+```ts
+const NativeApi = Auth.api(plugins.map((p) => p.contract), { csrf: false })   // groups without CsrfProtection
+```
+
+```text
+REQUIREMENT: `Auth.api(..., { csrf: false })` MUST produce a contract whose
+             groups carry no `CsrfProtection` middleware at all, rather than
+             a contract that carries the middleware but is configured to
+             skip it at runtime.
+```
+
+`archive/design/usage-examples-v4.md` §11.3 documents this as the native-client path: because bearer-token clients (mobile apps, CLIs, service-to-service callers) have no cookie jar and no double-submit cookie to echo, the design removes `CsrfProtection` from the contract entirely for that variant rather than adding a runtime bypass flag to the middleware itself — a bypassable check is a weaker design than no check being present in the type at all, since only the latter is visible in `auth.api`'s own type.
+
+## BEH-EA-080: The CSRF cookie name and header name are fixed, not per-plugin configurable
+
+```
+__Host-csrf   (cookie name)
+x-csrf-token  (header name)
+```
+
+```text
+REQUIREMENT: `__Host-csrf` and `x-csrf-token` MUST be the fixed cookie and
+             header names for every application composed through
+             `Auth.make`; no plugin or configuration override MAY rename
+             either, since the client-side CSRF layer (BEH-EA-076) is
+             written once, against these fixed names, and reused by every
+             application.
+```
+
+Fixing these names is what makes `HttpApiMiddleware.layerClient(CsrfProtection, ...)` (BEH-EA-076) a single, reusable implementation rather than something every application must rewrite against its own naming choices — the same reasoning `archive/PRD.md` §5 (Design principle 5, "one source of truth per concept") applies to contracts and models applies here to a security-relevant name that must match exactly between server and client.
+
+_Previous: [BEH-EA-072](09-authentication-middleware.md#beh-ea-072-the-security-records-declaration-order-is-the-entire-strategy-chain--no-separate-ordering-mechanism-exists)_
+_Next: [BEH-EA-081](11-http-error-mapping.md#beh-ea-081-a-plugins-handlers-are-built-with-httpapibuildergroup-against-its-own-contract)_

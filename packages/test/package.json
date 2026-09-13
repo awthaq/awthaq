@@ -1,0 +1,51 @@
+{
+  "name": "@effect-auth/test",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TestAuth test harness and the plugin contract-test suite (runPluginContractTests) — runs the whole plugin pipeline over an in-memory backend.",
+  "files": [
+    "lib",
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./lib/index.js",
+      "default": "./lib/index.js"
+    },
+    "./*": {
+      "types": "./lib/*.d.ts",
+      "bun": "./src/*.ts",
+      "import": "./lib/*.js",
+      "default": "./lib/*.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect-auth/api": "workspace:*",
+    "@effect-auth/core": "workspace:*",
+    "@effect-auth/ports": "workspace:*",
+    "@effect-auth/qadi": "workspace:*",
+    "@effect-auth/server": "workspace:*",
+    "@effect-auth/sql": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect-auth/password": "workspace:*",
+    "@effect/vitest": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

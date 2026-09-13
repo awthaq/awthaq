@@ -1,0 +1,74 @@
+// @effect-auth/ports — Mailer
+//
+// spec/overview.md's Ports stratum table ("Mailer (layerNoop, layerMemory)")
+// and archive/PRD.md's own table: "layerNoop (fails loudly in prod),
+// layerMemory (records)". No BEH-EA range is allocated for the Ports
+// stratum yet (spec/traceability.md); this module is grounded directly in
+// the cited spec/archive sources rather than a numbered behavior.
+//
+// The message shape (`to`, `template`, `data`) and the `send` signature are
+// reproduced from the two call sites shown in archive/design's own
+// examples — `usage-examples-v4.md` §17's
+// `Mailer.use((m) => m.send({ to: user.email, template: "welcome" }))` and
+// `api-design-v4.md`'s
+// `mailer.send({ to: amended.email, template: "invite", data: { token } })`
+// — a plugin (verification/reset/invite) names a template and its
+// interpolation data; which provider renders and delivers that template is
+// exactly the concrete `Mailer` implementation the application chooses.
+//
+// `layerMemory`'s recorded messages are read back through the `sent` field
+// on the service shape itself (`archive/design/usage-examples-v4.md` §17:
+// "Mailer.layerMemory // records; Mailer.sent to assert") rather than a
+// second service or a module-level ref, so a test can assert against
+// whichever `Mailer` layer it happened to provide without needing to know
+// which one it was.
+
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+
+export interface MailMessage {
+  readonly to: string;
+  readonly template: string;
+  readonly data?: Record<string, unknown>;
+}
+
+export interface MailerShape {
+  readonly send: (message: MailMessage) => Effect.Effect<void>;
+  readonly sent: Effect.Effect<ReadonlyArray<MailMessage>>;
+}
+
+export class Mailer extends Context.Service<Mailer, MailerShape>()("effect-auth/ports/Mailer") {}
+
+/**
+ * "Fails loudly in prod" (`archive/PRD.md`): an application that reaches
+ * production with no real `Mailer` provided gets a defect the moment
+ * anything tries to send mail, not a silently dropped verification or
+ * reset email.
+ */
+export const layerNoop: Layer.Layer<Mailer> = Layer.succeed(
+  Mailer,
+  Mailer.of({
+    send: (message) =>
+      Effect.die(
+        new Error(
+          `effect-auth: no Mailer configured — dropped a "${message.template}" message to ${message.to}. ` +
+            "Provide a real Mailer layer (or Mailer.layerMemory for tests).",
+        ),
+      ),
+    sent: Effect.succeed([]),
+  }),
+);
+
+/** Records every sent message in memory; `sent` reads them back for assertions. */
+export const layerMemory: Layer.Layer<Mailer> = Layer.effect(
+  Mailer,
+  Effect.gen(function* () {
+    const messages = yield* Ref.make<ReadonlyArray<MailMessage>>([]);
+    return Mailer.of({
+      send: (message) => Ref.update(messages, (existing) => [...existing, message]),
+      sent: Ref.get(messages),
+    });
+  }),
+);

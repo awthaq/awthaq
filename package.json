@@ -1,0 +1,48 @@
+{
+  "name": "effect-auth-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "effect-auth: a TypeScript authentication runtime built natively on Effect v4",
+  "type": "module",
+  "scripts": {
+    "prepare": "effect-tsgo patch",
+    "build": "node scripts/build.mjs",
+    "clean": "tsc -b --clean && rm -rf packages/*/lib features/lib",
+    "typecheck": "tsc -b tsconfig.json && tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:bdd": "pnpm --filter @effect-auth/features test",
+    "coverage": "vitest run --coverage",
+    "circular": "node scripts/circular.mjs",
+    "quality:dashboard": "node scripts/generate-quality-dashboard.mjs",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt packages features scripts vitest.config.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.base.json tsconfig.packages.json tsconfig.test.json .oxlintrc.json .changeset/config.json",
+    "format:check": "oxfmt --check packages features scripts vitest.config.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.base.json tsconfig.packages.json tsconfig.test.json .oxlintrc.json .changeset/config.json",
+    "spec:verify": "bash spec/scripts/verify-traceability.sh",
+    "spec:verify:strict": "bash spec/scripts/verify-traceability.sh --strict",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm circular && pnpm coverage && pnpm test:bdd && pnpm spec:verify:strict",
+    "changeset": "changeset",
+    "changeset-version": "changeset version",
+    "changeset-publish": "changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.2",
+    "@effect/language-service": "^0.87.2",
+    "@effect/tsgo": "0.45.0",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "effect": "catalog:",
+    "glob": "^13.0.0",
+    "madge": "^8.0.0",
+    "oxfmt": "^0.67.0",
+    "oxlint": "^1.82.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "packageManager": "pnpm@11.20.0"
+}

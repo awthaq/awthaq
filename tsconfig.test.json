@@ -1,0 +1,33 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": ["features/**/*.steps.test.ts", "packages/*/test/**/*.test.ts"],
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "types": ["node"],
+    // Same rationale as tsconfig.base.json's `paths`: lets test files resolve
+    // a sibling workspace package by source rather than by built output.
+    "paths": {
+      "@effect-auth/api": ["./packages/api/src/index.ts"],
+      "@effect-auth/ports": ["./packages/ports/src/index.ts"],
+      "@effect-auth/sql": ["./packages/sql/src/index.ts"],
+      "@effect-auth/core": ["./packages/core/src/index.ts"],
+      "@effect-auth/server": ["./packages/server/src/index.ts"],
+      "@effect-auth/qadi": ["./packages/qadi/src/index.ts"],
+      "@effect-auth/client": ["./packages/client/src/index.ts"],
+      "@effect-auth/react": ["./packages/react/src/index.ts"],
+      "@effect-auth/next": ["./packages/next/src/index.ts"],
+      "@effect-auth/test": ["./packages/test/src/index.ts"],
+      "@effect-auth/cli": ["./packages/cli/src/index.ts"],
+      "@effect-auth/password": ["./packages/password/src/index.ts"],
+      "@effect-auth/oauth": ["./packages/oauth/src/index.ts"],
+      "@effect-auth/passkey": ["./packages/passkey/src/index.ts"],
+      "@effect-auth/roles": ["./packages/roles/src/index.ts"],
+      "@effect-auth/magic-link": ["./packages/magic-link/src/index.ts"],
+      "@effect-auth/two-factor": ["./packages/two-factor/src/index.ts"],
+      "@effect-auth/organization": ["./packages/organization/src/index.ts"],
+      "@effect-auth/api-key": ["./packages/api-key/src/index.ts"],
+      "@effect-auth/admin": ["./packages/admin/src/index.ts"]
+    }
+  }
+}

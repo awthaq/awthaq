@@ -1,0 +1,72 @@
+{
+  "exclude": ["node_modules", "lib", "dist"],
+  "compilerOptions": {
+    "types": ["node"],
+    // Enable latest features
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "moduleDetection": "force",
+    "allowJs": false,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "noEmit": true,
+    // Bundler mode
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "verbatimModuleSyntax": true,
+    // Best practices
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitThis": true,
+    // This is an authentication library: indexed access must be checked
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noPropertyAccessFromIndexSignature": false,
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+    "noErrorTruncation": true,
+    // Workspace packages resolve to source, not to built output, via `paths`
+    // below — one entry per packages/* package, the same way qadi's
+    // tsconfig.base.json lists every @qadi/* package. Add a new entry here
+    // whenever a new package is scaffolded.
+    "paths": {
+      "@effect-auth/api": ["./packages/api/src/index.ts"],
+      "@effect-auth/ports": ["./packages/ports/src/index.ts"],
+      "@effect-auth/sql": ["./packages/sql/src/index.ts"],
+      "@effect-auth/core": ["./packages/core/src/index.ts"],
+      "@effect-auth/server": ["./packages/server/src/index.ts"],
+      "@effect-auth/qadi": ["./packages/qadi/src/index.ts"],
+      "@effect-auth/client": ["./packages/client/src/index.ts"],
+      "@effect-auth/react": ["./packages/react/src/index.ts"],
+      "@effect-auth/next": ["./packages/next/src/index.ts"],
+      "@effect-auth/test": ["./packages/test/src/index.ts"],
+      "@effect-auth/cli": ["./packages/cli/src/index.ts"],
+      "@effect-auth/password": ["./packages/password/src/index.ts"],
+      "@effect-auth/oauth": ["./packages/oauth/src/index.ts"],
+      "@effect-auth/passkey": ["./packages/passkey/src/index.ts"],
+      "@effect-auth/roles": ["./packages/roles/src/index.ts"],
+      "@effect-auth/magic-link": ["./packages/magic-link/src/index.ts"],
+      "@effect-auth/two-factor": ["./packages/two-factor/src/index.ts"],
+      "@effect-auth/organization": ["./packages/organization/src/index.ts"],
+      "@effect-auth/api-key": ["./packages/api-key/src/index.ts"],
+      "@effect-auth/admin": ["./packages/admin/src/index.ts"]
+    },
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnostics": true,
+        "namespaceImportPackages": ["effect", "@effect/*", "@effect-auth/*", "@effect-cucumber/*"],
+        "includeSuggestionsInTsc": false,
+        "ignoreEffectWarningsInTscExitCode": true,
+        "ignoreEffectErrorsInTscExitCode": false
+      }
+    ]
+  }
+}

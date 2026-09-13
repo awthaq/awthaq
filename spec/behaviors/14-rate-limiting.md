@@ -1,0 +1,170 @@
+# Rate Limiting
+> **Document Control**
+>
+> | Property | Value |
+> |---|---|
+> | Document ID | EFAUTH-BEH-14 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-12 |
+> | Status | Effective |
+> | Author | effect-auth Engineering |
+> | Classification | Functional Specification |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added fail-open/fail-closed guidance for an unreachable `RateLimiter` store, clarified the check-then-increment race under concurrency, and named the default fixed-window algorithm (CCR-EA-002) |
+---
+
+> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+
+## BEH-EA-105: The RateLimiter port
+
+> **See:** [ADR-EA-010](../decisions/010-plugins-require-ports-never-provide.md)
+
+```ts
+export interface RateLimiter {
+  readonly consume: (input: {
+    readonly key: string
+    readonly limit: number
+    readonly window: Duration.DurationInput
+  }) => Effect<void, RateLimited>
+}
+```
+
+```text
+REQUIREMENT: `RateLimiter` MUST be a port a plugin requires and the application
+             provides; a plugin MUST NOT bundle its own limiter implementation
+             or bypass the port to enforce a limit directly against a store.
+```
+
+`RateLimiter` sits at stratum 2 alongside `Crypto`, `KeyValueStore` and `PasswordHasher`: it is a capability, not a feature. The default implementation is an in-memory store adequate for a single instance and tests; production wiring swaps in a Redis- or SQL-backed store by providing a different Layer for the same port, exactly as ADR-EA-010 requires for every port. A plugin that shipped its own limiter would duplicate storage, duplicate configuration, and make one plugin's throttling invisible to the operator who only knows to look at `RateLimiter`.
+
+`consume` is expected to implement a **fixed-window** counter by default (increment a count keyed by `key` for the current `window`-sized bucket, fail with `RateLimited` once `limit` is exceeded within that bucket) — the simplest algorithm to implement correctly across every backing store (`RateLimiter.layerStoreMemory`, a SQL row with an expiring counter, a Redis `INCR`/`EXPIRE` pair), at the cost of allowing up to `2 × limit` requests across a window boundary, a cost this specification accepts as the documented default rather than requiring every store implementation to also implement a sliding-window or token-bucket algorithm. A `RateLimiter` implementation MAY instead implement sliding-window or token-bucket semantics — both give a tighter bound on burst-at-the-boundary behavior — provided it still satisfies `consume`'s `Effect<void, RateLimited>` contract and `retryAfterMillis` remains an honest estimate of when the next `consume` call is expected to succeed.
+
+Under concurrent, multi-instance load, `consume`'s check (has this key exceeded `limit`?) and its increment (record this attempt) MUST be one atomic operation against the backing store — a `RateLimiter` implementation that reads the current count, decides "not yet at the limit" in application code, and only then writes the incremented count back is a check-then-act race: two concurrent requests against the same key can both observe a pre-increment count under `limit` and both proceed, admitting `limit + 1` (or more, under enough concurrency) requests through a limit that was supposed to admit exactly `limit`. A store-level atomic primitive (SQL `UPDATE ... SET count = count + 1 WHERE count < limit RETURNING ...`, Redis `INCR` combined with a first-write `EXPIRE`, or an equivalent compare-and-swap) is what closes this race; a `RateLimiter` implementation backed by a store with no such primitive is not a legal implementation of the port, because it cannot honor `consume`'s contract under concurrent callers no matter how carefully the surrounding application code is written.
+
+Because `RateLimiter` sits behind an application-provided store the same way `Mailer` and `PasswordHasher` do, the store itself can become unreachable (a Redis outage, a SQL connection-pool exhaustion distinct from the primary database's own availability). `RateLimiter.layer`'s default posture in that case is **fail-open**: `consume` succeeds (the request proceeds unthrottled) rather than failing every request in the application with an unrelated 5xx merely because the rate-limit store, a defense-in-depth mechanism, is unavailable — the same reasoning `behaviors/15-password.md`'s BEH-EA-119 states for the breach-check provider (a third-party dependency's outage should not be able to take down a path that has no other dependency on it). An application whose risk posture prefers the opposite trade may configure a `RateLimiter` Layer that fails closed (rejecting with `RateLimited` or a distinct outage error whenever the store cannot be reached) instead, exactly as BEH-EA-119 offers `onUnavailable: "reject"` for breach-checking — but fail-open, not fail-closed, is the default a `RateLimiter.layer` ships with, and that default is documented, not an accident of how the store's connection failure happened to propagate.
+
+_Previous: [BEH-EA-104](13-events.md#beh-ea-104-a-failing-subscriber-is-logged-under-a-stable-queryable-event-name-and-never-re-raised) | Next: [BEH-EA-106](14-rate-limiting.md#beh-ea-106-the-ratelimited-error)_
+
+## BEH-EA-106: The RateLimited error
+
+```ts
+export class RateLimited extends Schema.TaggedError<RateLimited>()("RateLimited", {
+  retryAfterMillis: Schema.Number
+}) {}
+```
+
+```text
+REQUIREMENT: Exceeding a configured limit MUST fail with `RateLimited` carrying
+             `retryAfterMillis`; it MUST NOT fail with a generic or untyped error.
+```
+
+`retryAfterMillis` is the one piece of information a client needs to behave well: back off, then retry. Carrying it as a typed field (rather than folding it into a message string) lets `@effect-auth/client` render a localized "try again in n seconds" without parsing text, matching the error-catalog design used across the rest of the contract (research/11-client-frontend.md Q86) and the `RateLimited` handling shown in `usage-examples-v4.md` §11.2.
+
+_Previous: [BEH-EA-105](14-rate-limiting.md#beh-ea-105-the-ratelimiter-port) | Next: [BEH-EA-107](14-rate-limiting.md#beh-ea-107-a-plugin-may-only-rate-limit-its-own-endpoints)_
+
+## BEH-EA-107: A plugin may only rate-limit its own endpoints
+
+```ts
+export const AuthRateLimits: {
+  readonly rule: (input: {
+    readonly group: string
+    readonly endpoint: string
+    readonly key: "principal" | "ip" | ((ctx: unknown) => string)
+    readonly limit: number
+    readonly window: Duration.DurationInput
+  }) => Layer<never>
+}
+```
+
+```text
+REQUIREMENT: A rate-limit rule contributed by plugin P naming `group` MUST be
+             rejected at composition time unless `group` is one of P's own
+             contract groups; a plugin MUST NOT rate-limit another plugin's
+             endpoint.
+```
+
+Rate-limit rules are registry contributions, aggregated the way hook taps and event subscribers are (PRD §9.3, ADR-EA-012's registry half). Scoping a rule to the contributing plugin's own groups keeps the registry legible: reading `two-factor`'s rules tells you everything `two-factor` throttles, with no rule from an unrelated plugin hiding in the list. `usage-examples-v4.md` §16 shows the shape: a plugin's own `layer` mixes in `AuthRateLimits.rule({ group: "invite", ... })` next to its handlers, never a rule naming `"password"` or `"session"`.
+
+_Previous: [BEH-EA-106](14-rate-limiting.md#beh-ea-106-the-ratelimited-error) | Next: [BEH-EA-108](14-rate-limiting.md#beh-ea-108-key-strategies)_
+
+## BEH-EA-108: Key strategies
+
+```ts
+type RateLimitKey = "principal" | "ip" | ((input: unknown) => string)
+```
+
+```text
+REQUIREMENT: A rate-limit rule MUST derive its bucket key from `CurrentPrincipal`,
+             the request's network origin, or an explicit deterministic function
+             of the request; it MUST NOT key on a value the caller can set to an
+             arbitrary string of its choosing (e.g., an unvalidated header) without
+             the plugin author opting into that explicitly.
+```
+
+Two failure modes motivate the constraint: keying only on IP lets a NATed office collectively lock itself out, and keying on an attacker-chosen value (an email in a sign-in payload, say) makes the limiter's bucket space attacker-controlled, defeating the limit's purpose. The built-in strategies (`"principal"`, `"ip"`) cover the common cases; a custom function is available for a plugin that genuinely needs a composite key (`` `signin:${email}` `` in `usage-examples-v4.md` §16), but the plugin author is then responsible for the same reasoning the built-ins already satisfy.
+
+_Previous: [BEH-EA-107](14-rate-limiting.md#beh-ea-107-a-plugin-may-only-rate-limit-its-own-endpoints) | Next: [BEH-EA-109](14-rate-limiting.md#beh-ea-109-swappable-stores)_
+
+## BEH-EA-109: Swappable stores
+
+```ts
+Layer.provide(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)))
+Layer.provide(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreRedisConfig({ url: Config.Redacted("REDIS_URL") }))))
+```
+
+```text
+REQUIREMENT: Providing two Layers for the `RateLimiter` port MUST shadow (the
+             later Layer wins), never merge; effect-auth MUST NOT attempt to
+             combine two rate-limit store implementations into one.
+```
+
+This is the same rule ADR-EA-010 states for every port: `PasswordHasher`, `Mailer` and `RateLimiter` are all one-implementation-per-application services, and the type checker enforces it by construction — a second `Layer.provide` for the same tag simply replaces the first at that point in the graph. The memory store is adequate for a single process and for tests; Redis (or a SQL-backed store) is the production default for multi-instance deployments, exactly as PRD §11 lists `RateLimiter` among the ports whose default implementations are "memory, SQL, Redis stores."
+
+_Previous: [BEH-EA-108](14-rate-limiting.md#beh-ea-108-key-strategies) | Next: [BEH-EA-110](14-rate-limiting.md#beh-ea-110-built-in-rules-shipped-by-core-plugins)_
+
+## BEH-EA-110: Built-in rules shipped by core plugins
+
+```ts
+AuthRateLimits.rule({ group: "two-factor", endpoint: "verify", key: "principal", limit: 3, window: "10 seconds" })
+```
+
+```text
+REQUIREMENT: Every official plugin whose endpoints are a plausible brute-force
+             target (sign-in, two-factor verification, password reset request)
+             MUST ship a default rate-limit rule for that endpoint; an
+             application MUST NOT have to add rate limiting itself to get a
+             sane default.
+```
+
+`usage-examples-v4.md` §9 documents one instance directly: "`/two-factor/verify` is rate limited to three attempts per ten seconds by a rule the plugin ships." Shipping the rule as part of the plugin's own `layer` (rather than as documentation an application must remember to follow) makes secure-by-default (PRD G6) apply to rate limiting the same way it applies to session cookie flags and password hashing: the safe configuration is the one that requires no application code.
+
+_Previous: [BEH-EA-109](14-rate-limiting.md#beh-ea-109-swappable-stores) | Next: [BEH-EA-111](14-rate-limiting.md#beh-ea-111-registry-ordering)_
+
+## BEH-EA-111: Registry ordering
+
+```text
+REQUIREMENT: Rate-limit rules read for `effect-auth plugin list --graph` or any
+             other introspection MUST be ordered by plugin dependency order,
+             then by an explicit `order` field, then by rule id — the same
+             three-key ordering the hook and event registries use.
+```
+
+Rate-limit rules are a registry, and PRD §9.3 fixes one ordering discipline for every registry in the system: "aggregating contributions ordered by dependency, then `order`, then id." Rate limiting gets no special case. An operator who has learned to read the hook chain output from `effect-auth plugin list --hooks` reads the rate-limit rule listing the same way, without learning a second convention.
+
+_Previous: [BEH-EA-110](14-rate-limiting.md#beh-ea-110-built-in-rules-shipped-by-core-plugins) | Next: [BEH-EA-112](14-rate-limiting.md#beh-ea-112-testing-with-a-permissive-limiter)_
+
+## BEH-EA-112: Testing with a permissive limiter
+
+```ts
+const TestLive = TestAuth.layer(plugins)   // includes a permissive RateLimiter
+```
+
+```text
+REQUIREMENT: `TestAuth.layer` MUST provide a `RateLimiter` implementation that
+             never rejects a request under ordinary test iteration counts; a
+             test suite MUST NOT have to reconfigure or mock rate limiting
+             merely to run a loop of sign-in attempts.
+```
+
+A limiter tuned for production (three attempts per ten seconds) would make a test that signs in fifty times in a `for` loop flaky or fail outright, for a reason that has nothing to do with what the test is checking. `TestAuth.layer(plugins)` (PRD §19, `usage-examples-v4.md` §22.1) exists precisely to remove this class of incidental failure: memory repositories, a memory mailer, and a permissive rate limiter, so a test that wants to exercise rate limiting specifically does so by providing a stricter `RateLimiter` Layer of its own, not by fighting the default.
+
+_Previous: [BEH-EA-111](14-rate-limiting.md#beh-ea-111-registry-ordering) | Next: [BEH-EA-113](15-password.md#beh-ea-113-sign-up-issues-a-pending-user-and-a-verification-mail)_

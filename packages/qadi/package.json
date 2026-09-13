@@ -1,0 +1,51 @@
+{
+  "name": "@effect-auth/qadi",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AuthorizedSubject middleware, SubjectExtractor layer, obligation handlers — the bridge to qadi, not an authorizer of its own (ADR-EA-009).",
+  "files": [
+    "lib",
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./lib/index.js",
+      "default": "./lib/index.js"
+    },
+    "./*": {
+      "types": "./lib/*.d.ts",
+      "bun": "./src/*.ts",
+      "import": "./lib/*.js",
+      "default": "./lib/*.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect-auth/api": "workspace:*",
+    "@effect-auth/core": "workspace:*",
+    "@effect-auth/ports": "workspace:*",
+    "@effect-auth/server": "workspace:*",
+    "@effect-auth/sql": "workspace:*",
+    "@qadi/core": "^0.6.2",
+    "@qadi/http": "^0.6.2",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

@@ -1,0 +1,10 @@
+kind: process
+package: effect-auth
+infix: PROC
+entries:
+  - id: "EFAUTH-PROC-01"
+    file: "requirement-id-scheme.md"
+    title: "Requirement ID Scheme"
+  - id: "EFAUTH-PROC-02"
+    file: "definitions-of-done.md"
+    title: "Definitions of Done"

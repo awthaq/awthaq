@@ -1,0 +1,87 @@
+// spec/behaviors/13-events.md, BEH-EA-097 through BEH-EA-104.
+import { assert, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import { AuthEvents, Users } from "../src/index.ts";
+
+const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
+
+describe("AuthEvents", () => {
+  it.effect("BEH-EA-098/102: publish returns immediately; stream sees every published event", () =>
+    Effect.gen(function* () {
+      const events = yield* AuthEvents.AuthEvents;
+      // `startImmediately` runs the forked fiber synchronously up to its own
+      // first suspension point (inside the PubSub subscribe, waiting for a
+      // published item) before this call returns — without it, the fork is
+      // merely scheduled, and publishing below could race a subscription
+      // that hasn't registered with the PubSub yet.
+      const collected = yield* Effect.forkChild(
+        events.stream.pipe(Stream.take(2), Stream.runCollect),
+        { startImmediately: true },
+      );
+      yield* events.publish({ _tag: "auth.user.created", userId });
+      yield* events.publish({ _tag: "auth.token.replay", identifier: "verify-email:u1" });
+      const result = yield* Fiber.join(collected);
+      assert.deepStrictEqual(
+        result.map((e) => e._tag),
+        ["auth.user.created", "auth.token.replay"],
+      );
+    }).pipe(Effect.provide(AuthEvents.layer)),
+  );
+
+  it.effect(
+    "BEH-EA-099/104: a failing subscriber doesn't affect another subscriber or the publisher",
+    () =>
+      Effect.gen(function* () {
+        const seen = yield* Ref.make<ReadonlyArray<string>>([]);
+        const events = yield* AuthEvents.AuthEvents;
+
+        const failing = yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((e) => e._tag === "auth.token.replay"),
+            Stream.runForEach(() => Effect.die(new Error("boom"))),
+          ),
+          { startImmediately: true },
+        );
+        const healthy = yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((e) => e._tag === "auth.token.replay"),
+            Stream.take(1),
+            Stream.runForEach((e) => Ref.update(seen, (s) => [...s, e.identifier])),
+          ),
+          { startImmediately: true },
+        );
+
+        yield* events.publish({ _tag: "auth.token.replay", identifier: "reset-password:u2" });
+
+        // The publisher itself never observed the failing subscriber's death.
+        yield* Fiber.join(healthy);
+        assert.deepStrictEqual(yield* Ref.get(seen), ["reset-password:u2"]);
+        yield* Fiber.interrupt(failing);
+      }).pipe(Effect.provide(AuthEvents.layer)),
+  );
+
+  const seen = Effect.runSync(Ref.make<ReadonlyArray<string>>([]));
+  const Subscription = AuthEvents.on("auth.token.replay", (event) =>
+    Ref.update(seen, (s) => [...s, event.identifier]),
+  );
+
+  it.live("BEH-EA-103: on(tag, handler) only invokes the handler for its own tag", () =>
+    Effect.gen(function* () {
+      yield* Ref.set(seen, []);
+      const events = yield* AuthEvents.AuthEvents;
+      // Real wall-clock time (`it.live`, not `it.effect`'s `TestClock`): a
+      // small real sleep gives the subscription Layer's own internally
+      // forked fiber (built without `startImmediately`, since `on`'s public
+      // signature has no such knob) a chance to actually subscribe.
+      yield* Effect.sleep("20 millis");
+      yield* events.publish({ _tag: "auth.user.signedIn", userId, strategy: "password" });
+      yield* events.publish({ _tag: "auth.token.replay", identifier: "reset-password:u1" });
+      yield* Effect.sleep("20 millis");
+      assert.deepStrictEqual(yield* Ref.get(seen), ["reset-password:u1"]);
+    }).pipe(Effect.provide(Subscription.pipe(Layer.provideMerge(AuthEvents.layer)))),
+  );
+});

@@ -1,0 +1,32 @@
+packages:
+  - packages/*
+  - features
+
+# `effect` is pinned exact, not a caret range, and (once packages exist) every
+# @effect-auth package is expected to publish that exact pin as its own
+# runtime dependency, the same discipline qadi (../qadi) follows. This is
+# deliberate for as long as effect ships as an rc: two different rc builds
+# are not guaranteed ABI-compatible the way two semver-compatible stable
+# releases are, so a resolution conflict on mismatch should be loud, not
+# silent. Revisit once effect 4.0.0 ships stable.
+catalog:
+  effect: 4.0.0-rc.115
+  "@effect/platform-node": 4.0.0-rc.115
+  "@effect/sql-sqlite-node": 4.0.0-rc.115
+  "@effect/vitest": 4.0.0-rc.115
+  vitest: 5.0.0
+  "@vitest/coverage-v8": 5.0.0
+  typescript: ^7.0.0
+  "@types/node": ^22.12.0
+  hash-wasm: ^4.12.0
+
+minimumReleaseAgeExclude:
+  - "@effect-cucumber/gherkin@0.10.0"
+  - "@effect-cucumber/vitest@0.10.0"
+  - "@effect/platform-node-shared@4.0.0-rc.115"
+  - "@effect/platform-node@4.0.0-rc.115"
+  - "@effect/sql-sqlite-node@4.0.0-rc.115"
+  - "@effect/vitest@4.0.0-rc.115"
+  - effect@4.0.0-rc.115
+  - "@qadi/core@0.6.2"
+  - "@qadi/http@0.6.2"

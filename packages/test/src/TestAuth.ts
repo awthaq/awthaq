@@ -1,0 +1,299 @@
+// @effect-auth/test — TestAuth
+//
+// spec/behaviors/25-testing-harness.md, BEH-EA-193 through BEH-EA-200.
+//
+// **What is deliberately not built here, and why:**
+// - BEH-EA-193's "permissive `RateLimiter`" is wired in below
+//   (`RateLimiter.layerPermissive`, `@effect-auth/ports`'s own BEH-EA-112
+//   default) now that the port exists; `RateLimits.ts` (`@effect-auth/core`,
+//   the per-plugin rule *registry* half) exists too, but `TestAuth.layer`
+//   does not provide `RateLimits.layer` for it — no plugin built so far
+//   calls `RateLimits.rule`, so there is nothing yet for a test to need a
+//   registry instance for; a plugin that starts calling it will need
+//   `TestAuth.layer` to grow a `RateLimits.layer` the same way this change
+//   grew `RateLimiter.layerPermissive` in.
+// - BEH-EA-194 (`TestClock`) and BEH-EA-195 (`Layer.mock`) are `effect`'s own
+//   exports, not effect-auth's — nothing to wrap; a test simply imports them
+//   directly (`effect/testing/TestClock`, `effect/Layer`).
+// - BEH-EA-196 (`qadiTestLayer`, `subjectWith`) is `@qadi/testing`'s own
+//   package, already published and real — again nothing to wrap. Its
+//   illustrative `subjectWith` does not exist under that name in the real,
+//   installed `@qadi/testing`/`@qadi/core`; the real equivalent is
+//   `@qadi/core`'s own `makeSubject`/`fromRoles`, and `@qadi/testing`'s
+//   `Fixtures.ts` ready-made subjects — a test imports those directly.
+// - BEH-EA-200 (hook veto/observe isolation) is now directly testable via
+//   `@effect-auth/core`'s `HookPoint.ts` (see `packages/core/test/HookPoint.test.ts`
+//   for veto-abort/observe-isolation/divert coverage) — but no hook point is
+//   wired into a real signUp/signIn flow yet (`HookPoint.ts`'s own header
+//   comment), so `TestAuth.layer` itself still has nothing plugin-facing to
+//   assemble for this one.
+// - BEH-EA-199's "no `Redacted` value reaches a span or event" check is
+//   already, honestly, documented by that behavior file itself as "not
+//   mechanically verifiable today" (no tracer/logger interceptor exists) —
+//   `runPluginContractTests` below implements only its other half
+//   (contract-hash stability).
+//
+// **`TestAuth.signInAs` targets `HttpRouter.toWebHandler`'s raw
+// `(Request) => Promise<Response>` shape, not `HttpApiTest.groups`'s
+// in-memory client.** BEH-EA-197's own illustrative code calls
+// `client.admin.stats()` with no visible session plumbing after
+// `signInAs`, implying some ambient mechanism thread a session into later
+// calls automatically — but `HttpApiTest.groups` builds its own internal
+// `HttpClient` with no seam for injecting a cookie header into it, and
+// exposes no such seam itself. Every wire-level test already built in this
+// repository (`password`'s, `oauth`'s, `qadi`'s, `server`'s own
+// `AuthHttp.test.ts` files) instead threads a `Set-Cookie`/`cookie` header
+// by hand between `HttpRouter.toWebHandler`'s real `Request`/`Response`
+// objects — a proven, already-exercised pattern with a real extension seam.
+// `signInAs` returns the ready-to-use cookie header string for exactly that
+// pattern, rather than reimplementing (or fighting) `HttpApiTest.groups`'s
+// internals for an ambient-session mechanism this codebase does not
+// otherwise use anywhere.
+//
+// **`signInAs`'s `roles` is a caller-supplied callback, not a `{roles: [...]}`
+// list.** `@effect-auth/test` sits in the same stratum as `@effect-auth/roles`
+// (both are downstream of `core`/`server`/`qadi`/`sql`/`ports`/`api`, per
+// `spec/overview.md`'s own package map) — it does not depend on `roles` (or
+// any other plugin package), so it has no way to assign a role itself. A
+// caller that has installed `Roles` passes `onSignedUp: (userId) =>
+// roles.assign(userId, "member")`; `signInAs` runs it, if given, right after
+// issuing the user and before minting the session.
+import { Accounts, Auth, AuthPlugin, Sessions, Users } from "@effect-auth/core";
+import { Mailer, RateLimiter } from "@effect-auth/ports";
+import { AuthHttp } from "@effect-auth/server";
+import { NodeCrypto } from "@effect/platform-node";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpServer from "effect/unstable/http/HttpServer";
+
+/**
+ * BEH-EA-193: memory repositories, `Mailer.layerMemory`, and
+ * `HttpServer.layerServices` — re-used directly (`HttpPlatform`/`Path`/a weak
+ * `Etag` generator/a no-op `FileSystem`), not reassembled by hand the way
+ * every wire-level test elsewhere in this repository currently does.
+ * `RateLimiter.layerPermissive` (BEH-EA-112) is included too — a test that
+ * signs in fifty times in a loop shouldn't fail for a reason unrelated to
+ * what it's testing; see this module's own header comment for what
+ * BEH-EA-193's rate-limiting piece still leaves out.
+ */
+const MemoryPorts = Layer.mergeAll(
+  Users.layerMemory,
+  Accounts.layerMemory,
+  Sessions.layerMemory,
+  Mailer.layerMemory,
+  RateLimiter.layerPermissive,
+).pipe(Layer.provideMerge(NodeCrypto.layer));
+
+/**
+ * BEH-EA-193: `TestAuth.layer(Auth.make(plugins))` — the whole pipeline over
+ * memory.
+ *
+ * Takes the already-`Auth.make`-built `{api, layer}` pair rather than a raw
+ * plugin list. `Auth.make` is itself only callable, from outside its own
+ * module, through its precise, `Validate<P>`-checked overload — a generic
+ * `TestAuth.layer<P>(plugins: Auth.Validate<P>)` forwarding to it cannot
+ * simplify its own abstract `Validate<P>` back down to a concrete tuple to
+ * pass along (the same reason `Auth.ts`'s own header comment gives for why
+ * `Auth.make`'s *implementation* signature is separate from what it
+ * exports), and re-deriving a second, parallel non-empty-tuple check here
+ * would duplicate — and could drift from — `Auth.make`'s own. Accepting the
+ * *result* of a call the caller already made sidesteps the problem
+ * entirely: `Auth.Built<P>` is a plain interface, not a conditional type, so
+ * ordinary generic inference over it needs no special-cased forwarding, and
+ * the caller gets `Validate<P>`'s real compile-time checking exactly where
+ * they'd get it if they called `Auth.make` for production use anyway.
+ *
+ * **`middleware` is a real, necessary second parameter, not an
+ * afterthought.** The first version of this function had none, and folded
+ * `Layer.provideMerge(MemoryPorts)` immediately after `Layer.provide(built.layer)`.
+ * That silently made any plugin using `Api.Authentication` (or any other
+ * middleware whose *implementation* needs a service `MemoryPorts` itself
+ * provides — the ordinary case, since `Authentication.AuthenticationLive`
+ * needs `Sessions`) impossible to compose correctly: `Layer.provideMerge`
+ * only ever lets its second argument satisfy its first, never the reverse,
+ * so no ordering of a separately-built `AuthenticationLive` around the
+ * *already-sealed* result of the old `layer(built)` could satisfy both
+ * "`built.layer` needs `Api.Authentication`" and "`AuthenticationLive` needs
+ * `Sessions`" at once — confirmed empirically with `ManagedRuntime.make`,
+ * whose two-parameter signature (`Layer<R, E, never>` — no `RIn` slot to go
+ * stale) surfaces a real `Missing 'Authentication'`/`Missing 'Sessions'`
+ * error instead of the confusing `unknown` `HttpRouter.toWebHandler`'s own
+ * far more permissive constraint let through. The fix is structural, not a
+ * type annotation: `middleware` is folded in via `Layer.provide` *before*
+ * `MemoryPorts` is `provideMerge`d — the identical position `CoreLive`
+ * occupies in every wire-level `AuthHttp.test.ts` already in this
+ * repository — so a middleware implementation's own requirement on a
+ * memory-backed port is satisfied the same way theirs already is. Pass
+ * `Layer.empty` when no middleware needs providing.
+ *
+ * Declared as an overload for the same reason `Auth.make` itself is:
+ * checked against an abstract `P` (inside this function's own body, `P` is
+ * not yet the caller's concrete type), the precise formula below cannot be
+ * verified — so the implementation is checked against a separate,
+ * deliberately widened signature instead, matching the exact convention
+ * `AuthPlugin.Any` itself already establishes for a plugin's `layer` field
+ * (`Layer.Layer<never, unknown, unknown>` — `never`, not `unknown`, in the
+ * `ROut` position specifically, because `Layer`'s `ROut` is contravariant:
+ * `never` is what a contravariant slot accepts from any concrete success
+ * type, the same reasoning `Auth.ts`'s own comments give for that field).
+ */
+export function layer<P extends ReadonlyArray<AuthPlugin.Any>, MR, ME, MRIn>(
+  built: Auth.Built<P>,
+  middleware: Layer.Layer<MR, ME, MRIn>,
+): Layer.Layer<
+  | Layer.Success<typeof MemoryPorts>
+  | Layer.Success<typeof HttpServer.layerServices>
+  | Layer.Success<typeof HttpRouter.layer>
+  | MR,
+  ME,
+  Exclude<Layer.Services<Auth.Built<P>["layer"]> | MRIn, Layer.Success<typeof MemoryPorts> | MR>
+>;
+export function layer(
+  built: Auth.Built<ReadonlyArray<AuthPlugin.Any>>,
+  middleware: Layer.Layer<unknown, unknown, unknown>,
+): Layer.Layer<never, unknown, unknown> {
+  return AuthHttp.routes(built.api, {}).pipe(
+    Layer.provide(built.layer),
+    Layer.provide(middleware),
+    Layer.provideMerge(MemoryPorts),
+    Layer.provideMerge(HttpServer.layerServices),
+    Layer.provideMerge(HttpRouter.layer),
+  );
+}
+
+export interface SignedInSession {
+  readonly userId: Users.UserId;
+  readonly token: Redacted.Redacted<string>;
+  /** Ready to drop straight into `new Request(url, { headers: { cookie } })`. */
+  readonly cookieHeader: string;
+}
+
+/**
+ * BEH-EA-197: mints a real user and a real session directly against
+ * `Users`/`Sessions` — no password, no HTTP round trip — so an
+ * authorization test's setup cost is independent of whichever credential
+ * plugin (if any) is installed, matching this behavior's own point: testing
+ * *authorization*, not sign-up.
+ */
+export const signInAs = (input: {
+  readonly email: string;
+  readonly name?: string;
+  readonly onSignedUp?: (userId: Users.UserId) => Effect.Effect<void>;
+}): Effect.Effect<SignedInSession, never, Users.Users | Sessions.Sessions> =>
+  Effect.gen(function* () {
+    const users = yield* Users.Users;
+    const sessions = yield* Sessions.Sessions;
+    const user = yield* users
+      .create({ email: input.email, name: input.name ?? input.email })
+      .pipe(Effect.orDie);
+    if (input.onSignedUp !== undefined) {
+      yield* input.onSignedUp(user.id);
+    }
+    const { token } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+    return {
+      userId: user.id,
+      token,
+      cookieHeader: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+    };
+  });
+
+// ---------------------------------------------------------------------------
+// BEH-EA-198/199 (second half): runPluginContractTests
+// ---------------------------------------------------------------------------
+
+export interface ContractTestOptions<O> {
+  readonly options: ReadonlyArray<O>;
+  /** Other plugins to compose alongside the plugin under test — its own declared `dependsOn`, at minimum. */
+  readonly host?: ReadonlyArray<AuthPlugin.Any>;
+}
+
+/** `describe`/`it`/`assert` — kept as an injected shape rather than importing `@effect/vitest` directly, so this harness has no hard dependency on which test runner a third-party plugin author uses. */
+export interface TestFramework {
+  readonly describe: (name: string, body: () => void) => void;
+  readonly it: (name: string, body: () => void) => void;
+  readonly fail: (message: string) => never;
+}
+
+const TABLE_PREFIX_PATTERN = (id: string): RegExp => new RegExp(`^${id}_`);
+
+/**
+ * BEH-EA-198/199: the mechanically-verifiable subset of the plugin contract
+ * suite — see this module's own header comment for BEH-EA-199's other half
+ * (redaction), which is not.
+ *
+ * A third-party plugin author runs this against their own `makePlugin`
+ * factory with no dependency on `@effect-auth/*`'s own test files — only on
+ * this package and their own `AuthPlugin.Any`-shaped plugin classes.
+ */
+export const runPluginContractTests = <O>(
+  framework: TestFramework,
+  makePlugin: (options: O) => AuthPlugin.Any,
+  config: ContractTestOptions<O>,
+): void => {
+  const host = config.host ?? [];
+  const hostIds = new Set(host.map((plugin) => plugin.id));
+
+  framework.describe("runPluginContractTests", () => {
+    let previousContract: AuthPlugin.Any["contract"] | undefined;
+
+    for (const options of config.options) {
+      const plugin = makePlugin(options);
+      const label = JSON.stringify(options);
+
+      framework.it(`${label}: id does not collide with a host plugin`, () => {
+        if (hostIds.has(plugin.id)) {
+          framework.fail(`E_PLUGIN_DUPLICATE_ID: "${plugin.id}" also names a host plugin`);
+        }
+      });
+
+      framework.it(`${label}: every declared table carries this plugin's own id prefix`, () => {
+        const prefix = TABLE_PREFIX_PATTERN(plugin.id);
+        for (const table of plugin.tables) {
+          if (!prefix.test(table)) {
+            framework.fail(`table "${table}" does not carry plugin "${plugin.id}"'s own prefix`);
+          }
+        }
+      });
+
+      framework.it(`${label}: every dependsOn entry is present among the host plugins`, () => {
+        const missing = plugin.dependsOn.filter((dep) => !hostIds.has(dep.id));
+        if (missing.length > 0) {
+          framework.fail(
+            `E_PLUGIN_MISSING_DEP: plugin "${plugin.id}" depends on ` +
+              `${missing.map((dep) => `"${dep.id}"`).join(", ")}, not present in host`,
+          );
+        }
+      });
+
+      framework.it(
+        `${label}: composes with its host plugins, and migrations apply deterministically`,
+        () => {
+          const [first, ...rest] = [...host, plugin];
+          if (first === undefined) {
+            framework.fail("runPluginContractTests: host plus plugin under test was empty");
+            return;
+          }
+          const builtA = Auth.make([first, ...rest]);
+          const builtB = Auth.make([first, ...rest]);
+          if (JSON.stringify(builtA.migrations) !== JSON.stringify(builtB.migrations)) {
+            framework.fail(
+              `plugin "${plugin.id}"'s migrations are not deterministic across two identical builds`,
+            );
+          }
+        },
+      );
+
+      framework.it(`${label}: this option value does not change the plugin's own contract`, () => {
+        if (previousContract !== undefined && previousContract !== plugin.contract) {
+          framework.fail(
+            `plugin "${plugin.id}"'s contract changed with a different option value — ` +
+              "a plugin's contract must be a fixed value its options never influence (ADR-EA-011)",
+          );
+        }
+        previousContract = plugin.contract;
+      });
+    }
+  });
+};

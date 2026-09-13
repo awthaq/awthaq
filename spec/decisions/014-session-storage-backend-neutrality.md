@@ -1,0 +1,42 @@
+# ADR-EA-014: Session Storage Is Backend-Neutral
+
+> **Document Control**
+>
+> | Property | Value |
+> |---|---|
+> | Document ID | EFAUTH-ADR-014 |
+> | Revision | 1.0 |
+> | Effective Date | 2026-09-12 |
+> | Status | Accepted — design; implementation deferred |
+> | Author | effect-auth Engineering |
+> | Classification | Architectural Decision |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) |
+
+---
+
+## Context
+
+`behaviors/07-sessions.md` fixes a detailed session contract — an opaque `id.secret` token (BEH-EA-049), only `SHA-256(secret)` persisted (BEH-EA-050), independent absolute and idle expiries where idle refresh never extends the absolute deadline (BEH-EA-051, INV-EA-008), throttled idle-refresh writes (BEH-EA-052), and list/revoke/revoke-others operations (BEH-EA-054) — but states none of it in terms of a named port, and no decision record governs which storage technologies a `Sessions` implementation may target or what must stay true of revocation and expiry enforcement across them. ADR-EA-004 already establishes that persistence generally is dialect-neutral (`Model.Class` + `SqlModel` over PostgreSQL, SQLite, MySQL), but that neutrality is scoped to *SQL dialect*, not to storage *technology* — nothing in ADR-EA-004 or file 07 says whether a `Sessions` implementation may be backed by a key-value store (Redis) instead of the primary relational database, the way `RateLimiter` explicitly may (BEH-EA-109: "the memory store is adequate for a single process and for tests; Redis (or a SQL-backed store) is the production default for multi-instance deployments").
+
+`research/04-sessions-tokens.md` documents a concrete failure mode that motivates treating this as a decision rather than leaving it implicit: better-auth's session model is a plain relational row (`token`, `ipAddress`, `userAgent`, `expiresIn`) with an optional client-side performance overlay, `cookieCache` (a signed/JWT/JWE client-side cache) — and its own documentation carries "a documented revocation caveat: revoked sessions stay usable on other devices until the cache TTL lapses — a direct demonstration of why server-side lookup remains the revocation source of truth." The research's own recommendation states the property this ADR fixes as a requirement rather than a caveat to work around later: "Revocation is a server-side row delete — authoritative on the next request. Any cookie-cached session data must carry a small TTL (≤5 min) and be documented as revocation-lagging" (`research/04-sessions-tokens.md`, Q45 recommendation item 6). Because a production deployment under real load is exactly the scenario most likely to want a `Sessions` backend other than the primary SQL database — Redis or another KV store, for the same latency reasons `RateLimiter` and `KeyValueStore` already support swapping stores — the contract in file 07 needs to say explicitly what must hold *regardless* of which backend an application chooses, not merely what the reference SQL implementation happens to do.
+
+## Decision
+
+`Sessions` is a port: plugins and core middleware (`Authentication`, `SessionView`) depend on the `Sessions` service's interface (`issue`, `verify`, `touch`, `list`, `revoke`, `revokeOthers`), never on a specific storage technology, and the application provides exactly one `Sessions` store implementation the same way it provides `RateLimiter`'s store (BEH-EA-109) — a SQL-backed implementation via `Model.Class`/`SqlModel` (ADR-EA-004) is the documented default, and a KV-backed implementation (Redis or equivalent) is an equally legal, swappable alternative for deployments that want session reads and idle-touch writes off the primary relational database's hot path. Regardless of which backend is provided, two properties are fixed as part of the `Sessions` port's contract, not left to the backend's own defaults:
+
+1. **Revocation is authoritative on the very next read**, full stop. A `revoke`/`revokeOthers` call MUST make the affected session unverifiable on the next `Sessions.verify` call against any backend; a backend MAY layer a short-TTL, explicitly non-authoritative read-side cache in front of its store for performance, but such a cache MUST carry a documented upper-bound TTL (research/04-sessions-tokens.md's ≤5-minute reference figure) and MUST NOT be the thing `Sessions.verify` itself calls authoritative — the store lookup (or a same-request-consistent read of it) is.
+2. **Idle and absolute expiry enforcement (BEH-EA-051, INV-EA-008) behaves identically across backends.** A backend whose storage technology carries its own native TTL/eviction mechanism (a KV store's key expiry) MUST NOT rely on that native mechanism as the sole enforcement of either deadline — the domain-level `absolute`/`idle` timestamps stored on the session are what `Sessions.verify` checks, so that idle refresh's own throttling (BEH-EA-052) and the absolute-never-extends rule (INV-EA-008) hold the same way whether the store's own eviction happens to race ahead of, behind, or exactly at the domain deadline. A backend's native TTL, where present, is an operational cleanup optimization layered *under* the domain check, never a substitute for it.
+
+## Alternatives considered
+
+**Session storage hard-wired to the primary relational database, with no backend port at all** — the model `research/04-sessions-tokens.md` documents better-auth as actually shipping: a plain SQL session row, with `cookieCache` as the only performance lever, itself a client-side (not server-swappable) cache layered on top of the same single relational store, carrying the documented revocation-lag caveat quoted above. This was considered and rejected for effect-auth specifically because it forecloses the Redis-backed, multi-instance deployment shape `RateLimiter` (BEH-EA-109) and `KeyValueStore` already treat as a first-class production option elsewhere in the same specification — session verification is on the hot path of literally every authenticated request, making it one of the least defensible services to leave unable to move off the primary database, and better-auth's own `cookieCache` caveat is the concrete evidence of what happens when a team reaches for a performance workaround (a client-side cache) instead of a backend-neutral server-side store: revocation silently stops being authoritative for however long the workaround's cache lives.
+
+## Consequences
+
+**Positive**: A deployment under real load can move session reads and idle-touch writes to a KV store without touching `Authentication`, `SessionView`, or any plugin that depends on `Sessions` — the same shape of win ADR-EA-010 and BEH-EA-109 already give `PasswordHasher`, `Mailer`, and `RateLimiter`. Revocation semantics are a property every backend must satisfy rather than a property only the reference SQL implementation happens to have, so an application cannot silently regress into better-auth's documented cache-lag failure mode merely by choosing a different `Sessions` store.
+
+**Negative**: Every `Sessions` backend implementation — including any third-party one — carries a real, non-trivial correctness burden that a naive KV port would not: it must implement domain-level absolute/idle expiry checks itself rather than delegating fully to the store's native TTL, and it must guarantee revocation is visible on the very next read, which for a KV store deployed for read-scaling (replicas, eventually-consistent caches) is a genuinely hard property to hold — a naive read-replica-backed `Sessions` implementation is exactly the shape of bug this ADR exists to rule out, and ruling it out is a real implementation constraint on whoever writes that backend, not a paperwork requirement.
+
+**Trade-off accepted**: The project accepts that a `Sessions` backend author (including effect-auth's own Redis-backed implementation, once built) must solve read-your-own-revocation across whatever replication or caching topology their store uses, rather than being allowed to treat "the store's native TTL and eventual consistency are good enough" as sufficient — a materially harder bar than better-auth's SQL-row-plus-optional-cache model clears, accepted because a silently revocation-lagging session store is a security regression, not a performance trade a backend author should be free to make unilaterally.
+
+Not yet implemented — see spec/roadmap.md for milestone.

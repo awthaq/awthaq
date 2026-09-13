@@ -1,0 +1,13 @@
+kind: appendices
+package: effect-auth
+infix: EA
+entries:
+  - id: "EFAUTH-APP-01"
+    file: "01-password-signup-to-session-view.md"
+    title: "Password Sign-Up to Session View"
+  - id: "EFAUTH-APP-02"
+    file: "02-qadi-path-a-end-to-end.md"
+    title: "Qadi Path A, End to End"
+  - id: "EFAUTH-APP-03"
+    file: "03-nextjs-ssr-decision-hydration.md"
+    title: "Next.js SSR with Decision Hydration"

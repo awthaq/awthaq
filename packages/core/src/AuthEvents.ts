@@ -1,0 +1,105 @@
+// @effect-auth/core — AuthEvents
+//
+// spec/behaviors/13-events.md, BEH-EA-097 through BEH-EA-104.
+//
+// The registry (BEH-EA-101) starts with exactly the tags this module and its
+// callers actually publish, not the full illustrative set
+// `spec/behaviors/13-events.md`'s own examples name (`auth.user.signedIn`,
+// `auth.session.issued`, ...) — a tag nothing publishes yet would be
+// speculative surface with no test to hold it accountable. BEH-EA-101 itself
+// frames the registry as something "a plugin author can add a new event tag"
+// to; growing it as real publishers appear (`Verification.ts`'s
+// `auth.token.replay`, `@effect-auth/password`'s `auth.user.created`/
+// `auth.user.signedIn`) is that same growth, not a narrowing of the design.
+
+import * as Effect from "effect/Effect";
+import * as Context from "effect/Context";
+import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
+import type { UserId } from "./Users.ts";
+
+/** BEH-EA-059: published whenever `Verification.consume` fails — expired, unknown, or already-consumed alike (the same uniform-response reasoning as `TokenConsumed` itself). */
+export interface TokenReplayEvent {
+  readonly _tag: "auth.token.replay";
+  readonly identifier: string;
+}
+
+/** Published by `@effect-auth/password`'s `signUp`. */
+export interface UserCreatedEvent {
+  readonly _tag: "auth.user.created";
+  readonly userId: UserId;
+}
+
+/** Published by `@effect-auth/password`'s `signIn`. */
+export interface UserSignedInEvent {
+  readonly _tag: "auth.user.signedIn";
+  readonly userId: UserId;
+  readonly strategy: string;
+}
+
+/** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
+export type AuthEvent = TokenReplayEvent | UserCreatedEvent | UserSignedInEvent;
+
+export interface AuthEventsShape {
+  /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */
+  readonly publish: (event: AuthEvent) => Effect.Effect<void>;
+  /** BEH-EA-102: raw stream access for a consumer that needs custom filtering/multiplexing. */
+  readonly stream: Stream.Stream<AuthEvent>;
+}
+
+export class AuthEvents extends Context.Service<AuthEvents, AuthEventsShape>()(
+  "effect-auth/core/AuthEvents",
+) {}
+
+/**
+ * BEH-EA-097: a bounded capacity, so a slow or absent subscriber cannot
+ * cause unbounded memory growth in the publishing process. No spec'd number
+ * exists for this — 1024 is chosen as a generous, arbitrary default; an
+ * application with a genuinely different tolerance can still swap this
+ * `Layer` entirely, the same way any other capability is swapped.
+ */
+const CAPACITY = 1024;
+
+export const layer: Layer.Layer<AuthEvents> = Layer.effect(
+  AuthEvents,
+  Effect.gen(function* () {
+    const pubsub = yield* PubSub.bounded<AuthEvent>(CAPACITY);
+    const publish: AuthEventsShape["publish"] = (event) =>
+      PubSub.publish(pubsub, event).pipe(Effect.asVoid);
+    return AuthEvents.of({ publish, stream: Stream.fromPubSub(pubsub) });
+  }),
+);
+
+/**
+ * BEH-EA-103: sugar producing a subscription `Layer` — a caller never writes
+ * its own `Stream.runForEach`/`Effect.forkScoped` to get BEH-EA-099's
+ * isolation. `Layer.effectDiscard` is what supplies and then strips the
+ * `Scope.Scope` the forked fiber needs (its own doc: "Exclude<R, Scope.Scope>"),
+ * so the subscription's lifetime is exactly this `Layer`'s own.
+ */
+export const on = <Tag extends AuthEvent["_tag"]>(
+  tag: Tag,
+  handler: (event: Extract<AuthEvent, { readonly _tag: Tag }>) => Effect.Effect<void, unknown>,
+): Layer.Layer<never, never, AuthEvents> =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const events = yield* AuthEvents;
+      yield* events.stream.pipe(
+        Stream.filter((event): event is Extract<AuthEvent, { readonly _tag: Tag }> =>
+          Object.is(event._tag, tag),
+        ),
+        // BEH-EA-099/104: a failing handler is logged under a stable name and
+        // never propagates — to the publisher, to another subscriber's
+        // fiber, or anywhere else.
+        Stream.runForEach((event) =>
+          handler(event).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logError("auth.event.observer.error", { tag, cause }),
+            ),
+          ),
+        ),
+        Effect.forkScoped,
+      );
+    }),
+  );
