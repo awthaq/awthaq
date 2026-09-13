@@ -7,7 +7,7 @@
 > | Revision | 1.2 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Process Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Noted that spec/scripts/verify-traceability.sh now exists and is runnable by hand; gate 9 itself remains not-yet-active pending CI (CCR-EA-002) <br> 1.2 (2026-09-12): Noted that a Gherkin acceptance suite now exists at features/features/*.feature (REQ-EA-001 through REQ-EA-602 allocated); distinguished this from the still-unbuilt testing harness that would execute it (CCR-EA-003) |
 ---
@@ -55,7 +55,7 @@ claim mechanically rather than by a reviewer reading a compiler error by eye
 each time it changes.
 
 **Gate 7** cites `research/09-plugin-architecture.md`'s recommendation
-directly: `runPluginContractTests` is effect-auth's analog of ESLint's
+directly: `runPluginContractTests` is awthaq's analog of ESLint's
 `RuleTester` — it asserts the compiler-facing contract (id namespace and
 `apiVersion` legality, route and schema-IR validity including table
 prefixes, migration determinism across two compiles, hook classification so
@@ -66,7 +66,7 @@ contract run fails is not eligible for the official registry.
 
 **Gate 12** cites `research/12-library-strategy.md`'s recommendation to
 follow Effect's own release template: pnpm workspaces, changesets with a
-fixed version group so all `@effect-auth/*` packages move in lockstep, and
+fixed version group so all `@awthaq/*` packages move in lockstep, and
 publishing exclusively through npm trusted publishing (OIDC, `id-token:
 write`, no stored long-lived tokens) so that Sigstore provenance is attached
 automatically. Classic npm tokens were revoked ecosystem-wide in December
@@ -99,7 +99,7 @@ is introduced, it should run exactly this gate list and nothing else — one
 command, one definition of "done" — so that a second, informally-maintained
 notion of "done" never grows up alongside it. That is the discipline qadi's
 own `pnpm check` and `definitions-of-done.md` follow, and this document exists
-so effect-auth adopts it from the first commit rather than retrofitting it
+so awthaq adopts it from the first commit rather than retrofitting it
 after gates have already drifted from what CI actually runs.
 
 ## Per-change checklist (planned)

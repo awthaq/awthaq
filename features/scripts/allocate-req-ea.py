@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Allocate @REQ-EA-NNN tags across the effect-auth Gherkin suite and (re)generate
+Allocate @REQ-EA-NNN tags across the awthaq Gherkin suite and (re)generate
 features/traceability.md.
 
 Deterministic and idempotent: walks the .feature files in the fixed order
@@ -12,7 +12,7 @@ one already in use. Run this again after adding new scenarios to the suite;
 it will not renumber or duplicate existing ids.
 
 Usage: python3 features/scripts/allocate-req-ea.py
-(run from the effect-auth repo root, or anywhere — paths below are resolved
+(run from the awthaq repo root, or anywhere — paths below are resolved
 relative to this script's own location)
 """
 import re
@@ -174,7 +174,7 @@ def main():
         "> | Revision | 1.0 |\n"
         "> | Effective Date | 2026-09-12 |\n"
         "> | Status | Effective |\n"
-        "> | Author | effect-auth Engineering |\n"
+        "> | Author | awthaq Engineering |\n"
         "> | Classification | Verification Record |\n"
         "> | Change History | 1.0 (2026-09-12): Initial release, generated from "
         "`features/features/**/*.feature` (CCR-EA-003) |\n"

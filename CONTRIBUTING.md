@@ -1,4 +1,4 @@
-# Contributing to effect-auth
+# Contributing to awthaq
 
 Thanks for your interest in contributing. This document covers how the
 repository is organized, how to get a working development environment, and
@@ -6,7 +6,7 @@ what's expected of a pull request.
 
 ## Project layout
 
-This is a pnpm workspace of independently-versioned `@effect-auth/*`
+This is a pnpm workspace of independently-versioned `@awthaq/*`
 packages under `packages/`, plus a Gherkin/BDD acceptance suite under
 `features/`. The design is spec-first: `spec/` holds the normative
 behavior specification (`spec/behaviors/`), architectural decisions
@@ -49,7 +49,7 @@ verification) — the same checks CI runs on every pull request.
 
 This repository uses [Changesets](https://github.com/changesets/changesets)
 to manage versioning and changelogs across the workspace. If your change
-affects the published behavior of any `@effect-auth/*` package, add a
+affects the published behavior of any `@awthaq/*` package, add a
 changeset describing it:
 
 ```sh

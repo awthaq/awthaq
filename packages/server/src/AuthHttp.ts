@@ -1,4 +1,4 @@
-// @effect-auth/server — AuthHttp
+// @awthaq/server — AuthHttp
 //
 // spec/behaviors/11-http-error-mapping.md, BEH-EA-083 through BEH-EA-085.
 //
@@ -7,7 +7,7 @@
 // functions — re-declaring their generics independently loses the literal
 // group-identifier precision `HttpApiGroup.ToService<Id, Groups>` needs,
 // widening a group's own service type until `Layer.provide` can no longer
-// match it) — effect-auth's own composed `api` is registered and
+// match it) — awthaq's own composed `api` is registered and
 // documented the same way any application's own `HttpApi` would be,
 // requiring "no additional wiring step" (BEH-EA-083) beyond merging one
 // more `Layer` into the same list an application already builds

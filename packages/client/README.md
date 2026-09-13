@@ -1,6 +1,6 @@
-# @effect-auth/client
+# @awthaq/client
 
-> **This describes a planned package.** effect-auth is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
 
 Client. AtomHttpApi client and session atom — the isomorphic Effect client derived from the merged contract.
 

@@ -8,13 +8,13 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 
 ---
 
-> effect-auth is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/design/plugins-as-layers.md` and `archive/PRD.md` §9 — not code that has shipped.
+> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/design/plugins-as-layers.md` and `archive/PRD.md` §9 — not code that has shipped.
 
 ## BEH-EA-001: A plugin is a `Context.Service` class produced by `AuthPlugin.Service`
 
@@ -41,20 +41,20 @@ REQUIREMENT: `AuthPlugin.Service<Self, Shape>()(id, options)` MUST return a
              resolution or lifecycle.
 ```
 
-Every other capability in this file follows from this one design choice: a plugin is not an object interpreted by a bespoke compiler, it is a value the Effect runtime already knows how to compose. `archive/design/plugins-as-layers.md` §2.2 fixes the return type as `Context.ServiceClass<Self, "effect-auth/plugin/${Id}", Shape>` plus a handful of typed statics (`id`, `apiVersion`, `contract`, `tables`, `migrations`, `dependsOn`). Application code is intended to depend on a plugin exactly as it depends on any other service — `const password = yield* Password` — so "is this plugin installed" and "is this arbitrary service in scope" are designed to be the same question to the type checker.
+Every other capability in this file follows from this one design choice: a plugin is not an object interpreted by a bespoke compiler, it is a value the Effect runtime already knows how to compose. `archive/design/plugins-as-layers.md` §2.2 fixes the return type as `Context.ServiceClass<Self, "awthaq/plugin/${Id}", Shape>` plus a handful of typed statics (`id`, `apiVersion`, `contract`, `tables`, `migrations`, `dependsOn`). Application code is intended to depend on a plugin exactly as it depends on any other service — `const password = yield* Password` — so "is this plugin installed" and "is this arbitrary service in scope" are designed to be the same question to the type checker.
 
 ## BEH-EA-002: A plugin's `id` is a literal, namespaced string that keys its service instance
 
 ```ts
 type Class<Self, Id extends string, Shape, Groups extends HttpApiGroup.Constraint> =
-  Context.ServiceClass<Self, `effect-auth/plugin/${Id}`, Shape> & { readonly id: Id }
+  Context.ServiceClass<Self, `awthaq/plugin/${Id}`, Shape> & { readonly id: Id }
 ```
 
 ```text
 REQUIREMENT: A plugin's compiled service key MUST embed its own `id` as
-             `effect-auth/plugin/<id>`, so that any other plugin's
+             `awthaq/plugin/<id>`, so that any other plugin's
              requirement on it is a service whose instance type carries
-             `key: "effect-auth/plugin/<id>"` and can be named, not merely
+             `key: "awthaq/plugin/<id>"` and can be named, not merely
              detected as an unsatisfied requirement.
 ```
 
@@ -73,7 +73,7 @@ REQUIREMENT: A plugin built against a Plugin API generation other than the
              validation runs.
 ```
 
-`research/09-plugin-architecture.md` Q20 names the failure mode this rule exists to prevent: Gatsby's plugin ecosystem had no enforced API-version gate across majors, and plugins pinned to a specific host version silently rotted as majors shipped. effect-auth's plan is the opposite of a silent shim — `apiVersion: 1` is a TypeScript literal, not a semver range checked at runtime, so a plugin authored against a future Plugin API 2 cannot be passed to a v1 `Auth.make` and quietly "mostly work."
+`research/09-plugin-architecture.md` Q20 names the failure mode this rule exists to prevent: Gatsby's plugin ecosystem had no enforced API-version gate across majors, and plugins pinned to a specific host version silently rotted as majors shipped. awthaq's plan is the opposite of a silent shim — `apiVersion: 1` is a TypeScript literal, not a semver range checked at runtime, so a plugin authored against a future Plugin API 2 cannot be passed to a v1 `Auth.make` and quietly "mostly work."
 
 ## BEH-EA-004: A plugin's contract groups are constrained to its own namespace by a template-literal type
 
@@ -103,7 +103,7 @@ REQUIREMENT: Every entry in a plugin's `tables` array MUST be a string
              type-check as an argument to `AuthPlugin.Service`.
 ```
 
-`research/09-plugin-architecture.md` Q25 contrasts better-auth's convention-only table naming (plugins may create arbitrary table names, with only a documentation warning against colliding with core) against Medusa 2.0's strict per-module isolation. effect-auth's plan follows Medusa's discipline but enforces it the same way it enforces group namespacing (BEH-EA-004): as a template-literal constraint on the plugin's own static declaration, so a bare or core-colliding table name is rejected before the plugin can be published, not merely flagged by a linter a plugin author could ignore.
+`research/09-plugin-architecture.md` Q25 contrasts better-auth's convention-only table naming (plugins may create arbitrary table names, with only a documentation warning against colliding with core) against Medusa 2.0's strict per-module isolation. awthaq's plan follows Medusa's discipline but enforces it the same way it enforces group namespacing (BEH-EA-004): as a template-literal constraint on the plugin's own static declaration, so a bare or core-colliding table name is rejected before the plugin can be published, not merely flagged by a linter a plugin author could ignore.
 
 ## BEH-EA-006: `migrations` is a static, declarative member — never computed from runtime configuration
 
@@ -123,7 +123,7 @@ REQUIREMENT: A plugin's `migrations` value MUST be resolvable by reading the
              every runtime configuration of that plugin.
 ```
 
-`archive/PRD.md` §5 (Design principle 3, "Declarative, frozen, static") and `research/09-plugin-architecture.md` Q30 both fix this as a hard line: installation is code, configuration is data, and a schema-affecting fact (which tables exist, which migrations run) is an installation fact, never a runtime one. This is also what makes the CLI's manifest (`effect-auth plugin list --graph`, `schema`) possible without executing a single `Layer`: the migrations, like the contract and the table list, are read off the class, not derived by running it (`archive/design/plugins-as-layers.md` §7).
+`archive/PRD.md` §5 (Design principle 3, "Declarative, frozen, static") and `research/09-plugin-architecture.md` Q30 both fix this as a hard line: installation is code, configuration is data, and a schema-affecting fact (which tables exist, which migrations run) is an installation fact, never a runtime one. This is also what makes the CLI's manifest (`awthaq plugin list --graph`, `schema`) possible without executing a single `Layer`: the migrations, like the contract and the table list, are read off the class, not derived by running it (`archive/design/plugins-as-layers.md` §7).
 
 ## BEH-EA-007: All static members are frozen for the lifetime of a plugin's options — options reach only Layers
 

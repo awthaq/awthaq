@@ -1,8 +1,8 @@
-// @effect-auth/passkey — Passkey
+// @awthaq/passkey — Passkey
 //
 // spec/behaviors/17-passkey.md, BEH-EA-129 through BEH-EA-136. `Auth.make([Passkey])`
 // composes: `dependsOn` is left unset on `AuthPlugin.layer` (like
-// `@effect-auth/password`'s own `Password.layer`, not like a cross-*plugin*
+// `@awthaq/password`'s own `Password.layer`, not like a cross-*plugin*
 // dependency) — `Users`/`Sessions`/`Accounts`/`AuthEvents` are core domain
 // services this plugin's own `make` Effect simply `yield*`s directly, the
 // same way every other plugin in this codebase already does; `dependsOn`
@@ -22,9 +22,9 @@
 // no session yet (it's how one is created); see `PasskeyApi.ts`'s own
 // header comment for how it correlates its two anonymous calls instead.
 
-import { Api, SessionContract } from "@effect-auth/api";
-import { AuthEvents, AuthPlugin, Accounts, Sessions, Users } from "@effect-auth/core";
-import { WebAuthn } from "@effect-auth/ports";
+import { Api, SessionContract } from "@awthaq/api";
+import { AuthEvents, AuthPlugin, Accounts, Sessions, Users } from "@awthaq/core";
+import { WebAuthn } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -57,10 +57,10 @@ export interface PasskeyConfigShape {
 
 const defaultPasskeyConfig: PasskeyConfigShape = {
   // Deliberately insecure-looking dev defaults, the same posture
-  // `@effect-auth/oauth`'s own `OAuthConfig.baseUrl` default takes — real
+  // `@awthaq/oauth`'s own `OAuthConfig.baseUrl` default takes — real
   // deployments are expected to override every one of these via `config()`.
   rpId: "localhost",
-  rpName: "effect-auth",
+  rpName: "awthaq",
   origins: ["http://localhost:3000"],
   attestation: "none",
   authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
@@ -69,7 +69,7 @@ const defaultPasskeyConfig: PasskeyConfigShape = {
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
 export const PasskeyConfig: Context.Reference<PasskeyConfigShape> = Context.Reference(
-  "effect-auth/passkey/Config",
+  "awthaq/passkey/Config",
   { defaultValue: () => defaultPasskeyConfig },
 );
 
@@ -246,15 +246,13 @@ export interface PasskeyShape {
   ) => Effect.Effect<void, PasskeyApi.PasskeyCredentialNotFound | PasskeyApi.PasskeyLastCredential>;
 }
 
-/** Same forward-reference pattern `@effect-auth/password`'s own `PasswordHandlers` documents. */
+/** Same forward-reference pattern `@awthaq/password`'s own `PasswordHandlers` documents. */
 const currentUserPrincipal: Effect.Effect<Api.UserPrincipal, never, Api.CurrentPrincipal> =
   Effect.gen(function* () {
     const principal = yield* Api.CurrentPrincipal;
     if (principal._tag !== "User") {
       return yield* Effect.die(
-        new Error(
-          `effect-auth: passkey group reached with a non-User principal: ${principal._tag}`,
-        ),
+        new Error(`awthaq: passkey group reached with a non-User principal: ${principal._tag}`),
       );
     }
     return principal;

@@ -1,5 +1,5 @@
 {
-  "name": "@effect-auth/admin",
+  "name": "@awthaq/admin",
   "version": "0.1.0",
   "private": true,
   "description": "Impersonation: off by default, admin-gated, reason required, hard expiry, dual identity, fully audited (NFR-EA-007).",
@@ -31,14 +31,14 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
-    "@effect-auth/core": "workspace:*",
-    "@effect-auth/server": "workspace:*",
+    "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
+    "@awthaq/server": "workspace:*",
     "@qadi/core": "^0.6.2",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect-auth/test": "workspace:*",
+    "@awthaq/test": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",

@@ -1,5 +1,5 @@
 // spec/behaviors/18-roles-subject-resolver.md, BEH-EA-137, BEH-EA-142, BEH-EA-143.
-import { Api } from "@effect-auth/api";
+import { Api } from "@awthaq/api";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { anonymous } from "@qadi/core";

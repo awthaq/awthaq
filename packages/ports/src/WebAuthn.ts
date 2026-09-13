@@ -1,4 +1,4 @@
-// @effect-auth/ports — WebAuthn
+// @awthaq/ports — WebAuthn
 //
 // spec/behaviors/17-passkey.md, BEH-EA-129. Wraps `@simplewebauthn/server`
 // (a WebAuthn L3 spec editor's own library) — this module is exactly the
@@ -15,7 +15,7 @@
 // back the real `userVerified` flag observed on a structurally-valid,
 // cryptographically-verified response. Enforcing *policy* about whether UV
 // was required for a given ceremony (an ordinary registration vs.
-// `@effect-auth/passkey`'s Conditional Create, whose whole point is
+// `@awthaq/passkey`'s Conditional Create, whose whole point is
 // accepting UP=0/UV=0) is the plugin's job, not this port's — this port
 // only ever proves "this response is a real, unforged answer to this exact
 // challenge," never "...and the caller's policy about it is satisfied."
@@ -23,7 +23,7 @@
 // `PasskeyVerificationFailed` is this port's one failure mode (BEH-EA-129's
 // own type signature): a tampered/forged response, a wrong challenge, or a
 // wrong origin/rpId (as this port's own caller configured `expectedOrigin`/
-// `expectedRpId`) all collapse into it here. `@effect-auth/passkey` raises
+// `expectedRpId`) all collapse into it here. `@awthaq/passkey` raises
 // the other, more specific BEH-EA-136 errors (`PasskeyChallengeInvalid`,
 // `PasskeyOriginMismatch`, `PasskeyRpIdMismatch`, `PasskeyUserVerificationRequired`,
 // ...) from checks it runs *before* ever calling this port, using facts
@@ -90,7 +90,7 @@ export interface RegistrationOptionsInput {
   readonly rpName: string;
   /** Base64url-encoded raw challenge bytes — see this module's own header comment. */
   readonly challenge: string;
-  /** Base64url-encoded `webauthnUserId` handle — a per-user, non-PII handle distinct from the internal user id (BEH-EA-anchored in `@effect-auth/passkey`'s own `passkey_credential` table). */
+  /** Base64url-encoded `webauthnUserId` handle — a per-user, non-PII handle distinct from the internal user id (BEH-EA-anchored in `@awthaq/passkey`'s own `passkey_credential` table). */
   readonly userId: string;
   readonly userName: string;
   readonly userDisplayName: string;
@@ -170,9 +170,7 @@ export interface WebAuthnShape {
   ) => Effect.Effect<VerifiedAuthentication, PasskeyVerificationFailed>;
 }
 
-export class WebAuthn extends Context.Service<WebAuthn, WebAuthnShape>()(
-  "effect-auth/ports/WebAuthn",
-) {}
+export class WebAuthn extends Context.Service<WebAuthn, WebAuthnShape>()("awthaq/ports/WebAuthn") {}
 
 const toCredentialDescriptor = (
   descriptor: CredentialDescriptor,
@@ -216,7 +214,7 @@ export const layerSimpleWebAuthn: Layer.Layer<WebAuthn> = Layer.succeed(
           }),
         catch: (cause) =>
           new PasskeyVerificationFailed({
-            message: `effect-auth: passkey registration verification failed: ${String(cause)}`,
+            message: `awthaq: passkey registration verification failed: ${String(cause)}`,
           }),
       }).pipe(
         Effect.flatMap((result) =>
@@ -233,7 +231,7 @@ export const layerSimpleWebAuthn: Layer.Layer<WebAuthn> = Layer.succeed(
               })
             : Effect.fail(
                 new PasskeyVerificationFailed({
-                  message: "effect-auth: passkey registration was not verified",
+                  message: "awthaq: passkey registration was not verified",
                 }),
               ),
         ),
@@ -273,7 +271,7 @@ export const layerSimpleWebAuthn: Layer.Layer<WebAuthn> = Layer.succeed(
           }),
         catch: (cause) =>
           new PasskeyVerificationFailed({
-            message: `effect-auth: passkey authentication verification failed: ${String(cause)}`,
+            message: `awthaq: passkey authentication verification failed: ${String(cause)}`,
           }),
       }).pipe(
         Effect.flatMap((result) =>
@@ -287,7 +285,7 @@ export const layerSimpleWebAuthn: Layer.Layer<WebAuthn> = Layer.succeed(
               })
             : Effect.fail(
                 new PasskeyVerificationFailed({
-                  message: "effect-auth: passkey authentication was not verified",
+                  message: "awthaq: passkey authentication was not verified",
                 }),
               ),
         ),

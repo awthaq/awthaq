@@ -1,8 +1,8 @@
-// @effect-auth/next — WithNextCookies
+// @awthaq/next — WithNextCookies
 //
 // spec/behaviors/24-nextjs-ssr.md, BEH-EA-189.
 //
-// Bridges a `Set-Cookie` produced by effect-auth's own composed HTTP router
+// Bridges a `Set-Cookie` produced by awthaq's own composed HTTP router
 // (a sign-in, a CSRF rotation — anything reached through
 // `HttpApiBuilder.securitySetCookie`) into Next's `next/headers` cookie
 // jar, for use inside a server action, which never sees the raw HTTP

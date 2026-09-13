@@ -16,10 +16,10 @@
 // it taps, and taps every point that operation touches (both its `before`
 // and `after`) up front, in the same `Effect.provide`, so nothing runs
 // untapped before the tap is installed.
-import { Api } from "@effect-auth/api";
-import { AuthEvents, HookPoint, Sessions, Users } from "@effect-auth/core";
-import { Mailer } from "@effect-auth/ports";
-import { Authentication } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { AuthEvents, HookPoint, Sessions, Users } from "@awthaq/core";
+import { Mailer } from "@awthaq/ports";
+import { Authentication } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

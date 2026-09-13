@@ -11,9 +11,9 @@
 // separately-constructed `ManagedRuntime`) so the expiry test can advance
 // simulated time and have `Sessions.layerMemory`'s own `DateTime.now` reads
 // see it.
-import { Api } from "@effect-auth/api";
-import { Sessions, Users } from "@effect-auth/core";
-import { Authentication } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { Sessions, Users } from "@awthaq/core";
+import { Authentication } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";

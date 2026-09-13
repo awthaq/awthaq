@@ -1,4 +1,4 @@
-# effect-auth is pre-implementation (see spec/README.md). Every scenario in
+# awthaq is pre-implementation (see spec/README.md). Every scenario in
 # this file specifies intended behavior of a system that does not exist yet
 # — a target the future testing harness (BEH-EA-193..200) is meant to
 # execute against, not a record of anything verified today.
@@ -34,7 +34,7 @@ Feature: Roles and the Subject Resolver
       And qadi's evaluator would return a Deny decision for a policy requiring any permission, evaluated against that subject
       When a permission-gated policy is evaluated for that subject
       Then the Deny decision follows from the subject carrying no permissions
-      And no implicit "everyone can" default is applied anywhere in effect-auth's own resolution
+      And no implicit "everyone can" default is applied anywhere in awthaq's own resolution
 
   # BEH-EA-138 — spec/behaviors/18-roles-subject-resolver.md; see also
   # ADR-EA-012.
@@ -171,10 +171,10 @@ Feature: Roles and the Subject Resolver
       Then the resulting subject is qadi's canonical "anonymous" subject
 
     @REQ-EA-400
-    Scenario: SubjectResolver never synthesizes an effect-auth-specific representation of "no one"
+    Scenario: SubjectResolver never synthesizes an awthaq-specific representation of "no one"
       Given "CurrentPrincipal" is "AnonymousPrincipal"
       When "SubjectResolver" resolves the principal
-      Then no effect-auth-specific representation of "no one" is synthesized
+      Then no awthaq-specific representation of "no one" is synthesized
       And the same "anonymous" subject value that any other qadi-fronted service produces is used
 
     @REQ-EA-401

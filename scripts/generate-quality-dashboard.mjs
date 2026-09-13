@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Generates a self-contained HTML type-system quality dashboard for the
-// effect-auth monorepo from per-package KPI JSON files (see
-// /tmp/effect-auth-kpi/CONTRACT.md for the 50-KPI contract).
+// awthaq monorepo from per-package KPI JSON files (see
+// /tmp/awthaq-kpi/CONTRACT.md for the 50-KPI contract).
 //
 // Usage: node scripts/generate-quality-dashboard.mjs [--metrics-dir DIR] [--out FILE]
 
@@ -518,7 +518,7 @@ const KPI_META = [
     label: "workspace imports",
     agg: "sum",
     scored: false,
-    desc: "Distinct @effect-auth/* specifiers imported.",
+    desc: "Distinct @awthaq/* specifiers imported.",
   },
   {
     id: "E2",
@@ -828,7 +828,7 @@ function build(pkgs, checks, collisions) {
 
   const DATA = {
     generated: new Date().toISOString(),
-    repo: "effect-auth",
+    repo: "awthaq",
     overall,
     catScores,
     totals,
@@ -855,7 +855,7 @@ function build(pkgs, checks, collisions) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>effect-auth · Type-System Integrity Console</title>
+<title>awthaq · Type-System Integrity Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="${fontHref}">
 <style>
@@ -998,7 +998,7 @@ footer{margin-top:60px;border-top:1px solid var(--line);padding-top:18px;font-fa
 <header>
   <div class="brandrow">
     <div class="wordmark">TYPE<b>FRAME</b></div>
-    <div class="sub">effect-auth · type-system integrity console</div>
+    <div class="sub">awthaq · type-system integrity console</div>
     <div class="gen" id="gen"></div>
   </div>
   <div class="checks" id="checks"></div>

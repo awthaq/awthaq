@@ -1,4 +1,4 @@
-// @effect-auth/ports — Ports stratum (2)
+// @awthaq/ports — Ports stratum (2)
 //
 // PasswordHasher, Mailer, WebAuthn — each with layer, layerNoop, layerMemory variants. A plugin depends on a port, never a concrete implementation (capability over implementation).
 //
@@ -17,7 +17,7 @@
 //
 // `RateLimiter` (spec/behaviors/14-rate-limiting.md, BEH-EA-105/106/109/112)
 // is implemented below too — see that module's own header comment for why
-// it lives here rather than in `@effect-auth/core`.
+// it lives here rather than in `@awthaq/core`.
 //
 // `SqlTransaction` and `KeyProvider` (.scratch/shipping-gaps, tickets 16
 // and 17) round out the stratum — see each module's own header comment.

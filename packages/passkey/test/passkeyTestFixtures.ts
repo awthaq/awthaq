@@ -6,7 +6,7 @@
 // attestation/assertion bytes entirely: `clientDataJSON` is always real
 // (this plugin decodes it itself, before ever calling the port), only the
 // cryptographic verification behind it is stubbed.
-import { WebAuthn } from "@effect-auth/ports";
+import { WebAuthn } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";

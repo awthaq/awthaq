@@ -1,4 +1,4 @@
-// @effect-auth/ports — RateLimiter
+// @awthaq/ports — RateLimiter
 //
 // spec/behaviors/14-rate-limiting.md, BEH-EA-105/106/109/112. No BEH-EA
 // range is allocated for the Ports stratum's own package location yet
@@ -7,9 +7,9 @@
 // stratum 2 alongside Crypto, KeyValueStore and PasswordHasher" — a
 // capability an application provides, never a feature a plugin bundles
 // (ADR-EA-010) — so it lives here, next to `Mailer`/`PasswordHasher`, not in
-// `@effect-auth/core`. `AuthRateLimits`, the per-plugin rule registry that
+// `@awthaq/core`. `AuthRateLimits`, the per-plugin rule registry that
 // will call into this port (BEH-EA-107/108/110/111), is the domain-stratum
-// half and lives in `@effect-auth/core`'s `RateLimits.ts`; this module has
+// half and lives in `@awthaq/core`'s `RateLimits.ts`; this module has
 // no dependency on it and knows nothing about plugins.
 //
 // `layerStoreMemory` implements a fixed-window counter — BEH-EA-105's
@@ -59,7 +59,7 @@ export interface RateLimiterShape {
 }
 
 export class RateLimiter extends Context.Service<RateLimiter, RateLimiterShape>()(
-  "effect-auth/ports/RateLimiter",
+  "awthaq/ports/RateLimiter",
 ) {}
 
 export interface Bucket {
@@ -73,7 +73,7 @@ export interface RateLimiterStoreShape {
 }
 
 export class RateLimiterStore extends Context.Service<RateLimiterStore, RateLimiterStoreShape>()(
-  "effect-auth/ports/RateLimiterStore",
+  "awthaq/ports/RateLimiterStore",
 ) {}
 
 /**

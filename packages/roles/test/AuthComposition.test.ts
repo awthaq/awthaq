@@ -1,6 +1,6 @@
 // BEH-EA-009 (spec/behaviors/02-plugin-composition-validate.md): `Auth.make`
-// composes a real `roles` plugin the same way `@effect-auth/password`'s and
-// `@effect-auth/oauth`'s own `AuthComposition.test.ts` files prove.
+// composes a real `roles` plugin the same way `@awthaq/password`'s and
+// `@awthaq/oauth`'s own `AuthComposition.test.ts` files prove.
 //
 // `roles` contributes an empty `HttpApi.make("auth")` (no groups of its own,
 // per this plugin's own header comment) — `Auth.make([Roles.Roles])` alone
@@ -11,7 +11,7 @@
 // group at all). A minimal companion plugin with one real endpoint is
 // composed alongside `Roles` to prove its own manifest entry composes
 // correctly without a real HTTP dependency between the two packages.
-import { Auth, AuthPlugin } from "@effect-auth/core";
+import { Auth, AuthPlugin } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";

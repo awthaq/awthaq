@@ -71,8 +71,8 @@ the v3.22 line. Every subsystem section below uses `Context.Service`.
 |---|---|---|
 | Endpoint contract | `HttpApi`/`HttpApiGroup`/`HttpApiEndpoint` with `.setPayload`/`.addSuccess`/`.addError` | `unstable/httpapi/HttpApi.ts`, `HttpApiEndpoint.ts` — no longer flagged "Unstable" as a separate `@effect/platform` package; it now ships inside `effect/unstable/httpapi`, i.e. still pre-1.0-stability-tier by naming convention, but co-located with core |
 | Before/after hooks, cross-cutting concerns | `HttpApiMiddleware` — its own module doc lists its purpose as "authentication, authorization, logging, tracing, rate limiting, request-scoped services, schema-error handling, and client request decoration," i.e. nearly a verbatim enumeration of better-auth's hook use-cases | `unstable/httpapi/HttpApiMiddleware.ts` |
-| onRequest/onResponse asymmetry (better-auth: onRequest chains, onResponse is first-wins) | No native asymmetry exists in `HttpApiMiddleware` — ordinary middleware composition chains uniformly in both directions. Effect-auth should not reproduce better-auth's undocumented asymmetry; treat uniform chaining as the default and require an explicit, documented reason to special-case either direction | Design decision, not a primitive gap |
-| Rate limiting | **Native, production-grade**: `effect/unstable/persistence/RateLimiter` — keyed `consume`/`adaptiveConsume`/`adaptiveFeedback`, `algorithm: "fixed-window" \| "token-bucket"`, `onExceeded: "delay" \| "fail"`, in-memory or Redis-backed store `Layer`s | `unstable/persistence/RateLimiter.ts`. **[v4 supersedes v3.22 finding]** — `01-effect-ecosystem.md` (Q11) assumed effect-auth would need to declare and build its own `RateLimiter` capability from scratch; v4 ships one. effect-auth's per-plugin `rateLimit` contribution now just supplies `{ key, window, limit }` to this existing service rather than reinventing window/bucket logic |
+| onRequest/onResponse asymmetry (better-auth: onRequest chains, onResponse is first-wins) | No native asymmetry exists in `HttpApiMiddleware` — ordinary middleware composition chains uniformly in both directions. Awthaq should not reproduce better-auth's undocumented asymmetry; treat uniform chaining as the default and require an explicit, documented reason to special-case either direction | Design decision, not a primitive gap |
+| Rate limiting | **Native, production-grade**: `effect/unstable/persistence/RateLimiter` — keyed `consume`/`adaptiveConsume`/`adaptiveFeedback`, `algorithm: "fixed-window" \| "token-bucket"`, `onExceeded: "delay" \| "fail"`, in-memory or Redis-backed store `Layer`s | `unstable/persistence/RateLimiter.ts`. **[v4 supersedes v3.22 finding]** — `01-effect-ecosystem.md` (Q11) assumed awthaq would need to declare and build its own `RateLimiter` capability from scratch; v4 ships one. awthaq's per-plugin `rateLimit` contribution now just supplies `{ key, window, limit }` to this existing service rather than reinventing window/bucket logic |
 | Cookies | `effect/unstable/http/Cookies` | `unstable/http/Cookies.ts` |
 | Error model / blame taxonomy | Per-domain `Schema.TaggedError<Self>()("Tag", {...})` classes; HTTP status is attached **on the error schema itself**, one line, via `HttpApiSchema.status(code)` (e.g. `.pipe(HttpApiSchema.status(401))`) | `Schema.ts:14201` (`TaggedError`), `unstable/httpapi/HttpApiSchema.ts:113` (`status`). This gives the better-auth spec's per-category blame table (`02-request-pipeline/05`) a literal 1:1 encoding: each error class *is* one row of that table |
 | CSRF | No dedicated module found in this checkout; remains an `Effect.orElse`-composed policy decision layered on top of `HttpApiMiddleware`, not a gap in Effect itself | — |
@@ -85,8 +85,8 @@ the v3.22 line. Every subsystem section below uses `Context.Service`.
 |---|---|---|
 | Plugin contribution surface | Compiles to a `Layer` (services) plus an `HttpApiGroup` (endpoints/middleware) contributed into one assembled `HttpApi` | `Layer.ts`, `unstable/httpapi/HttpApiGroup.ts` |
 | `init`'s staged context/options delta | The `Layer.provide`/`Layer.mergeAll` dependency graph itself, resolved structurally and memoized once per build via `CurrentMemoMap` — there is no separate "options channel" with its own merge precedence the way better-auth's `init` return value has, so the spec's flagged "opposite precedence for context vs. options" footgun has no equivalent to reproduce | `Layer.ts:584` |
-| Schema field / endpoint collision (better-auth: silent last-wins) | Not caught by `Layer`/`Context` alone — two plugins contributing the same `Schema` field name or `HttpApiEndpoint` path is a **compiler-level** concern effect-auth must still implement itself (research 09's compile-time conflict-detection recommendation stands regardless of v3/v4) | Still an effect-auth build responsibility, not something the runtime gives for free |
-| Plugin dependency declaration | `requiresPlugins`/`requiresCapabilities`, checked by the effect-auth compiler via Kahn's algorithm — `Context.Service` requirements alone (the `RIn` of a `Layer`) already fail to compile on a missing service, but that is service-level, not plugin-level, so the plugin compiler still needs its own dependency graph on top (research 09) | Same conclusion as v3.22 research; unaffected by the v4 API change |
+| Schema field / endpoint collision (better-auth: silent last-wins) | Not caught by `Layer`/`Context` alone — two plugins contributing the same `Schema` field name or `HttpApiEndpoint` path is a **compiler-level** concern awthaq must still implement itself (research 09's compile-time conflict-detection recommendation stands regardless of v3/v4) | Still an awthaq build responsibility, not something the runtime gives for free |
+| Plugin dependency declaration | `requiresPlugins`/`requiresCapabilities`, checked by the awthaq compiler via Kahn's algorithm — `Context.Service` requirements alone (the `RIn` of a `Layer`) already fail to compile on a missing service, but that is service-level, not plugin-level, so the plugin compiler still needs its own dependency graph on top (research 09) | Same conclusion as v3.22 research; unaffected by the v4 API change |
 | Client/server plugin correspondence | `HttpApiClient.make`/`makeClient` — a client is **derived** from the compiled `HttpApi`; a plugin whose server group is absent is structurally absent from the derived client's type | `unstable/httpapi/HttpApiClient.ts:259,479` (`makeClient`, `make`) — verified real exports in v4. This removes the possibility of better-auth's `$InferServerPlugin` failure mode (a type-only, runtime-inert correspondence channel) by construction: there is only one source of truth, the compiled `HttpApi` |
 
 ---
@@ -114,7 +114,7 @@ the flows flagged as candidates:
 | `DurableDeferred` (`make`/`await`/`token`/`succeed`/`fail`) | A named wait-point an external actor completes later via a **token** (workflow name + execution id + deferred name, base64url-encoded) — the workflow suspends until that token is completed | `DurableDeferred.ts:38-168, 411-461` |
 | `DurableQueue.process`/`worker` | At-least-once background-worker handoff (offer → suspend → worker completes the paired `DurableDeferred`) built on `PersistedQueue`, with explicit dead-lettering after exhausted retries | `DurableQueue.ts:1-20, 186-342` |
 | `Workflow.withCompensation` | Saga-style compensating cleanup, run only if the *whole* workflow ultimately fails | `Workflow.ts:162-186, 908-927` |
-| `WorkflowProxy.toHttpApiGroup`/`WorkflowProxyServer.layerHttpApi` | Auto-derives `execute`/`discard`/`resume` `HttpApiEndpoint`s per workflow and wires handlers — a direct, zero-boilerplate integration with the same `HttpApi` effect-auth already targets | `WorkflowProxy.ts:142-166`, `WorkflowProxyServer.ts:30-87` |
+| `WorkflowProxy.toHttpApiGroup`/`WorkflowProxyServer.layerHttpApi` | Auto-derives `execute`/`discard`/`resume` `HttpApiEndpoint`s per workflow and wires handlers — a direct, zero-boilerplate integration with the same `HttpApi` awthaq already targets | `WorkflowProxy.ts:142-166`, `WorkflowProxyServer.ts:30-87` |
 
 **This is exactly the right shape for device-authorization polling** (an
 `Activity` that calls the token endpoint in a loop separated by
@@ -138,7 +138,7 @@ conceptual fit — verified, not inferred:
    `Sharding.Sharding` and `MessageStorage` and represents every workflow
    step (run, activity, deferred completion, resume) as a persisted RPC
    `Envelope` sent to a sharded cluster `Entity`. Adopting durable
-   workflows for effect-auth therefore means adopting a distributed
+   workflows for awthaq therefore means adopting a distributed
    actor/entity-sharding runtime as an operational dependency — a
    fundamentally different deployment model (shard manager, runners,
    entity placement) than "a stateless HTTP handler plus a SQL database,"
@@ -152,7 +152,7 @@ conceptual fit — verified, not inferred:
    provides.** Device-code polling and SSO/SCIM sagas need "a row with a
    status and an expiry column, checked/updated per request" — exactly how
    better-auth and every comparable framework already implements them —
-   which is already covered by effect-auth's decided SQL-adapter +
+   which is already covered by awthaq's decided SQL-adapter +
    `Persistence`/`KeyValueStore` primitives (§1 above). Reaching for a
    distributed-workflow engine to get compensation/suspend-resume
    ergonomics for something with no genuine multi-day, cross-process
@@ -169,7 +169,7 @@ external-token-completes-a-row pattern for admin-approval/invitation-accept
 waits (mirrors `DurableDeferred`'s token shape) — both are just naming
 conventions over the adapter contract already specified in
 `01-core-domain/04-database-adapter-contract.md`, not new primitives.
-Revisit `unstable/workflow` only if effect-auth ever needs a genuinely
+Revisit `unstable/workflow` only if awthaq ever needs a genuinely
 long-running, cross-process saga (e.g. a full-directory SCIM resync) **and**
 the team is willing to operate `unstable/cluster` — not a v1 question, and
 worth re-examining only after that module leaves `unstable`.
@@ -230,7 +230,7 @@ worth re-examining only after that module leaves `unstable`.
 | Schema migrations (generate/apply asymmetry) | `unstable/sql/Migrator` — **read in full (453 lines); confirms research 10's critique is unchanged in v4.** See the dedicated verdict below | `unstable/sql/Migrator.ts` (full read) |
 | CLI (scaffolding, `generate`/`migrate` commands) | **Native, in-core**: `effect/unstable/cli` — `Command`, `Flag`, `Argument`, `Param`, `Prompt`, `CliConfig`, `Completions` | `unstable/cli/*`. **[v4 supersedes v3.22 finding]** — the v3.22 research corpus assumed an external `@effect/cli` package; in this v4 checkout the CLI framework lives inside `effect/unstable/cli` |
 | Telemetry / observability | **Native, in-core**: `effect/unstable/observability` — `Otlp`, `OtlpExporter`, `OtlpLogger`, `OtlpMetrics`, `OtlpTracer`, `PrometheusMetrics` | `unstable/observability/*`. Opt-in gating still layers `Config` on top; the disclosure-inventory contract from the better-auth spec (`09-platform-services/03`) is unaffected — only the wiring substrate changes |
-| Secret/PII redaction | Two complementary mechanisms: `Redacted<A>` (opaque wrapper, masks in string/JSON/inspect output) and the newer **`Redactable`** protocol (objects present alternative, context-aware representations of themselves depending on runtime context — e.g. masked in a log context, real in a trusted one) | `Redacted.ts`, `Redactable.ts` (`Redactable.ts` module doc: "Context-aware redaction for sensitive values... masking secrets, tokens, or personal data in logs, traces, and serialized output") — `Redactable` was not present in the v3.22-era research and is a genuinely new, more flexible option for effect-auth's `Redactor` boundary (research 12) |
+| Secret/PII redaction | Two complementary mechanisms: `Redacted<A>` (opaque wrapper, masks in string/JSON/inspect output) and the newer **`Redactable`** protocol (objects present alternative, context-aware representations of themselves depending on runtime context — e.g. masked in a log context, real in a trusted one) | `Redacted.ts`, `Redactable.ts` (`Redactable.ts` module doc: "Context-aware redaction for sensitive values... masking secrets, tokens, or personal data in logs, traces, and serialized output") — `Redactable` was not present in the v3.22-era research and is a genuinely new, more flexible option for awthaq's `Redactor` boundary (research 12) |
 | i18n message-key contract | No dedicated module found in this checkout; remains a design-level contract (plugin-declared strings attached to the same `Schema`-backed error/response definitions as §2) | — |
 
 ### 9a. `unstable/sql/Migrator` verdict (full 453-line body read this session)
@@ -254,11 +254,11 @@ statement), and four ready-made migration loaders (`fromGlob`,
 different bundler/runtime conventions. Neither changes the correctness
 gaps above.
 
-**Consequence for effect-auth's migration story (research 10's own
+**Consequence for awthaq's migration story (research 10's own
 recommendation stands, now confirmed rather than assumed):** the stock
 `Migrator` is still a fine **ledger/lock/runner substrate** — its
 insert-as-concurrency-guard mechanism is worth reusing as-is — but it is
-still not the migration *engine* effect-auth needs on its own. A
+still not the migration *engine* awthaq needs on its own. A
 snapshot-diff planner with a checksum ledger, per-migration transaction-mode
 declarations (`transactional: none` for `CONCURRENTLY`-style DDL), and a
 dry-run/plan-review step must be built on top, exactly as research 10
@@ -270,7 +270,7 @@ specified before this v4 read and unchanged by it.
 
 | Gap flagged in `better-auth/` | Resolution via Effect v4 |
 |---|---|
-| Silent last-wins on plugin schema/endpoint collisions | Still requires effect-auth's own compiler-level conflict detection (research 09) — **not** solved by the runtime alone, v3 or v4 |
+| Silent last-wins on plugin schema/endpoint collisions | Still requires awthaq's own compiler-level conflict detection (research 09) — **not** solved by the runtime alone, v3 or v4 |
 | `init` context-vs-options opposite-precedence merge | No equivalent exists to get backwards: the `Layer` graph has one merge mechanism |
 | API-key permission narrowing documented but unenforced | `Schema.filter`-checked smart constructor makes the violation unconstructible, not just documented |
 | `onRequest` chains / `onResponse` first-wins asymmetry | Not reproduced — `HttpApiMiddleware` composes uniformly; treat as a disclosed, deliberate behavioral break from better-auth |

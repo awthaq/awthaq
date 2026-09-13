@@ -7,12 +7,12 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-169: The client derives from the merged contract
 
@@ -23,7 +23,7 @@ const client = yield* HttpApiClient.make(AuthApi, { baseUrl })
 ```
 
 ```text
-REQUIREMENT: `@effect-auth/client` MUST derive every endpoint method from
+REQUIREMENT: `@awthaq/client` MUST derive every endpoint method from
              `HttpApiClient.make` (or `AtomHttpApi.Service` for the reactive
              binding) against the application's merged `AuthApi`; it MUST NOT
              hand-write a method for any endpoint the contract already
@@ -116,7 +116,7 @@ authClient.session.hydrate(initialSession)   // SSR seeding, first non-null wins
 ```
 
 ```text
-REQUIREMENT: `@effect-auth/client` MUST hand-write only what `HttpApiClient`
+REQUIREMENT: `@awthaq/client` MUST hand-write only what `HttpApiClient`
              cannot derive — a session store, CSRF header injection, and the
              credentials/bearer policy; it MUST NOT hand-write endpoint
              plumbing that duplicates what the generated client already
@@ -159,6 +159,6 @@ REQUIREMENT: A Promise-returning convenience wrapper offered for non-Effect
              implemented client with its own request or decision logic.
 ```
 
-`usage-qadi.md` §14 shows the qadi analog directly — `makeQadi` wraps "the same Layer as the server" rather than reimplementing evaluation for Promise callers. Applied to `@effect-auth/client`, an optional Promise wrapper (research/11-client-frontend.md's Q39 "promise wrappers, if the user opts in") must be a thin `Effect.runPromise` shim over the one generated client, so a non-Effect caller and an Effect caller are guaranteed to see identical behavior — the same "one evaluation path" discipline `usage-qadi.md` §16 states for authorization applies here to the client transport itself.
+`usage-qadi.md` §14 shows the qadi analog directly — `makeQadi` wraps "the same Layer as the server" rather than reimplementing evaluation for Promise callers. Applied to `@awthaq/client`, an optional Promise wrapper (research/11-client-frontend.md's Q39 "promise wrappers, if the user opts in") must be a thin `Effect.runPromise` shim over the one generated client, so a non-Effect caller and an Effect caller are guaranteed to see identical behavior — the same "one evaluation path" discipline `usage-qadi.md` §16 states for authorization applies here to the client transport itself.
 
 _Previous: [BEH-EA-175](22-client-effect.md#beh-ea-175-transformclient-is-the-one-seam-for-custom-auth-policy) | Next: [BEH-EA-177](23-react.md#beh-ea-177-registryprovider-seeds-the-session-atom-for-ssr)_

@@ -1,14 +1,14 @@
-// @effect-auth/jwt/verify — the standalone lite verifier
+// @awthaq/jwt/verify — the standalone lite verifier
 //
 // .scratch/jwt/issues/13-lite-verifier.md: for a downstream service that
-// never installs `effect-auth` at all — verifying a JWT this plugin's
+// never installs `awthaq` at all — verifying a JWT this plugin's
 // full package minted, using only its own dependency on this one module.
-// Deliberately, checkably free of any import from `@effect-auth/core`,
-// `@effect-auth/server`, `./Jwt.ts`, or `./KeyRing.ts`: the only local
+// Deliberately, checkably free of any import from `@awthaq/core`,
+// `@awthaq/server`, `./Jwt.ts`, or `./KeyRing.ts`: the only local
 // import is `./JwtCodec.ts` (already, independently, free of every one of
 // those — see that file's own header comment), plus `effect` itself and
 // `effect/unstable/http`'s `HttpClient` for JWKS retrieval. Confirmed by
-// hand: `grep -E "@effect-auth/(core|server)|\./Jwt\.ts|\./KeyRing\.ts"
+// hand: `grep -E "@awthaq/(core|server)|\./Jwt\.ts|\./KeyRing\.ts"
 // packages/jwt/src/verify.ts` prints nothing.
 //
 // JWKS documents are decoded via `Schema.decodeUnknownEffect`

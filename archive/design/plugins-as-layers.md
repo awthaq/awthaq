@@ -1,7 +1,7 @@
 > **Superseded as the canonical specification by `spec/` (see `spec/README.md`).**
 > Retained here as design rationale.
 
-# Effect Auth — Plugins as Layers
+# Awthaq — Plugins as Layers
 
 Version 0.3 — 2026-09-12. Replaces the plugin model of `design/api-design-v4.md` §8. The strata, contracts, qadi integration and everything else in v0.2 stay as they are; this document changes what a plugin *is* so that the type checker answers the questions a linker used to answer at boot.
 
@@ -49,8 +49,8 @@ Left to runtime, on purpose: a cycle in `dependsOn` (unrepresentable across ES m
 ### 2.1 The class
 
 ```ts
-// @effect-auth/password/src/Password.ts
-import { AuthPlugin } from "@effect-auth/core"
+// @awthaq/password/src/Password.ts
+import { AuthPlugin } from "@awthaq/core"
 import { PasswordApi } from "./api.ts"
 
 export interface PasswordShape {
@@ -110,7 +110,7 @@ export namespace AuthPlugin {
     ): Class<Self, Id, Shape, Groups>
 
   export interface Class<Self, Id extends string, Shape, Groups extends HttpApiGroup.Constraint>
-    extends Context.ServiceClass<Self, `effect-auth/plugin/${Id}`, Shape>
+    extends Context.ServiceClass<Self, `awthaq/plugin/${Id}`, Shape>
   {
     readonly id: Id
     readonly apiVersion: 1
@@ -150,13 +150,13 @@ Everything after `Service` is plain `Layer` algebra. `AuthPlugin.layer` only doe
 Options are not constructor arguments. They are a `Context.Reference` the plugin reads; the application overrides it with a Layer. That makes options overridable per tenant, per test, or per environment with the same mechanism as everything else.
 
 ```ts
-// @effect-auth/password/src/Config.ts
+// @awthaq/password/src/Config.ts
 export const PasswordConfig = Context.Reference<{
   readonly minLength: number
   readonly breachCheck: boolean | { readonly onUnavailable: "allow" | "reject" }
   readonly resetTtl: Duration.Duration
   readonly rehashOnLogin: boolean
-}>("effect-auth/password/Config", {
+}>("awthaq/password/Config", {
   defaultValue: () => ({ minLength: 12, breachCheck: false, resetTtl: Duration.hours(1), rehashOnLogin: true })
 })
 
@@ -228,8 +228,8 @@ A slot is a `Context.Reference` with a fail-closed default. Overriding it means 
 
 ```ts
 // core slots
-export const SubjectResolver = Context.Reference<SubjectResolverShape>("effect-auth/slot/SubjectResolver", { defaultValue: () => identityOnly })
-export const SessionViewExtension = Context.Reference<(s: Session) => Effect.Effect<Record<string, unknown>>>("effect-auth/slot/SessionViewExtension", { defaultValue: () => () => Effect.succeed({}) })
+export const SubjectResolver = Context.Reference<SubjectResolverShape>("awthaq/slot/SubjectResolver", { defaultValue: () => identityOnly })
+export const SessionViewExtension = Context.Reference<(s: Session) => Effect.Effect<Record<string, unknown>>>("awthaq/slot/SessionViewExtension", { defaultValue: () => () => Effect.succeed({}) })
 
 // the roles plugin overrides SubjectResolver
 static readonly layer = AuthPlugin.layer(Roles, {
@@ -288,22 +288,22 @@ Pairwise checks over the tuple. Depth is the tuple length; a tuple of fifty plug
 ```ts
 export type Validate<P extends ReadonlyArray<Any>> =
   DuplicateId<P> extends infer D extends string
-    ? { readonly "effect-auth": `plugin id "${D}" appears more than once` }
+    ? { readonly "awthaq": `plugin id "${D}" appears more than once` }
   : MissingDep<P> extends infer M extends [string, string]
-    ? { readonly "effect-auth": `plugin "${M[1]}" depends on plugin "${M[0]}", which is not in the list` }
+    ? { readonly "awthaq": `plugin "${M[1]}" depends on plugin "${M[0]}", which is not in the list` }
   : SlotConflict<P> extends infer S extends [string, string, string]
-    ? { readonly "effect-auth": `slot "${S[0]}" is overridden by both "${S[1]}" and "${S[2]}"` }
+    ? { readonly "awthaq": `slot "${S[0]}" is overridden by both "${S[1]}" and "${S[2]}"` }
   : P
 
 // helpers (shape only)
 type Ids<P>          = P[number]["id"]
 type DuplicateId<P>  = /* walk the tuple; first id seen twice, else never */ never
-type PluginDeps<X>   = Extract<Layer.Services<LayerOf<X>>, { readonly key: `effect-auth/plugin/${string}` }>   // plugin requirements only
+type PluginDeps<X>   = Extract<Layer.Services<LayerOf<X>>, { readonly key: `awthaq/plugin/${string}` }>   // plugin requirements only
 type MissingDep<P>   = /* first [depId, byId] where depId ∉ Ids<P>, else never */ never
 type SlotConflict<P> = /* first [slotKey, a, b] with slotKey ∈ ROut of both, else never */ never
 ```
 
-Because a plugin requirement is a service whose instance type carries `key: "effect-auth/plugin/<id>"`, `MissingDep` can *name* the missing plugin instead of leaving you with a bare unsatisfied `RIn`. Both happen: the named error at `Auth.make`, and the structural one at `Layer.launch` if you bypass `Auth.make`.
+Because a plugin requirement is a service whose instance type carries `key: "awthaq/plugin/<id>"`, `MissingDep` can *name* the missing plugin instead of leaving you with a bare unsatisfied `RIn`. Both happen: the named error at `Auth.make`, and the structural one at `Layer.launch` if you bypass `Auth.make`.
 
 ### 4.3 What the compiler says
 
@@ -312,7 +312,7 @@ const auth = Auth.make([TwoFactor, Passkey])
 ```
 ```
 error TS2345: Argument of type '[typeof TwoFactor, typeof Passkey]' is not assignable to parameter of type
-  '{ readonly "effect-auth": "plugin \"two-factor\" depends on plugin \"password\", which is not in the list"; }'.
+  '{ readonly "awthaq": "plugin \"two-factor\" depends on plugin \"password\", which is not in the list"; }'.
 ```
 
 ```ts
@@ -330,7 +330,7 @@ Three ports still to provide, named.
 const auth = Auth.make([Roles, Organization])
 ```
 ```
-error TS2345: … '{ readonly "effect-auth": "slot \"effect-auth/slot/SubjectResolver\" is overridden by both \"roles\" and \"organization\""; }'
+error TS2345: … '{ readonly "awthaq": "slot \"awthaq/slot/SubjectResolver\" is overridden by both \"roles\" and \"organization\""; }'
 ```
 
 ```ts
@@ -349,13 +349,13 @@ error TS2322: Type 'HttpApiGroup<"invitations", …>' is not assignable to type 
 
 ```ts
 // app/auth.ts
-import { Auth, Sessions, SessionConfig } from "@effect-auth/core"
-import { Password } from "@effect-auth/password"
-import { Passkey } from "@effect-auth/passkey"
-import { OAuth, Google, GitHub } from "@effect-auth/oauth"
-import { Organization } from "@effect-auth/organization"
-import { Roles } from "@effect-auth/roles"
-import { PasswordHasher, Mailer } from "@effect-auth/ports"
+import { Auth, Sessions, SessionConfig } from "@awthaq/core"
+import { Password } from "@awthaq/password"
+import { Passkey } from "@awthaq/passkey"
+import { OAuth, Google, GitHub } from "@awthaq/oauth"
+import { Organization } from "@awthaq/organization"
+import { Roles } from "@awthaq/roles"
+import { PasswordHasher, Mailer } from "@awthaq/ports"
 import { RateLimiter, KeyValueStore } from "effect/unstable/persistence"
 import { PgClient, PgMigrator } from "@effect/sql-pg"
 
@@ -423,7 +423,7 @@ It also derives `manifest` for the CLI (`plugin list --graph`, `routes`, `schema
 ## 8. Writing a third-party plugin, complete
 
 ```ts
-// packages/effect-auth-invite/src/api.ts   — isomorphic
+// packages/awthaq-invite/src/api.ts   — isomorphic
 export class InviteApi extends HttpApiGroup.make("acme.invite")
   .add(
     HttpApiEndpoint.post("create", "/", { payload: { email: Email, role: Schema.Literals(["member", "admin"]) }, success: InviteCreated, error: [RateLimited] })
@@ -438,7 +438,7 @@ export class InviteContract extends HttpApi.make("auth").add(InviteApi) {}
 ```
 
 ```ts
-// packages/effect-auth-invite/src/Invite.ts   — server
+// packages/awthaq-invite/src/Invite.ts   — server
 export const InviteConfig = Context.Reference<{ readonly ttl: Duration.Duration }>("acme/invite/Config", {
   defaultValue: () => ({ ttl: Duration.days(7) })
 })

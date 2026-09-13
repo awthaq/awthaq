@@ -5,12 +5,12 @@
 // exercised over a real `HttpRouter`/`HttpRouter.toWebHandler` — the
 // closing proof that registration, Conditional Create, both authentication
 // paths, and credential management all work together as one coherent wire
-// contract, mirroring `@effect-auth/password`'s own `AuthHttp.test.ts`.
+// contract, mirroring `@awthaq/password`'s own `AuthHttp.test.ts`.
 // `WebAuthn` is still mocked (`Layer.mock`, BEH-EA-195) — this proves the
 // wire contract, not the cryptography (ticket 02's own job).
-import { Users, Accounts, Sessions, AuthEvents } from "@effect-auth/core";
-import { WebAuthn } from "@effect-auth/ports";
-import { Authentication, AuthHttp } from "@effect-auth/server";
+import { Users, Accounts, Sessions, AuthEvents } from "@awthaq/core";
+import { WebAuthn } from "@awthaq/ports";
+import { Authentication, AuthHttp } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -103,7 +103,7 @@ const cookieFrom = (response: Response): string => {
  * services `handler` itself uses, via the shared `memoMap` above) and
  * formats it as the same `__Host-session` cookie header the browser would
  * carry, the same `Sessions.SESSION_COOKIE_NAME`-keyed pattern
- * `@effect-auth/test`'s own `signInAs` documents using.
+ * `@awthaq/test`'s own `signInAs` documents using.
  */
 const issueSessionCookieHeader = (email: string): Promise<string> =>
   Effect.runPromise(

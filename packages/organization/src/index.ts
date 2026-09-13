@@ -1,4 +1,4 @@
-// @effect-auth/organization — Plugin (M7)
+// @awthaq/organization — Plugin (M7)
 //
 // Multi-tenancy: organizations, per-membership + dynamic per-org roles,
 // teams, invitations, lifecycle hooks, and a qadi relationship/attribute

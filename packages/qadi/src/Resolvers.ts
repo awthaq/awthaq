@@ -1,4 +1,4 @@
-// @effect-auth/qadi — Resolvers and obligation handlers
+// @awthaq/qadi — Resolvers and obligation handlers
 //
 // spec/behaviors/21-qadi-resolvers-obligations.md, BEH-EA-161, BEH-EA-165.
 //
@@ -7,10 +7,10 @@
 //   plugin (M7), which does not exist yet — nothing to build in this
 //   package for it.
 // - BEH-EA-163 (`relationshipResolverFromEdges`) is `@qadi/core`'s own
-//   export, used directly; there is nothing effect-auth-specific to wrap.
+//   export, used directly; there is nothing awthaq-specific to wrap.
 // - BEH-EA-164 (`DecisionHistory` backed by audit events) needs a durable
 //   audit-event table this repository does not have — no `AuditLog`
-//   service exists anywhere in `@effect-auth/core` yet. Building one only
+//   service exists anywhere in `@awthaq/core` yet. Building one only
 //   to satisfy this resolver would be exactly the kind of speculative
 //   infrastructure this project avoids (the same reasoning `WebAuthn`'s
 //   deferred port interface documents).
@@ -19,8 +19,8 @@
 //   already-working uses of `@qadi/predicate-sql`/`@qadi/audit`/
 //   `@qadi/devtools` an application wires itself — application-level usage
 //   patterns, not something this bridge package ships.
-import { Sessions, Users } from "@effect-auth/core";
-import { Api } from "@effect-auth/api";
+import { Sessions, Users } from "@awthaq/core";
+import { Api } from "@awthaq/api";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -56,7 +56,7 @@ export const UserAttributes: Layer.Layer<AttributeResolver, never, Users.Users> 
   Effect.gen(function* () {
     const users = yield* Users.Users;
     return {
-      name: "effect-auth/UserAttributes",
+      name: "awthaq/UserAttributes",
       resolve: (subjectId, attribute) => {
         if (!subjectId.startsWith(USER_SUBJECT_PREFIX)) {
           return Effect.succeed(undefined);
@@ -83,7 +83,7 @@ export const UserAttributes: Layer.Layer<AttributeResolver, never, Users.Users> 
 );
 
 /** BEH-EA-165: the duty a `changeEmail`-shaped handler obliges its caller to. */
-export const REAUTH_OBLIGATION_ID = "effect-auth/reauth";
+export const REAUTH_OBLIGATION_ID = "awthaq/reauth";
 
 /** Builds the `reauth` obligation, e.g. `obliged(reauth(300), hasPermission(...))`. */
 export const reauth = (maxAgeSeconds: number): Obligation =>
@@ -104,7 +104,7 @@ export class ReauthRequired extends Data.TaggedError("ReauthRequired")<{
  * `ReauthRequired`, never silently passes because it happens to still be
  * live.
  *
- * Applies only to the `effect-auth/reauth` obligation id; a binding
+ * Applies only to the `awthaq/reauth` obligation id; a binding
  * obligation with any other id reaching this handler is a wiring mistake
  * (a policy paired with the wrong `onObligations` handler) and fails loudly
  * rather than being silently discharged unexamined.
@@ -116,9 +116,7 @@ const reauthHandler: ObligationHandler<ReauthRequired, Api.CurrentPrincipal | Se
     for (const duty of obligations) {
       if (duty.id !== REAUTH_OBLIGATION_ID) {
         return yield* Effect.die(
-          new Error(
-            `effect-auth: ObligationHandlers.reauth cannot discharge obligation "${duty.id}"`,
-          ),
+          new Error(`awthaq: ObligationHandlers.reauth cannot discharge obligation "${duty.id}"`),
         );
       }
     }

@@ -1,4 +1,4 @@
-// @effect-auth/core — Domain stratum (4)
+// @awthaq/core — Domain stratum (4)
 //
 // Domain services, hook points, AuthEvents, config references, slots, the Auth namespace — the plugin contract and Auth.make composition live here.
 //
@@ -12,14 +12,14 @@
 // HookPoint.ts (spec/behaviors/12-hooks.md, BEH-EA-089-096, scoped as
 // documented in that module's own header),
 // RateLimits.ts (spec/behaviors/14-rate-limiting.md, BEH-EA-107/108/110/111 —
-// the port half, `RateLimiter`, lives in `@effect-auth/ports`),
+// the port half, `RateLimiter`, lives in `@awthaq/ports`),
 // Slots.ts (spec/behaviors/03-ports-slots-hooks-registries.md, BEH-EA-017/019/021,
 // scoped as documented in that module's own header — its `SlotConflict<P>`
 // check is real but runtime, not the compile-time one BEH-EA-012 illustrates,
 // a confirmed structural limit of `Context.Reference` in this effect
 // version, not a scoping choice).
 // `Users`/`Accounts`/`Sessions`/`Verification` each have both a `layerMemory`
-// and a SQL-backed `layerSql` (over `@effect-auth/sql`'s repositories,
+// and a SQL-backed `layerSql` (over `@awthaq/sql`'s repositories,
 // BEH-EA-033/034; `Verification.layerSql` per
 // spec/decisions/016-verification-sql-claiming.md, ADR-EA-016).
 // See spec/overview.md for the full package map.

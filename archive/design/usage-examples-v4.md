@@ -1,6 +1,6 @@
-# Effect Auth — Usage Examples
+# Awthaq — Usage Examples
 
-Version 0.2 — 2026-09-12. The public API of `design/api-design-v4.md`, shown only through usage. Every snippet is complete for its purpose and uses Effect v4 idioms verified against `../effect` and qadi 0.4 against `../qadi`. Package names use the `@effect-auth/*` placeholder.
+Version 0.2 — 2026-09-12. The public API of `design/api-design-v4.md`, shown only through usage. Every snippet is complete for its purpose and uses Effect v4 idioms verified against `../effect` and qadi 0.4 against `../qadi`. Package names use the `@awthaq/*` placeholder.
 
 Reading order is the order a team meets these needs: run it, serve it, protect things, add methods, authorize, build the UI, extend, test, operate.
 
@@ -12,8 +12,8 @@ Reading order is the order a team meets these needs: run it, serve it, protect t
 
 ```ts
 // auth.ts
-import { Auth } from "@effect-auth/core"
-import { password } from "@effect-auth/password"
+import { Auth } from "@awthaq/core"
+import { password } from "@awthaq/password"
 import { SqliteClient, SqliteMigrator } from "@effect/sql-sqlite-node"
 import { Config, Effect, Layer } from "effect"
 
@@ -35,7 +35,7 @@ export const AuthLive = Auth.layer(plugins).pipe(
 // server.ts
 import { NodeHttpServer, NodeRuntime, NodeServices } from "@effect/platform-node"
 import { HttpRouter } from "effect/unstable/http"
-import { AuthHttp } from "@effect-auth/server"
+import { AuthHttp } from "@awthaq/server"
 import { createServer } from "node:http"
 
 const Routes = AuthHttp.routes(AuthApi).pipe(Layer.provide(AuthLive))
@@ -75,13 +75,13 @@ curl -b jar -X POST localhost:3000/auth/password/sign-in -d '{"email":"ada@examp
 ### 2.1 Production wiring
 
 ```ts
-import { password } from "@effect-auth/password"
-import { oauth, google, github } from "@effect-auth/oauth"
-import { passkey } from "@effect-auth/passkey"
-import { organization } from "@effect-auth/organization"
-import { roles } from "@effect-auth/roles"
-import { SessionConfig } from "@effect-auth/core"
-import { PasswordHasher, Mailer } from "@effect-auth/ports"
+import { password } from "@awthaq/password"
+import { oauth, google, github } from "@awthaq/oauth"
+import { passkey } from "@awthaq/passkey"
+import { organization } from "@awthaq/organization"
+import { roles } from "@awthaq/roles"
+import { SessionConfig } from "@awthaq/core"
+import { PasswordHasher, Mailer } from "@awthaq/ports"
 import { PgClient, PgMigrator } from "@effect/sql-pg"
 import { RateLimiter, KeyValueStore } from "effect/unstable/persistence"
 
@@ -189,7 +189,7 @@ app.get("/me", async (c) => {
 ### 4.1 Require a signed-in principal
 
 ```ts
-import { Authentication, CurrentPrincipal, CsrfProtection } from "@effect-auth/api"
+import { Authentication, CurrentPrincipal, CsrfProtection } from "@awthaq/api"
 
 export class ProjectsApi extends HttpApiGroup.make("projects")
   .add(
@@ -220,7 +220,7 @@ export const ProjectsHandlers = HttpApiBuilder.group(AppApi, "projects", Effect.
 ### 4.2 Optional authentication
 
 ```ts
-import { OptionalAuthentication } from "@effect-auth/api"
+import { OptionalAuthentication } from "@awthaq/api"
 
 HttpApiGroup.make("feed")
   .add(HttpApiEndpoint.get("home", "/", { success: Feed }))
@@ -233,7 +233,7 @@ home: () => CurrentPrincipal.use((p) => p._tag === "Anonymous" ? feed.public : f
 ### 4.3 Different strategies for different groups
 
 ```ts
-import { ApiKeyAuthentication } from "@effect-auth/api-key/api"   // its own scheme: x-api-key header
+import { ApiKeyAuthentication } from "@awthaq/api-key/api"   // its own scheme: x-api-key header
 
 HttpApiGroup.make("machine").add(/* … */).middleware(ApiKeyAuthentication)   // ServicePrincipal
 HttpApiGroup.make("app").add(/* … */).middleware(Authentication)             // cookie → bearer
@@ -331,7 +331,7 @@ oauth({ providers: [google()], linking: { trustedProviders: ["google"] } })   //
 ### 7.3 A custom provider
 
 ```ts
-import { OAuthProvider } from "@effect-auth/oauth"
+import { OAuthProvider } from "@awthaq/oauth"
 
 export const okta = OAuthProvider.oidc({
   id: "okta",
@@ -418,7 +418,7 @@ yield* client.roles.assign({ params: { userId }, payload: { role: "admin" } })  
 ### 10.3 Path A: decide in the handler against the loaded resource
 
 ```ts
-import { AuthorizedSubject } from "@effect-auth/qadi"
+import { AuthorizedSubject } from "@awthaq/qadi"
 import { enforceProjected, filter, guard } from "@qadi/core"
 
 export class ProjectsApi extends HttpApiGroup.make("projects")
@@ -476,7 +476,7 @@ export class AdminApi extends HttpApiGroup.make("admin")
 ```ts
 import { EvaluationServicesNone, EvaluationIdLive, decisionCacheLayer } from "@qadi/core"
 import { RequirePermissionLive, PermissionRegistryLive, registerApi, permissionRegistryRoute } from "@qadi/http"
-import { AuthorizedSubjectLive, SubjectExtractorLive } from "@effect-auth/qadi"
+import { AuthorizedSubjectLive, SubjectExtractorLive } from "@awthaq/qadi"
 
 const QadiLive = Layer.mergeAll(EvaluationServicesNone, EvaluationIdLive, decisionCacheLayer({ capacity: 512 }))
 
@@ -525,7 +525,7 @@ const visible = yield* filter(canReadProject, yield* Projects.all).pipe(Effect.p
 ```ts
 import { HttpApiClient, HttpApiMiddleware } from "effect/unstable/httpapi"
 import { FetchHttpClient, HttpClientRequest } from "effect/unstable/http"
-import { CsrfProtection } from "@effect-auth/api"
+import { CsrfProtection } from "@awthaq/api"
 
 export const CsrfClient = HttpApiMiddleware.layerClient(CsrfProtection, ({ next, request }) =>
   next(HttpClientRequest.setHeader(request, "x-csrf-token", readCookie("__Host-csrf") ?? "")))
@@ -670,7 +670,7 @@ Sign-in invalidates `["session"]`; the session atom refetches; `subject` changes
 import { headers } from "next/headers"
 import { decide, filter, currentSubjectLayer } from "@qadi/core"
 import { dehydrateDecisions } from "@qadi/react"
-import { getSession } from "@effect-auth/next"
+import { getSession } from "@awthaq/next"
 
 export const dynamic = "force-dynamic"
 
@@ -699,7 +699,7 @@ export default async function Page() {
 
 ```ts
 // proxy.ts — optimistic redirect only, never the boundary
-import { hasSessionCookie } from "@effect-auth/next"
+import { hasSessionCookie } from "@awthaq/next"
 export function proxy(request: NextRequest) {
   if (!hasSessionCookie(request) && request.nextUrl.pathname.startsWith("/app")) return NextResponse.redirect(new URL("/sign-in", request.url))
 }
@@ -708,7 +708,7 @@ export function proxy(request: NextRequest) {
 ```ts
 // server action
 "use server"
-import { withNextCookies } from "@effect-auth/next"
+import { withNextCookies } from "@awthaq/next"
 export async function changeName(form: FormData) {
   return runtime.runPromise(withNextCookies(Users.use((u) => u.rename(String(form.get("name"))))))   // Set-Cookie from Effect reaches Next's jar
 }
@@ -719,7 +719,7 @@ export async function changeName(form: FormData) {
 ## 14. Hooks
 
 ```ts
-import { AuthHooks, Hooks, HookAbort } from "@effect-auth/core"
+import { AuthHooks, Hooks, HookAbort } from "@awthaq/core"
 
 // veto: only company addresses may sign up
 const CompanyEmail = AuthHooks.tap(Hooks.beforeSignUp, (input) =>
@@ -735,14 +735,14 @@ const Welcome = AuthHooks.tap(Hooks.afterSignUp, (user) => Mailer.use((m) => m.s
 export const AuthLive = Auth.layer(plugins).pipe(Layer.provide(Layer.mergeAll(CompanyEmail, Normalize, Welcome)), /* … */)
 ```
 
-Resolved order is printable: `effect-auth plugin list --hooks`.
+Resolved order is printable: `awthaq plugin list --hooks`.
 
 ---
 
 ## 15. Events
 
 ```ts
-import { AuthEvents } from "@effect-auth/core"
+import { AuthEvents } from "@awthaq/core"
 
 const Audit = AuthEvents.on("auth.user.signedIn", (e) => AuditLog.use((a) => a.write({ kind: "sign-in", userId: e.userId, strategy: e.strategy })))
 const Analytics = AuthEvents.on("auth.user.created", (e) => Segment.use((s) => s.track("signup", { userId: e.userId })))
@@ -855,7 +855,7 @@ curl -H "x-api-key: ak_…" https://app.example.com/machine/projects
 export const invite = (options?: { readonly ttl?: Duration.Input }) => Auth.plugin({
   manifest: {
     id: "acme.invite", apiVersion: 1, version: "1.0.0",
-    requires: { plugins: ["password"], ports: ["effect-auth/ports/Mailer"] },
+    requires: { plugins: ["password"], ports: ["awthaq/ports/Mailer"] },
     tables: ["invite_invitation"]
   },
   contract: InviteContract,                                   // HttpApi.make("auth").add(InviteApi)  (api.ts, isomorphic)
@@ -869,7 +869,7 @@ export const invite = (options?: { readonly ttl?: Duration.Input }) => Auth.plug
 })
 ```
 
-The contract, migrations and manifest are static; options reach only Layers. `effect-auth plugin list` reads the static half without executing anything.
+The contract, migrations and manifest are static; options reach only Layers. `awthaq plugin list` reads the static half without executing anything.
 
 ---
 
@@ -881,7 +881,7 @@ The contract, migrations and manifest are static; options reach only Layers. `ef
 import { assert, layer } from "@effect/vitest"
 import { HttpApiTest } from "effect/unstable/httpapi"
 import { TestClock } from "effect/testing"
-import { TestAuth } from "@effect-auth/test"
+import { TestAuth } from "@awthaq/test"
 
 const TestLive = TestAuth.layer(plugins)              // *.layerMemory, Mailer.layerMemory, permissive RateLimiter, HttpServer.layerServices
 const makeClient = HttpApiTest.groups(AuthApi, ["password", "session"])
@@ -923,7 +923,7 @@ it.effect("only the owner may delete", () => Effect.gen(function*() {
 ### 22.3 Plugin contract tests
 
 ```ts
-import { runPluginContractTests } from "@effect-auth/test"
+import { runPluginContractTests } from "@awthaq/test"
 runPluginContractTests(invite, { options: [{}, { ttl: "1 hour" }], host: [password()] })
 // manifest legality · group id uniqueness · table prefixes · migration determinism · veto only in veto points ·
 // observer isolation · no Redacted in spans · options do not change the contract hash · missing host dep → E_PLUGIN_MISSING_DEP
@@ -934,12 +934,12 @@ runPluginContractTests(invite, { options: [{}, { ttl: "1 hour" }], host: [passwo
 ## 23. Operating
 
 ```bash
-effect-auth doctor                     # link + config + insecure defaults (sameSite lax, csrf off, dev mailer in prod)
-effect-auth plugin list --graph        # topo order, ports, hook chains
-effect-auth routes                     # method, path, group, plugin, middleware
-effect-auth migration status           # applied / pending against the Migrator ledger
-effect-auth migration apply --yes
-effect-auth openapi > openapi.json
+awthaq doctor                     # link + config + insecure defaults (sameSite lax, csrf off, dev mailer in prod)
+awthaq plugin list --graph        # topo order, ports, hook chains
+awthaq routes                     # method, path, group, plugin, middleware
+awthaq migration status           # applied / pending against the Migrator ledger
+awthaq migration apply --yes
+awthaq openapi > openapi.json
 ```
 
 ```ts

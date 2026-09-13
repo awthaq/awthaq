@@ -1,18 +1,18 @@
-// @effect-auth/test — TestAuth
+// @awthaq/test — TestAuth
 //
 // spec/behaviors/25-testing-harness.md, BEH-EA-193 through BEH-EA-200.
 //
 // **What is deliberately not built here, and why:**
 // - BEH-EA-193's "permissive `RateLimiter`" is wired in below
-//   (`RateLimiter.layerPermissive`, `@effect-auth/ports`'s own BEH-EA-112
-//   default). `RateLimits.layer` (`@effect-auth/core`'s per-plugin rule
+//   (`RateLimiter.layerPermissive`, `@awthaq/ports`'s own BEH-EA-112
+//   default). `RateLimits.layer` (`@awthaq/core`'s per-plugin rule
 //   *registry* half) is provided too, as of the shipping-gap map's ticket
 //   12 — `Password` is the first real `RateLimits.rule` consumer, so
 //   building `Password.layer` (and, by extension, `TestAuth.layer(built)`
 //   for any composition that includes it) now genuinely needs a
 //   `RateLimitsRegistry` instance to register into.
 // - BEH-EA-194 (`TestClock`) and BEH-EA-195 (`Layer.mock`) are `effect`'s own
-//   exports, not effect-auth's — nothing to wrap; a test simply imports them
+//   exports, not awthaq's — nothing to wrap; a test simply imports them
 //   directly (`effect/testing/TestClock`, `effect/Layer`).
 // - BEH-EA-196 (`qadiTestLayer`, `subjectWith`) is `@qadi/testing`'s own
 //   package, already published and real — again nothing to wrap. Its
@@ -21,7 +21,7 @@
 //   `@qadi/core`'s own `makeSubject`/`fromRoles`, and `@qadi/testing`'s
 //   `Fixtures.ts` ready-made subjects — a test imports those directly.
 // - BEH-EA-200 (hook veto/observe isolation) is now directly testable via
-//   `@effect-auth/core`'s `HookPoint.ts` (see `packages/core/test/HookPoint.test.ts`
+//   `@awthaq/core`'s `HookPoint.ts` (see `packages/core/test/HookPoint.test.ts`
 //   for veto-abort/observe-isolation/divert coverage) — but no hook point is
 //   wired into a real signUp/signIn flow yet (`HookPoint.ts`'s own header
 //   comment), so `TestAuth.layer` itself still has nothing plugin-facing to
@@ -50,16 +50,16 @@
 // otherwise use anywhere.
 //
 // **`signInAs`'s `roles` is a caller-supplied callback, not a `{roles: [...]}`
-// list.** `@effect-auth/test` sits in the same stratum as `@effect-auth/roles`
+// list.** `@awthaq/test` sits in the same stratum as `@awthaq/roles`
 // (both are downstream of `core`/`server`/`qadi`/`sql`/`ports`/`api`, per
 // `spec/overview.md`'s own package map) — it does not depend on `roles` (or
 // any other plugin package), so it has no way to assign a role itself. A
 // caller that has installed `Roles` passes `onSignedUp: (userId) =>
 // roles.assign(userId, "member")`; `signInAs` runs it, if given, right after
 // issuing the user and before minting the session.
-import { Accounts, Auth, AuthPlugin, RateLimits, Sessions, Users } from "@effect-auth/core";
-import { Mailer, RateLimiter, SqlTransaction } from "@effect-auth/ports";
-import { AuthHttp } from "@effect-auth/server";
+import { Accounts, Auth, AuthPlugin, RateLimits, Sessions, Users } from "@awthaq/core";
+import { Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { AuthHttp } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -76,7 +76,7 @@ import * as HttpServer from "effect/unstable/http/HttpServer";
  * signs in fifty times in a loop shouldn't fail for a reason unrelated to
  * what it's testing; see this module's own header comment for what
  * BEH-EA-193's rate-limiting piece still leaves out. `RateLimits.layer`
- * (the registry half, `@effect-auth/core`) rides along in the same merge —
+ * (the registry half, `@awthaq/core`) rides along in the same merge —
  * it's not a "port," but every plugin composition needs it satisfied the
  * same way, and a second, separately-named layer here would be a
  * distinction with no practical difference for callers of this module.
@@ -229,7 +229,7 @@ const TABLE_PREFIX_PATTERN = (id: string): RegExp => new RegExp(`^${id}_`);
  * (redaction), which is not.
  *
  * A third-party plugin author runs this against their own `makePlugin`
- * factory with no dependency on `@effect-auth/*`'s own test files — only on
+ * factory with no dependency on `@awthaq/*`'s own test files — only on
  * this package and their own `AuthPlugin.Any`-shaped plugin classes.
  */
 export const runPluginContractTests = <O>(

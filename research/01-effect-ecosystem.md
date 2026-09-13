@@ -1,6 +1,6 @@
 # Effect Ecosystem — Research
 
-Domain: Effect architecture (Q8–Q19) for effect-auth. All versions/dates verified against npm, unpkg type declarations, and effect.website as of **2026-09-12**.
+Domain: Effect architecture (Q8–Q19) for awthaq. All versions/dates verified against npm, unpkg type declarations, and effect.website as of **2026-09-12**.
 
 ## TL;DR
 
@@ -49,16 +49,16 @@ Evidence:
 - Tag **identity is the class itself, not the string**: two `Context.Tag` classes with the same id are distinct keys; the id string appears in diagnostics, logs, and RPC wire metadata. The [services guide](https://effect.website/docs/v3/requirements-management/services) presents the Tag as the typed key for a service.
 - `Effect.Service<Name>()("Name", {...})` (since 3.9.0, verified in `Effect.d.ts` JSDoc) similarly takes an id string used for debugging/annotation.
 
-**Recommendation:** Mandate tag ids of the form `"@<package-scope>/<PluginId>/<ServiceName>"` (e.g. `"@effect-auth/password/PasswordService"`). Since identity is nominal, collisions cannot corrupt runtime behavior — but enforce id **uniqueness in the plugin compiler anyway** (it is a DX, log-clarity, and RPC-safety rule, and it feeds `auth plugin list`/`doctor`). Reserve the `"@effect-auth/*"` id prefix for first-party plugins; reject third-party plugins claiming it. Keep capability strings (`"auth.password"`) in a separate, separately-namespaced registry (plugin-system domain, Q23) — tag ids are not the capability namespace.
+**Recommendation:** Mandate tag ids of the form `"@<package-scope>/<PluginId>/<ServiceName>"` (e.g. `"@awthaq/password/PasswordService"`). Since identity is nominal, collisions cannot corrupt runtime behavior — but enforce id **uniqueness in the plugin compiler anyway** (it is a DX, log-clarity, and RPC-safety rule, and it feeds `auth plugin list`/`doctor`). Reserve the `"@awthaq/*"` id prefix for first-party plugins; reject third-party plugins claiming it. Keep capability strings (`"auth.password"`) in a separate, separately-namespaced registry (plugin-system domain, Q23) — tag ids are not the capability namespace.
 
 ```ts
 // first-party plugin service
 export class PasswordService extends Effect.Service<PasswordService>()(
-  "@effect-auth/password/PasswordService"
+  "@awthaq/password/PasswordService"
 ) {}
 // core-owned capability (reserved prefix)
 export class PasswordHasher extends Effect.Service<PasswordHasher>()(
-  "@effect-auth/core/PasswordHasher"
+  "@awthaq/core/PasswordHasher"
 ) {}
 ```
 
@@ -92,11 +92,11 @@ Evidence:
 - `Context.Reference` (verified in 3.22 `Context.d.ts`, marked `@experimental`) creates tags **with default values** that apply unless overridden — designed exactly for optional/overridable capabilities.
 - Swapping: `Layer.provide` / `Layer.provideMerge` compose overrides explicitly; when duplicate tags are in play, precedence follows composition order, so the compiler must wire overrides deliberately (`Layer.provide`) instead of relying on incidental merge order (dts JSDoc documents the operations, not a conflict direction — treated as unspecified).
 
-**Recommendation:** Declare every capability as an `Effect.Service` class with a safe `.Default` (e.g. `ArgonHasher.Default` for `PasswordHasher`, `NoopMailer.Default` that fails loudly in production and logs in test). Plugins `yield* PasswordHasher` — never another plugin's concrete hasher (PRD §5.1). Priority/conflict rules belong to the compiler: an explicit `capabilities` registry with `provides/requires/conflicts` (PRD §34/§36) resolves which layer wins, then the compiler wires overrides via `Layer.provide`; do not rely on merge-order accidents. For test doubles, `@effect-auth/test` ships `Layer.succeed`-based replacements; `Context.Reference` is worth watching but too experimental to build the public contract on in 3.x.
+**Recommendation:** Declare every capability as an `Effect.Service` class with a safe `.Default` (e.g. `ArgonHasher.Default` for `PasswordHasher`, `NoopMailer.Default` that fails loudly in production and logs in test). Plugins `yield* PasswordHasher` — never another plugin's concrete hasher (PRD §5.1). Priority/conflict rules belong to the compiler: an explicit `capabilities` registry with `provides/requires/conflicts` (PRD §34/§36) resolves which layer wins, then the compiler wires overrides via `Layer.provide`; do not rely on merge-order accidents. For test doubles, `@awthaq/test` ships `Layer.succeed`-based replacements; `Context.Reference` is worth watching but too experimental to build the public contract on in 3.x.
 
 ```ts
 export class PasswordHasher extends Effect.Service<PasswordHasher>()(
-  "@effect-auth/core/PasswordHasher",
+  "@awthaq/core/PasswordHasher",
   { effect: Effect.gen(function* () { /* argon2id default impl */ }) }
 ) {}
 
@@ -193,7 +193,7 @@ Evidence:
 - `@effect/opentelemetry@0.64.1` bridges to OTel SDK 2.x (peer deps verified: `@opentelemetry/sdk-trace-node ^2.0.0`, `sdk-metrics ^2.0.0`, `semantic-conventions ^1.33.0`, `api-logs`) — traces, metrics, **and logs** exportable to any OTLP backend. v4 beta added native OTLP observability (TWiE #121, June recap "OpenTelemetry enhancements").
 - PRD §A (G6) requires auditability; Q93 (security domain) will own the redaction table — this answer owns the mechanism.
 
-**Recommendation:** Hybrid. **Core-enforced skeleton**: the auth runtime creates one span per authentication operation (`auth.signin`, `auth.signup`, `auth.session.refresh` — attribute `effect-auth.plugin`, `strategy`, `principal_id`; never credentials/tokens) and emits standard metrics (`auth.signin.total`, `auth.signin.duration`, `auth.session.active`, `auth.denied.total` by reason). **Plugin-declared leaves**: plugins add child spans via `Effect.withSpan("auth.oauth.tokenExchange")` and their own metrics — the contract-test harness (Q31) asserts plugins declare no unredacted sensitive attributes. Redaction mechanism: sensitive values only ever travel as `Redacted`/Schema-annotated types (Q15), and the `auth_audit` event pipeline applies the redaction rules before any observer sees payloads. Ship `@effect/opentelemetry` wiring as an optional `AuthObservability.layer` so zero-provider dev setups still get pretty console spans/logs.
+**Recommendation:** Hybrid. **Core-enforced skeleton**: the auth runtime creates one span per authentication operation (`auth.signin`, `auth.signup`, `auth.session.refresh` — attribute `awthaq.plugin`, `strategy`, `principal_id`; never credentials/tokens) and emits standard metrics (`auth.signin.total`, `auth.signin.duration`, `auth.session.active`, `auth.denied.total` by reason). **Plugin-declared leaves**: plugins add child spans via `Effect.withSpan("auth.oauth.tokenExchange")` and their own metrics — the contract-test harness (Q31) asserts plugins declare no unredacted sensitive attributes. Redaction mechanism: sensitive values only ever travel as `Redacted`/Schema-annotated types (Q15), and the `auth_audit` event pipeline applies the redaction rules before any observer sees payloads. Ship `@effect/opentelemetry` wiring as an optional `AuthObservability.layer` so zero-provider dev setups still get pretty console spans/logs.
 
 Convention table (core-enforced skeleton, plugin-declared leaves):
 
@@ -202,7 +202,7 @@ Convention table (core-enforced skeleton, plugin-declared leaves):
 | Span | `auth.signin`, `auth.signup`, `auth.session.refresh`, `auth.oauth.callback` | core middleware |
 | Span | `auth.<plugin>.<op>` (e.g. `auth.password.verify`) | plugin, by convention |
 | Metric | `auth.signin.total`, `auth.signin.duration`, `auth.denied.total{reason}`, `auth.session.active` | core |
-| Span attrs | `effect-auth.plugin`, `strategy`, `outcome` — never tokens, passwords, emails | core-enforced, contract-tested |
+| Span attrs | `awthaq.plugin`, `strategy`, `outcome` — never tokens, passwords, emails | core-enforced, contract-tested |
 
 **Confidence:** high
 
@@ -235,9 +235,9 @@ Evidence:
 - Property-based testing is built in: `effect/FastCheck` export + `Schema` arbitrary derivation ([schema/arbitrary docs](https://effect.website/docs/v3/schema/arbitrary)) — arbitrary instances for every payload Schema come free.
 - **HTTP without a server** is documented: `HttpApiBuilder` apps convert "to a Web Handler" (README §Converting to a Web Handler) and call it with `HttpClient` where fetch is injectable (README §Testing → Injecting Fetch). v4 adds a dedicated `HttpApiTest` (TWiE #117, May 2026). In-memory repositories are plain `Layer.succeed` implementations — no framework needed.
 
-**Recommendation:** `@effect-auth/test` ships: (1) `TestAuth.layer({ plugins })` = full compiled auth over in-memory repositories + fake `Mailer`/`RateLimiter` + `TestClock`; (2) `authTestClient` = the compiled HttpApi mounted as a web handler with an injectable fetch (no socket, no port); (3) re-exports of `it.effect` helpers and `TestClock.adjust` recipes for expiry/rotation tests; (4) Schema arbitraries + `FastCheck` for property tests on token formats and payload validation. Plugin contract tests (Q31) run the plugin through the same harness so "works with the framework" is mechanically checkable.
+**Recommendation:** `@awthaq/test` ships: (1) `TestAuth.layer({ plugins })` = full compiled auth over in-memory repositories + fake `Mailer`/`RateLimiter` + `TestClock`; (2) `authTestClient` = the compiled HttpApi mounted as a web handler with an injectable fetch (no socket, no port); (3) re-exports of `it.effect` helpers and `TestClock.adjust` recipes for expiry/rotation tests; (4) Schema arbitraries + `FastCheck` for property tests on token formats and payload validation. Plugin contract tests (Q31) run the plugin through the same harness so "works with the framework" is mechanically checkable.
 
-Sketch of the shape `@effect-auth/test` enables (no server, deterministic time):
+Sketch of the shape `@awthaq/test` enables (no server, deterministic time):
 
 ```ts
 it.effect("session expires after TTL", () =>
@@ -268,7 +268,7 @@ Harness spec detail: scenarios = `GET /me` without credentials (401 path), `GET 
 
 ## Technologies & libraries
 
-| Name | What it is | License | Maturity (2026-09) | Relevance to effect-auth |
+| Name | What it is | License | Maturity (2026-09) | Relevance to awthaq |
 |---|---|---|---|---|
 | `effect` 3.22.2 | Core runtime: Effect, Layer, Context, Schema, Config, PubSub, Mailbox, Micro, TestClock | MIT | Stable `latest`; 15M weekly downloads (TWiE #120) | Foundation; target `^3.22` at v1 |
 | `effect` 4.0.0-rc.115 | v4 release candidate: rewritten runtime, unified packages, `effect/unstable/*` | MIT | RC (stable targeted Q3/Q4 2026) | Next migration target; track via `effect@rc` CI |
@@ -278,15 +278,15 @@ Harness spec detail: scenarios = `GET /me` without credentials (401 path), `GET 
 | `@effect/platform-browser` 0.77.1 | Browser-side abstractions | MIT | 0.x | Client package foundations |
 | `@effect/platform-deno` (4.0.0-beta.107) | Deno platform package | MIT | Published on v4 line; v3 Deno runs via platform-node | Later |
 | `@effect/sql` 0.52.1 + dialects (pg 0.53, mysql2 0.53, sqlite-node/bun 0.53, libsql, d1, mssql, clickhouse, pglite, kysely, drizzle) | SQL toolkit: `Migrator`, `Model`, `SqlResolver`, `SqlPersistedQueue` | MIT | 0.x, actively released (2026-07-30) | Repositories, migrations, session storage |
-| `@effect/vitest` 0.30.0 | Vitest integration (`it.effect`, test runtime) | MIT | 0.x, vitest ^3.2 | Test harness for `@effect-auth/test` |
+| `@effect/vitest` 0.30.0 | Vitest integration (`it.effect`, test runtime) | MIT | 0.x, vitest ^3.2 | Test harness for `@awthaq/test` |
 | `@effect/opentelemetry` 0.64.1 | OTel bridge (traces/metrics/logs, SDK 2.x) | MIT | 0.x | Optional `AuthObservability.layer` |
-| `@effect/cli` 0.77.1 | Declarative CLI framework | MIT | 0.x | `@effect-auth/cli` (`auth doctor`, migrations) |
+| `@effect/cli` 0.77.1 | Declarative CLI framework | MIT | 0.x | `@awthaq/cli` (`auth doctor`, migrations) |
 | `@effect/rpc` 0.76.2 / `@effect/cluster` 0.60.2 / `@effect/workflow` 0.19.1 | RPC, entity clustering, durable workflows | MIT | 0.x/experimental | Future distributed-session/audit patterns |
 | `@effect/ai` 0.37.0 | AI provider SDK on Schema | MIT | 0.x | Adjacent ecosystem signal |
 | `@effect/language-service` 0.87.2 / `@effect/tsgo` 0.45.0 | LSP plugin / native TS port | MIT | Active | Dev experience for heavy type graphs (Q8) |
 | `@effect/atom` + `@effect/atom-react` (v4 beta line) | Reactivity primitives | MIT | v4 beta | Client package option later |
-| `@kndwin/effect-auth` 0.0.1 (+ `-server/-client/-oauth/-organization`) | New native Effect auth framework attempt | n/a | 1 week old, ★0, no repo listed | Direct competitor/prior art to watch |
-| `@effect-auth/core` 0.1.0-alpha.20 + `@effect-auth/cli` | "Composable Effect-first authentication primitives" | n/a | Alpha, repo 404, last publish 2026-07-29 | **Namespace collision** with PRD's working names |
+| `@kndwin/effect-auth` 0.0.1 (+ `-server/-client/-oauth/-organization`) | New native Awthaq framework attempt | n/a | 1 week old, ★0, no repo listed | Direct competitor/prior art to watch |
+| `@awthaq/core` 0.1.0-alpha.20 + `@awthaq/cli` | "Composable Effect-first authentication primitives" | n/a | Alpha, repo 404, last publish 2026-07-29 | **Namespace collision** with PRD's working names |
 | `better-auth` 1.7.4 | Dominant TS auth framework (Promise-based) | MIT | Very mature | Benchmark; common "better-auth in Effect" wrapper pattern |
 | `@ballatech/effect-oauth-client` 0.3.2 | Small OAuth client for Effect | n/a | Low activity | OAuth plugin prior art |
 | `effect-cf` 0.40.3 / community starters (`chroxify/effect-cf-workers`, `brandhaug/b2b-saas-starter` ★42) | Cloudflare Workers Effect setups (often with better-auth) | n/a | Community | Workers runtime evidence |
@@ -337,32 +337,32 @@ Harness spec detail: scenarios = `GET /me` without credentials (401 path), `GET 
 - **David Khourshid** — "Effective State Machines for Complex Logic" (Effect Days) — https://github.com/davidkpiano
 - **Tom MacWright** — Val Town engineer; independent adopter/skeptic write-ups — https://macwright.com/
 
-## Recommended defaults for effect-auth
+## Recommended defaults for awthaq
 
 1. **Target `effect@^3.22` for v1**; run a nightly CI job against `effect@rc` (v4) from day one; read the v4 `MIGRATION.md` now and avoid constructs it deprecates (deep `Runtime` use, removed experimental modules). Public API should stick to stable v3 modules + `Effect.Service`/`LayerMap`; never leak "Unstable" HttpApi internals beyond the HttpApi contract itself.
-2. **Fix the PRD's API fiction**: `Context.Service` does not exist. Use `Effect.Service<PasswordService>()("@effect-auth/password/PasswordService", {...})` classes with `.Default` layers; `Context.Reference` only where an overridable default is the feature.
+2. **Fix the PRD's API fiction**: `Context.Service` does not exist. Use `Effect.Service<PasswordService>()("@awthaq/password/PasswordService", {...})` classes with `.Default` layers; `Context.Reference` only where an overridable default is the feature.
 3. **Plugin contributions**: declarative metadata (id, deps, capabilities, apiVersion, api, schema IR, migrations, hooks, events) + raw `Layer`s for services; compiler validates metadata, layers stay opaque; one merged, memoized `AuthLayer` via `Layer.mergeAll` + `ManagedRuntime`.
 4. **Single tiny top-level type**: `Layer<CompiledAuth, PluginCompileError>`; the facade is the compiled `HttpApi` (clients + server handlers derived from it) — no type-level mega-merges.
-5. **Naming**: tags `"@effect-auth/<plugin>/<Service>"`; reserve `@effect-auth/*` for first-party; capability strings live in their own registry.
+5. **Naming**: tags `"@awthaq/<plugin>/<Service>"`; reserve `@awthaq/*` for first-party; capability strings live in their own registry.
 6. **Events**: bounded `Mailbox`/`PubSub` + isolated observer fibers (never fail auth), `auth_audit` table as record of record; durable outbox deferred.
 7. **Config**: Schema-validated plain objects at `Auth.make`; secrets only as `Config.redacted`/`Redacted` sourced inside layers; redaction enforced by type.
 8. **Observability**: core-enforced `auth.<op>` spans + metric set; `@effect/opentelemetry` optional layer; contract tests forbid unredacted sensitive attributes.
 9. **Errors**: per-domain `Schema.TaggedError` extending `AuthError`; status + user-facing message declared once on the error; internal detail only in `cause`.
-10. **Testing**: `@effect/vitest` + `TestClock` for expiry; HTTP tests via HttpApi-as-web-handler with injected fetch; `FastCheck` + Schema arbitraries for property tests; `@effect-auth/test` = `TestAuth.layer` + in-memory repos + fake capabilities.
+10. **Testing**: `@effect/vitest` + `TestClock` for expiry; HTTP tests via HttpApi-as-web-handler with injected fetch; `FastCheck` + Schema arbitraries for property tests; `@awthaq/test` = `TestAuth.layer` + in-memory repos + fake capabilities.
 11. **Performance**: one `ManagedRuntime`, memoized layers, principal via `HttpApiMiddleware`-provided service (typed requirement, not `FiberRef`), `LayerMap` for the multi-tenant seam (verified available since effect 3.14); fixed benchmark scenarios in CI.
-12. **Rename before launch**: `@effect-auth/core` and `@effect-auth/cli` are taken on npm (alpha, possibly abandoned but published) — pick a free scope now (PRD already flags this).
+12. **Rename before launch**: `@awthaq/core` and `@awthaq/cli` are taken on npm (alpha, possibly abandoned but published) — pick a free scope now (PRD already flags this).
 
 ## Open questions for the user
 
 1. **Effect version strategy at v1**: (a) v3-only, migrate after v4 stable; (b) dual-track v3 + v4-RC from the start via a compatibility layer; (c) wait ~1–2 quarters and ship v1 on v4 stable (targeted Q3/Q4 2026). This decides the entire HttpApi surface (v4's HttpApi consolidates into `effect/unstable/httpapi` with streaming + `HttpApiTest`).
-2. **HttpApi "Unstable" risk**: (a) adopt HttpApi directly and pin versions tightly; (b) adopt HttpApi but wrap it behind `@effect-auth/http` so a future rewrite is contained; (c) build on lower-level `HttpRouter`/`HttpLayerRouter` and treat HttpApi as optional. (The PRD's ADR-003 assumes (a)/(b).)
-3. **Package namespace**: `@effect-auth/*` is taken — (a) negotiate/take over the abandoned `@effect-auth` scope; (b) rebrand (e.g. `@authed/*`, `@authfx/*`); (c) ship under `@effectful-auth/*`-style scope. Affects every doc example, so decide before MVP.
+2. **HttpApi "Unstable" risk**: (a) adopt HttpApi directly and pin versions tightly; (b) adopt HttpApi but wrap it behind `@awthaq/http` so a future rewrite is contained; (c) build on lower-level `HttpRouter`/`HttpLayerRouter` and treat HttpApi as optional. (The PRD's ADR-003 assumes (a)/(b).)
+3. **Package namespace**: `@awthaq/*` is taken — (a) negotiate/take over the abandoned `@awthaq` scope; (b) rebrand (e.g. `@authed/*`, `@authfx/*`); (c) ship under `@effectful-auth/*`-style scope. Affects every doc example, so decide before MVP.
 4. **Multi-tenancy seam**: build `LayerMap`-keyed tenant resources into v1 now (small surface: `TenantLayerMap` capability), or ship single-tenant and add the seam in v1.1? (PRD §33 leaves it open.)
 5. **Event durability**: in-process only at v1 (PubSub/Mailbox + audit table), or make the SQL-backed outbox (`SqlPersistedQueue`) a first-party plugin at v1?
 
 ## Sources
 
-- npm registry: https://registry.npmjs.org/effect/latest , https://registry.npmjs.org/@effect%2Fplatform/latest , https://registry.npmjs.org/@effect%2Fsql/latest , https://registry.npmjs.org/@effect%2Fvitest/latest , https://registry.npmjs.org/@effect%2Fopentelemetry/latest , https://registry.npmjs.org/@effect%2Fplatform-deno/latest , https://registry.npmjs.org/-/package/effect/dist-tags , https://registry.npmjs.org/@effect-auth%2Fcore , https://registry.npmjs.org/@kndwin%2Feffect-auth , https://registry.npmjs.org/@effect%2Frpc/latest , https://registry.npmjs.org/@effect%2Fcluster/latest
+- npm registry: https://registry.npmjs.org/effect/latest , https://registry.npmjs.org/@effect%2Fplatform/latest , https://registry.npmjs.org/@effect%2Fsql/latest , https://registry.npmjs.org/@effect%2Fvitest/latest , https://registry.npmjs.org/@effect%2Fopentelemetry/latest , https://registry.npmjs.org/@effect%2Fplatform-deno/latest , https://registry.npmjs.org/-/package/effect/dist-tags , https://registry.npmjs.org/@awthaq%2Fcore , https://registry.npmjs.org/@kndwin%2Fawthaq , https://registry.npmjs.org/@effect%2Frpc/latest , https://registry.npmjs.org/@effect%2Fcluster/latest
 - Type declarations (unpkg): https://unpkg.com/effect@3.22.2/dist/dts/Context.d.ts , https://unpkg.com/effect@3.22.2/dist/dts/Effect.d.ts , https://unpkg.com/effect@3.22.2/dist/dts/Layer.d.ts , https://unpkg.com/effect@3.22.2/dist/dts/LayerMap.d.ts , https://unpkg.com/effect@3.22.2/dist/dts/Schema.d.ts , https://unpkg.com/@effect/platform@0.97.2/dist/dts/FileSystem.d.ts
 - Effect docs (v3): https://effect.website/docs/v3/onboarding , https://effect.website/docs/v3/requirements-management/services , https://effect.website/docs/v3/requirements-management/layers , https://effect.website/docs/v3/requirements-management/layer-memoization , https://effect.website/docs/v3/concurrency/pubsub , https://effect.website/docs/v3/testing/testclock , https://effect.website/docs/v3/configuration , https://effect.website/docs/v3/data-types/redacted , https://effect.website/docs/v3/schema/arbitrary , https://effect.website/docs/v3/observability/tracing , https://effect.website/docs/v3/micro/effect-users , https://effect.website/docs/v3/platform/introduction , https://effect.website/docs/v3/error-management/yieldable-errors , https://www.effect.website/docs/v3/api/platform/HttpApi
 - Awesome lists: https://github.com/m9tdev/awesome-effect , https://github.com/betalyra/awesome-effect-ts , https://github.com/tcmlabs/awesome-effect-ts

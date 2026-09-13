@@ -1,8 +1,8 @@
 // BEH-EA-009 (spec/behaviors/02-plugin-composition-validate.md): `Auth.make`
-// composes a real `oauth` plugin the same way `@effect-auth/password`'s own
+// composes a real `oauth` plugin the same way `@awthaq/password`'s own
 // `AuthComposition.test.ts` proves for `password` — `OAuth.layer` needed to
 // be a `static` on the `OAuth` class for exactly this to type-check.
-import { Auth } from "@effect-auth/core";
+import { Auth } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import { OAuth } from "../src/index.ts";
 

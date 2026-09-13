@@ -4,16 +4,16 @@ Research date: 2026-09-12. All versions/dates verified against primary sources a
 
 ## TL;DR
 
-- **WebAuthn Level 3 is a W3C Recommendation (2026-08-25)** — the "passkey release". It adds the BE/BS backup flags, Conditional Get/Create, the Signals API, standard JSON (de)serialization helpers, `getClientCapabilities()`, AAGUID reporting without attestation, hints, and Related Origin Requests. Effect-auth should treat L3 as the baseline spec, not L2.
+- **WebAuthn Level 3 is a W3C Recommendation (2026-08-25)** — the "passkey release". It adds the BE/BS backup flags, Conditional Get/Create, the Signals API, standard JSON (de)serialization helpers, `getClientCapabilities()`, AAGUID reporting without attestation, hints, and Related Origin Requests. Awthaq should treat L3 as the baseline spec, not L2.
 - **Use `attestation: "none"` as the default** and design for unattested synced passkeys. Attestation (`direct`/`enterprise`) is a workforce/enterprise feature requiring FIDO MDS validation; keep it out of the v1 default path. L3's "AAGUID with no attestation" change lets us still show friendly credential-manager labels from the community AAGUID list.
 - **Challenge handling is the #1 security pivot**: ≥16 bytes of CSPRNG entropy, stored server-side (or in a signed HttpOnly challenge cookie) bound to the ceremony, single-use, and deleted on verification even when verification fails. CVE-2026-30964 (web-auth/webauthn-lib) and YSA-2026-02 (Yubico java-webauthn-server) both show the failure mode class: *application-level identity/origin confusion around an otherwise-correct library*.
 - **Origin validation must compare scheme + host + port exactly**; rpID is a registrable-domain suffix of the origin host (ports never part of rpID). `localhost` (with any port) is valid for dev.
 - **Passkeys are synced credentials**: store BE (`credentialDeviceType`) and BS (`credentialBackedUp`) per credential at registration and update BS on each authentication; sync ecosystems are iCloud Keychain and Google Password Manager (with Samsung Pass as the Android wildcard).
 - **Multi-credential per user is table design, not API design**: one `passkey` table FK'd to user, `excludeCredentials` at registration, `allowCredentials` at authentication, list/rename/delete endpoints, plus Signals API calls on delete to clean stale credentials in credential managers.
 - **Conditional UI (passkey autofill) is the default login UX**, with a button fallback; Conditional Create (automatic passkey upgrades) is the default enrollment booster. Corbado's 2026 benchmark: CC-only deployments plateau ~20% passkey adoption, +manual prompts → ~40%, full best practice → 60–80%.
-- **Do not implement the CBOR/COSE/attestation layer ourselves.** Use `@simplewebauthn/server` v14 (MIT, actively maintained, spec co-editor Matthew Miller is its author) behind an Effect service, mirroring SimpleWebAuthn's server/browser split with `@simplewebauthn/browser` in the effect-auth client package — the same choice better-auth made.
-- **Auth.js has joined Better Auth**; its experimental passkey provider was SimpleWebAuthn-based and adapter-fragmented — evidence that passkeys belong behind a clean plugin seam, which is exactly effect-auth's plugin model.
-- Server-side ceremony state should be an injected effect-auth capability (`ChallengeStore`), so Redis/in-memory/cookie backends are swappable and TestClock-testable.
+- **Do not implement the CBOR/COSE/attestation layer ourselves.** Use `@simplewebauthn/server` v14 (MIT, actively maintained, spec co-editor Matthew Miller is its author) behind an Effect service, mirroring SimpleWebAuthn's server/browser split with `@simplewebauthn/browser` in the awthaq client package — the same choice better-auth made.
+- **Auth.js has joined Better Auth**; its experimental passkey provider was SimpleWebAuthn-based and adapter-fragmented — evidence that passkeys belong behind a clean plugin seam, which is exactly awthaq's plugin model.
+- Server-side ceremony state should be an injected awthaq capability (`ChallengeStore`), so Redis/in-memory/cookie backends are swappable and TestClock-testable.
 
 ## Questions answered
 
@@ -36,9 +36,9 @@ Research date: 2026-09-12. All versions/dates verified against primary sources a
 #### RP configuration: rpID, origins, ports, subdomains
 
 - **rpID** must be a *registrable domain suffix* of the origin's effective domain: `www.example.com` may use `www.example.com` or `example.com`, never `com`. **`origin`** is the full URL the ceremony runs on; `http://localhost` and `http://localhost:PORT` are valid for dev. Ports are part of the *origin* check but never part of rpID. [SimpleWebAuthn "Identifying your RP"](https://simplewebauthn.dev/docs/packages/server), [better-auth passkey options](https://better-auth.com/docs/plugins/passkey)
-- Effect-auth config shape: `rpID`, `rpName`, `origins` (array — SimpleWebAuthn accepts an array of expected origins/RPIDs; support multiple deployment origins out of the box), optional `relatedOrigins` for ROR deployments.
+- Awthaq config shape: `rpID`, `rpName`, `origins` (array — SimpleWebAuthn accepts an array of expected origins/RPIDs; support multiple deployment origins out of the box), optional `relatedOrigins` for ROR deployments.
 - **Related Origin Requests** (L3): RP publishes `/.well-known/webauthn` listing additional origins usable with the same rpID — for ccTLD/multi-brand deployments. Same-party federation (OIDC redirect) remains the recommended alternative where possible. [Tim Cappalli L3](https://blog.timcappalli.me/p/webauthn-3/), [Corbado ROR guide](https://www.corbado.com/blog/webauthn-related-origins-cross-domain-passkeys)
-- **Quirk (CVE-grade):** origin comparison must be exact. CVE-2026-30964: web-auth/webauthn-lib < 5.2.4 reduced configured origins to host-only matching, silently accepting wrong scheme/port (`http://example.com`, `:8443`). [SentinelOne CVE analysis](https://www.sentinelone.com/vulnerability-database/cve-2026-30964/), [GHSA-f7pm-6hr8-7ggm](https://github.com/web-auth/webauthn-framework/security/advisories/GHSA-f7pm-6hr8-7ggm). Effect-auth's verifier must compare `(scheme, host, port)` tuples and derive default port explicitly.
+- **Quirk (CVE-grade):** origin comparison must be exact. CVE-2026-30964: web-auth/webauthn-lib < 5.2.4 reduced configured origins to host-only matching, silently accepting wrong scheme/port (`http://example.com`, `:8443`). [SentinelOne CVE analysis](https://www.sentinelone.com/vulnerability-database/cve-2026-30964/), [GHSA-f7pm-6hr8-7ggm](https://github.com/web-auth/webauthn-framework/security/advisories/GHSA-f7pm-6hr8-7ggm). Awthaq's verifier must compare `(scheme, host, port)` tuples and derive default port explicitly.
 
 #### Ceremonies: registration & authentication
 
@@ -77,7 +77,7 @@ Registration: server generates options (rp{ id, name }, user{ id, name, displayN
 #### Usernameless / discoverable-credential flows
 
 - Usernameless sign-in = `allowCredentials: []` + discoverable credentials (`residentKey: required|preferred`): the authenticator presents the account; the assertion's `userHandle` maps to the user server-side. SimpleWebAuthn: set `residentKey: 'required'`, `userVerification: 'preferred'` at registration, and enforce UV policy at *verification* time. [SimpleWebAuthn passkeys guide](https://simplewebauthn.dev/docs/advanced/passkeys)
-- Passkey-first onboarding (register before any session) needs an out-of-band user resolution — better-auth's 1.6 passkey plugin added `registration.requireSession: false` + `resolveUser({ context })` + `createSession` on success. Effect-auth should support this via its verification-token infrastructure. [better-auth 1.6 blog](https://better-auth.com/blog/1-6), [better-auth passkey docs](https://better-auth.com/docs/plugins/passkey)
+- Passkey-first onboarding (register before any session) needs an out-of-band user resolution — better-auth's 1.6 passkey plugin added `registration.requireSession: false` + `resolveUser({ context })` + `createSession` on success. Awthaq should support this via its verification-token infrastructure. [better-auth 1.6 blog](https://better-auth.com/blog/1-6), [better-auth passkey docs](https://better-auth.com/docs/plugins/passkey)
 
 #### Conditional UI / autofill
 
@@ -102,15 +102,15 @@ Registration: server generates options (rp{ id, name }, user{ id, name, displayN
 - **CVE-2026-46419 / YSA-2026-02** — Yubico java-webauthn-server 2.8.0–2.8.1: user impersonation in the "second-factor" flow when target username has no user handle; attacker's own valid assertion gets attributed to the target username. Class: *the credential returned by the ceremony is the identity source of truth — never the lookup input*. Fix: 2.8.2/2.9.0. [Yubico advisory](https://www.yubico.com/support/security-advisories/ysa-2026-02/)
 - **CVE-2026-47841** — Spring Security WebAuthn: user verification bypass when session state is externalized/deserialized. Class: *ceremony state must be bound to the exact session that started it*. [Spring advisory](https://spring.io/security/cve-2026-47841)
 - Historical class note: JVM-side CVE-2022-21449 (psychic signature, ECDSA) invalidated attestation/assertion verification on affected JDKs — pin crypto libraries and test with known vectors. [Yubico java-webauthn-server notes](https://github.com/yubico/java-webauthn-server)
-- Structural pitfall across all three 2026 CVEs: the library verified cryptography correctly; the *glue* (which user, which origin, which session) was wrong. Effect-auth's design must make those bindings explicit and typed in one place.
+- Structural pitfall across all three 2026 CVEs: the library verified cryptography correctly; the *glue* (which user, which origin, which session) was wrong. Awthaq's design must make those bindings explicit and typed in one place.
 
-#### Proposed effect-auth passkey plugin shape
+#### Proposed awthaq passkey plugin shape
 
-**Dependency decision**: wrap `@simplewebauthn/server` v14 (MIT; Node 22+/Deno 2.4+ via JSR; maintained, spec-aligned) for CBOR/COSE/attestation parsing and signature verification. Own implementation is unjustifiable risk: the CVE record above shows even dedicated library teams get glue-level checks wrong, and the CBOR/attestation-format matrix (packed/TPM/Android-Key/Apple/U2F/none) is pure undifferentiated heavy lifting. The Effect layer is where effect-auth adds value. [SimpleWebAuthn docs](https://simplewebauthn.dev/docs/packages/server), [npm](https://www.npmjs.com/package/@simplewebauthn/server)
+**Dependency decision**: wrap `@simplewebauthn/server` v14 (MIT; Node 22+/Deno 2.4+ via JSR; maintained, spec-aligned) for CBOR/COSE/attestation parsing and signature verification. Own implementation is unjustifiable risk: the CVE record above shows even dedicated library teams get glue-level checks wrong, and the CBOR/attestation-format matrix (packed/TPM/Android-Key/Apple/U2F/none) is pure undifferentiated heavy lifting. The Effect layer is where awthaq adds value. [SimpleWebAuthn docs](https://simplewebauthn.dev/docs/packages/server), [npm](https://www.npmjs.com/package/@simplewebauthn/server)
 
 ```ts
-// @effect-auth/plugin-passkey
-import { passkey } from "@effect-auth/passkey"
+// @awthaq/plugin-passkey
+import { passkey } from "@awthaq/passkey"
 
 const AuthLayer = Auth.make({
   plugins: [password(), passkey({
@@ -168,17 +168,17 @@ passkey
 
 **Typed errors** (HttpApi error union): `PasskeyChallengeInvalid` (missing/expired/replayed), `PasskeyOriginMismatch`, `PasskeyRpIdMismatch`, `PasskeyCredentialNotFound`, `PasskeyVerificationFailed`, `PasskeyUserVerificationRequired`, `PasskeyCounterAnomaly` (log+step-up), `PasskeyLastCredential` (delete guard).
 
-**Client package**: `passkeyClient()` in `@effect-auth/client` exposing `registerPasskey`, `authenticate({ autoFill })` (conditional UI via `startAuthentication({ useBrowserAutofill: true })`), `listPasskeys`, `renamePasskey`, `deletePasskey`, plus feature-detection helpers (`getClientCapabilities`). Mirrors better-auth's client-plugin ergonomics. [better-auth passkey docs](https://better-auth.com/docs/plugins/passkey), [SimpleWebAuthn browser docs](https://simplewebauthn.dev/docs/packages/browser)
+**Client package**: `passkeyClient()` in `@awthaq/client` exposing `registerPasskey`, `authenticate({ autoFill })` (conditional UI via `startAuthentication({ useBrowserAutofill: true })`), `listPasskeys`, `renamePasskey`, `deletePasskey`, plus feature-detection helpers (`getClientCapabilities`). Mirrors better-auth's client-plugin ergonomics. [better-auth passkey docs](https://better-auth.com/docs/plugins/passkey), [SimpleWebAuthn browser docs](https://simplewebauthn.dev/docs/packages/browser)
 
 **Sessions integration**: authentication-verify handler calls the core `SessionManager` capability to create the session — the plugin never sets cookies itself; passkey-first flows reuse the verification-token machinery (Q46) for the pre-auth grant.
 
 **Evidence anchors**: PRD Milestone 4 deliverables (WebAuthn registration/authentication/credential management) map 1:1 onto this surface; `PasskeyRepository` and `PasskeyRegistered` event already exist as PRD concepts ([PRD.md §19.2, §events](../PRD.md)).
 
-**Recommendation:** Ship `@effect-auth/passkey` as a Phase-1 official plugin wrapping `@simplewebauthn/server` v14: default `attestation: "none"`, `residentKey/userVerification: preferred`, pluggable `ChallengeStore` (Redis default, cookie for edge, single-use + 5-min TTL, deleted on every verification attempt), exact `(scheme, host, port)` origin sets with array support, per-user random `webauthnUserID`, full credential CRUD + Signals API, conditional UI on by default and conditional create behind a dedicated session-bound endpoint that relaxes UP/UV. Defer attestation/MDS to an enterprise module.
+**Recommendation:** Ship `@awthaq/passkey` as a Phase-1 official plugin wrapping `@simplewebauthn/server` v14: default `attestation: "none"`, `residentKey/userVerification: preferred`, pluggable `ChallengeStore` (Redis default, cookie for edge, single-use + 5-min TTL, deleted on every verification attempt), exact `(scheme, host, port)` origin sets with array support, per-user random `webauthnUserID`, full credential CRUD + Signals API, conditional UI on by default and conditional create behind a dedicated session-bound endpoint that relaxes UP/UV. Defer attestation/MDS to an enterprise module.
 
 **Confidence:** high
 
-### Q63 (passkey-related portion) — Passkey UX best practice for effect-auth
+### Q63 (passkey-related portion) — Passkey UX best practice for awthaq
 
 *(Captcha/bot-defense is out of scope for this file per assignment; this answer covers the passkey UX dimension of Q63 only.)*
 
@@ -187,7 +187,7 @@ passkey
 - Adoption compounds: `readiness × creation × usage = adoption impact`; the operational north-star is the **passkey login rate** (share of daily logins completed with passkeys). [Passkey Benchmark 2026](https://www.corbado.com/passkey-benchmark-2026)
 - Conditional Create alone plateaus ≈20% adoption; + basic manual prompts ≈40%; full best practice 60–80% (mobile-heavy consumer). iOS benefits most (iCloud Keychain dominance; 20–50% autofill ceiling); Samsung Pass defaults suppress Android. [Conditional Create research](https://www.corbado.com/blog/conditional-create-passkeys)
 - Conditional UI (autofill) improves transition because it requires zero new UI and zero user knowledge of "having a passkey" — but must be paired with a button fallback. [Corbado conditional UI](https://www.corbado.com/blog/user-transition-passkeys-conditional-ui)
-- Framing matters at the API level: effect-auth should return *machine-readable* ceremony outcomes so app teams can instrument enrollment/auth funnels (enrollment offer rate, creation completion, auth success rate) — the KPIs the benchmark tracks. [Benchmark KPI sections](https://www.corbado.com/passkey-benchmark-2026)
+- Framing matters at the API level: awthaq should return *machine-readable* ceremony outcomes so app teams can instrument enrollment/auth funnels (enrollment offer rate, creation completion, auth success rate) — the KPIs the benchmark tracks. [Benchmark KPI sections](https://www.corbado.com/passkey-benchmark-2026)
 
 **Recommended UX posture encoded in plugin defaults:**
 
@@ -202,10 +202,10 @@ passkey
 
 ## Technologies & libraries
 
-| Name | What it is | License | Maturity | Relevance to effect-auth |
+| Name | What it is | License | Maturity | Relevance to awthaq |
 | --- | --- | --- | --- | --- |
 | [@simplewebauthn/server](https://www.npmjs.com/package/@simplewebauthn/server) v14.0.1 | TS server lib: options generation + response verification, all attestation formats | MIT | Very active (pushed 2026-09-05); author is WebAuthn L3 spec editor | **Chosen dependency** for the passkey plugin's crypto/verification core |
-| [@simplewebauthn/browser](https://simplewebauthn.dev/docs/packages/browser) v14 | Browser helper: `startRegistration`/`startAuthentication`, autofill, conditional create, feature detection | MIT | Same project/pace | Dependency of `@effect-auth/client` passkey client |
+| [@simplewebauthn/browser](https://simplewebauthn.dev/docs/packages/browser) v14 | Browser helper: `startRegistration`/`startAuthentication`, autofill, conditional create, feature detection | MIT | Same project/pace | Dependency of `@awthaq/client` passkey client |
 | [@better-auth/passkey](https://better-auth.com/docs/plugins/passkey) 1.7.x | better-auth passkey plugin (SimpleWebAuthn-powered): challenge cookie, passkey-first, conditional UI, AAGUID labels | MIT | Production; actively developed | Primary API-shape benchmark; challenge-cookie pattern reference |
 | Auth.js `passkey` provider | Experimental WebAuthn provider (SimpleWebAuthn v9, `Authenticator` table) | MIT | **Experimental, deprecated direction** — Auth.js joined Better Auth | Cautionary reference: adapter-fragmentation made passkeys hard there |
 | [Yubico java-webauthn-server](https://github.com/yubico/java-webauthn-server) | Java server lib by Yubico; excellent docs + CVE-2026-46419 case study | BSD-2 [INFERENCE from repo] | Very mature | Documentation + advisory practices to emulate |
@@ -220,7 +220,7 @@ passkey
 
 - [WebAuthn Level 3 (W3C REC 2026-08-25)](https://www.w3.org/TR/webauthn-3/) — the normative source; L3 is the baseline for any new implementation.
 - [Tim Cappalli — "Web Authentication API (WebAuthn) Level 3" (2026-08)](https://blog.timcappalli.me/p/webauthn-3/) — the best field guide to every L3 feature (BE/BS, signals, conditional get/create, JSON helpers, hints, ROR) written by a spec editor.
-- [FIDO Alliance — Server Requirements (WebAuthn L3 & CTAP2.3), RD 2026-02-26](https://fidoalliance.org/specs/fidoserver/fido-server-v2.3-rd-20260226.html) — the server-implementer checklist effect-auth's verifier must satisfy.
+- [FIDO Alliance — Server Requirements (WebAuthn L3 & CTAP2.3), RD 2026-02-26](https://fidoalliance.org/specs/fidoserver/fido-server-v2.3-rd-20260226.html) — the server-implementer checklist awthaq's verifier must satisfy.
 - [SimpleWebAuthn docs (v14)](https://simplewebauthn.dev/docs/packages/server) — de-facto TypeScript implementation guide; schema, challenge handling, passkey options.
 - [Corbado — Passkey Benchmark 2026](https://www.corbado.com/passkey-benchmark-2026) and [Conditional Create research](https://www.corbado.com/blog/conditional-create-passkeys) — the empirical UX data (adoption plateaus, platform splits, Samsung problem).
 - [Yubico WebAuthn Developer Guide — Best Practices](https://developers.yubico.com/WebAuthn/WebAuthn_Developer_Guide/Best_Practices.html) — recovery/multi-key/credential-management doctrine from the deepest FIDO shop.
@@ -239,7 +239,7 @@ passkey
 - **better-auth team** — now stewards Auth.js too; passkey plugin is the closest TS ecosystem analog — [better-auth.com](https://better-auth.com/), [Auth.js joins Better Auth](https://better-auth.com/blog/authjs-joins-better-auth).
 - **passkeys.dev / passkeydeveloper** — community tools, AAGUID lists, feature detection — [tools.passkeys.dev](https://tools.passkeys.dev/featuredetect).
 
-## Recommended defaults for effect-auth
+## Recommended defaults for awthaq
 
 1. **Spec target**: implement to WebAuthn L3 (REC 2026-08-25) semantics; use the FIDO Server Requirements v2.3 RD checklist as the verification test matrix. [W3C REC](https://www.w3.org/TR/webauthn-3/), [FIDO RD](https://fidoalliance.org/specs/fidoserver/fido-server-v2.3-rd-20260226.html)
 2. **Dependency**: wrap `@simplewebauthn/server` v14 behind `PasskeyOptions`/`PasskeyVerifier` Context.Tags; never import it in handlers directly, so it stays swappable. Consider `@simplewebauthn/browser` in the client package. [rationale](https://simplewebauthn.dev/docs/packages/server)
@@ -253,7 +253,7 @@ passkey
 10. **Signals API**: call `signalUnknownCredential` on unknown-credential authentication failures and `signalAllAcceptedCredentials` after delete; fire-and-forget, typed events emitted for observability. [Tim Cappalli L3](https://blog.timcappalli.me/p/webauthn-3/)
 11. **Attestation/MDS**: none by default; `direct`/`enterprise` accepted as config but gated behind documented enterprise module (MDS3 validation, attestation CA trust anchors) — post-v1. [FIDO MDS](https://fidoalliance.org/metadata/)
 12. **Identity binding**: the verified assertion's credential → user mapping is the *only* identity source; never trust pre-ceremony lookup inputs for attribution (YSA-2026-02 lesson); ceremony state keyed to the initiating session (Spring CVE lesson). [Yubico advisory](https://www.yubico.com/support/security-advisories/ysa-2026-02/)
-13. **Testing**: Chrome DevTools virtual authenticator recipes in `@effect-auth/test`; regression tests for replayed challenge, wrong origin, wrong rpID, UV-required-missing, counter anomaly, stale BS flip. [Chrome docs](https://developer.chrome.com/docs/devtools/webauthn)
+13. **Testing**: Chrome DevTools virtual authenticator recipes in `@awthaq/test`; regression tests for replayed challenge, wrong origin, wrong rpID, UV-required-missing, counter anomaly, stale BS flip. [Chrome docs](https://developer.chrome.com/docs/devtools/webauthn)
 14. **Events**: emit `PasskeyRegistered` / `PasskeyAuthenticated` / `PasskeyBackupStateLost` / `PasskeyDeleted` on the core event bus (PRD §events) for adoption funneling.
 
 ## Open questions for the user

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Verifies the structural integrity of spec/ for effect-auth.
+# Verifies the structural integrity of spec/ for awthaq.
 #
 # Modeled directly on qadi's spec/scripts/verify-traceability.sh (same
 # report format, same philosophy: every check exists to make one class of
@@ -49,7 +49,7 @@ slugify() { # GitHub-style heading slug (approximate; see note in file header)
 }
 
 echo
-echo "effect-auth specification verification"
+echo "awthaq specification verification"
 echo "| Status | Check                                | Detail"
 echo "| ------ | ------------------------------------ | ------"
 
@@ -239,7 +239,7 @@ fi
 # 5b. Anchor fragments resolve to a real heading in the target file.
 #
 # qadi's own script does not check this (it strips the fragment and checks
-# only the path). effect-auth's tree was previously broken exactly this way:
+# only the path). awthaq's tree was previously broken exactly this way:
 # every anchor was a guessed slug of a block title rather than the real
 # per-requirement heading, and it went undetected until a manual audit. This
 # check exists so that regression is mechanical to catch from here on.
@@ -311,7 +311,7 @@ fi
 # 7. Traceability §4 test-file cells reference no path that already exists.
 #
 # Inverse of qadi's own check 6: qadi's project has shipped test files, so it
-# checks that every claimed test file exists. effect-auth has shipped none —
+# checks that every claimed test file exists. awthaq has shipped none —
 # so a "Planned: <path>" cell whose path already exists on disk would mean
 # either the banner is stale or a package was published without updating
 # this table. Until that day, every such path should NOT exist.

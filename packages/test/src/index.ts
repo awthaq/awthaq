@@ -1,4 +1,4 @@
-// @effect-auth/test — Tools
+// @awthaq/test — Tools
 //
 // TestAuth test harness and the plugin contract-test suite (runPluginContractTests) — runs the whole plugin pipeline over an in-memory backend.
 //

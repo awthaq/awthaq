@@ -1,4 +1,4 @@
-// @effect-auth/jwt — JwtApi
+// @awthaq/jwt — JwtApi
 //
 // .scratch/jwt/issues/09-jwks-endpoint.md, 10-explicit-mint-endpoint.md.
 // Path convention corrected from the tickets' own loose "`/auth/jwt/...`"
@@ -16,7 +16,7 @@
 // (see `PasskeyApi.ts`'s `passkey`/`passkey.authenticate` split), never a
 // per-endpoint middleware inside one shared group.
 
-import { Api } from "@effect-auth/api";
+import { Api } from "@awthaq/api";
 import * as Schema from "effect/Schema";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
 

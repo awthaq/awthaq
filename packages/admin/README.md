@@ -1,6 +1,6 @@
-# @effect-auth/admin
+# @awthaq/admin
 
-> **This describes a planned package.** effect-auth is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
 
 Plugin (M7). Impersonation: off by default, admin-gated, reason required, hard expiry, dual identity, fully audited (NFR-EA-007).
 

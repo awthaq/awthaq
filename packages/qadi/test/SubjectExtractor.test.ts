@@ -1,6 +1,6 @@
 // spec/behaviors/20-qadi-bridge-path-b.md, BEH-EA-153.
-import { AuthEvents, Sessions, Users } from "@effect-auth/core";
-import { Authentication } from "@effect-auth/server";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Authentication } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

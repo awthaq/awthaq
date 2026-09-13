@@ -1,4 +1,4 @@
-// @effect-auth/core — Migrations
+// @awthaq/core — Migrations
 //
 // A minimal placeholder ahead of the Persistence stratum (BEH-EA-033 through
 // BEH-EA-040, spec/behaviors/05-persistence-stratum.md), which owns the real,
@@ -25,7 +25,7 @@ export type Migrations = ReadonlyArray<Migration>;
  * `built.migrations`, already dependency-ordered and renumbered into
  * `"0001_<pluginId>_<name>"`-style names by `Auth.ts`'s own
  * `renumberMigrations`) onto Effect's real `Migrator` — the same runner
- * `@effect-auth/sql`'s `CoreMigrations.coreMigrations` uses for the core
+ * `@awthaq/sql`'s `CoreMigrations.coreMigrations` uses for the core
  * tables. Array index (already the correct dependency order) becomes the
  * migrator's own numeric id; no plugin populates `migrations` yet (the
  * "no line of source exists yet" era's own scaffold-only starting point),

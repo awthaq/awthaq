@@ -7,7 +7,7 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Appendix — Worked Example |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added inline BEH-EA citations per section and an ADR-EA-009 citation, beyond the header-only citation this appendix previously had (CCR-EA-002) |
 ---
@@ -15,7 +15,7 @@
 Every code block in this appendix is reproduced here as an uncompiled
 illustration; nothing in this repository compiles yet, so every fence below
 is `ts` regardless of the fence language used in the source material. This
-differs from qadi's own appendices, which are gate-compiled — effect-auth has
+differs from qadi's own appendices, which are gate-compiled — awthaq has
 no such tooling yet (see [`../process/definitions-of-done.md`](../process/definitions-of-done.md)
 gate 8). This walkthrough reproduces material from `archive/design/usage-qadi.md`
 §§1–3 and 7–10 as a single narrative; it exercises
@@ -25,10 +25,10 @@ gate 8). This walkthrough reproduces material from `archive/design/usage-qadi.md
 decision this whole walkthrough rests on is
 [ADR-EA-009](../decisions/009-authorization-delegated-to-qadi.md#adr-ea-009-authorization-is-delegated-to-qadi).
 
-The division of labor between the two libraries is one line: **effect-auth
+The division of labor between the two libraries is one line: **awthaq
 answers who is asking; qadi answers what they may do and what they may see.**
 The bridge between them is a single service, `SubjectResolver`, which turns a
-`Principal` — effect-auth's answer to "who" — into qadi's `AuthSubject`, the
+`Principal` — awthaq's answer to "who" — into qadi's `AuthSubject`, the
 input to every policy qadi evaluates.
 
 ## 1. Wiring qadi once
@@ -43,11 +43,11 @@ contribution, so installing a second plugin that also tries to override
 
 ```ts
 // app/auth.ts
-import { Auth, Sessions, Users } from "@effect-auth/core"
-import { Password } from "@effect-auth/password"
-import { Organization } from "@effect-auth/organization"
-import { Roles } from "@effect-auth/roles"
-import { AuthorizedSubjectLive, SubjectExtractorLive } from "@effect-auth/qadi"
+import { Auth, Sessions, Users } from "@awthaq/core"
+import { Password } from "@awthaq/password"
+import { Organization } from "@awthaq/organization"
+import { Roles } from "@awthaq/roles"
+import { AuthorizedSubjectLive, SubjectExtractorLive } from "@awthaq/qadi"
 import { EvaluationIdLive, EvaluationServicesNone, decisionCacheLayer } from "@qadi/core"
 import { PermissionRegistryLive, RequirePermissionLive } from "@qadi/http"
 
@@ -66,7 +66,7 @@ export const AuthzLive = Layer.mergeAll(
 ```
 
 What subject a request resolves to depends entirely on the kind of principal
-effect-auth handed it:
+awthaq handed it:
 
 | Principal | `AuthSubject` |
 |---|---|
@@ -77,7 +77,7 @@ effect-auth handed it:
 | no credential | qadi's `anonymous` |
 
 That table is the whole contract: nothing about roles, permissions, or
-organizations is defined by effect-auth itself. `Roles` merely fills in
+organizations is defined by awthaq itself. `Roles` merely fills in
 `AuthSubject.roles` and `.permissions`; the vocabulary those fields draw from
 is qadi's, defined next.
 
@@ -123,7 +123,7 @@ export const canDeleteProject = allOf([
 
 export const canManageBilling = allOf([
   hasPermission(billing.manage),
-  hasAttribute("plan", inArray(["team", "enterprise"]))     // attribute resolved from effect-auth's user table
+  hasAttribute("plan", inArray(["team", "enterprise"]))     // attribute resolved from awthaq's user table
 ])
 ```
 
@@ -252,11 +252,11 @@ refuses to proceed past until it is discharged.
 ```ts
 import { obliged, obligation } from "@qadi/core"
 
-export const reauth = obligation("effect-auth/reauth", { maxAgeSeconds: 300 })
+export const reauth = obligation("awthaq/reauth", { maxAgeSeconds: 300 })
 export const canChangeEmail = obliged(reauth, hasPermission(permission("account", "update")))
 
-// effect-auth ships the handler: allowed only if the session was authenticated within maxAgeSeconds
-import { ObligationHandlers } from "@effect-auth/qadi"
+// awthaq ships the handler: allowed only if the session was authenticated within maxAgeSeconds
+import { ObligationHandlers } from "@awthaq/qadi"
 
 changeEmail: ({ payload }) =>
   Users.use((u) => u.changeEmail(payload.email)).pipe(
@@ -264,7 +264,7 @@ changeEmail: ({ payload }) =>
   )
 ```
 
-`ObligationHandlers.reauth` is effect-auth's contribution, not qadi's: it
+`ObligationHandlers.reauth` is awthaq's contribution, not qadi's: it
 reads the session off `CurrentPrincipal`, compares `authenticatedAt` to the
 obligation's `maxAgeSeconds`, and fails with a typed error the client maps to
 a "confirm your password" screen. `client.session.reauthenticate` is the
@@ -315,7 +315,7 @@ const feed = Effect.runSync(decisionSinkFeed({ capacity: 256, replay: 32 }))
 export const Sinks = decisionSinkAll([
   ring.layer,                                                         // recent decisions, for /backlog
   feed.layer,                                                         // live stream, for devtools
-  AuditDecisionSinkLive({ failureThreshold: 5 }).pipe(Layer.provide(AuthAuditTrail.layer))   // durable: effect-auth's audit table implements AuditTrailPort
+  AuditDecisionSinkLive({ failureThreshold: 5 }).pipe(Layer.provide(AuthAuditTrail.layer))   // durable: awthaq's audit table implements AuditTrailPort
 ])
 
 // devtools stream, guarded, re-checking the subject every 30 seconds
@@ -323,8 +323,8 @@ import { decisionStreamRoute } from "@qadi/http"
 decisionStreamRoute(adminAccess, hasRole("admin"), feed.stream, { reauth: { every: "30 seconds" } })
 ```
 
-`AuthAuditTrail` is effect-auth's own audit table implementing qadi's
-`AuditTrailPort` — the durable sink is effect-auth data, wired through qadi's
+`AuthAuditTrail` is awthaq's own audit table implementing qadi's
+`AuditTrailPort` — the durable sink is awthaq data, wired through qadi's
 generic sink interface. Crucially, a sink can never change a decision it
 observes: if the durable audit trail breaks, its circuit breaker trips and
 the failure is logged, but the request in flight still gets the answer the
@@ -332,9 +332,9 @@ policy computed. Auditability never becomes an availability dependency for
 authorization itself.
 
 That closes the loop this appendix set out to walk: one wiring step that
-turns effect-auth principals into qadi subjects, a vocabulary of permissions
+turns awthaq principals into qadi subjects, a vocabulary of permissions
 and roles defined once, five ways to enforce a policy in a handler, an
 organization-scoped policy backed by a relationship resolver the
-organization plugin ships, an obligation effect-auth discharges from session
+organization plugin ships, an obligation awthaq discharges from session
 freshness, a policy pushed into SQL where it can be, and every decision
 observed without any observer able to change the answer.

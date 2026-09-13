@@ -1,4 +1,4 @@
-# effect-auth is pre-implementation (see spec/README.md). Every scenario in
+# awthaq is pre-implementation (see spec/README.md). Every scenario in
 # this file specifies intended behavior of a system that does not exist yet
 # — a target the future testing harness (BEH-EA-193..200) is meant to
 # execute against, not a record of anything verified today.
@@ -37,11 +37,11 @@ Feature: Plugin Contract
     Scenario: A plugin's compiled service key embeds its own id
       Given a plugin class "Password" declared with id "password"
       When "Password"'s compiled service key is inspected
-      Then the key is "effect-auth/plugin/password"
+      Then the key is "awthaq/plugin/password"
 
     @REQ-EA-004
     Scenario: A missing-dependency diagnostic names the plugin by id rather than an opaque unsatisfied requirement
-      Given a plugin "TwoFactor" that depends on a plugin whose service key is "effect-auth/plugin/password"
+      Given a plugin "TwoFactor" that depends on a plugin whose service key is "awthaq/plugin/password"
       When "TwoFactor"'s dependency is reported as unsatisfied
       Then the diagnostic names the plugin "password" by id
       And the diagnostic does not merely report an opaque unsatisfied requirement
@@ -115,7 +115,7 @@ Feature: Plugin Contract
     @REQ-EA-012
     Scenario: A plugin's migrations are resolvable from its static class members with no Layer evaluated
       Given a plugin class "Password" declaring a static "migrations" member
-      When the CLI reads "Password"'s manifest ("effect-auth plugin list --graph", "schema")
+      When the CLI reads "Password"'s manifest ("awthaq plugin list --graph", "schema")
       Then "migrations" is resolved by reading "Password"'s static class members alone
       And no "Layer" is evaluated and no configuration service is provided to resolve it
 

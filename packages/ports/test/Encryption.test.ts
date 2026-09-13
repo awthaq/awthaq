@@ -15,7 +15,7 @@ const TestLive = Encryption.layer.pipe(
     KeyProvider.layerEnv.pipe(
       Layer.provide(
         ConfigProvider.layer(
-          ConfigProvider.fromEnv({ env: { EFFECT_AUTH_ENCRYPTION_KEY: VALID_KEY_B64 } }),
+          ConfigProvider.fromEnv({ env: { AWTHAQ_ENCRYPTION_KEY: VALID_KEY_B64 } }),
         ),
       ),
     ),

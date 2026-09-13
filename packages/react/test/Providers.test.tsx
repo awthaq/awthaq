@@ -6,9 +6,9 @@
 // already knew" and BEH-EA-179's "derive subject from the atom, not a
 // second source" rest on, so these tests only exercise the seeded path
 // (`initialSession`/`initialSubject`), never the live query path (which
-// would need a real HTTP round trip to prove, `@effect-auth/qadi`'s own
+// would need a real HTTP round trip to prove, `@awthaq/qadi`'s own
 // `SubjectApi.test.ts` already covers the server half of that).
-import { SessionContract, SubjectContract } from "@effect-auth/api";
+import { SessionContract, SubjectContract } from "@awthaq/api";
 import { useAtomValue } from "@effect/atom-react";
 import { assert, describe, it } from "@effect/vitest";
 import { cleanup, render, screen } from "@testing-library/react";

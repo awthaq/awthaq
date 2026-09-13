@@ -1,7 +1,7 @@
-// @effect-auth/organization — OrganizationApi
+// @awthaq/organization — OrganizationApi
 //
 // This plugin's own contract — one group, `organization`, every endpoint
-// behind `.middleware(Api.Authentication)` (mirroring `@effect-auth/admin`'s
+// behind `.middleware(Api.Authentication)` (mirroring `@awthaq/admin`'s
 // own `AdminApi.ts`): every operation requires a real, already-authenticated
 // caller, gated again inside the handler by `PermissionEngine`/membership
 // checks where the operation is mutating.
@@ -9,7 +9,7 @@
 // Ticket 09 establishes this group empty-but-real; tickets 11/12 add the
 // organization-CRUD and membership endpoints below in the same pass.
 
-import { Api } from "@effect-auth/api";
+import { Api } from "@awthaq/api";
 import * as Schema from "effect/Schema";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi";
 

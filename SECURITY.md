@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-effect-auth has not yet reached a `1.0.0` release. Until then, only the
-most recently published `0.x` version of each `@effect-auth/*` package
+awthaq has not yet reached a `1.0.0` release. Until then, only the
+most recently published `0.x` version of each `@awthaq/*` package
 receives security fixes. Once `1.0.0` ships, this section will be updated
 to name the supported major version line(s).
 
@@ -39,6 +39,6 @@ Include, where possible:
 
 ## Scope
 
-This policy covers the `@effect-auth/*` packages published from this
+This policy covers the `@awthaq/*` packages published from this
 repository. Vulnerabilities in `effect` itself, or in other upstream
 dependencies, should be reported to their own respective projects.

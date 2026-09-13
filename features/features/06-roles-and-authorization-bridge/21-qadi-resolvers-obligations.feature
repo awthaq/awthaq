@@ -1,4 +1,4 @@
-# effect-auth is pre-implementation (see spec/README.md). Every scenario in
+# awthaq is pre-implementation (see spec/README.md). Every scenario in
 # this file specifies intended behavior of a system that does not exist yet
 # — a target the future testing harness (BEH-EA-193..200) is meant to
 # execute against, not a record of anything verified today.
@@ -13,14 +13,14 @@ Feature: Qadi Resolvers and Obligations
 
     @REQ-EA-451
     Scenario: The resolver returns undefined for an attribute it has no opinion on
-      Given effect-auth's user-table-backed AttributeResolver
+      Given awthaq's user-table-backed AttributeResolver
       When it is asked to resolve an attribute it does not recognize for a subject
       Then it returns undefined
       And undefined is understood to mean only "this resolver has no opinion on this attribute"
 
     @REQ-EA-452
     Scenario: A user-table lookup failure maps to a typed AttributeResolveError
-      Given effect-auth's user-table-backed AttributeResolver
+      Given awthaq's user-table-backed AttributeResolver
       And the user table is unreachable while resolving the "plan" attribute for a subject
       When it is asked to resolve that attribute
       Then it fails with a typed AttributeResolveError naming the subject and the attribute
@@ -29,7 +29,7 @@ Feature: Qadi Resolvers and Obligations
 
     @REQ-EA-453
     Scenario: A resolver failure is never indistinguishable from "this subject has no such attribute"
-      Given effect-auth's user-table-backed AttributeResolver
+      Given awthaq's user-table-backed AttributeResolver
       And the user table is experiencing an outage
       When it is asked to resolve the "plan" attribute for a subject who does have a plan
       Then the outage surfaces as a typed AttributeResolveError
@@ -41,7 +41,7 @@ Feature: Qadi Resolvers and Obligations
 
     @REQ-EA-454
     Scenario: A "member" relation is resolved by walking from the resource to its owning organization and checking membership there
-      Given effect-auth's Organization.relationships resolver
+      Given awthaq's Organization.relationships resolver
       And a project that belongs to an organization a subject is a member of
       When it is asked whether the subject has a "member" relation to that project at depth 2
       Then it walks from the project to its owning organization
@@ -49,7 +49,7 @@ Feature: Qadi Resolvers and Obligations
 
     @REQ-EA-455
     Scenario: A failure while walking the resource-to-organization relation maps to a typed RelationshipResolveError
-      Given effect-auth's Organization.relationships resolver
+      Given awthaq's Organization.relationships resolver
       And the organization-membership lookup fails while walking from a resource to its owning organization
       When it is asked to check a "member" relation for a subject against that resource
       Then it fails with a typed RelationshipResolveError naming the subject, relation, and resource
@@ -78,7 +78,7 @@ Feature: Qadi Resolvers and Obligations
       Given a plugin "Organization" and a hypothetical plugin "Billing", each providing a Layer.effect(AttributeResolver, ...) for the "plan" attribute
       When "Auth.make" composes a tuple containing both plugins
       Then composition succeeds without naming "Organization", "Billing", or "plan" as a conflict
-      And AttributeResolver is not one of effect-auth's own declared slots that SlotConflict<P> inspects
+      And AttributeResolver is not one of awthaq's own declared slots that SlotConflict<P> inspects
 
     @REQ-EA-459
     Scenario: The later-provided resolver Layer silently shadows the earlier one for the same attribute
@@ -93,7 +93,7 @@ Feature: Qadi Resolvers and Obligations
 
     @REQ-EA-460
     Scenario: hasActed answers from durable audit event records, not in-memory state
-      Given effect-auth's audit-table-backed DecisionHistory
+      Given awthaq's audit-table-backed DecisionHistory
       And a subject whose "accepted-terms" event was recorded before the current process started
       When it is asked hasActed for that subject and event
       Then it answers "Acted"
@@ -101,7 +101,7 @@ Feature: Qadi Resolvers and Obligations
 
     @REQ-EA-461
     Scenario: An audit-table query failure while answering hasActed maps to a typed DecisionHistoryUnavailable
-      Given effect-auth's audit-table-backed DecisionHistory
+      Given awthaq's audit-table-backed DecisionHistory
       And the audit table is unreachable while answering hasActed for a subject and event
       When it is asked hasActed for that subject and event
       Then it fails with a typed DecisionHistoryUnavailable
@@ -109,7 +109,7 @@ Feature: Qadi Resolvers and Obligations
 
     @REQ-EA-462
     Scenario: A database outage does not silently deny a subject who has genuinely acted
-      Given effect-auth's audit-table-backed DecisionHistory
+      Given awthaq's audit-table-backed DecisionHistory
       And a subject who genuinely has a durable "accepted-terms" event recorded
       And the audit table becomes unreachable
       When it is asked hasActed for that subject and event during the outage
@@ -119,7 +119,7 @@ Feature: Qadi Resolvers and Obligations
   # policy evaluation is a black box throughout this file: "qadi's evaluator
   # would return an Allow decision carrying an obligation" is a Given, never
   # something derived from role or permission logic here — that logic is
-  # qadi's own specification's job. These scenarios cover only effect-auth's
+  # qadi's own specification's job. These scenarios cover only awthaq's
   # own ObligationHandlers.reauth discharge implementation.
   @BEH-EA-165
   Rule: The reauth obligation discharges from session freshness

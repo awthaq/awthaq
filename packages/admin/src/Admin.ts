@@ -1,27 +1,27 @@
-// @effect-auth/admin — Admin
+// @awthaq/admin — Admin
 //
 // spec/behaviors/27-admin-impersonation.md, BEH-EA-209 through BEH-EA-220.
 // `Auth.make([Admin])` composes: `dependsOn` is left unset on
 // `AuthPlugin.layer` — `Sessions`/`Users`/`AuthEvents` are core domain
 // services this plugin's own `make` Effect simply `yield*`s directly, the
-// same established convention `@effect-auth/passkey`'s own ticket 06
+// same established convention `@awthaq/passkey`'s own ticket 06
 // corrected `Passkey.ts` to (see that file's own header comment).
 //
 // `AdminConfig.canImpersonate` takes a `@qadi/core` `AuthSubject`, but this
-// plugin never depends on `@effect-auth/qadi` (that would put a plugin
-// sitting at the same stratum as `@effect-auth/passkey`/`password` above
-// `@effect-auth/server`, breaking the stratum ordering `spec/overview.md`
+// plugin never depends on `@awthaq/qadi` (that would put a plugin
+// sitting at the same stratum as `@awthaq/passkey`/`password` above
+// `@awthaq/server`, breaking the stratum ordering `spec/overview.md`
 // fixes) — so the subject passed to the predicate is a bare, identity-only
 // one this plugin builds itself (`subjectOf`, below), the same "id only, no
-// roles, no permissions" shape `@effect-auth/qadi`'s own `SubjectResolver.ts`
+// roles, no permissions" shape `@awthaq/qadi`'s own `SubjectResolver.ts`
 // documents as its own *default* resolution. A host application whose
 // `canImpersonate` needs more than an id looks the rest up itself (e.g. by
 // closing over its own `Roles`/`SubjectResolver` at `config()` call time) —
 // this plugin has no way to reach a fuller subject without the layering
 // violation above.
 
-import { Api, SessionContract } from "@effect-auth/api";
-import { AuthEvents, AuthPlugin, Sessions, Users } from "@effect-auth/core";
+import { Api, SessionContract } from "@awthaq/api";
+import { AuthEvents, AuthPlugin, Sessions, Users } from "@awthaq/core";
 import type { AuthSubject } from "@qadi/core";
 import { makeSubject } from "@qadi/core";
 import * as Context from "effect/Context";
@@ -49,7 +49,7 @@ const defaultAdminConfig: AdminConfigShape = {
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
 export const AdminConfig: Context.Reference<AdminConfigShape> = Context.Reference(
-  "effect-auth/admin/Config",
+  "awthaq/admin/Config",
   { defaultValue: () => defaultAdminConfig },
 );
 
@@ -64,7 +64,7 @@ export interface IssuedSession {
 /**
  * BEH-EA-137-style "identity-only" subject — this plugin's own, independent
  * copy (see this module's own header comment for why it cannot import
- * `@effect-auth/qadi`'s real `SubjectResolver` default instead).
+ * `@awthaq/qadi`'s real `SubjectResolver` default instead).
  */
 const subjectOf = (principal: Api.UserPrincipal): AuthSubject =>
   makeSubject({ id: principal.ref.id });
@@ -130,12 +130,12 @@ const toRecordDto = (
     endedBy: Option.getOrNull(record.endedBy),
   });
 
-/** Same forward-reference pattern `@effect-auth/passkey`'s own `Passkey.ts` documents. */
+/** Same forward-reference pattern `@awthaq/passkey`'s own `Passkey.ts` documents. */
 const currentUserPrincipal = Effect.gen(function* () {
   const principal = yield* Api.CurrentPrincipal;
   if (principal._tag !== "User") {
     return yield* Effect.die(
-      new Error(`effect-auth: admin group reached with a non-User principal: ${principal._tag}`),
+      new Error(`awthaq: admin group reached with a non-User principal: ${principal._tag}`),
     );
   }
   return principal;

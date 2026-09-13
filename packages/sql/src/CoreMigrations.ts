@@ -1,4 +1,4 @@
-// @effect-auth/sql — CoreMigrations
+// @awthaq/sql — CoreMigrations
 //
 // Shipping-gap map (.scratch/shipping-gaps), ticket 15. Real, file-free
 // migrations for the core tables `Models.ts` declares (users/accounts/
@@ -10,7 +10,7 @@
 // duplicated schema files — matching the same pattern the framework's own
 // `Migrator.ts` uses internally for its tracking table.
 //
-// Not routed through `@effect-auth/core`'s `AuthPlugin`-declared
+// Not routed through `@awthaq/core`'s `AuthPlugin`-declared
 // `Migration`/`Migrations` mechanism: core's domain services (`Users`,
 // `Accounts`, `Sessions`, `Verification`) are not themselves a plugin, so
 // there is no `AuthPlugin.Any` to aggregate this list under. A plugin
@@ -72,7 +72,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           createdAt TEXT NOT NULL,
           updatedAt TEXT NOT NULL
         )`,
-      orElse: () => Effect.die(new Error("effect-auth: unsupported SQL dialect for migrations")),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
   migration(2, "create_accounts", (sql) =>
@@ -105,7 +105,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           updatedAt TEXT NOT NULL,
           UNIQUE (providerId, subject, issuer)
         )`,
-      orElse: () => Effect.die(new Error("effect-auth: unsupported SQL dialect for migrations")),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
   migration(3, "create_sessions", (sql) =>
@@ -138,7 +138,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           actingAsType TEXT,
           actingAsId TEXT
         )`,
-      orElse: () => Effect.die(new Error("effect-auth: unsupported SQL dialect for migrations")),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
   migration(4, "create_verification_tokens", (sql) =>
@@ -163,7 +163,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           createdAt TEXT NOT NULL,
           payload TEXT NOT NULL
         )`,
-      orElse: () => Effect.die(new Error("effect-auth: unsupported SQL dialect for migrations")),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
   migration(5, "create_verification_tokens_live_identifier_index", (sql) =>
@@ -174,7 +174,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       sqlite: () => sql`
         CREATE UNIQUE INDEX verification_tokens_live_identifier
         ON verification_tokens(identifier) WHERE consumedAt IS NULL`,
-      orElse: () => Effect.die(new Error("effect-auth: unsupported SQL dialect for migrations")),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
   migration(6, "create_verification_reservations", (sql) =>
@@ -189,7 +189,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           identifier TEXT PRIMARY KEY,
           expiresAt TEXT NOT NULL
         )`,
-      orElse: () => Effect.die(new Error("effect-auth: unsupported SQL dialect for migrations")),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
 ]);

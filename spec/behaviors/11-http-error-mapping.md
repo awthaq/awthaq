@@ -8,13 +8,13 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-013 (error taxonomy and HTTP status mapping) (CCR-EA-002) |
 
 ---
 
-> effect-auth is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §14 and `archive/design/usage-examples-v4.md` §3 — not code that has shipped.
+> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §14 and `archive/design/usage-examples-v4.md` §3 — not code that has shipped.
 
 ## BEH-EA-081: A plugin's handlers are built with `HttpApiBuilder.group` against its own contract
 
@@ -67,7 +67,7 @@ REQUIREMENT: `AuthHttp.routes` MUST accept the `auth.api` value produced by
              services `auth.layer` provides — no additional wiring step.
 ```
 
-`archive/design/usage-examples-v4.md` §1.1 and §3.1 both show `AuthHttp.routes(AuthApi)` composed with an application's own `HttpApiBuilder.layer(AppApi)` under one `Layer.mergeAll`, then provided `AuthLive` as a single dependency — registering effect-auth's routes alongside an application's own is designed to require no more ceremony than merging one more Layer into the same list.
+`archive/design/usage-examples-v4.md` §1.1 and §3.1 both show `AuthHttp.routes(AuthApi)` composed with an application's own `HttpApiBuilder.layer(AppApi)` under one `Layer.mergeAll`, then provided `AuthLive` as a single dependency — registering awthaq's routes alongside an application's own is designed to require no more ceremony than merging one more Layer into the same list.
 
 ## BEH-EA-084: `AuthHttp.docs` serves generated OpenAPI/Scalar documentation from the same contract
 
@@ -135,7 +135,7 @@ REQUIREMENT: `ManagedRuntime.make(AuthLive)` MUST expose a `runPromise`
              entry point capable of running any Effect program built
              against `AuthLive`'s provided services, so that a host
              framework's own imperative route handler (one not built on
-             `HttpRouter`) can still call into effect-auth's domain
+             `HttpRouter`) can still call into awthaq's domain
              services directly.
 ```
 

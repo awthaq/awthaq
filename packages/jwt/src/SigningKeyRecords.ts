@@ -1,9 +1,9 @@
-// @effect-auth/jwt — SigningKeyRecords
+// @awthaq/jwt — SigningKeyRecords
 //
 // .scratch/jwt/spec.md's "Key management" decision. This plugin's own
 // persistence for the `jwt_signing_key` table — built directly against
 // `effect/unstable/sql`'s `SqlSchema`, the same way
-// `@effect-auth/admin`'s own `ImpersonationRecords.ts` builds
+// `@awthaq/admin`'s own `ImpersonationRecords.ts` builds
 // `admin_impersonation`: this table belongs to the plugin, not the shared
 // persistence stratum.
 //
@@ -11,7 +11,7 @@
 // a remote-signing configuration (ticket 15's `KeyRing.registerRemoteKey`),
 // `Some` under local signing (ticket 07's `mint`). JWK objects are stored as
 // JSON text, the same manual `JSON.stringify`/`JSON.parse` convention
-// `@effect-auth/organization`'s own `OrgRoleRecords.ts`/`MembershipRecords.ts`
+// `@awthaq/organization`'s own `OrgRoleRecords.ts`/`MembershipRecords.ts`
 // already use for JSON-shaped columns — no `Schema.parseJson` machinery
 // needed for a shape this codebase already has a working, simpler pattern
 // for.
@@ -67,7 +67,7 @@ export interface SigningKeyRecordsShape {
 }
 
 export class SigningKeyRecords extends Context.Service<SigningKeyRecords, SigningKeyRecordsShape>()(
-  "effect-auth/jwt/SigningKeyRecords",
+  "awthaq/jwt/SigningKeyRecords",
 ) {}
 
 const newestFirst = (records: ReadonlyArray<SigningKeyRecord>): ReadonlyArray<SigningKeyRecord> =>

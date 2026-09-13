@@ -1,4 +1,4 @@
-// @effect-auth/oauth — Plugin (M4)
+// @awthaq/oauth — Plugin (M4)
 //
 // spec/behaviors/16-oauth.md, BEH-EA-121 through BEH-EA-128.
 // `OAuth`/`OAuth.layer` (generic authorization-code + PKCE + OIDC `id_token`

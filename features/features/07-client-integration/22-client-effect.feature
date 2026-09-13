@@ -1,4 +1,4 @@
-# effect-auth is pre-implementation (see spec/README.md). Every scenario in
+# awthaq is pre-implementation (see spec/README.md). Every scenario in
 # this file specifies intended behavior of a system that does not exist yet
 # — a target the future testing harness (BEH-EA-193..200) is meant to
 # execute against, not a record of anything verified today.
@@ -158,7 +158,7 @@ Feature: The Effect Client
 
     @REQ-EA-494
     Scenario: The hand-written client surface contains no re-implementation of a generated endpoint method
-      Given the hand-written portion of "@effect-auth/client" — the session store, CSRF header injection, and the credentials/bearer policy
+      Given the hand-written portion of "@awthaq/client" — the session store, CSRF header injection, and the credentials/bearer policy
       When that hand-written surface is compared against the endpoints "HttpApiClient" derives from "AuthApi"
       Then no hand-written method duplicates an endpoint method the generated client already provides
 

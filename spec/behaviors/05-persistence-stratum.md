@@ -8,13 +8,13 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 
 ---
 
-> effect-auth is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §12 and `research/10-schema-migrations.md` — not code that has shipped.
+> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §12 and `research/10-schema-migrations.md` — not code that has shipped.
 
 ## BEH-EA-033: Every entity is a `Model.Class` with `Model.UuidV7Insert` ids
 
@@ -37,7 +37,7 @@ REQUIREMENT: `User`, `Account`, `Session`, and `VerificationToken` MUST each
              the ordinary creation path.
 ```
 
-`archive/PRD.md` §12 fixes `Model.Class` as the one entity-definition mechanism, from which validation schemas, JSON variants, and repository helpers are all derived, rather than declared three separate times. `better-auth/01-core-domain/01-entities-and-invariants.md` §1 documents the same base-contract shape (an opaque, supplier-assigned `id`) as the invariant every one of better-auth's four core entities shares; effect-auth's plan is to make that shared base a property of `Model.Class` itself rather than a convention each entity's author must repeat.
+`archive/PRD.md` §12 fixes `Model.Class` as the one entity-definition mechanism, from which validation schemas, JSON variants, and repository helpers are all derived, rather than declared three separate times. `better-auth/01-core-domain/01-entities-and-invariants.md` §1 documents the same base-contract shape (an opaque, supplier-assigned `id`) as the invariant every one of better-auth's four core entities shares; awthaq's plan is to make that shared base a property of `Model.Class` itself rather than a convention each entity's author must repeat.
 
 ## BEH-EA-034: `Model.Sensitive` fields never appear in any JSON variant of an entity
 
@@ -56,7 +56,7 @@ REQUIREMENT: A field declared `Model.Sensitive` MUST be excluded from every
              merely by returning the entity value.
 ```
 
-`archive/PRD.md` §12 and §18 both require this: "`Model.Sensitive` for hashes and secrets so they never appear in JSON variants," and separately, "contract tests assert no `Redacted` value reaches spans or events." `better-auth/01-core-domain/01-entities-and-invariants.md` §6.1 documents the analogous rule in better-auth's schema (`returned:false` on `password`, `accessToken`, `refreshToken`, `idToken`) as a per-field attribute a schema author must set correctly; effect-auth's plan folds the same guarantee into `Model.Sensitive` so the exclusion is a type-level fact about the field, not an attribute that could be omitted.
+`archive/PRD.md` §12 and §18 both require this: "`Model.Sensitive` for hashes and secrets so they never appear in JSON variants," and separately, "contract tests assert no `Redacted` value reaches spans or events." `better-auth/01-core-domain/01-entities-and-invariants.md` §6.1 documents the analogous rule in better-auth's schema (`returned:false` on `password`, `accessToken`, `refreshToken`, `idToken`) as a per-field attribute a schema author must set correctly; awthaq's plan folds the same guarantee into `Model.Sensitive` so the exclusion is a type-level fact about the field, not an attribute that could be omitted.
 
 ## BEH-EA-035: Repositories are built with `SqlModel.makeRepository` over the ambient `SqlClient`, never opening their own transactions
 
@@ -103,7 +103,7 @@ REQUIREMENT: A plugin's `migrations` MUST be a static value on the plugin
              plugin's `make` Layer or providing any configuration.
 ```
 
-`archive/design/plugins-as-layers.md` §2.1 places `migrations` alongside `contract` and `tables` as one of the plugin's frozen static members. `research/10-schema-migrations.md`'s TL;DR is explicit that `@effect/sql`'s stock `Migrator` (single-transaction, ids-only, no checksums, no drift detection) is a fine runtime *applier* but not, by itself, the migration-authoring surface effect-auth plugins are meant to target directly — the plan is for a plugin's migrations to be data the linker (BEH-EA-038) and, eventually, a CLI diff planner (BEH-EA-039) can read and re-key, not opaque imperative steps a plugin runs unaudited.
+`archive/design/plugins-as-layers.md` §2.1 places `migrations` alongside `contract` and `tables` as one of the plugin's frozen static members. `research/10-schema-migrations.md`'s TL;DR is explicit that `@effect/sql`'s stock `Migrator` (single-transaction, ids-only, no checksums, no drift detection) is a fine runtime *applier* but not, by itself, the migration-authoring surface awthaq plugins are meant to target directly — the plan is for a plugin's migrations to be data the linker (BEH-EA-038) and, eventually, a CLI diff planner (BEH-EA-039) can read and re-key, not opaque imperative steps a plugin runs unaudited.
 
 ## BEH-EA-038: The linker orders and re-keys every plugin's migrations into one deterministic sequence
 
@@ -149,7 +149,7 @@ REQUIREMENT: A plugin's migrations MUST create or alter only tables named
              registry such as session claims).
 ```
 
-`research/09-plugin-architecture.md` Q25 documents better-auth's opposite choice — plugins may add fields directly to the shared `user`/`session` tables via `additionalFields`, with a documentation-only warning against storing sensitive data there — as the failure mode this rule is designed to close: two plugins altering the same shared table in incompatible ways, or a plugin quietly widening a table core does not know about. `research/10-schema-migrations.md` Q78 states the effect-auth-specific line precisely: primitive, nullable/defaulted scalar extensions are the only thing a shared table may accept, and even those go through a declared extension mechanism, never an unmediated `ALTER TABLE` from plugin migration code.
+`research/09-plugin-architecture.md` Q25 documents better-auth's opposite choice — plugins may add fields directly to the shared `user`/`session` tables via `additionalFields`, with a documentation-only warning against storing sensitive data there — as the failure mode this rule is designed to close: two plugins altering the same shared table in incompatible ways, or a plugin quietly widening a table core does not know about. `research/10-schema-migrations.md` Q78 states the awthaq-specific line precisely: primitive, nullable/defaulted scalar extensions are the only thing a shared table may accept, and even those go through a declared extension mechanism, never an unmediated `ALTER TABLE` from plugin migration code.
 
 _Previous: [BEH-EA-032](04-contract-stratum.md#beh-ea-032-authapi-merges-contracts-and-refuses-a-duplicate-group-id)_
 _Next: [BEH-EA-041](06-domain-users-accounts.md#beh-ea-041-a-user-is-identified-by-a-case-insensitively-unique-email)_

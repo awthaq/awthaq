@@ -1,11 +1,11 @@
 > **Superseded by `design/plugins-as-layers.md` (v0.3, `AuthPlugin.Service`), itself now superseded by `spec/behaviors/01-plugin-contract.md` and `spec/behaviors/02-plugin-composition-validate.md`.**
 > Kept for the research trace only — do not use `definePlugin` as current API guidance.
 
-# Effect Auth — API Design Proposal
+# Awthaq — API Design Proposal
 
 Version 0.1 — 2026-09-12. Synthesizes `PRD.md`, `research/01..18` and the `better-auth/` contract corpus into one concrete public API. Every shape below is traceable to a research finding; the trace is in §12.
 
-Target: `effect@^3.22`, `@effect/platform` HttpApi, `@effect/sql`. Idioms are v3 (`Context.Tag`, `Effect.Service`, `Layer`, `Schema.TaggedError`, `HttpApiMiddleware.Tag`). The `@effect-auth/*` scope is a placeholder; it is taken on npm (research 01) and the rename is a pending decision.
+Target: `effect@^3.22`, `@effect/platform` HttpApi, `@effect/sql`. Idioms are v3 (`Context.Tag`, `Effect.Service`, `Layer`, `Schema.TaggedError`, `HttpApiMiddleware.Tag`). The `@effect-auth/*` scope is a placeholder; it is taken on npm (research 01) and the rename is a pending decision. *(Resolved, post-archival: renamed to Awthaq, npm scope `@awthaq/*`.)*
 
 ---
 
@@ -19,7 +19,7 @@ The review article (research 18) derived seven design laws. Each one fixes a pie
 | 2. Compile, don't document | `Auth.compile` is a real compiler: dependencies, capabilities, routes, schema, hook legality are *errors with codes*, never docs |
 | 3. Detect interactions offline, resolve by declared policy | Route keys, schema columns, migration order and hook vetoes are validated at compile; ordering is topo → `order` → id, never registration order |
 | 4. Treat the plugin set as a product line | `Auth.define({ plugins })` is the configurator; capabilities are the feature diagram; config can never add a route, table or hook point |
-| 5. Trust measurements, not declarations | `@effect-auth/test` ships `runPluginContractTests`; `apiVersion` is an integer exact-match gate |
+| 5. Trust measurements, not declarations | `@awthaq/test` ships `runPluginContractTests`; `apiVersion` is an integer exact-match gate |
 | 6. Deprecate = minor + codemod | Plugin API ships as `apiVersion: 1`; hosts support current + previous generation |
 | 7. Least privilege before isolation | Plugins depend on *capabilities* (`PasswordHasher`), never on other plugins' internals; exclusivity is compiler-enforced; Wasm sandbox is a documented v2 seam |
 
@@ -33,22 +33,22 @@ Two structural rules from the Effect research (01, 09) shape everything else:
 ## 1. Package map
 
 ```
-@effect-auth/core        Auth, definePlugin, Capability, Principal, Sessions, Users, Authorizer,
+@awthaq/core        Auth, definePlugin, Capability, Principal, Sessions, Users, Authorizer,
                          HookPoint, AuthEvent, Table/Column, AuthError, Permissions
-@effect-auth/http        AuthHttp (serve), Authenticated/Authorized middleware, cookies, CSRF, OpenAPI
-@effect-auth/sql         SqlStore (AuthStore over @effect/sql), migration engine
-@effect-auth/sql-pg      DDL dialect
-@effect-auth/sql-sqlite  DDL dialect (node + wasm)
-@effect-auth/memory      MemoryStore (tests, prototyping)
-@effect-auth/client      AuthClient (HttpApiClient-derived)
-@effect-auth/react       useSession, AuthClientProvider (on @effect-atom/atom-react)
-@effect-auth/test        TestAuth, runPluginContractTests
-@effect-auth/cli         effect-auth doctor | schema | migration | plugin | routes | openapi
+@awthaq/http        AuthHttp (serve), Authenticated/Authorized middleware, cookies, CSRF, OpenAPI
+@awthaq/sql         SqlStore (AuthStore over @effect/sql), migration engine
+@awthaq/sql-pg      DDL dialect
+@awthaq/sql-sqlite  DDL dialect (node + wasm)
+@awthaq/memory      MemoryStore (tests, prototyping)
+@awthaq/client      AuthClient (HttpApiClient-derived)
+@awthaq/react       useSession, AuthClientProvider (on @effect-atom/atom-react)
+@awthaq/test        TestAuth, runPluginContractTests
+@awthaq/cli         awthaq doctor | schema | migration | plugin | routes | openapi
 
-@effect-auth/password    official plugins; each also exports "./api" (isomorphic contract, no server code)
-@effect-auth/oauth
-@effect-auth/passkey
-@effect-auth/magic-link
+@awthaq/password    official plugins; each also exports "./api" (isomorphic contract, no server code)
+@awthaq/oauth
+@awthaq/passkey
+@awthaq/magic-link
 ```
 
 Three audiences, three surfaces:
@@ -67,9 +67,9 @@ Three audiences, three surfaces:
 
 ```ts
 // auth.ts
-import { Auth } from "@effect-auth/core"
-import { password } from "@effect-auth/password"
-import { SqlStore } from "@effect-auth/sql"
+import { Auth } from "@awthaq/core"
+import { password } from "@awthaq/password"
+import { SqlStore } from "@awthaq/sql"
 import { PgClient } from "@effect/sql-pg"
 import { Config, Layer } from "effect"
 
@@ -103,11 +103,11 @@ Everything that follows hangs off this one object.
 ### 2.2 Full configuration
 
 ```ts
-import { Auth } from "@effect-auth/core"
-import { password } from "@effect-auth/password"
-import { oauth, google, github } from "@effect-auth/oauth"
-import { passkey } from "@effect-auth/passkey"
-import { organization } from "@effect-auth/organization"
+import { Auth } from "@awthaq/core"
+import { password } from "@awthaq/password"
+import { oauth, google, github } from "@awthaq/oauth"
+import { passkey } from "@awthaq/passkey"
+import { organization } from "@awthaq/organization"
 import { Duration } from "effect"
 
 export const auth = Auth.define({
@@ -147,8 +147,8 @@ Rules the config obeys, enforced by `Auth.compile` and a contract test:
 Plugins expose ordinary Effect services. There is no synthesized facade type; the "facade whose keys depend on installed plugins" is the Layer's provided set.
 
 ```ts
-import { CurrentPrincipal, Sessions, Authorizer } from "@effect-auth/core"
-import { Password } from "@effect-auth/password"
+import { CurrentPrincipal, Sessions, Authorizer } from "@awthaq/core"
+import { Password } from "@awthaq/password"
 
 const signIn = Effect.gen(function* () {
   const password = yield* Password              // present only if password() is installed — the type says so
@@ -181,7 +181,7 @@ Core services (always present):
 ### 2.4 Serving HTTP
 
 ```ts
-import { AuthHttp } from "@effect-auth/http"
+import { AuthHttp } from "@awthaq/http"
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
 import { HttpApiBuilder, HttpServer } from "@effect/platform"
 import { createServer } from "node:http"
@@ -216,7 +216,7 @@ POST /auth/organization/invitations
 The auth middleware is an exported `HttpApiMiddleware`, so your API reuses it directly. Nothing about your API is special-cased.
 
 ```ts
-import { Authenticated, Authorized } from "@effect-auth/http"
+import { Authenticated, Authorized } from "@awthaq/http"
 
 const ProjectsApi = HttpApiGroup.make("projects")
   .add(HttpApiEndpoint.del("delete", "/projects/:id").setPath(Schema.Struct({ id: ProjectId })))
@@ -234,7 +234,7 @@ const ProjectsLive = HttpApiBuilder.group(AppApi, "projects", (h) =>
 ### 2.6 Authorization
 
 ```ts
-import { Permissions, Policy } from "@effect-auth/core"
+import { Permissions, Policy } from "@awthaq/core"
 
 export const perms = Permissions.make("app", {
   project: ["create", "update", "delete"],
@@ -258,7 +258,7 @@ Semantics are fixed once: deny by default, `all` short-circuits on first false, 
 Capabilities are `Effect.Service` classes with a safe `.Default`. Swapping is a Layer operation the app does explicitly; the compiler refuses two exclusive providers.
 
 ```ts
-import { PasswordHasher } from "@effect-auth/core"
+import { PasswordHasher } from "@awthaq/core"
 
 export const AuthLive = auth.layer.pipe(
   Layer.provide(BcryptHasher.layer),     // overrides the argon2id default for auth.hasher
@@ -274,7 +274,7 @@ Test doubles are the same mechanism: `Layer.succeed(Mailer, recordingMailer)`.
 Installation is code; configuration is data. A tenant may select among installed capabilities, never add one.
 
 ```ts
-import { TenantConfig } from "@effect-auth/core"
+import { TenantConfig } from "@awthaq/core"
 
 const TenantsLive = TenantConfig.layerMap({
   lookup: (tenantId) => TenantRepo.load(tenantId),   // Effect<TenantSettings>
@@ -346,12 +346,12 @@ export const definePlugin: <...>(spec: PluginSpec<...>) => PluginDefinition<...>
 // PluginDefinition is callable: password({ minLength: 12 }) → Plugin (frozen instance)
 ```
 
-Why the split matters: `effect-auth plugin list`, `doctor`, `schema`, docs generation and the registry validator all run on the static half alone. Options can parameterize behaviour, never shape. The contract test asserts it: two instances with different options compile to the same manifest hash.
+Why the split matters: `awthaq plugin list`, `doctor`, `schema`, docs generation and the registry validator all run on the static half alone. Options can parameterize behaviour, never shape. The contract test asserts it: two instances with different options compile to the same manifest hash.
 
 ### 3.2 Smallest plugin: a sign-up policy (hooks only)
 
 ```ts
-import { definePlugin, Hooks, HookAbort } from "@effect-auth/core"
+import { definePlugin, Hooks, HookAbort } from "@awthaq/core"
 
 export const companyEmail = definePlugin({
   id: "acme.company-email",
@@ -380,8 +380,8 @@ Auth.define({ plugins: [password(), companyEmail()] })
 Everything a plugin can contribute, in one file. Comments mark the compiler rules each part triggers.
 
 ```ts
-// packages/plugin-invite/src/api.ts  — isomorphic; also exported as "@acme/effect-auth-invite/api"
-import { AuthApi, AuthError } from "@effect-auth/core"
+// packages/plugin-invite/src/api.ts  — isomorphic; also exported as "@acme/awthaq-invite/api"
+import { AuthApi, AuthError } from "@awthaq/core"
 import { HttpApiEndpoint, HttpApiSchema } from "@effect/platform"
 import { Schema } from "effect"
 
@@ -408,8 +408,8 @@ export const InviteApi = AuthApi.group("invite")            // group name = plug
 import {
   definePlugin, Capabilities, Table, Column, Index, AuthEvent, Permissions,
   Hooks, HookPoint, AuthStore, Users, Verification, Mailer, CurrentPrincipal, Authorizer
-} from "@effect-auth/core"
-import { Authenticated } from "@effect-auth/http"
+} from "@awthaq/core"
+import { Authenticated } from "@awthaq/http"
 import { InviteApi, InviteNotFound, InviteExpired } from "./api.js"
 
 // ── schema: a side table, auto-prefixed to invite_invitation ────────────
@@ -450,7 +450,7 @@ const Options = Schema.Struct({
 })
 
 // ── the service the plugin exposes to app code ────────────────────────
-export class Invites extends Effect.Service<Invites>()("@acme/effect-auth-invite/Invites", {
+export class Invites extends Effect.Service<Invites>()("@acme/awthaq-invite/Invites", {
   effect: Effect.gen(function* () {
     const store = yield* AuthStore
     const invitations = store.table(Invitation)          // typed repository: byId, findOne, insert, update, list(keyset)
@@ -523,7 +523,7 @@ Compiler checks this plugin triggers: `E_PLUGIN_MISSING_DEP` if `password()` is 
 Strategies are declarative contributions to the core `Authentication` chain. The chain is ordered at compile (topo → `order` → id), first match wins, a presented-but-invalid credential is a typed error rather than a fall-through.
 
 ```ts
-import { definePlugin, AuthStrategy, Sessions, CredentialInvalid } from "@effect-auth/core"
+import { definePlugin, AuthStrategy, Sessions, CredentialInvalid } from "@awthaq/core"
 
 export const bearer = definePlugin({
   id: "bearer",
@@ -556,7 +556,7 @@ export const bearer = definePlugin({
 Exclusive capabilities are implemented as a Layer and declared in `provides`. Two providers in one app is `E_CAPABILITY_CONFLICT` naming both plugins.
 
 ```ts
-import { definePlugin, Capabilities, PasswordHasher } from "@effect-auth/core"
+import { definePlugin, Capabilities, PasswordHasher } from "@awthaq/core"
 
 const BcryptHasherLive = Layer.effect(PasswordHasher, Effect.gen(function* () {
   const cost = yield* Config.integer("AUTH_BCRYPT_COST").pipe(Config.withDefault(12))
@@ -588,7 +588,7 @@ export const Capabilities = {
   botDefense:  Capability.exclusive("auth.bot-defense",  BotDefense),
   webauthn:    Capability.exclusive("auth.webauthn",     WebAuthn)
 } as const
-// Namespaces "auth.*" and "effect-auth.*" are reserved; third parties use "<scope>.*".
+// Namespaces "auth.*" and "awthaq.*" are reserved; third parties use "<scope>.*".
 // Multi-provider things (strategies, oauth providers, hooks, events) are contribution lists, not capabilities.
 ```
 
@@ -770,7 +770,7 @@ error E_PLUGIN_CYCLE  Plugin dependency cycle
   organization@1.0.0 → acme.invite@1.0.0 → organization@1.0.0
   introduced by organization() at src/auth.ts:14
   hint: extract the shared requirement into a capability and depend on requires.capabilities
-  docs: https://effect-auth.dev/errors/E_PLUGIN_CYCLE
+  docs: https://awthaq.dev/errors/E_PLUGIN_CYCLE
 
 error E_CAPABILITY_CONFLICT  Two plugins provide the exclusive capability auth.hasher
   acme.bcrypt-hasher@1.0.0 (src/auth.ts:9)
@@ -844,9 +844,9 @@ yield* store.transaction(Effect.gen(function* () { /* nested = savepoint */ }))
 ### 6.4 Migrations
 
 ```
-effect-auth migration generate            snapshot diff (never the live DB) → 0004_invite/{migration.sql, snapshot.json, plan.json}
-effect-auth migration apply               dry-run by default; --yes in CI; destructive ops need --allow-destructive "<reason>"
-effect-auth migration status [--drift]    files vs auth_migrations ledger; --drift introspects the DB, non-zero exit
+awthaq migration generate            snapshot diff (never the live DB) → 0004_invite/{migration.sql, snapshot.json, plan.json}
+awthaq migration apply               dry-run by default; --yes in CI; destructive ops need --allow-destructive "<reason>"
+awthaq migration status [--drift]    files vs auth_migrations ledger; --drift introspects the DB, non-zero exit
 ```
 
 Statements are ordered core → plugin topo order, annotated `-- plugin: acme.invite`, hash-stamped. Plugin-authored steps (`MigrationUnit.effect`) run after the generated section of their own unit.
@@ -861,10 +861,10 @@ Plugin packages export their API group from `./api` with no server code. Apps th
 
 ```ts
 // auth.contract.ts — safe for the browser
-import { AuthContract } from "@effect-auth/core/contract"
-import { PasswordApi } from "@effect-auth/password/api"
-import { PasskeyApi } from "@effect-auth/passkey/api"
-import { OrganizationApi } from "@effect-auth/organization/api"
+import { AuthContract } from "@awthaq/core/contract"
+import { PasswordApi } from "@awthaq/password/api"
+import { PasskeyApi } from "@awthaq/passkey/api"
+import { OrganizationApi } from "@awthaq/organization/api"
 
 export const contract = AuthContract.make({ basePath: "/auth", groups: [PasswordApi, PasskeyApi, OrganizationApi] })
 
@@ -878,7 +878,7 @@ Same-repo servers may skip the contract and use `auth.api` directly.
 ### 7.2 Vanilla client
 
 ```ts
-import { AuthClient } from "@effect-auth/client"
+import { AuthClient } from "@awthaq/client"
 
 export const authClient = AuthClient.make(contract, {
   baseUrl: "https://app.example.com",
@@ -899,7 +899,7 @@ CSRF is handled by the client's `transformClient`: it reads the readable `__Host
 ### 7.3 React
 
 ```tsx
-import { AuthClientProvider, useSession, useAuthAction } from "@effect-auth/react"
+import { AuthClientProvider, useSession, useAuthAction } from "@awthaq/react"
 
 <AuthClientProvider client={authClient}>...</AuthClientProvider>
 
@@ -910,7 +910,7 @@ function Profile() {
 }
 ```
 
-`@effect-auth/react-query` exports `sessionQueryOptions(client)` and `apiQueryOptions(client, "password", "signIn")` for TanStack shops.
+`@awthaq/react-query` exports `sessionQueryOptions(client)` and `apiQueryOptions(client, "password", "signIn")` for TanStack shops.
 
 ### 7.4 Framework adapters
 
@@ -918,7 +918,7 @@ Five functions, nothing else: `authHandler`, `getSession(input, { strategy: "coo
 
 ```ts
 // app/api/auth/[...all]/route.ts
-import { toNextRouteHandler } from "@effect-auth/next"
+import { toNextRouteHandler } from "@awthaq/next"
 export const { GET, POST } = toNextRouteHandler(auth, AuthLive)
 
 // data access layer
@@ -932,7 +932,7 @@ const session = await getSession({ headers: await headers() }, { strategy: "data
 ### 8.1 App tests
 
 ```ts
-import { TestAuth } from "@effect-auth/test"
+import { TestAuth } from "@awthaq/test"
 import { it } from "@effect/vitest"
 
 const TestLive = TestAuth.layer(auth)   // MemoryStore + TestClock + recording Mailer + permissive RateLimiter
@@ -951,7 +951,7 @@ it.effect("session expires after the idle window", () =>
 ### 8.2 Plugin contract tests
 
 ```ts
-import { runPluginContractTests } from "@effect-auth/test"
+import { runPluginContractTests } from "@awthaq/test"
 import { invite } from "../src/index.js"
 
 runPluginContractTests(invite, {
@@ -975,14 +975,14 @@ runPluginContractTests(invite, {
 The CLI loads `auth.config.ts`, runs `Auth.compile`, and never touches a database unless the command says so.
 
 ```
-effect-auth doctor                 compile + config + insecure defaults + missing migrations
-effect-auth plugin list [--graph]  resolved topo order, capabilities, hook chains
-effect-auth routes                 normalized route table with owning plugin
-effect-auth schema                 IR with per-column owner
-effect-auth openapi > openapi.json aggregated spec, security schemes
-effect-auth migration generate | apply | status
-effect-auth seed admin             claim-URL bootstrap, never a seeded password
-effect-auth import --from better-auth --dry-run
+awthaq doctor                 compile + config + insecure defaults + missing migrations
+awthaq plugin list [--graph]  resolved topo order, capabilities, hook chains
+awthaq routes                 normalized route table with owning plugin
+awthaq schema                 IR with per-column owner
+awthaq openapi > openapi.json aggregated spec, security schemes
+awthaq migration generate | apply | status
+awthaq seed admin             claim-URL bootstrap, never a seeded password
+awthaq import --from better-auth --dry-run
 ```
 
 ---
@@ -1065,7 +1065,7 @@ Taken (with the research that backs them):
 
 Still open (product calls, not derivable from research):
 
-1. npm scope rename (`@effect-auth` is taken).
+1. npm scope rename (`@awthaq` is taken).
 2. Effect track: `^3.22` + v4-rc CI (recommended) vs waiting for v4 stable.
 3. Whether third-party plugins may ever `override` a core route (proposal: no).
 4. Session lifetime defaults: 30d/7d (PRD) vs 7d/1d (ecosystem).

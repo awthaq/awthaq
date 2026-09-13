@@ -1,11 +1,11 @@
-// @effect-auth/server — CSRF protection
+// @awthaq/server — CSRF protection
 //
 // spec/behaviors/10-csrf.md, BEH-EA-073 through BEH-EA-080. Implements
-// `@effect-auth/api`'s `CsrfProtection` declaration: `Sec-Fetch-Site` first,
+// `@awthaq/api`'s `CsrfProtection` declaration: `Sec-Fetch-Site` first,
 // `Origin` fallback, backed by a signed double-submit `__Host-csrf` cookie —
 // all three compose (BEH-EA-075 "backs", not replaces, the site check).
 
-import { Api } from "@effect-auth/api";
+import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -28,7 +28,7 @@ export interface CsrfConfigShape {
 }
 
 export class CsrfConfig extends Context.Service<CsrfConfig, CsrfConfigShape>()(
-  "effect-auth/server/CsrfConfig",
+  "awthaq/server/CsrfConfig",
 ) {}
 
 const toHex = (bytes: Uint8Array): string =>

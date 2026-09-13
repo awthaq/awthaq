@@ -5,9 +5,9 @@
 // middleware/session at all — it is public by definition; `token` does,
 // mirroring `packages/organization/test/AuthHttp.test.ts`'s own
 // `issueSessionCookieHeader` pattern for setting one up.
-import { AuthCore } from "@effect-auth/api";
-import { Accounts, Sessions, Users } from "@effect-auth/core";
-import { Account, Authentication, AuthHttp, Session } from "@effect-auth/server";
+import { AuthCore } from "@awthaq/api";
+import { Accounts, Sessions, Users } from "@awthaq/core";
+import { Account, Authentication, AuthHttp, Session } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -18,7 +18,7 @@ import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { TestAuth } from "@effect-auth/test";
+import { TestAuth } from "@awthaq/test";
 import { Jwt, JwtApi, JwtCodec, JwtConfig, KeyRing, SigningKeyRecords } from "../src/index.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
@@ -78,7 +78,7 @@ const buildHandler = () => {
       ),
     );
 
-  /** Mirrors `@effect-auth/organization`'s own `AuthHttp.test.ts`: a real session cookie against the same running `Sessions` instance. */
+  /** Mirrors `@awthaq/organization`'s own `AuthHttp.test.ts`: a real session cookie against the same running `Sessions` instance. */
   const issueSessionCookieHeader = (userId: string): Promise<string> =>
     withAppContext(
       Effect.gen(function* () {

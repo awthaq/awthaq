@@ -7,7 +7,7 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 ---
@@ -19,7 +19,7 @@ clickable link: the caller submits an email address, receives a code, and
 types it back into the application to complete sign-in. It is the same
 email-possession proof as Magic Link, delivered as a code a user can type on a
 second device rather than a link they must click on the device that received
-it. Nothing described here exists yet — effect-auth is pre-implementation.
+it. Nothing described here exists yet — awthaq is pre-implementation.
 
 ## Who asks for it
 
@@ -81,7 +81,7 @@ accompanying sketch.
 No design beyond the §17 row and the shared E1 enabler exists yet. There is no
 contract, no decision on digit count or TTL (`research/07-passwords-2fa.md`
 recommends 6 digits, 5 minutes, and a maximum of 3 failed verifications per
-token, matching NIST 800-63B-4's OOB constraints, but effect-auth has not
+token, matching NIST 800-63B-4's OOB constraints, but awthaq has not
 adopted any of that as a committed default), and no decision on whether Email
 OTP and Magic Link ship as one plugin with two verification modes or as two
 separate plugins sharing one enabler. That question is itself unresolved and

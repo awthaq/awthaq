@@ -1,7 +1,7 @@
-// @effect-auth/organization — OrganizationRecords
+// @awthaq/organization — OrganizationRecords
 //
 // spec.md's "Organization entity & CRUD": persistence for the
-// `organization` table, built the same way `@effect-auth/admin`'s own
+// `organization` table, built the same way `@awthaq/admin`'s own
 // `ImpersonationRecords.ts` builds `admin_impersonation` — directly against
 // `effect/unstable/sql`'s `SqlSchema`, owned by this plugin rather than the
 // shared persistence stratum.
@@ -63,7 +63,7 @@ export interface OrganizationRecordsShape {
 export class OrganizationRecords extends Context.Service<
   OrganizationRecords,
   OrganizationRecordsShape
->()("effect-auth/organization/OrganizationRecords") {}
+>()("awthaq/organization/OrganizationRecords") {}
 
 const notFound = (id: string): OrganizationRecordNotFound => new OrganizationRecordNotFound({ id });
 const slugTaken = (slug: string): OrganizationRecordSlugTaken =>

@@ -1,4 +1,4 @@
-// @effect-auth/organization — ActiveContextRecords
+// @awthaq/organization — ActiveContextRecords
 //
 // spec.md's "Active organization/team state": persistence for
 // `organization_active_context`, a plugin-owned table keyed by `sessionId`
@@ -12,7 +12,7 @@
 // Deliberately not cascade-deleted when its underlying session is revoked
 // — an orphaned row is harmless (the next read simply finds no matching
 // session), the same "declare the gap rather than build unrequested
-// session-lifecycle plumbing" precedent `@effect-auth/admin`'s own
+// session-lifecycle plumbing" precedent `@awthaq/admin`'s own
 // `endedBy: "expired"` gap already sets for this codebase.
 
 import * as Context from "effect/Context";
@@ -49,7 +49,7 @@ export interface ActiveContextRecordsShape {
 export class ActiveContextRecords extends Context.Service<
   ActiveContextRecords,
   ActiveContextRecordsShape
->()("effect-auth/organization/ActiveContextRecords") {}
+>()("awthaq/organization/ActiveContextRecords") {}
 
 // ---- layerMemory ------------------------------------------------------------
 

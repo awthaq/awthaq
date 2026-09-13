@@ -1,5 +1,5 @@
 // spec.md's "Organization entity & CRUD": the same contract-suite-over-both-layers
-// pattern `@effect-auth/admin`'s own `ImpersonationRecords.test.ts` establishes.
+// pattern `@awthaq/admin`'s own `ImpersonationRecords.test.ts` establishes.
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";

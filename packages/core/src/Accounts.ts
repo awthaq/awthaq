@@ -1,13 +1,13 @@
-// @effect-auth/core — Accounts
+// @awthaq/core — Accounts
 //
 // spec/behaviors/06-domain-users-accounts.md, BEH-EA-043 through BEH-EA-045,
 // BEH-EA-047. Two `Layer`s over the same `AccountsShape`: `layerMemory` (a
-// `Ref`) and `layerSql` (`@effect-auth/sql`'s `Model.Class`/repository,
+// `Ref`) and `layerSql` (`@awthaq/sql`'s `Model.Class`/repository,
 // BEH-EA-033–036) — neither changes this service's public interface, the
 // same deferral `Migrations.ts` documents for the persistence stratum
 // generally.
 
-import { Models as SqlModels, Repositories as SqlRepositories } from "@effect-auth/sql";
+import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -36,7 +36,7 @@ export interface AccountRecord {
   readonly providerId: string;
   readonly subject: string;
   /**
-   * BEH-EA-125/INV-EA-015 (`@effect-auth/oauth`): the third component of
+   * BEH-EA-125/INV-EA-015 (`@awthaq/oauth`): the third component of
    * the real identity anchor — `(providerId, subject, issuer)`, never
    * `(providerId, subject)` alone. `password` and any other non-federated
    * provider have no issuer at all (`Option.none()`); two OIDC accounts
@@ -76,7 +76,7 @@ export interface AccountsShape {
    * BEH-EA-043: `(providerId, subject)` is a schema-level-equivalent unique
    * constraint here. `credentialHash` is BEH-EA-044's password-credential
    * case (`providerId = "password"`) — an already-hashed secret
-   * (`@effect-auth/password`'s own `PasswordHasher` port produced it; this
+   * (`@awthaq/password`'s own `PasswordHasher` port produced it; this
    * service never hashes anything itself), stored alongside the row and
    * deliberately kept out of `AccountRecord` so an ordinary "list my linked
    * accounts" read never carries a hash it doesn't need.
@@ -116,9 +116,7 @@ export interface AccountsShape {
   readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void>;
 }
 
-export class Accounts extends Context.Service<Accounts, AccountsShape>()(
-  "effect-auth/core/Accounts",
-) {}
+export class Accounts extends Context.Service<Accounts, AccountsShape>()("awthaq/core/Accounts") {}
 
 interface State {
   readonly byId: HashMap.HashMap<AccountId, AccountRecord>;
@@ -167,7 +165,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
             return [
               Result.fail(
                 new AccountAlreadyLinked({
-                  message: `effect-auth: account already linked: ${key}`,
+                  message: `awthaq: account already linked: ${key}`,
                   providerId: input.providerId,
                   subject: input.subject,
                 }),
@@ -220,9 +218,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
           const existing = HashMap.get(s.byId, id);
           if (Option.isNone(existing)) {
             return [
-              Result.fail(
-                new AccountNotFound({ message: `effect-auth: no such account: ${id}`, id }),
-              ),
+              Result.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
               s,
             ] as const;
           }
@@ -233,7 +229,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
             return [
               Result.fail(
                 new LastAccountRefusal({
-                  message: `effect-auth: refusing to unlink the last account for user ${existing.value.userId}`,
+                  message: `awthaq: refusing to unlink the last account for user ${existing.value.userId}`,
                   userId: existing.value.userId,
                 }),
               ),
@@ -263,9 +259,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
         Effect.flatMap((s) =>
           HashMap.has(s.byId, id)
             ? Effect.succeed(HashMap.get(s.credentialHashes, id))
-            : Effect.fail(
-                new AccountNotFound({ message: `effect-auth: no such account: ${id}`, id }),
-              ),
+            : Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
         ),
       );
 
@@ -273,9 +267,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
       Ref.modify(state, (s): readonly [Result.Result<void, AccountNotFound>, State] => {
         if (!HashMap.has(s.byId, id)) {
           return [
-            Result.fail(
-              new AccountNotFound({ message: `effect-auth: no such account: ${id}`, id }),
-            ),
+            Result.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
             s,
           ] as const;
         }
@@ -363,7 +355,7 @@ export const layerSql: Layer.Layer<
           error.reason._tag === "UniqueViolation"
             ? Effect.fail(
                 new AccountAlreadyLinked({
-                  message: `effect-auth: account already linked: ${input.providerId}:${input.subject}`,
+                  message: `awthaq: account already linked: ${input.providerId}:${input.subject}`,
                   providerId: input.providerId,
                   subject: input.subject,
                 }),
@@ -394,9 +386,7 @@ export const layerSql: Layer.Layer<
       const account = yield* repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(
-              new AccountNotFound({ message: `effect-auth: no such account: ${id}`, id }),
-            ),
+            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
@@ -405,7 +395,7 @@ export const layerSql: Layer.Layer<
       if (siblings.length <= 1) {
         return yield* Effect.fail(
           new LastAccountRefusal({
-            message: `effect-auth: refusing to unlink the last account for user ${account.userId}`,
+            message: `awthaq: refusing to unlink the last account for user ${account.userId}`,
             userId: UserId(account.userId),
           }),
         );
@@ -423,9 +413,7 @@ export const layerSql: Layer.Layer<
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(
-              new AccountNotFound({ message: `effect-auth: no such account: ${id}`, id }),
-            ),
+            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
@@ -443,9 +431,7 @@ export const layerSql: Layer.Layer<
         const existing = yield* repo.findById(id).pipe(
           Effect.catchTags({
             NoSuchElementError: () =>
-              Effect.fail(
-                new AccountNotFound({ message: `effect-auth: no such account: ${id}`, id }),
-              ),
+              Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
             SchemaError: Effect.die,
             SqlError: Effect.die,
           }),

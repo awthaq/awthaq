@@ -7,7 +7,7 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 ---
@@ -17,10 +17,10 @@
 A credential type for server-to-server and CI callers rather than interactive
 users: a caller creates a named, scoped, long-lived key; the raw key is shown
 once and only its hash is stored; presenting it on a request resolves to an
-`ApiKey` principal rather than a `User` principal. It is effect-auth's answer
+`ApiKey` principal rather than a `User` principal. It is awthaq's answer
 to "how does a non-human caller authenticate," and its scopes are what qadi
 turns into permissions on the other side of the authorization boundary.
-Nothing described here exists yet — effect-auth is pre-implementation.
+Nothing described here exists yet — awthaq is pre-implementation.
 
 ## Who asks for it
 
@@ -91,7 +91,7 @@ copied as authoritative content — is documented in `archive/design/usage-qadi.
 which shows an `ApiKey` principal resolving to a subject with
 `id: "apikey:<keyId>"` and `permissions` equal to the key's scopes, alongside
 an equivalent `Service` principal kind (`id: "service:<name>"`) for
-non-key-based service-to-service callers. On the effect-auth side, this means
+non-key-based service-to-service callers. On the awthaq side, this means
 the `ApiKey` plugin's job stops at producing a scoped principal; turning
 scopes into qadi permissions is the `SubjectResolver` slot's job, not this
 plugin's.

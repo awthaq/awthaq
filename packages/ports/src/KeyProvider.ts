@@ -1,4 +1,4 @@
-// @effect-auth/ports — KeyProvider
+// @awthaq/ports — KeyProvider
 //
 // Shipping-gap map (.scratch/shipping-gaps), ticket 17 — the seam ticket
 // 18 (provider-token encryption at rest) and ticket 19 (PKCE
@@ -56,14 +56,14 @@ export interface KeyProviderShape {
 }
 
 export class KeyProvider extends Context.Service<KeyProvider, KeyProviderShape>()(
-  "effect-auth/ports/KeyProvider",
+  "awthaq/ports/KeyProvider",
 ) {}
 
 /**
  * Dev/test seam: one key, read once from the environment at layer
- * construction. `EFFECT_AUTH_ENCRYPTION_KEY` (required, base64-encoded,
+ * construction. `AWTHAQ_ENCRYPTION_KEY` (required, base64-encoded,
  * must decode to exactly 32 bytes for AES-256) and
- * `EFFECT_AUTH_ENCRYPTION_KEY_ID` (optional, defaults to `"env"`) —
+ * `AWTHAQ_ENCRYPTION_KEY_ID` (optional, defaults to `"env"`) —
  * a missing key surfaces as a `Config.ConfigError`, the same way a
  * missing config value does anywhere else in this codebase
  * (`PasswordHasher.layerArgon2id`/`layerScrypt`); a *present but
@@ -74,22 +74,22 @@ export class KeyProvider extends Context.Service<KeyProvider, KeyProviderShape>(
 export const layerEnv: Layer.Layer<KeyProvider, Config.ConfigError> = Layer.effect(
   KeyProvider,
   Effect.gen(function* () {
-    const kid = yield* Config.String("EFFECT_AUTH_ENCRYPTION_KEY_ID").pipe(
+    const kid = yield* Config.String("AWTHAQ_ENCRYPTION_KEY_ID").pipe(
       Config.withDefault(DEFAULT_KID),
     );
-    const encoded = yield* Config.Redacted("EFFECT_AUTH_ENCRYPTION_KEY");
+    const encoded = yield* Config.Redacted("AWTHAQ_ENCRYPTION_KEY");
     const decoded = Encoding.decodeBase64(Redacted.value(encoded));
     if (decoded._tag === "Failure") {
       return yield* Effect.die(
         new Error(
-          `effect-auth: EFFECT_AUTH_ENCRYPTION_KEY must be valid base64 (${decoded.failure.message}).`,
+          `awthaq: AWTHAQ_ENCRYPTION_KEY must be valid base64 (${decoded.failure.message}).`,
         ),
       );
     }
     if (decoded.success.length !== AES_256_KEY_LENGTH) {
       return yield* Effect.die(
         new Error(
-          `effect-auth: EFFECT_AUTH_ENCRYPTION_KEY must decode to exactly ${AES_256_KEY_LENGTH} bytes for AES-256, got ${decoded.success.length}.`,
+          `awthaq: AWTHAQ_ENCRYPTION_KEY must decode to exactly ${AES_256_KEY_LENGTH} bytes for AES-256, got ${decoded.success.length}.`,
         ),
       );
     }

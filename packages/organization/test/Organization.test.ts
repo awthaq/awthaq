@@ -1,11 +1,11 @@
 // spec.md. Domain-level tests (no HTTP layer here — see `AuthHttp.test.ts`
 // for the wire-level equivalent): real `AuthEvents`/`OrganizationRecords`/
 // `MembershipRecords`, a hand-built `Api.UserPrincipal` the same way
-// `@effect-auth/admin`'s own `Admin.test.ts` does.
-import { Api } from "@effect-auth/api";
-import { AuthEvents, Sessions, Users } from "@effect-auth/core";
-import { Mailer } from "@effect-auth/ports";
-import { Authentication } from "@effect-auth/server";
+// `@awthaq/admin`'s own `Admin.test.ts` does.
+import { Api } from "@awthaq/api";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Mailer } from "@awthaq/ports";
+import { Authentication } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";

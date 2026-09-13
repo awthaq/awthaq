@@ -1,4 +1,4 @@
-// @effect-auth/jwt — Plugin (M7)
+// @awthaq/jwt — Plugin (M7)
 //
 // Short-lived, self-contained, cryptographically signed JWTs representing
 // an already-authenticated caller — EdDSA/ES256, JWKS with grace-period

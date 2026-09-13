@@ -5,7 +5,7 @@
 // declares `.middleware(Api.CsrfProtection)` yet, so there is no real,
 // generated client to exercise it against. `readCookie`'s own logic (what
 // `CsrfClientLive` actually reads) is tested directly below instead.
-import { SessionContract } from "@effect-auth/api";
+import { SessionContract } from "@awthaq/api";
 import { afterEach, assert, describe, it } from "@effect/vitest";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";

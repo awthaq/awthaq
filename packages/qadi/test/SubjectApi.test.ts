@@ -4,9 +4,9 @@
 // carries) — proving the real, exported `SubjectApi`/`SubjectHandlers`
 // actually serve a decodable `SubjectDto`, not just that the underlying
 // `AuthorizedSubject` middleware chain resolves a subject in memory.
-import { Api } from "@effect-auth/api";
-import { AuthEvents, Sessions, Users } from "@effect-auth/core";
-import { Authentication, AuthHttp } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Authentication, AuthHttp } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -24,7 +24,7 @@ import { AuthorizedSubject, SubjectApi } from "../src/index.ts";
 // A separate, standalone tiny `HttpApi` (its own id, its own group) rather
 // than folding a `/login` endpoint into `SubjectApi.SubjectApi` itself —
 // this test exercises the real, shipped `SubjectApi.SubjectApi`/
-// `SubjectHandlers` exactly as `@effect-auth/react` will consume them, not
+// `SubjectHandlers` exactly as `@awthaq/react` will consume them, not
 // a test-local variant with a different api id (`HttpApiBuilder.group`'s
 // generated handler-registration tag is keyed by the owning api's id, so a
 // handlers `Layer` built against one api id cannot satisfy a differently-

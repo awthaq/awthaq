@@ -1,6 +1,6 @@
 # Plugin Systems — A Scientific Literature Review for Effect Native Auth
 
-Version 1.0 — 2026-09-12. This article synthesizes the scientific corpus built in `research/13..17-*.md` into design evidence for the effect-auth plugin compiler (PRD.md §9, §12, §34–36). Practitioner prior art lives in `research/09-plugin-architecture.md`; this document is the peer-reviewed counterpart.
+Version 1.0 — 2026-09-12. This article synthesizes the scientific corpus built in `research/13..17-*.md` into design evidence for the awthaq plugin compiler (PRD.md §9, §12, §34–36). Practitioner prior art lives in `research/09-plugin-architecture.md`; this document is the peer-reviewed counterpart.
 
 **Method.** Five literature sweeps ran in parallel (foundations/OS kernels; platform case studies; extensibility theory; API evolution; capability security). Every entry in every file was verified against a primary source this session (ACM DL, IEEE Xplore, USENIX, Crossref DOI resolution, arXiv API, publisher/author pages, MIT Press, HBR). Papers recalled but not verifiable were dropped or flagged; wrong citations surfaced during verification were corrected in-file (e.g., SLIC is USENIX ATC 1998, not 1996; Jangda et al. is ATC 2019, not PLDI; the hypothesized ".NET breaking-APIs" study does not exist and is flagged as such in 16). Gray-literature canon (OSGi spec, semver.org, Cargo rules, Fowler) is explicitly labeled `non-academic`.
 
@@ -20,7 +20,7 @@ Total: ~185 annotated entries, ~250 verified primary links.
 
 ## 2. Foundations: extensibility has a 50-year-old design manual (13)
 
-The deepest finding: **every load-bearing decision in the effect-auth PRD already has a canonical scientific treatment**, and they all point the same way.
+The deepest finding: **every load-bearing decision in the awthaq PRD already has a canonical scientific treatment**, and they all point the same way.
 
 - **Parnas (1972) information hiding + Baldwin & Clark (2000) design rules:** the plugin contract is the "design rules" document of the ecosystem. Required fields must be minimal (`id`, `apiVersion`); everything else optional and declarative; freezing the contract early is the highest-leverage act in the project. Plugins are options priced against stable rules.
 - **Microkernel pattern (POSA 1996) + Liedtke (1995) + SPIN/Exokernel (SOSP 1995):** minimal core, policies in extensions. The kernel papers also validate the PRD's compile-time choice — SPIN proved language-level (type-safe) extension safe *without* hardware isolation; the 1996 extension-technology comparison (Small & Seltzer) prices exactly the axis PRD ADR-005 sits on.
@@ -31,7 +31,7 @@ The deepest finding: **every load-bearing decision in the effect-auth PRD alread
 
 Empirical SE studied the big plugin ecosystems; the numbers are a warning label for ours.
 
-- **Declared ≠ real.** Eclipse shipped documented breaking changes without bumping majors (Bogart FSE 2016); compatibility outcomes varied 96.7% vs 50.2% by *what plugins actually import* (Businge ICSM/SCAM 2012). → Integer `apiVersion` stays the cheap structural gate, but the registry must *measure* compatibility by compiling plugins against supported generations (`@effect-auth/test` harness, Q31) — never trust declarations alone.
+- **Declared ≠ real.** Eclipse shipped documented breaking changes without bumping majors (Bogart FSE 2016); compatibility outcomes varied 96.7% vs 50.2% by *what plugins actually import* (Businge ICSM/SCAM 2012). → Integer `apiVersion` stays the cheap structural gate, but the registry must *measure* compatibility by compiling plugins against supported generations (`@awthaq/test` harness, Q31) — never trust declarations alone.
 - **Best practices violated everywhere.** Even well-documented modularity rules (OSGi/Eclipse) were violated at scale (Ochoa MSR 2018); dependency depth converts small failures into ecosystem events (Zimmermann NDSS 2019). → Enforce `requiresPlugins`/`requiresCapabilities` as **compile errors**, not docs.
 - **Deprecation is a compiler feature.** Firefox 57's hard cut vs MV3's slipping deadlines show the two failure modes of deprecation UX; >80% of Java API breaks are codemodable refactorings (Dig & Johnson 2006). → Every deprecation ships with a codemod in the same release (→ Q100).
 - **Registries are attack surface.** 60% of Chrome Web Store items never updated; half of vulnerable extensions persisted 2 years (Hsu 2024); 21 malicious VS Code extensions totaled >6M installs (UntrustIDE NDSS 2024). → Update-delta review, mechanical registry gates, and "official plugin" curation are evidence-backed requirements, not marketing (→ Q7).
@@ -70,7 +70,7 @@ Five decades of security science compress into an ordered playbook for running t
 5. Secrets-leakage assumption: prefix-visible + hashed API keys (macaroons lineage, Birgisson NDSS 2014 — also feeds Q46/Q59 token design: attenuation-only, purpose-bound).
 6. Sandbox is a **v2 seam, not a v1 need**: SFI 1993 → CFI 2009 → XFI 2006 → Wasm (Haas PLDI 2017) → Swivel/ATC-2019-lineage, with a measured price (Jangda et al.: 45–56% perf overhead). Document the seam (Wasm plugin target + capability-strings-as-imports), ship the playbook.
 
-## 7. Synthesis — seven design laws for the effect-auth plugin compiler
+## 7. Synthesis — seven design laws for the awthaq plugin compiler
 
 1. **Freeze the design rules early** (Parnas/Baldwin): minimal required contract, declarative everything else, visible deprecation rules.
 2. **Compile, don't document** (Ochoa 2018/Zimmermann 2019): dependency, capability, conflict, and ordering rules are compile errors.

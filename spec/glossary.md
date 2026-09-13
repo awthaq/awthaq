@@ -1,4 +1,4 @@
-# effect-auth Glossary
+# awthaq Glossary
 
 > **Document Control**
 >
@@ -8,7 +8,7 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) |
 
@@ -20,7 +20,7 @@
 
 ### Principal
 
-Who is asking. A `Schema.Union` of `Schema.TaggedClass`es — `UserPrincipal` (carrying a `sessionId` and an optional `actingAs` for impersonation), `ApiKeyPrincipal`, `ServicePrincipal`, and `AnonymousPrincipal` — each wrapping a Zanzibar-shaped `PrincipalRef { type, id }`. A Principal is effect-auth's entire answer to "who"; it says nothing about what that identity may do. See: [BEH-EA-025](behaviors/04-contract-stratum.md#beh-ea-025-a-principal-is-a-tagged-union-carrying-a-zanzibar-shaped-reference).
+Who is asking. A `Schema.Union` of `Schema.TaggedClass`es — `UserPrincipal` (carrying a `sessionId` and an optional `actingAs` for impersonation), `ApiKeyPrincipal`, `ServicePrincipal`, and `AnonymousPrincipal` — each wrapping a Zanzibar-shaped `PrincipalRef { type, id }`. A Principal is awthaq's entire answer to "who"; it says nothing about what that identity may do. See: [BEH-EA-025](behaviors/04-contract-stratum.md#beh-ea-025-a-principal-is-a-tagged-union-carrying-a-zanzibar-shaped-reference).
 
 ### Subject
 
@@ -52,7 +52,7 @@ A `Model.Class` entity for a purpose-scoped, single-use token — email verifica
 
 ### CsrfProtection
 
-The domain service that composes effect-auth's CSRF defenses into one strategy chain, checked in the order it is declared: `Sec-Fetch-Site` first (a browser-set header page script cannot forge), falling back to comparing `Origin` against the expected host, and a signed double-submit `__Host-csrf` cookie beneath both. There is no separate ordering mechanism — the security record's declaration order *is* the strategy chain. See: [BEH-EA-073](behaviors/10-csrf.md#beh-ea-073-sec-fetch-site-is-the-primary-csrf-signal), [BEH-EA-072](behaviors/09-authentication-middleware.md#beh-ea-072-the-security-records-declaration-order-is-the-entire-strategy-chain--no-separate-ordering-mechanism-exists).
+The domain service that composes awthaq's CSRF defenses into one strategy chain, checked in the order it is declared: `Sec-Fetch-Site` first (a browser-set header page script cannot forge), falling back to comparing `Origin` against the expected host, and a signed double-submit `__Host-csrf` cookie beneath both. There is no separate ordering mechanism — the security record's declaration order *is* the strategy chain. See: [BEH-EA-073](behaviors/10-csrf.md#beh-ea-073-sec-fetch-site-is-the-primary-csrf-signal), [BEH-EA-072](behaviors/09-authentication-middleware.md#beh-ea-072-the-security-records-declaration-order-is-the-entire-strategy-chain--no-separate-ordering-mechanism-exists).
 
 ### TestAuth
 
@@ -68,11 +68,11 @@ Stratum 1: the isomorphic layer of schemas, typed errors, `HttpApiGroup`s, the m
 
 ### Layer
 
-Effect's dependency-injection and resource-construction primitive: `Layer<ROut, E, RIn>` describes what a piece of code provides (`ROut`), how it can fail while doing so (`E`), and what it still requires (`RIn`) to run. Every plugin, every port implementation, and every application composition root in effect-auth is expressed as a Layer, which is why the type checker can read dependency, port, and slot information directly off `RIn`/`ROut` instead of off a separately maintained manifest. See: [ADR-EA-001](decisions/001-plugins-contribute-layers.md#adr-ea-001-plugins-contribute-effect-layers).
+Effect's dependency-injection and resource-construction primitive: `Layer<ROut, E, RIn>` describes what a piece of code provides (`ROut`), how it can fail while doing so (`E`), and what it still requires (`RIn`) to run. Every plugin, every port implementation, and every application composition root in awthaq is expressed as a Layer, which is why the type checker can read dependency, port, and slot information directly off `RIn`/`ROut` instead of off a separately maintained manifest. See: [ADR-EA-001](decisions/001-plugins-contribute-layers.md#adr-ea-001-plugins-contribute-effect-layers).
 
 ### Stratum
 
-One of the seven architectural layers effect-auth is organized into — Contract, Ports, Persistence, Domain, HTTP, Authorization, Composition — each depending only on strata below it. A stratum boundary is a Layer boundary: nothing in a lower stratum imports from a higher one. See: [spec/overview.md](overview.md).
+One of the seven architectural layers awthaq is organized into — Contract, Ports, Persistence, Domain, HTTP, Authorization, Composition — each depending only on strata below it. A stratum boundary is a Layer boundary: nothing in a lower stratum imports from a higher one. See: [spec/overview.md](overview.md).
 
 ## Plugin system
 
@@ -144,8 +144,8 @@ The second qadi integration path: a `SubjectExtractor` layer resolves the sessio
 
 ### Obligation
 
-A qadi concept, borrowed here rather than redefined: a condition an `Allow` decision can carry that must be discharged before the enforcing call proceeds — for example, a step-up re-authentication requirement. effect-auth ships `ObligationHandlers.reauth`, which discharges a re-authentication obligation by checking session freshness against the obligation's declared maximum age. See: [BEH-EA-161](behaviors/21-qadi-resolvers-obligations.md#beh-ea-161-attributes-resolved-from-the-user-table).
+A qadi concept, borrowed here rather than redefined: a condition an `Allow` decision can carry that must be discharged before the enforcing call proceeds — for example, a step-up re-authentication requirement. awthaq ships `ObligationHandlers.reauth`, which discharges a re-authentication obligation by checking session freshness against the obligation's declared maximum age. See: [BEH-EA-161](behaviors/21-qadi-resolvers-obligations.md#beh-ea-161-attributes-resolved-from-the-user-table).
 
 ### qadi
 
-The sibling authorization library, by the same author, that effect-auth delegates every permission, policy, and authorization decision to. effect-auth ships no authorizer of its own; it ships the `SubjectResolver` slot and the two bridges (Path A, Path B) qadi needs to receive a Subject and enforce decisions. See: [ADR-EA-009](decisions/009-authorization-delegated-to-qadi.md#adr-ea-009-authorization-is-delegated-to-qadi).
+The sibling authorization library, by the same author, that awthaq delegates every permission, policy, and authorization decision to. awthaq ships no authorizer of its own; it ships the `SubjectResolver` slot and the two bridges (Path A, Path B) qadi needs to receive a Subject and enforce decisions. See: [ADR-EA-009](decisions/009-authorization-delegated-to-qadi.md#adr-ea-009-authorization-is-delegated-to-qadi).

@@ -7,12 +7,12 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-012 callout to BEH-EA-161 and a note on unhandled same-attribute/relation resolver conflicts across plugins (CCR-EA-002) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-161: Attributes resolved from the user table
 
@@ -22,7 +22,7 @@
 export const UserAttributes = Layer.effect(AttributeResolver, Effect.gen(function*() {
   const users = yield* Users
   return AttributeResolver.of({
-    name: "effect-auth/UserAttributes",
+    name: "awthaq/UserAttributes",
     resolve: (subjectId, attribute) => users.byId(id).pipe(
       Effect.map((u) => attribute === "plan" ? u.plan : undefined),
       Effect.mapError((cause) => new AttributeResolveError({ subjectId, attribute, cause }))
@@ -32,7 +32,7 @@ export const UserAttributes = Layer.effect(AttributeResolver, Effect.gen(functio
 ```
 
 ```text
-REQUIREMENT: An `AttributeResolver` backed by effect-auth's user table MUST
+REQUIREMENT: An `AttributeResolver` backed by awthaq's user table MUST
              map a lookup failure to `AttributeResolveError`, never to
              `undefined`-as-deny or to a swallowed exception; `undefined` MUST
              mean only "this resolver has no opinion on this attribute."
@@ -48,7 +48,7 @@ _Previous: [BEH-EA-160](20-qadi-bridge-path-b.md#beh-ea-160-both-bridges-share-o
 export const OrgRelationships = Layer.effect(RelationshipResolver, Effect.gen(function*() {
   const org = yield* Organization
   return RelationshipResolver.of({
-    name: "effect-auth/OrgRelationships",
+    name: "awthaq/OrgRelationships",
     check: ({ subjectId, relation, resourceId, depth }) => /* … */.pipe(
       Effect.mapError((cause) => new RelationshipResolveError({ subjectId, relation, resourceId, cause }))
     )
@@ -82,7 +82,7 @@ REQUIREMENT: A deployment or test with a small, statically known relationship
 
 `usage-qadi.md` §6.2 notes this is "enough" when the graph is fixed — a test suite (`usage-qadi.md` §15's `edgeRelationshipResolver`), or a deployment that has no organization plugin installed at all but still wants a couple of hard-coded relationships. Because both implementations satisfy the same `RelationshipResolver` tag, a policy written against `hasRelationship` never needs to know or care which backing implementation is in effect.
 
-**Two plugins both wiring a resolver for the same attribute or relation** is, honestly, an unhandled case today, and worth stating plainly rather than implying a check exists. `AttributeResolver` and `RelationshipResolver` are qadi's own service tags (`@qadi/core`), not one of effect-auth's own declared slots (`SubjectResolver`, `SessionViewExtension` — ADR-EA-012), so `Auth.make`'s `SlotConflict<P>` check (INV-EA-004) has no visibility into them: it only detects a collision between two plugins' `ROut` for a slot *effect-auth itself* defines. If, say, both `Organization` and a hypothetical third-party `Billing` plugin each provide a `Layer.effect(AttributeResolver, ...)` for the `"plan"` attribute, ordinary Effect Layer composition applies — the later-provided Layer shadows the earlier one for that tag, the same shadow-not-merge semantics `behaviors/14-rate-limiting.md`'s BEH-EA-109 documents for two `RateLimiter` store Layers — and the losing resolver's contribution is silently unreachable, with no name-both-plugins compiler error the way an actual slot conflict gets. Closing this gap would mean either classifying `AttributeResolver`/`RelationshipResolver` as effect-auth-recognized slots (extending `SlotConflict<P>` to see through to a qadi-owned tag it does not otherwise know about) or introducing an aggregating combinator that tries each contributed resolver in order and takes the first non-`undefined` answer, mirroring how `undefined` already means "no opinion" per BEH-EA-161's own resolver contract — neither of which this specification commits to today. Until one of those exists, an application composing more than one resolver for the same attribute or relation is responsible for either combining them into a single Layer itself before providing it, or ensuring no two installed plugins target the same attribute/relation name at all.
+**Two plugins both wiring a resolver for the same attribute or relation** is, honestly, an unhandled case today, and worth stating plainly rather than implying a check exists. `AttributeResolver` and `RelationshipResolver` are qadi's own service tags (`@qadi/core`), not one of awthaq's own declared slots (`SubjectResolver`, `SessionViewExtension` — ADR-EA-012), so `Auth.make`'s `SlotConflict<P>` check (INV-EA-004) has no visibility into them: it only detects a collision between two plugins' `ROut` for a slot *awthaq itself* defines. If, say, both `Organization` and a hypothetical third-party `Billing` plugin each provide a `Layer.effect(AttributeResolver, ...)` for the `"plan"` attribute, ordinary Effect Layer composition applies — the later-provided Layer shadows the earlier one for that tag, the same shadow-not-merge semantics `behaviors/14-rate-limiting.md`'s BEH-EA-109 documents for two `RateLimiter` store Layers — and the losing resolver's contribution is silently unreachable, with no name-both-plugins compiler error the way an actual slot conflict gets. Closing this gap would mean either classifying `AttributeResolver`/`RelationshipResolver` as awthaq-recognized slots (extending `SlotConflict<P>` to see through to a qadi-owned tag it does not otherwise know about) or introducing an aggregating combinator that tries each contributed resolver in order and takes the first non-`undefined` answer, mirroring how `undefined` already means "no opinion" per BEH-EA-161's own resolver contract — neither of which this specification commits to today. Until one of those exists, an application composing more than one resolver for the same attribute or relation is responsible for either combining them into a single Layer itself before providing it, or ensuring no two installed plugins target the same attribute/relation name at all.
 
 _Previous: [BEH-EA-162](21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership) | Next: [BEH-EA-164](21-qadi-resolvers-obligations.md#beh-ea-164-decision-history-backed-by-audit-events)_
 
@@ -101,7 +101,7 @@ export const TermsHistory = Layer.effect(DecisionHistory, Effect.gen(function*()
 ```
 
 ```text
-REQUIREMENT: A `DecisionHistory` implementation backed by effect-auth's audit
+REQUIREMENT: A `DecisionHistory` implementation backed by awthaq's audit
              table MUST answer `hasActed` from durable event records, never
              from in-memory state; a query failure MUST map to
              `DecisionHistoryUnavailable`, not to `"NotActed"`.
@@ -114,7 +114,7 @@ _Previous: [BEH-EA-163](21-qadi-resolvers-obligations.md#beh-ea-163-fixed-graphs
 ## BEH-EA-165: The reauth obligation discharges from session freshness
 
 ```ts
-export const reauth = obligation("effect-auth/reauth", { maxAgeSeconds: 300 })
+export const reauth = obligation("awthaq/reauth", { maxAgeSeconds: 300 })
 export const canChangeEmail = obliged(reauth, hasPermission(permission("account", "update")))
 
 changeEmail: ({ payload }) => Users.use((u) => u.changeEmail(payload.email)).pipe(
@@ -130,7 +130,7 @@ REQUIREMENT: `ObligationHandlers.reauth` MUST compare the current session's
              independent of when it was last authenticated.
 ```
 
-`usage-qadi.md` §8 states the mechanism directly: the handler "reads `CurrentPrincipal`'s session, compares `authenticatedAt` to the obligation's `maxAgeSeconds`, and fails with a typed error the client maps to a 'confirm your password' screen." This is the step-up authentication pattern applied through qadi's obligation mechanism rather than as a bespoke check in the `changeEmail` handler — the handler declares the requirement (`obliged(reauth, ...)`) and effect-auth supplies the one discharge implementation every such requirement uses.
+`usage-qadi.md` §8 states the mechanism directly: the handler "reads `CurrentPrincipal`'s session, compares `authenticatedAt` to the obligation's `maxAgeSeconds`, and fails with a typed error the client maps to a 'confirm your password' screen." This is the step-up authentication pattern applied through qadi's obligation mechanism rather than as a bespoke check in the `changeEmail` handler — the handler declares the requirement (`obliged(reauth, ...)`) and awthaq supplies the one discharge implementation every such requirement uses.
 
 _Previous: [BEH-EA-164](21-qadi-resolvers-obligations.md#beh-ea-164-decision-history-backed-by-audit-events) | Next: [BEH-EA-166](21-qadi-resolvers-obligations.md#beh-ea-166-sql-pushdown-and-its-limit)_
 

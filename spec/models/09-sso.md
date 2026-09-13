@@ -7,7 +7,7 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Noted that the `Organization` dependency is itself only the non-normative MOD-EA-014 adoption record, so this plugin's dependency on it is presently unresolved/blocked (CCR-EA-002) |
 ---
@@ -62,7 +62,7 @@ behavior file, `Sso`'s own design cannot proceed past this row either.
 No worked example drafted yet. Neither `archive/design/usage-examples-v4.md` nor `archive/design/usage-qadi.md` carries a section for SSO as of this revision.
 
 ## What is missing
-No design beyond this row exists yet. There is no `SsoApi` contract, no connection model, no per-tenant resolution mechanism, and no decision on whether SSO wraps SAML and OIDC-based enterprise connections under one plugin or dispatches to the separate `Saml`/`OAuth` plugins underneath. See `research/03-auth-landscape.md` for the landscape context (Wave 3 "B2B money" framing, the WorkOS/Clerk/Logto pricing evidence) that justifies the Phase 3 placement; that file does not itself propose an effect-auth-specific design.
+No design beyond this row exists yet. There is no `SsoApi` contract, no connection model, no per-tenant resolution mechanism, and no decision on whether SSO wraps SAML and OIDC-based enterprise connections under one plugin or dispatches to the separate `Saml`/`OAuth` plugins underneath. See `research/03-auth-landscape.md` for the landscape context (Wave 3 "B2B money" framing, the WorkOS/Clerk/Logto pricing evidence) that justifies the Phase 3 placement; that file does not itself propose an awthaq-specific design.
 
 ## Verification
 None yet — no test exists.

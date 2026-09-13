@@ -4,7 +4,7 @@
 // `Ref`) and `layerSql` (a real, in-memory SQLite database via
 // `@effect/sql-sqlite-node`) — since `UsersShape` is the one thing callers
 // depend on and both `Layer`s are meant to satisfy it identically.
-import { Repositories } from "@effect-auth/sql";
+import { Repositories } from "@awthaq/sql";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";

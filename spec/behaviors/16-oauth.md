@@ -7,12 +7,12 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-015 callout to BEH-EA-125 (CCR-EA-002) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-121: PKCE S256 is structural, not optional
 
@@ -63,7 +63,7 @@ REQUIREMENT: When a provider callback's email matches an existing account that
              silently linking the accounts.
 ```
 
-Auth.js calls its opt-in flag `allowDangerousEmailAccountLinking` for a reason research/05-oauth-oidc.md documents directly: auto-linking by email is account-takeover-prone whenever any linked provider has weak email verification, and email at the provider can change without effect-auth ever finding out. Defaulting to explicit linking follows the stricter of the two major frameworks' stances; the typed error drives a "sign in, then link" UI flow instead of a silent account merge the user never asked for.
+Auth.js calls its opt-in flag `allowDangerousEmailAccountLinking` for a reason research/05-oauth-oidc.md documents directly: auto-linking by email is account-takeover-prone whenever any linked provider has weak email verification, and email at the provider can change without awthaq ever finding out. Defaulting to explicit linking follows the stricter of the two major frameworks' stances; the typed error drives a "sign in, then link" UI flow instead of a silent account merge the user never asked for.
 
 _Previous: [BEH-EA-122](16-oauth.md#beh-ea-122-flow-state-lives-server-side-in-verification) | Next: [BEH-EA-124](16-oauth.md#beh-ea-124-trusted-provider-auto-link-is-opt-in-per-provider)_
 
@@ -93,7 +93,7 @@ REQUIREMENT: An `Account` row MUST be keyed uniquely on `(provider, subject,
              issuer)`; email MUST NOT be used as, or substitute for, that key.
 ```
 
-Email is documented as an unreliable anchor across every provider effect-auth targets: Apple strips it after the first login, Entra ID's own docs forbid using `email`/`preferred_username` for authorization, and Facebook exposes no verification flag (research/05-oauth-oidc.md). `subject` — OIDC's `sub`, or a provider's declared immutable field — never gets reassigned by the provider the way an email address can be changed or reused, which is exactly the property a uniqueness constraint needs to hold across the account's lifetime.
+Email is documented as an unreliable anchor across every provider awthaq targets: Apple strips it after the first login, Entra ID's own docs forbid using `email`/`preferred_username` for authorization, and Facebook exposes no verification flag (research/05-oauth-oidc.md). `subject` — OIDC's `sub`, or a provider's declared immutable field — never gets reassigned by the provider the way an email address can be changed or reused, which is exactly the property a uniqueness constraint needs to hold across the account's lifetime.
 
 _Previous: [BEH-EA-124](16-oauth.md#beh-ea-124-trusted-provider-auto-link-is-opt-in-per-provider) | Next: [BEH-EA-126](16-oauth.md#beh-ea-126-provider-secrets-are-configredacted-inside-layers)_
 

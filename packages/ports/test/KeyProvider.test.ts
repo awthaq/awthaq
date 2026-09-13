@@ -24,7 +24,7 @@ describe("KeyProvider.layerEnv (ticket 17)", () => {
     }).pipe(
       Effect.provide(
         KeyProvider.layerEnv.pipe(
-          Layer.provide(envLayer({ EFFECT_AUTH_ENCRYPTION_KEY: VALID_KEY_B64 })),
+          Layer.provide(envLayer({ AWTHAQ_ENCRYPTION_KEY: VALID_KEY_B64 })),
         ),
       ),
     ),
@@ -42,8 +42,8 @@ describe("KeyProvider.layerEnv (ticket 17)", () => {
         KeyProvider.layerEnv.pipe(
           Layer.provide(
             envLayer({
-              EFFECT_AUTH_ENCRYPTION_KEY: VALID_KEY_B64,
-              EFFECT_AUTH_ENCRYPTION_KEY_ID: "test-kid-1",
+              AWTHAQ_ENCRYPTION_KEY: VALID_KEY_B64,
+              AWTHAQ_ENCRYPTION_KEY_ID: "test-kid-1",
             }),
           ),
         ),
@@ -60,13 +60,13 @@ describe("KeyProvider.layerEnv (ticket 17)", () => {
     }).pipe(
       Effect.provide(
         KeyProvider.layerEnv.pipe(
-          Layer.provide(envLayer({ EFFECT_AUTH_ENCRYPTION_KEY: VALID_KEY_B64 })),
+          Layer.provide(envLayer({ AWTHAQ_ENCRYPTION_KEY: VALID_KEY_B64 })),
         ),
       ),
     ),
   );
 
-  it.effect("a missing EFFECT_AUTH_ENCRYPTION_KEY surfaces as a ConfigError", () =>
+  it.effect("a missing AWTHAQ_ENCRYPTION_KEY surfaces as a ConfigError", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(
         Effect.provide(Effect.void, KeyProvider.layerEnv.pipe(Layer.provide(envLayer({})))),

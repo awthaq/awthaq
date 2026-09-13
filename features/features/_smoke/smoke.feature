@@ -1,4 +1,4 @@
-# Not part of the effect-auth specification — this feature exists only to
+# Not part of the awthaq specification — this feature exists only to
 # prove the @effect-cucumber/vitest pipeline (loadFeature, describeFeature,
 # tag filtering, watch triggers) is wired correctly. See spec/behaviors/ and
 # features/features/00-foundations/ onward for the real suite this

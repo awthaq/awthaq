@@ -3,10 +3,10 @@
 ## TL;DR
 
 - **OAuth 2.1 is still an IETF draft** as of 2026-09 (`draft-ietf-oauth-v2-1-16`, expires 2027-03; the WG milestone lists "Submit OAuth 2.1 to IESG" for Dec 2026). Design to 2.1 semantics (PKCE mandatory, implicit/ROPC removed, exact `redirect_uri` matching) but treat RFC 6749/7636/6750 + RFC 9700 as the normative stack; 9700 supersedes RFC 6819 and its guidance "is incorporated into OAuth 2.1". Live follow-ups: "Updates to OAuth 2.0 Security BCP" (July 2026) and the JWT BCP revision `rfc8725bis` — assume the security floor keeps rising.
-- **Arctic is deprecated.** Its author (pilcrowonpaper, the Lucia author — verified via his blog) deprecated the npm package (latest 3.7.0 still pulls ~828K weekly downloads) and wrote that OAuth 2.0 "isn't an ideal layer to abstract into a library; any library should target an abstraction one or two layers above it." effect-auth must own its client layer; Arctic's per-provider fact tables remain reference material, not a dependency.
-- **A new BCP landed mid-2026: RFC 10017, OAuth 2.0 for Browser-Based Apps** (BCP 212, Aug 2026, editors Parecki/Waite/De Ryck). It formalizes what better-auth/Auth.js already practice: JS apps should not hold OAuth tokens; cookie-session BFF is the robust default. This is directly load-bearing for effect-auth's default topology and Q87.
+- **Arctic is deprecated.** Its author (pilcrowonpaper, the Lucia author — verified via his blog) deprecated the npm package (latest 3.7.0 still pulls ~828K weekly downloads) and wrote that OAuth 2.0 "isn't an ideal layer to abstract into a library; any library should target an abstraction one or two layers above it." awthaq must own its client layer; Arctic's per-provider fact tables remain reference material, not a dependency.
+- **A new BCP landed mid-2026: RFC 10017, OAuth 2.0 for Browser-Based Apps** (BCP 212, Aug 2026, editors Parecki/Waite/De Ryck). It formalizes what better-auth/Auth.js already practice: JS apps should not hold OAuth tokens; cookie-session BFF is the robust default. This is directly load-bearing for awthaq's default topology and Q87.
 - **Ecosystem consolidation:** Auth.js (NextAuth) is now maintained by the Better Auth team (announced 2025-09); Better Auth itself joined Vercel. better-auth is now the dominant TS reference design; Auth.js's `OAuth2Config` (`issuer`/`wellKnown` + `authorization`/`token`/`userinfo`/`profile` + `checks: ["pkce"|"state"|"none"]`) remains the best-typed generic-provider shape to borrow.
-- **State/nonce storage:** the two proven designs are (a) an encrypted, short-TTL, `HttpOnly` cookie blob (Auth.js: state+PKCE verifier+nonce; better-auth `storeStateStrategy: "cookie"`) and (b) server-side verification storage with an opaque cookie handle (better-auth default `"database"`). effect-auth already has a purpose-scoped single-use Verification core (PRD Q46) — reuse it for flow state (`purpose: "oauth.flow"`), which gives single-use + TTL + replay protection by construction.
+- **State/nonce storage:** the two proven designs are (a) an encrypted, short-TTL, `HttpOnly` cookie blob (Auth.js: state+PKCE verifier+nonce; better-auth `storeStateStrategy: "cookie"`) and (b) server-side verification storage with an opaque cookie handle (better-auth default `"database"`). awthaq already has a purpose-scoped single-use Verification core (PRD Q46) — reuse it for flow state (`purpose: "oauth.flow"`), which gives single-use + TTL + replay protection by construction.
 - **Account linking splits the ecosystem:** Auth.js defaults auto-link **off** (`allowDangerousEmailAccountLinking`, opt-in, name says "dangerous"); Better Auth defaults implicit verified-email linking **on** (opt-out via `disableImplicitLinking`; `trustedProviders` links even without `email_verified`). Recommendation: default off, explicit `linkSocial` flow, opt-in auto-link per provider.
 - **Identity anchor is always `(providerId, subject)`** where subject = OIDC `sub` (stable, never reassign) or the provider's numeric id — never email (Apple strips it after first login; Entra ID explicitly forbids using email for authorization).
 - **Provider quirks are the real work:** Apple (no PKCE, ES256 JWT client secret, `form_post`, name/email only on first consent, no userinfo endpoint, nonce required for id-token binding); GitHub (private email ⇒ `null` on `/user`, must call `/user/emails` with `user:email` scope; OAuth App tokens never expire vs GitHub App 8h+6mo-refresh); Google (refresh tokens die after 7 days while consent screen is "Testing"); Entra ID (email untrustworthy; anchor on `oid`).
@@ -26,7 +26,7 @@
 
 - RFC 6749 (framework), RFC 6750 (bearer), RFC 7636 (PKCE): authorization-code flow, `code_verifier`/`code_challenge` (S256), `state`. ([rfc-editor.org/rfc/rfc6749](https://www.rfc-editor.org/rfc/rfc6749), [rfc7636](https://www.rfc-editor.org/rfc/rfc7636))
 - RFC 9700 (Jan 2025) supersedes RFC 6819: mandates PKCE for *all* clients, deprecates implicit + password grants, requires exact-string `redirect_uri` comparison (AS-side), requires clients to defend against mix-up attacks, requires refresh-token rotation for public clients. [rfc-editor.org/rfc/rfc9700](https://www.rfc-editor.org/rfc/rfc9700), [oauth.net summary](https://oauth.net/2/oauth-best-practice/), [WorkOS deep-dive](https://workos.com/blog/oauth-best-practices)
-- OAuth 2.1: active draft `draft-ietf-oauth-v2-1-16` (Sept 2026, expires 2027-03) — not an RFC yet; WG milestone targets IESG submission Dec 2026. Re-verify status before effect-auth 1.0. A follow-up "Updates to OAuth 2.0 Security BCP" draft is also circulating (July 2026). [datatracker draft](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/), [oauth.net/specs](https://oauth.net/specs/), [security-topics-update](https://datatracker.ietf.org/doc/draft-ietf-oauth-security-topics-update/)
+- OAuth 2.1: active draft `draft-ietf-oauth-v2-1-16` (Sept 2026, expires 2027-03) — not an RFC yet; WG milestone targets IESG submission Dec 2026. Re-verify status before awthaq 1.0. A follow-up "Updates to OAuth 2.0 Security BCP" draft is also circulating (July 2026). [datatracker draft](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/), [oauth.net/specs](https://oauth.net/specs/), [security-topics-update](https://datatracker.ietf.org/doc/draft-ietf-oauth-security-topics-update/)
 - OIDC Core 1.0 §3.1.3.7: when `nonce` is sent in the auth request, the AS MUST echo it into the `id_token`; clients validate iss/aud/exp/nonce against discovery's `issuer` and `jwks_uri`. [openid.net/connect-core](https://openid.net/specs/openid-connect-core-1_0.html#CodeFlowValidation)
 - OIDC Discovery / RFC 8414: `GET /.well-known/openid-configuration` (OIDC) or `.well-known/oauth-authorization-server` (RFC 8414); the returned `issuer` MUST match the expected value exactly — this exact-match rule is the first SSRF/impersonation control. [openid discovery](https://openid.net/specs/openid-connect-discovery-1_0.html), [rfc8414](https://www.rfc-editor.org/rfc/rfc8414)
 - RFC 9207: `iss` parameter on authorization responses — the standard mix-up countermeasure; validate it whenever the provider sends it. [datatracker.ietf.org/doc/rfc9207](https://datatracker.ietf.org/doc/rfc9207/)
@@ -41,11 +41,11 @@
 
 *Comparison of the four designs:*
 
-| Design | Provider surface | Flow/protocol handling | Quirk handling | Lesson for effect-auth |
+| Design | Provider surface | Flow/protocol handling | Quirk handling | Lesson for awthaq |
 | --- | --- | --- | --- | --- |
 | **Arctic** (deprecated) | One client class per provider (`Google`, `GitHub`, …), ~3 methods each | Raw OAuth2 code flow only; no session/linking/state ownership | Encoded in per-provider classes | Per-provider divergence is real — but model it as *data presets* over one core, not one hand-written class per provider |
 | **Auth.js `OAuth2Config`** | Single config type; OIDC via `wellKnown`/`issuer` or explicit endpoint fields; `profile()`/`account()` callbacks | `checks` array — default `["pkce"]`, `"state"` optional, `"none"` possible | Thin (`conform` flags, `customFetch`) | Best generic shape to borrow; drop the `"none"` escape hatch and make nonce/id-token validation structural for OIDC |
-| **better-auth social + Generic OAuth** | Built-in presets + config-driven generic (`discoveryUrl`/explicit endpoints, `accountSubject`, `tokenEndpointAuth`) | PKCE + state + nonce on by default; `pkce: false` opt-out for rejecting providers | Rich: documented per-provider email/refresh quirk table | Closest to target; effect-auth additionally moves flow state into core Verification and validates provider configs at `Auth.make()` time |
+| **better-auth social + Generic OAuth** | Built-in presets + config-driven generic (`discoveryUrl`/explicit endpoints, `accountSubject`, `tokenEndpointAuth`) | PKCE + state + nonce on by default; `pkce: false` opt-out for rejecting providers | Rich: documented per-provider email/refresh quirk table | Closest to target; awthaq additionally moves flow state into core Verification and validates provider configs at `Auth.make()` time |
 | **Keycloak / Ory Hydra (AS side)** | Client = `issuer + clientId + secret + redirect URIs` | Full OIDC discovery per realm/deployment | n/a — they *are* the provider | Compatibility target: generic-OIDC mode must work against both unmodified |
 
 *State/nonce storage:*
@@ -56,7 +56,7 @@
 
 *Callback URL handling:* derive the `redirect_uri` from the configured base URL (`${baseUrl}/auth/oauth/:provider/callback`), never from request input; validate the post-login destination (`callbackURL`) against the trusted-origin allowlist; send the exact pre-registered URI to the AS. better-auth defaults `/api/auth/callback/${provider}` and rejects reserved query keys (`state`, `code_challenge`, `redirect_uri`, …) in `additionalParams` with a 400 so a caller cannot corrupt flow correlation. [better-auth oauth](https://better-auth.com/docs/concepts/oauth), RFC 9700 exact-match requirement.
 
-*Proposed provider abstraction for effect-auth* (three layers, so quirks stay per-provider and the protocol core stays uniform — the Arctic lesson applied to Effect):
+*Proposed provider abstraction for awthaq* (three layers, so quirks stay per-provider and the protocol core stays uniform — the Arctic lesson applied to Effect):
 
 ```ts
 // 1. Declaration — static, validated at Auth.make() time (PRD §5.3)
@@ -67,7 +67,7 @@ interface OAuthProvider {
   readonly discoveryUrl?: string                       // or explicit endpoints:
   readonly endpoints?: Partial<OAuthEndpoints>
   readonly clientId: string
-  readonly clientSecret?: EffectAuthSecret             // optional ⇒ public client
+  readonly clientSecret?: AwthaqSecret             // optional ⇒ public client
   readonly tokenAuth?: TokenEndpointAuth               // basic | post | private_key_jwt | none
   readonly scopes: ReadonlyArray<string>
   readonly pkce: true                                  // structural `true`; quirks override
@@ -94,7 +94,7 @@ The `callback` service performs, in order: verify `state` (single-use fetch from
 
 **Recommendation:**
 
-1. Build the OAuth client in `@effect-auth/plugin-oauth` (no Arctic/jose dependency in core; use Effect `HttpClient` for transport and a small JWKS+JWS verifier, or `jose` if the crypto-inventory decision (Q89) prefers it).
+1. Build the OAuth client in `@awthaq/plugin-oauth` (no Arctic/jose dependency in core; use Effect `HttpClient` for transport and a small JWKS+JWS verifier, or `jose` if the crypto-inventory decision (Q89) prefers it).
 2. Generic OIDC (discovery + exact issuer match + JWKS cache with TTL + nonce always) is the *default* provider kind; Google/GitHub/Apple are shipped as thin quirk-preset factories over the same interface. OAuth 2.0-only providers (GitHub) run without id-token validation.
 3. PKCE S256 always (better-auth generic default; RFC 9700 mandate); state always single-use with ≤10-min TTL; `nonce` always for OIDC flows, bound into `id_token` validation. No `"none"` checks escape hatch.
 4. Store flow state in the core Verification store (purpose `oauth.flow`), keeping only an opaque `HttpOnly`/`SameSite=Lax`/`Secure` correlation cookie in the browser. This is better-auth's `"database"` mode generalized; it survives serverless multi-instance by default and gets single-use/replay semantics from Q46 machinery. Provide the cookie-only mode as an opt-in for DB-less deployments.
@@ -129,7 +129,7 @@ The `callback` service performs, in order: verify `state` (single-use fetch from
 
 **Evidence.**
 
-- PRD non-goals: effect-auth is not an "email/SMS provider" (§4); verification is core (§24: email verification, token verification, expiration, one-time usage); observability must redact tokens (§52). Plugins need a *capability*, not a vendor.
+- PRD non-goals: awthaq is not an "email/SMS provider" (§4); verification is core (§24: email verification, token verification, expiration, one-time usage); observability must redact tokens (§52). Plugins need a *capability*, not a vendor.
 - better-auth's shape: library generates the single-use `url` + `token` (TTL from `emailVerification.expiresIn`, default 3600s, stored in verification storage), the app supplies `sendVerificationEmail({ user, url, token })`; same callback pattern for reset password, change-email confirmation (sent to the *current* email), delete-account confirmation (the recommended path for OAuth users without passwords). Docs explicitly warn: "Avoid awaiting the email sending to prevent timing attacks. On serverless platforms, use `waitUntil`" — i.e., sends are fire-and-forget on request paths. [options/emailVerification](https://better-auth.com/docs/reference/options), [users-accounts](https://better-auth.com/docs/concepts/users-accounts)
 - No HTML templating lives in the library — the callback receives semantic inputs (`user`, `url`, `token`) and the app owns content. Templates are app/plugin code.
 - OAuth interaction: placeholder emails for providers without email (Apple after first login, Discord, Roblox) mean "Plugins that send mail (password reset, magic link, email verification, organization invites) cannot deliver to them"; better-auth's `requireEmailVerification` per social provider is opt-in and warns it will block every sign-in on providers with untrustworthy `email_verified`. [oauth docs](https://better-auth.com/docs/concepts/oauth)
@@ -158,7 +158,7 @@ The OAuth plugin consumes `Mailer` only in the verification-gated branch, so `Au
 
 **Evidence (attack class → real incident → control).**
 
-| Threat | Documented example | Control for effect-auth |
+| Threat | Documented example | Control for awthaq |
 | --- | --- | --- |
 | **SSRF via provider-controlled endpoints** | Keycloak `request_uri` unauthenticated SSRF + port scan (CVE-2020-10770); Amazon Cognito fetched attacker-set discovery endpoints (`token_endpoint: http://127.0.0.1:22`) enabling blind SSRF; Open WebUI fetched attacker-controlled avatar URLs post-OAuth (CVE-2026-54008) | Treat all provider URLs as config, never request data: discovery only from a configured `discoveryUrl`, `issuer` exact-match on the fetched document (OIDC Discovery §4.3), HTTPS-only + block link-local/loopback/private IP resolution for all provider fetches (token/userinfo/JWKS/discovery), fixed redirect limit, never fetch request-hostile content like avatar URLs server-side (store the URL, let the client load it). [Holtmann SSRF writeup](https://security.lauritz-holtmann.de/post/sso-security-ssrf/), [CVE-2026-54008](https://sec.co/vulnerabilities/cve-2026-54008) |
 | **Open redirect via post-login destination** | Twenty app: OAuth callback handler redirected to attacker URL while capturing codes (CVE-2026-82274); RFC 9700: "no open redirectors" for clients and ASes | `callbackURL` validated against `trustedOrigins`/relative-only allowlist *before* the redirect is issued; default destination = same-origin `/`; never echo `redirect_uri`/`next` query params unvalidated. [CVE-2026-82274](https://www.sentinelone.com/vulnerability-database/cve-2026-82274/), [WorkOS/RFC 9700 summary](https://workos.com/blog/oauth-best-practices) |
@@ -166,14 +166,14 @@ The OAuth plugin consumes `Mailer` only in the verification-gated branch, so `Au
 | **Mix-up attack** (multiple ASes, client confuses endpoints → code sent to attacker AS) | RFC 9700 requires defense; RFC 9207 `iss` is the standard countermeasure | Require/validate `iss` on authorization responses when present; per-provider redirect URIs (path embeds provider id); never share one callback across providers with different ASes without `iss` validation. [rfc9207](https://datatracker.ietf.org/doc/rfc9207/) |
 | **Token/ID-token validation failures** | alg confusion & missing claim checks are the recurring JWT pitfall class (RFC 8725 BCP, being updated by `draft-ietf-oauth-rfc8725bis`); PortSwigger catalogs code-substitution/leak vectors | Pin algorithms from discovery `id_token_signing_alg_values_supported` ∩ allowlist (ES256/RS256 — never `none`/HS unless configured symmetric); verify `iss` exact, `aud` (multi-client-id arrays supported), `exp`, `nonce`; fetch JWKS only from discovery `jwks_uri` (SSRF rules above) with cache + key-id fallback refresh. [rfc8725bis](https://datatracker.ietf.org/doc/draft-ietf-oauth-rfc8725bis/), [PortSwigger hidden OAuth attack vectors](https://portswigger.net/research/hidden-oauth-attack-vectors) |
 | **Code/token leakage** (Referer, logs, URL history) | RFC 9700 §4.1.3 (credential leakage via referrer); PRD §52 already requires redacting authorization codes | Codes/tokens redacted in spans/events (core redaction, PRD §52); never put codes in fragment URLs; store provider tokens hashed-or-encrypted at rest (opt-in like better-auth `encryptOAuthTokens`); access tokens never returned to the browser in cookie-session mode. [rfc9700](https://www.rfc-editor.org/rfc/rfc9700), [options reference](https://better-auth.com/docs/reference/options) |
-| **Browser token theft / SPA misuse** | RFC 10017 (Aug 2026, BCP 212) documents why browser-held tokens are fragile (XSS exfiltration, noisy token storage) and recommends BFF/cookie sessions for server-backed apps | Default topology is cookie-session BFF-style; provider OAuth tokens never cross to the browser; `@effect-auth/client` exposes session state, never provider tokens. [rfc10017](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-browser-based-apps) |
+| **Browser token theft / SPA misuse** | RFC 10017 (Aug 2026, BCP 212) documents why browser-held tokens are fragile (XSS exfiltration, noisy token storage) and recommends BFF/cookie sessions for server-backed apps | Default topology is cookie-session BFF-style; provider OAuth tokens never cross to the browser; `@awthaq/client` exposes session state, never provider tokens. [rfc10017](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-browser-based-apps) |
 | **Refresh-token lifecycle abuse** | RFC 9700 mandates rotation for public clients; Google refresh tokens expire after 7 days while the consent screen is "Testing"; GitHub OAuth App tokens never expire vs GitHub App 8h + 6mo refresh | Single-flight refresh per account (no stampede), persist every rotation, treat `invalid_grant` as terminal (`needs_reauth` on the account — never a retry loop), emit auth events on refresh failure. [rfc9700](https://www.rfc-editor.org/rfc/rfc9700), [GitHub refresh docs](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens), [Google Testing expiry](https://developers.google.com/google-ads/api/docs/get-started/common-errors) |
 
 Tests to land with the plugin (abuse-case suite, per Q94): callback with unknown/replayed/spoofed `state` → typed rejection; callback missing `iss` from an `iss`-validating provider → rejection; discovery doc with mismatched `issuer` or private-IP endpoints → provider registration fails closed; `callbackURL=http://evil.example` → fallback to safe destination; Apple `form_post` callback with reused code → single-use rejection; nonce mismatch on `id_token` → rejection; `mapProfile` output can never set `subject` (property test).
 
 Two cross-cutting rules: **refresh patterns** — refresh lazily on first provider-API need (not on callback), merge incrementally-granted scopes into the stored consent set on link (better-auth behavior), and classify token-endpoint 400s: `invalid_grant` is terminal, everything else transient with a bounded retry. **Enumeration/timing** — callback failures follow Q90 rules: unknown state, expired state, and nonce mismatch all redirect with the same generic `?error=oauth_callback` (operator detail goes to logs/events only, never to the URL), and the state handle lookup compares hashes in constant time.
 
-**Recommendation:** encode the table above as the plugin's threat-model section in docs, and gate every row with a contract test in `@effect-auth/test` so third-party providers must pass the same controls.
+**Recommendation:** encode the table above as the plugin's threat-model section in docs, and gate every row with a contract test in `@awthaq/test` so third-party providers must pass the same controls.
 
 **Confidence:** high (each control traces to an RFC requirement or a documented CVE; tests are deterministic by construction).
 
@@ -181,7 +181,7 @@ Two cross-cutting rules: **refresh patterns** — refresh lazily on first provid
 
 ## Technologies & libraries
 
-| Name | What it is | License | Maturity | Relevance to effect-auth |
+| Name | What it is | License | Maturity | Relevance to awthaq |
 | --- | --- | --- | --- | --- |
 | RFC 6749/6750/7636 | OAuth 2.0 framework, bearer usage, PKCE | IETF | Normative | Protocol baseline the client implements |
 | RFC 9700 | OAuth 2.0 Security BCP (Jan 2025) | IETF | Current BCP | Security defaults source-of-truth |
@@ -227,7 +227,7 @@ Two cross-cutting rules: **refresh patterns** — refresh lazily on first provid
 - **pilcrowonpaper** — Lucia/Arctic author; The Auth Book. [pilcrowonpaper.com](https://pilcrowonpaper.com/)
 - **Lauritz Holtmann** — OIDC implementation-security research (SSRF/state). [security.lauritz-holtmann.de](https://security.lauritz-holtmann.de/)
 
-## Recommended defaults for effect-auth
+## Recommended defaults for awthaq
 
 1. **Flow**: authorization-code + PKCE S256 only. No implicit, no ROPC, no token response mode. `state` always (≥128-bit random, single-use, 10-min TTL), `nonce` always for OIDC, validate RFC 9207 `iss` when present.
 2. **Provider model**: static declarative `OAuthProvider` values compiled into an `OAuthRegistry` service at `Auth.make()` (PRD §5.3); `genericOidc({ issuer })` is the default; Google/GitHub/Apple are quirk presets; one route pair `/auth/oauth/:provider` + `/auth/oauth/:provider/callback`.
@@ -241,13 +241,13 @@ Two cross-cutting rules: **refresh patterns** — refresh lazily on first provid
 10. **Quirks as documented presets**: Apple (no PKCE, ES256 JWT client secret ≤6mo, `form_post`, persist name/email from first consent, nonce echo required); GitHub (`/user/emails` for private addresses, token-expiry differences OAuth App vs GitHub App); Google (Testing-mode 7-day refresh expiry, `hd`, `prompt`), Entra (`oid` anchor, untrusted email). Each preset links its doc page.
 11. **Redaction**: authorization codes, access/refresh/id tokens redacted by the core observability layer (PRD §52); property-test that no provider token reaches a span/event.
 12. **Mailer dependency**: `requireEmailVerification` per provider requires the `Mailer` capability at compile time; sends never block or fail the auth path (Q48).
-13. **Deployment topology (SPA/BFF)**: cookie-session BFF is the enforced default per RFC 10017; provider OAuth tokens are server-side-only in every mode; bearer mode (Q82) applies to effect-auth's own API tokens, not provider tokens.
+13. **Deployment topology (SPA/BFF)**: cookie-session BFF is the enforced default per RFC 10017; provider OAuth tokens are server-side-only in every mode; bearer mode (Q82) applies to awthaq's own API tokens, not provider tokens.
 
 ## Open questions for the user
 
 1. **Default account-linking posture** — (a) default off + explicit link flow (recommended, Auth.js stance); (b) default on for verified emails (better-auth stance, smoother OAuth-only onboarding); (c) default on but only for providers on a curated "verified-email trustworthy" list.
 2. **Silent account creation** — (a) create user on first OAuth sign-in (ecosystem norm); (b) require explicit signup step (`requestSignUp`) always; (c) config default a with plugin-level opt-out.
-3. **JWT/JWKS implementation** — (a) depend on `jose` inside the oauth plugin; (b) implement minimal ES256/RS256 JWS verification in `@effect-auth/crypto` (Q89 alignment); (c) wrap `jose` behind an internal `IdTokenVerifier` capability so both are swappable.
+3. **JWT/JWKS implementation** — (a) depend on `jose` inside the oauth plugin; (b) implement minimal ES256/RS256 JWS verification in `@awthaq/crypto` (Q89 alignment); (c) wrap `jose` behind an internal `IdTokenVerifier` capability so both are swappable.
 4. **Token-at-rest encryption default** — (a) plaintext with documented `databaseHooks`-style escape hatch (better-auth default); (b) encrypt-by-default using the core secret (simpler for users, couples to key rotation).
 5. **Flow-state store** — (a) always core Verification (recommended); (b) cookie-first with Verification fallback; (c) make it a strategy interface like better-auth's `storeStateStrategy` from day one.
 

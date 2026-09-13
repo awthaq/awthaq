@@ -6,10 +6,10 @@
 // evaluated through the real `evaluate`/`hasRelationship` API from
 // `@qadi/core`, mirroring `usage-qadi.md` §7's own worked example
 // (`hasRelationship("member", { depth: 2 })` inside a real policy).
-import { Api } from "@effect-auth/api";
-import { AuthEvents, Sessions, Users } from "@effect-auth/core";
-import { Mailer } from "@effect-auth/ports";
-import { Authentication } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Mailer } from "@awthaq/ports";
+import { Authentication } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import {

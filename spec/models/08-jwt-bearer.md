@@ -7,7 +7,7 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 ---
@@ -31,7 +31,7 @@ Native mobile/desktop clients and machine-to-machine callers that cannot rely on
 export class JwtConfig extends Context.Reference<{
   readonly alg: "EdDSA" | "ES256"
   readonly ttl: Duration.Duration
-}>()("effect-auth/jwt/Config", {
+}>()("awthaq/jwt/Config", {
   defaultValue: () => ({ alg: "EdDSA", ttl: Duration.minutes(15) })
 }) {}
 

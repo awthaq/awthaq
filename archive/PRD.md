@@ -18,7 +18,7 @@ What changed from v1, in one paragraph: the target is Effect v4; plugins are `Co
 
 ### 1.1 Product name
 
-**Effect Native Auth**. Working npm scope `@effect-auth/*`. The scope is already taken on npm by an abandoned alpha (research 01); a rename is a pending decision and every example below treats the scope as a placeholder.
+**Effect Native Auth**. Working npm scope `@effect-auth/*`. The scope is already taken on npm by an abandoned alpha (research 01); a rename is a pending decision and every example below treats the scope as a placeholder. *(Resolved, post-archival: renamed to Awthaq, npm scope `@awthaq/*`.)*
 
 ### 1.2 Vision
 
@@ -28,7 +28,7 @@ A TypeScript authentication runtime built natively on Effect v4, whose different
 
 > Authentication capabilities are Effect services. Features are plugins that are themselves services. Installing a plugin is providing a Layer. Whatever the Layer still requires is what the application still has to provide, and the type checker says so.
 
-Authorization is a separate concern with its own library: **qadi** (`@qadi/*`, by the same author). effect-auth resolves *who is asking*; qadi decides *what they may do and what they may see*.
+Authorization is a separate concern with its own library: **qadi** (`@qadi/*`, by the same author). awthaq resolves *who is asking*; qadi decides *what they may do and what they may see*.
 
 ---
 
@@ -84,7 +84,7 @@ Effect application developers (primary), plugin authors, adapter and framework-i
 | **Subject** | qadi's `AuthSubject` derived from a Principal by the `SubjectResolver` slot: id, roles, permissions, attributes. |
 | **User / Account / Session / VerificationToken** | `Model.Class` entities. Sessions store only `SHA-256(secret)`; accounts key on `(provider, subject)`. |
 | **Plugin** | A `Context.Service` class with static `contract`, `tables`, `migrations` and a `layer` that provides the plugin and its handler groups. |
-| **Port** | A service a plugin requires and the application provides: `Crypto`, `KeyValueStore`, `RateLimiter`, `SqlClient` (from Effect), `PasswordHasher`, `Mailer`, `WebAuthn` (from `@effect-auth/ports`). |
+| **Port** | A service a plugin requires and the application provides: `Crypto`, `KeyValueStore`, `RateLimiter`, `SqlClient` (from Effect), `PasswordHasher`, `Mailer`, `WebAuthn` (from `@awthaq/ports`). |
 | **Slot** | A `Context.Reference` with a fail-closed default that at most one plugin may override (`SubjectResolver`, `SessionViewExtension`). |
 | **Hook point** | A service holding a registry cell; veto points may abort or amend, observe points are fail-isolated. |
 | **Registry** | An aggregating service filled by `Layer.effectDiscard` writes: hook taps, event subscribers, rate-limit rules, session claims. |
@@ -95,7 +95,7 @@ Effect application developers (primary), plugin authors, adapter and framework-i
 
 ```
 7  Composition     Auth.make · the application's Layer.provide stack
-6  Authorization   @qadi/core · @qadi/http · @qadi/react · @effect-auth/qadi bridges
+6  Authorization   @qadi/core · @qadi/http · @qadi/react · @awthaq/qadi bridges
 5  HTTP            HttpApiBuilder groups · middleware implementations · HttpRouter
 4  Domain          Users · Sessions · Accounts · Verification · Authentication · hook points · events
 3  Persistence     Model.Class · SqlModel repositories · Migrator records
@@ -109,16 +109,16 @@ Rules: a stratum depends only on strata below it; each service exposes `layerNoD
 
 | Stratum | Package | Contents |
 |---|---|---|
-| 1 | `@effect-auth/api` | `Principal`, `SessionView`, `SubjectDto`, errors, `Authentication` and `CsrfProtection` middleware definitions, core groups |
-| 1 | `@effect-auth/<plugin>/api` | each plugin's groups, schemas, errors, contract `HttpApi` |
-| 2 | `@effect-auth/ports` | `PasswordHasher`, `Mailer`, `WebAuthn` with `layer`, `layerNoop`, `layerMemory` |
-| 3 | `@effect-auth/sql` | models, repositories, migration records, memory twins |
-| 4 | `@effect-auth/core` | domain services, hook points, `AuthEvents`, config references, slots, `Auth` namespace |
-| 5 | `@effect-auth/server` | middleware implementations, core handlers, `AuthHttp` |
-| 6 | `@effect-auth/qadi` | `AuthorizedSubject` middleware, `SubjectExtractor` layer, obligation handlers |
-| client | `@effect-auth/client`, `@effect-auth/react`, `@effect-auth/next` | `AtomHttpApi` client, session atom, provider glue, framework adapters |
-| tools | `@effect-auth/test`, `@effect-auth/cli` | `TestAuth`, contract tests, `doctor`, migrations, `openapi` |
-| plugins | `@effect-auth/password`, `oauth`, `passkey`, `magic-link`, `two-factor`, `organization`, `roles`, `api-key`, `admin` | one class each |
+| 1 | `@awthaq/api` | `Principal`, `SessionView`, `SubjectDto`, errors, `Authentication` and `CsrfProtection` middleware definitions, core groups |
+| 1 | `@awthaq/<plugin>/api` | each plugin's groups, schemas, errors, contract `HttpApi` |
+| 2 | `@awthaq/ports` | `PasswordHasher`, `Mailer`, `WebAuthn` with `layer`, `layerNoop`, `layerMemory` |
+| 3 | `@awthaq/sql` | models, repositories, migration records, memory twins |
+| 4 | `@awthaq/core` | domain services, hook points, `AuthEvents`, config references, slots, `Auth` namespace |
+| 5 | `@awthaq/server` | middleware implementations, core handlers, `AuthHttp` |
+| 6 | `@awthaq/qadi` | `AuthorizedSubject` middleware, `SubjectExtractor` layer, obligation handlers |
+| client | `@awthaq/client`, `@awthaq/react`, `@awthaq/next` | `AtomHttpApi` client, session atom, provider glue, framework adapters |
+| tools | `@awthaq/test`, `@awthaq/cli` | `TestAuth`, contract tests, `doctor`, migrations, `openapi` |
+| plugins | `@awthaq/password`, `oauth`, `passkey`, `magic-link`, `two-factor`, `organization`, `roles`, `api-key`, `admin` | one class each |
 
 ---
 
@@ -209,9 +209,9 @@ export const auth = Auth.make([Password, Passkey, OAuth, Organization, Roles])
 | `Crypto` | `effect/Crypto` | platform layer |
 | `KeyValueStore`, `RateLimiter` | `effect/unstable/persistence` | memory, SQL, Redis stores |
 | `SqlClient` | `effect/unstable/sql` | `@effect/sql-pg`, `@effect/sql-sqlite-node` |
-| `PasswordHasher` | `@effect-auth/ports` | `layerArgon2id`; `layerScrypt` for WebCrypto-only runtimes |
-| `Mailer` | `@effect-auth/ports` | `layerNoop` (fails loudly in production), `layerMemory` |
-| `WebAuthn` | `@effect-auth/ports` | `layerSimpleWebAuthn` |
+| `PasswordHasher` | `@awthaq/ports` | `layerArgon2id`; `layerScrypt` for WebCrypto-only runtimes |
+| `Mailer` | `@awthaq/ports` | `layerNoop` (fails loudly in production), `layerMemory` |
+| `WebAuthn` | `@awthaq/ports` | `layerSimpleWebAuthn` |
 
 ---
 
@@ -246,15 +246,15 @@ export const auth = Auth.make([Password, Passkey, OAuth, Organization, Roles])
 
 ## 15. Authorization (stratum 6): qadi
 
-effect-auth ships no permission model, no policy language and no authorizer. It ships the bridge to qadi.
+awthaq ships no permission model, no policy language and no authorizer. It ships the bridge to qadi.
 
 - **`SubjectResolver` slot.** Default: identity only. The `roles` plugin overrides it with roles from its table flattened through a qadi role DAG; API-key scopes become permissions; impersonation is `attributes.actingAs`.
 - **Path A**: `AuthorizedSubject` middleware requires `CurrentPrincipal` and provides qadi's `CurrentSubject`; handlers use `guard`, `enforce`, `enforceProjected`, `filter`, `decide`.
-- **Path B**: `SubjectExtractor` layer runs effect-auth's session resolution on the raw request so qadi's `RequirePermission` enforces `requiresPermission` annotations; unannotated endpoints are refused; the permission registry route lists guarded paths behind a policy.
+- **Path B**: `SubjectExtractor` layer runs awthaq's session resolution on the raw request so qadi's `RequirePermission` enforces `requiresPermission` annotations; unannotated endpoints are refused; the permission registry route lists guarded paths behind a policy.
 - **Resolvers from auth data**: attributes from the user table, relationships from organization membership (`Organization.relationships`), decision history from audit events.
 - **Obligations**: `ObligationHandlers.reauth` discharges a step-up obligation from session freshness.
 - **SQL pushdown**: `toPredicate` plus `@qadi/predicate-sql` inside `SqlClient` queries.
-- **Audit**: `DecisionSink` composed with the effect-auth audit trail; guarded decision stream for devtools.
+- **Audit**: `DecisionSink` composed with the awthaq audit trail; guarded decision stream for devtools.
 - **Rules**: failure is not denial (502 vs 403); absence is refusal; decide against attributes, not content; a stale decision is not a decision; one evaluation path.
 
 ---
@@ -314,7 +314,7 @@ Three audiences. Application developer: getting started, sessions, sign-in metho
 
 ## 21. CLI
 
-`effect-auth doctor` (link, config, insecure defaults), `plugin list --graph`, `routes`, `schema`, `migration status|apply`, `openapi`, `seed admin`, `import --from better-auth|authjs|lucia`. The CLI reads `Auth.make`'s derived manifest; it never runs the application.
+`awthaq doctor` (link, config, insecure defaults), `plugin list --graph`, `routes`, `schema`, `migration status|apply`, `openapi`, `seed admin`, `import --from better-auth|authjs|lucia`. The CLI reads `Auth.make`'s derived manifest; it never runs the application.
 
 ---
 
@@ -330,7 +330,7 @@ Three audiences. Application developer: getting started, sessions, sign-in metho
 | ADR-006 | Runtime configuration separate from installation (kept; realized as `Context.Reference` overrides and `LayerMap`) |
 | ADR-007 | **Target Effect v4.** Stability of the rc line is the project's own risk to carry; the substrate (multi-scheme middleware, `addHttpApi`, `Model`, `AtomHttpApi`, `LayerMap`, `LayerRef`) is what makes the design small. |
 | ADR-008 | **A plugin is a `Context.Service` class** with static contract, tables, migrations and a typed Layer; `Auth.make` validates the tuple pairwise. |
-| ADR-009 | **Authorization is delegated to qadi.** effect-auth ships the `SubjectResolver` slot and two bridges; it defines no permissions, policies or authorizer. |
+| ADR-009 | **Authorization is delegated to qadi.** awthaq ships the `SubjectResolver` slot and two bridges; it defines no permissions, policies or authorizer. |
 | ADR-010 | **Plugins require ports and never provide them.** Port implementations are Layers the application provides once. |
 | ADR-011 | **Configuration is a service with a default** (`Context.Reference`), overridden by Layers. |
 | ADR-012 | **Slots are exclusive, registries aggregate.** The type of a contribution says whether it can conflict. |

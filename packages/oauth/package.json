@@ -1,5 +1,5 @@
 {
-  "name": "@effect-auth/oauth",
+  "name": "@awthaq/oauth",
   "version": "0.1.0",
   "private": true,
   "description": "OAuth providers as Layers, PKCE, explicit account linking.",
@@ -31,10 +31,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
-    "@effect-auth/core": "workspace:*",
-    "@effect-auth/ports": "workspace:*",
-    "@effect-auth/server": "workspace:*",
+    "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
+    "@awthaq/ports": "workspace:*",
+    "@awthaq/server": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

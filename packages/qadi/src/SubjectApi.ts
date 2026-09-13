@@ -1,24 +1,24 @@
-// @effect-auth/qadi — SubjectApi
+// @awthaq/qadi — SubjectApi
 //
-// The server half of `@effect-auth/api`'s `SubjectContract` (BEH-EA-026's
-// `SubjectDto`) — added specifically so `@effect-auth/react`'s `Providers`
+// The server half of `@awthaq/api`'s `SubjectContract` (BEH-EA-026's
+// `SubjectDto`) — added specifically so `@awthaq/react`'s `Providers`
 // can satisfy BEH-EA-179 ("derive qadi's `subject` prop from `sessionAtom`'s
 // current value, not from a second, independently fetched source") for
 // real, rather than deriving `subject` from data that does not exist (see
-// `@effect-auth/api`'s `Subject.ts` header comment for the full reasoning,
+// `@awthaq/api`'s `Subject.ts` header comment for the full reasoning,
 // and for why `SessionView`'s single combined struct isn't what this is).
 //
 // **Why the middleware attachment and the handler live here, not in
-// `@effect-auth/api`/`@effect-auth/server`**: those two strata sit *below*
-// `@effect-auth/qadi` (`spec/overview.md`) — neither can depend on
+// `@awthaq/api`/`@awthaq/server`**: those two strata sit *below*
+// `@awthaq/qadi` (`spec/overview.md`) — neither can depend on
 // `SubjectResolver`/`AuthSubject`/`CurrentSubject`/`AuthorizedSubject` at
-// all without inverting that dependency. `@effect-auth/api`'s `Subject.ts`
+// all without inverting that dependency. `@awthaq/api`'s `Subject.ts`
 // therefore declares only the plain, middleware-free group/schema (so a
 // browser client can depend on it without pulling in qadi's much heavier,
 // server-only dependency graph — see that file's own header comment); this
 // module attaches the real `AuthorizedSubject`/`OptionalAuthentication`
 // middleware to that same base group and builds the actual served `HttpApi`
-// and its handler, the one place both halves (a `@effect-auth/server`
+// and its handler, the one place both halves (a `@awthaq/server`
 // dependency, and qadi's own resolver machinery) are available together.
 //
 // Fixed and standalone, exactly like `AuthCoreApi` — not yet folded into
@@ -29,7 +29,7 @@
 // real, well-formed `AuthSubject` too (qadi's own `anonymous` value,
 // `SubjectResolver.ts`'s `resolveIdentityOnly`) — this endpoint should
 // resolve for every caller, logged in or not, never 401.
-import { Api, SubjectContract } from "@effect-auth/api";
+import { Api, SubjectContract } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi";
 import type { AuthSubject } from "@qadi/core";

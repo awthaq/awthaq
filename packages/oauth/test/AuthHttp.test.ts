@@ -6,13 +6,13 @@
 // actually answering a `302` with a `Location` header and the correlation
 // cookie set, `callback` actually setting the session cookie on success,
 // and `httpApiStatus` landing on the real response status for each
-// declared error. `@effect-auth/password`'s own `AuthHttp.test.ts` caught a
+// declared error. `@awthaq/password`'s own `AuthHttp.test.ts` caught a
 // real bug (`Schema.Union` collapsing per-member `httpApiStatus`) that its
 // domain-level tests could not — this file exists for the same reason,
 // against `OAuthApi.ts`'s own array-form `error` declarations.
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@effect-auth/core";
-import { Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@effect-auth/ports";
-import { Authentication, AuthHttp } from "@effect-auth/server";
+import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { Authentication, AuthHttp } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
@@ -38,7 +38,7 @@ const EncryptionLive = Encryption.layer.pipe(
       Layer.provide(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
-            env: { EFFECT_AUTH_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
           }),
         ),
       ),
@@ -125,7 +125,7 @@ const AppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.jso
  * A real, enforcing limiter — every other test in this file uses
  * `RateLimiter.layerPermissive` via `AppLayer`, deliberately, so this is
  * the one dedicated layer that opts back into real enforcement, mirroring
- * `@effect-auth/password`'s own dedicated throttle test.
+ * `@awthaq/password`'s own dedicated throttle test.
  */
 const ThrottledAppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.json" }).pipe(
   Layer.provide(OAuth.OAuth.layer),

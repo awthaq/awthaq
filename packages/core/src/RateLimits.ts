@@ -1,10 +1,10 @@
-// @effect-auth/core — RateLimits
+// @awthaq/core — RateLimits
 //
 // spec/behaviors/14-rate-limiting.md, BEH-EA-107/108/110/111 — the
 // domain-stratum half of rate limiting: which of a plugin's own endpoints
 // it may throttle, and how those rules are aggregated and ordered for
 // introspection. The port itself (`RateLimiter`, `RateLimited`, the
-// fixed-window memory store) lives in `@effect-auth/ports`'s
+// fixed-window memory store) lives in `@awthaq/ports`'s
 // `RateLimiter.ts` — see that module's own header comment for why the two
 // halves are split this way.
 //
@@ -41,8 +41,8 @@
 // documents for tap ordering, for the identical reason (a plugin's
 // topological position isn't known at the point its own `layer` calls
 // `rule`) — this module orders by declared `order` then registration
-// sequence instead. A real `effect-auth plugin list --graph` CLI command
-// (BEH-EA-111's own example) is `@effect-auth/cli`'s job, not built yet;
+// sequence instead. A real `awthaq plugin list --graph` CLI command
+// (BEH-EA-111's own example) is `@awthaq/cli`'s job, not built yet;
 // `registered` is this module's own introspection primitive for it to call.
 
 import * as Context from "effect/Context";
@@ -94,7 +94,7 @@ export interface RateLimitsRegistryShape {
 export class RateLimitsRegistry extends Context.Service<
   RateLimitsRegistry,
   RateLimitsRegistryShape
->()("effect-auth/core/RateLimitsRegistry") {}
+>()("awthaq/core/RateLimitsRegistry") {}
 
 export const layer: Layer.Layer<RateLimitsRegistry> = Layer.effect(
   RateLimitsRegistry,
@@ -109,7 +109,7 @@ export const layer: Layer.Layer<RateLimitsRegistry> = Layer.effect(
             new RateLimitScopeViolation({
               plugin: owner.id,
               group: input.group,
-              message: `effect-auth: plugin "${owner.id}" cannot rate-limit group "${input.group}", which is not one of its own contract groups`,
+              message: `awthaq: plugin "${owner.id}" cannot rate-limit group "${input.group}", which is not one of its own contract groups`,
             }),
           );
         }
@@ -117,7 +117,7 @@ export const layer: Layer.Layer<RateLimitsRegistry> = Layer.effect(
           return yield* Effect.die(
             new RateLimitsFrozen({
               message:
-                "effect-auth: rate-limit rules are frozen once read (e.g. by introspection) — every rule must be registered before that point",
+                "awthaq: rate-limit rules are frozen once read (e.g. by introspection) — every rule must be registered before that point",
             }),
           );
         }

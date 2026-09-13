@@ -8,7 +8,7 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Accepted — design; implementation deferred |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 
@@ -22,17 +22,17 @@ As of the research pass behind this decision (`research/01-effect-ecosystem.md`,
 
 ## Decision
 
-effect-auth targets **Effect v4** as its foundation, starting from the rc line, not stable v3. This is stated without hedging: the rc/pre-stable status of v4 is a known, accepted fact, and the decision to build on it anyway is **the project owner's own risk to carry**, not a decision the project is uncertain about or planning to revisit if v4 takes longer to stabilize than announced. The PRD states this directly: "Stability of the rc line is the project's own risk to carry; the substrate ... is what makes the design small" (PRD §22, ADR-007). This is a deliberate trade-off, made with full knowledge of the alternative (build on stable v3, migrate later), and rejected because building the plugin architecture on v3 first would mean building it twice.
+awthaq targets **Effect v4** as its foundation, starting from the rc line, not stable v3. This is stated without hedging: the rc/pre-stable status of v4 is a known, accepted fact, and the decision to build on it anyway is **the project owner's own risk to carry**, not a decision the project is uncertain about or planning to revisit if v4 takes longer to stabilize than announced. The PRD states this directly: "Stability of the rc line is the project's own risk to carry; the substrate ... is what makes the design small" (PRD §22, ADR-007). This is a deliberate trade-off, made with full knowledge of the alternative (build on stable v3, migrate later), and rejected because building the plugin architecture on v3 first would mean building it twice.
 
 ## Alternatives considered
 
-**Target stable Effect v3 (`^3.22`) for v1, tracking v4 via nightly CI only** — the posture `research/01-effect-ecosystem.md` itself recommends from a conservative-risk standpoint, and the more common choice for a production library that cannot ask its users to depend on a pre-1.0 release candidate. This was considered and rejected for effect-auth specifically because the plugin model's core mechanism — reading plugin identity and requirements off `Context.Service`/Layer type extractors (ADR-EA-002) — depends on v4-line context system changes ("the context system was rebuilt as `ServiceMap` then renamed back to `Context`," research/01-effect-ecosystem.md), and because `HttpApi`'s v3 form lacks streaming and carries "a known middleware-skipping bug class (#6121)" that the v4 beta/rc line addresses. Building against v3 would produce a materially different, more complex plugin system now, which would then need to be redesigned around v4's simplifications once it stabilizes — the "build it twice" cost the project chose to avoid.
+**Target stable Effect v3 (`^3.22`) for v1, tracking v4 via nightly CI only** — the posture `research/01-effect-ecosystem.md` itself recommends from a conservative-risk standpoint, and the more common choice for a production library that cannot ask its users to depend on a pre-1.0 release candidate. This was considered and rejected for awthaq specifically because the plugin model's core mechanism — reading plugin identity and requirements off `Context.Service`/Layer type extractors (ADR-EA-002) — depends on v4-line context system changes ("the context system was rebuilt as `ServiceMap` then renamed back to `Context`," research/01-effect-ecosystem.md), and because `HttpApi`'s v3 form lacks streaming and carries "a known middleware-skipping bug class (#6121)" that the v4 beta/rc line addresses. Building against v3 would produce a materially different, more complex plugin system now, which would then need to be redesigned around v4's simplifications once it stabilizes — the "build it twice" cost the project chose to avoid.
 
 ## Consequences
 
-**Positive**: The plugin design is as small as PRD §22 claims specifically because it leans on v4-only primitives; effect-auth avoids building interim workarounds for a context/service model that is about to be superseded, and gets a smaller runtime footprint (~20 kB minimal bundle vs. ~70 kB) and a rewritten, faster fiber runtime for free by virtue of building on v4 from the start.
+**Positive**: The plugin design is as small as PRD §22 claims specifically because it leans on v4-only primitives; awthaq avoids building interim workarounds for a context/service model that is about to be superseded, and gets a smaller runtime footprint (~20 kB minimal bundle vs. ~70 kB) and a rewritten, faster fiber runtime for free by virtue of building on v4 from the start.
 
-**Negative**: effect-auth ships depending on a release candidate with "no more broad breaking changes planned" but not yet a stable release; users of effect-auth inherit that same risk one level removed — an effect-auth v1 release built on `effect@rc` cannot itself claim the stability guarantees a library built on a stable dependency would carry, and any late-breaking change in the v4 rc→stable transition becomes effect-auth's problem to absorb.
+**Negative**: awthaq ships depending on a release candidate with "no more broad breaking changes planned" but not yet a stable release; users of awthaq inherit that same risk one level removed — an awthaq v1 release built on `effect@rc` cannot itself claim the stability guarantees a library built on a stable dependency would carry, and any late-breaking change in the v4 rc→stable transition becomes awthaq's problem to absorb.
 
 **Trade-off accepted**: The project knowingly accepts pre-1.0 dependency risk on its single most foundational dependency, in exchange for a plugin architecture that is simpler and more correct than anything achievable on stable v3 today. This is not a hedge or a placeholder decision — it is the deliberate, accepted cost of building the design the project actually wants rather than an interim design that would need to be discarded when v4 ships.
 

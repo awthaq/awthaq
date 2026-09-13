@@ -1,6 +1,6 @@
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-065 through BEH-EA-072.
-import { Sessions, Users } from "@effect-auth/core";
-import { Api } from "@effect-auth/api";
+import { Sessions, Users } from "@awthaq/core";
+import { Api } from "@awthaq/api";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as FileSystem from "effect/FileSystem";
@@ -208,7 +208,7 @@ describe("Authentication", () => {
   // them override it, and all pass unchanged). This is the one test
   // proving a tapped override is actually consulted, with the correctly-
   // resolved principal, and that its result is what the request ultimately
-  // returns — the mechanism `@effect-auth/jwt` builds on, exercised here
+  // returns — the mechanism `@awthaq/jwt` builds on, exercised here
   // with no knowledge of that plugin at all.
   it.effect("a tapped PostAuthResponseHook is consulted with the resolved principal", () => {
     const seen = Effect.runSync(Ref.make<Option.Option<string>>(Option.none()));
@@ -249,7 +249,7 @@ describe("Authentication", () => {
   // `OptionalAuthenticationLive`'s `bearer` branch falls back to on a
   // missing/invalid credential is a *recovery* from failure, not a success,
   // and must never reach the hook (an unauthenticated caller must never be
-  // handed a decorated response, e.g. a `@effect-auth/jwt`-minted token
+  // handed a decorated response, e.g. a `@awthaq/jwt`-minted token
   // asserting "anonymous" identity).
   it.effect("a tapped PostAuthResponseHook is NOT consulted for the anonymous fallback", () => {
     const seen = Effect.runSync(Ref.make<Option.Option<string>>(Option.none()));

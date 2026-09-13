@@ -1,4 +1,4 @@
-// @effect-auth/api — Session
+// @awthaq/api — Session
 //
 // spec/behaviors/04-contract-stratum.md, BEH-EA-031.
 //
@@ -7,13 +7,13 @@
 // to exist at all. Not yet folded into `Auth.make`'s composed `api`
 // (`Auth.ts`'s own header comment tracks that as separate, later work);
 // this is the standalone contract, wired to real handlers in
-// `@effect-auth/server/src/Session.ts`.
+// `@awthaq/server/src/Session.ts`.
 
 import * as Schema from "effect/Schema";
 import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
 import { Authentication } from "./Api.ts";
 
-/** One row of `list` — the wire shape of `@effect-auth/core`'s `SessionListItem`. */
+/** One row of `list` — the wire shape of `@awthaq/core`'s `SessionListItem`. */
 export class SessionDto extends Schema.Class<SessionDto>("SessionDto")({
   id: Schema.String,
   createdAt: Schema.String,

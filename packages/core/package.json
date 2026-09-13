@@ -1,5 +1,5 @@
 {
-  "name": "@effect-auth/core",
+  "name": "@awthaq/core",
   "version": "0.1.0",
   "private": true,
   "description": "Domain services, hook points, AuthEvents, config references, slots, the Auth namespace — the plugin contract and Auth.make composition live here.",
@@ -31,8 +31,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/ports": "workspace:*",
-    "@effect-auth/sql": "workspace:*",
+    "@awthaq/ports": "workspace:*",
+    "@awthaq/sql": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

@@ -3,8 +3,8 @@
 // The same contract suite runs against both `Layer`s — `layerMemory` (a
 // `Ref`) and `layerSql` (a real, in-memory SQLite database via
 // `@effect/sql-sqlite-node`).
-import { Encryption, KeyProvider } from "@effect-auth/ports";
-import { Repositories } from "@effect-auth/sql";
+import { Encryption, KeyProvider } from "@awthaq/ports";
+import { Repositories } from "@awthaq/sql";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";
@@ -30,7 +30,7 @@ const EncryptionLive = Encryption.layer.pipe(
       Layer.provide(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
-            env: { EFFECT_AUTH_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
           }),
         ),
       ),

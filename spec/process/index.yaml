@@ -1,5 +1,5 @@
 kind: process
-package: effect-auth
+package: awthaq
 infix: PROC
 entries:
   - id: "EFAUTH-PROC-01"

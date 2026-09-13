@@ -1,17 +1,17 @@
-// @effect-auth/admin — ImpersonationRecords
+// @awthaq/admin — ImpersonationRecords
 //
 // spec/behaviors/27-admin-impersonation.md, BEH-EA-215/219. This plugin's
 // own persistence for the `admin_impersonation` table — a durable audit
 // trail independent of the `Session` row's own lifecycle, built directly
 // against `effect/unstable/sql`'s `SqlSchema` the same way
-// `@effect-auth/passkey`'s own `PasskeyCredentials.ts` builds its table:
+// `@awthaq/passkey`'s own `PasskeyCredentials.ts` builds its table:
 // this table belongs to the plugin, not the shared persistence stratum.
 //
 // Keyed by the row's own generated `id`; `sessionId` is the practical lookup
 // key `Admin.ts`'s `stopImpersonating`/`forceStop` use to find the episode
 // to end — a session issued by `impersonate` is 1:1 with its own audit row.
 
-import { Users } from "@effect-auth/core";
+import { Users } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -29,7 +29,7 @@ type UserId = Users.UserId;
 
 /**
  * BEH-EA-217: the three ways an impersonation episode ends. `"expired"` is
- * declared for completeness with this closed set — like `@effect-auth/passkey`'s
+ * declared for completeness with this closed set — like `@awthaq/passkey`'s
  * own `PasskeyCounterAnomaly` tag, it names a value no code path in this
  * plugin produces yet: nothing here observes a session's hard expiry and
  * calls `endEpisode(id, "expired")` on its behalf, so a naturally-expired
@@ -86,11 +86,11 @@ export interface ImpersonationRecordsShape {
 export class ImpersonationRecords extends Context.Service<
   ImpersonationRecords,
   ImpersonationRecordsShape
->()("effect-auth/admin/ImpersonationRecords") {}
+>()("awthaq/admin/ImpersonationRecords") {}
 
 const notFound = (sessionId: string): ImpersonationRecordNotFound =>
   new ImpersonationRecordNotFound({
-    message: `effect-auth: no active impersonation episode for session: ${sessionId}`,
+    message: `awthaq: no active impersonation episode for session: ${sessionId}`,
   });
 
 const newestFirst = (

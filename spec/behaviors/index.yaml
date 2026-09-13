@@ -1,5 +1,5 @@
 kind: behaviors
-package: effect-auth
+package: awthaq
 infix: EA
 entries:
   - id: "BEH-EA-001"

@@ -1,4 +1,4 @@
-// @effect-auth/oauth — OAuth
+// @awthaq/oauth — OAuth
 //
 // spec/behaviors/16-oauth.md, BEH-EA-121 through BEH-EA-128.
 // spec/models/02-oauth-oidc.md's plugin sketch, made runnable — the
@@ -15,7 +15,7 @@
 // of documented deferral as `Verification.layerSql`), and `Jwt.ts`'s own
 // header documents its RS256-only signature-verification scope.
 
-import { Api } from "@effect-auth/api";
+import { Api } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
@@ -24,8 +24,8 @@ import {
   Sessions,
   Users,
   Verification,
-} from "@effect-auth/core";
-import { Encryption, RateLimiter, SqlTransaction } from "@effect-auth/ports";
+} from "@awthaq/core";
+import { Encryption, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
@@ -65,7 +65,7 @@ const defaultOAuthConfig: OAuthConfigShape = {
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
 export const OAuthConfig: Context.Reference<OAuthConfigShape> = Context.Reference(
-  "effect-auth/oauth/Config",
+  "awthaq/oauth/Config",
   { defaultValue: () => defaultOAuthConfig },
 );
 
@@ -84,7 +84,7 @@ const toBase64Url = (bytes: Uint8Array): string => {
 
 /**
  * BEH-EA-122: the same `${identifier}.${secret}` round trip
- * `@effect-auth/password`'s `Password.ts` uses for its mailed tokens,
+ * `@awthaq/password`'s `Password.ts` uses for its mailed tokens,
  * reproduced here rather than shared — the two callers travel through
  * different transports (a mailed link vs. an OAuth provider's own `state`
  * round trip) and duplicating six lines was judged simpler than a shared
@@ -393,7 +393,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
   contract: OAuthApi.OAuthApi,
   // BEH-EA-125: an OAuth account is an ordinary `accounts` row (extended
   // with `issuer`, per BEH-EA-125) — this plugin owns no table of its own,
-  // the same reasoning `@effect-auth/password`'s own `tables: []` documents.
+  // the same reasoning `@awthaq/password`'s own `tables: []` documents.
   tables: [],
 }) {
   static readonly layer = AuthPlugin.layer(OAuth, {
@@ -427,7 +427,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // exception, not a style choice: passing `OAuth` (this class) into
       // anything typed `AuthPlugin.Any` (which itself requires a `layer`
       // field) from within `OAuth`'s own `static readonly layer`
-      // initializer is a real TS circularity — see `@effect-auth/password`'s
+      // initializer is a real TS circularity — see `@awthaq/password`'s
       // `Password.ts` for the identical problem and the same fix, first
       // hit there (ticket 12).
       const registerCallbackRule: Effect.Effect<void, RateLimits.RateLimitScopeViolation> =

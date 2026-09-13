@@ -7,7 +7,7 @@ checkout used to produce this tree: `better-auth` core, `core`, and all
 first-party plugin/adapter/integration packages).
 
 It exists to serve as the **behavioral source of truth** for designing
-`effect-auth` (an Effect-native reimplementation) without inheriting
+`awthaq` (an Effect-native reimplementation) without inheriting
 better-auth's implementation choices — only its *contracts*: what every
 capability requires of its caller, what it guarantees in return, what
 invariants it protects, and who is at fault when something goes wrong.

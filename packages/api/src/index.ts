@@ -1,4 +1,4 @@
-// @effect-auth/api — Contract stratum (1)
+// @awthaq/api — Contract stratum (1)
 //
 // Principal, SessionView, SubjectDto, errors, Authentication and CsrfProtection middleware definitions, core groups — isomorphic, no server code, importable in the browser.
 //

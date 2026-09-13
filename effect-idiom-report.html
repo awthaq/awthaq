@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>effect-auth · Effect Idiom Dossier</title>
+<title>awthaq · Effect Idiom Dossier</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
 <style>
@@ -177,7 +177,7 @@ footer{margin-top:70px;border-top:1px solid var(--line);padding-top:18px;font-fa
     <tr><td>C2 flatMap</td><td class="num">1</td><td><span class="dot na"></span>0 src</td><td>The hit is <code>Array.flatMap</code> <span class="loc">Auth.ts:311</span>. No <code>Effect.flatMap</code> anywhere.</td></tr>
     <tr><td>C3 gen preference</td><td class="num">0%</td><td><span class="dot na"></span>N/A</td><td>0/0 after C2 correction. Dashboard's 22.2 category score derived from this — rescinded.</td></tr>
     <tr><td>C4 Schema declarations</td><td class="num">0</td><td><span class="dot warn"></span>0 src · 2 test</td><td><code>Schema.String</code> appears only in test HttpApi contracts <span class="loc">AuthPlugin.test.ts:17</span>. Src validation is deferred to M-stages.</td></tr>
-    <tr><td>C5 service tags</td><td class="num">0</td><td><span class="dot pass"></span>2</td><td><code>Context.Service</code> <span class="loc">AuthPlugin.ts:130</span>, <code>Context.ServiceClass</code> <span class="loc">AuthPlugin.ts:53</span>. v4-correct idioms, with a namespaced key <code>effect-auth/plugin/${Id}</code> <span class="loc">AuthPlugin.ts:39</span>.</td></tr>
+    <tr><td>C5 service tags</td><td class="num">0</td><td><span class="dot pass"></span>2</td><td><code>Context.Service</code> <span class="loc">AuthPlugin.ts:130</span>, <code>Context.ServiceClass</code> <span class="loc">AuthPlugin.ts:53</span>. v4-correct idioms, with a namespaced key <code>awthaq/plugin/${Id}</code> <span class="loc">AuthPlugin.ts:39</span>.</td></tr>
     <tr><td>C6 layers</td><td class="num">21</td><td><span class="dot pass"></span>composition is the core competency</td><td><code>Layer.effect</code> <span class="loc">AuthPlugin.ts:254</span>, <code>Layer.provideMerge</code> <span class="loc">AuthPlugin.ts:255 · Auth.ts:344</span>. The fold — not <code>Layer.merge</code> — is exactly what makes dependencies resolve (see F-01).</td></tr>
     <tr><td>C7 tagged errors</td><td class="num">0</td><td><span class="dot fail"></span>0 — real gap</td><td><code>Data.TaggedError</code> and <code>Schema.TaggedError</code> both exist in the installed v4; unused. Four <code>throw new Error</code> at init boundaries <span class="loc">Auth.ts:243,257,314,342</span> — see F-04.</td></tr>
     <tr><td>C8 yield*</td><td class="num">0</td><td><span class="dot na"></span>0 src · <b>14 test</b></td><td>All 4 src matches are JSDoc prose (<code>Auth.ts:65</code>, <code>AuthPlugin.ts:44,92,98</code>) — agent correctly excluded them.</td></tr>
@@ -262,7 +262,7 @@ footer{margin-top:70px;border-top:1px solid var(--line);padding-top:18px;font-fa
 
   <div class="finding info">
     <h3><span class="fid">F-08</span> service identity is namespaced string keys <span class="tag info">design note</span></h3>
-    <p>Plugin service keys embed the plugin id (<code>effect-auth/plugin/${Id}</code>,
+    <p>Plugin service keys embed the plugin id (<code>awthaq/plugin/${Id}</code>,
     <span class="loc">AuthPlugin.ts:39,129-130</span>) and dependency declarations are recorded in a
     <code>WeakMap</code> with a live getter so subclasses inherit <code>dependsOn</code> with correct
     <code>this</code>-binding <span class="loc">AuthPlugin.ts:109-159</span>. Unusual, carefully

@@ -1,11 +1,11 @@
-// @effect-auth/server — Authentication middleware
+// @awthaq/server — Authentication middleware
 //
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-065 through BEH-EA-072.
 // Implements the `Authentication`/`OptionalAuthentication` declarations from
-// `@effect-auth/api`'s `Api.ts` against `@effect-auth/core`'s `Sessions`.
+// `@awthaq/api`'s `Api.ts` against `@awthaq/core`'s `Sessions`.
 
-import { Sessions } from "@effect-auth/core";
-import { Api } from "@effect-auth/api";
+import { Sessions } from "@awthaq/core";
+import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -25,14 +25,14 @@ export interface PrincipalResolverShape {
 }
 
 export class PrincipalResolver extends Context.Service<PrincipalResolver, PrincipalResolverShape>()(
-  "effect-auth/server/PrincipalResolver",
+  "awthaq/server/PrincipalResolver",
 ) {}
 
 /**
  * The ordinary case: a session resolves to the `UserPrincipal` it belongs to.
  * BEH-EA-211: a session's own `actingAs` (BEH-EA-209/210) is placed onto the
  * resolved `UserPrincipal` unconditionally, closing the loop BEH-EA-142
- * (`@effect-auth/qadi`'s `SubjectResolver`) already anticipates — omitted
+ * (`@awthaq/qadi`'s `SubjectResolver`) already anticipates — omitted
  * entirely, not `undefined`, when the session carries none
  * (`exactOptionalPropertyTypes`).
  */
@@ -65,7 +65,7 @@ export const PrincipalResolverLive: Layer.Layer<PrincipalResolver> = Layer.succe
  * successfully-authenticated request, without this middleware knowing or
  * caring who's listening. Defaults to a true identity no-op, so installing
  * a plugin that never overrides this reference (i.e. every plugin except
- * `@effect-auth/jwt` today) changes nothing about existing behavior.
+ * `@awthaq/jwt` today) changes nothing about existing behavior.
  * `decorate`'s own type — `Effect.Effect<HttpServerResponse>`, no error
  * channel — forces any override to handle its own failures internally
  * (e.g. minting a JWT must never be able to fail an otherwise-successful
@@ -79,7 +79,7 @@ export interface PostAuthResponseHookShape {
 }
 
 export const PostAuthResponseHook = Context.Reference<PostAuthResponseHookShape>(
-  "effect-auth/server/PostAuthResponseHook",
+  "awthaq/server/PostAuthResponseHook",
   { defaultValue: () => ({ decorate: (_principal, response) => Effect.succeed(response) }) },
 );
 
@@ -89,7 +89,7 @@ export const PostAuthResponseHook = Context.Reference<PostAuthResponseHookShape>
  * when the request carries neither, never a decode failure) and an invalid
  * or expired session are both reported as `Unauthenticated`, uniformly.
  *
- * Exported (not module-private) so `@effect-auth/qadi`'s `SubjectExtractor.ts`
+ * Exported (not module-private) so `@awthaq/qadi`'s `SubjectExtractor.ts`
  * (BEH-EA-153) can call the identical hash-comparison/expiry logic this
  * middleware uses, rather than reimplementing it against the raw request —
  * BEH-EA-153 requires exactly that reuse.
@@ -131,7 +131,7 @@ export const AuthenticationLive: Layer.Layer<
             Effect.flatMap((response) =>
               // `PostAuthResponseHook` is resolved here, per request, not
               // captured once above alongside `sessions`/`resolver` — a
-              // plugin overriding it (e.g. `@effect-auth/jwt`) may itself
+              // plugin overriding it (e.g. `@awthaq/jwt`) may itself
               // need `Api.Authentication` for its own endpoints, which
               // would make capturing the override at THIS layer's own
               // build time an unresolvable circular build order. Resolved
@@ -193,7 +193,7 @@ export const OptionalAuthenticationLive: Layer.Layer<
         // failure, never a success `resolvePrincipal` itself produced —
         // `PostAuthResponseHook` is only ever consulted above, on the
         // genuine success path, so an anonymous/no-credential caller never
-        // gets a decorated (e.g. `@effect-auth/jwt`-minted) response.
+        // gets a decorated (e.g. `@awthaq/jwt`-minted) response.
         Effect.catchTag("Unauthenticated", () =>
           Effect.provideService(httpEffect, Api.CurrentPrincipal, Api.anonymousPrincipal),
         ),

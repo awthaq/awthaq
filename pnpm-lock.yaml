@@ -101,28 +101,28 @@ importers:
 
   features:
     devDependencies:
-      '@effect-auth/admin':
+      '@awthaq/admin':
         specifier: workspace:*
         version: link:../packages/admin
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../packages/api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../packages/core
-      '@effect-auth/oauth':
+      '@awthaq/oauth':
         specifier: workspace:*
         version: link:../packages/oauth
-      '@effect-auth/passkey':
+      '@awthaq/passkey':
         specifier: workspace:*
         version: link:../packages/passkey
-      '@effect-auth/password':
+      '@awthaq/password':
         specifier: workspace:*
         version: link:../packages/password
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../packages/ports
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../packages/server
       '@effect-cucumber/vitest':
@@ -152,13 +152,13 @@ importers:
 
   packages/admin:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
       '@qadi/core':
@@ -168,7 +168,7 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.115
     devDependencies:
-      '@effect-auth/test':
+      '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
@@ -202,19 +202,19 @@ importers:
 
   packages/api-key:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
-      '@effect-auth/sql':
+      '@awthaq/sql':
         specifier: workspace:*
         version: link:../sql
       effect:
@@ -233,22 +233,22 @@ importers:
 
   packages/cli:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
-      '@effect-auth/qadi':
+      '@awthaq/qadi':
         specifier: workspace:*
         version: link:../qadi
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
-      '@effect-auth/sql':
+      '@awthaq/sql':
         specifier: workspace:*
         version: link:../sql
       effect:
@@ -267,7 +267,7 @@ importers:
 
   packages/client:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
       effect:
@@ -286,10 +286,10 @@ importers:
 
   packages/core:
     dependencies:
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
-      '@effect-auth/sql':
+      '@awthaq/sql':
         specifier: workspace:*
         version: link:../sql
       effect:
@@ -314,20 +314,20 @@ importers:
 
   packages/jwt:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.115
     devDependencies:
-      '@effect-auth/test':
+      '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
@@ -348,19 +348,19 @@ importers:
 
   packages/magic-link:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
-      '@effect-auth/sql':
+      '@awthaq/sql':
         specifier: workspace:*
         version: link:../sql
       effect:
@@ -379,16 +379,16 @@ importers:
 
   packages/next:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/react':
+      '@awthaq/react':
         specifier: workspace:*
         version: link:../react
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
       effect:
@@ -410,16 +410,16 @@ importers:
 
   packages/oauth:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
       effect:
@@ -441,16 +441,16 @@ importers:
 
   packages/organization:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
       '@qadi/core':
@@ -460,7 +460,7 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.115
     devDependencies:
-      '@effect-auth/test':
+      '@awthaq/test':
         specifier: workspace:*
         version: link:../test
       '@effect/platform-node':
@@ -481,16 +481,16 @@ importers:
 
   packages/passkey:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
       effect:
@@ -515,16 +515,16 @@ importers:
 
   packages/password:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
       effect:
@@ -571,13 +571,13 @@ importers:
 
   packages/qadi:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
       '@qadi/core':
@@ -605,7 +605,7 @@ importers:
 
   packages/react:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
       '@effect/atom-react':
@@ -651,13 +651,13 @@ importers:
 
   packages/roles:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/qadi':
+      '@awthaq/qadi':
         specifier: workspace:*
         version: link:../qadi
       '@qadi/core':
@@ -679,10 +679,10 @@ importers:
 
   packages/server:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
       effect:
@@ -704,7 +704,7 @@ importers:
 
   packages/sql:
     dependencies:
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
       effect:
@@ -732,16 +732,16 @@ importers:
 
   packages/test:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
       '@effect/platform-node':
@@ -751,7 +751,7 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.115
     devDependencies:
-      '@effect-auth/password':
+      '@awthaq/password':
         specifier: workspace:*
         version: link:../password
       '@effect/vitest':
@@ -766,19 +766,19 @@ importers:
 
   packages/two-factor:
     dependencies:
-      '@effect-auth/api':
+      '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@effect-auth/core':
+      '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@effect-auth/ports':
+      '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
-      '@effect-auth/server':
+      '@awthaq/server':
         specifier: workspace:*
         version: link:../server
-      '@effect-auth/sql':
+      '@awthaq/sql':
         specifier: workspace:*
         version: link:../sql
       effect:

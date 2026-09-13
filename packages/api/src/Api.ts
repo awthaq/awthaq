@@ -1,11 +1,11 @@
-// @effect-auth/api — Contract stratum (1)
+// @awthaq/api — Contract stratum (1)
 //
 // spec/behaviors/04-contract-stratum.md, BEH-EA-025 (Principal), BEH-EA-027
 // (contract errors), BEH-EA-028/029/030 (Authentication/OptionalAuthentication/
 // CsrfProtection middleware *declarations*). This package is isomorphic (no
 // server code) — the real resolution logic these declarations name is built
-// against them in `@effect-auth/server`'s Authentication.ts/Csrf.ts, which
-// depends on `@effect-auth/core`; this package deliberately does not.
+// against them in `@awthaq/server`'s Authentication.ts/Csrf.ts, which
+// depends on `@awthaq/core`; this package deliberately does not.
 
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
@@ -55,7 +55,7 @@ export const anonymousPrincipal = new AnonymousPrincipal({
  * permissive default.
  */
 export class CurrentPrincipal extends Context.Service<CurrentPrincipal, Principal>()(
-  "effect-auth/api/CurrentPrincipal",
+  "awthaq/api/CurrentPrincipal",
 ) {}
 
 /** BEH-EA-027/067: no scheme resolved a live session. */
@@ -81,7 +81,7 @@ export class InvalidCredentials extends Schema.TaggedError<InvalidCredentials>()
 
 /**
  * Shipping-gap map (.scratch/shipping-gaps), ticket 12. BEH-EA-106: the
- * wire counterpart of `@effect-auth/ports`' `RateLimiter.RateLimited` —
+ * wire counterpart of `@awthaq/ports`' `RateLimiter.RateLimited` —
  * `retryAfterMillis` carried as a typed field (not folded into a message
  * string) so a client can render "try again in n seconds" without parsing
  * text. Declared here, not per-plugin, since every rate-limited endpoint
@@ -94,7 +94,7 @@ export class RateLimited extends Schema.TaggedError<RateLimited>()(
 ) {}
 
 /**
- * BEH-EA-065: cookie name matches `@effect-auth/core`'s `Sessions.SESSION_COOKIE_NAME`
+ * BEH-EA-065: cookie name matches `@awthaq/core`'s `Sessions.SESSION_COOKIE_NAME`
  * exactly (`api` cannot import `core`, so the literal is repeated here rather
  * than shared — both are `"__Host-session"` by construction, not by convention).
  */
@@ -120,7 +120,7 @@ export class Authentication extends HttpApiMiddleware.Service<
 
 /**
  * BEH-EA-029/068: declares the same `Unauthenticated` error `Authentication`
- * does — not because it can actually reach a caller (its own `@effect-auth/server`
+ * does — not because it can actually reach a caller (its own `@awthaq/server`
  * implementation always resolves `CurrentPrincipal`, defaulting to
  * `anonymousPrincipal`, never letting a failure escape the middleware) but
  * because the underlying per-scheme handler shape requires every entry in

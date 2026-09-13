@@ -1,4 +1,4 @@
-// @effect-auth/sql — Models
+// @awthaq/sql — Models
 //
 // spec/behaviors/05-persistence-stratum.md, BEH-EA-033/034.
 //
@@ -6,7 +6,7 @@
 // one field declaration each is the source of truth, from which the
 // database (`select`/`insert`/`update`) and JSON (`json`/`jsonCreate`/
 // `jsonUpdate`) variants are all derived. This package sits below
-// `@effect-auth/core` (spec/overview.md's stratum ordering), so these ids
+// `@awthaq/core` (spec/overview.md's stratum ordering), so these ids
 // are declared as ordinary branded schemas here, not imported from core's
 // own `UserId`/`SessionId`/`AccountId`/`VerificationTokenId` — the two are
 // structurally compatible (a `Brand<Keys>`'s uniqueness comes from the
@@ -59,7 +59,7 @@ export class User extends Model.Class<User>("User")({
  * BEH-EA-043/044/125: `(providerId, subject, issuer)` identifies at most one
  * row; `providerId = "password"` with `subject` equal to the owning `User`'s
  * own id and `issuer = ""` is the reserved password-credential shape
- * (`PASSWORD_PROVIDER_ID` in `@effect-auth/core`'s `Accounts.ts`).
+ * (`PASSWORD_PROVIDER_ID` in `@awthaq/core`'s `Accounts.ts`).
  * `providerId`/`subject`/`issuer`/`userId` are excluded from
  * `update`/`jsonUpdate` — this identity tuple is immutable once linked;
  * unlinking and relinking is a delete-then-insert, never an update.
@@ -81,7 +81,7 @@ export class Account extends Model.Class<Account>("Account")({
   userId: UserId.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   providerId: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   subject: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
-  // BEH-EA-125/INV-EA-015 (`@effect-auth/oauth`): the third component of the
+  // BEH-EA-125/INV-EA-015 (`@awthaq/oauth`): the third component of the
   // real identity anchor, `(providerId, subject, issuer)` — `""` (not SQL
   // NULL) for a non-federated provider (`password`), specifically so the
   // real `UNIQUE(providerId, subject, issuer)` index enforces uniqueness
@@ -138,7 +138,7 @@ export class Session extends Model.Class<Session>("Session")({
  * `update`/`jsonUpdate`: a verification token's identity and hash are
  * fixed at issue.
  *
- * BEH-EA-122 (`@effect-auth/oauth`): `payload` round-trips the opaque
+ * BEH-EA-122 (`@awthaq/oauth`): `payload` round-trips the opaque
  * OAuth-flow state (`codeVerifier`/`nonce`/`callbackURL`/`link`) `issue`'s
  * caller attached — JSON-encoded at rest (`Schema.fromJsonString(Schema.Unknown)`)
  * since its shape is never this stratum's to know, and built as a bare

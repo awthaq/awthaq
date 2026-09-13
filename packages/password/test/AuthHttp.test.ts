@@ -17,9 +17,9 @@
 // only actually runs as part of the full handled-request lifecycle
 // (`HttpEffect.toHandled`'s `sendResponse`), which `toWebHandler` goes
 // through and a bare `router.asHttpEffect()` call does not.
-import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@effect-auth/core";
-import { Mailer, PasswordHasher, RateLimiter } from "@effect-auth/ports";
-import { Authentication, AuthHttp } from "@effect-auth/server";
+import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@awthaq/core";
+import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Authentication, AuthHttp } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

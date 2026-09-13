@@ -8,10 +8,10 @@
 // RSA keypair signing a real RS256 `id_token` that `Jwt.ts`'s own verifier
 // checks — not a stub that always returns `true`.
 import { generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@effect-auth/core";
-import { Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@effect-auth/ports";
+import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { NodeCrypto } from "@effect/platform-node";
-import { Authentication } from "@effect-auth/server";
+import { Authentication } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -32,7 +32,7 @@ const EncryptionLive = Encryption.layer.pipe(
       Layer.provide(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
-            env: { EFFECT_AUTH_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
           }),
         ),
       ),

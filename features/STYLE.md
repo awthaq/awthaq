@@ -1,4 +1,4 @@
-# Gherkin authoring style — effect-auth
+# Gherkin authoring style — awthaq
 
 This is the contract every `.feature` file in `features/features/` follows. It exists so that ~700 scenarios written by different authors (human or agent) read as one suite, not twenty-six. Read this in full before writing or editing any `.feature` file.
 
@@ -6,7 +6,7 @@ This is the contract every `.feature` file in `features/features/` follows. It e
 
 Every scenario here is a Gherkin restatement of a requirement already specified in `spec/behaviors/NN-*.md`. This suite does not invent requirements — it makes the existing `BEH-EA-NNN` catalog executable-shaped. If a scenario needs a fact the source `.md` doesn't state, that's a signal to re-read the source (and its cross-referenced `ADR-EA`/`INV-EA`/`MOD-EA` entries), not to invent one.
 
-`effect-auth` is pre-implementation: no package, no source, no test runner. Every `.feature` file therefore opens with the same banner comment (see template below) stating plainly that this describes intended behavior of a system that does not exist yet — the same discipline every `spec/*.md` file already follows.
+`awthaq` is pre-implementation: no package, no source, no test runner. Every `.feature` file therefore opens with the same banner comment (see template below) stating plainly that this describes intended behavior of a system that does not exist yet — the same discipline every `spec/*.md` file already follows.
 
 ## File structure
 
@@ -38,7 +38,7 @@ Do not merge two `BEH-EA` ids into one `Rule`, and do not split one `BEH-EA` id 
 ## Banner (top of every `.feature` file)
 
 ```gherkin
-# effect-auth is pre-implementation (see spec/README.md). Every scenario in
+# awthaq is pre-implementation (see spec/README.md). Every scenario in
 # this file specifies intended behavior of a system that does not exist yet
 # — a target the future testing harness (BEH-EA-193..200) is meant to
 # execute against, not a record of anything verified today.
@@ -71,11 +71,11 @@ Never write a scenario that pretends to observe a compiler error via an HTTP res
 
 ## The qadi boundary (all of `06-roles-and-authorization-bridge/`, and anywhere else a scenario touches authorization)
 
-effect-auth ships no authorizer. qadi decides; effect-auth only bridges a resolved identity into qadi's evaluation context and reacts to the decision qadi hands back. Every scenario that involves an authorization decision must:
+awthaq ships no authorizer. qadi decides; awthaq only bridges a resolved identity into qadi's evaluation context and reacts to the decision qadi hands back. Every scenario that involves an authorization decision must:
 
-- Treat qadi's evaluation as a **black box `Given`**: `Given qadi's evaluator would return an Allow decision for this policy` / `Given qadi's AttributeResolver fails while evaluating a policy`. Never write a `Given` that constructs roles, permissions, or a policy tree and expects a specific combinator result — that is qadi's own specification's job (see `../qadi/spec/behaviors/`, and its own `features/features/*.feature`), not effect-auth's.
-- Assert only on what effect-auth's bridge itself owns: middleware ordering (`Authentication` before `AuthorizedSubject`), `CurrentPrincipal` → `CurrentSubject` derivation happening at all (not what it derives to, beyond the documented claim-mapping), `AccessDenied` → 404 mapping for tenant-scoped-by-id reads, a resolver failure surfacing as a 5xx defect and never as a denial, witness (`guard`) usage, and Path B's unannotated-endpoint-is-refused default.
-- Never assert that a specific role grants or withholds a specific permission, that a policy combinator (`allOf`/`anyOf`/`not`/...) evaluates a certain way, or that role inheritance flattens correctly — those are qadi's invariants, already covered by qadi's own suite, and restating them here would duplicate (and risk drifting from) qadi's specification rather than effect-auth's.
+- Treat qadi's evaluation as a **black box `Given`**: `Given qadi's evaluator would return an Allow decision for this policy` / `Given qadi's AttributeResolver fails while evaluating a policy`. Never write a `Given` that constructs roles, permissions, or a policy tree and expects a specific combinator result — that is qadi's own specification's job (see `../qadi/spec/behaviors/`, and its own `features/features/*.feature`), not awthaq's.
+- Assert only on what awthaq's bridge itself owns: middleware ordering (`Authentication` before `AuthorizedSubject`), `CurrentPrincipal` → `CurrentSubject` derivation happening at all (not what it derives to, beyond the documented claim-mapping), `AccessDenied` → 404 mapping for tenant-scoped-by-id reads, a resolver failure surfacing as a 5xx defect and never as a denial, witness (`guard`) usage, and Path B's unannotated-endpoint-is-refused default.
+- Never assert that a specific role grants or withholds a specific permission, that a policy combinator (`allOf`/`anyOf`/`not`/...) evaluates a certain way, or that role inheritance flattens correctly — those are qadi's invariants, already covered by qadi's own suite, and restating them here would duplicate (and risk drifting from) qadi's specification rather than awthaq's.
 
 ## Vocabulary consistency
 
@@ -92,7 +92,7 @@ Reuse the same phrasing for the same concept across every file, so `grep` across
 ### 1. An ordinary runtime behavior (Sessions)
 
 ```gherkin
-# effect-auth is pre-implementation (see spec/README.md). Every scenario in
+# awthaq is pre-implementation (see spec/README.md). Every scenario in
 # this file specifies intended behavior of a system that does not exist yet
 # — a target the future testing harness (BEH-EA-193..200) is meant to
 # execute against, not a record of anything verified today.

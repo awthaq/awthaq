@@ -1,7 +1,7 @@
-// @effect-auth/core — AuthPlugin
+// @awthaq/core — AuthPlugin
 //
 // spec/behaviors/01-plugin-contract.md, BEH-EA-001 through BEH-EA-008.
-// effect-auth is pre-implementation (spec/README.md); this module is the
+// awthaq is pre-implementation (spec/README.md); this module is the
 // first real piece of it — the signatures below are meant to run, not merely
 // to type-check as design rationale the way archive/design/plugins-as-layers.md
 // does.
@@ -36,7 +36,7 @@ export type GroupsFor<Id extends string> = HttpApiGroup.HttpApiGroup<
 /* oxlint-enable no-explicit-any */
 
 /** BEH-EA-002: the compiled service key embeds the plugin's own `id`. */
-export type Key<Id extends string> = `effect-auth/plugin/${Id}`;
+export type Key<Id extends string> = `awthaq/plugin/${Id}`;
 
 /**
  * BEH-EA-001/002: what `AuthPlugin.Service<Self, Shape>()(id, options)`
@@ -126,7 +126,7 @@ export const Service =
       readonly migrations?: Migrations;
     },
   ): Class<Self, Id, Shape, Groups> => {
-    const key: Key<Id> = `effect-auth/plugin/${id}`;
+    const key: Key<Id> = `awthaq/plugin/${id}`;
     const serviceKey = Context.Service<Self, Shape>()(key);
     // `Object.assign`'s source is a plain-valued `dependsOn` (not a getter): a
     // getter here would be *invoked immediately* by `Object.assign` itself (it

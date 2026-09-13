@@ -1,7 +1,7 @@
-// @effect-auth/core — Auth
+// @awthaq/core — Auth
 //
 // spec/behaviors/02-plugin-composition-validate.md, BEH-EA-009 through
-// BEH-EA-016. effect-auth is pre-implementation (spec/README.md); this module
+// BEH-EA-016. awthaq is pre-implementation (spec/README.md); this module
 // composes real `AuthPlugin` values, it does not merely type them.
 //
 // Scoped deliberately smaller than the full design in
@@ -60,7 +60,7 @@ export class LinkerInvariantViolation extends Data.TaggedError("LinkerInvariantV
 /** Replaces a postfix `!`: the invariant is checked for real, and a broken one is a catchable `LinkerInvariantViolation`, not a silent `undefined` dereference. */
 const assertDefined = <A>(value: A | undefined, detail: string): A => {
   if (value === undefined) {
-    throw new LinkerInvariantViolation({ message: `effect-auth: internal error — ${detail}` });
+    throw new LinkerInvariantViolation({ message: `awthaq: internal error — ${detail}` });
   }
   return value;
 };
@@ -96,13 +96,13 @@ type DuplicateId<
  * `layer`'s `RIn`, in contrast, is exact at the type level from the moment
  * `AuthPlugin.layer(Plugin, { dependsOn: [...] })` is written, because
  * `dependsOn`'s classes are spliced directly into `RIn` there. Every plugin's
- * compiled key is `` `effect-auth/plugin/${id}` `` (BEH-EA-002), so filtering
+ * compiled key is `` `awthaq/plugin/${id}` `` (BEH-EA-002), so filtering
  * `RIn`'s services by that `key` shape separates plugin dependencies from
  * ports (`Mailer`, `PasswordHasher`, ...), which have no such key.
  */
 type PluginDeps<X extends AuthPlugin.Any> = Extract<
   Layer.Services<X["layer"]>,
-  { readonly key: `effect-auth/plugin/${string}` }
+  { readonly key: `awthaq/plugin/${string}` }
 >;
 
 /**
@@ -110,10 +110,10 @@ type PluginDeps<X extends AuthPlugin.Any> = Extract<
  * Ping` requires — `Context.ServiceClass` makes the class itself
  * `Effect<Shape, never, Self>`, so `RIn` carries `Self`, not `typeof Ping`),
  * which — unlike the class — has no `id` static to read. Its compiled `key`
- * (BEH-EA-002: `` `effect-auth/plugin/${id}` ``) still names the id, in the
+ * (BEH-EA-002: `` `awthaq/plugin/${id}` ``) still names the id, in the
  * string itself.
  */
-type IdOf<Dep> = Dep extends { readonly key: `effect-auth/plugin/${infer Id}` } ? Id : never;
+type IdOf<Dep> = Dep extends { readonly key: `awthaq/plugin/${infer Id}` } ? Id : never;
 
 /** BEH-EA-011: the first `[missingDepId, requiringPluginId]` pair not present in the tuple, or `never`. */
 type MissingDep<
@@ -141,10 +141,10 @@ export type Validate<P extends ReadonlyArray<AuthPlugin.Any>> = [DuplicateId<P>]
     ? P
     : MissingDep<P> extends readonly [infer Dep extends string, infer By extends string]
       ? {
-          readonly "effect-auth": `plugin "${By}" depends on plugin "${Dep}", which is not in the list`;
+          readonly awthaq: `plugin "${By}" depends on plugin "${Dep}", which is not in the list`;
         }
       : never
-  : { readonly "effect-auth": `plugin id "${DuplicateId<P>}" appears more than once` };
+  : { readonly awthaq: `plugin id "${DuplicateId<P>}" appears more than once` };
 
 // ---------------------------------------------------------------------------
 // Built<P> — BEH-EA-009, BEH-EA-013
@@ -290,7 +290,7 @@ const linkPlugins = (plugins: ReadonlyArray<AuthPlugin.Any>): ReadonlyArray<Auth
     const cycle = findCycle(remaining, byId);
     throw new CircularPluginDependency({
       cycle,
-      message: `effect-auth: circular plugin dependency: ${cycle.join(" -> ")}`,
+      message: `awthaq: circular plugin dependency: ${cycle.join(" -> ")}`,
     });
   }
 
@@ -306,7 +306,7 @@ const findCycle = (
   const [start] = remaining;
   if (start === undefined) {
     throw new LinkerInvariantViolation({
-      message: "effect-auth: internal error — findCycle called with no remaining plugins",
+      message: "awthaq: internal error — findCycle called with no remaining plugins",
     });
   }
   const path: Array<string> = [];
@@ -373,7 +373,7 @@ const composeApi = (
   const groups = order.flatMap((plugin) => Object.values(plugin.contract.groups));
   const [firstGroup, ...restGroups] = groups;
   if (firstGroup === undefined) {
-    throw new EmptyPluginTuple({ message: "effect-auth: Auth.make requires at least one plugin" });
+    throw new EmptyPluginTuple({ message: "awthaq: Auth.make requires at least one plugin" });
   }
   return HttpApi.make("auth").add(firstGroup, ...restGroups);
 };
@@ -401,7 +401,7 @@ const composeLayer = (
 ): Layer.Layer<never, unknown, unknown> => {
   const [first, ...rest] = order;
   if (first === undefined) {
-    throw new EmptyPluginTuple({ message: "effect-auth: Auth.make requires at least one plugin" });
+    throw new EmptyPluginTuple({ message: "awthaq: Auth.make requires at least one plugin" });
   }
   return rest.reduce((acc, plugin) => Layer.provideMerge(plugin.layer, acc), first.layer);
 };
@@ -416,7 +416,7 @@ const composeLayer = (
  * refuses a duplicate id or a missing dependency: as a type error, before
  * `Auth.make` is ever called.
  *
- * Exported (not module-private): `@effect-auth/test`'s `TestAuth.layer`
+ * Exported (not module-private): `@awthaq/test`'s `TestAuth.layer`
  * forwards to `Auth.make` and needs the identical overload shape —
  * `Validate<P>`/`Built<P>`/`NonEmptyPlugins` together — to preserve the same
  * per-plugin literal type inference and the same `Validate<P>` compile-time

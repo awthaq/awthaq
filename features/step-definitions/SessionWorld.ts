@@ -1,17 +1,17 @@
 // Shipping-gap map (.scratch/shipping-gaps), ticket 21: the real wire-level
 // seam `packages/server/test/AuthHttp.test.ts` establishes for
-// `@effect-auth/server`'s own core `session` HTTP group
+// `@awthaq/server`'s own core `session` HTTP group
 // (`/session`, `/session/list`, `/session/sign-out`, `/session/revoke`,
-// `/session/revoke-others`), plus `@effect-auth/password`'s `/password/sign-up`
+// `/session/revoke-others`), plus `@awthaq/password`'s `/password/sign-up`
 // composed alongside it on the same `HttpRouter` — Session's own contract has
 // no HTTP endpoint that *issues* a session (only ones that consume an
 // already-issued cookie), so a real Set-Cookie response (REQ-EA-136/154/155)
 // needs an actual sign-in flow, the same way any real deployment would.
-import { AuthCore } from "@effect-auth/api";
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@effect-auth/core";
-import { Mailer, PasswordHasher, RateLimiter } from "@effect-auth/ports";
-import { Password, PasswordApi } from "@effect-auth/password";
-import { Account, Authentication, AuthHttp, Session } from "@effect-auth/server";
+import { AuthCore } from "@awthaq/api";
+import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Password, PasswordApi } from "@awthaq/password";
+import { Account, Authentication, AuthHttp, Session } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";

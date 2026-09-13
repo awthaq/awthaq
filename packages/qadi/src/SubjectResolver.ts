@@ -1,10 +1,10 @@
-// @effect-auth/qadi — SubjectResolver
+// @awthaq/qadi — SubjectResolver
 //
 // spec/behaviors/18-roles-subject-resolver.md, BEH-EA-137 through BEH-EA-144.
 // spec/decisions/012-slots-exclusive-registries-aggregate.md (ADR-EA-012):
 // "core slots include `SubjectResolver` and `SessionViewExtension`" — a slot
 // is a `Context.Reference` with a fail-closed default that a plugin may
-// override; declared via `@effect-auth/core`'s `Slots.define`, which is
+// override; declared via `@awthaq/core`'s `Slots.define`, which is
 // exactly that (`Context.Reference`, not `Context.Service`, which has no
 // default and would make every application that installs no roles plugin
 // fail to resolve it at all), plus a literal, introspectable key.
@@ -17,28 +17,28 @@
 // (`Layer.Success`) is `never` too, which vanishes from a union instead of
 // appearing in it, so no pairwise walk over plugins' `ROut` types (the
 // mechanism `Auth.ts`'s `Validate<P>` already uses for `DuplicateId`/
-// `MissingDep`) can ever observe a slot override. `@effect-auth/roles`'s
+// `MissingDep`) can ever observe a slot override. `@awthaq/roles`'s
 // `Roles` claims this slot through `Slots.override`, which enforces the
 // same conflict, at `Layer`-build time, through an explicit registry
 // instead — see that call site, and `Slots.ts`'s own header comment, for
 // how.
 //
 // **BEH-EA-140/141 (ApiKey/Service principal scopes → permissions) are also
-// not implemented, for a different reason**: `@effect-auth/api`'s
+// not implemented, for a different reason**: `@awthaq/api`'s
 // `ApiKeyPrincipal`/`ServicePrincipal` (`Api.ts`) carry only a `ref`, no
-// `scopes` field — there is no `@effect-auth/api-key` plugin yet (M7,
+// `scopes` field — there is no `@awthaq/api-key` plugin yet (M7,
 // unbuilt) or any other mechanism that would populate one. Inventing a
 // `scopes` field on these Principal schemas now, with no code path that ever
 // sets it, would be exactly the kind of speculative infrastructure this
 // project avoids building ahead of a real caller (`WebAuthn`'s own port
-// interface is deferred for the identical reason — see `@effect-auth/ports`).
+// interface is deferred for the identical reason — see `@awthaq/ports`).
 // The default resolver below still maps both principal kinds to a real,
 // well-formed `AuthSubject` — `id` only, per BEH-EA-137's own "identity-only"
 // default — so a policy checking a permission against either simply denies,
 // which is the correct fail-closed behavior in the absence of a scope
 // source, not a broken one.
-import { Api } from "@effect-auth/api";
-import { Slots } from "@effect-auth/core";
+import { Api } from "@awthaq/api";
+import { Slots } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import type { AuthSubject } from "@qadi/core";
 import { anonymous, makeSubject, withAttributes } from "@qadi/core";
@@ -56,7 +56,7 @@ export interface SubjectResolverShape {
  * carrying `actingAs` is minted), not something that requires an `Admin`
  * plugin to be installed; no `Admin` plugin exists yet to mint one, but the
  * mapping is correct the moment one does. BEH-EA-143: `AnonymousPrincipal`
- * maps to qadi's own `anonymous` value exactly, never an effect-auth-specific
+ * maps to qadi's own `anonymous` value exactly, never an awthaq-specific
  * stand-in.
  */
 export const resolveIdentityOnly = (principal: Api.Principal): AuthSubject => {

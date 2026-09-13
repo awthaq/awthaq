@@ -9,9 +9,9 @@
     "tsBuildInfoFile": "./.tsbuildinfo",
     "paths": {
       "@/*": ["./src/*"],
-      "@effect-auth/sql": ["../sql/src/index.ts"],
-      "@effect-auth/ports": ["../ports/src/index.ts"],
-      "@effect-auth/api": ["../api/src/index.ts"]
+      "@awthaq/sql": ["../sql/src/index.ts"],
+      "@awthaq/ports": ["../ports/src/index.ts"],
+      "@awthaq/api": ["../api/src/index.ts"]
     }
   },
   "references": [

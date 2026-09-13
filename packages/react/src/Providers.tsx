@@ -1,4 +1,4 @@
-// @effect-auth/react — Providers
+// @awthaq/react — Providers
 //
 // spec/behaviors/23-react.md, BEH-EA-177/178/179.
 //
@@ -11,7 +11,7 @@
 // prop passed between them here, never through a shared registry (see
 // `Subject.ts`'s header comment, and `AuthClientAtom.ts`'s, for why the
 // session and subject are two atoms, not one combined query).
-import type { SessionContract, SubjectContract } from "@effect-auth/api";
+import type { SessionContract, SubjectContract } from "@awthaq/api";
 import { RegistryProvider, useAtomValue } from "@effect/atom-react";
 import type { QadiAtoms } from "@qadi/react";
 import { QadiProvider } from "@qadi/react";
@@ -57,7 +57,7 @@ const SubjectBridge = ({
   // see it, unlike the ordinary "not resolved yet" case below.
   if (AsyncResult.isFailure(subjectResult)) {
     console.error(
-      "[@effect-auth/react] subjectDtoAtom failed to resolve — QadiProvider will see `subject: undefined` " +
+      "[@awthaq/react] subjectDtoAtom failed to resolve — QadiProvider will see `subject: undefined` " +
         "(indistinguishable from still-loading) until it succeeds:",
       subjectResult.cause,
     );

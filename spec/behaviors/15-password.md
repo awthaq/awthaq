@@ -7,12 +7,12 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-113's research citation to the precise Q48 finding it refers to (CCR-EA-002) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-113: Sign-up issues a pending user and a verification mail
 
@@ -26,7 +26,7 @@ REQUIREMENT: `password.signUp` MUST create the user and session in one
              blocking the response on delivery.
 ```
 
-`usage-examples-v4.md` §6.2 fixes the shape: `signUp` sends a verification mail as a side effect, and the caller receives a `SessionView` immediately rather than waiting on mail delivery. Not awaiting the send keeps the sign-up response time independent of the mail provider's latency and, per `research/05-oauth-oidc.md` Q48's `Mailer`-capability recommendation ("Fire-and-forget: core wraps sends with `Effect.forkDaemon`/`waitUntil`-style detached execution so request latency and error surface don't leak account existence (enumeration resistance...)"), avoids a timing side-channel that a slow-vs-fast response could otherwise leak about whether the address already had an account. Q48 lives in the OAuth research file because it was written to answer a delivery question that first came up in the OAuth/verification-linking context, but the finding itself is general to any mail send effect-auth issues from a request path — password sign-up's verification mail included — which is why this citation names the specific question rather than the file's title.
+`usage-examples-v4.md` §6.2 fixes the shape: `signUp` sends a verification mail as a side effect, and the caller receives a `SessionView` immediately rather than waiting on mail delivery. Not awaiting the send keeps the sign-up response time independent of the mail provider's latency and, per `research/05-oauth-oidc.md` Q48's `Mailer`-capability recommendation ("Fire-and-forget: core wraps sends with `Effect.forkDaemon`/`waitUntil`-style detached execution so request latency and error surface don't leak account existence (enumeration resistance...)"), avoids a timing side-channel that a slow-vs-fast response could otherwise leak about whether the address already had an account. Q48 lives in the OAuth research file because it was written to answer a delivery question that first came up in the OAuth/verification-linking context, but the finding itself is general to any mail send awthaq issues from a request path — password sign-up's verification mail included — which is why this citation names the specific question rather than the file's title.
 
 _Previous: [BEH-EA-112](14-rate-limiting.md#beh-ea-112-testing-with-a-permissive-limiter) | Next: [BEH-EA-114](15-password.md#beh-ea-114-uniform-invalidcredentials-on-sign-in)_
 

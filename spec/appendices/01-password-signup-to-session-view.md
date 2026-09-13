@@ -7,7 +7,7 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Appendix — Worked Example |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added inline BEH-EA citations per section and an ADR-EA-003 citation, beyond the header-only citation this appendix previously had (CCR-EA-002) |
 ---
@@ -16,7 +16,7 @@ Every code block in this appendix is reproduced here as an uncompiled
 illustration; nothing in this repository compiles yet, so every fence below
 is `ts` even where the source material it is drawn from marks a fence
 `tsx` or `typescript`. This differs from qadi's own appendices, which are
-gate-compiled by `check-doc-examples.mjs`-style tooling — effect-auth has no
+gate-compiled by `check-doc-examples.mjs`-style tooling — awthaq has no
 such tooling yet (see [`../process/definitions-of-done.md`](../process/definitions-of-done.md)
 gate 8). This walkthrough reproduces material from `archive/design/usage-examples-v4.md`
 §§1, 4, 5, and 6 as a single narrative rather than a sequence of disconnected
@@ -32,15 +32,15 @@ contract shape everything below is built against is
 
 *(Exercises [BEH-EA-081](../behaviors/11-http-error-mapping.md#beh-ea-081-a-plugins-handlers-are-built-with-httpapibuildergroup-against-its-own-contract) and [BEH-EA-083](../behaviors/11-http-error-mapping.md#beh-ea-083-authhttproutesauthapi-registers-the-composed-api-with-the-router).)
 
-A team's first contact with effect-auth is composing one plugin and getting a
+A team's first contact with awthaq is composing one plugin and getting a
 running HTTP server out of it. `password()` is the only plugin installed —
 no OAuth, no passkeys, no roles — so the composed API surface is exactly
 sign-up, sign-in, session, and sign-out.
 
 ```ts
 // auth.ts
-import { Auth } from "@effect-auth/core"
-import { password } from "@effect-auth/password"
+import { Auth } from "@awthaq/core"
+import { password } from "@awthaq/password"
 import { SqliteClient, SqliteMigrator } from "@effect/sql-sqlite-node"
 import { Config, Effect, Layer } from "effect"
 
@@ -62,7 +62,7 @@ export const AuthLive = Auth.layer(plugins).pipe(
 // server.ts
 import { NodeHttpServer, NodeRuntime, NodeServices } from "@effect/platform-node"
 import { HttpRouter } from "effect/unstable/http"
-import { AuthHttp } from "@effect-auth/server"
+import { AuthHttp } from "@awthaq/server"
 import { createServer } from "node:http"
 
 const Routes = AuthHttp.routes(AuthApi).pipe(Layer.provide(AuthLive))
@@ -104,18 +104,18 @@ The `x-csrf-token` header on sign-up is not incidental — it is the next
 section's subject, and it is required here for the same reason it would be
 required on any application endpoint this team writes.
 
-## 2. Protecting an endpoint the same way effect-auth protects its own
+## 2. Protecting an endpoint the same way awthaq protects its own
 
 *(Exercises [BEH-EA-065](../behaviors/09-authentication-middleware.md#beh-ea-065-the-authentication-middleware-tries-a-cookie-handler-first-in-its-declared-security-record) and [BEH-EA-073](../behaviors/10-csrf.md#beh-ea-073-sec-fetch-site-is-the-primary-csrf-signal).)
 
 Once the auth plugin is wired, the team's own `projects` API group is
-protected by composing the same two pieces of middleware effect-auth uses
+protected by composing the same two pieces of middleware awthaq uses
 internally: `Authentication`, which resolves a signed-in principal or fails
 with 401, and `CsrfProtection`, which rejects unsafe methods lacking the CSRF
 header with 403.
 
 ```ts
-import { Authentication, CurrentPrincipal, CsrfProtection } from "@effect-auth/api"
+import { Authentication, CurrentPrincipal, CsrfProtection } from "@awthaq/api"
 
 export class ProjectsApi extends HttpApiGroup.make("projects")
   .add(
@@ -150,7 +150,7 @@ uses `OptionalAuthentication` instead, which resolves `CurrentPrincipal` to
 an `AnonymousPrincipal` rather than failing:
 
 ```ts
-import { OptionalAuthentication } from "@effect-auth/api"
+import { OptionalAuthentication } from "@awthaq/api"
 
 HttpApiGroup.make("feed")
   .add(HttpApiEndpoint.get("home", "/", { success: Feed }))
@@ -165,7 +165,7 @@ machine-to-machine group authenticated by an API key header alongside a
 human-facing group authenticated by the cookie-to-bearer flow:
 
 ```ts
-import { ApiKeyAuthentication } from "@effect-auth/api-key/api"   // its own scheme: x-api-key header
+import { ApiKeyAuthentication } from "@awthaq/api-key/api"   // its own scheme: x-api-key header
 
 HttpApiGroup.make("machine").add(/* … */).middleware(ApiKeyAuthentication)   // ServicePrincipal
 HttpApiGroup.make("app").add(/* … */).middleware(Authentication)             // cookie → bearer
@@ -262,6 +262,6 @@ posture can flip that with `onUnavailable: "reject"`.
 
 That is the whole loop this appendix set out to walk: a server that runs
 with no authorization concepts installed at all, an endpoint protected the
-same way effect-auth protects its own, a session a user can see and revoke,
+same way awthaq protects its own, a session a user can see and revoke,
 and the two flows — reset and verification — that keep a password account
 recoverable without leaking who has an account at all.

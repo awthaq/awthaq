@@ -1,6 +1,6 @@
-# @effect-auth/password
+# @awthaq/password
 
-> **This describes a planned package.** effect-auth is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
 
 Plugin (M2). Sign-up, sign-in, password reset, verification, and optional breach check as the Password plugin.
 

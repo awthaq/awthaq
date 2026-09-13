@@ -1,5 +1,5 @@
 {
-  "name": "@effect-auth/next",
+  "name": "@awthaq/next",
   "version": "0.1.0",
   "private": true,
   "description": "Next.js adapter: server/client boundary, cookie forwarding, SSR decision hydration.",
@@ -31,10 +31,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
-    "@effect-auth/core": "workspace:*",
-    "@effect-auth/react": "workspace:*",
-    "@effect-auth/server": "workspace:*",
+    "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
+    "@awthaq/react": "workspace:*",
+    "@awthaq/server": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

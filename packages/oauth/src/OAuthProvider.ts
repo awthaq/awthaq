@@ -1,4 +1,4 @@
-// @effect-auth/oauth — OAuthProvider
+// @awthaq/oauth — OAuthProvider
 //
 // spec/behaviors/16-oauth.md, BEH-EA-121, BEH-EA-126, BEH-EA-127.
 // spec/models/02-oauth-oidc.md's `OAuthProvider.oidc({...})` sketch, made
@@ -126,7 +126,7 @@ export const resolve = (
 
     if (config.kind === "oidc" && Option.isNone(configuredIssuer)) {
       return yield* Effect.die(
-        new Error(`effect-auth/oauth: provider "${config.id}" is oidc but declares no issuer`),
+        new Error(`awthaq/oauth: provider "${config.id}" is oidc but declares no issuer`),
       );
     }
 
@@ -145,7 +145,7 @@ export const resolve = (
       if (Option.isSome(configuredIssuer) && document.issuer !== configuredIssuer.value) {
         return yield* Effect.die(
           new Error(
-            `effect-auth/oauth: provider "${config.id}" discovery issuer "${document.issuer}" ` +
+            `awthaq/oauth: provider "${config.id}" discovery issuer "${document.issuer}" ` +
               `does not match configured issuer "${configuredIssuer.value}"`,
           ),
         );
@@ -159,7 +159,7 @@ export const resolve = (
     if (authorizationEndpoint === undefined || tokenEndpoint === undefined) {
       return yield* Effect.die(
         new Error(
-          `effect-auth/oauth: provider "${config.id}" has no authorizationEndpoint/tokenEndpoint ` +
+          `awthaq/oauth: provider "${config.id}" has no authorizationEndpoint/tokenEndpoint ` +
             "(supply endpoints, or a discoveryUrl that publishes them)",
         ),
       );

@@ -1,4 +1,4 @@
-// @effect-auth/jwt — JwtCodec
+// @awthaq/jwt — JwtCodec
 //
 // .scratch/jwt/issues/08-sign-and-verify.md: the shared claims-assembly and
 // JWS encode/verify logic — deliberately free of any import from `Jwt.ts`,
@@ -6,9 +6,9 @@
 // `AuthPlugin`-shaped. Operates on plain data only (a `kid`/`alg`/JWK, a
 // token string, expected `iss`/`aud`/`alg`) so ticket 13's standalone lite
 // verifier can depend on this module alone, with zero footprint from the
-// rest of this plugin or `@effect-auth/core`.
+// rest of this plugin or `@awthaq/core`.
 //
-// Compact-JWS *segment splitting* mirrors `@effect-auth/oauth`'s own
+// Compact-JWS *segment splitting* mirrors `@awthaq/oauth`'s own
 // `Jwt.ts` (base64url decode) — not imported from there, since that module
 // solves a narrower, different problem (RS256-only third-party `id_token`
 // verification) and this codebase's own `.scratch/jwt/spec.md` decided to
@@ -121,7 +121,7 @@ export const localSigner = (privateKeyJwk: Record<string, unknown>): Signer => (
  * failing to sign.
  */
 export const RemoteSigner: Context.Reference<Option.Option<Signer>> = Context.Reference(
-  "effect-auth/jwt/RemoteSigner",
+  "awthaq/jwt/RemoteSigner",
   { defaultValue: () => Option.none() },
 );
 

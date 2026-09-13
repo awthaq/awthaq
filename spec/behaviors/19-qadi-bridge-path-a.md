@@ -7,12 +7,12 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-015 (qadi bridge path selection) (CCR-EA-002) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-145: `AuthorizedSubject` bridges `CurrentPrincipal` to `CurrentSubject`
 

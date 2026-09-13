@@ -1,7 +1,7 @@
-# @effect-auth/ports
+# @awthaq/ports
 
 ## 0.1.0
 
 ### Patch Changes
 
-- @effect-auth/api@0.1.0
+- @awthaq/api@0.1.0

@@ -1,4 +1,4 @@
-# @effect-auth/api
+# @awthaq/api
 
 ## 0.1.0
 

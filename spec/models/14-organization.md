@@ -7,7 +7,7 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) |
 ---
@@ -22,7 +22,7 @@ authorization policies can ask "is this subject a member of the organization
 that owns this resource" without the application hand-writing that resolver
 itself. `archive/PRD.md` §17's Phase-2 row describes it exactly this way:
 "`Organization` (membership, invitations, relationship resolver)." Nothing
-described here exists yet — effect-auth is pre-implementation.
+described here exists yet — awthaq is pre-implementation.
 
 ## Who asks for it
 
@@ -34,7 +34,7 @@ composition example repeats the same tuple shape
 organization membership as a baseline building block for applications that
 have any notion of a team or tenant, not an exotic add-on. `archive/PRD.md`
 §15 (Authorization: qadi) names `Organization.relationships` directly as one
-of the three resolvers effect-auth is expected to wire against qadi's fail-closed
+of the three resolvers awthaq is expected to wire against qadi's fail-closed
 defaults ("relationships from organization membership
 (`Organization.relationships`)"), alongside attributes from the user table and
 decision history from audit events — so this plugin is asked for both by
@@ -96,7 +96,7 @@ example but a boundary note on how far the existing cookbook material goes:
 export const OrgRelationships = Layer.effect(RelationshipResolver, Effect.gen(function*() {
   const org = yield* Organization
   return RelationshipResolver.of({
-    name: "effect-auth/OrgRelationships",
+    name: "awthaq/OrgRelationships",
     check: ({ subjectId, relation, resourceId, depth }) => Effect.gen(function*() {
       const [type, userId] = subjectId.split(":")
       if (type !== "user") return "Unrelated" as const

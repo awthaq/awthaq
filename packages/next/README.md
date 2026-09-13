@@ -1,8 +1,8 @@
-# @effect-auth/next
+# @awthaq/next
 
 Next.js adapter: `getSession` (the real, database-verified boundary),
 `hasSessionCookie` (the optimistic, `proxy.ts`-only check), and
-`withNextCookies` (bridges a `Set-Cookie` produced by effect-auth's composed
+`withNextCookies` (bridges a `Set-Cookie` produced by awthaq's composed
 HTTP router into Next's own cookie jar). See
 [`spec/behaviors/24-nextjs-ssr.md`](../../spec/behaviors/24-nextjs-ssr.md)
 (BEH-EA-185/188/189) and
@@ -53,7 +53,7 @@ Every Server Component, server action, and Route Handler imports this one
 
 ```ts
 // proxy.ts
-import { hasSessionCookie } from "@effect-auth/next";
+import { hasSessionCookie } from "@awthaq/next";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
@@ -73,7 +73,7 @@ reject anyway; it is never itself the boundary.
 ```ts
 // app/projects/page.tsx
 import { headers } from "next/headers";
-import { getSession } from "@effect-auth/next";
+import { getSession } from "@awthaq/next";
 import { runtime } from "../lib/runtime.ts";
 
 export default async function Page() {
@@ -92,7 +92,7 @@ export default async function Page() {
 // app/actions.ts
 "use server";
 import { cookies } from "next/headers";
-import { withNextCookies } from "@effect-auth/next";
+import { withNextCookies } from "@awthaq/next";
 import { runtime } from "./lib/runtime.ts";
 import { AppApi } from "./lib/api.ts"; // your own composed HttpApi/router
 
@@ -109,7 +109,7 @@ export async function signIn(email: string, password: string) {
 }
 ```
 
-`withNextCookies` only ever harvests a `Set-Cookie` that effect-auth's own
+`withNextCookies` only ever harvests a `Set-Cookie` that awthaq's own
 `HttpApiBuilder.securitySetCookie` calls already produce (sign-in, sign-up,
 CSRF rotation) — it takes a `Response` and a cookie jar, nothing more, so it
 composes with however your app already dispatches requests against its own

@@ -2,11 +2,11 @@
 //
 // Exercised with a recording `TestFramework` (not `@effect/vitest`'s real
 // `describe`/`it`) so each check's pass/fail can be asserted on directly —
-// a real, well-formed plugin (`@effect-auth/password`'s own `Password`)
+// a real, well-formed plugin (`@awthaq/password`'s own `Password`)
 // proves every check passes cleanly; small deliberately-broken fixture
 // plugins each prove one specific check actually catches its violation.
-import { Password } from "@effect-auth/password";
-import { AuthPlugin } from "@effect-auth/core";
+import { Password } from "@awthaq/password";
+import { AuthPlugin } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import { TestAuth } from "../src/index.ts";

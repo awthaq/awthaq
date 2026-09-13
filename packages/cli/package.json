@@ -1,5 +1,5 @@
 {
-  "name": "@effect-auth/cli",
+  "name": "@awthaq/cli",
   "version": "0.1.0",
   "private": true,
   "description": "doctor, plugin list --graph, routes, migration status|apply, openapi, seed admin, import — reads the plugin manifest, never runs the application.",
@@ -31,12 +31,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
-    "@effect-auth/core": "workspace:*",
-    "@effect-auth/ports": "workspace:*",
-    "@effect-auth/qadi": "workspace:*",
-    "@effect-auth/server": "workspace:*",
-    "@effect-auth/sql": "workspace:*",
+    "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
+    "@awthaq/ports": "workspace:*",
+    "@awthaq/qadi": "workspace:*",
+    "@awthaq/server": "workspace:*",
+    "@awthaq/sql": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-// @effect-auth/organization — OrganizationQadi
+// @awthaq/organization — OrganizationQadi
 //
 // Ticket 18 / spec.md's "qadi contribution": two plain `Layer.effect`
 // contributions an application composes into its own `QadiLive` by hand —
@@ -37,7 +37,7 @@
 import { Organization as OrganizationService } from "./Organization.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as TeamRecords from "./TeamRecords.ts";
-import * as Users from "@effect-auth/core/Users";
+import * as Users from "@awthaq/core/Users";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -85,7 +85,7 @@ export const relationships = Layer.effect(
         );
 
     return {
-      name: "effect-auth/OrganizationQadi.relationships",
+      name: "awthaq/OrganizationQadi.relationships",
       check: ({ subjectId, relation, resourceId }) =>
         Effect.gen(function* () {
           const userId = userIdFromSubject(subjectId);
@@ -133,7 +133,7 @@ export const attributes = Layer.effect(
   Effect.gen(function* () {
     const members = yield* MembershipRecords.MembershipRecords;
     return {
-      name: "effect-auth/OrganizationQadi.attributes",
+      name: "awthaq/OrganizationQadi.attributes",
       resolve: (subjectId, attribute) => {
         const userId = userIdFromSubject(subjectId);
         if (userId === undefined) return Effect.succeed(undefined);

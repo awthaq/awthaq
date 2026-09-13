@@ -1,4 +1,4 @@
-// @effect-auth/qadi — AuthorizedSubject (Path A)
+// @awthaq/qadi — AuthorizedSubject (Path A)
 //
 // spec/behaviors/19-qadi-bridge-path-a.md, BEH-EA-145.
 //
@@ -10,7 +10,7 @@
 // "hide denied as 404"/"outages stay 5xx" handler patterns) are all
 // `@qadi/core`/`@qadi/http` calls a handler makes once `CurrentSubject` is in
 // its environment — nothing in this package reimplements them; there is
-// nothing effect-auth-specific to build for those behaviors beyond this one
+// nothing awthaq-specific to build for those behaviors beyond this one
 // middleware providing the subject they all read.
 //
 // **Group `.middleware()` call order — verified empirically, and the
@@ -30,7 +30,7 @@
 // `Authentication`/`OptionalAuthentication` declared *last*, so it wraps
 // (and therefore runs *before*) `AuthorizedSubject`. `AuthorizedSubject.test.ts`
 // uses this order, confirmed passing.
-import { Api } from "@effect-auth/api";
+import { Api } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpApiMiddleware } from "effect/unstable/httpapi";
@@ -52,14 +52,14 @@ import { SubjectResolver } from "./SubjectResolver.ts";
 export class AuthorizedSubject extends HttpApiMiddleware.Service<
   AuthorizedSubject,
   { provides: CurrentSubject; requires: Api.CurrentPrincipal }
->()("effect-auth/qadi/AuthorizedSubject") {}
+>()("awthaq/qadi/AuthorizedSubject") {}
 
 /**
  * `SubjectResolver` is a `Context.Reference` (a slot with a fail-closed
  * default, ADR-EA-012) — like `Sessions.ts`'s own `SessionConfig`, it is
  * satisfied by its default the moment it is yielded and never appears in a
  * consuming `Layer`'s `RIn`, so this layer's only real requirement is none
- * at all unless some other plugin (`@effect-auth/roles`) overrides it.
+ * at all unless some other plugin (`@awthaq/roles`) overrides it.
  */
 export const AuthorizedSubjectLive: Layer.Layer<AuthorizedSubject> = Layer.effect(
   AuthorizedSubject,

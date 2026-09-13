@@ -8,7 +8,7 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Accepted — design; implementation deferred |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 

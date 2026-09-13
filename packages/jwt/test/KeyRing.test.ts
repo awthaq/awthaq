@@ -1,7 +1,7 @@
 // .scratch/jwt/issues/07-keyring-and-key-persistence.md — a fresh KeyRing
 // produces a key with the right shape, lazily minting on first use and
 // persisting it. The same contract suite runs against `layerMemory` and
-// `layerSql`, mirroring `@effect-auth/admin`'s own
+// `layerSql`, mirroring `@awthaq/admin`'s own
 // `ImpersonationRecords.test.ts`.
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";

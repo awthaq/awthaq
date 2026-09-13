@@ -1,5 +1,5 @@
 {
-  "name": "@effect-auth/api-key",
+  "name": "@awthaq/api-key",
   "version": "0.1.0",
   "private": true,
   "description": "Long-lived API keys resolving to service principals.",
@@ -31,11 +31,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
-    "@effect-auth/core": "workspace:*",
-    "@effect-auth/ports": "workspace:*",
-    "@effect-auth/server": "workspace:*",
-    "@effect-auth/sql": "workspace:*",
+    "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
+    "@awthaq/ports": "workspace:*",
+    "@awthaq/server": "workspace:*",
+    "@awthaq/sql": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

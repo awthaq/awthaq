@@ -1,6 +1,6 @@
-# @effect-auth/qadi
+# @awthaq/qadi
 
-> **This describes a planned package.** effect-auth is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
 
 Authorization bridge (6). AuthorizedSubject middleware, SubjectExtractor layer, obligation handlers — the bridge to qadi, not an authorizer of its own (ADR-EA-009).
 

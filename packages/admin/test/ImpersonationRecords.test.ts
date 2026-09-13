@@ -3,7 +3,7 @@
 // The same contract suite runs against `layerMemory` and `layerSql` — the
 // same pattern `packages/passkey/test/PasskeyCredentials.test.ts` uses for
 // its own two `Layer`s.
-import { Users } from "@effect-auth/core";
+import { Users } from "@awthaq/core";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";

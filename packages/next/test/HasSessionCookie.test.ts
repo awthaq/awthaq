@@ -4,8 +4,8 @@
 // *expired* session's still-present cookie just as readily as a valid
 // one — the whole point being that it performs no verification at all, not
 // merely that it happens to tolerate expired sessions.
-import { Api } from "@effect-auth/api";
-import { Sessions, Users } from "@effect-auth/core";
+import { Api } from "@awthaq/api";
+import { Sessions, Users } from "@awthaq/core";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";

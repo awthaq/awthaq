@@ -1,8 +1,8 @@
-// @effect-auth/passkey — PasskeyApi
+// @awthaq/passkey — PasskeyApi
 //
 // spec/behaviors/17-passkey.md, BEH-EA-129 through BEH-EA-136. This
 // plugin's own contract, three groups all named `passkey` or a dotted
-// sub-id of it (BEH-EA-004) — built the same way `@effect-auth/password`'s
+// sub-id of it (BEH-EA-004) — built the same way `@awthaq/password`'s
 // own `PasswordApi.ts` builds its:
 //
 // - `passkey` — the registration ceremony (BEH-EA-130) and Conditional
@@ -41,13 +41,13 @@
 // every other authentication failure (unknown credential id, a wrong
 // signature, an origin/rpId mismatch) *would* leak that distinction, so
 // `Passkey.ts`'s handler collapses all of them into the same
-// `Api.InvalidCredentials` uniform response `@effect-auth/password`'s own
+// `Api.InvalidCredentials` uniform response `@awthaq/password`'s own
 // `signIn` already uses for the identical reason. `register/verify`, in
 // contrast, only ever runs for an already-authenticated caller adding a
 // credential to their own account — there is no identifier to enumerate —
 // so it reports the full, precise BEH-EA-136 taxonomy.
 
-import { Api, SessionContract } from "@effect-auth/api";
+import { Api, SessionContract } from "@awthaq/api";
 import * as Schema from "effect/Schema";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi";
 

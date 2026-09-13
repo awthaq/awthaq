@@ -3,7 +3,7 @@ packages:
   - features
 
 # `effect` is pinned exact, not a caret range, and (once packages exist) every
-# @effect-auth package is expected to publish that exact pin as its own
+# @awthaq package is expected to publish that exact pin as its own
 # runtime dependency, the same discipline qadi (../qadi) follows. This is
 # deliberate for as long as effect ships as an rc: two different rc builds
 # are not guaranteed ABI-compatible the way two semver-compatible stable

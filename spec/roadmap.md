@@ -8,7 +8,7 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed gate-count and M7 Bearer omission; clarified milestone-to-gate mapping (gates cluster at M0/M1/M6/M8, other milestones certified retroactively); reworded M0 to not overclaim gate 5's mechanized proof (CCR-EA-002) |
 
@@ -121,5 +121,5 @@ Drawn from `archive/PRD.md` §4 (Non-goals). The initial product will not:
 - Load plugins at runtime.
 - Be a general application plugin system.
 - Be an ORM or a mail provider.
-- Implement authorization — that is qadi's responsibility, not effect-auth's (see `archive/PRD.md` §5, principle 7, and [ADR-EA-009](decisions/009-authorization-delegated-to-qadi.md)).
+- Implement authorization — that is qadi's responsibility, not awthaq's (see `archive/PRD.md` §5, principle 7, and [ADR-EA-009](decisions/009-authorization-delegated-to-qadi.md)).
 - Implement every enterprise protocol in v1 (SSO, SAML, an OIDC provider, SCIM and device authorization are M(3) roadmap items, not v1 scope — see `archive/PRD.md` §17, Phase 3).

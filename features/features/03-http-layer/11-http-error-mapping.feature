@@ -1,4 +1,4 @@
-# effect-auth is pre-implementation (see spec/README.md). Every scenario in
+# awthaq is pre-implementation (see spec/README.md). Every scenario in
 # this file specifies intended behavior of a system that does not exist yet
 # — a target the future testing harness (BEH-EA-193..200) is meant to
 # execute against, not a record of anything verified today.
@@ -53,9 +53,9 @@ Feature: HTTP Serving and Error Mapping
 
     @REQ-EA-228
     Scenario: AuthHttp.routes accepts Auth.api composing auth groups with application groups
-      Given an "auth.api" value produced by "Auth.api" merging effect-auth's plugin groups with an application's own groups
+      Given an "auth.api" value produced by "Auth.api" merging awthaq's plugin groups with an application's own groups
       When "AuthHttp.routes(auth.api)" is called
-      Then both the effect-auth groups and the application's own groups are registered with the router
+      Then both the awthaq groups and the application's own groups are registered with the router
 
     @REQ-EA-229
     Scenario: Registering the routes requires no wiring beyond the services auth.layer already provides

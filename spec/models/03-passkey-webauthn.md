@@ -8,13 +8,13 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 ---
 
 ## What it is
-Passkey is WebAuthn-based, phishing-resistant sign-in: the browser mints a public-key credential via the platform authenticator, effect-auth stores the public key and verifies signed challenges, with no shared secret ever transmitted. It is planned as an MVP plugin, listed alongside `Password`, `OAuth` and `Roles` in `archive/PRD.md` §9.4's example tuple.
+Passkey is WebAuthn-based, phishing-resistant sign-in: the browser mints a public-key credential via the platform authenticator, awthaq stores the public key and verifies signed challenges, with no shared secret ever transmitted. It is planned as an MVP plugin, listed alongside `Password`, `OAuth` and `Roles` in `archive/PRD.md` §9.4's example tuple.
 
 ## Who asks for it
 `research/06-webauthn-passkeys.md`'s TL;DR frames 2026 as the point where this stopped being a niche ask: "WebAuthn Level 3 is a W3C Recommendation (2026-08-25) — the 'passkey release'," and cites a Corbado 2026 benchmark that conditional-UI-only deployments plateau around 20% passkey adoption, "+manual prompts → ~40%, full best practice → 60–80%" — meaning any consumer application aiming for passwordless adoption at scale is the concrete class asking for this, and the win depends on doing autofill/conditional-create correctly, not just exposing the two ceremony endpoints.
@@ -48,7 +48,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   })
 }
 ```
-This sketch is speculative — it is not quoted from `archive/PRD.md` — but it is consistent with `research/06-webauthn-passkeys.md`'s recommendation that "server-side ceremony state should be an injected effect-auth capability (`ChallengeStore`)" and its endorsement of `@simplewebauthn/server` "behind an Effect service," which is what the `WebAuthn` port in `archive/PRD.md` §11 already names.
+This sketch is speculative — it is not quoted from `archive/PRD.md` — but it is consistent with `research/06-webauthn-passkeys.md`'s recommendation that "server-side ceremony state should be an injected awthaq capability (`ChallengeStore`)" and its endorsement of `@simplewebauthn/server` "behind an Effect service," which is what the `WebAuthn` port in `archive/PRD.md` §11 already names.
 
 ## Worked example
 ```ts

@@ -1,4 +1,4 @@
-// @effect-auth/ports — PasswordHasher
+// @awthaq/ports — PasswordHasher
 //
 // spec/overview.md's Ports stratum table ("PasswordHasher (layerArgon2id,
 // layerScrypt)") and archive/design/api-design-v4.md §3, which gives this
@@ -8,12 +8,12 @@
 //     hash(plain: Redacted.Redacted<string>): Effect.Effect<string>            // PHC string
 //     verify(plain: Redacted.Redacted<string>, phc: string): Effect.Effect<boolean>
 //     needsRehash(phc: string): boolean
-//   }>()("effect-auth/ports/PasswordHasher") { ... }
+//   }>()("awthaq/ports/PasswordHasher") { ... }
 //
 // No BEH-EA range is allocated for the Ports stratum yet
 // (spec/traceability.md); this module is grounded directly in the cited
 // spec/archive/research sources rather than a numbered behavior, the same
-// way `@effect-auth/sql`'s workaround comments cite ADRs directly where no
+// way `@awthaq/sql`'s workaround comments cite ADRs directly where no
 // BEH-EA covers a specific implementation detail.
 //
 // research/07-passwords-2fa.md Q52 names the OWASP Password Storage Cheat
@@ -24,7 +24,7 @@
 // own words: "hash-wasm v4.12.0 (MIT, zero-dep pure WASM, runs in
 // browsers/Node/Deno/Web Workers) brings argon2id to edge runtimes" — the
 // same "zero native compilation" preference already applied to
-// `@effect/sql-sqlite-node` in `@effect-auth/sql`: no platform-specific
+// `@effect/sql-sqlite-node` in `@awthaq/sql`: no platform-specific
 // prebuilt binary, no native compilation step, works unmodified on any
 // runtime that can load WASM.
 //
@@ -83,7 +83,7 @@ export interface PasswordHasherShape {
 }
 
 export class PasswordHasher extends Context.Service<PasswordHasher, PasswordHasherShape>()(
-  "effect-auth/ports/PasswordHasher",
+  "awthaq/ports/PasswordHasher",
 ) {}
 
 // $argon2id$v=19$m=<memorySize>,t=<iterations>,p=<parallelism>$<salt>$<hash>

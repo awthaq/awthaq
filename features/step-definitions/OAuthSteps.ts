@@ -7,7 +7,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as Duration from "effect/Duration";
-import { Users } from "@effect-auth/core";
+import { Users } from "@awthaq/core";
 import * as Config from "effect/Config";
 import {
   World,

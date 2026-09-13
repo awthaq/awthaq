@@ -1,8 +1,8 @@
-// @effect-auth/core — Verification
+// @awthaq/core — Verification
 //
 // spec/behaviors/08-verification-tokens.md, BEH-EA-057 through BEH-EA-064.
 // Two `Layer`s over the same `VerificationShape`: `layerMemory` (a `Ref`)
-// and `layerSql` (`@effect-auth/sql`'s `VerificationRepository`/
+// and `layerSql` (`@awthaq/sql`'s `VerificationRepository`/
 // `VerificationReservationsRepository`), per
 // `spec/decisions/016-verification-sql-claiming.md` (ADR-EA-016, revised
 // 1.1 after a code-review finding on the original delete-then-insert
@@ -30,7 +30,7 @@
 // comment) and so should be indistinguishable to whatever is watching that
 // event too.
 
-import { Models as SqlModels, Repositories as SqlRepositories } from "@effect-auth/sql";
+import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -73,7 +73,7 @@ export interface VerificationTokenView {
   readonly createdAt: DateTime.Utc;
   readonly expiresAt: DateTime.Utc;
   /**
-   * BEH-EA-122 (`@effect-auth/oauth`): an opaque value the issuer attached
+   * BEH-EA-122 (`@awthaq/oauth`): an opaque value the issuer attached
    * at `issue` time and gets back verbatim from `consume` — `password`'s
    * reset/verify tokens never needed this (the `userId` they carry round
    * trips inside `identifier` itself), but OAuth flow state
@@ -120,7 +120,7 @@ export interface VerificationShape {
 }
 
 export class Verification extends Context.Service<Verification, VerificationShape>()(
-  "effect-auth/core/Verification",
+  "awthaq/core/Verification",
 ) {}
 
 interface TokenRow {
@@ -198,7 +198,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
                 return [
                   Result.fail(
                     new TokenConsumed({
-                      message: `effect-auth: token replay or unknown token: ${identifier}`,
+                      message: `awthaq: token replay or unknown token: ${identifier}`,
                       identifier,
                     }),
                   ),
@@ -302,7 +302,7 @@ export const layerSql = Layer.effect(
         onNone: () =>
           Result.fail(
             new TokenConsumed({
-              message: `effect-auth: token replay or unknown token: ${identifier}`,
+              message: `awthaq: token replay or unknown token: ${identifier}`,
               identifier,
             }),
           ),

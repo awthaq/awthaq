@@ -3,7 +3,7 @@
 // The same contract suite runs against `layerMemory` and `layerSql` — the
 // same pattern `packages/core/test/Accounts.test.ts` etc. use for their own
 // two `Layer`s.
-import { Users } from "@effect-auth/core";
+import { Users } from "@awthaq/core";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

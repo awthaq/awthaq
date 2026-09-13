@@ -1,7 +1,7 @@
 // spec/behaviors/15-password.md, BEH-EA-113 through BEH-EA-120.
 //
 // Real, in-memory domain-level tests (no HTTP layer here — see
-// `@effect-auth/server/test/AuthHttp.test.ts` for the equivalent
+// `@awthaq/server/test/AuthHttp.test.ts` for the equivalent
 // wire-level pattern this plugin could get its own version of later): a
 // real `PasswordHasher.layerArgon2id` (real argon2id hashing, not a mock),
 // a real in-memory `Mailer`/`AuthEvents`/`Users`/`Accounts`/`Sessions`/
@@ -9,9 +9,9 @@
 // transport (the same category of swap `TestClock` is for time — not a
 // business-logic mock).
 import { createHash } from "node:crypto";
-import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@effect-auth/core";
-import { Mailer, PasswordHasher, RateLimiter } from "@effect-auth/ports";
-import { Authentication } from "@effect-auth/server";
+import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@awthaq/core";
+import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Authentication } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

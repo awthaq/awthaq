@@ -1,5 +1,5 @@
 {
-  "name": "@effect-auth/test",
+  "name": "@awthaq/test",
   "version": "0.1.0",
   "private": true,
   "description": "TestAuth test harness and the plugin contract-test suite (runPluginContractTests) — runs the whole plugin pipeline over an in-memory backend.",
@@ -31,15 +31,15 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
-    "@effect-auth/core": "workspace:*",
-    "@effect-auth/ports": "workspace:*",
-    "@effect-auth/server": "workspace:*",
+    "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
+    "@awthaq/ports": "workspace:*",
+    "@awthaq/server": "workspace:*",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect-auth/password": "workspace:*",
+    "@awthaq/password": "workspace:*",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

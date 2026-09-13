@@ -1,4 +1,4 @@
-// @effect-auth/organization — InvitationRecords
+// @awthaq/organization — InvitationRecords
 //
 // spec.md's "Invitations": persistence for the `organization_invitation`
 // table, mirroring `MembershipRecords.ts`'s own shape. `role` is stored as
@@ -6,7 +6,7 @@
 // `status` is a plain closed string union, never derived at read time — a
 // caller (`Organization.ts`) transitions it explicitly via `updateStatus`.
 
-import { Users } from "@effect-auth/core";
+import { Users } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -66,7 +66,7 @@ export interface InvitationRecordsShape {
 }
 
 export class InvitationRecords extends Context.Service<InvitationRecords, InvitationRecordsShape>()(
-  "effect-auth/organization/InvitationRecords",
+  "awthaq/organization/InvitationRecords",
 ) {}
 
 const notFound = (id: string): InvitationRecordNotFound => new InvitationRecordNotFound({ id });

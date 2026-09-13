@@ -4,10 +4,10 @@
 // composing them directly with a real `Organization` instance and calling
 // `RelationshipResolver`/`AttributeResolver` straight, the same way an
 // application's own qadi policy evaluation would reach them.
-import { Api } from "@effect-auth/api";
-import { AuthEvents, Sessions, Users } from "@effect-auth/core";
-import { Mailer } from "@effect-auth/ports";
-import { Authentication } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Mailer } from "@awthaq/ports";
+import { Authentication } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

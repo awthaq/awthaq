@@ -7,9 +7,9 @@
 // this suite proves the plugin's own ceremony/persistence/enumeration-safety
 // logic, not `@simplewebauthn/server`'s cryptography (that's
 // `packages/ports/test/WebAuthn.test.ts`'s own job).
-import { AuthEvents, Accounts, Sessions, Users } from "@effect-auth/core";
-import { WebAuthn } from "@effect-auth/ports";
-import { Authentication } from "@effect-auth/server";
+import { AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
+import { WebAuthn } from "@awthaq/ports";
+import { Authentication } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

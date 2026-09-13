@@ -8,13 +8,13 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 
 ---
 
-> effect-auth is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §13, `archive/design/usage-examples-v4.md` §6.2, and `better-auth/01-core-domain/01-entities-and-invariants.md` §5 — not code that has shipped.
+> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §13, `archive/design/usage-examples-v4.md` §6.2, and `better-auth/01-core-domain/01-entities-and-invariants.md` §5 — not code that has shipped.
 
 ## BEH-EA-057: A verification token is scoped to one purpose
 
@@ -30,7 +30,7 @@ REQUIREMENT: A `VerificationToken` row MUST carry an identifier whose
              purpose, even if the raw token value were somehow reused.
 ```
 
-`better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 documents `Verification` as "a generic, single-purpose ephemeral keyed value store," whose `identifier` is an arbitrary string whose meaning is defined entirely by the caller that created the row. effect-auth's plan adopts the same generic entity but requires the purpose to be encoded in the identifier's own naming convention, so a password-reset token and an email-verification token are structurally distinct rows even when both happen to exist for the same user at once.
+`better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 documents `Verification` as "a generic, single-purpose ephemeral keyed value store," whose `identifier` is an arbitrary string whose meaning is defined entirely by the caller that created the row. awthaq's plan adopts the same generic entity but requires the purpose to be encoded in the identifier's own naming convention, so a password-reset token and an email-verification token are structurally distinct rows even when both happen to exist for the same user at once.
 
 ## BEH-EA-058: A verification token's consumption and the state change it authorizes commit in one transaction
 
@@ -73,7 +73,7 @@ REQUIREMENT: The value compared at consumption time MUST be a hash of the
              and compared directly.
 ```
 
-`better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 documents this as a supplier-side confidentiality hardening the base contract explicitly allows: "the same identifier, hashed the same way, must always resolve to the same row." effect-auth's plan treats this the same way it treats session secrets (BEH-EA-050): a disclosure of the verification-token table must not itself be sufficient to complete a password reset or email confirmation the token was meant to gate.
+`better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 documents this as a supplier-side confidentiality hardening the base contract explicitly allows: "the same identifier, hashed the same way, must always resolve to the same row." awthaq's plan treats this the same way it treats session secrets (BEH-EA-050): a disclosure of the verification-token table must not itself be sufficient to complete a password reset or email confirmation the token was meant to gate.
 
 ## BEH-EA-061: A verification token carries an expiry, treated as invalid before physical removal
 
@@ -83,7 +83,7 @@ REQUIREMENT: A verification token past its `expiresAt` MUST be treated as
              cleanup process has physically deleted the row.
 ```
 
-`better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 states this as a lifecycle property of the entity, not of whatever garbage-collection process eventually removes expired rows: "rows past this instant are treated as already invalid by every read operation, even before they are physically removed." effect-auth's plan follows the same rule so that expiry enforcement never depends on the timeliness of a background sweep.
+`better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 states this as a lifecycle property of the entity, not of whatever garbage-collection process eventually removes expired rows: "rows past this instant are treated as already invalid by every read operation, even before they are physically removed." awthaq's plan follows the same rule so that expiry enforcement never depends on the timeliness of a background sweep.
 
 ## BEH-EA-062: Consuming a verification token is race-safe — at most one concurrent caller succeeds
 
@@ -95,7 +95,7 @@ REQUIREMENT: When multiple callers race to consume the same token
              caller won.
 ```
 
-`better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as the `consume-verification-value` operation's core guarantee, with an explicit blame rule alongside it: a caller that proceeds with a state change without gating on a non-null consume result is responsible for the resulting violation — the race-safety guarantee protects only callers that actually check the result. effect-auth's plan carries the same operation and the same blame assignment into its own `Verification` domain service.
+`better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as the `consume-verification-value` operation's core guarantee, with an explicit blame rule alongside it: a caller that proceeds with a state change without gating on a non-null consume result is responsible for the resulting violation — the race-safety guarantee protects only callers that actually check the result. awthaq's plan carries the same operation and the same blame assignment into its own `Verification` domain service.
 
 ## BEH-EA-063: A reservation-style identifier answers "who claimed this first," independent of any column-level uniqueness
 
@@ -108,7 +108,7 @@ REQUIREMENT: A caller that needs to claim an identifier exclusively (a
              closed rather than report a false success.
 ```
 
-`better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as a distinct operation from ordinary consumption — `reserve-verification-value` — used, for example, to serialize the "promote an unverified user on email proof" operation (§2.3) against a concurrent second promotion of the same user. effect-auth's plan reuses the same generic `Verification` entity for this purpose rather than introducing a second, lock-specific table.
+`better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as a distinct operation from ordinary consumption — `reserve-verification-value` — used, for example, to serialize the "promote an unverified user on email proof" operation (§2.3) against a concurrent second promotion of the same user. awthaq's plan reuses the same generic `Verification` entity for this purpose rather than introducing a second, lock-specific table.
 
 ## BEH-EA-064: Purpose-scoped flows respond uniformly regardless of whether their target exists
 

@@ -82,7 +82,7 @@ NIST explicitly references HIBP as a compliant breach-blocklist source: [how HIB
 **Recommendation:**
 
 1. Define `PasswordHasher` with `hash(password) -> Effect<PhcString, PasswordHashError>`, `verify(password, phc) -> Effect<boolean, ...>` (constant-time inside the implementation), `needsRehash(phc, policy) -> boolean`, `algorithm: AlgorithmId`. Plugins (password reset, basic auth, API-key secret if ever KDF'd) depend only on the tag.
-2. **Ship three first-class Layers** and make the docs' quickstart pick per runtime: `@effect-auth/hasher-argon2-native` (peer-dep `@node-rs/argon2`, for Node/Bun), `@effect-auth/hasher-wasm` (peer-dep `hash-wasm`, universal incl. Workers — the **default for edge targets**), `@effect-auth/hasher-scrypt` (pure `node:crypto`, zero extra deps). Core itself ships **no native dependency** — hashers are optional peer deps so the framework stays installable everywhere.
+2. **Ship three first-class Layers** and make the docs' quickstart pick per runtime: `@awthaq/hasher-argon2-native` (peer-dep `@node-rs/argon2`, for Node/Bun), `@awthaq/hasher-wasm` (peer-dep `hash-wasm`, universal incl. Workers — the **default for edge targets**), `@awthaq/hasher-scrypt` (pure `node:crypto`, zero extra deps). Core itself ships **no native dependency** — hashers are optional peer deps so the framework stays installable everywhere.
 3. Document the honest edge tradeoff matrix: argon2id-WASM ≈ native (same security), ~2–4× slower CPU per hash; PBKDF2-WebCrypto only for FIPS; never silently degrade — the chosen Layer is visible in the type signature of the compiled `Auth`.
 4. Verification must never leak timing on miss: library verify functions are constant-time; for PBKDF2/scrypt use `crypto.timingSafeEqual` / Workers `crypto.timingSafeEqual` on the derived bytes (also covered by Q90's timing normalization on the whole sign-in path).
 5. Do **not** use argon2/bcrypt/scrypt for high-entropy tokens (API keys, verification tokens) — SHA-256 suffices and is required for indexed lookup (see Q59).
@@ -189,7 +189,7 @@ Mechanics worth copying: better-auth stores the **first 6 chars** (incl. prefix)
 2. Typed errors: `CaptchaMissing`, `CaptchaInvalid({ codes })`, `CaptchaUnavailable` mapped per Q36 (4xx to the client, 5xx only for provider failure); never include the raw token in logs (Q93 redaction list).
 3. **Failure policy is explicit config**: `onProviderFailure: "allow" | "deny"` — default `allow` (fail-open) so a Turnstile outage cannot lock out all signups, with a metric/event emitted; strict operators flip to `deny`. Provider *rejections* always deny.
 4. Pass through `idempotency_key` (Turnstile) and enforce our own single-use semantics client-side (don't accept the same token twice across two endpoints — keep a short TTL cache of consumed token hashes).
-5. Tests: contract-test the capability with a fake verifier (success / invalid codes / provider 500) asserting hook abort ordering (before rate-limit? after body validation — recommend **after validation, before user-write**, so missing-field errors don't burn solved tokens) — the PRD's `@effect-auth/test` harness (Q31) can pin this ordering.
+5. Tests: contract-test the capability with a fake verifier (success / invalid codes / provider 500) asserting hook abort ordering (before rate-limit? after body validation — recommend **after validation, before user-write**, so missing-field errors don't burn solved tokens) — the PRD's `@awthaq/test` harness (Q31) can pin this ordering.
 6. Docs stance: captcha is a spam/cost control, **not** an auth factor; pair with rate limiting (Q37/Q91) and never gate password *reset* completion behind a captcha for an existing account (DoS-on-victim).
 
 **Confidence:** high.
@@ -198,7 +198,7 @@ Mechanics worth copying: better-auth stores the **first 6 chars** (incl. prefix)
 
 ## Technologies & libraries
 
-| Name | What it is | License | Maturity | Relevance to effect-auth |
+| Name | What it is | License | Maturity | Relevance to awthaq |
 |---|---|---|---|---|
 | [@node-rs/argon2](https://www.npmjs.com/package/@node-rs/argon2) | Rust argon2 binding, napi prebuilds | MIT | v2.2.1, ~946k wk downloads | Default hasher Layer for Node/Bun |
 | [hash-wasm](https://github.com/Daninet/hash-wasm) | Pure-WASM argon2/bcrypt/scrypt/PBKDF2/SHA, zero deps | MIT | v4.12.0, stable | Universal/edge hasher Layer (argon2id on Workers) |
@@ -236,7 +236,7 @@ Mechanics worth copying: better-auth stores the **first 6 chars** (incl. prefix)
 - **Soatok** — applied-crypto engineering blog ([beyond-bcrypt](https://soatok.blog/2024/11/27/beyond-bcrypt/)); sharp reviews of JS crypto mistakes.
 - **NIST Digital Identity Guidelines team** — SP 800-63 revision process; the -4 revision shows where policy is heading (restricted PSTN, syncable authenticators).
 
-## Recommended defaults for effect-auth
+## Recommended defaults for awthaq
 
 1. **Hasher**: argon2id `m=19456, t=2, p=1` (PHC strings) — native Layer on Node/Bun (`@node-rs/argon2`), WASM Layer (`hash-wasm`) as edge default; scrypt `N=2^17,r=8,p=1` (maxmem raised) as zero-dep option; bcrypt cost 10 for legacy verify only; PBKDF2 600k only for FIPS.
 2. **PasswordHasher = capability** (Context.Tag + 3 Layers), core has **no native/optional dependency**; hashers are optional peer deps.

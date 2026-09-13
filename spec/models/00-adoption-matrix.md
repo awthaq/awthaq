@@ -8,13 +8,13 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added MOD-EA-014 (Organization) and MOD-EA-015 (Admin/Impersonation) rows; noted an open question on whether a new enabler category is needed (CCR-EA-002) |
 
 ---
 
-This document is **not normative**. effect-auth is currently **pre-implementation**:
+This document is **not normative**. awthaq is currently **pre-implementation**:
 no code exists yet, anywhere in this repository. This matrix records, for each
 authentication method — and, as of MOD-EA-014/015, each core plugin — the
 project intends to ship, what phase it is planned for, why, and what shared
@@ -51,7 +51,7 @@ method, and a passing test suite. Until then:
 |---|---|
 | **Planned-MVP** | Intended for the first release described in `archive/PRD.md` §17. No code exists; this is the highest-confidence, nearest-term plan. |
 | **Planned-Phase2** | Intended for the second wave of official plugins per `archive/PRD.md` §17. Depends on MVP enablers landing first. |
-| **Planned-Phase3** | Intended for the third wave. Several of these methods (SSO, SAML, OIDC Provider, SCIM) turn effect-auth from a relying party into an identity provider, which is a materially larger scope than the rest of the matrix and is planned last on purpose. |
+| **Planned-Phase3** | Intended for the third wave. Several of these methods (SSO, SAML, OIDC Provider, SCIM) turn awthaq from a relying party into an identity provider, which is a materially larger scope than the rest of the matrix and is planned last on purpose. |
 | **Excluded** | Considered and deliberately kept off the roadmap. (No entry in the current 15-row matrix carries this status; it is defined here so a future revision can use it without inventing a new vocabulary.) |
 
 ## 2. Priority
@@ -62,11 +62,11 @@ if few applications ask for it and it is expensive to wire in.
 
 | Priority | Criterion |
 |---|---|
-| **P0** | Expected on essentially every application that adopts effect-auth; blocking for a credible MVP. |
+| **P0** | Expected on essentially every application that adopts awthaq; blocking for a credible MVP. |
 | **P1** | Asked for by most production applications; costs one well-scoped enabler. |
 | **P2** | Asked for by a recognizable class of application (consumer apps wanting passwordless, teams wanting light 2FA); additive on top of an MVP enabler. |
 | **P3** | Asked for mainly by B2B/enterprise buyers; costs a large, mostly self-contained subsystem. |
-| **P4** | Rarely asked for outside a narrow niche, or requires effect-auth to take on an identity-provider-as-server role rather than a relying-party role. |
+| **P4** | Rarely asked for outside a narrow niche, or requires awthaq to take on an identity-provider-as-server role rather than a relying-party role. |
 
 ## 3. Enablers
 
@@ -132,7 +132,7 @@ Every "Verification" cell across the fifteen files linked above reads **None
 yet — no test exists**, without exception. Every "What is missing" cell is
 honest about the fact that, literally, everything is missing: there is no
 implementation, no contract, no handler, no test, for any of these fifteen
-entries, because effect-auth is pre-implementation in its entirety. The value
+entries, because awthaq is pre-implementation in its entirety. The value
 of these fifteen documents today is not to describe something built — it is
 to fix the planned shape of each method or core plugin (what service it would
 expose, what enabler it depends on, what a caller's code would look like)

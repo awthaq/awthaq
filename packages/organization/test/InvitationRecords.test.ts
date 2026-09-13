@@ -1,6 +1,6 @@
 // spec.md's "Invitations": the same contract-suite-over-both-layers
 // pattern `MembershipRecords.test.ts` uses.
-import { Users } from "@effect-auth/core";
+import { Users } from "@awthaq/core";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";

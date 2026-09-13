@@ -1,4 +1,4 @@
-// @effect-auth/jwt — KeyRing
+// @awthaq/jwt — KeyRing
 //
 // .scratch/jwt/spec.md's "Key management" decision. The first real
 // consumer of `LayerRef.Service` in this codebase (see
@@ -11,7 +11,7 @@
 // (ticket 08 onward) never hit the store directly.
 //
 // Key generation uses the platform WebCrypto (`globalThis.crypto.subtle`),
-// the same primitive `@effect-auth/oauth`'s own `Jwt.ts` already uses for
+// the same primitive `@awthaq/oauth`'s own `Jwt.ts` already uses for
 // RS256 verification — this module is the first to also *generate* and
 // *export* keys, for EdDSA (Ed25519) and ES256 (ECDSA P-256) per
 // `JwtConfig.algorithm`.
@@ -58,7 +58,7 @@ export interface SigningKeysShape {
 }
 
 export class SigningKeysCache extends Context.Service<SigningKeysCache, SigningKeysShape>()(
-  "effect-auth/jwt/SigningKeysCache",
+  "awthaq/jwt/SigningKeysCache",
 ) {}
 
 const toSigningKey = (record: SigningKeyRecords.SigningKeyRecord): SigningKey => ({
@@ -172,7 +172,7 @@ const layerFromStore = Layer.effect(
   }),
 );
 
-export class KeyRing extends LayerRef.Service<KeyRing>()("effect-auth/jwt/KeyRing", {
+export class KeyRing extends LayerRef.Service<KeyRing>()("awthaq/jwt/KeyRing", {
   layer: layerFromStore,
   idleTimeToLive: "1 hour",
 }) {}

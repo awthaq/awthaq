@@ -1,11 +1,11 @@
-// @effect-auth/organization — MembershipRecords
+// @awthaq/organization — MembershipRecords
 //
 // spec.md's "Membership": persistence for the `organization_membership`
 // table, mirroring `OrganizationRecords.ts`'s own shape. `role` is stored as
 // an array (multi-role, spec.md's richer-than-a-single-value decision) — a
 // JSON-serialized `TEXT` column under `layerSql`, a plain array in memory.
 
-import { Users } from "@effect-auth/core";
+import { Users } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -70,7 +70,7 @@ export interface MembershipRecordsShape {
 }
 
 export class MembershipRecords extends Context.Service<MembershipRecords, MembershipRecordsShape>()(
-  "effect-auth/organization/MembershipRecords",
+  "awthaq/organization/MembershipRecords",
 ) {}
 
 const notFound = (userId: Users.UserId, organizationId: string): MembershipRecordNotFound =>

@@ -15,8 +15,8 @@ import * as Ref from "effect/Ref";
 import { TestClock } from "effect/testing";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { Sessions } from "@effect-auth/core";
-import { Authentication } from "@effect-auth/server";
+import { Sessions } from "@awthaq/core";
+import { Authentication } from "@awthaq/server";
 import { Jwt, JwtConfig, KeyRing, SigningKeyRecords } from "../src/index.ts";
 import * as Verify from "../src/verify.ts";
 
@@ -62,7 +62,7 @@ const fakeJwksHttpClient = (served: Ref.Ref<unknown>) =>
     ),
   );
 
-describe("lite verifier (@effect-auth/jwt/verify)", () => {
+describe("lite verifier (@awthaq/jwt/verify)", () => {
   it.effect("accepts a genuinely valid token", () =>
     Effect.gen(function* () {
       const jwt = yield* Jwt.Jwt;

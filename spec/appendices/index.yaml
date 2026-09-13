@@ -1,5 +1,5 @@
 kind: appendices
-package: effect-auth
+package: awthaq
 infix: EA
 entries:
   - id: "EFAUTH-APP-01"

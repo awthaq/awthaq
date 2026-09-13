@@ -1,6 +1,6 @@
-# Effect Native Auth
+# Awthaq
 
-An authentication runtime for TypeScript, built natively on Effect v4, with authorization delegated to the sibling library [qadi](../qadi).
+*Effect Native Auth* — an authentication runtime for TypeScript, built natively on Effect v4, with authorization delegated to the sibling library [qadi](../qadi). The name comes from Arabic أوثق (*awthaq*, "most trustworthy/reliable") — the original working name, `effect-auth`, was already taken on npm by an abandoned package (see `research/01-effect-ecosystem.md`).
 
 **Status:** actively implemented, pre-`1.0`/pre-publish. `spec/` is still the canonical specification — user requirements, architectural decisions, functional behaviors, invariants, and a traceability matrix tying them together — but it is no longer just a plan: every plugin below has a real, tested implementation under `packages/`. See [`spec/roadmap.md`](spec/roadmap.md) for the milestone plan and [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md) for the most recent gap-closure pass against it.
 
@@ -43,12 +43,12 @@ Save this as `server.ts` inside a clone of this repository (it imports workspace
 
 ```ts
 import { createServer } from "node:http";
-import { Auth, AuthEvents, RateLimits, Sessions, Users, Accounts, Verification } from "@effect-auth/core";
-import { CoreMigrations, Repositories } from "@effect-auth/sql";
-import { Encryption, KeyProvider, Mailer, PasswordHasher, RateLimiter } from "@effect-auth/ports";
-import { AuthCore } from "@effect-auth/api";
-import { Password } from "@effect-auth/password";
-import { Account, Authentication, AuthHttp, Session } from "@effect-auth/server";
+import { Auth, AuthEvents, RateLimits, Sessions, Users, Accounts, Verification } from "@awthaq/core";
+import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { Encryption, KeyProvider, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { AuthCore } from "@awthaq/api";
+import { Password } from "@awthaq/password";
+import { Account, Authentication, AuthHttp, Session } from "@awthaq/server";
 import { NodeCrypto, NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
 import * as Effect from "effect/Effect";
@@ -78,7 +78,7 @@ const Migrated = Layer.effectDiscard(
 ).pipe(Layer.provide(SqlLive));
 
 // 3. Provider tokens (OAuth access/refresh tokens) are encrypted at rest;
-//    `KeyProvider.layerEnv` reads the key from `EFFECT_AUTH_ENCRYPTION_KEY`
+//    `KeyProvider.layerEnv` reads the key from `AWTHAQ_ENCRYPTION_KEY`
 //    (base64, 32 bytes) even when no OAuth plugin is installed, since the
 //    `accounts` table's encryption columns are shared, core-owned schema.
 const EncryptionLive = Encryption.layer.pipe(
@@ -162,13 +162,13 @@ const ServerLive = HttpRouter.serve(AppLayer).pipe(
 Layer.launch(ServerLive).pipe(NodeRuntime.runMain);
 ```
 
-> **Why `AuthHttp.routes(AuthCore.AuthCoreApi, {})` alongside `Auth.make`?** `Auth.make([Password])` folds Password's own `contract`/`layer` — the `/password/sign-up`, `/password/sign-in`, etc. routes — but effect-auth's fixed, always-present core surface (`Session`: list/current/revoke/revokeOthers/signOut; `Account`: update profile, delete account) is not yet one of the things `Auth.make` prepends automatically (`packages/core/src/Auth.ts`'s own header comment: that lands with M1 Core, per `spec/roadmap.md`). Until then, wiring `AuthCore.AuthCoreApi` alongside a plugin's own `Auth.make(...)` output — exactly as this repository's own HTTP integration tests do — is the current, real way to get both.
+> **Why `AuthHttp.routes(AuthCore.AuthCoreApi, {})` alongside `Auth.make`?** `Auth.make([Password])` folds Password's own `contract`/`layer` — the `/password/sign-up`, `/password/sign-in`, etc. routes — but awthaq's fixed, always-present core surface (`Session`: list/current/revoke/revokeOthers/signOut; `Account`: update profile, delete account) is not yet one of the things `Auth.make` prepends automatically (`packages/core/src/Auth.ts`'s own header comment: that lands with M1 Core, per `spec/roadmap.md`). Until then, wiring `AuthCore.AuthCoreApi` alongside a plugin's own `Auth.make(...)` output — exactly as this repository's own HTTP integration tests do — is the current, real way to get both.
 
 Run migrations and start it:
 
 ```sh
-export DATABASE_URL="postgres://user:pass@localhost:5432/effect_auth"
-export EFFECT_AUTH_ENCRYPTION_KEY="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))")"
+export DATABASE_URL="postgres://user:pass@localhost:5432/awthaq"
+export AWTHAQ_ENCRYPTION_KEY="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))")"
 node --experimental-strip-types server.ts
 ```
 
@@ -201,7 +201,7 @@ This exact composition — `Auth.make([Password])` over a real, migrated SQL bac
 
 ## Swapping in Postgres for real
 
-`packages/sql` ships one migration set (`CoreMigrations.coreMigrations`, in `@effect-auth/sql`) that branches per dialect internally (`sql.onDialectOrElse`), so the same `Migrator.make({})({ loader: CoreMigrations.coreMigrations })` call in the quickstart above brings a fresh Postgres database to schema-equality with what `packages/sql/src/Models.ts` declares — no separate Postgres-specific schema file to maintain. See [`.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md`](.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md) for how this was proven (a dedicated contract-test suite runs against SQLite, then Postgres, with the same test bodies).
+`packages/sql` ships one migration set (`CoreMigrations.coreMigrations`, in `@awthaq/sql`) that branches per dialect internally (`sql.onDialectOrElse`), so the same `Migrator.make({})({ loader: CoreMigrations.coreMigrations })` call in the quickstart above brings a fresh Postgres database to schema-equality with what `packages/sql/src/Models.ts` declares — no separate Postgres-specific schema file to maintain. See [`.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md`](.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md) for how this was proven (a dedicated contract-test suite runs against SQLite, then Postgres, with the same test bodies).
 
 Plugin-specific tables (`Organization`, `Admin`, `Passkey`, `Jwt` each own their own schema in their own package) are not part of `CoreMigrations` — see each plugin's own package for its migrations.
 
@@ -214,7 +214,7 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 | `PasswordHasher` | `layerArgon2id` | `layerScrypt` |
 | `Mailer` | a one-line `console.log` stand-in | bring your own (`Mailer.Mailer.of({ send })`, any provider) |
 | `RateLimiter` | `layerPermissive` (no real limiting) | `layer` over `layerStoreMemory`, or your own `RateLimiterStore` |
-| `Encryption`/`KeyProvider` | `layerEnv` (`EFFECT_AUTH_ENCRYPTION_KEY`) | a KMS-backed `KeyProvider` (implement the port directly) |
+| `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEY`) | a KMS-backed `KeyProvider` (implement the port directly) |
 
 `Sessions.SessionConfig` (absolute/idle expiry, idle-refresh throttle) and `Password.config({...})` (breach checking, off by default) are `Context.Reference`s with defaults — override either with `Layer.succeed`/`Password.config(...)` only if the defaults documented in `packages/core/src/Sessions.ts`/`packages/password/src/Password.ts` don't fit.
 
@@ -222,18 +222,18 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 
 | Plugin | Package | What it adds |
 |---|---|---|
-| Password | `@effect-auth/password` | Sign-up, sign-in, password reset, email verification, change-password, optional breach checking |
-| OAuth | `@effect-auth/oauth` | Third-party provider sign-in and account linking |
-| Organization | `@effect-auth/organization` | Multi-tenant organizations, membership, roles |
-| Admin | `@effect-auth/admin` | Impersonation, session force-stop, admin session listing |
-| Passkey | `@effect-auth/passkey` | WebAuthn registration and authentication |
-| Jwt | `@effect-auth/jwt` | JWT issuance/verification for stateless callers |
+| Password | `@awthaq/password` | Sign-up, sign-in, password reset, email verification, change-password, optional breach checking |
+| OAuth | `@awthaq/oauth` | Third-party provider sign-in and account linking |
+| Organization | `@awthaq/organization` | Multi-tenant organizations, membership, roles |
+| Admin | `@awthaq/admin` | Impersonation, session force-stop, admin session listing |
+| Passkey | `@awthaq/passkey` | WebAuthn registration and authentication |
+| Jwt | `@awthaq/jwt` | JWT issuance/verification for stateless callers |
 
 Each composes into `Auth.make([...])` alongside Password exactly as shown in the quickstart — `Auth.make`'s own type-level `Validate<P>` rejects the tuple at compile time if a plugin's `dependsOn` isn't also in the list, or if two plugins share an id. `two-factor`, `magic-link`, `api-key`, `cli`, and `next` remain stub packages — see [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md)'s "Out of scope" section for why they're deliberately not part of this pass.
 
 ## Publishing status
 
-No `@effect-auth/*` package is published to npm — every `package.json` in `packages/` is still `"private": true`. A provenance-publish workflow (`.github/workflows/release.yml`, npm OIDC trusted publishing, no stored tokens) is wired and ready per [`spec/process/definitions-of-done.md`](spec/process/definitions-of-done.md)'s gate 12, but going live needs a one-time, manual trusted-publisher registration on npmjs.com that no automation here can perform. Until then, use this library from a clone: `pnpm install && pnpm build`, then reference packages the way the quickstart above does, or `pnpm link` a package into another project.
+No `@awthaq/*` package is published to npm — every `package.json` in `packages/` is still `"private": true`. A provenance-publish workflow (`.github/workflows/release.yml`, npm OIDC trusted publishing, no stored tokens) is wired and ready per [`spec/process/definitions-of-done.md`](spec/process/definitions-of-done.md)'s gate 12, but going live needs a one-time, manual trusted-publisher registration on npmjs.com that no automation here can perform. Until then, use this library from a clone: `pnpm install && pnpm build`, then reference packages the way the quickstart above does, or `pnpm link` a package into another project.
 
 ## Documentation
 

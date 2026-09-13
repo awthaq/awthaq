@@ -1,7 +1,7 @@
-// @effect-auth/passkey — ChallengeStore
+// @awthaq/passkey — ChallengeStore
 //
 // spec/behaviors/17-passkey.md, BEH-EA-132. Plugin-owned, not
-// `@effect-auth/ports` — only this plugin needs it (this module's own
+// `@awthaq/ports` — only this plugin needs it (this module's own
 // header explains why WebAuthn itself, in contrast, is a shared port).
 //
 // Three `Layer`s over the same `ChallengeStoreShape`, per the "richness
@@ -29,7 +29,7 @@
 //   needing none.
 //
 // The value `issue` returns is always a base64url string — the exact shape
-// `@effect-auth/ports`' `WebAuthn` port expects to decode straight into a
+// `@awthaq/ports`' `WebAuthn` port expects to decode straight into a
 // challenge's raw bytes (see that module's own header comment on why a
 // bare string is never treated as UTF-8 text there).
 
@@ -63,7 +63,7 @@ export interface ChallengeStoreShape {
 }
 
 export class ChallengeStore extends Context.Service<ChallengeStore, ChallengeStoreShape>()(
-  "effect-auth/passkey/ChallengeStore",
+  "awthaq/passkey/ChallengeStore",
 ) {}
 
 // ---- layerMemory ----------------------------------------------------------
@@ -189,7 +189,7 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
 
 // ---- layerCookie --------------------------------------------------------
 
-/** BEH-EA-075's own `Csrf.ts` HMAC — copied rather than imported: this plugin does not depend on `@effect-auth/server`, and the primitive is small enough that duplicating it costs less than the cross-stratum dependency would. */
+/** BEH-EA-075's own `Csrf.ts` HMAC — copied rather than imported: this plugin does not depend on `@awthaq/server`, and the primitive is small enough that duplicating it costs less than the cross-stratum dependency would. */
 const SHA256_BLOCK_SIZE = 64;
 
 const concatBytes = (...parts: ReadonlyArray<Uint8Array>): Uint8Array => {
@@ -234,14 +234,14 @@ const constantTimeEqual = (a: Uint8Array, b: Uint8Array): boolean => {
 };
 
 export interface ChallengeCookieConfigShape {
-  /** Signs every issued value; never defaulted, the same posture `@effect-auth/server`'s `CsrfConfig.secret` takes. */
+  /** Signs every issued value; never defaulted, the same posture `@awthaq/server`'s `CsrfConfig.secret` takes. */
   readonly secret: Redacted.Redacted<string>;
 }
 
 export class ChallengeCookieConfig extends Context.Service<
   ChallengeCookieConfig,
   ChallengeCookieConfigShape
->()("effect-auth/passkey/ChallengeCookieConfig") {}
+>()("awthaq/passkey/ChallengeCookieConfig") {}
 
 const PAYLOAD_BYTES = RANDOM_BYTES + 8;
 const HMAC_BYTES = 32;

@@ -1,4 +1,4 @@
-// @effect-auth/jwt — Jwt
+// @awthaq/jwt — Jwt
 //
 // .scratch/jwt/spec.md. Tickets 08 (sign/verify), 09 (JWKS endpoint), 10
 // (mint endpoint), 12 (verifyLive), 14 (general-purpose signJWT/verifyJWT).
@@ -44,9 +44,9 @@
 // touching `packages/core` (that's ticket 16's own, separately-justified
 // core touch), and this achieves the live check without doing so.
 
-import { Api } from "@effect-auth/api";
-import { AuthPlugin, Sessions, Users } from "@effect-auth/core";
-import { Authentication } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { AuthPlugin, Sessions, Users } from "@awthaq/core";
+import { Authentication } from "@awthaq/server";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -136,7 +136,7 @@ export const JwtHandlers = Layer.mergeAll(
 
 /**
  * .scratch/jwt/issues/16-automatic-response-mirroring.md: installing `Jwt`
- * overrides `@effect-auth/server`'s `Authentication.PostAuthResponseHook`
+ * overrides `@awthaq/server`'s `Authentication.PostAuthResponseHook`
  * (default: a no-op) so a fresh token mirrors onto every authenticated
  * response across every installed plugin — better-auth's `set-auth-jwt`
  * equivalent — with no per-plugin opt-in. Requires `Jwt` itself, provided
@@ -220,7 +220,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
                   onNone: () =>
                     Effect.die(
                       new Error(
-                        `effect-auth/jwt: signing key "${key.kid}" has no local private key material and no RemoteSigner is configured`,
+                        `awthaq/jwt: signing key "${key.kid}" has no local private key material and no RemoteSigner is configured`,
                       ),
                     ),
                 }),

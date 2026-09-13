@@ -1,4 +1,4 @@
-// @effect-auth/next — Client
+// @awthaq/next — Client
 //
 // Next.js adapter: server/client boundary, cookie forwarding.
 //

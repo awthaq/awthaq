@@ -1,4 +1,4 @@
-# effect-auth Overview
+# awthaq Overview
 
 > **Document Control**
 >
@@ -8,7 +8,7 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Reworded Mission section from present-tense to planned-system phrasing, consistent with the document's own honesty banner (CCR-EA-002) |
 
@@ -18,11 +18,11 @@
 
 ## Mission
 
-effect-auth is a TypeScript authentication runtime built natively on Effect v4. Its differentiator is not its feature list but its composition model: every capability is a service, every contribution is a `Layer`, and the application's dependency graph is checked by the TypeScript compiler before anything runs.
+awthaq is a TypeScript authentication runtime built natively on Effect v4. Its differentiator is not its feature list but its composition model: every capability is a service, every contribution is a `Layer`, and the application's dependency graph is checked by the TypeScript compiler before anything runs.
 
 The central thesis: authentication capabilities are Effect services. Features are plugins that are themselves services. Installing a plugin is providing a Layer. Whatever the Layer still requires is what the application still has to provide, and the type checker says so — a missing plugin, a missing port implementation, a duplicate plugin id, two plugins overriding one slot, or a tap on an undefined hook point is a compile error, not a runtime surprise.
 
-Authentication and authorization are deliberately split across two libraries by the same author. **effect-auth** is designed to resolve *who is asking* — it is planned to issue sessions, verify credentials, and produce a `Principal`. **qadi** decides *what they may do and what they may see* — effect-auth is planned to ship no permission model, no policy language, and no authorizer of its own; it is planned to ship exactly the bridge qadi needs (the `SubjectResolver` slot and two integration paths) and otherwise stay out of authorization entirely.
+Authentication and authorization are deliberately split across two libraries by the same author. **awthaq** is designed to resolve *who is asking* — it is planned to issue sessions, verify credentials, and produce a `Principal`. **qadi** decides *what they may do and what they may see* — awthaq is planned to ship no permission model, no policy language, and no authorizer of its own; it is planned to ship exactly the bridge qadi needs (the `SubjectResolver` slot and two integration paths) and otherwise stay out of authorization entirely.
 
 ## Design philosophy
 
@@ -42,17 +42,17 @@ The system is organized into seven strata plus client, tooling, and plugin packa
 
 | Stratum | Package | Contents |
 |---|---|---|
-| 1 Contract | `@effect-auth/api` | `Principal`, `SessionView`, `SubjectDto`, errors, `Authentication` and `CsrfProtection` middleware definitions, core groups. Isomorphic — no server code, importable in the browser. |
-| 1 Contract | `@effect-auth/<plugin>/api` | Each plugin's own groups, schemas, errors, and contract `HttpApi`. |
-| 2 Ports | `@effect-auth/ports` | `PasswordHasher`, `Mailer`, `WebAuthn`, each with `layer`, `layerNoop`, `layerMemory` variants. |
-| 3 Persistence | `@effect-auth/sql` | Models, repositories, migration records, memory twins. |
-| 4 Domain | `@effect-auth/core` | Domain services, hook points, `AuthEvents`, config references, slots, the `Auth` namespace. |
-| 5 HTTP | `@effect-auth/server` | Middleware implementations, core handlers, `AuthHttp`. |
-| 6 Authorization | `@effect-auth/qadi` | `AuthorizedSubject` middleware, `SubjectExtractor` layer, obligation handlers — the bridge to qadi, not an authorizer. |
+| 1 Contract | `@awthaq/api` | `Principal`, `SessionView`, `SubjectDto`, errors, `Authentication` and `CsrfProtection` middleware definitions, core groups. Isomorphic — no server code, importable in the browser. |
+| 1 Contract | `@awthaq/<plugin>/api` | Each plugin's own groups, schemas, errors, and contract `HttpApi`. |
+| 2 Ports | `@awthaq/ports` | `PasswordHasher`, `Mailer`, `WebAuthn`, each with `layer`, `layerNoop`, `layerMemory` variants. |
+| 3 Persistence | `@awthaq/sql` | Models, repositories, migration records, memory twins. |
+| 4 Domain | `@awthaq/core` | Domain services, hook points, `AuthEvents`, config references, slots, the `Auth` namespace. |
+| 5 HTTP | `@awthaq/server` | Middleware implementations, core handlers, `AuthHttp`. |
+| 6 Authorization | `@awthaq/qadi` | `AuthorizedSubject` middleware, `SubjectExtractor` layer, obligation handlers — the bridge to qadi, not an authorizer. |
 | 7 Composition | (application code) | `Auth.make([...])` and the application's own `Layer.provide` stack. |
-| client | `@effect-auth/client`, `@effect-auth/react`, `@effect-auth/next` | `AtomHttpApi` client, session atom, provider glue, framework adapters. |
-| tools | `@effect-auth/test`, `@effect-auth/cli` | `TestAuth`, contract tests, `doctor`, migrations, `openapi`. |
-| plugins | `@effect-auth/password`, `oauth`, `passkey`, `magic-link`, `two-factor`, `organization`, `roles`, `api-key`, `admin`, `jwt` | One `AuthPlugin.Service` class each. |
+| client | `@awthaq/client`, `@awthaq/react`, `@awthaq/next` | `AtomHttpApi` client, session atom, provider glue, framework adapters. |
+| tools | `@awthaq/test`, `@awthaq/cli` | `TestAuth`, contract tests, `doctor`, migrations, `openapi`. |
+| plugins | `@awthaq/password`, `oauth`, `passkey`, `magic-link`, `two-factor`, `organization`, `roles`, `api-key`, `admin`, `jwt` | One `AuthPlugin.Service` class each. |
 
 ## Planned public API surface
 

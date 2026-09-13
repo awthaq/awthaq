@@ -1,8 +1,8 @@
-# Effect Auth + qadi — Usage Examples
+# Awthaq + qadi — Usage Examples
 
 Version 0.3 — 2026-09-12. Companion to `design/plugins-as-layers.md`. Every qadi call below is checked against `../qadi` (0.4.0): `@qadi/core`, `@qadi/http`, `@qadi/react`, `@qadi/testing`, `@qadi/predicate-sql`, `@qadi/audit`, `@qadi/promise`.
 
-The division of labour in one line: **effect-auth answers who is asking; qadi answers what they may do and what they may see.** The bridge between them is one service, `SubjectResolver`, which turns a `Principal` into qadi's `AuthSubject`.
+The division of labour in one line: **awthaq answers who is asking; qadi answers what they may do and what they may see.** The bridge between them is one service, `SubjectResolver`, which turns a `Principal` into qadi's `AuthSubject`.
 
 ---
 
@@ -10,11 +10,11 @@ The division of labour in one line: **effect-auth answers who is asking; qadi an
 
 ```ts
 // app/auth.ts
-import { Auth, Sessions, Users } from "@effect-auth/core"
-import { Password } from "@effect-auth/password"
-import { Organization } from "@effect-auth/organization"
-import { Roles } from "@effect-auth/roles"
-import { AuthorizedSubjectLive, SubjectExtractorLive } from "@effect-auth/qadi"
+import { Auth, Sessions, Users } from "@awthaq/core"
+import { Password } from "@awthaq/password"
+import { Organization } from "@awthaq/organization"
+import { Roles } from "@awthaq/roles"
+import { AuthorizedSubjectLive, SubjectExtractorLive } from "@awthaq/qadi"
 import { EvaluationIdLive, EvaluationServicesNone, decisionCacheLayer } from "@qadi/core"
 import { PermissionRegistryLive, RequirePermissionLive } from "@qadi/http"
 
@@ -80,7 +80,7 @@ export const canDeleteProject = allOf([
 
 export const canManageBilling = allOf([
   hasPermission(billing.manage),
-  hasAttribute("plan", inArray(["team", "enterprise"]))     // attribute resolved from effect-auth's user table, §6
+  hasAttribute("plan", inArray(["team", "enterprise"]))     // attribute resolved from awthaq's user table, §6
 ])
 ```
 
@@ -219,7 +219,7 @@ const ExportRoute = addGuardedRoute(
 
 ---
 
-## 6. Resolvers backed by effect-auth data
+## 6. Resolvers backed by awthaq data
 
 qadi asks three questions it cannot answer itself. Each is a service; each default denies.
 
@@ -231,7 +231,7 @@ import { AttributeResolver } from "@qadi/core"
 export const UserAttributes = Layer.effect(AttributeResolver, Effect.gen(function*() {
   const users = yield* Users
   return AttributeResolver.of({
-    name: "effect-auth/UserAttributes",
+    name: "awthaq/UserAttributes",
     resolve: (subjectId, attribute) => {
       const [type, id] = subjectId.split(":")
       if (type !== "user") return Effect.succeed(undefined)
@@ -255,7 +255,7 @@ import { RelationshipResolver } from "@qadi/core"
 export const OrgRelationships = Layer.effect(RelationshipResolver, Effect.gen(function*() {
   const org = yield* Organization
   return RelationshipResolver.of({
-    name: "effect-auth/OrgRelationships",
+    name: "awthaq/OrgRelationships",
     check: ({ subjectId, relation, resourceId, depth }) => Effect.gen(function*() {
       const [type, userId] = subjectId.split(":")
       if (type !== "user") return "Unrelated" as const
@@ -326,16 +326,16 @@ The organization plugin ships `Organization.relationships` (the resolver in §6.
 
 ## 8. Obligations: step-up authentication
 
-An `Allow` may carry an obligation. Enforcing calls refuse to proceed until it is discharged. effect-auth discharges the re-authentication obligation from session freshness.
+An `Allow` may carry an obligation. Enforcing calls refuse to proceed until it is discharged. awthaq discharges the re-authentication obligation from session freshness.
 
 ```ts
 import { obliged, obligation } from "@qadi/core"
 
-export const reauth = obligation("effect-auth/reauth", { maxAgeSeconds: 300 })
+export const reauth = obligation("awthaq/reauth", { maxAgeSeconds: 300 })
 export const canChangeEmail = obliged(reauth, hasPermission(permission("account", "update")))
 
-// effect-auth ships the handler: allowed only if the session was authenticated within maxAgeSeconds
-import { ObligationHandlers } from "@effect-auth/qadi"
+// awthaq ships the handler: allowed only if the session was authenticated within maxAgeSeconds
+import { ObligationHandlers } from "@awthaq/qadi"
 
 changeEmail: ({ payload }) =>
   Users.use((u) => u.changeEmail(payload.email)).pipe(
@@ -379,7 +379,7 @@ const feed = Effect.runSync(decisionSinkFeed({ capacity: 256, replay: 32 }))
 export const Sinks = decisionSinkAll([
   ring.layer,                                                         // recent decisions, for /backlog
   feed.layer,                                                         // live stream, for devtools
-  AuditDecisionSinkLive({ failureThreshold: 5 }).pipe(Layer.provide(AuthAuditTrail.layer))   // durable: effect-auth's audit table implements AuditTrailPort
+  AuditDecisionSinkLive({ failureThreshold: 5 }).pipe(Layer.provide(AuthAuditTrail.layer))   // durable: awthaq's audit table implements AuditTrailPort
 ])
 
 // devtools stream, guarded, re-checking the subject every 30 seconds
@@ -394,7 +394,7 @@ A sink cannot change a decision; a broken audit trail trips the breaker and logs
 ## 11. Impersonation, seen by policies
 
 ```ts
-// effect-auth puts the impersonator on the subject; policies branch on it
+// awthaq puts the impersonator on the subject; policies branch on it
 export const readOnlyWhileImpersonating = rules([
   denyWhen(allOf([hasAttribute("actingAs", exists()), hasAction("write")])),
   permitWhen(hasPermission(project.update))
@@ -486,7 +486,7 @@ const AcceptInvite = ({ token }: { token: string }) => {
 import { headers } from "next/headers"
 import { currentSubjectLayer, decide, project } from "@qadi/core"
 import { dehydrateDecisions } from "@qadi/react"
-import { getSession } from "@effect-auth/next"
+import { getSession } from "@awthaq/next"
 
 export const dynamic = "force-dynamic"
 
@@ -573,7 +573,7 @@ it.effect("membership grants read through the relationship", () => Effect.gen(fu
   relationships: edgeRelationshipResolver([{ subjectId: "user:u1", relation: "member", resourceId: "p1" }])
 }))))
 
-// through HTTP, with effect-auth's test layer and qadi's middleware
+// through HTTP, with awthaq's test layer and qadi's middleware
 const makeClient = HttpApiTest.groups(AppApi, ["admin"])
 layer(Layer.mergeAll(TestAuth.layer([Password, Roles]), AuthzLive, QadiLive, HttpServer.layerServices))("admin", (it) => {
   it.effect("stats needs the admin role", () => Effect.gen(function*() {

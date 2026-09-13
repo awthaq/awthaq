@@ -1,17 +1,17 @@
-// @effect-auth/oauth — OAuthApi
+// @awthaq/oauth — OAuthApi
 //
 // spec/behaviors/16-oauth.md, BEH-EA-121 through BEH-EA-128. This plugin's
 // own contract, groups named `oauth` (BEH-EA-004), built the same way
-// `@effect-auth/password`'s `PasswordApi.ts` builds its own.
+// `@awthaq/password`'s `PasswordApi.ts` builds its own.
 //
 // Both endpoints answer typed JSON errors on failure rather than a
 // redirect-with-`?error=` query param (unlike better-auth's convention) —
-// consistent with how `@effect-auth/password`'s own contract already
+// consistent with how `@awthaq/password`'s own contract already
 // treats every failure as a typed response, not a redirect; an
 // application's own frontend is the one place a user-facing "something
 // went wrong" redirect belongs, not this plugin.
 
-import { Api } from "@effect-auth/api";
+import { Api } from "@awthaq/api";
 import * as Schema from "effect/Schema";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi";
 

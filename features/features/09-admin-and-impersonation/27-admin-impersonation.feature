@@ -1,5 +1,5 @@
 # Shipping-gap map (.scratch/shipping-gaps), ticket 24: authored against
-# the real, already-implemented `@effect-auth/admin` plugin (unlike every
+# the real, already-implemented `@awthaq/admin` plugin (unlike every
 # other file in this directory, written before implementation existed) —
 # spec/behaviors/27-admin-impersonation.md never got its own `.feature`
 # file at spec-authoring time. REQ-EA numbers below continue past 381

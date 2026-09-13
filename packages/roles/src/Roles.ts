@@ -1,25 +1,25 @@
-// @effect-auth/roles — Roles plugin
+// @awthaq/roles — Roles plugin
 //
 // spec/behaviors/18-roles-subject-resolver.md, BEH-EA-138 through BEH-EA-141.
-// The one plugin that overrides `@effect-auth/qadi`'s `SubjectResolver` slot
+// The one plugin that overrides `@awthaq/qadi`'s `SubjectResolver` slot
 // (BEH-EA-138) with a real implementation: `UserPrincipal` gets its assigned
 // role names looked up and flattened through qadi's role DAG into
 // `AuthSubject.roles`/`permissions` (BEH-EA-139); every other principal kind
 // — `Anonymous`, `ApiKey`, `Service`, and a `UserPrincipal`'s own
-// `actingAs` — is delegated to `@effect-auth/qadi`'s own
+// `actingAs` — is delegated to `@awthaq/qadi`'s own
 // `resolveIdentityOnly`, so installing this plugin never changes how those
 // kinds resolve (BEH-EA-140's/141's real gap — no `scopes` field exists yet
 // on `ApiKeyPrincipal`/`ServicePrincipal` — is documented once, in
-// `@effect-auth/qadi`'s `SubjectResolver.ts`, not repeated here).
+// `@awthaq/qadi`'s `SubjectResolver.ts`, not repeated here).
 //
 // SQL persistence for role assignments is deferred: only `layerMemory`
 // exists today, the same class of not-yet-designed persistence
-// `@effect-auth/ports`'s deferred `WebAuthn` interface documents. A real
+// `@awthaq/ports`'s deferred `WebAuthn` interface documents. A real
 // reservation/uniqueness design for a `role_assignments` table is separate,
 // later work, not a gap silently papered over.
-import { Users } from "@effect-auth/core";
-import { AuthPlugin, Slots } from "@effect-auth/core";
-import { SubjectResolver as QadiSubjectResolver } from "@effect-auth/qadi";
+import { Users } from "@awthaq/core";
+import { AuthPlugin, Slots } from "@awthaq/core";
+import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
@@ -43,7 +43,7 @@ export interface RolesConfigShape {
 }
 
 export const RolesConfig: Context.Reference<RolesConfigShape> = Context.Reference(
-  "effect-auth/roles/Config",
+  "awthaq/roles/Config",
   { defaultValue: (): RolesConfigShape => ({ catalog: [] }) },
 );
 
@@ -107,7 +107,7 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
    * exposes both `Roles` and the overridden `SubjectResolver` in its
    * `ROut` — the real, working half of BEH-EA-138 this module's own header
    * comment describes. `Slots.override` also registers this claim with
-   * `@effect-auth/core`'s opt-in `Slots.SlotsRegistry`, so an application
+   * `@awthaq/core`'s opt-in `Slots.SlotsRegistry`, so an application
    * that provides `Slots.layer` gets a real `SlotConflict` if some other
    * plugin ever claims this same slot too (`Slots.ts`'s own header comment
    * explains why that check is enforced at `Layer`-build time, not by

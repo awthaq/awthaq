@@ -7,12 +7,12 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-177: `RegistryProvider` seeds the session atom for SSR
 
@@ -146,7 +146,7 @@ _Previous: [BEH-EA-182](23-react.md#beh-ea-182-useprojected-trims-what-a-compone
 ```text
 REQUIREMENT: `RequirePermission`, `guard`, `enforce`, the React gates
              (`Can`/`useCan`/…), and the Promise facade MUST all resolve a
-             decision by calling the same qadi evaluator; effect-auth's React
+             decision by calling the same qadi evaluator; awthaq's React
              bindings MUST NOT implement a second, client-only evaluation
              shortcut for any policy.
 ```

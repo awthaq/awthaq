@@ -1,4 +1,4 @@
-// @effect-auth/ports — Encryption
+// @awthaq/ports — Encryption
 //
 // Shipping-gap map (.scratch/shipping-gaps), ticket 18 — the AES-256-GCM
 // envelope spec.md's workstream 4 calls for: "Encrypt/decrypt live behind
@@ -8,10 +8,10 @@
 // it's carried in a signed cookie and in the existing verification-flow
 // payload mechanism. The encryption service is therefore callable from
 // both the SQL persistence path and the cookie/flow-payload path, not
-// just one." — hence this lives here, in `@effect-auth/ports`, alongside
-// `KeyProvider`: `@effect-auth/sql` (ticket 18's own consumer) and
-// `@effect-auth/oauth` (ticket 19's) both already depend on this package;
-// neither depends on `@effect-auth/core`.
+// just one." — hence this lives here, in `@awthaq/ports`, alongside
+// `KeyProvider`: `@awthaq/sql` (ticket 18's own consumer) and
+// `@awthaq/oauth` (ticket 19's) both already depend on this package;
+// neither depends on `@awthaq/core`.
 //
 // Fixed AES-256-GCM logic wrapping the swappable `KeyProvider` port — the
 // same "fixed algorithm over a swappable store" shape `RateLimiter.layer`
@@ -20,7 +20,7 @@
 // Uses the platform WebCrypto (`globalThis.crypto.subtle`), not Node's
 // `node:crypto` module — the same "zero platform-specific dependency, runs
 // anywhere WebCrypto exists (Node/Deno/Bun/browsers)" choice
-// `@effect-auth/jwt`'s `KeyRing.ts`/`JwtCodec.ts` and `@effect-auth/oauth`'s
+// `@awthaq/jwt`'s `KeyRing.ts`/`JwtCodec.ts` and `@awthaq/oauth`'s
 // `Jwt.ts` already make for their own signing/verification. WebCrypto's
 // own `AES-GCM` `encrypt` result already has the authentication tag
 // appended to the ciphertext (unlike Node's `crypto` module, which
@@ -106,7 +106,7 @@ export interface EncryptionShape {
 }
 
 export class Encryption extends Context.Service<Encryption, EncryptionShape>()(
-  "effect-auth/ports/Encryption",
+  "awthaq/ports/Encryption",
 ) {}
 
 const toArrayBuffer = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => Uint8Array.from(bytes);

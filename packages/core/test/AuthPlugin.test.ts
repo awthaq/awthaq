@@ -134,7 +134,7 @@ describe("Auth.make", () => {
       const error = thrown as Auth.CircularPluginDependency;
       assert.strictEqual(error._tag, "CircularPluginDependency");
       assert.deepStrictEqual(error.cycle, ["ping", "pong", "ping"]);
-      assert.match(error.message, /effect-auth: circular plugin dependency: ping -> pong -> ping/);
+      assert.match(error.message, /awthaq: circular plugin dependency: ping -> pong -> ping/);
     } finally {
       const restoredPingLayer = AuthPlugin.layer(Ping, {
         make: Effect.succeed({ ping: () => Effect.succeed("pong") }),
@@ -153,6 +153,6 @@ describe("Auth.make", () => {
     assert.throws(() => {
       // @ts-expect-error - Auth.make requires at least one plugin
       Auth.make([]);
-    }, /effect-auth: Auth.make requires at least one plugin/);
+    }, /awthaq: Auth.make requires at least one plugin/);
   });
 });

@@ -1,12 +1,12 @@
-// @effect-auth/core — Users
+// @awthaq/core — Users
 //
 // spec/behaviors/06-domain-users-accounts.md, BEH-EA-041, BEH-EA-042.
 // Two `Layer`s over the same `UsersShape`: `layerMemory` (a `Ref`) and
-// `layerSql` (`@effect-auth/sql`'s `Model.Class`/repository, BEH-EA-033–036)
+// `layerSql` (`@awthaq/sql`'s `Model.Class`/repository, BEH-EA-033–036)
 // — neither changes this service's public interface, the same deferral
 // `Migrations.ts` documents for the persistence stratum generally.
 
-import { Models as SqlModels, Repositories as SqlRepositories } from "@effect-auth/sql";
+import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -67,7 +67,7 @@ export interface UsersShape {
   readonly delete: (id: UserId) => Effect.Effect<void, UserNotFound>;
 }
 
-export class Users extends Context.Service<Users, UsersShape>()("effect-auth/core/Users") {}
+export class Users extends Context.Service<Users, UsersShape>()("awthaq/core/Users") {}
 
 interface State {
   readonly byId: HashMap.HashMap<UserId, UserRecord>;
@@ -88,7 +88,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto> = Layer.effec
         Effect.flatMap((s) =>
           Option.match(HashMap.get(s.byId, id), {
             onNone: () =>
-              Effect.fail(new UserNotFound({ message: `effect-auth: no such user: ${id}`, id })),
+              Effect.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
             onSome: Effect.succeed,
           }),
         ),
@@ -125,7 +125,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto> = Layer.effec
             return [
               Result.fail(
                 new EmailAlreadyExists({
-                  message: `effect-auth: email already exists: ${email}`,
+                  message: `awthaq: email already exists: ${email}`,
                   email,
                 }),
               ),
@@ -146,7 +146,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto> = Layer.effec
         const existing = HashMap.get(s.byId, id);
         if (Option.isNone(existing)) {
           return [
-            Result.fail(new UserNotFound({ message: `effect-auth: no such user: ${id}`, id })),
+            Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
             s,
           ] as const;
         }
@@ -159,7 +159,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto> = Layer.effec
         const existing = HashMap.get(s.byId, id);
         if (Option.isNone(existing)) {
           return [
-            Result.fail(new UserNotFound({ message: `effect-auth: no such user: ${id}`, id })),
+            Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
             s,
           ] as const;
         }
@@ -175,7 +175,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto> = Layer.effec
         const existing = HashMap.get(s.byId, id);
         if (Option.isNone(existing)) {
           return [
-            Result.fail(new UserNotFound({ message: `effect-auth: no such user: ${id}`, id })),
+            Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
             s,
           ] as const;
         }
@@ -227,7 +227,7 @@ export const layerSql: Layer.Layer<Users, never, SqlRepositories.UsersRepository
           error.reason._tag === "UniqueViolation"
             ? Effect.fail(
                 new EmailAlreadyExists({
-                  message: `effect-auth: email already exists: ${email}`,
+                  message: `awthaq: email already exists: ${email}`,
                   email,
                 }),
               )
@@ -242,7 +242,7 @@ export const layerSql: Layer.Layer<Users, never, SqlRepositories.UsersRepository
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new UserNotFound({ message: `effect-auth: no such user: ${id}`, id })),
+            Effect.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
@@ -271,7 +271,7 @@ export const layerSql: Layer.Layer<Users, never, SqlRepositories.UsersRepository
       const row = yield* repo.verifyEmail(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new UserNotFound({ message: `effect-auth: no such user: ${id}`, id })),
+            Effect.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),

@@ -1,10 +1,10 @@
-// @effect-auth/client — AuthClient
+// @awthaq/client — AuthClient
 //
 // spec/behaviors/22-client-effect.md, BEH-EA-169 through BEH-EA-176.
 //
 // BEH-EA-169: `make`/`makeWith`/`group`/`endpoint`/`urlBuilder` are direct
 // re-exports of `HttpApiClient`'s own functions — not re-declared wrapper
-// functions — the identical discipline `@effect-auth/server`'s `AuthHttp.ts`
+// functions — the identical discipline `@awthaq/server`'s `AuthHttp.ts`
 // documents for `HttpApiBuilder.layer`/`HttpApiScalar.layer`: re-declaring
 // their generics independently would lose the literal group/endpoint
 // precision the real functions carry, and would create a second place a
@@ -18,7 +18,7 @@
 // holds: `effect` itself now ships `AtomHttpApi`/`Atom`/`AtomRegistry`
 // natively at `effect/unstable/reactivity` (confirmed present in this
 // repo's own installed `effect` dependency, no external package needed).
-// `@effect-auth/react`'s own reactive bindings (M5, not yet built) are the
+// `@awthaq/react`'s own reactive bindings (M5, not yet built) are the
 // right place to build the actual `AtomHttpApiClient` service over this
 // package's `Api` contract — this module stays the plain, non-reactive
 // `HttpApiClient` binding either way (BEH-EA-169 offers both forms; this
@@ -33,7 +33,7 @@
 // client is, for now, simply `make(api, { baseUrl, transformClient })` with
 // no `CsrfClientLive` provided, which already type-checks and behaves
 // correctly against every contract this repository currently composes.
-import { Api, SessionContract } from "@effect-auth/api";
+import { Api, SessionContract } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -141,7 +141,7 @@ export type ErrorCodes<App extends HttpApi.Constraint> =
 // BEH-EA-174: session helpers — the hand-written remainder
 // ---------------------------------------------------------------------------
 
-/** The wire shape of the core `session` group's own `SessionDto` (`@effect-auth/api`'s `Session.ts`) — one source of truth, not a parallel type. */
+/** The wire shape of the core `session` group's own `SessionDto` (`@awthaq/api`'s `Session.ts`) — one source of truth, not a parallel type. */
 export type Session = SessionContract.SessionDto;
 
 export interface SessionStoreShape {
@@ -158,7 +158,7 @@ export interface SessionStoreShape {
 }
 
 export class SessionStore extends Context.Service<SessionStore, SessionStoreShape>()(
-  "effect-auth/client/SessionStore",
+  "awthaq/client/SessionStore",
 ) {}
 
 export const SessionStoreLive: Layer.Layer<SessionStore> = Layer.effect(
@@ -205,7 +205,7 @@ export type PromiseFacade<A> = A extends AnyClientMethod
  * boundary between a runtime-generic recursive walk and the precise
  * `PromiseFacade<A>` conditional type no such walk can structurally prove
  * itself against — the same overload-vs-implementation split
- * `@effect-auth/core`'s `Auth.make` already uses for the identical reason
+ * `@awthaq/core`'s `Auth.make` already uses for the identical reason
  * (that module's own doc comment explains it in more depth).
  */
 export function toPromiseFacade<A extends Readonly<Record<string, unknown>>>(

@@ -1,8 +1,8 @@
 > **Partially superseded.** §8 (`Auth.link`: the linker) is superseded by `design/plugins-as-layers.md` v0.3's `Auth.make`/`Validate<P>` composition model, now normatively specified in `spec/behaviors/02-plugin-composition-validate.md`. §§1–7 and §9+ are otherwise still representative of the seven-strata design.
 
-# Effect Auth — Layered, API-first Design on Effect v4
+# Awthaq — Layered, API-first Design on Effect v4
 
-Version 0.2 — 2026-09-12. Supersedes the runtime model of v0.1 (`design/api-design.md`); the research trace and the product decisions there still hold. Every API below was checked against the Effect v4 source in `../effect` (rc line, `packages/effect/src`) and the qadi source in `../qadi` (0.4.0). Authorization is delegated to qadi; effect-auth resolves *who is asking*, qadi decides *what they may do*.
+Version 0.2 — 2026-09-12. Supersedes the runtime model of v0.1 (`design/api-design.md`); the research trace and the product decisions there still hold. Every API below was checked against the Effect v4 source in `../effect` (rc line, `packages/effect/src`) and the qadi source in `../qadi` (0.4.0). Authorization is delegated to qadi; awthaq resolves *who is asking*, qadi decides *what they may do*.
 
 ---
 
@@ -45,16 +45,16 @@ API-first means stratum 1 is written first and alone: it has no server code, it 
 
 | Stratum | Package | Contents |
 |---|---|---|
-| 1 | `@effect-auth/api` | `Principal`, `SessionView`, `SubjectDto`, errors, `Authentication`/`CsrfProtection` middleware definitions, `CoreApi` |
-| 1 | `@effect-auth/<plugin>/api` | each plugin's `HttpApiGroup` + contract `HttpApi`, schemas, errors |
-| 2 | `@effect-auth/ports` | `PasswordHasher`, `Mailer`, `WebAuthn` services with `layer`, `layerNoop`, `layerMemory` |
-| 3 | `@effect-auth/sql` | `Model.Class` models, repositories, migration records, `layerMemory` twins |
-| 4 | `@effect-auth/core` | domain services, `AuthHooks`, `AuthEvents`, `SessionConfig`, `SubjectResolver` |
-| 5 | `@effect-auth/server` | middleware implementations, core handlers, `AuthHttp` |
-| 6 | `@effect-auth/qadi` | `AuthorizedSubject` middleware, `SubjectExtractor` layer, `SubjectDto` codecs |
-| 7 | `@effect-auth/core` (`Auth` namespace) | `Auth.plugin`, `Auth.api`, `Auth.link`, `Auth.layer` |
-| client | `@effect-auth/client`, `@effect-auth/react` | `AuthClient` (AtomHttpApi), `useSession`, `AuthClientProvider` |
-| tools | `@effect-auth/test`, `@effect-auth/cli` | `TestAuth`, contract tests, `doctor`, migrations |
+| 1 | `@awthaq/api` | `Principal`, `SessionView`, `SubjectDto`, errors, `Authentication`/`CsrfProtection` middleware definitions, `CoreApi` |
+| 1 | `@awthaq/<plugin>/api` | each plugin's `HttpApiGroup` + contract `HttpApi`, schemas, errors |
+| 2 | `@awthaq/ports` | `PasswordHasher`, `Mailer`, `WebAuthn` services with `layer`, `layerNoop`, `layerMemory` |
+| 3 | `@awthaq/sql` | `Model.Class` models, repositories, migration records, `layerMemory` twins |
+| 4 | `@awthaq/core` | domain services, `AuthHooks`, `AuthEvents`, `SessionConfig`, `SubjectResolver` |
+| 5 | `@awthaq/server` | middleware implementations, core handlers, `AuthHttp` |
+| 6 | `@awthaq/qadi` | `AuthorizedSubject` middleware, `SubjectExtractor` layer, `SubjectDto` codecs |
+| 7 | `@awthaq/core` (`Auth` namespace) | `Auth.plugin`, `Auth.api`, `Auth.link`, `Auth.layer` |
+| client | `@awthaq/client`, `@awthaq/react` | `AuthClient` (AtomHttpApi), `useSession`, `AuthClientProvider` |
+| tools | `@awthaq/test`, `@awthaq/cli` | `TestAuth`, contract tests, `doctor`, migrations |
 
 ---
 
@@ -63,7 +63,7 @@ API-first means stratum 1 is written first and alone: it has no server code, it 
 ### 2.1 Identity schemas
 
 ```ts
-// @effect-auth/api/src/Principal.ts
+// @awthaq/api/src/Principal.ts
 import { Schema } from "effect"
 
 export const UserId = Schema.String.pipe(Schema.brand("UserId"))
@@ -101,7 +101,7 @@ export type Principal = typeof Principal.Type
 Status lives on the error class. Wire shape is the tagged struct; internal causes never reach it.
 
 ```ts
-// @effect-auth/api/src/Errors.ts
+// @awthaq/api/src/Errors.ts
 export class Unauthenticated extends Schema.TaggedError<Unauthenticated>()("Unauthenticated", {
   reason: Schema.Literals(["missing", "invalid", "expired", "revoked"])
 }, { httpApiStatus: 401 }) {}
@@ -124,12 +124,12 @@ export class TwoFactorRequired extends Schema.TaggedError<TwoFactorRequired>()("
 ### 2.3 The security record is the strategy chain
 
 ```ts
-// @effect-auth/api/src/Authentication.ts
+// @awthaq/api/src/Authentication.ts
 import { Context } from "effect"
 import { HttpApiMiddleware, HttpApiSecurity } from "effect/unstable/httpapi"
 
 export class CurrentPrincipal extends Context.Service<CurrentPrincipal, Principal>()(
-  "effect-auth/CurrentPrincipal"
+  "awthaq/CurrentPrincipal"
 ) {}
 
 export const SessionCookie = HttpApiSecurity.apiKey({ key: "__Host-session", in: "cookie" })
@@ -139,7 +139,7 @@ export const SessionCookie = HttpApiSecurity.apiKey({ key: "__Host-session", in:
 // Adding a strategy = adding a key here and a handler in the implementation (§5.1).
 export class Authentication extends HttpApiMiddleware.Service<Authentication, {
   provides: CurrentPrincipal
-}>()("effect-auth/Authentication", {
+}>()("awthaq/Authentication", {
   security: {
     cookie: SessionCookie,               // 1. browser session
     bearer: HttpApiSecurity.bearer       // 2. session token or JWT in Authorization
@@ -150,7 +150,7 @@ export class Authentication extends HttpApiMiddleware.Service<Authentication, {
 // Same, but a missing credential yields an anonymous principal instead of 401.
 export class OptionalAuthentication extends HttpApiMiddleware.Service<OptionalAuthentication, {
   provides: CurrentPrincipal
-}>()("effect-auth/OptionalAuthentication", {
+}>()("awthaq/OptionalAuthentication", {
   security: { cookie: SessionCookie, bearer: HttpApiSecurity.bearer }
 }) {}
 
@@ -158,7 +158,7 @@ export class OptionalAuthentication extends HttpApiMiddleware.Service<OptionalAu
 // generated client does not type-check until it provides the client half (§9).
 export class CsrfProtection extends HttpApiMiddleware.Service<CsrfProtection, {
   clientError: CsrfRejected
-}>()("effect-auth/CsrfProtection", {
+}>()("awthaq/CsrfProtection", {
   error: CsrfRejected,
   requiredForClient: true
 }) {}
@@ -167,7 +167,7 @@ export class CsrfProtection extends HttpApiMiddleware.Service<CsrfProtection, {
 ### 2.4 Views
 
 ```ts
-// @effect-auth/api/src/Views.ts
+// @awthaq/api/src/Views.ts
 export const SessionSummary = Schema.Struct({
   id: SessionId,
   createdAt: Schema.DateTimeUtcFromString,
@@ -177,7 +177,7 @@ export const SessionSummary = Schema.Struct({
   current: Schema.Boolean
 })
 
-// The serialized qadi subject. Sets become arrays on the wire; @effect-auth/qadi
+// The serialized qadi subject. Sets become arrays on the wire; @awthaq/qadi
 // turns it back into an AuthSubject with makeSubject (§7.1).
 export const SubjectDto = Schema.Struct({
   id: Schema.String,
@@ -197,7 +197,7 @@ export const SessionView = Schema.Struct({
 ### 2.5 Core groups and the core contract
 
 ```ts
-// @effect-auth/api/src/CoreApi.ts
+// @awthaq/api/src/CoreApi.ts
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 
 export class SessionApi extends HttpApiGroup.make("session")
@@ -224,10 +224,10 @@ export class CoreApi extends HttpApi.make("auth").add(SessionApi) {}
 ### 2.6 A plugin contract: password
 
 ```ts
-// @effect-auth/password/src/api.ts   (subpath export "@effect-auth/password/api", no server code)
+// @awthaq/password/src/api.ts   (subpath export "@awthaq/password/api", no server code)
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi"
-import { CsrfProtection, InvalidCredentials, RateLimited, SessionView, TwoFactorRequired } from "@effect-auth/api"
+import { CsrfProtection, InvalidCredentials, RateLimited, SessionView, TwoFactorRequired } from "@awthaq/api"
 
 export const Email = Schema.String.pipe(Schema.check(Schema.isPattern(/^[^@\s]+@[^@\s]+$/)))
 // Decoded into Redacted<string>: application code never holds a plain password.
@@ -274,10 +274,10 @@ export class PasswordContract extends HttpApi.make("auth").add(PasswordApi) {}
 ```ts
 // app/auth.contract.ts — isomorphic, imported by server, client and tests
 import { HttpApi } from "effect/unstable/httpapi"
-import { CoreApi } from "@effect-auth/api"
-import { PasswordContract } from "@effect-auth/password/api"
-import { PasskeyContract } from "@effect-auth/passkey/api"
-import { OrganizationContract } from "@effect-auth/organization/api"
+import { CoreApi } from "@awthaq/api"
+import { PasswordContract } from "@awthaq/password/api"
+import { PasskeyContract } from "@awthaq/passkey/api"
+import { OrganizationContract } from "@awthaq/organization/api"
 
 export class AuthApi extends HttpApi.make("auth")
   .addHttpApi(CoreApi)
@@ -302,17 +302,17 @@ Ports are `Context.Service`s. Where v4 already defines one, we consume it unchan
 | `KeyValueStore` | `effect/unstable/persistence` | `layerMemory`, `layerSql`, Redis | cookie-cache, challenges, counters |
 | `RateLimiter` | `effect/unstable/persistence` | `layer` + `layerStoreMemory` / `layerStoreRedis` | per-route limits |
 | `SqlClient` | `effect/unstable/sql` | `@effect/sql-pg`, `@effect/sql-sqlite-node` | persistence |
-| `PasswordHasher` | `@effect-auth/ports` | `layerArgon2id`, `layerScrypt` (edge) | password plugin |
-| `Mailer` | `@effect-auth/ports` | `layerNoop` (fails loudly in prod), `layerMemory` (records) | verification, reset, invites |
-| `WebAuthn` | `@effect-auth/ports` | `layerSimpleWebAuthn` | passkey plugin |
+| `PasswordHasher` | `@awthaq/ports` | `layerArgon2id`, `layerScrypt` (edge) | password plugin |
+| `Mailer` | `@awthaq/ports` | `layerNoop` (fails loudly in prod), `layerMemory` (records) | verification, reset, invites |
+| `WebAuthn` | `@awthaq/ports` | `layerSimpleWebAuthn` | passkey plugin |
 
 ```ts
-// @effect-auth/ports/src/PasswordHasher.ts
+// @awthaq/ports/src/PasswordHasher.ts
 export class PasswordHasher extends Context.Service<PasswordHasher, {
   hash(plain: Redacted.Redacted<string>): Effect.Effect<string>            // PHC string
   verify(plain: Redacted.Redacted<string>, phc: string): Effect.Effect<boolean>   // constant-time
   needsRehash(phc: string): boolean
-}>()("effect-auth/ports/PasswordHasher") {
+}>()("awthaq/ports/PasswordHasher") {
   static readonly layerArgon2id = Layer.effect(PasswordHasher, Effect.gen(function*() {
     const cost = yield* Config.Int("AUTH_ARGON2_MEMORY_KIB").pipe(Config.withDefault(19_456))
     /* @node-rs/argon2 */
@@ -333,7 +333,7 @@ Swapping a port is a `Layer.provide` at composition time (§8.4). Two providers 
 `Model.Class` is the one definition per entity. The `json` variants feed stratum 1; `insert`/`update` feed repositories. Sensitive columns exist only in database variants.
 
 ```ts
-// @effect-auth/sql/src/models/Session.ts
+// @awthaq/sql/src/models/Session.ts
 import { Model } from "effect/unstable/schema"
 
 export class User extends Model.Class<User>("User")({
@@ -382,7 +382,7 @@ export class VerificationToken extends Model.Class<VerificationToken>("Verificat
 ### 4.2 Repositories
 
 ```ts
-// @effect-auth/sql/src/SessionRepo.ts
+// @awthaq/sql/src/SessionRepo.ts
 export class SessionRepo extends Context.Service<SessionRepo, {
   insert(row: typeof Session.insert.Type): Effect.Effect<Session>
   findBySecretHash(hash: string): Effect.Effect<Option.Option<Session>>
@@ -390,7 +390,7 @@ export class SessionRepo extends Context.Service<SessionRepo, {
   touch(id: SessionId, idleExpiresAt: DateTime.Utc): Effect.Effect<void>
   remove(id: SessionId): Effect.Effect<void>
   removeOthers(userId: UserId, keep: SessionId): Effect.Effect<void>
-}>()("effect-auth/sql/SessionRepo") {
+}>()("awthaq/sql/SessionRepo") {
   static readonly layerNoDeps = Layer.effect(SessionRepo, Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient
     const repo = yield* SqlModel.makeRepository(Session, {
@@ -412,7 +412,7 @@ export class SessionRepo extends Context.Service<SessionRepo, {
 Migrations are the v4 `Migrator` record shape. A plugin exports its own record; the linker (§8.3) concatenates records in plugin topological order and re-keys them `NNNN_<plugin>_<name>` so ordering is deterministic and attributable.
 
 ```ts
-// @effect-auth/password/src/migrations.ts
+// @awthaq/password/src/migrations.ts
 export const migrations = {
   "0001_password_account_index": Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient
@@ -430,13 +430,13 @@ The snapshot-diff planner with a checksum ledger from v0.1 stays a CLI feature o
 ### 5.1 Configuration as services with defaults
 
 ```ts
-// @effect-auth/core/src/SessionConfig.ts
+// @awthaq/core/src/SessionConfig.ts
 export const SessionConfig = Context.Reference<{
   readonly absolute: Duration.Duration
   readonly idle: Duration.Duration
   readonly touchEvery: Duration.Duration
   readonly cookie: { readonly name: string; readonly sameSite: "strict" | "lax"; readonly secure: boolean }
-}>("effect-auth/SessionConfig", {
+}>("awthaq/SessionConfig", {
   defaultValue: () => ({
     absolute: Duration.days(30),
     idle: Duration.days(7),
@@ -452,14 +452,14 @@ Secrets are never in a `Reference`; they are read inside layers with `Config.Red
 ### 5.2 Sessions
 
 ```ts
-// @effect-auth/core/src/Sessions.ts
+// @awthaq/core/src/Sessions.ts
 export class Sessions extends Context.Service<Sessions, {
   issue(input: { userId: UserId; request?: RequestInfo; actingAs?: PrincipalRef }): Effect.Effect<IssuedSession>
   resolve(token: Redacted.Redacted<string>): Effect.Effect<Session, Unauthenticated>
   revoke(id: SessionId): Effect.Effect<void, SessionNotFound>
   revokeOthers(userId: UserId, keep: SessionId): Effect.Effect<void>
   list(userId: UserId): Effect.Effect<Array<Session>>
-}>()("effect-auth/Sessions") {
+}>()("awthaq/Sessions") {
   static readonly layerNoDeps = Layer.effect(Sessions, Effect.gen(function*() {
     const repo = yield* SessionRepo
     const crypto = yield* Crypto.Crypto
@@ -511,7 +511,7 @@ export class Sessions extends Context.Service<Sessions, {
 This mirrors how v4 fills an `HttpRouter`: a service holds the registry, and contributors are `Layer.effectDiscard` values that register into it. A plugin's hook taps are therefore just part of the plugin's `layer`.
 
 ```ts
-// @effect-auth/core/src/AuthHooks.ts
+// @awthaq/core/src/AuthHooks.ts
 export interface HookPoint<I, O> { readonly id: string; readonly input: Schema.Schema<I>; readonly output: Schema.Schema<O> }
 
 export const Hooks = {
@@ -526,7 +526,7 @@ export class AuthHooks extends Context.Service<AuthHooks, {
   tap<I, O, E, R>(point: HookPoint<I, O>, handler: (input: I) => Effect.Effect<O, E, R>,
                   options?: { readonly order?: number | "pre" | "post"; readonly plugin?: string }): Effect.Effect<void, never, R>
   run<I, O>(point: HookPoint<I, O>, input: I): Effect.Effect<O, HookAbort>
-}>()("effect-auth/AuthHooks") {
+}>()("awthaq/AuthHooks") {
   static readonly layer = Layer.effect(AuthHooks, makeRegistry)   // sorts taps by (topo, order, plugin) at first run, then freezes
 
   // Contributor sugar — the HttpRouter.use shape.
@@ -542,7 +542,7 @@ Veto points run taps sequentially; a tap may fail with `HookAbort` (typed, mappe
 ### 5.4 Events
 
 ```ts
-// @effect-auth/core/src/AuthEvents.ts
+// @awthaq/core/src/AuthEvents.ts
 export class UserSignedIn extends Schema.TaggedClass<UserSignedIn>()("auth.user.signedIn", {
   userId: UserId, sessionId: SessionId, strategy: Schema.String
 }) {}
@@ -551,7 +551,7 @@ export const AuthEvent = Schema.Union([UserSignedIn, SessionIssued, SessionRevok
 export class AuthEvents extends Context.Service<AuthEvents, {
   publish(event: AuthEvent): Effect.Effect<void>              // never awaits observers
   readonly stream: Stream.Stream<AuthEvent>
-}>()("effect-auth/AuthEvents") {
+}>()("awthaq/AuthEvents") {
   static readonly layer = Layer.effect(AuthEvents, Effect.gen(function*() {
     const pubsub = yield* PubSub.bounded<AuthEvent>({ capacity: 1024 })
     yield* Effect.addFinalizer(() => PubSub.shutdown(pubsub))
@@ -592,7 +592,7 @@ export class PasswordError extends Schema.TaggedError<PasswordError>()("Password
 The middleware implementation is a Layer for the service defined in stratum 1. Each security key is a strategy.
 
 ```ts
-// @effect-auth/server/src/Authentication.ts
+// @awthaq/server/src/Authentication.ts
 export const AuthenticationLive: Layer.Layer<Authentication, never, Sessions | PrincipalResolver> = Layer.effect(
   Authentication,
   Effect.gen(function*() {
@@ -649,7 +649,7 @@ export const CsrfProtectionLive = Layer.effect(CsrfProtection, Effect.gen(functi
 Handlers are `HttpApiBuilder.group` layers built against the plugin's own contract. They call stratum-4 services and map reason unions to declared errors.
 
 ```ts
-// @effect-auth/password/src/http.ts
+// @awthaq/password/src/http.ts
 export const PasswordHandlersNoDeps = HttpApiBuilder.group(PasswordContract, "password", Effect.fn(function*(handlers) {
   const password = yield* Password            // the plugin's domain service
   const sessions = yield* Sessions
@@ -686,7 +686,7 @@ export const PasswordHandlersNoDeps = HttpApiBuilder.group(PasswordContract, "pa
 ### 6.4 Serving
 
 ```ts
-// @effect-auth/server/src/AuthHttp.ts
+// @awthaq/server/src/AuthHttp.ts
 export const AuthHttp = {
   // Registers every group of the merged api with the router; handler layers come from Auth.layer.
   routes: <Groups extends HttpApiGroup.Constraint>(api: HttpApi.HttpApi<"auth", Groups>) =>
@@ -717,15 +717,15 @@ export const { handler } = HttpRouter.toWebHandler(Routes.pipe(Layer.provide(Htt
 
 ### 7.1 The boundary
 
-effect-auth produces a `Principal`. qadi consumes an `AuthSubject` (`id`, `roles`, `permissions`, `attributes`). The bridge is one service, `SubjectResolver`, whose default knows nothing about roles. The `roles` and `organization` plugins replace its layer.
+awthaq produces a `Principal`. qadi consumes an `AuthSubject` (`id`, `roles`, `permissions`, `attributes`). The bridge is one service, `SubjectResolver`, whose default knows nothing about roles. The `roles` and `organization` plugins replace its layer.
 
 ```ts
-// @effect-auth/core/src/SubjectResolver.ts
+// @awthaq/core/src/SubjectResolver.ts
 import { makeSubject, type AuthSubject } from "@qadi/core"
 
 export class SubjectResolver extends Context.Service<SubjectResolver, {
   resolve(principal: Principal): Effect.Effect<AuthSubject>
-}>()("effect-auth/SubjectResolver") {
+}>()("awthaq/SubjectResolver") {
   // Default: identity only. No roles, no permissions. Every qadi policy that needs one denies.
   static readonly layer = Layer.succeed(SubjectResolver, {
     resolve: (p) => Effect.succeed(makeSubject({
@@ -735,7 +735,7 @@ export class SubjectResolver extends Context.Service<SubjectResolver, {
   })
 }
 
-// @effect-auth/roles — replaces the default with roles loaded from the role table + a role DAG
+// @awthaq/roles — replaces the default with roles loaded from the role table + a role DAG
 export const SubjectResolverWithRoles = Layer.effect(SubjectResolver, Effect.gen(function*() {
   const roles = yield* RoleRepo
   const graph = yield* RoleGraph                    // qadi `role({...})` definitions, from config
@@ -754,13 +754,13 @@ export const SubjectResolverWithRoles = Layer.effect(SubjectResolver, Effect.gen
 **A. Middleware that lifts the principal.** For endpoints already behind `Authentication`, a second middleware requires `CurrentPrincipal` and provides qadi's `CurrentSubject`. Handlers then call `guard`, `enforce`, `enforceProjected` directly.
 
 ```ts
-// @effect-auth/qadi/src/AuthorizedSubject.ts
+// @awthaq/qadi/src/AuthorizedSubject.ts
 import { CurrentSubject } from "@qadi/core"
 
 export class AuthorizedSubject extends HttpApiMiddleware.Service<AuthorizedSubject, {
   requires: CurrentPrincipal
   provides: CurrentSubject
-}>()("effect-auth/qadi/AuthorizedSubject") {}
+}>()("awthaq/qadi/AuthorizedSubject") {}
 
 export const AuthorizedSubjectLive = Layer.effect(AuthorizedSubject, Effect.gen(function*() {
   const resolver = yield* SubjectResolver
@@ -772,10 +772,10 @@ export const AuthorizedSubjectLive = Layer.effect(AuthorizedSubject, Effect.gen(
 }))
 ```
 
-**B. qadi's own `RequirePermission` middleware,** fed by a `SubjectExtractor` that runs effect-auth's session resolution on the raw request. This is the declarative path: the permission is an endpoint annotation, the permission registry can list it, and an endpoint that declares nothing is refused.
+**B. qadi's own `RequirePermission` middleware,** fed by a `SubjectExtractor` that runs awthaq's session resolution on the raw request. This is the declarative path: the permission is an endpoint annotation, the permission registry can list it, and an endpoint that declares nothing is refused.
 
 ```ts
-// @effect-auth/qadi/src/SubjectExtractor.ts
+// @awthaq/qadi/src/SubjectExtractor.ts
 import { SubjectExtractor, SubjectExtractionFailed } from "@qadi/http"
 import { anonymous } from "@qadi/core"
 
@@ -927,16 +927,16 @@ const nightly = Effect.gen(function*() {
 })
 ```
 
-### 7.6 React: session from effect-auth, decisions from qadi
+### 7.6 React: session from awthaq, decisions from qadi
 
-`@effect-auth/react` and `@qadi/react` share one substrate: atoms from `effect/unstable/reactivity`. The auth client is an `AtomHttpApi.Service`; the session atom is a query on `session.current`; its `subject` field feeds `QadiProvider`.
+`@awthaq/react` and `@qadi/react` share one substrate: atoms from `effect/unstable/reactivity`. The auth client is an `AtomHttpApi.Service`; the session atom is a query on `session.current`; its `subject` field feeds `QadiProvider`.
 
 ```tsx
 // app/client/auth.ts
 import { AtomHttpApi } from "effect/unstable/reactivity"
 import { FetchHttpClient } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
-import { CsrfProtection } from "@effect-auth/api"
+import { CsrfProtection } from "@awthaq/api"
 import { AuthApi } from "../auth.contract"
 
 // The client half of CsrfProtection. Without this layer the AuthClient does not type-check.
@@ -1019,7 +1019,7 @@ Decide on the server, seed the browser, let the browser re-check. Only attribute
 // app/projects/page.tsx (React Server Component)
 import { decide } from "@qadi/core"
 import { dehydrateDecisions } from "@qadi/react"
-import { getSession } from "@effect-auth/next"          // reads the cookie, runs Sessions.resolve, returns SessionView | undefined
+import { getSession } from "@awthaq/next"          // reads the cookie, runs Sessions.resolve, returns SessionView | undefined
 
 export const dynamic = "force-dynamic"
 
@@ -1057,7 +1057,7 @@ export { handler as GET, handler as POST }
 ### 8.1 What a plugin is
 
 ```ts
-// @effect-auth/core/src/Auth.ts
+// @awthaq/core/src/Auth.ts
 export interface PluginManifest {
   readonly id: string                          // "password" | "acme.invite"
   readonly apiVersion: 1
@@ -1138,12 +1138,12 @@ Types stay shallow: `Plugins[number]["layer"]` indexed accesses, never condition
 
 ```ts
 // app/auth.ts
-import { Auth } from "@effect-auth/core"
-import { password } from "@effect-auth/password"
-import { passkey } from "@effect-auth/passkey"
-import { organization } from "@effect-auth/organization"
-import { roles } from "@effect-auth/roles"
-import { PasswordHasher, Mailer } from "@effect-auth/ports"
+import { Auth } from "@awthaq/core"
+import { password } from "@awthaq/password"
+import { passkey } from "@awthaq/passkey"
+import { organization } from "@awthaq/organization"
+import { roles } from "@awthaq/roles"
+import { PasswordHasher, Mailer } from "@awthaq/ports"
 import { PgClient, PgMigrator } from "@effect/sql-pg"
 import { RateLimiter, KeyValueStore } from "effect/unstable/persistence"
 
@@ -1212,7 +1212,7 @@ export const companyEmail = () => Auth.plugin({
 
 ```
 packages/plugin-invite/src/
-  api.ts          contract (stratum 1)      → "@acme/effect-auth-invite/api"
+  api.ts          contract (stratum 1)      → "@acme/awthaq-invite/api"
   Invitation.ts   Model.Class (stratum 3)
   Invites.ts      domain service (stratum 4)
   http.ts         handlers (stratum 5)
@@ -1271,7 +1271,7 @@ export const migrations = {
 export class Invites extends Context.Service<Invites, {
   create(input: { email: string; role: "member" | "admin" }): Effect.Effect<Invitation, InviteError>
   accept(token: Redacted.Redacted<string>): Effect.Effect<User, InviteError>
-}>()("acme/effect-auth-invite/Invites") {
+}>()("acme/awthaq-invite/Invites") {
   static readonly layerNoDeps = Layer.effect(Invites, Effect.gen(function*() {
     const sql = yield* SqlClient.SqlClient
     const repo = yield* SqlModel.makeRepository(Invitation, { tableName: "invite_invitation", spanPrefix: "Invites", idColumn: "id" })
@@ -1305,7 +1305,7 @@ export class Invites extends Context.Service<Invites, {
 export const invite = (options?: { readonly ttl?: Duration.Input }) => Auth.plugin({
   manifest: {
     id: "acme.invite", apiVersion: 1, version: "1.0.0",
-    requires: { plugins: ["password"], ports: ["effect-auth/ports/Mailer"] },
+    requires: { plugins: ["password"], ports: ["awthaq/ports/Mailer"] },
     tables: ["invite_invitation"]
   },
   contract: InviteContract,
@@ -1318,7 +1318,7 @@ export const invite = (options?: { readonly ttl?: Duration.Input }) => Auth.plug
 })
 ```
 
-Options parameterize Layers only. The contract, the migrations and the manifest are static, so `effect-auth plugin list` and the registry validator read them without executing anything.
+Options parameterize Layers only. The contract, the migrations and the manifest are static, so `awthaq plugin list` and the registry validator read them without executing anything.
 
 ---
 
@@ -1333,7 +1333,7 @@ export class TenantProviders extends LayerMap.Service<TenantProviders>()("app/Te
 // in a request: Effect.provide(TenantProviders.get(tenantId))
 
 // a rotatable JWKS key ring for the jwt plugin
-export class KeyRing extends LayerRef.Service<KeyRing>()("effect-auth/jwt/KeyRing", {
+export class KeyRing extends LayerRef.Service<KeyRing>()("awthaq/jwt/KeyRing", {
   layer: SigningKeys.layerFromStore,           // loads current + previous keys
   idleTimeToLive: "1 hour"
 }) {}
@@ -1351,7 +1351,7 @@ A tenant selects among installed plugins; it cannot add one. The manifest is val
 import { layer } from "@effect/vitest"
 import { HttpApiTest } from "effect/unstable/httpapi"
 import { TestClock } from "effect/testing"
-import { TestAuth } from "@effect-auth/test"
+import { TestAuth } from "@awthaq/test"
 
 const TestLive = TestAuth.layer(plugins)      // Auth.layer over *.layerMemory, Mailer.layerMemory, permissive RateLimiter, HttpServer.layerServices
 const makeClient = HttpApiTest.groups(AuthApi, ["password", "session"])

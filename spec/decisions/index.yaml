@@ -1,5 +1,5 @@
 kind: decisions
-package: effect-auth
+package: awthaq
 infix: EA
 entries:
   - id: "ADR-EA-001"

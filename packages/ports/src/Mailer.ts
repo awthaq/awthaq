@@ -1,4 +1,4 @@
-// @effect-auth/ports — Mailer
+// @awthaq/ports — Mailer
 //
 // spec/overview.md's Ports stratum table ("Mailer (layerNoop, layerMemory)")
 // and archive/PRD.md's own table: "layerNoop (fails loudly in prod),
@@ -39,7 +39,7 @@ export interface MailerShape {
   readonly sent: Effect.Effect<ReadonlyArray<MailMessage>>;
 }
 
-export class Mailer extends Context.Service<Mailer, MailerShape>()("effect-auth/ports/Mailer") {}
+export class Mailer extends Context.Service<Mailer, MailerShape>()("awthaq/ports/Mailer") {}
 
 /**
  * "Fails loudly in prod" (`archive/PRD.md`): an application that reaches
@@ -53,7 +53,7 @@ export const layerNoop: Layer.Layer<Mailer> = Layer.succeed(
     send: (message) =>
       Effect.die(
         new Error(
-          `effect-auth: no Mailer configured — dropped a "${message.template}" message to ${message.to}. ` +
+          `awthaq: no Mailer configured — dropped a "${message.template}" message to ${message.to}. ` +
             "Provide a real Mailer layer (or Mailer.layerMemory for tests).",
         ),
       ),

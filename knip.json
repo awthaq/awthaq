@@ -6,51 +6,51 @@
     },
     "packages/api-key": {
       "ignoreDependencies": [
-        "@effect-auth/api",
-        "@effect-auth/core",
-        "@effect-auth/ports",
-        "@effect-auth/server",
-        "@effect-auth/sql",
+        "@awthaq/api",
+        "@awthaq/core",
+        "@awthaq/ports",
+        "@awthaq/server",
+        "@awthaq/sql",
         "@effect/vitest",
         "effect"
       ]
     },
     "packages/two-factor": {
       "ignoreDependencies": [
-        "@effect-auth/api",
-        "@effect-auth/core",
-        "@effect-auth/ports",
-        "@effect-auth/server",
-        "@effect-auth/sql",
+        "@awthaq/api",
+        "@awthaq/core",
+        "@awthaq/ports",
+        "@awthaq/server",
+        "@awthaq/sql",
         "@effect/vitest",
         "effect"
       ]
     },
     "packages/magic-link": {
       "ignoreDependencies": [
-        "@effect-auth/api",
-        "@effect-auth/core",
-        "@effect-auth/ports",
-        "@effect-auth/server",
-        "@effect-auth/sql",
+        "@awthaq/api",
+        "@awthaq/core",
+        "@awthaq/ports",
+        "@awthaq/server",
+        "@awthaq/sql",
         "@effect/vitest",
         "effect"
       ]
     },
     "packages/cli": {
       "ignoreDependencies": [
-        "@effect-auth/api",
-        "@effect-auth/core",
-        "@effect-auth/ports",
-        "@effect-auth/qadi",
-        "@effect-auth/server",
-        "@effect-auth/sql",
+        "@awthaq/api",
+        "@awthaq/core",
+        "@awthaq/ports",
+        "@awthaq/qadi",
+        "@awthaq/server",
+        "@awthaq/sql",
         "@effect/vitest",
         "effect"
       ]
     },
     "packages/next": {
-      "ignoreDependencies": ["@effect-auth/react"]
+      "ignoreDependencies": ["@awthaq/react"]
     }
   }
 }

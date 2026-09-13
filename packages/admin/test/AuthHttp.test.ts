@@ -4,10 +4,10 @@
 //
 // The full `admin` group exercised over a real `HttpRouter`/
 // `HttpRouter.toWebHandler` — real HTTP requests/responses, real status
-// codes, a real session cookie — mirroring `@effect-auth/passkey`'s own
+// codes, a real session cookie — mirroring `@awthaq/passkey`'s own
 // `AuthHttp.test.ts`.
-import { AuthEvents, Sessions, Users } from "@effect-auth/core";
-import { Authentication, AuthHttp } from "@effect-auth/server";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Authentication, AuthHttp } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -18,7 +18,7 @@ import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { TestAuth } from "@effect-auth/test";
+import { TestAuth } from "@awthaq/test";
 import { Admin, AdminApi, ImpersonationRecords } from "../src/index.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
@@ -62,7 +62,7 @@ const buildHandler = (canImpersonate: Admin.AdminConfigShape["canImpersonate"]) 
    * Issues a real session directly against the same running `Sessions`
    * instance the handler itself uses (shared via `memoMap`), formatted as
    * the `__Host-session` cookie header a browser would carry — the same
-   * pattern `@effect-auth/passkey`'s own `AuthHttp.test.ts` documents using.
+   * pattern `@awthaq/passkey`'s own `AuthHttp.test.ts` documents using.
    */
   const issueSessionCookieHeader = (userId: string): Promise<string> =>
     Effect.runPromise(
@@ -280,7 +280,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
  * BEH-EA-198/199: `runPluginContractTests` against the real `Admin` plugin —
  * manifest legality, group ids, the `admin_impersonation` table prefix, and
  * migration determinism. Mirrors `packages/test/test/runPluginContractTests.test.ts`'s
- * own use of `@effect-auth/password`, adapted onto real `describe`/`it`/`assert`
+ * own use of `@awthaq/password`, adapted onto real `describe`/`it`/`assert`
  * instead of a recording framework, since this suite only needs the checks to
  * pass, not to inspect their pass/fail messages.
  */

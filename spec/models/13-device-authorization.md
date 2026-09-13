@@ -8,7 +8,7 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 ---
@@ -17,7 +17,7 @@
 A plan for a `DeviceAuthorization` plugin implementing the OAuth 2.0 Device Authorization Grant (RFC 8628): an input-constrained device (a smart TV, a CLI, a set-top box) displays a short user code and a URL, the user completes sign-in on a second device (their phone or laptop), and the first device polls until the grant is approved and receives a session or token. It shares the divert/step-up hook-point machinery `archive/PRD.md` §9.3 defines for `Two-Factor` — the first device's poll loop is diverted (pending, then approved or denied) in the same way a password sign-in is diverted to a 2FA challenge.
 
 ## Who asks for it
-`archive/PRD.md` §17 lists `DeviceAuthorization` as a Phase-3 official plugin with no further elaboration; no worked example or design discussion exists for it in `archive/design/usage-examples-v4.md` or `archive/design/usage-qadi.md`. `research/03-auth-landscape.md`'s TL;DR situates the grant among CLI/TV/agent-facing authentication rather than the browser-first flows the rest of the matrix targets, grouping it with "the 2026 frontier" of agent/MCP identity work ("agent/MCP identity... is the 2026 frontier") rather than with the enterprise-tier B2B methods (SSO, SAML, SCIM) it is filed alongside in the phase table. The realistic asker is a developer tool or a TV/console application that cannot practically render effect-auth's normal browser-based sign-in surface.
+`archive/PRD.md` §17 lists `DeviceAuthorization` as a Phase-3 official plugin with no further elaboration; no worked example or design discussion exists for it in `archive/design/usage-examples-v4.md` or `archive/design/usage-qadi.md`. `research/03-auth-landscape.md`'s TL;DR situates the grant among CLI/TV/agent-facing authentication rather than the browser-first flows the rest of the matrix targets, grouping it with "the 2026 frontier" of agent/MCP identity work ("agent/MCP identity... is the 2026 frontier") rather than with the enterprise-tier B2B methods (SSO, SAML, SCIM) it is filed alongside in the phase table. The realistic asker is a developer tool or a TV/console application that cannot practically render awthaq's normal browser-based sign-in surface.
 
 ## Status
 | Property | Value |

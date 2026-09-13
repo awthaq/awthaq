@@ -8,7 +8,7 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Accepted — design; implementation deferred |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Grounded "Alternatives considered" in NestJS's documented global-provider merge behavior instead of a self-referential PRD citation (CCR-EA-002) |
 

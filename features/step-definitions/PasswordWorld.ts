@@ -7,12 +7,12 @@
 // domain-service access — matching that file's own scope: "this only checks
 // the HTTP plumbing," with domain rules already proven in
 // `packages/password/test/Password.test.ts`.
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@effect-auth/core";
-import type { AuthEvent } from "@effect-auth/core/AuthEvents";
-import { Mailer, PasswordHasher, RateLimiter } from "@effect-auth/ports";
-import type { MailMessage } from "@effect-auth/ports/Mailer";
-import { Authentication, AuthHttp } from "@effect-auth/server";
-import { Password, PasswordApi } from "@effect-auth/password";
+import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import type { AuthEvent } from "@awthaq/core/AuthEvents";
+import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import type { MailMessage } from "@awthaq/ports/Mailer";
+import { Authentication, AuthHttp } from "@awthaq/server";
+import { Password, PasswordApi } from "@awthaq/password";
 import { NodeCrypto } from "@effect/platform-node";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";

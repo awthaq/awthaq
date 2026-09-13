@@ -9,7 +9,7 @@
     "tsBuildInfoFile": "./.tsbuildinfo",
     "paths": {
       "@/*": ["./src/*"],
-      "@effect-auth/api": ["../api/src/index.ts"]
+      "@awthaq/api": ["../api/src/index.ts"]
     }
   },
   "references": [

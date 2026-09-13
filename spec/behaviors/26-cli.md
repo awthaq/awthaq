@@ -7,21 +7,21 @@
 > | Revision | 1.2 |
 > | Effective Date | 2026-09-13 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Softened BEH-EA-207 to a deferred, unvalidated CLI feature, matching BEH-EA-039's hedged framing (CCR-EA-002) <br> 1.2 (2026-09-13): Retargeted BEH-EA-208's footer link now that [27-admin-impersonation.md](27-admin-impersonation.md) follows it (CCR-EA-004) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-201: `doctor` checks link, config, and insecure defaults
 
 ```bash
-effect-auth doctor   # link + config + insecure defaults (sameSite lax, csrf off, dev mailer in prod)
+awthaq doctor   # link + config + insecure defaults (sameSite lax, csrf off, dev mailer in prod)
 ```
 
 ```text
-REQUIREMENT: `effect-auth doctor` MUST report every plugin-graph linking
+REQUIREMENT: `awthaq doctor` MUST report every plugin-graph linking
              problem, every configuration value it can validate, and every
              known insecure-default combination (relaxed `SameSite`, CSRF
              disabled, a development mailer configured in a production
@@ -36,7 +36,7 @@ _Previous: [BEH-EA-200](25-testing-harness.md#beh-ea-200-veto-only-in-veto-point
 ## BEH-EA-202: `plugin list --graph` shows topology, ports, and hook chains
 
 ```bash
-effect-auth plugin list --graph   # topo order, ports, hook chains
+awthaq plugin list --graph   # topo order, ports, hook chains
 ```
 
 ```text
@@ -47,14 +47,14 @@ REQUIREMENT: `plugin list --graph` MUST print the installed plugins in
              migrations and hook resolution.
 ```
 
-PRD §21 and `usage-examples-v4.md` §14's "Resolved order is printable: `effect-auth plugin list --hooks`" both point at the same need: the composition order that determines behavior (which hook tap runs first, which migration applies first) must be inspectable as data, not something a developer has to infer by reading `Auth.make`'s plugin array and reasoning about `dependsOn` by hand.
+PRD §21 and `usage-examples-v4.md` §14's "Resolved order is printable: `awthaq plugin list --hooks`" both point at the same need: the composition order that determines behavior (which hook tap runs first, which migration applies first) must be inspectable as data, not something a developer has to infer by reading `Auth.make`'s plugin array and reasoning about `dependsOn` by hand.
 
 _Previous: [BEH-EA-201](26-cli.md#beh-ea-201-doctor-checks-link-config-and-insecure-defaults) | Next: [BEH-EA-203](26-cli.md#beh-ea-203-routes-lists-every-endpoint-with-its-owning-plugin-and-middleware)_
 
 ## BEH-EA-203: `routes` lists every endpoint with its owning plugin and middleware
 
 ```bash
-effect-auth routes   # method, path, group, plugin, middleware
+awthaq routes   # method, path, group, plugin, middleware
 ```
 
 ```text
@@ -72,8 +72,8 @@ _Previous: [BEH-EA-202](26-cli.md#beh-ea-202-plugin-list---graph-shows-topology-
 ## BEH-EA-204: `migration status` and `apply` read and advance the ledger
 
 ```bash
-effect-auth migration status     # applied / pending against the Migrator ledger
-effect-auth migration apply --yes
+awthaq migration status     # applied / pending against the Migrator ledger
+awthaq migration apply --yes
 ```
 
 ```text
@@ -92,11 +92,11 @@ _Previous: [BEH-EA-203](26-cli.md#beh-ea-203-routes-lists-every-endpoint-with-it
 ## BEH-EA-205: `openapi` exports the aggregated document
 
 ```bash
-effect-auth openapi > openapi.json
+awthaq openapi > openapi.json
 ```
 
 ```text
-REQUIREMENT: `effect-auth openapi` MUST emit one OpenAPI document covering
+REQUIREMENT: `awthaq openapi` MUST emit one OpenAPI document covering
              core and every installed plugin's contract; it MUST NOT require
              a non-Effect consumer to assemble multiple per-plugin documents
              themselves.
@@ -109,7 +109,7 @@ _Previous: [BEH-EA-204](26-cli.md#beh-ea-204-migration-status-and-apply-read-and
 ## BEH-EA-206: `seed admin` provisions the first privileged account
 
 ```bash
-effect-auth seed admin
+awthaq seed admin
 ```
 
 ```text
@@ -128,20 +128,20 @@ _Previous: [BEH-EA-205](26-cli.md#beh-ea-205-openapi-exports-the-aggregated-docu
 ## BEH-EA-207: `import` migrates users from a named source framework
 
 ```bash
-effect-auth import --from better-auth|authjs|lucia
+awthaq import --from better-auth|authjs|lucia
 ```
 
 ```text
-REQUIREMENT: `effect-auth import` MUST support at least `better-auth`,
+REQUIREMENT: `awthaq import` MUST support at least `better-auth`,
              `authjs`, and `lucia` as named source formats, translating each
-             framework's user/account/session tables into effect-auth's own
+             framework's user/account/session tables into awthaq's own
              `Model.Class` shapes; it MUST NOT silently drop a source field
-             effect-auth has no equivalent for without reporting it.
+             awthaq has no equivalent for without reporting it.
 ```
 
-PRD §21 names these three sources explicitly, reflecting the ecosystem effect-auth positions itself against (PRD §2's discussion of better-auth) and alongside (Auth.js/Lucia as prior art). Reporting rather than silently dropping unmapped fields (a provider-specific column, a plugin-specific table the target framework had no equivalent for) keeps a migration auditable — an operator moving a production user base needs to know what, if anything, did not carry over.
+PRD §21 names these three sources explicitly, reflecting the ecosystem awthaq positions itself against (PRD §2's discussion of better-auth) and alongside (Auth.js/Lucia as prior art). Reporting rather than silently dropping unmapped fields (a provider-specific column, a plugin-specific table the target framework had no equivalent for) keeps a migration auditable — an operator moving a production user base needs to know what, if anything, did not carry over.
 
-Like `behaviors/05-persistence-stratum.md`'s BEH-EA-039 (schema diffing and destructive-change guardrails are "a deferred CLI feature, not a v1 runtime requirement"), this requirement names a real target without claiming it is validated today: no source-framework schema mapping (`better-auth`, `authjs`, `lucia`) has been built or tested against a real export from any of the three, and the exact set of fields each framework's schema carries that effect-auth's `Model.Class` shapes have no equivalent for is not yet enumerated. `effect-auth import` is planned CLI tooling, not a v1 runtime requirement — nothing in `Auth.make`, `auth.layer`, or `auth.migrations` depends on it existing — and, like BEH-EA-039's diff planner, it is expected to be built and validated against real exported data from each named source before it is relied on for a production migration, not assumed correct from this specification alone.
+Like `behaviors/05-persistence-stratum.md`'s BEH-EA-039 (schema diffing and destructive-change guardrails are "a deferred CLI feature, not a v1 runtime requirement"), this requirement names a real target without claiming it is validated today: no source-framework schema mapping (`better-auth`, `authjs`, `lucia`) has been built or tested against a real export from any of the three, and the exact set of fields each framework's schema carries that awthaq's `Model.Class` shapes have no equivalent for is not yet enumerated. `awthaq import` is planned CLI tooling, not a v1 runtime requirement — nothing in `Auth.make`, `auth.layer`, or `auth.migrations` depends on it existing — and, like BEH-EA-039's diff planner, it is expected to be built and validated against real exported data from each named source before it is relied on for a production migration, not assumed correct from this specification alone.
 
 _Previous: [BEH-EA-206](26-cli.md#beh-ea-206-seed-admin-provisions-the-first-privileged-account) | Next: [BEH-EA-208](26-cli.md#beh-ea-208-the-cli-reads-the-manifest-it-never-runs-the-application)_
 

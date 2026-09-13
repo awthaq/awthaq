@@ -17,10 +17,10 @@
 // depends on (e.g. `DateTime.now`) see the same simulated `TestClock` every
 // other step does. Several of this feature's own scenarios (REQ-EA-334's
 // flow-TTL expiry) depend on that.
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@effect-auth/core";
-import { RateLimiter, SqlTransaction, Encryption, KeyProvider } from "@effect-auth/ports";
-import { Authentication } from "@effect-auth/server";
-import { OAuth, OAuthProvider } from "@effect-auth/oauth";
+import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { RateLimiter, SqlTransaction, Encryption, KeyProvider } from "@awthaq/ports";
+import { Authentication } from "@awthaq/server";
+import { OAuth, OAuthProvider } from "@awthaq/oauth";
 import { NodeCrypto } from "@effect/platform-node";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -122,7 +122,7 @@ const EncryptionLive = Encryption.layer.pipe(
       Layer.provide(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
-            env: { EFFECT_AUTH_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
           }),
         ),
       ),

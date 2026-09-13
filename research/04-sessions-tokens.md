@@ -8,7 +8,7 @@ Domain owner: research agent 04. Answers Q45–Q47, Q60–Q62, and the session-r
 - **Token format winner: composite `id.secret`** (Lucia/Pilcrow design): unguessable ID + 32-byte CSPRNG secret, joined for transport, secret SHA-256-hashed at rest, verified with constant-time comparison. The ID lets the server reference/log a session without handling the live credential.
 - **Cookie hardening is a solved checklist**: `__Host-` (or the newer `__Host-Http-`) prefix, `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no `Domain` — all verifiable browser-enforced guarantees (MDN, RFC 10017 §6.1.3.2, OWASP).
 - **Rotation**: mandatory new session at every authentication and privilege/permission change (session-fixation defense, OWASP); sliding idle expiry (Lucia `active/idle`, better-auth `updateAge`) plus an absolute ceiling (Clerk/OAuth-style "max lifetime"); at least one of idle/absolute must be enabled.
-- **Reuse detection, not just rotation**: for refresh/step-up token families, issuing a new token per exchange *and* invalidating the whole family when an already-used token reappears is the RFC 9700 §4.14 requirement and what Auth0 implements; effect-auth should copy the pattern for any multi-token chains.
+- **Reuse detection, not just rotation**: for refresh/step-up token families, issuing a new token per exchange *and* invalidating the whole family when an already-used token reappears is the RFC 9700 §4.14 requirement and what Auth0 implements; awthaq should copy the pattern for any multi-token chains.
 - **JWT plugin**: EdDSA/Ed25519 (OKP) default with a JWKS endpoint and `kid`-driven key cache refresh — exactly what better-auth ships — under RFC 8725 rules (explicit algorithm allowlist, `iss`/`aud`/`exp` validation, explicit `typ`, mutually exclusive validation per token kind). JWTs are for *delegation at a distance*, never the primary session.
 - **CSRF default for a library**: `SameSite=Strict` + signed (session-bound HMAC) double-submit token + Origin/`Sec-Fetch-Site` validation on unsafe methods; bearer/api-key requests are CSRF-exempt because they carry no ambient credentials. Naive (unsigned) double-submit is now OWASP-discouraged.
 - **Impersonation** has a converging industry spec: opt-in + admin-gated, mandatory reason, 60-minute hard expiry, dual identity (`sub` = user, `act` = impersonator, RFC 8693 style), distinct audit events, visible staff bar (WorkOS AuthKit; Auth0 Session Delegation, Aug 2026).
@@ -99,13 +99,13 @@ Domain owner: research agent 04. Answers Q45–Q47, Q60–Q62, and the session-r
 - Scope discipline: joepie91's constructive conclusion — JWTs fit "Hello Server B, Server A told me I could do X, here's the proof" patterns: short-lived, single-use, per-operation tokens issued by a sessionful server ([part 1, closing section](http://cryto.net/~joepie91/blog/2016/06/13/stop-using-jwt-for-sessions/)). PRD similarly lists JWT as a phase-2 plugin, with sessions in core.
 - If bearer JWTs leave the cookie perimeter, sender-constraining is the RFC 9700 §2.2.1 expectation for high-value tokens, via mTLS (RFC 8705) or DPoP (RFC 9449) ([RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)); see DPoP note below.
 
-**DPoP — does it matter for effect-auth?** For our primary architecture (HttpOnly-cookie browser session), no: DPoP sender-constrains *OAuth-style bearer* access/refresh tokens, its headline win is making exfiltrated tokens unusable outside the holder's key, and it cannot stop an XSS'd page from *using* the session in-place — RFC 9449 §2 explicitly scopes "proxying requests via the user's browser" attacks out ([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449)). It becomes relevant only if/when we ship OAuth-provider features minting bearer access tokens for third-party clients; then it's a phase-3 consideration, ideally opt-in behind the OAuth plugin.
+**DPoP — does it matter for awthaq?** For our primary architecture (HttpOnly-cookie browser session), no: DPoP sender-constrains *OAuth-style bearer* access/refresh tokens, its headline win is making exfiltrated tokens unusable outside the holder's key, and it cannot stop an XSS'd page from *using* the session in-place — RFC 9449 §2 explicitly scopes "proxying requests via the user's browser" attacks out ([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449)). It becomes relevant only if/when we ship OAuth-provider features minting bearer access tokens for third-party clients; then it's a phase-3 consideration, ideally opt-in behind the OAuth plugin.
 
 **Recommendation.**
 
-1. `@effect-auth/plugin-jwt` (phase 2, per PRD §26): default **EdDSA (Ed25519)**, keypair generated at first boot and persisted via the configured key store; HS256 allowed only as explicit opt-in with a ≥32-byte generated secret and a config warning.
+1. `@awthaq/plugin-jwt` (phase 2, per PRD §26): default **EdDSA (Ed25519)**, keypair generated at first boot and persisted via the configured key store; HS256 allowed only as explicit opt-in with a ≥32-byte generated secret and a config warning.
 2. Sign with `kid`; serve `GET /auth/jwks`; verifiers cache JWKS and refresh on unknown `kid` (better-auth's documented client behavior); support scheduled rotation by publishing two keys (new + old) and retiring old signing after a grace period.
-3. Strict verify policy, non-negotiable: fixed allowlist `["EdDSA","ES256"]` (+HS256 only if enabled), reject tokens whose `alg`/`typ`/`kid` don't match the expected kind, require and check `iss`, `aud`, `exp`; require explicit `typ` (e.g., `JWT+effect-auth`) and keep validation rules mutually exclusive per token kind (access vs ID vs plugin-issued) per RFC 8725 §3.12.
+3. Strict verify policy, non-negotiable: fixed allowlist `["EdDSA","ES256"]` (+HS256 only if enabled), reject tokens whose `alg`/`typ`/`kid` don't match the expected kind, require and check `iss`, `aud`, `exp`; require explicit `typ` (e.g., `JWT+awthaq`) and keep validation rules mutually exclusive per token kind (access vs ID vs plugin-issued) per RFC 8725 §3.12.
 4. Claims mapping: stable core (`sub` = principal id, `sid` = session id, `iat`, `exp`, `iss`, `aud`, optional `act` for impersonation — see Q62), plugin-configurable extra claims; `sid` gives any resource server an optional "check session still valid" escalation path, restoring revocability.
 5. Default TTL short (15 min); position the plugin exactly as better-auth does — a bridge for services that can't consult the session store — and keep the opaque session as the source of truth (PRD: JWT is phase 2).
 6. Library: build on `jose` (the de-facto TS JOSE implementation, used in better-auth's own docs examples) rather than hand-rolled JOSE; isolate it behind a capability so edge runtimes can swap in `@noble/*`-based signers if needed.
@@ -154,7 +154,7 @@ Domain owner: research agent 04. Answers Q45–Q47, Q60–Q62, and the session-r
 5. Client surface: `impersonated: true` in the session payload so UIs render a staff bar + "stop impersonating" control; revocation endpoint for early exit.
 6. Tests (feeds Q88/Q94): impersonation blocked when disabled; blocked without permission; reason enforced; expiry enforced via TestClock; target-user revocation kills the impersonation session; audit events emitted with both ids.
 
-**Confidence:** high — two independent 2026 industry implementations agree on the pattern; effect-auth's only novel decision is plugin placement.
+**Confidence:** high — two independent 2026 industry implementations agree on the pattern; awthaq's only novel decision is plugin placement.
 
 ---
 
@@ -205,7 +205,7 @@ Domain owner: research agent 04. Answers Q45–Q47, Q60–Q62, and the session-r
 
 ## Technologies & libraries
 
-| Name | What it is | License | Maturity | Relevance to effect-auth |
+| Name | What it is | License | Maturity | Relevance to awthaq |
 |---|---|---|---|---|
 | `node:crypto` | CSPRNG (`randomBytes`, `getRandomValues`), `timingSafeEqual`, HMAC, Ed25519 keys | Node built-in (MIT-licensed runtime) | Stable (docs current to v26.x) | Token generation + constant-time compare on Node/Bun ([docs](https://nodejs.org/api/crypto.html)) |
 | WebCrypto (`globalThis.crypto`) | `getRandomValues`, `randomUUID`, Ed25519 in modern engines | WHATWG standard | Stable | Edge/Workers token generation; no timing-safe compare primitive — needs audited JS fallback |
@@ -242,7 +242,7 @@ Domain owner: research agent 04. Answers Q45–Q47, Q60–Q62, and the session-r
 - **better-auth team (Bekacru et al.)** — the ecosystem we benchmark against; their plugin docs are a running changelog of session/security defaults. [GitHub](https://github.com/better-auth/better-auth)
 - **Effect team (Michael Arnaldi, Tim Smart)** — `Clock`/`TestClock`, `Duration`, `Redacted` primitives this design leans on. [GitHub](https://github.com/Effect-TS/effect)
 
-## Recommended defaults for effect-auth
+## Recommended defaults for awthaq
 
 1. **Token format**: opaque `id.secret`; secret = 32 CSPRNG bytes base64url; persist `SHA-256(secret)` with a unique index; all verification constant-time (`node:crypto.timingSafeEqual`; audited JS fallback on WebCrypto-only runtimes).
 2. **Cookie**: `__Host-session`; `Secure; HttpOnly; SameSite=Strict; Path=/`; no `Domain`; `Max-Age` mirrors server expiry, capped at 400 days; escape hatch `sameSite: "lax"` for OAuth redirect UX only.

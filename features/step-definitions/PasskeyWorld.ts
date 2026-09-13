@@ -12,10 +12,10 @@
 // directly against `Sessions` through the same shared `MemoMap` the app's
 // own handler resolves against — the identical technique
 // `AuthHttp.test.ts`'s own `issueSessionCookieHeader` uses.
-import { AuthEvents, Accounts, Sessions, Users } from "@effect-auth/core";
-import { WebAuthn } from "@effect-auth/ports";
-import { Authentication, AuthHttp } from "@effect-auth/server";
-import { Passkey, PasskeyApi, ChallengeStore, PasskeyCredentials } from "@effect-auth/passkey";
+import { AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
+import { WebAuthn } from "@awthaq/ports";
+import { Authentication, AuthHttp } from "@awthaq/server";
+import { Passkey, PasskeyApi, ChallengeStore, PasskeyCredentials } from "@awthaq/passkey";
 import { NodeCrypto } from "@effect/platform-node";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";

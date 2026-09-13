@@ -1,4 +1,4 @@
-// @effect-auth/api — Account
+// @awthaq/api — Account
 //
 // Shipping-gap map (.scratch/shipping-gaps), tickets 09/10. Core's own
 // `account` `HttpApiGroup` — reserved, root-level, needing no plugin to
@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
 import { Authentication } from "./Api.ts";
 
-/** The wire shape of `@effect-auth/core`'s `UserRecord`, minus internal ids/timestamps a caller has no use for. */
+/** The wire shape of `@awthaq/core`'s `UserRecord`, minus internal ids/timestamps a caller has no use for. */
 export class AccountDto extends Schema.Class<AccountDto>("AccountDto")({
   id: Schema.String,
   email: Schema.String,

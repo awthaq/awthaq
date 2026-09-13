@@ -1,4 +1,4 @@
-// @effect-auth/jwt — JwtConfig
+// @awthaq/jwt — JwtConfig
 //
 // .scratch/jwt/spec.md's own "Config (`JwtConfig`)" decision. Kept in its
 // own module, separate from `Jwt.ts`, so `KeyRing.ts` (which needs
@@ -14,7 +14,7 @@
 // all, rather than silently shipping an unconfigured `iss` claim — the
 // spec's own stricter-than-`OAuthConfig.baseUrl` decision.
 
-import type { Api } from "@effect-auth/api";
+import type { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -32,9 +32,7 @@ export interface JwtConfigShape {
   readonly definePayload: (principal: Api.Principal) => Effect.Effect<Record<string, unknown>>;
 }
 
-export class JwtConfig extends Context.Service<JwtConfig, JwtConfigShape>()(
-  "effect-auth/jwt/Config",
-) {}
+export class JwtConfig extends Context.Service<JwtConfig, JwtConfigShape>()("awthaq/jwt/Config") {}
 
 const emptyPayload: JwtConfigShape["definePayload"] = () => Effect.succeed({});
 

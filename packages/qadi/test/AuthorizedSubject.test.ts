@@ -1,7 +1,7 @@
 // spec/behaviors/19-qadi-bridge-path-a.md, BEH-EA-145.
 //
 // A real `HttpRouter.toWebHandler` test, the same shape
-// `@effect-auth/password`/`@effect-auth/oauth`'s own `AuthHttp.test.ts` use:
+// `@awthaq/password`/`@awthaq/oauth`'s own `AuthHttp.test.ts` use:
 // domain-level tests (`SubjectResolver.test.ts`) prove the resolver logic in
 // isolation, but only a real request through a real `.middleware(Authentication)
 // .middleware(AuthorizedSubject)` chain proves the bridge is actually wired —
@@ -14,9 +14,9 @@
 // single `HttpRouter.toWebHandler(AppLayer)` runtime is built once and
 // reused for both requests, since each independent build would otherwise
 // own its own, unrelated `Sessions`/`Users` state.
-import { Api } from "@effect-auth/api";
-import { AuthEvents, Sessions, Users } from "@effect-auth/core";
-import { Authentication, AuthHttp } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Authentication, AuthHttp } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

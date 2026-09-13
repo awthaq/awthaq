@@ -1,5 +1,5 @@
 /**
- * Shared state for the tooling smoke test — not part of the effect-auth
+ * Shared state for the tooling smoke test — not part of the awthaq
  * specification. Mirrors qadi's World/WorldLive shape (a Context.Service
  * wrapping one Ref, rebuilt fresh per Scenario via a Layer) at the smallest
  * possible scale, so the real spec suite's future World services have a

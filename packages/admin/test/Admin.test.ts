@@ -5,9 +5,9 @@
 // `Sessions`/`AuthEvents`/`ImpersonationRecords`, a plain in-test
 // `canImpersonate` function (no `Layer.mock` needed — it is a bare config
 // predicate, not a service).
-import { Api } from "@effect-auth/api";
-import { AuthEvents, Sessions, Users } from "@effect-auth/core";
-import { Authentication } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Authentication } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -27,7 +27,7 @@ const CoreLive = Layer.mergeAll(Sessions.layerMemory, AuthEvents.layer).pipe(
  * The `admin` group declares `.middleware(Api.Authentication)` — merged into
  * `Admin.Admin.layer` regardless of whether a test ever dispatches real
  * HTTP, so this domain-level suite still has to satisfy it, the same way
- * `@effect-auth/passkey`'s own `Passkey.test.ts` does.
+ * `@awthaq/passkey`'s own `Passkey.test.ts` does.
  */
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),

@@ -1,4 +1,4 @@
-// @effect-auth/organization — OrganizationHooks
+// @awthaq/organization — OrganizationHooks
 //
 // Ticket 19 / spec.md's "Lifecycle hooks": one `veto` (before) + `observe`
 // (after) `HookPoint` per mutating operation this plugin exposes —
@@ -20,7 +20,7 @@
 // per-operation "aborted" error to design and thread through 15 endpoints)
 // while still giving an application a real way to block an operation
 // outright by tapping the veto point and failing.
-import { HookPoint } from "@effect-auth/core";
+import { HookPoint } from "@awthaq/core";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 

@@ -1,14 +1,14 @@
-// @effect-auth/password — PasswordApi
+// @awthaq/password — PasswordApi
 //
 // spec/behaviors/15-password.md, BEH-EA-113, BEH-EA-114, BEH-EA-117, BEH-EA-120.
 // The plugin's own contract, groups named `password` (BEH-EA-004: a
 // plugin's groups are confined to its own id or a dotted sub-id) — built the
-// same way `@effect-auth/api`'s core `session` group is (`packages/api/src/Session.ts`),
+// same way `@awthaq/api`'s core `session` group is (`packages/api/src/Session.ts`),
 // since a plugin's contract is stratum-1-shaped even though it lives in the
 // plugin's own package (`spec/overview.md`: "Each plugin's own groups,
 // schemas, errors, and contract `HttpApi`").
 
-import { Api, SessionContract } from "@effect-auth/api";
+import { Api, SessionContract } from "@awthaq/api";
 import * as Schema from "effect/Schema";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi";
 
@@ -40,7 +40,7 @@ export class EmailAlreadyExists extends Schema.TaggedError<EmailAlreadyExists>()
  * reset token, not a wrong password — the wire shape BEH-EA-059 itself
  * fixes (`410 TokenConsumed`), reproduced here as this plugin's own schema
  * error since no shared `verification` contract group exists yet for it to
- * come from instead (see `@effect-auth/api`'s own header comment on what is
+ * come from instead (see `@awthaq/api`'s own header comment on what is
  * and isn't built yet).
  */
 export class TokenConsumed extends Schema.TaggedError<TokenConsumed>()(
@@ -98,14 +98,14 @@ export class WrongPassword extends Schema.TaggedError<WrongPassword>()(
 ) {}
 
 /**
- * BEH-EA-113: `signUp`/`signIn`'s success shape reuses `@effect-auth/api`'s
+ * BEH-EA-113: `signUp`/`signIn`'s success shape reuses `@awthaq/api`'s
  * `SessionContract.SessionDto` rather than inventing a second, competing
  * "who is signed in" wire shape — `SessionView`/`SubjectDto` proper
  * (BEH-EA-026) is its own, still-deferred piece of work; `SessionDto` is
  * the one that already exists and is already what the `session` group
  * itself returns for the identical "here is your session" moment.
  * `confirmReset` declares no `success` schema (defaults to `204`, the same
- * convention `@effect-auth/api`'s `session` group's `signOut`/`revokeOthers`
+ * convention `@awthaq/api`'s `session` group's `signOut`/`revokeOthers`
  * already use) — it does not sign the caller in on whatever device
  * submitted the reset, only revokes every *other* session (BEH-EA-117).
  */

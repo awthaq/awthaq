@@ -5,7 +5,7 @@
 // a `static` on the `Password` class (not a sibling export) for exactly
 // this to type-check — `Auth.make` reads `layer` directly off each plugin
 // class (`AuthPlugin.Any["layer"]`).
-import { Auth } from "@effect-auth/core";
+import { Auth } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import { Password } from "../src/index.ts";
 

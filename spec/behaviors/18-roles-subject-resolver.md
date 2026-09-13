@@ -7,12 +7,12 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-142's false citation of "file 06's admin plugin" — file 06 is Users and Accounts, not an Admin plugin; no Admin plugin behaviors exist yet (CCR-EA-002) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-137: The SubjectResolver slot defaults to identity-only
 
@@ -27,7 +27,7 @@ REQUIREMENT: The default `SubjectResolver` MUST produce an `AuthSubject`
              the absence of a plugin that provides them.
 ```
 
-`usage-qadi.md` §1's table is explicit about the consequence: "`User` without roles plugin → `id` only. Every policy that needs a role or permission denies." This is qadi's own fail-closed posture (PRD §5's "failure is not denial; absence is refusal" applied to the identity a policy evaluates) carried into effect-auth's one piece of authorization surface: installing no roles plugin means every permission-gated policy denies by construction, never by an implicit "everyone can" default.
+`usage-qadi.md` §1's table is explicit about the consequence: "`User` without roles plugin → `id` only. Every policy that needs a role or permission denies." This is qadi's own fail-closed posture (PRD §5's "failure is not denial; absence is refusal" applied to the identity a policy evaluates) carried into awthaq's one piece of authorization surface: installing no roles plugin means every permission-gated policy denies by construction, never by an implicit "everyone can" default.
 
 _Previous: [BEH-EA-136](17-passkey.md#beh-ea-136-typed-errors-are-enumeration-safe) | Next: [BEH-EA-138](18-roles-subject-resolver.md#beh-ea-138-roles-overrides-the-slot-exclusively)_
 
@@ -64,7 +64,7 @@ REQUIREMENT: `SubjectResolver` MUST flatten a user's assigned roles through
              role graph itself.
 ```
 
-This is qadi's own house rule from `spec/behaviors/01-permissions.md`'s design ("a subject carries a pre-flattened `ReadonlySet` of permission keys, so a permission check is a set membership test rather than a graph walk") applied at the point effect-auth hands qadi a subject: the DAG walk happens once, in `SubjectResolver`, so every downstream `check`/`enforce`/`filter` call is O(1) set membership rather than re-deriving inheritance on every request.
+This is qadi's own house rule from `spec/behaviors/01-permissions.md`'s design ("a subject carries a pre-flattened `ReadonlySet` of permission keys, so a permission check is a set membership test rather than a graph walk") applied at the point awthaq hands qadi a subject: the DAG walk happens once, in `SubjectResolver`, so every downstream `check`/`enforce`/`filter` call is O(1) set membership rather than re-deriving inheritance on every request.
 
 _Previous: [BEH-EA-138](18-roles-subject-resolver.md#beh-ea-138-roles-overrides-the-slot-exclusively) | Next: [BEH-EA-140](18-roles-subject-resolver.md#beh-ea-140-api-key-scopes-become-permissions)_
 
@@ -129,11 +129,11 @@ _Previous: [BEH-EA-141](18-roles-subject-resolver.md#beh-ea-141-service-principa
 ```text
 REQUIREMENT: When `CurrentPrincipal` is `AnonymousPrincipal`, `SubjectResolver`
              MUST produce qadi's canonical `anonymous` subject; it MUST NOT
-             synthesize a distinct effect-auth-specific representation of "no
+             synthesize a distinct awthaq-specific representation of "no
              one."
 ```
 
-`usage-qadi.md` §1's table lists this as the fourth resolution row. Using qadi's own `anonymous` value rather than an effect-auth equivalent means every policy already written against qadi's anonymous semantics (public-read rules, `anyOf` branches that check `hasResourceAttribute("visibility", eq("public"))` without needing a role) behaves identically whether the caller came through effect-auth or through any other qadi-fronted service — one subject shape, one evaluator, per `usage-qadi.md` §16's "one evaluation path" rule.
+`usage-qadi.md` §1's table lists this as the fourth resolution row. Using qadi's own `anonymous` value rather than an awthaq equivalent means every policy already written against qadi's anonymous semantics (public-read rules, `anyOf` branches that check `hasResourceAttribute("visibility", eq("public"))` without needing a role) behaves identically whether the caller came through awthaq or through any other qadi-fronted service — one subject shape, one evaluator, per `usage-qadi.md` §16's "one evaluation path" rule.
 
 _Previous: [BEH-EA-142](18-roles-subject-resolver.md#beh-ea-142-impersonation-is-a-static-subject-attribute) | Next: [BEH-EA-144](18-roles-subject-resolver.md#beh-ea-144-the-session-view-exposes-the-resolved-subject)_
 

@@ -1,5 +1,5 @@
 kind: models
-package: effect-auth
+package: awthaq
 infix: EA
 entries:
   - id: null

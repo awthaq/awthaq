@@ -1,4 +1,4 @@
-# effect-auth Specification
+# awthaq Specification
 
 > **Document Control**
 >
@@ -8,17 +8,17 @@
 > | Revision | 1.2 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed 11 stale filenames in the behaviors table; updated models count/table for MOD-EA-014/015; added decisions-table rows for ADR-EA-013/014/015 (CCR-EA-002) <br> 1.2 (2026-09-12): Added a "`features/` is the acceptance suite" section noting the new Gherkin suite and its REQ-EA allocation (CCR-EA-003) |
 
 ---
 
-> **This describes a planned system.** effect-auth is pre-implementation: there is no package.json, no source tree, no CI, and no shipped code. Every requirement, decision, invariant, model, and behavior in the tree below is a specification of intent — a target the implementation is meant to satisfy once it exists — not a record of something already built or verified. Where this tree and `archive/` disagree, this tree governs; where this tree describes something not yet true of any running system, that is expected and not an error to be fixed by quiet rewording.
+> **This describes a planned system.** awthaq is pre-implementation: there is no package.json, no source tree, no CI, and no shipped code. Every requirement, decision, invariant, model, and behavior in the tree below is a specification of intent — a target the implementation is meant to satisfy once it exists — not a record of something already built or verified. Where this tree and `archive/` disagree, this tree governs; where this tree describes something not yet true of any running system, that is expected and not an error to be fixed by quiet rewording.
 
 ## What this is
 
-This is the specification tree for **effect-auth**, a TypeScript authentication runtime being designed on Effect v4, with authorization delegated to a sibling library, **qadi**. The tree is organized the way a verified specification is organized once a project has shipped: user requirements (`urs.md`), architectural decisions (`decisions/`), domain models (`models/`), a behavior catalog that a future BDD suite will trace to (`behaviors/`), system invariants (`invariants.md`), a requirement-to-behavior traceability matrix (`traceability.md`), and process documents that fix the ID scheme and definitions of done (`process/`). Every document carries a Document-Control header with a stable ID, and every cross-document reference is a relative markdown link to the exact heading it cites, so the tree can be traced in either direction: from a requirement down to the behaviors that will satisfy it, or from a behavior up to the decision and requirement that justify it.
+This is the specification tree for **awthaq**, a TypeScript authentication runtime being designed on Effect v4, with authorization delegated to a sibling library, **qadi**. The tree is organized the way a verified specification is organized once a project has shipped: user requirements (`urs.md`), architectural decisions (`decisions/`), domain models (`models/`), a behavior catalog that a future BDD suite will trace to (`behaviors/`), system invariants (`invariants.md`), a requirement-to-behavior traceability matrix (`traceability.md`), and process documents that fix the ID scheme and definitions of done (`process/`). Every document carries a Document-Control header with a stable ID, and every cross-document reference is a relative markdown link to the exact heading it cites, so the tree can be traced in either direction: from a requirement down to the behaviors that will satisfy it, or from a behavior up to the decision and requirement that justify it.
 
 The difference from a normal post-hoc specification is temporal, not structural: this tree was authored **before** an implementation exists, rather than extracted from one. It uses the same ID scheme, the same document shapes, and the same cross-reference discipline a mature, verified specification would use, so that when implementation begins, the specification does not need to be re-architected — only filled in, checked against real code, and (where reality diverges from plan) revised in place with a recorded change history entry.
 

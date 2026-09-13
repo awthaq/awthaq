@@ -8,13 +8,13 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-006, previously uncited by any behavior file (CCR-EA-002) |
 
 ---
 
-> effect-auth is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/design/plugins-as-layers.md` §3 and `archive/PRD.md` §9.3 — not code that has shipped.
+> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/design/plugins-as-layers.md` §3 and `archive/PRD.md` §9.3 — not code that has shipped.
 
 ## BEH-EA-017: Configuration is a `Context.Reference` with a default value
 
@@ -26,7 +26,7 @@ export const PasswordConfig = Context.Reference<{
   readonly breachCheck: boolean | { readonly onUnavailable: "allow" | "reject" }
   readonly resetTtl: Duration.Duration
   readonly rehashOnLogin: boolean
-}>("effect-auth/password/Config", {
+}>("awthaq/password/Config", {
   defaultValue: () => ({ minLength: 12, breachCheck: false, resetTtl: Duration.hours(1), rehashOnLogin: true })
 })
 ```
@@ -106,7 +106,7 @@ REQUIREMENT: No plugin's Layer MAY include a port service (`PasswordHasher`,
 
 ```ts
 export const SubjectResolver = Context.Reference<SubjectResolverShape>(
-  "effect-auth/slot/SubjectResolver", { defaultValue: () => identityOnly }
+  "awthaq/slot/SubjectResolver", { defaultValue: () => identityOnly }
 )
 
 static readonly layer = AuthPlugin.layer(Roles, {
@@ -143,7 +143,7 @@ REQUIREMENT: A hook point declared `kind: "veto"` MUST allow a tap to
              then declared `order`, then plugin id.
 ```
 
-`research/09-plugin-architecture.md` Q27 draws this from Tapable's typed hook classes (`SyncBailHook`, `SyncWaterfallHook`) while explicitly rejecting Tapable's registration-order semantics and Babel's famously reversed plugin/preset ordering rule, in favor of a small, declared, and printable order (`effect-auth plugin list --hooks`, `archive/design/usage-examples-v4.md` §14). Because a hook point is itself a service (`HookPoint.Service`), "may this plugin abort" is answered by the point's declared `kind`, not by convention a tap author must remember.
+`research/09-plugin-architecture.md` Q27 draws this from Tapable's typed hook classes (`SyncBailHook`, `SyncWaterfallHook`) while explicitly rejecting Tapable's registration-order semantics and Babel's famously reversed plugin/preset ordering rule, in favor of a small, declared, and printable order (`awthaq plugin list --hooks`, `archive/design/usage-examples-v4.md` §14). Because a hook point is itself a service (`HookPoint.Service`), "may this plugin abort" is answered by the point's declared `kind`, not by convention a tap author must remember.
 
 ## BEH-EA-023: An observe hook point is fail-isolated; a divert hook point returns a typed alternative outcome
 

@@ -1,10 +1,10 @@
-// @effect-auth/core — Slots
+// @awthaq/core — Slots
 //
 // spec/behaviors/03-ports-slots-hooks-registries.md, BEH-EA-017/019/021,
 // and spec/decisions/012-slots-exclusive-registries-aggregate.md
 // (ADR-EA-012). A slot is a `Context.Reference` with a fail-closed default
 // that at most one plugin may override (BEH-EA-021) — `define` gives it a
-// literal, introspectable key (`effect-auth/slot/${Name}`, the same
+// literal, introspectable key (`awthaq/slot/${Name}`, the same
 // `AuthPlugin`/`HookPoint` convention), and `override` is how a plugin
 // claims one, with a real, working conflict check.
 //
@@ -40,7 +40,7 @@
 // required: `override`'s own requirement is only the implementation
 // `Effect`'s own `R` — `Effect.serviceOption` looks the registry up without
 // ever placing it in `RIn`, so a plugin using `override` (like
-// `@effect-auth/roles`'s `Roles`) does not force every caller to also
+// `@awthaq/roles`'s `Roles`) does not force every caller to also
 // provide `Slots.layer`. An application that wants the real conflict check
 // provides `Slots.layer` once, application-wide, the same way it opts into
 // `RateLimits.layer` or `AuthEvents.layer` today; one that doesn't still
@@ -59,7 +59,7 @@ import * as Ref from "effect/Ref";
  * claim. Deliberately narrower than `AuthPlugin.Any` (which also declares
  * `layer`): a plugin that claims a slot from inside its own `static
  * readonly layer = Slots.override(Self, ...)` initializer (as
- * `@effect-auth/roles`'s `Roles` does) would otherwise force TypeScript to
+ * `@awthaq/roles`'s `Roles` does) would otherwise force TypeScript to
  * resolve `Self`'s entire structural shape — `layer` included — to check it
  * against the parameter type, while that very `layer` field's type is what
  * the initializer is computing (`TS7022`, a real circularity, not a style
@@ -70,7 +70,7 @@ export interface PluginOwner {
   readonly id: string;
 }
 
-export type Key<Name extends string> = `effect-auth/slot/${Name}`;
+export type Key<Name extends string> = `awthaq/slot/${Name}`;
 
 /** BEH-EA-021: a `Context.Reference` (fail-closed default, real override semantics) with a literal, introspectable `key`. */
 export interface Slot<Name extends string, Shape> extends Context.Reference<Shape> {
@@ -89,7 +89,7 @@ export const define =
     name: Name,
     options: { readonly defaultValue: () => Shape },
   ): Slot<Name, Shape> => {
-    const key: Key<Name> = `effect-auth/slot/${name}`;
+    const key: Key<Name> = `awthaq/slot/${name}`;
     const reference = Context.Reference<Shape>(key, options);
     const statics: { readonly key: Key<Name> } = { key };
     return Object.assign(reference, statics);
@@ -123,7 +123,7 @@ export interface SlotsRegistryShape {
 }
 
 export class SlotsRegistry extends Context.Service<SlotsRegistry, SlotsRegistryShape>()(
-  "effect-auth/core/SlotsRegistry",
+  "awthaq/core/SlotsRegistry",
 ) {}
 
 export const layer: Layer.Layer<SlotsRegistry> = Layer.effect(
@@ -141,7 +141,7 @@ export const layer: Layer.Layer<SlotsRegistry> = Layer.effect(
               slot: slot.key,
               firstOwner: existing.owner,
               secondOwner: owner.id,
-              message: `effect-auth: slot "${slot.key}" is overridden by both "${existing.owner}" and "${owner.id}"`,
+              message: `awthaq: slot "${slot.key}" is overridden by both "${existing.owner}" and "${owner.id}"`,
             }),
           );
         }
@@ -149,7 +149,7 @@ export const layer: Layer.Layer<SlotsRegistry> = Layer.effect(
           return yield* Effect.die(
             new SlotsFrozen({
               message:
-                "effect-auth: slot claims are frozen once read (e.g. by introspection) — every slot must be claimed before that point",
+                "awthaq: slot claims are frozen once read (e.g. by introspection) — every slot must be claimed before that point",
             }),
           );
         }
@@ -177,7 +177,7 @@ export const layer: Layer.Layer<SlotsRegistry> = Layer.effect(
  *
  * `owner` is typed `PluginOwner` (`{ readonly id: string }`), not
  * `AuthPlugin.Any` — see that interface's own doc comment for why: a plugin
- * that (like `@effect-auth/roles`'s `Roles`) passes itself here, eagerly,
+ * that (like `@awthaq/roles`'s `Roles`) passes itself here, eagerly,
  * from inside its own `static readonly layer = Slots.override(Roles, ...)`
  * initializer, must never need TypeScript to resolve anything beyond `id`
  * to check the argument, since `Roles.layer`'s own type is simultaneously

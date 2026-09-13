@@ -8,7 +8,7 @@
 > | Revision | 1.2 |
 > | Effective Date | 2026-09-13 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) |
 
@@ -16,13 +16,13 @@
 
 An invariant, here, is a property the system is designed to hold — a statement that should be true of every plugin composition, every session, every token, every authorization decision, once the corresponding code exists. Each entry below names the property, the mechanism intended to make it hold, and what breaks if that mechanism is absent or defeated.
 
-> **Banner — read before relying on anything below.** effect-auth is pre-implementation (see `archive/PRD.md` and `spec/README.md`): no package has been published, no line of runtime source exists. None of the invariants in this document has a real enforcing artifact yet, with one exception of kind, not degree: the **type-level invariants** in §1 are enforced by the TypeScript compiler acting on the plugin-composition types described in `archive/design/plugins-as-layers.md`, and `tsc` is a real, present mechanism today, independent of whether `@effect-auth/*` packages exist. Every **runtime invariant** in §2 is proved, once it is provable at all, by a test that does not yet exist; its "Enforcement" cell names an intended path, not a file on disk. Treat every entry as a design commitment, not a verified fact.
+> **Banner — read before relying on anything below.** awthaq is pre-implementation (see `archive/PRD.md` and `spec/README.md`): no package has been published, no line of runtime source exists. None of the invariants in this document has a real enforcing artifact yet, with one exception of kind, not degree: the **type-level invariants** in §1 are enforced by the TypeScript compiler acting on the plugin-composition types described in `archive/design/plugins-as-layers.md`, and `tsc` is a real, present mechanism today, independent of whether `@awthaq/*` packages exist. Every **runtime invariant** in §2 is proved, once it is provable at all, by a test that does not yet exist; its "Enforcement" cell names an intended path, not a file on disk. Treat every entry as a design commitment, not a verified fact.
 
 ---
 
 ## Type-level invariants
 
-These are properties that the TypeScript compiler enforces the moment `Auth.make`'s `Validate<P>` and Effect's `Layer` type algebra exist as designed in `archive/design/plugins-as-layers.md` §1, §4.2. They differ from every other invariant in this document in one respect: their enforcing mechanism, the compiler, is not itself something effect-auth has to build. Once the types in `plugins-as-layers.md` are written as code, these hold for free.
+These are properties that the TypeScript compiler enforces the moment `Auth.make`'s `Validate<P>` and Effect's `Layer` type algebra exist as designed in `archive/design/plugins-as-layers.md` §1, §4.2. They differ from every other invariant in this document in one respect: their enforcing mechanism, the compiler, is not itself something awthaq has to build. Once the types in `plugins-as-layers.md` are written as code, these hold for free.
 
 ## INV-EA-001: A plugin dependency that is not installed keeps the application from compiling
 
@@ -42,7 +42,7 @@ These are properties that the TypeScript compiler enforces the moment `Auth.make
 
 ## INV-EA-003: Two plugins declaring the same id is a compile-time error at `Auth.make`
 
-**Source**: TypeScript compiler, via `Validate<P>`'s `DuplicateId<P>` conditional type, evaluated pairwise over the tuple passed to `Auth.make` (`archive/design/plugins-as-layers.md` §4.2) — the tuple's type is narrowed to a literal error-object type (`{ readonly "effect-auth": "plugin id \"...\" appears more than once" }`) whenever two entries share an `id`, so the argument itself fails to type-check against `Auth.make`'s parameter type.
+**Source**: TypeScript compiler, via `Validate<P>`'s `DuplicateId<P>` conditional type, evaluated pairwise over the tuple passed to `Auth.make` (`archive/design/plugins-as-layers.md` §4.2) — the tuple's type is narrowed to a literal error-object type (`{ readonly "awthaq": "plugin id \"...\" appears more than once" }`) whenever two entries share an `id`, so the argument itself fails to type-check against `Auth.make`'s parameter type.
 
 **Implication**: Without this, two plugins that happen to choose the same id (for example, two third-party plugins both named `"invite"`) could silently shadow one another's handler groups, tables, or migrations at the point where the tuple is folded — the exact "last-wins merge" failure mode `archive/PRD.md` §2 documents in better-auth. With it, the collision is named at the `Auth.make([...])` call site before anything runs.
 
@@ -130,7 +130,7 @@ These are properties intended to hold at runtime once the corresponding domain s
 
 ## INV-EA-012: A qadi resolver's failure never becomes an authorization denial
 
-**Source**: qadi bridge (planned), governed by qadi's own rule "failure is not denial" as inherited into effect-auth per `archive/PRD.md` §5 (Design principle 7) and §15 — a resolver (attributes, relationships, decision history) that fails (times out, throws, cannot reach its data source) must surface as a distinguishable failure outcome, never silently coerced into a `false` / `AccessDenied` decision.
+**Source**: qadi bridge (planned), governed by qadi's own rule "failure is not denial" as inherited into awthaq per `archive/PRD.md` §5 (Design principle 7) and §15 — a resolver (attributes, relationships, decision history) that fails (times out, throws, cannot reach its data source) must surface as a distinguishable failure outcome, never silently coerced into a `false` / `AccessDenied` decision.
 
 **Implication**: Without this, a transient database blip or a slow relationship lookup would masquerade as "this user may not do this," which is both a wrong answer and an unauditable one — a legitimate user is refused for a reason that looks like policy when it is actually infrastructure. With it, callers can distinguish "denied by policy" (403) from "the system could not decide" (502 or equivalent), per `archive/PRD.md` §15's "Rules" bullet.
 

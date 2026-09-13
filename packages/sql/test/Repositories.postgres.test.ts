@@ -3,10 +3,10 @@
 // The real, `@effect/sql-pg`-backed counterpart to `Repositories.test.ts`'s
 // SQLite suite — same `Models`/`Repositories`, same `CoreMigrations.coreMigrations`
 // migrator, a real Postgres database instead of an in-memory SQLite one. Skips
-// (not fails) without `EFFECT_AUTH_POSTGRES_URL` set — CI provisions a real
+// (not fails) without `AWTHAQ_POSTGRES_URL` set — CI provisions a real
 // Postgres service and sets it; a local run without one just proves nothing,
 // rather than reporting a false failure for an environment gap.
-import { Encryption, KeyProvider } from "@effect-auth/ports";
+import { Encryption, KeyProvider } from "@awthaq/ports";
 import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
 import { assert, describe, it } from "@effect/vitest";
@@ -17,7 +17,7 @@ import * as Redacted from "effect/Redacted";
 import { Migrator, SqlClient } from "effect/unstable/sql";
 import { CoreMigrations, Models, Repositories } from "../src/index.ts";
 
-const postgresUrl = process.env["EFFECT_AUTH_POSTGRES_URL"];
+const postgresUrl = process.env["AWTHAQ_POSTGRES_URL"];
 
 // Shipping-gap map (.scratch/shipping-gaps), ticket 18:
 // `Repositories.AccountsRepositoryLive` now requires `Encryption` — a
@@ -28,7 +28,7 @@ const EncryptionLive = Encryption.layer.pipe(
       Layer.provide(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
-            env: { EFFECT_AUTH_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
           }),
         ),
       ),

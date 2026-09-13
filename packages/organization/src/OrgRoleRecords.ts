@@ -1,4 +1,4 @@
-// @effect-auth/organization — OrgRoleRecords
+// @awthaq/organization — OrgRoleRecords
 //
 // spec.md's "Dynamic access control": persistence for the
 // `organization_role` table (opt-in via `OrganizationConfig.dynamicAccessControl.enabled`),
@@ -68,7 +68,7 @@ export interface OrgRoleRecordsShape {
 }
 
 export class OrgRoleRecords extends Context.Service<OrgRoleRecords, OrgRoleRecordsShape>()(
-  "effect-auth/organization/OrgRoleRecords",
+  "awthaq/organization/OrgRoleRecords",
 ) {}
 
 const notFound = (id: string): OrgRoleRecordNotFound => new OrgRoleRecordNotFound({ id });

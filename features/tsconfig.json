@@ -9,17 +9,17 @@
     "rootDir": ".",
     "tsBuildInfoFile": "./lib/.tsbuildinfo",
     "paths": {
-      "@effect-auth/api": ["../packages/api/src/index.ts"],
-      "@effect-auth/core": ["../packages/core/src/index.ts"],
-      "@effect-auth/ports": ["../packages/ports/src/index.ts"],
-      "@effect-auth/server": ["../packages/server/src/index.ts"],
-      "@effect-auth/sql": ["../packages/sql/src/index.ts"],
-      "@effect-auth/password": ["../packages/password/src/index.ts"],
-      "@effect-auth/oauth": ["../packages/oauth/src/index.ts"],
-      "@effect-auth/passkey": ["../packages/passkey/src/index.ts"],
-      "@effect-auth/organization": ["../packages/organization/src/index.ts"],
-      "@effect-auth/admin": ["../packages/admin/src/index.ts"],
-      "@effect-auth/jwt": ["../packages/jwt/src/index.ts"]
+      "@awthaq/api": ["../packages/api/src/index.ts"],
+      "@awthaq/core": ["../packages/core/src/index.ts"],
+      "@awthaq/ports": ["../packages/ports/src/index.ts"],
+      "@awthaq/server": ["../packages/server/src/index.ts"],
+      "@awthaq/sql": ["../packages/sql/src/index.ts"],
+      "@awthaq/password": ["../packages/password/src/index.ts"],
+      "@awthaq/oauth": ["../packages/oauth/src/index.ts"],
+      "@awthaq/passkey": ["../packages/passkey/src/index.ts"],
+      "@awthaq/organization": ["../packages/organization/src/index.ts"],
+      "@awthaq/admin": ["../packages/admin/src/index.ts"],
+      "@awthaq/jwt": ["../packages/jwt/src/index.ts"]
     }
   },
   "references": [

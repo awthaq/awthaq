@@ -2,12 +2,12 @@
 // spec/behaviors/11-http-error-mapping.md, BEH-EA-083 through BEH-EA-088.
 //
 // Exercises the core `session` group's real HTTP surface — `AuthHttp.routes`/
-// `AuthHttp.docs` registering `@effect-auth/api`'s `AuthCoreApi` with a real
+// `AuthHttp.docs` registering `@awthaq/api`'s `AuthCoreApi` with a real
 // `HttpRouter`, requests built from actual `Request` objects (BEH-EA-085's
 // "any host that hands the application a `Request`" path), and `httpApiStatus`
 // annotations landing on the real response status (BEH-EA-088).
-import { AuthCore } from "@effect-auth/api";
-import { Accounts, Sessions, Users } from "@effect-auth/core";
+import { AuthCore } from "@awthaq/api";
+import { Accounts, Sessions, Users } from "@awthaq/core";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

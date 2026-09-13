@@ -1,5 +1,5 @@
 {
-  "name": "@effect-auth/jwt",
+  "name": "@awthaq/jwt",
   "version": "0.1.0",
   "private": true,
   "description": "Short-lived, self-contained, cryptographically signed JWTs representing an already-authenticated caller — EdDSA/ES256, JWKS with grace-period key rotation, a standalone lite verifier for downstream services, and general-purpose signing primitives.",
@@ -31,13 +31,13 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
-    "@effect-auth/core": "workspace:*",
-    "@effect-auth/server": "workspace:*",
+    "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
+    "@awthaq/server": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect-auth/test": "workspace:*",
+    "@awthaq/test": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",

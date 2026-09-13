@@ -1,4 +1,4 @@
-// @effect-auth/next — HasSessionCookie
+// @awthaq/next — HasSessionCookie
 //
 // spec/behaviors/24-nextjs-ssr.md, BEH-EA-188.
 //
@@ -19,7 +19,7 @@
 // Treating a passing `hasSessionCookie` check as authentication is exactly
 // the mistake this module's own existence is meant to make hard to make.
 
-import { Api } from "@effect-auth/api";
+import { Api } from "@awthaq/api";
 import { hasCookie } from "./CookieHeader.ts";
 import type { HeadersLike } from "./GetSession.ts";
 

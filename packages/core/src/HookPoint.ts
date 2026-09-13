@@ -1,9 +1,9 @@
-// @effect-auth/core — HookPoint
+// @awthaq/core — HookPoint
 //
 // spec/behaviors/12-hooks.md, BEH-EA-089 through BEH-EA-096; also
 // spec/behaviors/03-ports-slots-hooks-registries.md, BEH-EA-022 through
 // BEH-EA-024 (the same design restated from the tap author's point of
-// view). effect-auth is pre-implementation; this module makes the
+// view). awthaq is pre-implementation; this module makes the
 // mechanism real — a point declared with `HookPoint.veto<Self>()(id,
 // input)` (or `.observe`/`.divert`), `.tap(handler)` registering a tap, and
 // `(yield* Point).run(input)` actually executing the registered chain —
@@ -82,7 +82,7 @@ export interface TapOptions {
   readonly order?: number;
 }
 
-export type Key<Id extends string> = `effect-auth/hook/${Id}`;
+export type Key<Id extends string> = `awthaq/hook/${Id}`;
 
 /** BEH-EA-090/091: a veto tap either amends the value for later taps and the operation, or aborts the operation outright. */
 export type VetoTap<Input> = (input: Input) => Effect.Effect<Input, HookAbort>;
@@ -169,7 +169,7 @@ export const veto =
     input: Schema.Schema<Input>,
   ): VetoClass<Self, Id, Input> => {
     void input; // type carrier only — see this module's own header comment
-    const key: Key<Id> = `effect-auth/hook/${id}`;
+    const key: Key<Id> = `awthaq/hook/${id}`;
     const serviceKey = Context.Service<Self, VetoShape<Input>>()(key);
     const entries: Array<Registration<VetoTap<Input>>> = [];
     let frozen: ReadonlyArray<VetoTap<Input>> | undefined;
@@ -184,7 +184,7 @@ export const veto =
             return Effect.die(
               new HookPointFrozen({
                 point: key,
-                message: `effect-auth: hook point "${key}" already ran once — every tap must be installed before the first run, never after`,
+                message: `awthaq: hook point "${key}" already ran once — every tap must be installed before the first run, never after`,
               }),
             );
           }
@@ -225,7 +225,7 @@ export const observe =
     input: Schema.Schema<Input>,
   ): ObserveClass<Self, Id, Input> => {
     void input; // type carrier only — see this module's own header comment
-    const key: Key<Id> = `effect-auth/hook/${id}`;
+    const key: Key<Id> = `awthaq/hook/${id}`;
     const serviceKey = Context.Service<Self, ObserveShape<Input>>()(key);
     const entries: Array<Registration<ObserveTap<Input>>> = [];
     let frozen: ReadonlyArray<ObserveTap<Input>> | undefined;
@@ -240,7 +240,7 @@ export const observe =
             return Effect.die(
               new HookPointFrozen({
                 point: key,
-                message: `effect-auth: hook point "${key}" already ran once — every tap must be installed before the first run, never after`,
+                message: `awthaq: hook point "${key}" already ran once — every tap must be installed before the first run, never after`,
               }),
             );
           }
@@ -286,7 +286,7 @@ export const divert =
   ): DivertClass<Self, Id, Input, Diverted> => {
     void input; // type carrier only — see this module's own header comment
     void diverted; // type carrier only — see this module's own header comment
-    const key: Key<Id> = `effect-auth/hook/${id}`;
+    const key: Key<Id> = `awthaq/hook/${id}`;
     const serviceKey = Context.Service<Self, DivertShape<Input, Diverted>>()(key);
     const entries: Array<Registration<DivertTap<Input, Diverted>>> = [];
     let frozen: ReadonlyArray<DivertTap<Input, Diverted>> | undefined;
@@ -301,7 +301,7 @@ export const divert =
             return Effect.die(
               new HookPointFrozen({
                 point: key,
-                message: `effect-auth: hook point "${key}" already ran once — every tap must be installed before the first run, never after`,
+                message: `awthaq: hook point "${key}" already ran once — every tap must be installed before the first run, never after`,
               }),
             );
           }

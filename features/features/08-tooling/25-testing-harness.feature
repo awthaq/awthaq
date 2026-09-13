@@ -1,4 +1,4 @@
-# effect-auth is pre-implementation (see spec/README.md). Every scenario in
+# awthaq is pre-implementation (see spec/README.md). Every scenario in
 # this file specifies intended behavior of a system that does not exist yet
 # — a target the future testing harness (BEH-EA-193..200) is meant to
 # execute against, not a record of anything verified today.
@@ -168,10 +168,10 @@ Feature: Testing Harness
       Then it fails with "E_PLUGIN_MISSING_DEP"
 
     @REQ-EA-565
-    Scenario: A third-party plugin author runs runPluginContractTests without effect-auth's own source
-      Given a third-party plugin "invite" built outside the effect-auth repository
+    Scenario: A third-party plugin author runs runPluginContractTests without awthaq's own source
+      Given a third-party plugin "invite" built outside the awthaq repository
       When its author runs "runPluginContractTests(invite, { options, host })"
-      Then the suite runs to completion without needing effect-auth's own source code
+      Then the suite runs to completion without needing awthaq's own source code
 
   # BEH-EA-199 — spec/behaviors/25-testing-harness.md
   @BEH-EA-199

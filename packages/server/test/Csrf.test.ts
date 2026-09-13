@@ -1,5 +1,5 @@
 // spec/behaviors/10-csrf.md, BEH-EA-073 through BEH-EA-080.
-import { Api } from "@effect-auth/api";
+import { Api } from "@awthaq/api";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { createHmac, randomBytes } from "node:crypto";

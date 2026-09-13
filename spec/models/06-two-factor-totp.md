@@ -7,7 +7,7 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 ---
@@ -18,7 +18,7 @@ A second authentication factor layered on top of Password (or any first
 factor): after the first factor succeeds, the plugin diverts sign-in to a
 challenge state instead of issuing a session, and only a valid time-based
 one-time code (RFC 6238 TOTP) or a hashed, single-use recovery code completes
-sign-in. Nothing described here exists yet — effect-auth is pre-implementation.
+sign-in. Nothing described here exists yet — awthaq is pre-implementation.
 
 ## Who asks for it
 

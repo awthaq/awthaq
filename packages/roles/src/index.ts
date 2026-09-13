@@ -1,4 +1,4 @@
-// @effect-auth/roles — Plugin (M3)
+// @awthaq/roles — Plugin (M3)
 //
 // A SubjectResolver override that flattens roles through a role DAG into
 // qadi's AuthSubject.

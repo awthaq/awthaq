@@ -1,10 +1,10 @@
-// @effect-auth/next — GetSession
+// @awthaq/next — GetSession
 //
 // spec/behaviors/24-nextjs-ssr.md, BEH-EA-185.
 //
 // The real, database-verified boundary: called from a React Server
 // Component or a server action, it resolves the incoming request's session
-// cookie against `@effect-auth/core`'s `Sessions` service and returns the
+// cookie against `@awthaq/core`'s `Sessions` service and returns the
 // principal, user, and session — or `undefined` for a missing, malformed,
 // expired, or unknown-session cookie. `HasSessionCookie.ts`'s cheap
 // presence-only check is the `proxy.ts`-only alternative; never treat that
@@ -15,11 +15,11 @@
 // stays the caller's own job, via `@qadi/core`'s `SubjectResolver.resolve`
 // against this struct's `principal`. See `.scratch/next-package/spec.md`'s
 // Implementation Decisions for why: it keeps this package off of
-// `@effect-auth/qadi` entirely, the same stratum-layering rule that already
-// forced `@effect-auth/api`'s `Subject.ts`/`@effect-auth/qadi`'s
+// `@awthaq/qadi` entirely, the same stratum-layering rule that already
+// forced `@awthaq/api`'s `Subject.ts`/`@awthaq/qadi`'s
 // `SubjectApi.ts` split.
 //
-// Reuses `@effect-auth/server`'s `Authentication.PrincipalResolver` — the
+// Reuses `@awthaq/server`'s `Authentication.PrincipalResolver` — the
 // one place a verified session already maps to a `Principal` — rather than
 // reconstructing that mapping a second time here, which would duplicate a
 // decision an application may have overridden (`spec/overview.md`'s "one
@@ -29,9 +29,9 @@
 // `ManagedRuntime` construction of its own — see this package's README for
 // the `globalThis`-pinned pattern a Next.js app needs to build one safely.
 
-import { Api } from "@effect-auth/api";
-import { Sessions, Users } from "@effect-auth/core";
-import { Authentication } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { Sessions, Users } from "@awthaq/core";
+import { Authentication } from "@awthaq/server";
 import * as Effect from "effect/Effect";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Redacted from "effect/Redacted";

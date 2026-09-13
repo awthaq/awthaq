@@ -1,9 +1,9 @@
 // .scratch/jwt/issues/08-sign-and-verify.md — sign a principal, verify the
 // result succeeds with every claim correct; a tampered signature fails;
 // an expired token fails (`TestClock`-driven).
-import { Api } from "@effect-auth/api";
-import { Sessions, Users } from "@effect-auth/core";
-import { Authentication } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { Sessions, Users } from "@awthaq/core";
+import { Authentication } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";

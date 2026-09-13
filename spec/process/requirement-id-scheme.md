@@ -7,16 +7,16 @@
 > | Revision | 1.2 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Process Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Broadened MOD-EA-NNN's description from authentication-method-only to authentication-method-or-core-plugin, to cover Organization and Admin (CCR-EA-002) <br> 1.2 (2026-09-12): `REQ-EA-NNN` is no longer reserved-only — a Gherkin suite now exists at `features/features/*.feature`, allocating `REQ-EA-001` through `REQ-EA-602` (CCR-EA-003) |
 ---
 
 ## 1. Package Infix
 
-All identifiers in this specification use the infix **`EA`** (effect-auth).
+All identifiers in this specification use the infix **`EA`** (awthaq).
 
-The infix exists to keep effect-auth's identifiers distinct from those of
+The infix exists to keep awthaq's identifiers distinct from those of
 sibling projects that are frequently open side by side with this
 specification — most importantly qadi, whose identifiers use the infix `QD`.
 `BEH-EA-009` and `BEH-QD-009` are unrelated requirements in unrelated
@@ -55,7 +55,7 @@ scenario runs yet — the suite is Gherkin-shaped, not yet Cucumber-executed.
 
 `MOD-EA-NNN` mirrors qadi's `MOD-QD-NNN`: it is the one series that asserts no
 verified behavior. It records which authentication methods and flows, and which core plugins,
-effect-auth can express — and what an unadopted one would cost to add — so
+awthaq can express — and what an unadopted one would cost to add — so
 that intent has somewhere to live that is not the behavior specification. A
 method becomes normative by acquiring `BEH-EA`, `INV-EA`, and (once it exists)
 `REQ-EA` identifiers in the ordinary way, never by being described in
@@ -120,7 +120,7 @@ itself:
 
 The anchor fragment is the heading's GitHub-slugified full heading text. It is
 **not independently verified by any tooling yet** — no `verify-traceability`
-script exists for effect-auth, unlike qadi's
+script exists for awthaq, unlike qadi's
 `spec/scripts/verify-traceability.sh`. A traceability-verification gate is
 itself a planned, not-yet-active gate of this specification; see
 [`definitions-of-done.md`](./definitions-of-done.md). Until that gate exists,

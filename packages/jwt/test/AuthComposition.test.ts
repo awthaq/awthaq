@@ -1,5 +1,5 @@
 // BEH-EA-009 (spec/behaviors/02-plugin-composition-validate.md): `Auth.make`
-// composes a real `jwt` plugin the same way `@effect-auth/roles`'s own
+// composes a real `jwt` plugin the same way `@awthaq/roles`'s own
 // `AuthComposition.test.ts` proves.
 //
 // `jwt` now carries a real group (the `jwks` endpoint, ticket 09), so
@@ -10,7 +10,7 @@
 // minimal companion plugin is still composed alongside `Jwt` in the second
 // test, to prove its manifest entry composes correctly next to another
 // plugin too, not only alone.
-import { Auth, AuthPlugin } from "@effect-auth/core";
+import { Auth, AuthPlugin } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";

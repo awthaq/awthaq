@@ -1,4 +1,4 @@
-# effect-auth is pre-implementation (see spec/README.md). Every scenario in
+# awthaq is pre-implementation (see spec/README.md). Every scenario in
 # this file specifies intended behavior of a system that does not exist yet
 # — a target the future testing harness (BEH-EA-193..200) is meant to
 # execute against, not a record of anything verified today.
@@ -157,7 +157,7 @@ Feature: Rate Limiting
       And the memory-backed implementation is entirely shadowed, not merged
 
     @REQ-EA-296
-    Scenario: effect-auth never attempts to combine two RateLimiter store implementations into one
+    Scenario: awthaq never attempts to combine two RateLimiter store implementations into one
       Given two Layers are provided for the "RateLimiter" port
       When the application is composed
       Then only one implementation of "RateLimiter" exists in the composed graph
@@ -187,7 +187,7 @@ Feature: Rate Limiting
     @REQ-EA-299
     Scenario: Rate-limit rules are listed in dependency order, then declared order, then rule id
       Given rate-limit rules contributed by plugins with a dependency relationship, some declaring an explicit "order", and rule ids as the final tiebreaker
-      When "effect-auth plugin list --graph" lists the rate-limit rules
+      When "awthaq plugin list --graph" lists the rate-limit rules
       Then the listing is ordered by plugin dependency order first, then by declared "order", then by rule id
 
     @REQ-EA-300

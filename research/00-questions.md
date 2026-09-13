@@ -4,7 +4,7 @@ Version 0.1 — 2026-09-12. This is the working questionnaire that drives PRD v2
 
 **How it works:** research agents answer their assigned question ranges with evidence (see `research/01..12-*.md`). Each answer carries a `Recommendation` and `Confidence`. Questions that remain contested after research become explicit user decisions (PRD v2 + ADRs).
 
-Conventions: `effect-auth` = this project (`@effect-auth/*`); PRD = `PRD.md` at repo root.
+Conventions: `awthaq` = this project (`@awthaq/*`); PRD = `PRD.md` at repo root.
 
 ---
 
@@ -46,7 +46,7 @@ Conventions: `effect-auth` = this project (`@effect-auth/*`); PRD = `PRD.md` at 
 28. Middleware contributions: per-endpoint/group/global middleware from plugins; ordering relative to auth/session middleware?
 29. Client contributions: how a plugin's client API derives from its HttpApi definition (one contract, no duplication)?
 30. What runtime seam exists between "static install" (compile time) and "runtime config" (tenants enabling/disabling installed providers)?
-31. What does the plugin contract test suite look like — the `@effect-auth/test` harness every plugin author can run against their plugin?
+31. What does the plugin contract test suite look like — the `@awthaq/test` harness every plugin author can run against their plugin?
 
 ## D. HTTP & API (Q32–Q41)
 
@@ -58,7 +58,7 @@ Conventions: `effect-auth` = this project (`@effect-auth/*`); PRD = `PRD.md` at 
 37. Rate limiting: abstraction shape (key/limit/window), per-route rules, response headers, storage backends?
 38. OpenAPI: one aggregated spec across plugins, security schemes, docs hosting?
 39. Client generation: how much of the typed client comes free from Effect `HttpApiClient` vs a custom plugin client surface?
-40. Framework adapters: what belongs in `@effect-auth/http` vs `@effect-auth/next|hono|tanstack|astro` — the minimal adapter contract?
+40. Framework adapters: what belongs in `@awthaq/http` vs `@awthaq/next|hono|tanstack|astro` — the minimal adapter contract?
 41. Input validation defaults: Schema strictness (unknown keys), body size limits, content-type policy?
 
 ## E. Core domain model (Q42–Q51)
@@ -137,6 +137,6 @@ Conventions: `effect-auth` = this project (`@effect-auth/*`); PRD = `PRD.md` at 
 95. CLI scope at MVP (`doctor`, `schema`, `migration`, `plugin list`) built on `@effect/cli`? Later: `init`, codegen?
 96. Docs platform and structure for the three audiences (app dev, plugin dev, adapter dev) — examples/playground?
 97. Monorepo: pnpm + turborepo/nx, changesets + provenance, canary releases, Effect peer ranges?
-98. Plugin author experience: templates (`create-effect-auth-plugin`?), validator, publishing checklist, registry/listing?
+98. Plugin author experience: templates (`create-awthaq-plugin`?), validator, publishing checklist, registry/listing?
 99. Reference apps: which 3 example apps ship (frameworks × DB × plugins) to prove the matrix?
 100. Compatibility & versioning: semver policy, plugin `apiVersion` evolution, deprecation process, Effect bump policy?

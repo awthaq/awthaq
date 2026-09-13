@@ -1,16 +1,16 @@
-// @effect-auth/sql — Repositories
+// @awthaq/sql — Repositories
 //
 // spec/behaviors/05-persistence-stratum.md, BEH-EA-035/036.
 //
 // Each repository is a `Context.Service` built with `SqlModel.makeRepository`
 // over the ambient `SqlClient` (BEH-EA-035) — none opens its own
-// transaction; the calling domain service (in `@effect-auth/core`'s
+// transaction; the calling domain service (in `@awthaq/core`'s
 // eventual SQL-backed `Layer`) holds that boundary, the same way
 // `Verification.consume` and its caller's own state change are meant to
 // commit together (BEH-EA-058). Every paginated query takes an opaque
 // `(createdAt, id)` cursor, never an offset (BEH-EA-036).
 
-import { Encryption } from "@effect-auth/ports";
+import { Encryption } from "@awthaq/ports";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -68,7 +68,7 @@ export interface UsersRepositoryShape {
 }
 
 export class UsersRepository extends Context.Service<UsersRepository, UsersRepositoryShape>()(
-  "effect-auth/sql/UsersRepository",
+  "awthaq/sql/UsersRepository",
 ) {}
 
 export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.SqlClient> =
@@ -111,7 +111,7 @@ export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.
 
 export interface AccountsRepositoryShape {
   readonly insert: (input: typeof Account.insert.Type) => Effect.Effect<Account, RepositoryError>;
-  /** BEH-EA-116 (`@effect-auth/password`'s rehash-on-login): the generic write path — `passwordHash`/`accessToken`/`refreshToken` are all `Model.Sensitive` (included in `update`, not excluded), so a caller updating one must pass the other two through unchanged. */
+  /** BEH-EA-116 (`@awthaq/password`'s rehash-on-login): the generic write path — `passwordHash`/`accessToken`/`refreshToken` are all `Model.Sensitive` (included in `update`, not excluded), so a caller updating one must pass the other two through unchanged. */
   readonly update: (input: typeof Account.update.Type) => Effect.Effect<Account, RepositoryError>;
   readonly findById: (
     id: AccountId,
@@ -138,11 +138,11 @@ export interface AccountsRepositoryShape {
 export class AccountsRepository extends Context.Service<
   AccountsRepository,
   AccountsRepositoryShape
->()("effect-auth/sql/AccountsRepository") {}
+>()("awthaq/sql/AccountsRepository") {}
 
 /**
  * Shipping-gap map (.scratch/shipping-gaps), ticket 18: `accessToken`/
- * `refreshToken` are encrypted at rest via `@effect-auth/ports`'
+ * `refreshToken` are encrypted at rest via `@awthaq/ports`'
  * `Encryption`, transparently to every caller of this repository —
  * `AccountsRepositoryShape` itself is unchanged, still taking/returning
  * the same plain nullable strings `Model.Sensitive` already types them
@@ -237,7 +237,7 @@ export const AccountsRepositoryLive: Layer.Layer<
         // call is an unexpected condition — `update`'s own contract has
         // always presupposed the row still exists (see
         // `AccountsShape.updateCredentialHash`'s own `repo.findById` call
-        // in `@effect-auth/core`) — not a new recoverable outcome this
+        // in `@awthaq/core`) — not a new recoverable outcome this
         // repository method's signature needs to grow a case for.
         const existing = yield* repo
           .findById(input.id)
@@ -334,7 +334,7 @@ export interface SessionsRepositoryShape {
 export class SessionsRepository extends Context.Service<
   SessionsRepository,
   SessionsRepositoryShape
->()("effect-auth/sql/SessionsRepository") {}
+>()("awthaq/sql/SessionsRepository") {}
 
 const DEFAULT_PAGE_SIZE = 50;
 
@@ -448,7 +448,7 @@ export interface VerificationRepositoryShape {
 export class VerificationRepository extends Context.Service<
   VerificationRepository,
   VerificationRepositoryShape
->()("effect-auth/sql/VerificationRepository") {}
+>()("awthaq/sql/VerificationRepository") {}
 
 export const VerificationRepositoryLive: Layer.Layer<
   VerificationRepository,
@@ -553,7 +553,7 @@ export interface VerificationReservationsRepositoryShape {
 export class VerificationReservationsRepository extends Context.Service<
   VerificationReservationsRepository,
   VerificationReservationsRepositoryShape
->()("effect-auth/sql/VerificationReservationsRepository") {}
+>()("awthaq/sql/VerificationReservationsRepository") {}
 
 export const VerificationReservationsRepositoryLive = Layer.effect(
   VerificationReservationsRepository,

@@ -1,8 +1,8 @@
 {
-  "name": "@effect-auth/react",
+  "name": "@awthaq/react",
   "version": "0.1.0",
   "private": true,
-  "description": "React provider glue over @effect-auth/client, including QadiProvider integration.",
+  "description": "React provider glue over @awthaq/client, including QadiProvider integration.",
   "license": "MIT",
   "files": [
     "lib",
@@ -31,7 +31,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
+    "@awthaq/api": "workspace:*",
     "@effect/atom-react": "catalog:",
     "@qadi/core": "^0.6.2",
     "@qadi/react": "^0.6.2",

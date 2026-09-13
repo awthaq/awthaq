@@ -1,7 +1,7 @@
 // spec/behaviors/18-roles-subject-resolver.md, BEH-EA-138 through BEH-EA-141.
-import { Api } from "@effect-auth/api";
-import { Users } from "@effect-auth/core";
-import { SubjectResolver as QadiSubjectResolver } from "@effect-auth/qadi";
+import { Api } from "@awthaq/api";
+import { Users } from "@awthaq/core";
+import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

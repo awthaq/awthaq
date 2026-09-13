@@ -6,7 +6,7 @@
 // MySQL-backed deployment would use, so a passing test here is evidence
 // against the real encode/decode/SQL round-trip, not just against an
 // in-memory stand-in.
-import { Encryption, KeyProvider } from "@effect-auth/ports";
+import { Encryption, KeyProvider } from "@awthaq/ports";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";
@@ -40,7 +40,7 @@ const EncryptionLive = Encryption.layer.pipe(
       Layer.provide(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
-            env: { EFFECT_AUTH_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
           }),
         ),
       ),

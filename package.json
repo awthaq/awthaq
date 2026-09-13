@@ -1,8 +1,8 @@
 {
-  "name": "effect-auth-monorepo",
+  "name": "awthaq-monorepo",
   "version": "0.0.0",
   "private": true,
-  "description": "effect-auth: a TypeScript authentication runtime built natively on Effect v4",
+  "description": "awthaq: a TypeScript authentication runtime built natively on Effect v4",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
     "typecheck": "tsc -b tsconfig.json && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:bdd": "pnpm --filter @effect-auth/features test",
+    "test:bdd": "pnpm --filter @awthaq/features test",
     "coverage": "vitest run --coverage",
     "circular": "node scripts/circular.mjs",
     "quality:dashboard": "node scripts/generate-quality-dashboard.mjs",

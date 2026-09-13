@@ -1,4 +1,4 @@
-// @effect-auth/organization — PermissionEngine
+// @awthaq/organization — PermissionEngine
 //
 // spec.md's "Roles & permissions — a self-contained, statement-based
 // engine": a pure domain module with no service tag and no HTTP endpoint of

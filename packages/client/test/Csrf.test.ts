@@ -2,7 +2,7 @@
 // spec/invariants.md, INV-EA-011.
 //
 // A type-level check, real against `Api.CsrfProtection` itself (declared in
-// `@effect-auth/api`) even though no real plugin group in this repository
+// `@awthaq/api`) even though no real plugin group in this repository
 // attaches it to an endpoint yet (see `AuthClient.ts`'s own header comment)
 // — this small synthetic group is enough to prove the property BEH-EA-170
 // actually requires: a client built over a `CsrfProtection`-middlewared
@@ -12,7 +12,7 @@
 // `test/**/*.test.ts` only, so the check lives here as an ordinary test
 // whose real assertion is the two type aliases below, not the trivial
 // runtime one.
-import { Api } from "@effect-auth/api";
+import { Api } from "@awthaq/api";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware } from "effect/unstable/httpapi";

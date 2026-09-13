@@ -7,7 +7,7 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Appendix — Worked Example |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added inline BEH-EA citations per section and ADR-EA-003/009 citations, beyond the header-only citation this appendix previously had (CCR-EA-002) |
 ---
@@ -15,7 +15,7 @@
 Every code block in this appendix is reproduced here as an uncompiled
 illustration; nothing in this repository compiles yet, so every fence below
 is `ts` even though the source material renders these examples as `tsx`.
-This differs from qadi's own appendices, which are gate-compiled — effect-auth
+This differs from qadi's own appendices, which are gate-compiled — awthaq
 has no such tooling yet (see [`../process/definitions-of-done.md`](../process/definitions-of-done.md)
 gate 8). This walkthrough combines `archive/design/usage-examples-v4.md` §13
 and `archive/design/usage-qadi.md` §13 into a single narrative; it exercises
@@ -44,7 +44,7 @@ client.
 import { headers } from "next/headers"
 import { currentSubjectLayer, decide, project } from "@qadi/core"
 import { dehydrateDecisions } from "@qadi/react"
-import { getSession } from "@effect-auth/next"
+import { getSession } from "@awthaq/next"
 
 export const dynamic = "force-dynamic"
 
@@ -103,7 +103,7 @@ default, since a trace is itself diagnostic detail no browser needs.
 *(Exercises [BEH-EA-177](../behaviors/23-react.md#beh-ea-177-registryprovider-seeds-the-session-atom-for-ssr).)
 
 The dehydrated decisions and the session both flow into `<Providers>`, which
-wraps `QadiProvider` (and effect-auth's own session provider) so that client
+wraps `QadiProvider` (and awthaq's own session provider) so that client
 components can call `useDecision` / `useCan` against a policy and get back
 exactly the answer the server already computed — no second round trip, and
 no re-decision against data the client was never given.
@@ -141,7 +141,7 @@ must never be mistaken for the authorization boundary itself:
 
 ```ts
 // proxy.ts — optimistic redirect only, never the boundary
-import { hasSessionCookie } from "@effect-auth/next"
+import { hasSessionCookie } from "@awthaq/next"
 export function proxy(request: NextRequest) {
   if (!hasSessionCookie(request) && request.nextUrl.pathname.startsWith("/app")) return NextResponse.redirect(new URL("/sign-in", request.url))
 }
@@ -186,7 +186,7 @@ mutation always re-decides against the current state, since a decision that
 old could have been invalidated by something that happened in between.
 
 There is a second, more mechanical bridging concern in server actions that
-is easy to miss: effect-auth operations that set cookies — a session
+is easy to miss: awthaq operations that set cookies — a session
 refresh, a sign-out, a rename that touches `Set-Cookie` — need those
 headers routed into Next's own cookie jar rather than lost. That is what a
 helper like `withNextCookies` is for:
@@ -194,7 +194,7 @@ helper like `withNextCookies` is for:
 ```ts
 // server action
 "use server"
-import { withNextCookies } from "@effect-auth/next"
+import { withNextCookies } from "@awthaq/next"
 export async function changeName(form: FormData) {
   return runtime.runPromise(withNextCookies(Users.use((u) => u.rename(String(form.get("name"))))))   // Set-Cookie from Effect reaches Next's jar
 }

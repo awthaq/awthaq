@@ -8,7 +8,7 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Accepted — design; implementation deferred |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) |
 
@@ -29,7 +29,7 @@
 
 ## Alternatives considered
 
-**Session storage hard-wired to the primary relational database, with no backend port at all** — the model `research/04-sessions-tokens.md` documents better-auth as actually shipping: a plain SQL session row, with `cookieCache` as the only performance lever, itself a client-side (not server-swappable) cache layered on top of the same single relational store, carrying the documented revocation-lag caveat quoted above. This was considered and rejected for effect-auth specifically because it forecloses the Redis-backed, multi-instance deployment shape `RateLimiter` (BEH-EA-109) and `KeyValueStore` already treat as a first-class production option elsewhere in the same specification — session verification is on the hot path of literally every authenticated request, making it one of the least defensible services to leave unable to move off the primary database, and better-auth's own `cookieCache` caveat is the concrete evidence of what happens when a team reaches for a performance workaround (a client-side cache) instead of a backend-neutral server-side store: revocation silently stops being authoritative for however long the workaround's cache lives.
+**Session storage hard-wired to the primary relational database, with no backend port at all** — the model `research/04-sessions-tokens.md` documents better-auth as actually shipping: a plain SQL session row, with `cookieCache` as the only performance lever, itself a client-side (not server-swappable) cache layered on top of the same single relational store, carrying the documented revocation-lag caveat quoted above. This was considered and rejected for awthaq specifically because it forecloses the Redis-backed, multi-instance deployment shape `RateLimiter` (BEH-EA-109) and `KeyValueStore` already treat as a first-class production option elsewhere in the same specification — session verification is on the hot path of literally every authenticated request, making it one of the least defensible services to leave unable to move off the primary database, and better-auth's own `cookieCache` caveat is the concrete evidence of what happens when a team reaches for a performance workaround (a client-side cache) instead of a backend-neutral server-side store: revocation silently stops being authoritative for however long the workaround's cache lives.
 
 ## Consequences
 
@@ -37,6 +37,6 @@
 
 **Negative**: Every `Sessions` backend implementation — including any third-party one — carries a real, non-trivial correctness burden that a naive KV port would not: it must implement domain-level absolute/idle expiry checks itself rather than delegating fully to the store's native TTL, and it must guarantee revocation is visible on the very next read, which for a KV store deployed for read-scaling (replicas, eventually-consistent caches) is a genuinely hard property to hold — a naive read-replica-backed `Sessions` implementation is exactly the shape of bug this ADR exists to rule out, and ruling it out is a real implementation constraint on whoever writes that backend, not a paperwork requirement.
 
-**Trade-off accepted**: The project accepts that a `Sessions` backend author (including effect-auth's own Redis-backed implementation, once built) must solve read-your-own-revocation across whatever replication or caching topology their store uses, rather than being allowed to treat "the store's native TTL and eventual consistency are good enough" as sufficient — a materially harder bar than better-auth's SQL-row-plus-optional-cache model clears, accepted because a silently revocation-lagging session store is a security regression, not a performance trade a backend author should be free to make unilaterally.
+**Trade-off accepted**: The project accepts that a `Sessions` backend author (including awthaq's own Redis-backed implementation, once built) must solve read-your-own-revocation across whatever replication or caching topology their store uses, rather than being allowed to treat "the store's native TTL and eventual consistency are good enough" as sufficient — a materially harder bar than better-auth's SQL-row-plus-optional-cache model clears, accepted because a silently revocation-lagging session store is a security regression, not a performance trade a backend author should be free to make unilaterally.
 
 Not yet implemented — see spec/roadmap.md for milestone.

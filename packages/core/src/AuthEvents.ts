@@ -1,4 +1,4 @@
-// @effect-auth/core — AuthEvents
+// @awthaq/core — AuthEvents
 //
 // spec/behaviors/13-events.md, BEH-EA-097 through BEH-EA-104.
 //
@@ -9,7 +9,7 @@
 // speculative surface with no test to hold it accountable. BEH-EA-101 itself
 // frames the registry as something "a plugin author can add a new event tag"
 // to; growing it as real publishers appear (`Verification.ts`'s
-// `auth.token.replay`, `@effect-auth/password`'s `auth.user.created`/
+// `auth.token.replay`, `@awthaq/password`'s `auth.user.created`/
 // `auth.user.signedIn`) is that same growth, not a narrowing of the design.
 
 import * as Effect from "effect/Effect";
@@ -25,13 +25,13 @@ export interface TokenReplayEvent {
   readonly identifier: string;
 }
 
-/** Published by `@effect-auth/password`'s `signUp`. */
+/** Published by `@awthaq/password`'s `signUp`. */
 export interface UserCreatedEvent {
   readonly _tag: "auth.user.created";
   readonly userId: UserId;
 }
 
-/** Published by `@effect-auth/password`'s `signIn`. */
+/** Published by `@awthaq/password`'s `signIn`. */
 export interface UserSignedInEvent {
   readonly _tag: "auth.user.signedIn";
   readonly userId: UserId;
@@ -39,7 +39,7 @@ export interface UserSignedInEvent {
 }
 
 /**
- * Published by `@effect-auth/passkey`'s authentication ceremony (BEH-EA-131,
+ * Published by `@awthaq/passkey`'s authentication ceremony (BEH-EA-131,
  * ticket 08): a verified assertion's reported counter did not exceed the
  * stored one — "log + step-up, not an instant kill" per that ticket's own
  * language, so the session still issues and this event is the whole
@@ -51,7 +51,7 @@ export interface PasskeyCounterAnomalyEvent {
   readonly credentialId: string;
 }
 
-/** Published by `@effect-auth/admin`'s `impersonate`, on success (BEH-EA-218). */
+/** Published by `@awthaq/admin`'s `impersonate`, on success (BEH-EA-218). */
 export interface AdminImpersonationStartedEvent {
   readonly _tag: "auth.admin.impersonationStarted";
   readonly adminUserId: UserId;
@@ -60,7 +60,7 @@ export interface AdminImpersonationStartedEvent {
   readonly sessionId: string;
 }
 
-/** Published by `@effect-auth/admin`'s `stopImpersonating`/`forceStop` (BEH-EA-218). */
+/** Published by `@awthaq/admin`'s `stopImpersonating`/`forceStop` (BEH-EA-218). */
 export interface AdminImpersonationStoppedEvent {
   readonly _tag: "auth.admin.impersonationStopped";
   readonly sessionId: string;
@@ -68,7 +68,7 @@ export interface AdminImpersonationStoppedEvent {
 }
 
 /**
- * Published by `@effect-auth/admin`'s `impersonate`/`forceStop`/`list`, but
+ * Published by `@awthaq/admin`'s `impersonate`/`forceStop`/`list`, but
  * only for a genuine `AdminConfig.canImpersonate` rejection — never for
  * self-impersonation, nested-impersonation, or an unknown target/session,
  * which are ordinary validation failures (BEH-EA-218's own "not diluted with
@@ -79,26 +79,26 @@ export interface AdminImpersonationDeniedEvent {
   readonly adminUserId: UserId;
 }
 
-/** Published by `@effect-auth/organization`'s `create`. */
+/** Published by `@awthaq/organization`'s `create`. */
 export interface OrganizationCreatedEvent {
   readonly _tag: "auth.organization.created";
   readonly organizationId: string;
   readonly creatorUserId: UserId;
 }
 
-/** Published by `@effect-auth/organization`'s `update`. */
+/** Published by `@awthaq/organization`'s `update`. */
 export interface OrganizationUpdatedEvent {
   readonly _tag: "auth.organization.updated";
   readonly organizationId: string;
 }
 
-/** Published by `@effect-auth/organization`'s `delete`. */
+/** Published by `@awthaq/organization`'s `delete`. */
 export interface OrganizationDeletedEvent {
   readonly _tag: "auth.organization.deleted";
   readonly organizationId: string;
 }
 
-/** Published by `@effect-auth/organization`'s `create` (the creator's own membership) and `addMember`. */
+/** Published by `@awthaq/organization`'s `create` (the creator's own membership) and `addMember`. */
 export interface OrganizationMemberAddedEvent {
   readonly _tag: "auth.organization.memberAdded";
   readonly organizationId: string;
@@ -106,14 +106,14 @@ export interface OrganizationMemberAddedEvent {
   readonly role: ReadonlyArray<string>;
 }
 
-/** Published by `@effect-auth/organization`'s `removeMember`/`leave`. */
+/** Published by `@awthaq/organization`'s `removeMember`/`leave`. */
 export interface OrganizationMemberRemovedEvent {
   readonly _tag: "auth.organization.memberRemoved";
   readonly organizationId: string;
   readonly userId: UserId;
 }
 
-/** Published by `@effect-auth/organization`'s `updateMemberRole`. */
+/** Published by `@awthaq/organization`'s `updateMemberRole`. */
 export interface OrganizationMemberRoleUpdatedEvent {
   readonly _tag: "auth.organization.memberRoleUpdated";
   readonly organizationId: string;
@@ -121,7 +121,7 @@ export interface OrganizationMemberRoleUpdatedEvent {
   readonly role: ReadonlyArray<string>;
 }
 
-/** Published by `@effect-auth/organization`'s `invite`. */
+/** Published by `@awthaq/organization`'s `invite`. */
 export interface OrganizationInvitationCreatedEvent {
   readonly _tag: "auth.organization.invitationCreated";
   readonly invitationId: string;
@@ -129,7 +129,7 @@ export interface OrganizationInvitationCreatedEvent {
   readonly email: string;
 }
 
-/** Published by `@effect-auth/organization`'s `accept`. */
+/** Published by `@awthaq/organization`'s `accept`. */
 export interface OrganizationInvitationAcceptedEvent {
   readonly _tag: "auth.organization.invitationAccepted";
   readonly invitationId: string;
@@ -137,63 +137,63 @@ export interface OrganizationInvitationAcceptedEvent {
   readonly userId: UserId;
 }
 
-/** Published by `@effect-auth/organization`'s `reject`. */
+/** Published by `@awthaq/organization`'s `reject`. */
 export interface OrganizationInvitationRejectedEvent {
   readonly _tag: "auth.organization.invitationRejected";
   readonly invitationId: string;
   readonly organizationId: string;
 }
 
-/** Published by `@effect-auth/organization`'s `cancel`. */
+/** Published by `@awthaq/organization`'s `cancel`. */
 export interface OrganizationInvitationCanceledEvent {
   readonly _tag: "auth.organization.invitationCanceled";
   readonly invitationId: string;
   readonly organizationId: string;
 }
 
-/** Published by `@effect-auth/organization`'s `createRole`. */
+/** Published by `@awthaq/organization`'s `createRole`. */
 export interface OrganizationRoleCreatedEvent {
   readonly _tag: "auth.organization.roleCreated";
   readonly organizationId: string;
   readonly role: string;
 }
 
-/** Published by `@effect-auth/organization`'s `updateRole`. */
+/** Published by `@awthaq/organization`'s `updateRole`. */
 export interface OrganizationRoleUpdatedEvent {
   readonly _tag: "auth.organization.roleUpdated";
   readonly organizationId: string;
   readonly role: string;
 }
 
-/** Published by `@effect-auth/organization`'s `deleteRole`. */
+/** Published by `@awthaq/organization`'s `deleteRole`. */
 export interface OrganizationRoleDeletedEvent {
   readonly _tag: "auth.organization.roleDeleted";
   readonly organizationId: string;
   readonly role: string;
 }
 
-/** Published by `@effect-auth/organization`'s `createTeam`. */
+/** Published by `@awthaq/organization`'s `createTeam`. */
 export interface OrganizationTeamCreatedEvent {
   readonly _tag: "auth.organization.teamCreated";
   readonly organizationId: string;
   readonly teamId: string;
 }
 
-/** Published by `@effect-auth/organization`'s `updateTeam`. */
+/** Published by `@awthaq/organization`'s `updateTeam`. */
 export interface OrganizationTeamUpdatedEvent {
   readonly _tag: "auth.organization.teamUpdated";
   readonly organizationId: string;
   readonly teamId: string;
 }
 
-/** Published by `@effect-auth/organization`'s `removeTeam`. */
+/** Published by `@awthaq/organization`'s `removeTeam`. */
 export interface OrganizationTeamDeletedEvent {
   readonly _tag: "auth.organization.teamDeleted";
   readonly organizationId: string;
   readonly teamId: string;
 }
 
-/** Published by `@effect-auth/organization`'s `addTeamMember` (and `acceptInvitation` for a team-targeted invitation). */
+/** Published by `@awthaq/organization`'s `addTeamMember` (and `acceptInvitation` for a team-targeted invitation). */
 export interface OrganizationTeamMemberAddedEvent {
   readonly _tag: "auth.organization.teamMemberAdded";
   readonly organizationId: string;
@@ -201,7 +201,7 @@ export interface OrganizationTeamMemberAddedEvent {
   readonly userId: UserId;
 }
 
-/** Published by `@effect-auth/organization`'s `removeTeamMember`. */
+/** Published by `@awthaq/organization`'s `removeTeamMember`. */
 export interface OrganizationTeamMemberRemovedEvent {
   readonly _tag: "auth.organization.teamMemberRemoved";
   readonly organizationId: string;
@@ -245,7 +245,7 @@ export interface AuthEventsShape {
 }
 
 export class AuthEvents extends Context.Service<AuthEvents, AuthEventsShape>()(
-  "effect-auth/core/AuthEvents",
+  "awthaq/core/AuthEvents",
 ) {}
 
 /**

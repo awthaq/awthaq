@@ -7,12 +7,12 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added fail-open/fail-closed guidance for an unreachable `RateLimiter` store, clarified the check-then-increment race under concurrency, and named the default fixed-window algorithm (CCR-EA-002) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-105: The RateLimiter port
 
@@ -57,7 +57,7 @@ REQUIREMENT: Exceeding a configured limit MUST fail with `RateLimited` carrying
              `retryAfterMillis`; it MUST NOT fail with a generic or untyped error.
 ```
 
-`retryAfterMillis` is the one piece of information a client needs to behave well: back off, then retry. Carrying it as a typed field (rather than folding it into a message string) lets `@effect-auth/client` render a localized "try again in n seconds" without parsing text, matching the error-catalog design used across the rest of the contract (research/11-client-frontend.md Q86) and the `RateLimited` handling shown in `usage-examples-v4.md` §11.2.
+`retryAfterMillis` is the one piece of information a client needs to behave well: back off, then retry. Carrying it as a typed field (rather than folding it into a message string) lets `@awthaq/client` render a localized "try again in n seconds" without parsing text, matching the error-catalog design used across the rest of the contract (research/11-client-frontend.md Q86) and the `RateLimited` handling shown in `usage-examples-v4.md` §11.2.
 
 _Previous: [BEH-EA-105](14-rate-limiting.md#beh-ea-105-the-ratelimiter-port) | Next: [BEH-EA-107](14-rate-limiting.md#beh-ea-107-a-plugin-may-only-rate-limit-its-own-endpoints)_
 
@@ -113,7 +113,7 @@ Layer.provide(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreRedisCo
 
 ```text
 REQUIREMENT: Providing two Layers for the `RateLimiter` port MUST shadow (the
-             later Layer wins), never merge; effect-auth MUST NOT attempt to
+             later Layer wins), never merge; awthaq MUST NOT attempt to
              combine two rate-limit store implementations into one.
 ```
 
@@ -142,13 +142,13 @@ _Previous: [BEH-EA-109](14-rate-limiting.md#beh-ea-109-swappable-stores) | Next:
 ## BEH-EA-111: Registry ordering
 
 ```text
-REQUIREMENT: Rate-limit rules read for `effect-auth plugin list --graph` or any
+REQUIREMENT: Rate-limit rules read for `awthaq plugin list --graph` or any
              other introspection MUST be ordered by plugin dependency order,
              then by an explicit `order` field, then by rule id — the same
              three-key ordering the hook and event registries use.
 ```
 
-Rate-limit rules are a registry, and PRD §9.3 fixes one ordering discipline for every registry in the system: "aggregating contributions ordered by dependency, then `order`, then id." Rate limiting gets no special case. An operator who has learned to read the hook chain output from `effect-auth plugin list --hooks` reads the rate-limit rule listing the same way, without learning a second convention.
+Rate-limit rules are a registry, and PRD §9.3 fixes one ordering discipline for every registry in the system: "aggregating contributions ordered by dependency, then `order`, then id." Rate limiting gets no special case. An operator who has learned to read the hook chain output from `awthaq plugin list --hooks` reads the rate-limit rule listing the same way, without learning a second convention.
 
 _Previous: [BEH-EA-110](14-rate-limiting.md#beh-ea-110-built-in-rules-shipped-by-core-plugins) | Next: [BEH-EA-112](14-rate-limiting.md#beh-ea-112-testing-with-a-permissive-limiter)_
 

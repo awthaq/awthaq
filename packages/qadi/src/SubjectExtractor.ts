@@ -1,4 +1,4 @@
-// @effect-auth/qadi — SubjectExtractor (Path B adapter)
+// @awthaq/qadi — SubjectExtractor (Path B adapter)
 //
 // spec/behaviors/20-qadi-bridge-path-b.md, BEH-EA-153.
 //
@@ -6,17 +6,17 @@
 // `RequirePermission` middleware built on it (BEH-EA-154 through 160 are all
 // qadi's own exports — `RequiredPermission`/`PublicEndpoint` annotations,
 // `requiresPermission`/`publicEndpoint`, the 403/502/500 status mapping,
-// `registerApi`/`permissionRegistryRoute` — nothing effect-auth-specific to
-// build for those). What effect-auth owns is the one *implementation* of
-// that interface: running effect-auth's own session resolution directly
+// `registerApi`/`permissionRegistryRoute` — nothing awthaq-specific to
+// build for those). What awthaq owns is the one *implementation* of
+// that interface: running awthaq's own session resolution directly
 // against the raw request, independent of `Authentication`'s middleware
-// pipeline (so qadi's `RequirePermission` can run before any effect-auth
+// pipeline (so qadi's `RequirePermission` can run before any awthaq
 // contract middleware does), while reusing — not reimplementing —
 // `Authentication`'s own `resolvePrincipal` (the identical hash-comparison
 // and absolute/idle-expiry logic over `Sessions`, per BEH-EA-153's own text).
-import { Api } from "@effect-auth/api";
-import { Sessions } from "@effect-auth/core";
-import { Authentication } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { Sessions } from "@awthaq/core";
+import { Authentication } from "@awthaq/server";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -57,7 +57,7 @@ const extractCredential = (
  * the same uniform treatment `OptionalAuthenticationLive`'s bearer handler
  * relies on — never `SubjectExtractionFailed`, which is reserved for a
  * genuinely broken store (`@qadi/http`'s own `SubjectExtractionFailed` doc
- * comment), a distinction this effect-auth-backed extractor has no way to
+ * comment), a distinction this awthaq-backed extractor has no way to
  * observe yet: `Sessions`/`Users` report typed domain errors, not a
  * store-is-unreachable signal distinct from "no such session."
  */

@@ -1,4 +1,4 @@
-// @effect-auth/next — CookieHeader (internal)
+// @awthaq/next — CookieHeader (internal)
 //
 // The one place a raw `Cookie` request header — `"a=1; b=2"` — gets scanned
 // for a single name's value, shared by `GetSession.ts` (which also

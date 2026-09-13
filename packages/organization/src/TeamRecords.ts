@@ -1,4 +1,4 @@
-// @effect-auth/organization — TeamRecords
+// @awthaq/organization — TeamRecords
 //
 // spec.md's "Teams" (opt-in via `OrganizationConfig.teams.enabled`):
 // persistence for `organization_team` and `organization_team_membership`,
@@ -8,7 +8,7 @@
 // `addTeamMember`/`removeTeamMember` rather than recomputed via `COUNT`
 // every time.
 
-import { Users } from "@effect-auth/core";
+import { Users } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -95,7 +95,7 @@ export interface TeamRecordsShape {
 }
 
 export class TeamRecords extends Context.Service<TeamRecords, TeamRecordsShape>()(
-  "effect-auth/organization/TeamRecords",
+  "awthaq/organization/TeamRecords",
 ) {}
 
 const teamNotFound = (id: string): TeamRecordNotFound => new TeamRecordNotFound({ id });

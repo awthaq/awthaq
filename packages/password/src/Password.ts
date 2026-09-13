@@ -1,4 +1,4 @@
-// @effect-auth/password — Password
+// @awthaq/password — Password
 //
 // spec/behaviors/15-password.md, BEH-EA-113 through BEH-EA-120.
 // spec/models/01-password.md's plugin-class sketch, reproduced with the
@@ -7,7 +7,7 @@
 // transport) filled in and documented at each site rather than left to
 // silently die or guessed at without a comment explaining the choice.
 
-import { Api, SessionContract } from "@effect-auth/api";
+import { Api, SessionContract } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
@@ -16,8 +16,8 @@ import {
   Sessions,
   Users,
   Verification,
-} from "@effect-auth/core";
-import { Mailer, PasswordHasher, RateLimiter } from "@effect-auth/ports";
+} from "@awthaq/core";
+import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -46,7 +46,7 @@ const defaultPasswordConfig: PasswordConfigShape = {
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
 export const PasswordConfig: Context.Reference<PasswordConfigShape> = Context.Reference(
-  "effect-auth/password/Config",
+  "awthaq/password/Config",
   { defaultValue: () => defaultPasswordConfig },
 );
 
@@ -217,7 +217,7 @@ const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto
 /**
  * Resolves `Password` once here, in the group-builder generator itself —
  * not inside each handler body — the same `HttpApiBuilder.group` pattern
- * `@effect-auth/server`'s `Session.SessionHandlers` uses and documents: a
+ * `@awthaq/server`'s `Session.SessionHandlers` uses and documents: a
  * service a handler function's own body `yield*`s directly gets wrapped as
  * `HttpRouter.Request<"Requires", R>`, which no ordinary `Layer.provide` can
  * satisfy. Defined before the `Password` class below but only *reads* it
@@ -290,7 +290,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
         if (principal._tag !== "User") {
           return yield* Effect.die(
             new Error(
-              `effect-auth: change-password reached with a non-User principal: ${principal._tag}`,
+              `awthaq: change-password reached with a non-User principal: ${principal._tag}`,
             ),
           );
         }
@@ -396,14 +396,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // hasher produced, so `hasher.verify` always does the same real
       // work whether or not a matching account/credential actually
       // exists.
-      const dummyHash = Redacted.make(
-        yield* hasher.hash(Redacted.make("effect-auth/password/dummy")),
-      );
+      const dummyHash = Redacted.make(yield* hasher.hash(Redacted.make("awthaq/password/dummy")));
 
       /**
        * Ticket 12: every call site below passes its own `key`/`limit`/
        * `window` from `RATE_LIMITS`, and maps the port's own domain
-       * `RateLimited` (`@effect-auth/ports`) onto the wire-level
+       * `RateLimited` (`@awthaq/ports`) onto the wire-level
        * `Api.RateLimited` — the same class `PasswordShape`'s own error
        * unions declare and `PasswordApi`'s endpoints carry, so no separate
        * mapping is needed again at the HTTP handler layer.
@@ -569,9 +567,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 // here is a defect, not a request-level condition the
                 // caller can act on.
                 onNone: () =>
-                  Effect.die(
-                    new Error(`effect-auth: password credential missing for user ${userId}`),
-                  ),
+                  Effect.die(new Error(`awthaq: password credential missing for user ${userId}`)),
                 onSome: Effect.succeed,
               }),
             ),
@@ -607,9 +603,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           .verifyEmail(userId)
           .pipe(
             Effect.catchTag("UserNotFound", () =>
-              Effect.die(
-                new Error(`effect-auth: verify-email token's own user missing: ${userId}`),
-              ),
+              Effect.die(new Error(`awthaq: verify-email token's own user missing: ${userId}`)),
             ),
           );
       });

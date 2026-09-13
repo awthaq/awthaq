@@ -1,5 +1,5 @@
 {
-  "name": "@effect-auth/roles",
+  "name": "@awthaq/roles",
   "version": "0.1.0",
   "private": true,
   "description": "A SubjectResolver override that flattens roles through a role DAG into qadi's AuthSubject.",
@@ -31,9 +31,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
-    "@effect-auth/core": "workspace:*",
-    "@effect-auth/qadi": "workspace:*",
+    "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
+    "@awthaq/qadi": "workspace:*",
     "@qadi/core": "^0.6.2",
     "effect": "catalog:"
   },

@@ -2,7 +2,7 @@
 // `OrgRoleRecords.test.ts`/`MembershipRecords.test.ts` use, covering both
 // `organization_team` and `organization_team_membership` together since
 // they're managed by the same `TeamRecords` module.
-import { Users } from "@effect-auth/core";
+import { Users } from "@awthaq/core";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";

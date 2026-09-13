@@ -1,4 +1,4 @@
-// @effect-auth/password — Plugin (M2)
+// @awthaq/password — Plugin (M2)
 //
 // spec/behaviors/15-password.md, BEH-EA-113 through BEH-EA-120.
 // `Password`/`Password.layer` (sign-up, sign-in, request/confirm reset, an

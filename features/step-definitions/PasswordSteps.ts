@@ -7,8 +7,8 @@ import * as Layer from "effect/Layer";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { PasswordHasher } from "@effect-auth/ports";
-import { Password } from "@effect-auth/password";
+import { PasswordHasher } from "@awthaq/ports";
+import { Password } from "@awthaq/password";
 import {
   World,
   configureApp,

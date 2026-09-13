@@ -7,12 +7,12 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-129: WebAuthn is a port, wrapped, not reimplemented
 
@@ -34,7 +34,7 @@ REQUIREMENT: `WebAuthn` MUST be a port with a default implementation
              checking itself.
 ```
 
-research/06-webauthn-passkeys.md's structural pitfall note applies directly here: three 2026 CVEs across independent WebAuthn server libraries (CVE-2026-30964, YSA-2026-02, CVE-2026-47841) all verified cryptography correctly and got the *glue* wrong — which origin, which session, which user. Wrapping a maintained library (`@simplewebauthn/server`, whose author is a WebAuthn L3 spec editor) behind a port means effect-auth's own code is exactly that glue layer, kept small and auditable, while the attestation-format matrix stays someone else's already-hardened problem.
+research/06-webauthn-passkeys.md's structural pitfall note applies directly here: three 2026 CVEs across independent WebAuthn server libraries (CVE-2026-30964, YSA-2026-02, CVE-2026-47841) all verified cryptography correctly and got the *glue* wrong — which origin, which session, which user. Wrapping a maintained library (`@simplewebauthn/server`, whose author is a WebAuthn L3 spec editor) behind a port means awthaq's own code is exactly that glue layer, kept small and auditable, while the attestation-format matrix stays someone else's already-hardened problem.
 
 _Previous: [BEH-EA-128](16-oauth.md#beh-ea-128-callback-destination-is-validated-never-echoed) | Next: [BEH-EA-130](17-passkey.md#beh-ea-130-registration-ceremony)_
 

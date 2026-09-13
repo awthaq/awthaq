@@ -7,7 +7,7 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) |
 ---
@@ -19,7 +19,7 @@ an administrator act as another user for a bounded window, without the
 target's own credentials, while the resulting principal still carries who is
 really behind the wheel. `archive/PRD.md` §17's Phase-2 row states it
 plainly: "`Admin` (impersonation with hard expiry and `actingAs`)." Nothing
-described here exists yet — effect-auth is pre-implementation, and this
+described here exists yet — awthaq is pre-implementation, and this
 document is non-normative: it records intent, not a verified behavior.
 
 ## Who asks for it

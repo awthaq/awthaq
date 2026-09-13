@@ -17,9 +17,9 @@
 // the latter would rebuild the whole layer independently each time — a
 // second, unrelated `Users`/`Sessions` instance `signInAs`'s own session
 // would never be visible to.
-import { Api } from "@effect-auth/api";
-import { Auth, AuthPlugin } from "@effect-auth/core";
-import { Authentication } from "@effect-auth/server";
+import { Api } from "@awthaq/api";
+import { Auth, AuthPlugin } from "@awthaq/core";
+import { Authentication } from "@awthaq/server";
 import { assert, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

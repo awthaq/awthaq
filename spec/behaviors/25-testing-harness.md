@@ -7,12 +7,12 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added an honest note that BEH-EA-199's redaction check is not yet mechanically verifiable (CCR-EA-002) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-193: `TestAuth.layer` is the whole pipeline, over memory
 
@@ -124,7 +124,7 @@ REQUIREMENT: `runPluginContractTests` MUST assert, for every option
              group ids are unique, its tables carry its own prefix, its
              migrations apply deterministically, and that a missing declared
              dependency produces `E_PLUGIN_MISSING_DEP`; a third-party plugin
-             MUST be able to run this suite without effect-auth's own source.
+             MUST be able to run this suite without awthaq's own source.
 ```
 
 PRD §19 and `usage-examples-v4.md` §22.3 name this as the mechanism that makes plugin authorship self-certifying: a plugin author runs one function against their own plugin, across the option matrix they support, and gets the same checks every official plugin (`Password`, `OAuth`, `Passkey`, and the rest) must also pass — there is no separate, weaker bar for third-party plugins.

@@ -4,8 +4,8 @@ Answers Q72–Q81 (Persistence & schema) for PRD v2. All versions verified again
 
 ## TL;DR
 
-- Effect ecosystem state as of 2026-09: `effect` npm `latest` = **3.22.2**; **Effect v4 is in beta** and `@effect/sql` dialect packages already have `4.0.0-rc.115` dist-tags — v1 of effect-auth should target the v3 line and treat `@effect/sql`'s core modules (Migrator, SqlClient, Statement, SqlSchema, SqlResolver) as the substrate.
-- `@effect/sql`'s stock `Migrator` is **single-transaction, ids-only, no checksums, no dry-run, no drift detection** (verified in source). It is a fine runtime "apply" for simple apps but is **not** the migration engine effect-auth needs; we should build our own planner/CLI and can reuse its ledger-lock idea.
+- Effect ecosystem state as of 2026-09: `effect` npm `latest` = **3.22.2**; **Effect v4 is in beta** and `@effect/sql` dialect packages already have `4.0.0-rc.115` dist-tags — v1 of awthaq should target the v3 line and treat `@effect/sql`'s core modules (Migrator, SqlClient, Statement, SqlSchema, SqlResolver) as the substrate.
+- `@effect/sql`'s stock `Migrator` is **single-transaction, ids-only, no checksums, no dry-run, no drift detection** (verified in source). It is a fine runtime "apply" for simple apps but is **not** the migration engine awthaq needs; we should build our own planner/CLI and can reuse its ledger-lock idea.
 - `@effect/sql`'s PG client already exposes `transformQueryNames`/`transformResultNames` (camelCase↔snake_case at the client) and pool sizing (`maxConnections`/`minConnections`/`connectionTTL`); Drizzle has a `casing` mapping option; both are prior art for Q76 enforcement-in-tooling rather than docs-only.
 - The winning workflow shape is **Drizzle-kit's snapshot diff** (diff IR snapshot vs previous snapshot — never the live DB, so CI is deterministic) **plus Atlas's guardrails** (review policy, destructive-change lint, plan files, advisory locks) **plus Prisma's drift detection** (optional `--from-database` check with non-zero exit).
 - Alembic's documented limitation is the strongest argument for our IR: autogenerate **cannot detect unnamed constraints** and cannot detect renames — so the IR must emit explicit names for every constraint and should treat column/table renames as explicit, opt-in operations.
@@ -109,7 +109,7 @@ Evidence:
 - Alembic's own warning: "autogenerate is not intended to be perfect. It is *always* necessary to manually review" (https://alembic.sqlalchemy.org/en/latest/autogenerate.html).
 - dbmate/golang-migrate/sqitch are the minimal VCS-friendly baseline: plain up/down SQL files in git, tiny ledger table, nothing more (https://github.com/amacneil/dbmate, https://github.com/golang-migrate/migrate, https://github.com/sqitchers/sqitch). Sqitch adds a plan file + dependency ordering + revert — closest to "migrations as reviewed artifacts".
 
-Recommendation — `@effect-auth/migration` engine:
+Recommendation — `@awthaq/migration` engine:
 1. **Generation is snapshot-diff, DB-optional** (Drizzle model): `auth migration generate` diffs `schema.snapshot.json` (previous) against the compiled IR of `Auth.make({plugins})` (desired) and writes `NNNN_<name>/{migration.sql, snapshot.json, plan.json}`. Rename/destructive candidates become **prompts or explicit annotations** (`auth migration generate --rename users.user_name account.name`) — never silent add/drop pairs.
 2. **Plugin-authored migrations are first-class**: a plugin may ship `migrations: [{id, name, sql | Effect<SqlClient>}]` (data backfills, index builds outside transactions) which the aggregator interleaves by plugin topo order at each step; generated + authored steps merge into one deterministic ordered file list.
 3. **Ledger**: `auth_migrations(id PK, name, checksum, plugin, applied_at, duration_ms, success)`. Concurrency: PG = ledger `LOCK TABLE ... ACCESS EXCLUSIVE` + insert-race (proven pattern from `@effect/sql`); MySQL = `GET_LOCK()`; SQLite = `BEGIN IMMEDIATE`. Checksum verify on apply → tamper = hard error (Flyway `validate` semantics).
@@ -192,7 +192,7 @@ Recommendation:
 - Schema-level guarantees shipped by core IR: `session.token_hash UNIQUE` (the only lookup on the secret material); `session(user_id)` for revocation cascades; `session(expires_at)` partial index `WHERE expires_at > ...` on PG/SQLite for the reaper, plain index on MySQL; same pattern for verification tokens and (later) api-key prefixes.
 - Hot path reads are `SqlSchema.findOne` / prepared-tag templates with `.withoutTransform` where the compiler transform is pure overhead; batch resolution via `SqlResolver.grouped` for fan-out endpoints.
 - Pooling: expose `maxConnections/minConnections/connectionTTL` as `Config`-driven options on the adapter Layer (default `maxConnections = 10`); document the pgbouncer transaction-pooling caveat (avoid session-level state; `LISTEN/NOTIFY` unavailable through transaction pooling) [INFERENCE].
-- Add a `@effect-auth/test` benchmark fixture (in-memory SQLite + local PG) so plugin authors can measure before/after — PRD asks for a benchmark harness (§"Performance").
+- Add a `@awthaq/test` benchmark fixture (in-memory SQLite + local PG) so plugin authors can measure before/after — PRD asks for a benchmark harness (§"Performance").
 
 **Confidence:** high (design), medium (exact pool defaults)
 
@@ -234,7 +234,7 @@ Recommendation:
 
 ## Technologies & libraries
 
-| Name | What it is | License | Maturity | Relevance to effect-auth |
+| Name | What it is | License | Maturity | Relevance to awthaq |
 |---|---|---|---|---|
 | `@effect/sql` (+ pg/sqlite/mysql2/d1/kysely) | Effect SQL toolkit: clients, typed statements, Migrator, Model, SqlResolver | MIT | Stable on v3 (0.52–0.53); 4.0-rc in flight | The substrate: SqlClient/transactions/ledger patterns; we build the planner on top |
 | effect 3.22.2 / v4 beta | Runtime | MIT | v3 stable, v4 beta→rc | Peer-range decision (see Q2 owner); SQL API stable across both |
@@ -259,11 +259,11 @@ Recommendation:
 - SQLite: `ALTER TABLE` & release notes — https://www.sqlite.org/lang_altertable.html, https://www.sqlite.org/changes.html — the full restriction list for DROP COLUMN and the 3.53.0 ALTER COLUMN addition; also STRICT tables https://www.sqlite.org/stricttables.html.
 - MySQL 8.4 Reference, InnoDB Online DDL Operations — https://dev.mysql.com/doc/refman/8.4/en/innodb-online-ddl-operations.html — per-operation ALGORITHM/LOCK table; INSTANT default and row-version limits.
 - Atlas docs: Declarative apply / lint analyzers / versioned intro — https://atlasgo.io/declarative/apply, https://atlasgo.io/lint/analyzers, https://atlasgo.io/versioned/intro — the review-policy + destructive-guardrail UX to emulate.
-- Atlas blog, "Migrate Multi-Tenant Environments With Atlas" + database-per-tenant guide — https://atlasgo.io/blog/2022/10/27/multi-tenant-support, https://atlasgo.io/guides/database-per-tenant/deploying — target-group fan-out pattern if effect-auth grows tenant-keyed deployments.
+- Atlas blog, "Migrate Multi-Tenant Environments With Atlas" + database-per-tenant guide — https://atlasgo.io/blog/2022/10/27/multi-tenant-support, https://atlasgo.io/guides/database-per-tenant/deploying — target-group fan-out pattern if awthaq grows tenant-keyed deployments.
 - Alembic autogenerate + naming constraints — https://alembic.sqlalchemy.org/en/latest/autogenerate.html, https://alembic.sqlalchemy.org/en/latest/naming.html — the "always review, name everything" doctrine.
 - Drizzle: migrations & kit docs — https://orm.drizzle.team/docs/kit-overview, https://orm.drizzle.team/docs/drizzle-kit-generate, https://orm.drizzle.team/docs/sql-schema-declaration — snapshot mechanics and the casing option.
 - Prisma Migrate docs — https://www.prisma.io/docs/orm/prisma-migrate — shadow database, drift, baseline, status.
-- Liquibase licensing announcement — https://www.liquibase.com/blog/liquibase-community-for-the-future-fsl — FSL shift (2025-10); relevant when we pick effect-auth's own license/CLI packaging.
+- Liquibase licensing announcement — https://www.liquibase.com/blog/liquibase-community-for-the-future-fsl — FSL shift (2025-10); relevant when we pick awthaq's own license/CLI packaging.
 - gh-ost — https://github.com/github/gh-ost — why huge-table MySQL DDL leaves the migration-tool layer entirely (triggerless online schema change); context for "not our problem in v1".
 
 ## People & projects to follow
@@ -279,9 +279,9 @@ Recommendation:
 - **Nathan Voxland** — Liquibase founder (license-shift saga worth following for our own governance) — https://www.liquibase.com.
 - **Markus Winand** — indexing/pagination pedagogy — https://use-the-index-luke.com.
 
-## Recommended defaults for effect-auth
+## Recommended defaults for awthaq
 
-1. **Build `@effect-auth/migration` on `@effect/sql`, do not wrap its stock Migrator.** Keep its good parts (dialect-aware ledger creation, lock-by-insert, duplicate-id detection) and add checksums, status, dry-run, per-step tx modes, drift, destructive guardrails.
+1. **Build `@awthaq/migration` on `@effect/sql`, do not wrap its stock Migrator.** Keep its good parts (dialect-aware ledger creation, lock-by-insert, duplicate-id detection) and add checksums, status, dry-run, per-step tx modes, drift, destructive guardrails.
 2. **IR is data, not classes** (Q73): JSON-serializable tables/columns/indexes/FKs/checks with `owner` metadata; versioned snapshots in git; one compiler per dialect; validation Effect Schemas derived from the same IR (Drizzle↔effect-schema as precedent).
 3. **Name every constraint at IR level** with a fixed grammar (`{table}_{cols}_{idx|uq|fk|ck}`); physical names stored in snapshots; reject unnamed constraints at compile time (Alembic lesson).
 4. **Generation = snapshot diff** (never live DB) with prompts/flags for renames; **drift check = explicit opt-in command with non-zero exit** for CI (Prisma model).

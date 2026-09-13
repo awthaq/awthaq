@@ -1,10 +1,10 @@
-// @effect-auth/passkey — PasskeyCredentials
+// @awthaq/passkey — PasskeyCredentials
 //
 // spec/behaviors/17-passkey.md, BEH-EA-130/134. This plugin's own
 // persistence for the `passkey_credential` table (ticket 06) — a real
 // `Model.Class` built directly against `effect/unstable/schema`'s `Model`
 // and `effect/unstable/sql`'s `SqlSchema`, the same primitives
-// `@effect-auth/sql`'s own `Models.ts`/`Repositories.ts` are built from, not
+// `@awthaq/sql`'s own `Models.ts`/`Repositories.ts` are built from, not
 // imported from that package: this table belongs to the plugin, not the
 // shared persistence stratum.
 //
@@ -17,7 +17,7 @@
 // `layerSql` — the same pattern every other domain concept in this
 // codebase (`Users`, `Accounts`, `Sessions`, `Verification`) already
 // follows, so this plugin's own `AuthComposition.test.ts`/`Passkey.test.ts`
-// can compose entirely in memory the same way `@effect-auth/password`'s do.
+// can compose entirely in memory the same way `@awthaq/password`'s do.
 
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -30,7 +30,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { SqlClient, SqlSchema } from "effect/unstable/sql";
-import { Users } from "@effect-auth/core";
+import { Users } from "@awthaq/core";
 
 type UserId = Users.UserId;
 
@@ -87,7 +87,7 @@ export interface PasskeyCredentialsShape {
 export class PasskeyCredentials extends Context.Service<
   PasskeyCredentials,
   PasskeyCredentialsShape
->()("effect-auth/passkey/PasskeyCredentials") {}
+>()("awthaq/passkey/PasskeyCredentials") {}
 
 // ---- layerMemory ----------------------------------------------------------
 
@@ -114,7 +114,7 @@ export const layerMemory: Layer.Layer<PasskeyCredentials> = Layer.effect(
       );
 
     const notFound = (): PasskeyCredentialNotFound =>
-      new PasskeyCredentialNotFound({ message: "effect-auth: no such passkey credential" });
+      new PasskeyCredentialNotFound({ message: "awthaq: no such passkey credential" });
 
     const recordUsage: PasskeyCredentialsShape["recordUsage"] = (id, counter, backedUp) =>
       Effect.gen(function* () {
@@ -293,7 +293,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
     });
 
     const notFound = (): PasskeyCredentialNotFound =>
-      new PasskeyCredentialNotFound({ message: "effect-auth: no such passkey credential" });
+      new PasskeyCredentialNotFound({ message: "awthaq: no such passkey credential" });
 
     const create: PasskeyCredentialsShape["create"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;

@@ -1,4 +1,4 @@
-// @effect-auth/admin — Plugin (M7)
+// @awthaq/admin — Plugin (M7)
 //
 // Impersonation: off by default, admin-gated, reason required, hard expiry, dual identity, fully audited (NFR-EA-007).
 //

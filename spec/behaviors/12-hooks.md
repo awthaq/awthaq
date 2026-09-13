@@ -8,13 +8,13 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 
 ---
 
-> effect-auth is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/design/plugins-as-layers.md` §3.4 and `archive/design/usage-examples-v4.md` §14 — not code that has shipped.
+> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/design/plugins-as-layers.md` §3.4 and `archive/design/usage-examples-v4.md` §14 — not code that has shipped.
 
 ## BEH-EA-089: A hook point is declared as a service carrying its own `kind`
 
@@ -32,7 +32,7 @@ REQUIREMENT: `HookPoint.Service` MUST require a `kind` ("veto", "observe",
              decided later, by whichever plugin happens to tap it.
 ```
 
-`archive/design/plugins-as-layers.md` §3.4 fixes a hook point as "a service holding a registry cell," whose defining plugin (or core) chooses its `kind` once. `research/09-plugin-architecture.md` Q27 draws the contrast this design is built to avoid: Tapable's hook classes (`SyncHook`, `SyncBailHook`, `SyncWaterfallHook`) encode failure semantics in the type, which effect-auth's plan follows, rather than better-auth's array-of-`{matcher, handler}` hooks, where "before" and "after" are a naming convention a tap author must respect rather than a property the point itself enforces.
+`archive/design/plugins-as-layers.md` §3.4 fixes a hook point as "a service holding a registry cell," whose defining plugin (or core) chooses its `kind` once. `research/09-plugin-architecture.md` Q27 draws the contrast this design is built to avoid: Tapable's hook classes (`SyncHook`, `SyncBailHook`, `SyncWaterfallHook`) encode failure semantics in the type, which awthaq's plan follows, rather than better-auth's array-of-`{matcher, handler}` hooks, where "before" and "after" are a naming convention a tap author must respect rather than a property the point itself enforces.
 
 ## BEH-EA-090: A veto tap may abort the operation with a typed `HookAbort`
 
@@ -135,7 +135,7 @@ REQUIREMENT: A plugin that needs to react to a change in core-owned data
 ## BEH-EA-096: The resolved order of every hook point's taps is introspectable without running any code
 
 ```
-effect-auth plugin list --hooks
+awthaq plugin list --hooks
 ```
 
 ```text
@@ -146,7 +146,7 @@ REQUIREMENT: The fully resolved tap order for every hook point in a
              any tap.
 ```
 
-`archive/design/usage-examples-v4.md` §14 states this directly: "Resolved order is printable: `effect-auth plugin list --hooks`." Because the ordering inputs (each plugin's `dependsOn`, each tap's declared `order`, each plugin's `id`) are all static facts read off the plugin classes (BEH-EA-006, BEH-EA-007), the CLI is designed to compute and display the resolved chain the same way it derives the migration order (BEH-EA-038), without needing a running application to observe it in.
+`archive/design/usage-examples-v4.md` §14 states this directly: "Resolved order is printable: `awthaq plugin list --hooks`." Because the ordering inputs (each plugin's `dependsOn`, each tap's declared `order`, each plugin's `id`) are all static facts read off the plugin classes (BEH-EA-006, BEH-EA-007), the CLI is designed to compute and display the resolved chain the same way it derives the migration order (BEH-EA-038), without needing a running application to observe it in.
 
 _Previous: [BEH-EA-088](11-http-error-mapping.md#beh-ea-088-every-contract-errors-http-status-is-derived-from-its-httpapistatus-annotation-uniformly)_
 _Next: [BEH-EA-097](13-events.md#beh-ea-097-authevents-is-a-bounded-pubsub)_

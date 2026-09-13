@@ -7,12 +7,12 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-13 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-13): Initial release, replacing [MOD-EA-015](../models/15-admin-impersonation.md)'s non-normative sketch (CCR-EA-004) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; effect-auth is pre-implementation.
+> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
 
 ## BEH-EA-209: `actingAs` becomes a real, generic field on session issuance
 
@@ -81,7 +81,7 @@ REQUIREMENT: `Admin` MUST NOT declare a `dependsOn` on any other plugin to
              supplies none.
 ```
 
-A hard dependency on `@effect-auth/roles` specifically would force every consumer onto that one authorization mechanism, and would repeat the exact `dependsOn`-is-for-plugins-only mistake `@effect-auth/passkey`'s own ticket 06 already found and corrected — `Sessions`/`Users` are core services a plugin reaches with a plain `yield*`, not something `dependsOn` exists for, and the same reasoning extends to "another plugin's role check," which `Admin` never needs to see as a plugin at all. A host that authorizes via `@effect-auth/roles`, a qadi policy, or any other mechanism supplies `canImpersonate` itself. The fail-closed default gives `archive/PRD.md` §18's "impersonation off by default" two independent guarantees: the plugin must be installed, and it must be explicitly configured with a real predicate, before impersonation is ever reachable.
+A hard dependency on `@awthaq/roles` specifically would force every consumer onto that one authorization mechanism, and would repeat the exact `dependsOn`-is-for-plugins-only mistake `@awthaq/passkey`'s own ticket 06 already found and corrected — `Sessions`/`Users` are core services a plugin reaches with a plain `yield*`, not something `dependsOn` exists for, and the same reasoning extends to "another plugin's role check," which `Admin` never needs to see as a plugin at all. A host that authorizes via `@awthaq/roles`, a qadi policy, or any other mechanism supplies `canImpersonate` itself. The fail-closed default gives `archive/PRD.md` §18's "impersonation off by default" two independent guarantees: the plugin must be installed, and it must be explicitly configured with a real predicate, before impersonation is ever reachable.
 
 _Previous: [BEH-EA-211](27-admin-impersonation.md#beh-ea-211-resolveprincipal-closes-the-loop-to-userprincipalactingas) | Next: [BEH-EA-213](27-admin-impersonation.md#beh-ea-213-impersonate-issues-a-new-dual-identity-session-for-the-target)_
 

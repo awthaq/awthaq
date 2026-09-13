@@ -6,7 +6,7 @@ Verification method: every entry checked against a primary source (ACM DL / IEEE
 
 ## TL;DR
 
-- **Parnas (1972, 1976, 1979)** is the theoretical program of effect-auth in three papers: modules hide *likely-change decisions*; systems come in *program families* defined by shared design rules; and a well-designed system stays valid under *extension and contraction* — every subset of installed plugins must compile to a valid program.
+- **Parnas (1972, 1976, 1979)** is the theoretical program of awthaq in three papers: modules hide *likely-change decisions*; systems come in *program families* defined by shared design rules; and a well-designed system stays valid under *extension and contraction* — every subset of installed plugins must compile to a valid program.
 - **Dijkstra's THE system (1968)** proves-by-construction that strict layering works at scale: each layer uses only lower layers. The Effect Layer graph is this discipline made a runtime object; acyclicity is a proof obligation, not bureaucracy.
 - **Simon (1962)** supplies the general science: complex systems that evolve are hierarchic and **near-decomposable** — interactions within modules are strong, between modules weak. The plugin contract is the near-decomposability claim made machine-checkable.
 - **Contracts and behavioral subtyping (Meyer 1992; Liskov & Wing 1994)** define what "swappable capability" must mean: type equality is not substitutability; preconditions may not strengthen, postconditions may not weaken. The plugin contract-test suite (Q31) is the runtime face of these two papers.
@@ -14,12 +14,12 @@ Verification method: every entry checked against a primary source (ACM DL / IEEE
 - **Baldwin & Clark (1997, 2000)** explain why the plugin compiler is the strategic product: design rules (contract, namespaces, `apiVersion`) must be frozen *first*; then hidden modules (plugins) become independently improvable **options** whose value grows with ecosystem volatility.
 - **MacCormack/Rusnak/Baldwin (2006)** make design structure *measurable*: propagation cost on a DSM separated Linux from Mozilla-1.0 (5.2% vs 17.4%) and showed purposeful re-modularization works — "architecture for participation" is the ecosystem requirement on the compiler.
 - **Extensible OS kernels (SPIN, Exokernel, Liedtke — all SOSP 1995)** converged from three directions: a minimal core; safe, cheap in-process extension; and a minimality principle — "a concept is tolerated inside the core only if moving it outside would prevent implementing required functionality."
-- **Small & Seltzer (1996)** compared extension technologies and found no dominant one: performance, protection, and recoverability trade off. effect-auth's compile-time-only choice must be defended as a deliberate point in this design space (Q30), not a default.
+- **Small & Seltzer (1996)** compared extension technologies and found no dominant one: performance, protection, and recoverability trade off. awthaq's compile-time-only choice must be defended as a deliberate point in this design space (Q30), not a default.
 - **VINO and KaffeOS** are the complement to compile-time guarantees: untrusted extensions still misbehave, so runtime containment (transactions, rollback, resource rations) is needed for hooks (Q27) and migrations (Q26).
 
 ## Annotated bibliography
 
-Entry format: **Authors (Year). Title.** *Venue.* link — then core claim and implication for effect-auth's plugin compiler.
+Entry format: **Authors (Year). Title.** *Venue.* link — then core claim and implication for awthaq's plugin compiler.
 
 ### 1. The Parnas lineage: information hiding, module specification, program families, design for change
 
@@ -28,7 +28,7 @@ The four Parnas papers below are the intellectual foundation of the whole plugin
 **D.L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules.** *Communications of the ACM 15(12):1053–1058.*
 [https://dl.acm.org/doi/10.1145/361598.361623](https://dl.acm.org/doi/10.1145/361598.361623) — free PDF: [TU Eindhoven mirror](https://wstomv.win.tue.nl/edu/2ip30/references/criteria_for_modularization.pdf)
 Claim: decompose modules around **design decisions likely to change** (information hiding), not around steps of processing; the KWIC example shows flowchart-style decomposition fails exactly where requirements shift.
-Implication: effect-auth's capability interfaces (`PasswordHasher`, `Mailer`, `RateLimiter`, Q11) are module seams cut along the auth system's likely-change axes — algorithm swaps, storage backends, provider policies.
+Implication: awthaq's capability interfaces (`PasswordHasher`, `Mailer`, `RateLimiter`, Q11) are module seams cut along the auth system's likely-change axes — algorithm swaps, storage backends, provider policies.
 
 **D.L. Parnas (1972). A Technique for Software Module Specification with Examples.** *Communications of the ACM 15(5):330–336.*
 [https://dl.acm.org/doi/10.1145/355602.361309](https://dl.acm.org/doi/10.1145/355602.361309) — free text: [CACM research page](https://cacm.acm.org/research/a-technique-for-software-module-specification-with-examples/)
@@ -50,7 +50,7 @@ Implication: the plugin compiler's deepest obligation (Q20/Q31): `Auth.make({ pl
 **E.W. Dijkstra (1968). The Structure of the "THE"-Multiprogramming System.** *Communications of the ACM 11(5):341–346.*
 [https://dl.acm.org/doi/10.1145/363095.363143](https://dl.acm.org/doi/10.1145/363095.363143)
 Claim: a working multiprogramming system decomposed into a strict hierarchy of levels, each providing abstractions used only by higher layers, with correctness argued level by level — layering as a proof technique.
-Implication: effect-auth's single typed Layer graph (Q8) inherits this obligation — core → plugin layers → application, no upward edges; cycle detection (Q22) is the compiler enforcing THE's layer discipline.
+Implication: awthaq's single typed Layer graph (Q8) inherits this obligation — core → plugin layers → application, no upward edges; cycle detection (Q22) is the compiler enforcing THE's layer discipline.
 
 ### 3. Complexity science and modularity economics
 
@@ -62,7 +62,7 @@ Implication: the plugin contract is the near-decomposability claim made machine-
 **Carliss Y. Baldwin & Kim B. Clark (2000). Design Rules, Volume 1: The Power of Modularity.** *MIT Press.*
 [https://direct.mit.edu/books/monograph/1856/Design-Rules-Volume-1The-Power-of-Modularity](https://direct.mit.edu/books/monograph/1856/Design-Rules-Volume-1The-Power-of-Modularity)
 Claim: modularity = design rules (visible, frozen information) plus hidden modules (encapsulated design); modular operators (split, substitute, augment, exclude, invert, port) create **options** whose economic value grows with volatility — the theory of the computer industry's modularity boom.
-Implication: the plugin compiler is effect-auth's design-rule engine; its output (contract, namespaces, `apiVersion`) must be frozen early and defended, because third-party option value exists only if the rules stay stable (Q20).
+Implication: the plugin compiler is awthaq's design-rule engine; its output (contract, namespaces, `apiVersion`) must be frozen early and defended, because third-party option value exists only if the rules stay stable (Q20).
 
 **Carliss Y. Baldwin & Kim B. Clark (1997). Managing in an Age of Modularity.** *Harvard Business Review 75(5):84–93 (Sept–Oct).*
 [https://hbr.org/1997/09/managing-in-an-age-of-modularity](https://hbr.org/1997/09/managing-in-an-age-of-modularity)
@@ -89,19 +89,19 @@ Implication: the plugin definition contract (Q20) should carry its obligations e
 **Barbara Liskov & Jeannette M. Wing (1994). A Behavioral Notion of Subtyping.** *ACM Transactions on Programming Languages and Systems 16(6):1811–1841.*
 [https://dl.acm.org/doi/10.1145/197320.197383](https://dl.acm.org/doi/10.1145/197320.197383) (open access) — free PDF: [CMU](https://www.cs.cmu.edu/~wing/publications/LiskovWing94.pdf)
 Claim: substitutability is behavioral — subtype methods may not strengthen preconditions, weaken postconditions, or violate supertype invariants and history constraints; type-system compatibility alone proves nothing about behavior.
-Implication: any `PasswordHasher` implementation type-checks, but only behavior makes it swappable (Q11) — hash strength, timing uniformity, and idempotence live in `@effect-auth/test` contract assertions (Q31), which is Liskov–Wing operationalized.
+Implication: any `PasswordHasher` implementation type-checks, but only behavior makes it swappable (Q11) — hash strength, timing uniformity, and idempotence live in `@awthaq/test` contract assertions (Q31), which is Liskov–Wing operationalized.
 
 ### 5. The software architecture canon
 
 **Dewayne E. Perry & Alexander L. Wolf (1992). Foundations for the Study of Software Architecture.** *ACM SIGSOFT Software Engineering Notes 17(4):40–52.*
 [https://dl.acm.org/doi/10.1145/141874.141884](https://dl.acm.org/doi/10.1145/141874.141884) — free PDF: [Univ. of Bologna mirror](http://www.cs.unibo.it/~paolo.ciancarini/wwwpages/readings/perrywolf)
 Claim: architecture = **components** (processing/data), **connectors** (interaction), and **constraints** (properties of the whole), organized into styles; connectors are first-class design objects with their own types.
-Implication: effect-auth's connectors are Effect objects — `Layer` composition, `HttpApi`, the event bus (Q13) — and the compiler must treat them as typed, validated citizens, not incidental wiring (Q10).
+Implication: awthaq's connectors are Effect objects — `Layer` composition, `HttpApi`, the event bus (Q13) — and the compiler must treat them as typed, validated citizens, not incidental wiring (Q10).
 
 **Mary Shaw & David Garlan (1996). Software Architecture: Perspectives on an Emerging Discipline.** *Prentice Hall.*
 [https://dl.acm.org/doi/book/10.5555/231003](https://dl.acm.org/doi/book/10.5555/231003) — companion paper "An Introduction to Software Architecture": [PDF](https://www.cimat.mx/~fory/ingsoft/9.pdf)
 Claim: catalogs architectural **styles** (layers, pipes-and-filters, repository, event-based, client-server…) with explicit properties, and gives connectors (procedure call, event, pipe, shared data) explicit semantics.
-Implication: effect-auth is a named style — plugin-plus-compiler — and style consistency is what makes `auth plugin list`/`doctor` introspection possible (Q10, Q31); mixing styles (mutable registries inside a declarative system) is where prior frameworks decay.
+Implication: awthaq is a named style — plugin-plus-compiler — and style consistency is what makes `auth plugin list`/`doctor` introspection possible (Q10, Q31); mixing styles (mutable registries inside a declarative system) is where prior frameworks decay.
 
 **Frank Buschmann, Regine Meunier, Hans Rohnert, Peter Sommerlad, Michael Stal (1996). Pattern-Oriented Software Architecture, Volume 1: A System of Patterns.** *Wiley.*
 [https://www.wiley.com/en-ca/pattern-oriented-software-architecture-volume-1-a-system-of-patterns-p-9781118725269](https://www.wiley.com/en-ca/pattern-oriented-software-architecture-volume-1-a-system-of-patterns-p-9781118725269) — ACM: [10.5555/249013](https://dl.acm.org/doi/10.5555/249013)
@@ -116,16 +116,16 @@ Implication: the tactics list is a design-review rubric for every plugin-contrac
 **Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). Design Patterns: Elements of Reusable Object-Oriented Software.** *Addison-Wesley.*
 [https://www.oreilly.com/library/view/design-patterns-elements/0201633612/](https://www.oreilly.com/library/view/design-patterns-elements/0201633612/)
 Claim (kept brief, as scoped): the composition patterns underpinning plugin composition — **Bridge** (capability interface ↔ implementations), **Strategy** (authentication strategies), **Decorator** (middleware around handlers), **Observer** (events/hooks) — and the book's thesis "favor object composition over class inheritance" is why plugin ecosystems can grow at all.
-Implication: effect-auth's plugin surface is these four patterns under a compiler: capabilities are Bridges, strategies are Strategies, middleware is Decorator, hooks/events are Observer (Q11, Q13, Q27, Q28).
+Implication: awthaq's plugin surface is these four patterns under a compiler: capabilities are Bridges, strategies are Strategies, middleware is Decorator, hooks/events are Observer (Q11, Q13, Q27, Q28).
 
 ### 6. Extensible operating-system kernels
 
-The SOSP '95 trio attacked kernel extensibility from three directions — safe language (SPIN), minimal core with secure bindings (exokernel), and microkernel minimality (Liedtke) — and together they fixed the terms of the compile-time-vs-runtime tradeoff that effect-auth inherits.
+The SOSP '95 trio attacked kernel extensibility from three directions — safe language (SPIN), minimal core with secure bindings (exokernel), and microkernel minimality (Liedtke) — and together they fixed the terms of the compile-time-vs-runtime tradeoff that awthaq inherits.
 
 **Brian N. Bershad, Stefan Savage, Przemysław Pardyak, Emin Gün Sirer, Marc E. Fiuczynski, David Becker, Craig Chambers, Susan Eggers (1995). Extensibility, Safety and Performance in the SPIN Operating System.** *Proceedings of SOSP '95, pp. 267–284.*
 [https://dl.acm.org/doi/10.1145/224056.224077](https://dl.acm.org/doi/10.1145/224056.224077) — free PDF: [Cornell mirror](https://www.cs.cornell.edu/people/egs/papers/spin-sosp95.pdf); project: [SPIN papers](https://www-spin.cs.washington.edu/papers/index.html)
 Claim: kernel extensions written in a type-safe language (Modula-3) are dynamically linked into the running kernel; type safety plus link-time interposition replaces address-space protection, making extension calls as cheap as local procedure calls — no IPC boundary.
-Implication: the strongest systems-science precedent for effect-auth's thesis: when the extension language already guarantees safety, in-process composition needs no runtime enforcement layer. TypeScript + Effect types are our Modula-3; the plugin compiler is our dynamic linker (Q8, Q10).
+Implication: the strongest systems-science precedent for awthaq's thesis: when the extension language already guarantees safety, in-process composition needs no runtime enforcement layer. TypeScript + Effect types are our Modula-3; the plugin compiler is our dynamic linker (Q8, Q10).
 
 **Dawson R. Engler, M. Frans Kaashoek, James O'Toole Jr. (1995). Exokernel: An Operating System Architecture for Application-Level Resource Management.** *Proceedings of SOSP '95, pp. 251–266.*
 [https://dl.acm.org/doi/10.1145/224057.224076](https://dl.acm.org/doi/10.1145/224057.224076) — free PDF: [Wisconsin mirror](https://pages.cs.wisc.edu/~bart/736/papers/exo-sosp95.pdf)
@@ -140,7 +140,7 @@ Implication: the audit test for PRD §1.2's contribution list (Q20, Q51): for ea
 **Jochen Liedtke (1996). Toward Real Microkernels.** *Communications of the ACM 39(9):70–77.*
 [https://dl.acm.org/doi/10.1145/234215.234473](https://dl.acm.org/doi/10.1145/234215.234473) (free access)
 Claim: the retrospective on first-generation microkernels (Mach): performance came only after moving policy out of the kernel and minimizing IPC — the empirical cost of getting the core/extension boundary wrong.
-Implication: the warning for the compiler: if core contributions start accumulating policy (default mailer, default roles), effect-auth re-enacts Mach; keep policy in plugins, mechanism in core (Q51).
+Implication: the warning for the compiler: if core contributions start accumulating policy (default mailer, default roles), awthaq re-enacts Mach; keep policy in plugins, mechanism in core (Q51).
 
 ### 7. Isolation mechanisms and extension-technology tradeoffs
 
@@ -162,7 +162,7 @@ Implication: compile-time validation is necessary, not sufficient — hooks need
 **Douglas P. Ghormley, David Petrou, Steven H. Rodrigues, Thomas E. Anderson (1998). SLIC: An Extensibility System for Commodity Operating Systems.** *Proceedings of the 1998 USENIX Annual Technical Conference, New Orleans.*
 [https://www.usenix.org/conference/1998-usenix-annual-technical-conference/slic-extensibility-system-commodity-operating](https://www.usenix.org/conference/1998-usenix-annual-technical-conference/slic-extensibility-system-commodity-operating) — free PDF: [usenix.org](http://usenix.org/publications/library/proceedings/usenix98/full_papers/ghormley/ghormley.pdf)
 Claim: instead of a new kernel architecture, SLIC **interposes trusted extensions on existing kernel interfaces**, composable across multiple third parties with enforced order, requiring only trivial kernel changes — extensions protected from apps, enforced on uncooperative apps, composed from different vendors.
-Implication: the third-party extension point is a real, named design object: effect-auth's named middleware phases and hook points (Q27, Q28) with compiler-enforced ordering are SLIC's interposition model at application scale.
+Implication: the third-party extension point is a real, named design object: awthaq's named middleware phases and hook points (Q27, Q28) with compiler-enforced ordering are SLIC's interposition model at application scale.
 
 ### 8. Language-based extension systems (processes inside a safe language)
 
@@ -190,7 +190,7 @@ Implication: when the runtime already provides fibers, scopes, and context, proc
 - **J-Kernel:** canonical forms are USENIX ATC **1998** ("Implementing Multiple Protection Domains in Java") and the LNCS **1999** chapter; no verified 1996 version — do not cite 1996.
 - **Parnas 1972b:** *A Technique for Software Module Specification…* is CACM **15(5), May 1972** (pp. 330–336) — a different issue from the December decomposition paper.
 
-## Cross-cutting themes for effect-auth
+## Cross-cutting themes for awthaq
 
 - **Q20 plugin contract — design rules first (Baldwin & Clark; Parnas 1976).** The contract is the family definition: required fields minimal (`id`, `apiVersion`), everything else optional and declarative. Freezing this early and visibly is the highest-leverage act in the project; plugins are options priced against stable rules.
 - **Q21/Q23 capability strings — unforgeable authority (J-Kernel).** Namespaced capability strings plus `Context.Tag` requirements give the object-capability property: plugins hold references to providers, not global mutable registries; exclusivity (`provides`/`conflicts`) is the compiler checking one authority is not held twice.
@@ -245,8 +245,8 @@ One paper per week; the order is thesis → theory → vocabulary → economics 
 
 1. **Freeze timing for the design rules (Q20).** Baldwin & Clark argue option value appears only after rules are frozen — but Parnas's families warn the family definition itself evolves. What is the *minimal* v1 plugin contract that can survive Plugin API 2 without a codemod cliff (09's Gatsby lesson)? User decision, with a scientific deadline: every ecosystem plugin added before the freeze makes the freeze harder.
 2. **How much VINO in the runtime? (Q26, Q27)** Compile-time validation cannot rule out hangs, resource exhaustion, or behavioral violations (Liskov–Wing). Should hooks carry per-plugin budgets (KaffeOS rations) and migrations be strictly transactional with rollback, or is ledger-plus-guardrails enough at v1?
-3. **Is there ever a sanctioned dynamic path? (Q30)** SPIN loads extensions at runtime; effect-auth compiles statically. Is recompile-and-redeploy the only install path (pure static), or is `LayerMap`-keyed per-tenant plugin *selection* among installed plugins the bounded runtime analog of SPIN's linker — and where exactly is that line in the docs?
-4. **Substitutability conformance — who checks behavior? (Q11, Q31)** Liskov–Wing says the type system cannot; the contract suite must. Should `@effect-auth/test` ship reference behavioral suites per core capability (`PasswordHasher`, `RateLimiter`), or only compiler-facing checks, leaving behavioral conformance to each implementation's own tests?
+3. **Is there ever a sanctioned dynamic path? (Q30)** SPIN loads extensions at runtime; awthaq compiles statically. Is recompile-and-redeploy the only install path (pure static), or is `LayerMap`-keyed per-tenant plugin *selection* among installed plugins the bounded runtime analog of SPIN's linker — and where exactly is that line in the docs?
+4. **Substitutability conformance — who checks behavior? (Q11, Q31)** Liskov–Wing says the type system cannot; the contract suite must. Should `@awthaq/test` ship reference behavioral suites per core capability (`PasswordHasher`, `RateLimiter`), or only compiler-facing checks, leaving behavioral conformance to each implementation's own tests?
 5. **Coupling budget (Q8, Q19).** MacCormack makes design structure measurable. Should CI track propagation cost of the compiled graph (contributions × plugins) with a budget that blocks Plugin API growth — and what threshold is defensible before v1 data exists?
 6. **Contraction guarantee (Q20, Q31).** Parnas 1979 requires every subset to be valid. Should the compiler reject *accidental dependencies* — configurations valid only because two plugins happen to coexist (a plugin consuming another's capability without declaring it) — even when the graph happens to work?
 

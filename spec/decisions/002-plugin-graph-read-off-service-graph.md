@@ -8,7 +8,7 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Accepted — design; implementation deferred |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 
@@ -32,7 +32,7 @@ Two concerns remain, deliberately, at runtime rather than in the type system: **
 
 ## Consequences
 
-**Positive**: There is exactly one thing to keep consistent, and the type checker keeps it consistent for free. `Auth.make`'s error messages ("plugin `two-factor` depends on plugin `password`, which is not in the list," `archive/design/plugins-as-layers.md` §4.3) can *name* a missing plugin precisely because the plugin-requirement service the type carries encodes `key: "effect-auth/plugin/<id>"` — the same mechanism that would otherwise require a hand-maintained id table now produces better diagnostics than the two-graph design did.
+**Positive**: There is exactly one thing to keep consistent, and the type checker keeps it consistent for free. `Auth.make`'s error messages ("plugin `two-factor` depends on plugin `password`, which is not in the list," `archive/design/plugins-as-layers.md` §4.3) can *name* a missing plugin precisely because the plugin-requirement service the type carries encodes `key: "awthaq/plugin/<id>"` — the same mechanism that would otherwise require a hand-maintained id table now produces better diagnostics than the two-graph design did.
 
 **Negative**: Anything that is not naturally expressible as a Layer's type-level channel (in practice: cycle detection and migration ordering, per the Context above) still needs a small amount of runtime logic outside the pure type-level story. The plugin system is not *entirely* free of runtime bookkeeping, only free of a second parallel *graph*.
 

@@ -1,4 +1,4 @@
-// @effect-auth/admin — AdminApi
+// @awthaq/admin — AdminApi
 //
 // spec/behaviors/27-admin-impersonation.md, BEH-EA-209 through BEH-EA-220.
 // This plugin's own contract — one group, `admin` (BEH-EA-004), all four
@@ -6,7 +6,7 @@
 // (including `list`) requires a real, already-authenticated caller, gated
 // again by `AdminConfig.canImpersonate` inside the handler itself.
 
-import { Api, SessionContract } from "@effect-auth/api";
+import { Api, SessionContract } from "@awthaq/api";
 import * as Schema from "effect/Schema";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi";
 

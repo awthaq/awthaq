@@ -1,4 +1,4 @@
-// @effect-auth/passkey — Plugin (M4)
+// @awthaq/passkey — Plugin (M4)
 //
 // The Passkey plugin against the WebAuthn port.
 //

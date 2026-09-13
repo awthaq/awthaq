@@ -1,4 +1,4 @@
-// @effect-auth/ports — SqlTransaction
+// @awthaq/ports — SqlTransaction
 //
 // Shipping-gap map (.scratch/shipping-gaps), ticket 16. A port — not a
 // bare `SqlClient.withTransaction` call scattered at each call site —
@@ -30,7 +30,7 @@ export interface SqlTransactionShape {
 }
 
 export class SqlTransaction extends Context.Service<SqlTransaction, SqlTransactionShape>()(
-  "effect-auth/ports/SqlTransaction",
+  "awthaq/ports/SqlTransaction",
 ) {}
 
 /** For an in-memory composition — every write already lands atomically in its own `Ref.modify`, so there is nothing this port needs to wrap. */

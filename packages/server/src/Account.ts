@@ -1,11 +1,11 @@
-// @effect-auth/server — Account
+// @awthaq/server — Account
 //
 // Shipping-gap map (.scratch/shipping-gaps), tickets 09/10. Handlers for
-// `@effect-auth/api`'s core `account` group, built against `AuthCoreApi`
+// `@awthaq/api`'s core `account` group, built against `AuthCoreApi`
 // the same way `Session.SessionHandlers` is.
 
-import { AuthCore, Api, AccountContract } from "@effect-auth/api";
-import { Accounts, Sessions, Users } from "@effect-auth/core";
+import { AuthCore, Api, AccountContract } from "@awthaq/api";
+import { Accounts, Sessions, Users } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
@@ -20,9 +20,7 @@ const currentUserPrincipal: Effect.Effect<Api.UserPrincipal, never, Api.CurrentP
     const principal = yield* Api.CurrentPrincipal;
     if (principal._tag !== "User") {
       return yield* Effect.die(
-        new Error(
-          `effect-auth: account group reached with a non-User principal: ${principal._tag}`,
-        ),
+        new Error(`awthaq: account group reached with a non-User principal: ${principal._tag}`),
       );
     }
     return principal;
@@ -59,7 +57,7 @@ export const AccountHandlers = HttpApiBuilder.group(
           .updateProfile(userId, payload)
           .pipe(
             Effect.catchTag("UserNotFound", () =>
-              Effect.die(new Error(`effect-auth: authenticated user missing: ${userId}`)),
+              Effect.die(new Error(`awthaq: authenticated user missing: ${userId}`)),
             ),
           );
         return toDto(updated);
@@ -81,7 +79,7 @@ export const AccountHandlers = HttpApiBuilder.group(
           .delete(userId)
           .pipe(
             Effect.catchTag("UserNotFound", () =>
-              Effect.die(new Error(`effect-auth: authenticated user missing: ${userId}`)),
+              Effect.die(new Error(`awthaq: authenticated user missing: ${userId}`)),
             ),
           );
       }),

@@ -1,4 +1,4 @@
-# effect-auth is pre-implementation (see spec/README.md). Every scenario in
+# awthaq is pre-implementation (see spec/README.md). Every scenario in
 # this file specifies intended behavior of a system that does not exist yet
 # — a target the future testing harness (BEH-EA-193..200) is meant to
 # execute against, not a record of anything verified today.
@@ -12,10 +12,10 @@ Feature: Qadi Bridge — Path B (Declared Permissions)
   Rule: SubjectExtractor runs session resolution on the raw request
 
     @REQ-EA-428
-    Scenario: SubjectExtractor resolves a subject directly from the raw request, ahead of any effect-auth contract middleware
+    Scenario: SubjectExtractor resolves a subject directly from the raw request, ahead of any awthaq contract middleware
       Given an endpoint middlewared only by qadi's RequirePermission, with SubjectExtractor provided over the raw request
       When a request reaches that endpoint
-      Then SubjectExtractor resolves a subject before any effect-auth contract middleware has executed
+      Then SubjectExtractor resolves a subject before any awthaq contract middleware has executed
       And it does so without depending on Authentication's own middleware pipeline having run first
 
     @REQ-EA-429
@@ -116,7 +116,7 @@ Feature: Qadi Bridge — Path B (Declared Permissions)
 
   # BEH-EA-157 — spec/behaviors/20-qadi-bridge-path-b.md
   @BEH-EA-157
-  Rule: Status mapping is qadi's, not effect-auth's
+  Rule: Status mapping is qadi's, not awthaq's
 
     @REQ-EA-440
     Scenario Outline: RequirePermission maps each outcome to its designated status, with an empty body
@@ -133,11 +133,11 @@ Feature: Qadi Bridge — Path B (Declared Permissions)
         | a missing annotation         | 500 Internal Server Error   |
 
     @REQ-EA-441
-    Scenario: effect-auth's bridge code does not reinterpret or override qadi's status mapping
+    Scenario: awthaq's bridge code does not reinterpret or override qadi's status mapping
       Given qadi's RequirePermission middleware maps an outcome to one of its designated statuses
-      When effect-auth's own bridge code serves that response
+      When awthaq's own bridge code serves that response
       Then the status served matches qadi's mapping exactly
-      And no additional mapping layer inside effect-auth changes it
+      And no additional mapping layer inside awthaq changes it
 
     @REQ-EA-442
     Scenario: A resolver outage is never collapsed into a 403 denial

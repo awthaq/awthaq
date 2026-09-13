@@ -8,13 +8,13 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Functional Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 
 ---
 
-> effect-auth is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/design/plugins-as-layers.md` §4 and `archive/PRD.md` §9.4 — not code that has shipped.
+> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/design/plugins-as-layers.md` §4 and `archive/PRD.md` §9.4 — not code that has shipped.
 
 ## BEH-EA-009: `Auth.make` computes three outputs from one plugin tuple
 
@@ -53,7 +53,7 @@ REQUIREMENT: `auth.api`, `auth.layer`, and `auth.migrations` MUST all be
 ```ts
 export type Validate<P extends ReadonlyArray<Any>> =
   DuplicateId<P> extends infer D extends string
-    ? { readonly "effect-auth": `plugin id "${D}" appears more than once` }
+    ? { readonly "awthaq": `plugin id "${D}" appears more than once` }
     : /* … */ P
 ```
 
@@ -71,7 +71,7 @@ Without this check, two independently authored plugins that happen to choose the
 ```ts
 const auth = Auth.make([TwoFactor, Passkey])
 // error TS2345: Argument of type '[typeof TwoFactor, typeof Passkey]' is not assignable to parameter of type
-//   '{ readonly "effect-auth": "plugin \"two-factor\" depends on plugin \"password\", which is not in the list"; }'.
+//   '{ readonly "awthaq": "plugin \"two-factor\" depends on plugin \"password\", which is not in the list"; }'.
 ```
 
 ```text
@@ -83,13 +83,13 @@ REQUIREMENT: If a plugin in the tuple depends (via `dependsOn`) on a plugin
 
 > **Invariant:** [INV-EA-001](../invariants.md#inv-ea-001-a-plugin-dependency-that-is-not-installed-keeps-the-application-from-compiling)
 
-Because a plugin dependency is a service instance whose key literally contains `effect-auth/plugin/<id>` (BEH-EA-002), `MissingDep<P>` can extract that id from the type and report it by name rather than leave the author with an opaque "some service is missing" diagnostic. `research/09-plugin-architecture.md` Q22 treats this as the central lesson of tRPC's `TS2589` failures: graph reasoning belongs to a shallow, purpose-built conditional type over a small tuple, never to open-ended recursive inference — which is exactly the shape `DuplicateId`/`MissingDep`/`SlotConflict` share.
+Because a plugin dependency is a service instance whose key literally contains `awthaq/plugin/<id>` (BEH-EA-002), `MissingDep<P>` can extract that id from the type and report it by name rather than leave the author with an opaque "some service is missing" diagnostic. `research/09-plugin-architecture.md` Q22 treats this as the central lesson of tRPC's `TS2589` failures: graph reasoning belongs to a shallow, purpose-built conditional type over a small tuple, never to open-ended recursive inference — which is exactly the shape `DuplicateId`/`MissingDep`/`SlotConflict` share.
 
 ## BEH-EA-012: `Validate<P>`'s `SlotConflict` check refuses two plugins overriding one exclusive slot
 
 ```ts
 const auth = Auth.make([Roles, Organization])
-// error TS2345: … '{ readonly "effect-auth": "slot \"effect-auth/slot/SubjectResolver\" is overridden by both \"roles\" and \"organization\""; }'
+// error TS2345: … '{ readonly "awthaq": "slot \"awthaq/slot/SubjectResolver\" is overridden by both \"roles\" and \"organization\""; }'
 ```
 
 ```text

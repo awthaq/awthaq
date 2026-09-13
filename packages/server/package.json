@@ -1,5 +1,5 @@
 {
-  "name": "@effect-auth/server",
+  "name": "@awthaq/server",
   "version": "0.1.0",
   "private": true,
   "description": "Middleware implementations, core handlers, AuthHttp — the mechanism that registers a composed HttpApi with a router.",
@@ -31,8 +31,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
-    "@effect-auth/core": "workspace:*",
+    "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

@@ -1,12 +1,12 @@
-// @effect-auth/core — Sessions
+// @awthaq/core — Sessions
 //
 // spec/behaviors/07-sessions.md, BEH-EA-049 through BEH-EA-056.
 // Two `Layer`s over the same `SessionsShape`: `layerMemory` (a `Ref`) and
-// `layerSql` (`@effect-auth/sql`'s `Model.Class`/repository, BEH-EA-033–036)
+// `layerSql` (`@awthaq/sql`'s `Model.Class`/repository, BEH-EA-033–036)
 // — neither changes this service's public interface, the same deferral
 // `Migrations.ts` documents for the persistence stratum generally.
 
-import { Models as SqlModels, Repositories as SqlRepositories } from "@effect-auth/sql";
+import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -66,7 +66,7 @@ export interface SessionConfig {
  * specification's current, documented default, not an arbitrary placeholder).
  */
 export const SessionConfig: Context.Reference<SessionConfig> = Context.Reference<SessionConfig>(
-  "effect-auth/core/SessionConfig",
+  "awthaq/core/SessionConfig",
   {
     defaultValue: () => ({
       absolute: Duration.days(30),
@@ -78,7 +78,7 @@ export const SessionConfig: Context.Reference<SessionConfig> = Context.Reference
 
 /**
  * BEH-EA-209: the caller's own identity, immutably attached to a session
- * minted on someone else's behalf (e.g. `@effect-auth/admin`'s `impersonate`)
+ * minted on someone else's behalf (e.g. `@awthaq/admin`'s `impersonate`)
  * — a generic, `Admin`-agnostic field any future plugin could reuse.
  */
 export interface ActingAs {
@@ -140,7 +140,7 @@ export interface SessionsShape {
     readonly supersedes?: SessionId;
     /** BEH-EA-209/210: sets a hard expiry (`idleExpiresAt = absoluteExpiresAt`) and disables idle-refresh for this session's whole lifetime. */
     readonly actingAs?: ActingAs;
-    /** BEH-EA-212: overrides `SessionConfig.absolute` for this one call — e.g. `@effect-auth/admin`'s own `AdminConfig.maxDuration`, generally shorter than an ordinary session's absolute lifetime. */
+    /** BEH-EA-212: overrides `SessionConfig.absolute` for this one call — e.g. `@awthaq/admin`'s own `AdminConfig.maxDuration`, generally shorter than an ordinary session's absolute lifetime. */
     readonly absoluteDuration?: Duration.Duration;
   }) => Effect.Effect<
     { readonly session: SessionView; readonly token: Redacted.Redacted<string> },
@@ -165,9 +165,7 @@ export interface SessionsShape {
   ) => Effect.Effect<ReadonlyArray<SessionListItem>>;
 }
 
-export class Sessions extends Context.Service<Sessions, SessionsShape>()(
-  "effect-auth/core/Sessions",
-) {}
+export class Sessions extends Context.Service<Sessions, SessionsShape>()("awthaq/core/Sessions") {}
 
 interface SessionRow {
   readonly id: SessionId;
@@ -231,7 +229,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
       const separator = raw.indexOf(".");
       if (separator < 0) {
         return yield* Effect.fail(
-          new SessionNotFound({ message: "effect-auth: malformed session token" }),
+          new SessionNotFound({ message: "awthaq: malformed session token" }),
         );
       }
       const id = SessionId(raw.slice(0, separator));
@@ -239,18 +237,18 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
       const row = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
       if (Option.isNone(row)) {
         return yield* Effect.fail(
-          new SessionNotFound({ message: `effect-auth: no such session: ${id}` }),
+          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
         );
       }
       const now = yield* DateTime.now;
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.absoluteExpiresAt)) {
         return yield* Effect.fail(
-          new SessionExpired({ message: `effect-auth: session expired: ${id}`, id }),
+          new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),
         );
       }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.idleExpiresAt)) {
         return yield* Effect.fail(
-          new SessionExpired({ message: `effect-auth: session idle-expired: ${id}`, id }),
+          new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
         );
       }
       const presentedHash = yield* hashSecret(crypto, secret);
@@ -260,7 +258,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
       );
       if (!matches) {
         return yield* Effect.fail(
-          new SessionNotFound({ message: `effect-auth: no such session: ${id}` }),
+          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
         );
       }
       // BEH-EA-210: a session carrying `actingAs` never idle-refreshes — its
@@ -298,7 +296,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
         ] => {
           if (!HashMap.has(s, id)) {
             return [
-              Result.fail(new SessionNotFound({ message: `effect-auth: no such session: ${id}` })),
+              Result.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
               s,
             ] as const;
           }
@@ -399,7 +397,7 @@ export const layerSql: Layer.Layer<
       const separator = raw.indexOf(".");
       if (separator < 0) {
         return yield* Effect.fail(
-          new SessionNotFound({ message: "effect-auth: malformed session token" }),
+          new SessionNotFound({ message: "awthaq: malformed session token" }),
         );
       }
       const id = SessionId(raw.slice(0, separator));
@@ -407,7 +405,7 @@ export const layerSql: Layer.Layer<
       const row = yield* repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new SessionNotFound({ message: `effect-auth: no such session: ${id}` })),
+            Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
@@ -415,12 +413,12 @@ export const layerSql: Layer.Layer<
       const now = yield* DateTime.now;
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
         return yield* Effect.fail(
-          new SessionExpired({ message: `effect-auth: session expired: ${id}`, id }),
+          new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),
         );
       }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
         return yield* Effect.fail(
-          new SessionExpired({ message: `effect-auth: session idle-expired: ${id}`, id }),
+          new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
         );
       }
       const presentedHash = yield* hashSecret(crypto, secret);
@@ -430,7 +428,7 @@ export const layerSql: Layer.Layer<
       );
       if (!matches) {
         return yield* Effect.fail(
-          new SessionNotFound({ message: `effect-auth: no such session: ${id}` }),
+          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
         );
       }
       // BEH-EA-210: a session carrying `actingAs` never idle-refreshes.
@@ -461,7 +459,7 @@ export const layerSql: Layer.Layer<
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new SessionNotFound({ message: `effect-auth: no such session: ${id}` })),
+            Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),

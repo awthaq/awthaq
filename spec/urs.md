@@ -1,4 +1,4 @@
-# effect-auth User Requirements Specification
+# awthaq User Requirements Specification
 
 > **Document Control**
 >
@@ -8,17 +8,17 @@
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | User Requirements Specification |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added §6 entries recording the previously-missing traceability.md crosswalk and the Organization/Admin cross-reference defect, both now tracked (CCR-EA-002) |
 
 ---
 
-> **This describes a planned system.** No requirement below has been verified against a running effect-auth; there is no implementation to verify it against yet. Every `URS-EA-NNN` and `NFR-EA-NNN` row is a target requirement, stated before the system that must satisfy it exists.
+> **This describes a planned system.** No requirement below has been verified against a running awthaq; there is no implementation to verify it against yet. Every `URS-EA-NNN` and `NFR-EA-NNN` row is a target requirement, stated before the system that must satisfy it exists.
 
 ## 1. Purpose
 
-This document states the user requirements for effect-auth **before an implementation exists**. That is the inverse of how a requirements specification is normally produced: the ordinary process extracts requirements from an existing system's behavior, user feedback, and support history, then verifies them retroactively against what was built. Here there is no system to observe, so every requirement below is derived instead from the product requirements document (`archive/PRD.md`, in particular §3 Goals and §6 Target users) and from the design series it names — a synthesis of stated intent, not observed need.
+This document states the user requirements for awthaq **before an implementation exists**. That is the inverse of how a requirements specification is normally produced: the ordinary process extracts requirements from an existing system's behavior, user feedback, and support history, then verifies them retroactively against what was built. Here there is no system to observe, so every requirement below is derived instead from the product requirements document (`archive/PRD.md`, in particular §3 Goals and §6 Target users) and from the design series it names — a synthesis of stated intent, not observed need.
 
 This ordering has a consequence recorded explicitly in §6 Known Gaps: a requirement written before implementation can state what its authors intended, but it cannot yet reflect what real usage will surface. Both are legitimate inputs to a requirements specification; only the first is available today.
 
@@ -31,8 +31,8 @@ This ordering has a consequence recorded explicitly in §6 Known Gaps: a require
 | The HTTP contract stratum (`HttpApi`), server handlers, and a derived Effect/React/Next.js client | Supporting every database on day one (v1 targets Postgres and SQLite) |
 | Database-neutral persistence via `Model.Class` and repositories over `SqlClient` | Loading plugins at runtime (the plugin set is static, resolved at build/boot time) |
 | The bridge to qadi: the `SubjectResolver` slot, `AuthorizedSubject` middleware, `SubjectExtractor` layer | Being a general-purpose application plugin system (plugins are authentication-scoped only) |
-| Testing and operational tooling: `TestAuth`, contract tests, CLI (`doctor`, `plugin list`, `migration`, `openapi`) | Being an ORM or a mail provider (effect-auth depends on `SqlClient` and `Mailer` as ports, not implementations) |
-| **Deciding *who is asking*** (a `Principal`) | **Deciding *what they may do or see*.** effect-auth implements no permission model, no policy language, and no authorizer — that is qadi's responsibility in full (`archive/PRD.md` §9, §15) |
+| Testing and operational tooling: `TestAuth`, contract tests, CLI (`doctor`, `plugin list`, `migration`, `openapi`) | Being an ORM or a mail provider (awthaq depends on `SqlClient` and `Mailer` as ports, not implementations) |
+| **Deciding *who is asking*** (a `Principal`) | **Deciding *what they may do or see*.** awthaq implements no permission model, no policy language, and no authorizer — that is qadi's responsibility in full (`archive/PRD.md` §9, §15) |
 | First-party plugins scheduled for v1 and v1.x (Password, OAuth, Passkey, Roles, then TwoFactor, MagicLink, EmailOtp, Organization, ApiKey, Admin, Jwt, Bearer) | Every enterprise protocol in v1 (SSO, SAML, OIDC Provider, SCIM, Device Authorization are phase-3) |
 
 ## 2. User groups
@@ -43,7 +43,7 @@ Documentation and requirements are organized around three audiences (`archive/PR
 
 **Plugin authors** build new authentication methods or organization-specific extensions (an invite flow, a custom sign-in strategy) as `AuthPlugin.Service` classes. Their need is a contract precise enough that a plugin they write today keeps working against a version of the core the authors have not seen, and that the type checker — not a manifest linter run in CI — catches a plugin that names a table or endpoint group outside its own namespace.
 
-**Adapter and framework-integration authors** connect effect-auth's ports (`SqlClient`, `Mailer`, `PasswordHasher`, `WebAuthn`, `KeyValueStore`, `RateLimiter`) and its HTTP contract to a concrete driver or host framework (a Postgres driver, an SES mailer, a Next.js route handler, a Hono app). Their need is a small, stable adapter surface — a handful of Layers and one `Request → Response` entry point — that does not require touching plugin internals to add support for a new driver or framework.
+**Adapter and framework-integration authors** connect awthaq's ports (`SqlClient`, `Mailer`, `PasswordHasher`, `WebAuthn`, `KeyValueStore`, `RateLimiter`) and its HTTP contract to a concrete driver or host framework (a Postgres driver, an SES mailer, a Next.js route handler, a Hono app). Their need is a small, stable adapter surface — a handful of Layers and one `Request → Response` entry point — that does not require touching plugin internals to add support for a new driver or framework.
 
 ## 3. Functional requirements
 
@@ -57,7 +57,7 @@ Rationale: this is the concrete form of Goal G7 (small application surface) and 
 
 If a plugin in the tuple depends on another plugin that is not also in the tuple, `Auth.make` reports the missing plugin by name at the call site — a compile-time failure, not a boot-time exception or a runtime 500.
 
-Rationale: Goal G2 (type-checked composition); this is the primary developer-facing promise distinguishing effect-auth from an untyped plugin model.
+Rationale: Goal G2 (type-checked composition); this is the primary developer-facing promise distinguishing awthaq from an untyped plugin model.
 
 ### URS-EA-003 — A missing port implementation is caught before the application runs
 
@@ -107,9 +107,9 @@ Domain entities are `Model.Class` values with repositories built over the generi
 
 Rationale: Goal G5 (database independence).
 
-### URS-EA-011 — Authorization decisions are never made by effect-auth itself
+### URS-EA-011 — Authorization decisions are never made by awthaq itself
 
-No effect-auth service evaluates a permission, a policy, or an authorization rule. Every authorization decision is made by qadi, reached through the `SubjectResolver` slot and the two integration paths (`AuthorizedSubject` middleware for Path A, `SubjectExtractor` for Path B). effect-auth's own responsibility ends at producing a `Principal` and, through the slot, a qadi `AuthSubject`.
+No awthaq service evaluates a permission, a policy, or an authorization rule. Every authorization decision is made by qadi, reached through the `SubjectResolver` slot and the two integration paths (`AuthorizedSubject` middleware for Path A, `SubjectExtractor` for Path B). awthaq's own responsibility ends at producing a `Principal` and, through the slot, a qadi `AuthSubject`.
 
 Rationale: Goal G9 / `archive/PRD.md` §9, §15 and ADR-EA-009; this is the boundary the entire two-library split depends on, and it must hold even for first-party plugins such as `Roles`.
 
@@ -147,7 +147,7 @@ Rationale: need of adapter/framework-integration authors (§6); ports exist prec
 
 A user can list their active sessions (with device/user-agent metadata), revoke a specific session, revoke every session but the current one, and sign out, all through the core `session` contract group.
 
-Rationale: baseline expectation of any application developer building on effect-auth (§6); this is core, not a plugin, precisely because every application needs it.
+Rationale: baseline expectation of any application developer building on awthaq (§6); this is core, not a plugin, precisely because every application needs it.
 
 ### URS-EA-018 — Verification tokens are scoped to one purpose and consumed once
 

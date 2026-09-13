@@ -1,6 +1,6 @@
-# effect-auth acceptance suite
+# awthaq acceptance suite
 
-This is the Gherkin/BDD acceptance suite for effect-auth. It exists because `spec/process/requirement-id-scheme.md` reserved `REQ-EA-NNN` for exactly this ("a BDD-testable acceptance requirement"), `spec/traceability.md` §6 was written as a stub waiting for it, and `spec/scripts/verify-traceability.sh` already contains check logic that looks for `features/features/*.feature` — this fills that slot in.
+This is the Gherkin/BDD acceptance suite for awthaq. It exists because `spec/process/requirement-id-scheme.md` reserved `REQ-EA-NNN` for exactly this ("a BDD-testable acceptance requirement"), `spec/traceability.md` §6 was written as a stub waiting for it, and `spec/scripts/verify-traceability.sh` already contains check logic that looks for `features/features/*.feature` — this fills that slot in.
 
 **This suite is pre-implementation, same as the rest of the repository.** There is no `package.json`, no Cucumber configuration, and no step-definition layer wiring these scenarios to real code — see `spec/behaviors/25-testing-harness.md` (`BEH-EA-193`–`200`) for the planned testing harness that will eventually execute them. Until then, every `.feature` file here is a specification artifact: it makes `spec/behaviors/`'s prose requirements Gherkin-shaped so a future BDD suite has scenarios to run, not a suite that currently passes or fails.
 
@@ -24,7 +24,7 @@ Inside each `.feature` file: one `Rule:` per `BEH-EA-NNN` (tagged `@BEH-EA-NNN`)
 
 ## Authorization is out of scope here
 
-effect-auth ships no authorizer; authorization is delegated to the sibling library **qadi** (`ADR-EA-009`). Scenarios that touch an authorization decision treat qadi's evaluator as a black box and assert only on effect-auth's own bridge responsibilities. See [`STYLE.md`](STYLE.md#the-qadi-boundary) for the exact rule, and qadi's own `features/features/*.feature` for the authorization-decision suite this one deliberately does not duplicate.
+awthaq ships no authorizer; authorization is delegated to the sibling library **qadi** (`ADR-EA-009`). Scenarios that touch an authorization decision treat qadi's evaluator as a black box and assert only on awthaq's own bridge responsibilities. See [`STYLE.md`](STYLE.md#the-qadi-boundary) for the exact rule, and qadi's own `features/features/*.feature` for the authorization-decision suite this one deliberately does not duplicate.
 
 ## Reading a scenario against the spec
 

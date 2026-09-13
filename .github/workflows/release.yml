@@ -1,7 +1,7 @@
 # Shipping-gap map (.scratch/shipping-gaps), ticket 28: wired per
 # spec/process/definitions-of-done.md's gate 12 (npm trusted publishing via
 # OIDC, no long-lived tokens, Sigstore provenance attached automatically) —
-# not run as part of this ticket. Every `@effect-auth/*` package is still
+# not run as part of this ticket. Every `@awthaq/*` package is still
 # `"private": true`, so `changeset publish` has nothing publishable yet;
 # this workflow only becomes live once a package is made public and the
 # npm registry has a trusted publisher configured for this repository and

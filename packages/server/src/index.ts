@@ -1,4 +1,4 @@
-// @effect-auth/server — HTTP stratum (5)
+// @awthaq/server — HTTP stratum (5)
 //
 // Middleware implementations, core handlers, AuthHttp — the mechanism that registers a composed HttpApi with a router.
 //

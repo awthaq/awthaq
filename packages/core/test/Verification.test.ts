@@ -4,7 +4,7 @@
 // `Ref`) and `layerSql` (a real, in-memory SQLite database via
 // `@effect/sql-sqlite-node`) — per
 // spec/decisions/016-verification-sql-claiming.md (ADR-EA-016).
-import { Repositories } from "@effect-auth/sql";
+import { Repositories } from "@awthaq/sql";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";
@@ -82,7 +82,7 @@ const suite = (
     );
 
     it.effect(
-      "BEH-EA-122 (@effect-auth/oauth): an opaque payload round-trips through issue/consume verbatim",
+      "BEH-EA-122 (@awthaq/oauth): an opaque payload round-trips through issue/consume verbatim",
       () =>
         Effect.gen(function* () {
           const verification = yield* Verification.Verification;

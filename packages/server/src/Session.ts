@@ -1,12 +1,12 @@
-// @effect-auth/server — Session
+// @awthaq/server — Session
 //
 // spec/behaviors/04-contract-stratum.md, BEH-EA-031. Handlers for
-// `@effect-auth/api`'s core `session` group, built against `AuthCoreApi`
+// `@awthaq/api`'s core `session` group, built against `AuthCoreApi`
 // (BEH-EA-081: a group's handlers are built with `HttpApiBuilder.group`
 // against that same group's own contract).
 
-import { AuthCore, Api, SessionContract } from "@effect-auth/api";
-import { Sessions, Users } from "@effect-auth/core";
+import { AuthCore, Api, SessionContract } from "@awthaq/api";
+import { Sessions, Users } from "@awthaq/core";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -35,9 +35,7 @@ const currentUserPrincipal: Effect.Effect<Api.UserPrincipal, never, Api.CurrentP
     const principal = yield* Api.CurrentPrincipal;
     if (principal._tag !== "User") {
       return yield* Effect.die(
-        new Error(
-          `effect-auth: session group reached with a non-User principal: ${principal._tag}`,
-        ),
+        new Error(`awthaq: session group reached with a non-User principal: ${principal._tag}`),
       );
     }
     return principal;
@@ -66,9 +64,7 @@ export const SessionHandlers = HttpApiBuilder.group(
         const items = yield* sessions.list(userId, sessionId);
         const item = items.find((row) => row.current);
         if (item === undefined) {
-          return yield* Effect.die(
-            new Error("effect-auth: current session missing from its own list"),
-          );
+          return yield* Effect.die(new Error("awthaq: current session missing from its own list"));
         }
         return toDto(item);
       }),

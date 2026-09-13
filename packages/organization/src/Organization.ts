@@ -1,11 +1,11 @@
-// @effect-auth/organization — Organization
+// @awthaq/organization — Organization
 //
 // spec.md. `Auth.make([Organization])` composes: `dependsOn` is left unset
 // on `AuthPlugin.layer` — `Users`/`AuthEvents` are core domain services this
 // plugin's own `make` Effect simply `yield*`s directly, the same
-// established convention `@effect-auth/admin`'s own `Admin.ts` documents.
+// established convention `@awthaq/admin`'s own `Admin.ts` documents.
 //
-// This plugin never depends on `@effect-auth/qadi` (stratum ordering,
+// This plugin never depends on `@awthaq/qadi` (stratum ordering,
 // mirroring `Admin.ts`'s own header comment) — its own endpoint gating is
 // entirely self-contained via `PermissionEngine.ts`, not a qadi round trip.
 // Ticket 18 (a later phase) adds this plugin's own qadi `Layer`
@@ -13,9 +13,9 @@
 // as a separate, additive export — this file does not need to anticipate
 // their shape.
 
-import { Api } from "@effect-auth/api";
-import { AuthEvents, AuthPlugin, Users } from "@effect-auth/core";
-import { Mailer } from "@effect-auth/ports";
+import { Api } from "@awthaq/api";
+import { AuthEvents, AuthPlugin, Users } from "@awthaq/core";
+import { Mailer } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -84,7 +84,7 @@ const defaultOrganizationConfig: OrganizationConfigShape = {
 };
 
 export const OrganizationConfig: Context.Reference<OrganizationConfigShape> = Context.Reference(
-  "effect-auth/organization/Config",
+  "awthaq/organization/Config",
   { defaultValue: () => defaultOrganizationConfig },
 );
 
@@ -527,9 +527,7 @@ const currentUserPrincipal = Effect.gen(function* () {
   const principal = yield* Api.CurrentPrincipal;
   if (principal._tag !== "User") {
     return yield* Effect.die(
-      new Error(
-        `effect-auth: organization group reached with a non-User principal: ${principal._tag}`,
-      ),
+      new Error(`awthaq: organization group reached with a non-User principal: ${principal._tag}`),
     );
   }
   return principal;
@@ -1126,7 +1124,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .update(organizationId, { ...input, name: vetoed.name, slug: vetoed.slug })
             .pipe(
               Effect.catchTag("OrganizationRecordNotFound", () =>
-                Effect.die(new Error("effect-auth: organization vanished between check and write")),
+                Effect.die(new Error("awthaq: organization vanished between check and write")),
               ),
               Effect.catchTag("OrganizationRecordSlugTaken", () =>
                 Effect.fail(new OrganizationApi.OrganizationSlugTaken()),
@@ -1159,7 +1157,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .delete(organizationId)
             .pipe(
               Effect.catchTag("OrganizationRecordNotFound", () =>
-                Effect.die(new Error("effect-auth: organization vanished between check and write")),
+                Effect.die(new Error("awthaq: organization vanished between check and write")),
               ),
             );
           yield* events.publish({ _tag: "auth.organization.deleted", organizationId });
@@ -1209,7 +1207,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .remove(targetUserId, organizationId)
             .pipe(
               Effect.catchTag("MembershipRecordNotFound", () =>
-                Effect.die(new Error("effect-auth: membership vanished between check and write")),
+                Effect.die(new Error("awthaq: membership vanished between check and write")),
               ),
             );
           yield* events.publish({
@@ -1247,7 +1245,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .updateRole(targetUserId, organizationId, vetoed.role)
             .pipe(
               Effect.catchTag("MembershipRecordNotFound", () =>
-                Effect.die(new Error("effect-auth: membership vanished between check and write")),
+                Effect.die(new Error("awthaq: membership vanished between check and write")),
               ),
             );
           yield* events.publish({
@@ -1284,7 +1282,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .remove(callerId, organizationId)
             .pipe(
               Effect.catchTag("MembershipRecordNotFound", () =>
-                Effect.die(new Error("effect-auth: membership vanished between check and write")),
+                Effect.die(new Error("awthaq: membership vanished between check and write")),
               ),
             );
           yield* events.publish({
@@ -1511,9 +1509,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
               Effect.flatMap(
                 Option.match({
                   onNone: () =>
-                    Effect.die(
-                      new Error("effect-auth: invitation's team vanished before acceptance"),
-                    ),
+                    Effect.die(new Error("awthaq: invitation's team vanished before acceptance")),
                   onSome: Effect.succeed,
                 }),
               ),
@@ -1723,7 +1719,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .update(organizationId, roleId, permission)
             .pipe(
               Effect.catchTag("OrgRoleRecordNotFound", () =>
-                Effect.die(new Error("effect-auth: org role vanished between check and write")),
+                Effect.die(new Error("awthaq: org role vanished between check and write")),
               ),
             );
           yield* events.publish({
@@ -1747,7 +1743,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .remove(organizationId, roleId)
             .pipe(
               Effect.catchTag("OrgRoleRecordNotFound", () =>
-                Effect.die(new Error("effect-auth: org role vanished between check and write")),
+                Effect.die(new Error("awthaq: org role vanished between check and write")),
               ),
             );
           yield* events.publish({
@@ -1825,7 +1821,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .updateTeam(organizationId, teamId, vetoed.name)
             .pipe(
               Effect.catchTag("TeamRecordNotFound", () =>
-                Effect.die(new Error("effect-auth: team vanished between check and write")),
+                Effect.die(new Error("awthaq: team vanished between check and write")),
               ),
             );
           yield* events.publish({ _tag: "auth.organization.teamUpdated", organizationId, teamId });
@@ -1849,7 +1845,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .removeTeam(organizationId, teamId)
             .pipe(
               Effect.catchTag("TeamRecordNotFound", () =>
-                Effect.die(new Error("effect-auth: team vanished between check and write")),
+                Effect.die(new Error("awthaq: team vanished between check and write")),
               ),
             );
           yield* events.publish({ _tag: "auth.organization.teamDeleted", organizationId, teamId });

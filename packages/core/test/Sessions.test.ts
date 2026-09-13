@@ -6,7 +6,7 @@
 // `it.effect`) is the ambient `Clock` both `DateTime.now` and the SQL
 // model's own constructor defaults read from, so `TestClock.adjust`
 // controls simulated time identically for either backend.
-import { Repositories } from "@effect-auth/sql";
+import { Repositories } from "@awthaq/sql";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { assert, describe, it } from "@effect/vitest";

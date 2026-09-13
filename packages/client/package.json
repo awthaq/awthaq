@@ -1,5 +1,5 @@
 {
-  "name": "@effect-auth/client",
+  "name": "@awthaq/client",
   "version": "0.1.0",
   "private": true,
   "description": "AtomHttpApi client and session atom — the isomorphic Effect client derived from the merged contract.",
@@ -31,7 +31,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
+    "@awthaq/api": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

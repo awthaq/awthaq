@@ -1,4 +1,4 @@
-# effect-auth is pre-implementation (see spec/README.md). Every scenario in
+# awthaq is pre-implementation (see spec/README.md). Every scenario in
 # this file specifies intended behavior of a system that does not exist yet
 # — a target the future testing harness (BEH-EA-193..200) is meant to
 # execute against, not a record of anything verified today.
@@ -154,7 +154,7 @@ Feature: Hooks
     @REQ-EA-257
     Scenario: The resolved tap order for every hook point is printable by the CLI without executing any tap
       Given an application composed from a plugin tuple with taps registered on multiple hook points
-      When "effect-auth plugin list --hooks" is run
+      When "awthaq plugin list --hooks" is run
       Then it prints the fully resolved tap order for each hook point
       And no tap is executed to produce that output
 

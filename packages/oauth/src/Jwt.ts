@@ -1,4 +1,4 @@
-// @effect-auth/oauth — Jwt
+// @awthaq/oauth — Jwt
 //
 // spec/behaviors/16-oauth.md, BEH-EA-127 (issuer exact match feeds the same
 // claim check here). Not itself a numbered behavior — `research/05-oauth-oidc.md`
@@ -34,7 +34,7 @@ export class JwtVerificationError extends Data.TaggedError("JwtVerificationError
  * distinction `lib.dom.d.ts`'s `BufferSource` (what `crypto.subtle.verify`
  * below actually requires) already draws, surfaced only once this
  * package's shared `tsconfig` gained the `"DOM"` lib for
- * `@effect-auth/react`'s sake.
+ * `@awthaq/react`'s sake.
  */
 const base64UrlToUint8Array = (segment: string): Uint8Array<ArrayBuffer> => {
   const padded = segment.replaceAll("-", "+").replaceAll("_", "/");

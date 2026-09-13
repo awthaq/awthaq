@@ -8,16 +8,16 @@
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
-> | Author | effect-auth Engineering |
+> | Author | awthaq Engineering |
 > | Classification | Planning |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 ---
 
 ## What it is
-OAuth and OIDC is the relying-party social-login method: effect-auth redirects to an external provider (Google, GitHub, or a generic OIDC issuer), verifies the callback with PKCE and server-side state, and either creates or links an `Account` row to a `User`. It is planned as an MVP plugin, one of the four named in `archive/PRD.md` §9.4's example tuple.
+OAuth and OIDC is the relying-party social-login method: awthaq redirects to an external provider (Google, GitHub, or a generic OIDC issuer), verifies the callback with PKCE and server-side state, and either creates or links an `Account` row to a `User`. It is planned as an MVP plugin, one of the four named in `archive/PRD.md` §9.4's example tuple.
 
 ## Who asks for it
-Nearly every consumer-facing application that isn't purely enterprise-internal. `research/05-oauth-oidc.md`'s TL;DR is explicit about the shape this demand takes in 2026: "RFC 10017, OAuth 2.0 for Browser-Based Apps... formalizes what better-auth/Auth.js already practice: JS apps should not hold OAuth tokens; cookie-session BFF is the robust default" — which is directly load-bearing for effect-auth's default topology, since effect-auth's session is already a cookie, not a bearer token, in the browser case. The same document also notes Arctic's own author concluded "OAuth 2.0 isn't an ideal layer to abstract into a library; any library should target an abstraction one or two layers above it" — i.e. effect-auth cannot simply depend on Arctic and must own this layer itself.
+Nearly every consumer-facing application that isn't purely enterprise-internal. `research/05-oauth-oidc.md`'s TL;DR is explicit about the shape this demand takes in 2026: "RFC 10017, OAuth 2.0 for Browser-Based Apps... formalizes what better-auth/Auth.js already practice: JS apps should not hold OAuth tokens; cookie-session BFF is the robust default" — which is directly load-bearing for awthaq's default topology, since awthaq's session is already a cookie, not a bearer token, in the browser case. The same document also notes Arctic's own author concluded "OAuth 2.0 isn't an ideal layer to abstract into a library; any library should target an abstraction one or two layers above it" — i.e. awthaq cannot simply depend on Arctic and must own this layer itself.
 
 ## Status
 | Property | Value |
@@ -29,7 +29,7 @@ Nearly every consumer-facing application that isn't purely enterprise-internal. 
 
 ## How it would be expressed
 ```ts
-import { OAuthProvider } from "@effect-auth/oauth"
+import { OAuthProvider } from "@awthaq/oauth"
 
 export const okta = OAuthProvider.oidc({
   id: "okta",

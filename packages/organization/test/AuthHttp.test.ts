@@ -1,10 +1,10 @@
 // spec.md. The `organization` group exercised over a real `HttpRouter`/
 // `HttpRouter.toWebHandler` — real HTTP requests/responses, real status
-// codes, a real session cookie — mirroring `@effect-auth/admin`'s own
+// codes, a real session cookie — mirroring `@awthaq/admin`'s own
 // `AuthHttp.test.ts`.
-import { AuthEvents, Sessions, Users } from "@effect-auth/core";
-import { Mailer } from "@effect-auth/ports";
-import { Authentication, AuthHttp } from "@effect-auth/server";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Mailer } from "@awthaq/ports";
+import { Authentication, AuthHttp } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -12,7 +12,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
-import { TestAuth } from "@effect-auth/test";
+import { TestAuth } from "@awthaq/test";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
@@ -69,7 +69,7 @@ const buildHandler = (configOverrides: Partial<Organization.OrganizationConfigSh
   const memoMap = Layer.makeMemoMapUnsafe();
   const { handler } = HttpRouter.toWebHandler(AppLayer, { memoMap });
 
-  /** Mirrors `@effect-auth/admin`'s own `AuthHttp.test.ts`: a real session cookie against the same running `Sessions` instance. */
+  /** Mirrors `@awthaq/admin`'s own `AuthHttp.test.ts`: a real session cookie against the same running `Sessions` instance. */
   const issueSessionCookieHeader = (userId: string): Promise<string> =>
     Effect.runPromise(
       Effect.scoped(

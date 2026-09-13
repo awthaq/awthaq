@@ -16,12 +16,12 @@
 // or a resolved `UserPrincipal`'s `actingAs` — so this World also exposes
 // direct domain-level access to `Sessions`/`Authentication.resolvePrincipal`
 // over the same shared `MemoMap` the HTTP handler itself resolves against.
-import { AuthEvents, Sessions, Users } from "@effect-auth/core";
-import { Admin, AdminApi, ImpersonationRecords } from "@effect-auth/admin";
-import type { Api } from "@effect-auth/api";
-import { Authentication, AuthHttp } from "@effect-auth/server";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Admin, AdminApi, ImpersonationRecords } from "@awthaq/admin";
+import type { Api } from "@awthaq/api";
+import { Authentication, AuthHttp } from "@awthaq/server";
 import { NodeCrypto } from "@effect/platform-node";
-import type { AuthEvent } from "@effect-auth/core/AuthEvents";
+import type { AuthEvent } from "@awthaq/core/AuthEvents";
 import type { AuthSubject } from "@qadi/core";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -226,8 +226,8 @@ export const inspectSession = Effect.fn("features.admin.inspectSession")(functio
  * Domain-level: `Authentication.resolvePrincipal` against a raw token —
  * BEH-EA-211's own seam. Explicitly typed to `Api.Principal` — a real
  * TS2883 portability error otherwise (two different resolved filesystem
- * paths to the same, real `packages/api` behind the `@effect-auth/admin`
- * vs. this package's own `node_modules/@effect-auth/api` symlink), not a
+ * paths to the same, real `packages/api` behind the `@awthaq/admin`
+ * vs. this package's own `node_modules/@awthaq/api` symlink), not a
  * layer-composition bug this time (see `OAuthWorld.ts`'s own comment,
  * ticket 22, for a case where the identical error *was* a real bug).
  */
