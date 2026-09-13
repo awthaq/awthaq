@@ -1,10 +1,13 @@
 // @effect-auth/next — Client
 //
-// Next.js adapter: server/client boundary, cookie forwarding, SSR decision hydration.
+// Next.js adapter: server/client boundary, cookie forwarding.
 //
-// Planned first module: index.ts (spec/behaviors/24-nextjs-ssr.md, BEH-EA-185–192)
-// See spec/overview.md for the full package map.
-//
-// Empty placeholder — effect-auth is pre-implementation. No exported symbols yet.
+// spec/behaviors/24-nextjs-ssr.md, BEH-EA-185/188/189.
+// See .scratch/next-package/spec.md for the implementation decisions this
+// package follows, and spec/overview.md for the full package map.
 
-export {};
+export { getSession } from "./GetSession.ts";
+export type { HeadersLike, Session } from "./GetSession.ts";
+export { hasSessionCookie } from "./HasSessionCookie.ts";
+export { withNextCookies } from "./WithNextCookies.ts";
+export type { CookieJarLike, CookieSetOptions } from "./WithNextCookies.ts";

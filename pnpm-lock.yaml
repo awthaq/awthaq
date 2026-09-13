@@ -321,13 +321,28 @@ importers:
 
   packages/next:
     dependencies:
+      '@effect-auth/api':
+        specifier: workspace:*
+        version: link:../api
+      '@effect-auth/core':
+        specifier: workspace:*
+        version: link:../core
       '@effect-auth/react':
         specifier: workspace:*
         version: link:../react
+      '@effect-auth/server':
+        specifier: workspace:*
+        version: link:../server
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.115
     devDependencies:
+      '@effect-auth/test':
+        specifier: workspace:*
+        version: link:../test
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.115(effect@4.0.0-rc.115)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.115(effect@4.0.0-rc.115)(vitest@5.0.0)

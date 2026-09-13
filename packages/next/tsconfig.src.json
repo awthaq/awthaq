@@ -9,12 +9,24 @@
     "tsBuildInfoFile": "./.tsbuildinfo",
     "paths": {
       "@/*": ["./src/*"],
-      "@effect-auth/react": ["../react/src/index.ts"]
+      "@effect-auth/api": ["../api/src/index.ts"],
+      "@effect-auth/core": ["../core/src/index.ts"],
+      "@effect-auth/react": ["../react/src/index.ts"],
+      "@effect-auth/server": ["../server/src/index.ts"]
     }
   },
   "references": [
     {
+      "path": "../api/tsconfig.src.json"
+    },
+    {
+      "path": "../core/tsconfig.src.json"
+    },
+    {
       "path": "../react/tsconfig.src.json"
+    },
+    {
+      "path": "../server/tsconfig.src.json"
     }
   ]
 }

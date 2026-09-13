@@ -30,10 +30,15 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@effect-auth/api": "workspace:*",
+    "@effect-auth/core": "workspace:*",
     "@effect-auth/react": "workspace:*",
+    "@effect-auth/server": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect-auth/test": "workspace:*",
+    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
