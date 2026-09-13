@@ -9,7 +9,7 @@
 // checks — not a stub that always returns `true`.
 import { generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
 import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@effect-auth/core";
-import { RateLimiter } from "@effect-auth/ports";
+import { RateLimiter, SqlTransaction } from "@effect-auth/ports";
 import { NodeCrypto } from "@effect/platform-node";
 import { Authentication } from "@effect-auth/server";
 import { assert, describe, it } from "@effect/vitest";
@@ -118,6 +118,9 @@ const buildLayer = (options: {
     // test loop never trips a limit tuned for production.
     Layer.provideMerge(RateLimiter.layerPermissive),
     Layer.provideMerge(RateLimits.layer),
+    // Ticket 16: `SqlTransaction`'s no-op layer — this test's own `CoreLive`
+    // is in-memory, with nothing a transaction would need to wrap.
+    Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provide(fakeHttpClient(options.httpRoutes ?? {})),
     Layer.provide(
       OAuth.config({

@@ -25,7 +25,7 @@ import {
   Users,
   Verification,
 } from "@effect-auth/core";
-import { RateLimiter } from "@effect-auth/ports";
+import { RateLimiter, SqlTransaction } from "@effect-auth/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
@@ -402,6 +402,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const httpClient = yield* HttpClient.HttpClient;
       const jwksCache = yield* Ref.make(HashMap.empty<string, Jwt.Jwks>());
       const limiter = yield* RateLimiter.RateLimiter;
+      const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
 
       /**
@@ -616,24 +617,52 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
               // BEH-EA-113-adjacent silent sign-up (research/05-oauth-oidc.md
               // Q55): the ecosystem norm for a first-time, non-conflicting
               // OAuth sign-in — no separate "confirm sign-up" step in v1.
+              // Shipping-gap map (.scratch/shipping-gaps), ticket 16: `create`
+              // and `link` now commit together via `SqlTransaction` — the
+              // clearest atomicity gap this codebase had (a failure between
+              // the two previously left a real, unlinked, orphaned `User`
+              // row with no way back in). `Effect.orDie` on the whole
+              // transaction, not just `link`'s own failure — a `SqlError`
+              // rolling back the transaction is a defect here the same way
+              // every other `.pipe(Effect.orDie)` in this codebase already
+              // treats an unexpected persistence failure.
               const name = profile.name ?? profile.email ?? profile.subject;
-              const created = yield* users
-                .create({ email: profile.email ?? `${providerId}:${profile.subject}`, name })
-                .pipe(
-                  Effect.catchTag(
-                    "EmailAlreadyExists",
-                    () => new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),
-                  ),
-                  Effect.catchTag("PlatformError", Effect.die),
-                );
-              yield* accounts
-                .link({
-                  userId: created.id,
-                  providerId,
-                  subject: profile.subject,
-                  ...issuerField(provider.issuer),
-                })
-                .pipe(Effect.orDie);
+              const created = yield* sqlTransaction
+                .withTransaction(
+                  Effect.gen(function* () {
+                    const user = yield* users
+                      .create({ email: profile.email ?? `${providerId}:${profile.subject}`, name })
+                      .pipe(
+                        Effect.catchTag(
+                          "EmailAlreadyExists",
+                          () =>
+                            new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),
+                        ),
+                        Effect.catchTag("PlatformError", Effect.die),
+                      );
+                    yield* accounts
+                      .link({
+                        userId: user.id,
+                        providerId,
+                        subject: profile.subject,
+                        ...issuerField(provider.issuer),
+                      })
+                      .pipe(
+                        Effect.catchTags({
+                          AccountAlreadyLinked: Effect.die,
+                          PlatformError: Effect.die,
+                        }),
+                      );
+                    return user;
+                  }),
+                )
+                // Only the transaction's own `SqlError` dies here — a
+                // rolled-back commit is an unexpected persistence failure,
+                // the same posture every other `Effect.orDie` in this
+                // codebase already takes. `OAuthApi.AccountExists` (from
+                // `EmailAlreadyExists` above) is a real, expected outcome
+                // and must still reach the caller as itself.
+                .pipe(Effect.catchTag("SqlError", Effect.die));
               yield* events.publish({ _tag: "auth.user.created", userId: created.id });
               return created.id;
             }),

@@ -11,7 +11,7 @@
 // domain-level tests could not — this file exists for the same reason,
 // against `OAuthApi.ts`'s own array-form `error` declarations.
 import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@effect-auth/core";
-import { RateLimiter } from "@effect-auth/ports";
+import { RateLimiter, SqlTransaction } from "@effect-auth/ports";
 import { Authentication, AuthHttp } from "@effect-auth/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
@@ -87,6 +87,7 @@ const AppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.jso
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(RateLimiter.layerPermissive),
   Layer.provideMerge(RateLimits.layer),
+  Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provide(
     fakeHttpClient({
       "/token": { access_token: "at-1" },
@@ -113,6 +114,7 @@ const ThrottledAppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/op
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
   Layer.provideMerge(RateLimits.layer),
+  Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provide(
     fakeHttpClient({
       "/token": { access_token: "at-1" },

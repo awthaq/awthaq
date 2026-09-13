@@ -24,4 +24,5 @@
 export * as Mailer from "./Mailer.ts";
 export * as PasswordHasher from "./PasswordHasher.ts";
 export * as RateLimiter from "./RateLimiter.ts";
+export * as SqlTransaction from "./SqlTransaction.ts";
 export * as WebAuthn from "./WebAuthn.ts";

@@ -58,7 +58,7 @@
 // roles.assign(userId, "member")`; `signInAs` runs it, if given, right after
 // issuing the user and before minting the session.
 import { Accounts, Auth, AuthPlugin, RateLimits, Sessions, Users } from "@effect-auth/core";
-import { Mailer, RateLimiter } from "@effect-auth/ports";
+import { Mailer, RateLimiter, SqlTransaction } from "@effect-auth/ports";
 import { AuthHttp } from "@effect-auth/server";
 import { NodeCrypto } from "@effect/platform-node";
 import * as Effect from "effect/Effect";
@@ -88,6 +88,7 @@ const MemoryPorts = Layer.mergeAll(
   Mailer.layerMemory,
   RateLimiter.layerPermissive,
   RateLimits.layer,
+  SqlTransaction.layerNoop,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 /**
