@@ -93,7 +93,8 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
       params: CallbackParams,
       query: CallbackQuery,
       success: HttpApiSchema.Empty(302),
-      error: [ProviderNotFound, OAuthCallbackFailed, AccountExists],
+      // Shipping-gap map (.scratch/shipping-gaps), ticket 13: rate-limited.
+      error: [ProviderNotFound, OAuthCallbackFailed, AccountExists, Api.RateLimited],
     }),
   )
   .middleware(Api.OptionalAuthentication);

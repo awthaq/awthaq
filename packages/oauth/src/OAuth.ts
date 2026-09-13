@@ -16,7 +16,16 @@
 // header documents its RS256-only signature-verification scope.
 
 import { Api } from "@effect-auth/api";
-import { AuthEvents, AuthPlugin, Accounts, Sessions, Users, Verification } from "@effect-auth/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  Accounts,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@effect-auth/core";
+import { RateLimiter } from "@effect-auth/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
@@ -313,6 +322,7 @@ export const OAuthHandlers = HttpApiBuilder.group(
           state: query.state,
           iss: query.iss,
           cookieState,
+          ...(Option.isSome(request.remoteAddress) ? { ip: request.remoteAddress.value } : {}),
         });
         if (outcome.session !== undefined) {
           const response = HttpServerResponse.redirect(outcome.callbackURL);
@@ -347,6 +357,15 @@ export interface OAuthShape {
       readonly state: string;
       readonly iss: string | undefined;
       readonly cookieState: string | undefined;
+      /**
+       * Shipping-gap map (.scratch/shipping-gaps), ticket 13: the
+       * rate-limit key — no identity exists yet at this point in the
+       * flow, so IP is the only sensible strategy (ticket 02's own
+       * decision). `undefined` when the handler's own `HttpServerRequest`
+       * carries none, which the rate limiter treats as a single shared
+       * bucket for "unknown origin" requests, never as unthrottled.
+       */
+      readonly ip?: string;
     },
   ) => Effect.Effect<
     {
@@ -355,7 +374,10 @@ export interface OAuthShape {
         | { readonly session: Sessions.SessionView; readonly token: Redacted.Redacted<string> }
         | undefined;
     },
-    OAuthApi.ProviderNotFound | OAuthApi.OAuthCallbackFailed | OAuthApi.AccountExists
+    | OAuthApi.ProviderNotFound
+    | OAuthApi.OAuthCallbackFailed
+    | OAuthApi.AccountExists
+    | Api.RateLimited
   >;
 }
 
@@ -379,6 +401,35 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const crypto = yield* Crypto.Crypto;
       const httpClient = yield* HttpClient.HttpClient;
       const jwksCache = yield* Ref.make(HashMap.empty<string, Jwt.Jwks>());
+      const limiter = yield* RateLimiter.RateLimiter;
+      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
+
+      /**
+       * Ticket 13: 20 callback attempts per minute per source IP — loose
+       * enough not to trip a real user's own retries after a transient
+       * provider hiccup, tight enough to bound repeated token-exchange
+       * calls (the expensive step — a real network round trip to the
+       * provider) against one origin. `undefined` IP (no
+       * `HttpServerRequest.remoteAddress`) shares one bucket, never
+       * unthrottled.
+       */
+      const CALLBACK_RATE_LIMIT = { limit: 20, window: Duration.minutes(1) } as const;
+      // The explicit return-type annotation below is a narrow, necessary
+      // exception, not a style choice: passing `OAuth` (this class) into
+      // anything typed `AuthPlugin.Any` (which itself requires a `layer`
+      // field) from within `OAuth`'s own `static readonly layer`
+      // initializer is a real TS circularity — see `@effect-auth/password`'s
+      // `Password.ts` for the identical problem and the same fix, first
+      // hit there (ticket 12).
+      const registerCallbackRule: Effect.Effect<void, RateLimits.RateLimitScopeViolation> =
+        rateLimitsRegistry.register(OAuth, {
+          group: "oauth",
+          endpoint: "callback",
+          key: "ip",
+          limit: CALLBACK_RATE_LIMIT.limit,
+          window: CALLBACK_RATE_LIMIT.window,
+        });
+      yield* registerCallbackRule.pipe(Effect.orDie);
 
       // BEH-EA-127: resolved once, at boot — a mismatched or unfetchable
       // discovery document dies here, before any request is ever served.
@@ -428,6 +479,18 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       });
 
       const callback: OAuthShape["callback"] = Effect.fnUntraced(function* (providerId, input) {
+        yield* limiter
+          .consume({
+            key: `oauth:callback:${input.ip ?? "unknown"}`,
+            limit: CALLBACK_RATE_LIMIT.limit,
+            window: CALLBACK_RATE_LIMIT.window,
+          })
+          .pipe(
+            Effect.catchTag(
+              "RateLimited",
+              (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
+            ),
+          );
         const provider = registry.get(providerId);
         if (provider === undefined) {
           return yield* Effect.fail(new OAuthApi.ProviderNotFound({ providerId }));

@@ -8,7 +8,8 @@
 // RSA keypair signing a real RS256 `id_token` that `Jwt.ts`'s own verifier
 // checks — not a stub that always returns `true`.
 import { generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
-import { AuthEvents, Accounts, Sessions, Users, Verification } from "@effect-auth/core";
+import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@effect-auth/core";
+import { RateLimiter } from "@effect-auth/ports";
 import { NodeCrypto } from "@effect/platform-node";
 import { Authentication } from "@effect-auth/server";
 import { assert, describe, it } from "@effect/vitest";
@@ -112,6 +113,11 @@ const buildLayer = (options: {
     Layer.provide(Authentication.OptionalAuthenticationLive),
     Layer.provide(Authentication.PrincipalResolverLive),
     Layer.provideMerge(CoreLive),
+    // Ticket 13: `callback` is now rate-limited — a real, permissive
+    // default here, mirroring `TestAuth`'s own posture, so an ordinary
+    // test loop never trips a limit tuned for production.
+    Layer.provideMerge(RateLimiter.layerPermissive),
+    Layer.provideMerge(RateLimits.layer),
     Layer.provide(fakeHttpClient(options.httpRoutes ?? {})),
     Layer.provide(
       OAuth.config({

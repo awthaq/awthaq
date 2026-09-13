@@ -10,7 +10,8 @@
 // real bug (`Schema.Union` collapsing per-member `httpApiStatus`) that its
 // domain-level tests could not — this file exists for the same reason,
 // against `OAuthApi.ts`'s own array-form `error` declarations.
-import { AuthEvents, Accounts, Sessions, Users, Verification } from "@effect-auth/core";
+import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@effect-auth/core";
+import { RateLimiter } from "@effect-auth/ports";
 import { Authentication, AuthHttp } from "@effect-auth/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
@@ -84,6 +85,34 @@ const AppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.jso
   Layer.provide(Authentication.OptionalAuthenticationLive),
   Layer.provide(Authentication.PrincipalResolverLive),
   Layer.provideMerge(CoreLive),
+  Layer.provideMerge(RateLimiter.layerPermissive),
+  Layer.provideMerge(RateLimits.layer),
+  Layer.provide(
+    fakeHttpClient({
+      "/token": { access_token: "at-1" },
+      "/userinfo": { id: "acme-sub-1", email: "acme-user@example.com" },
+    }),
+  ),
+  Layer.provide(
+    OAuth.config({ providers: [acme], linking: "explicit", trustedOrigins: [], baseUrl }),
+  ),
+  Layer.provideMerge(TestServices),
+  Layer.provideMerge(HttpRouter.layer),
+);
+
+/**
+ * A real, enforcing limiter — every other test in this file uses
+ * `RateLimiter.layerPermissive` via `AppLayer`, deliberately, so this is
+ * the one dedicated layer that opts back into real enforcement, mirroring
+ * `@effect-auth/password`'s own dedicated throttle test.
+ */
+const ThrottledAppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.json" }).pipe(
+  Layer.provide(OAuth.OAuth.layer),
+  Layer.provide(Authentication.OptionalAuthenticationLive),
+  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provideMerge(CoreLive),
+  Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
+  Layer.provideMerge(RateLimits.layer),
   Layer.provide(
     fakeHttpClient({
       "/token": { access_token: "at-1" },
@@ -171,6 +200,25 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
         );
         assert.strictEqual(response.status, 400);
       }),
+  );
+
+  it.effect("shipping-gaps/13: callback is throttled once its own rule's limit is exceeded", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(ThrottledAppLayer);
+      // The limiter runs before state/cookie validation, so a garbage
+      // callback is enough to exercise it — 20 requests admitted as
+      // ordinary 400s, the 21st throttled.
+      for (let i = 0; i < 20; i++) {
+        const response = yield* Effect.promise(() =>
+          handler(new Request(`http://localhost/oauth/acme/callback?code=c${i}&state=bogus`)),
+        );
+        assert.strictEqual(response.status, 400);
+      }
+      const throttled = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/oauth/acme/callback?code=cN&state=bogus")),
+      );
+      assert.strictEqual(throttled.status, 429);
+    }),
   );
 
   it.effect("BEH-EA-084: serves generated OpenAPI JSON from this plugin's own api", () =>
