@@ -25,7 +25,7 @@ import {
   Users,
   Verification,
 } from "@effect-auth/core";
-import { RateLimiter, SqlTransaction } from "@effect-auth/ports";
+import { Encryption, RateLimiter, SqlTransaction } from "@effect-auth/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
@@ -104,7 +104,14 @@ const decodeState = (
   });
 };
 
-/** BEH-EA-122's own payload sketch: `{ codeVerifier, nonce?, callbackURL, link?, providerId }`. */
+/**
+ * BEH-EA-122's own payload sketch: `{ codeVerifier, nonce?, callbackURL,
+ * link?, providerId }`. Shipping-gap map (.scratch/shipping-gaps), ticket
+ * 19: `codeVerifier`/`nonce` are `Encryption`-produced ciphertext
+ * envelopes at rest (this is what `VerificationToken.payload` actually
+ * persists), not the raw PKCE material — still typed `string` either
+ * way, so `isFlowPayload`'s own shape check below doesn't need to change.
+ */
 interface FlowPayload {
   readonly providerId: string;
   readonly codeVerifier: string;
@@ -403,6 +410,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const jwksCache = yield* Ref.make(HashMap.empty<string, Jwt.Jwks>());
       const limiter = yield* RateLimiter.RateLimiter;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
+      const encryption = yield* Encryption.Encryption;
       const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
 
       /**
@@ -458,10 +466,26 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
             ? toBase64Url(yield* crypto.randomBytes(16).pipe(Effect.orDie))
             : undefined;
         const identifier = `${FLOW_PREFIX}${yield* crypto.randomUUIDv7.pipe(Effect.orDie)}`;
+        // Ticket 19: encrypted at rest inside `VerificationToken.payload` —
+        // `identifier` (this flow's own unique correlation id, generated
+        // just above) is the AAD, binding each ciphertext to the one flow
+        // it belongs to. `nonce` itself (plaintext, above) still goes to
+        // the provider's own authorize URL unencrypted below — that's the
+        // normal, correct OIDC wire format, not something this ticket
+        // touches; only the *persisted copy* this server reads back at
+        // callback time is ciphertext.
+        const encryptedCodeVerifier = yield* encryption.encrypt(
+          Redacted.make(verifier),
+          identifier,
+        );
+        const encryptedNonce =
+          nonce === undefined
+            ? undefined
+            : yield* encryption.encrypt(Redacted.make(nonce), identifier);
         const payload: FlowPayload = {
           providerId,
-          codeVerifier: verifier,
-          nonce,
+          codeVerifier: encryptedCodeVerifier,
+          nonce: encryptedNonce,
           callbackURL,
           link: input.link,
         };
@@ -515,6 +539,34 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         }
         const flow = consumed.payload;
 
+        // Ticket 19: `flow.codeVerifier`/`flow.nonce` are ciphertext at
+        // rest (encrypted in `authorize`, above, under this same
+        // `identifier` as AAD) — decrypted here, once, right after the
+        // payload is validated as this flow's own. A failure (tampered
+        // envelope, or a `kid` this `KeyProvider` no longer knows about)
+        // is treated the same as every other validation failure in this
+        // handler: a real, user-facing `OAuthCallbackFailed`, not a
+        // defect — this whole payload traveled through attacker-reachable
+        // request state (`input.state`/`input.cookieState`) to get here,
+        // even though it's the server's own ciphertext underneath.
+        const codeVerifier = yield* encryption.decrypt(flow.codeVerifier, identifier).pipe(
+          Effect.map(Redacted.value),
+          Effect.catchTags({
+            DecryptionFailed: () => new OAuthApi.OAuthCallbackFailed(),
+            UnknownKeyId: () => new OAuthApi.OAuthCallbackFailed(),
+          }),
+        );
+        const nonce =
+          flow.nonce === undefined
+            ? undefined
+            : yield* encryption.decrypt(flow.nonce, identifier).pipe(
+                Effect.map(Redacted.value),
+                Effect.catchTags({
+                  DecryptionFailed: () => new OAuthApi.OAuthCallbackFailed(),
+                  UnknownKeyId: () => new OAuthApi.OAuthCallbackFailed(),
+                }),
+              );
+
         // RFC 9207 mix-up countermeasure: validated whenever the provider sends `iss`.
         if (
           input.iss !== undefined &&
@@ -527,7 +579,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         const redirectUri = `${config_.baseUrl}/oauth/${providerId}/callback`;
         const tokens = yield* exchangeCode(httpClient, provider, {
           code: input.code,
-          codeVerifier: flow.codeVerifier,
+          codeVerifier,
           redirectUri,
         });
 
@@ -535,7 +587,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           provider.kind === "oidc"
             ? tokens.idToken === undefined
               ? yield* Effect.fail(new OAuthApi.OAuthCallbackFailed())
-              : yield* verifyIdToken(httpClient, jwksCache, provider, tokens.idToken, flow.nonce)
+              : yield* verifyIdToken(httpClient, jwksCache, provider, tokens.idToken, nonce)
             : undefined;
 
         // A plain `"oauth2"` provider (no `id_token` at all, e.g. GitHub)

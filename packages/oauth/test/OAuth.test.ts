@@ -9,11 +9,12 @@
 // checks — not a stub that always returns `true`.
 import { generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
 import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@effect-auth/core";
-import { RateLimiter, SqlTransaction } from "@effect-auth/ports";
+import { Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@effect-auth/ports";
 import { NodeCrypto } from "@effect/platform-node";
 import { Authentication } from "@effect-auth/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -21,6 +22,24 @@ import * as Redacted from "effect/Redacted";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { OAuth, OAuthProvider } from "../src/index.ts";
+
+// Shipping-gap map (.scratch/shipping-gaps), ticket 19: `OAuth.layer` now
+// requires `Encryption` — a fixed test key, isolated from the real
+// `process.env`.
+const EncryptionLive = Encryption.layer.pipe(
+  Layer.provide(
+    KeyProvider.layerEnv.pipe(
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { EFFECT_AUTH_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+          }),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
 
 // ---- RS256 test signing (a real keypair, a real signature — not a stub) ----
 
@@ -121,6 +140,7 @@ const buildLayer = (options: {
     // Ticket 16: `SqlTransaction`'s no-op layer — this test's own `CoreLive`
     // is in-memory, with nothing a transaction would need to wrap.
     Layer.provideMerge(SqlTransaction.layerNoop),
+    Layer.provideMerge(EncryptionLive),
     Layer.provide(fakeHttpClient(options.httpRoutes ?? {})),
     Layer.provide(
       OAuth.config({
@@ -290,6 +310,90 @@ describe("OAuth", () => {
               httpRoutes: {
                 "/token": { access_token: "at-1" },
                 "/userinfo": { id: "acme-user-2", email: "bo@example.com" },
+              },
+            }),
+          ),
+        ),
+    );
+  });
+
+  describe("Ticket 19: PKCE verifier/nonce are encrypted at rest", () => {
+    it.effect(
+      "the persisted FlowPayload's codeVerifier/nonce are ciphertext envelopes, not the raw PKCE values",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const verification = yield* Verification.Verification;
+          // `okta` is an `"oidc"` provider (line 184), so `authorize` also
+          // generates a `nonce` — unlike `acme` (`oauth2`), letting this one
+          // test cover both `codeVerifier` and `nonce`.
+          const { state } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          // `state`'s own encoding (`OAuth.ts`'s private `encodeState`) is
+          // `${identifier}.${value}` — replicated here, not exported,
+          // specifically so this test reaches the *persisted* payload
+          // directly via `Verification.consume`, the same primitive
+          // `oauth.callback` itself uses, rather than asserting against
+          // this module's own internals.
+          const separator = state.lastIndexOf(".");
+          const identifier = state.slice(0, separator);
+          const value = Redacted.make(state.slice(separator + 1));
+          const consumed = yield* verification.consume(identifier, value);
+          const payload = consumed.payload as {
+            readonly codeVerifier: string;
+            readonly nonce: string | undefined;
+          };
+          assert.isDefined(payload.nonce);
+          for (const ciphertext of [payload.codeVerifier, payload.nonce]) {
+            const envelope: unknown = JSON.parse(
+              Buffer.from(ciphertext ?? "", "base64url").toString("utf8"),
+            );
+            // The real `Encryption` envelope shape (`v`/`kid`/`iv`/
+            // `ciphertext`) — structurally incompatible with a raw PKCE
+            // verifier or nonce (a bare base64url random-bytes string),
+            // so this also proves it isn't just base64 of the plaintext.
+            assert.deepEqual(Object.keys(envelope as object).sort(), [
+              "ciphertext",
+              "iv",
+              "kid",
+              "v",
+            ]);
+          }
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta()],
+              httpRoutes: { ".well-known/openid-configuration": oktaDiscovery },
+            }),
+          ),
+        ),
+    );
+
+    it.effect(
+      "an OAuth flow using an encrypted PKCE value still completes correctly end-to-end",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state } = yield* oauth.authorize("acme", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          const outcome = yield* oauth.callback("acme", {
+            code: "auth-code",
+            state,
+            iss: undefined,
+            cookieState: state,
+          });
+          assert.isDefined(outcome.session);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                "/token": { access_token: "at-1" },
+                "/userinfo": { id: "ticket-19-user", email: "ticket19@example.com" },
               },
             }),
           ),

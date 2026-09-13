@@ -11,11 +11,12 @@
 // domain-level tests could not — this file exists for the same reason,
 // against `OAuthApi.ts`'s own array-form `error` declarations.
 import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@effect-auth/core";
-import { RateLimiter, SqlTransaction } from "@effect-auth/ports";
+import { Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@effect-auth/ports";
 import { Authentication, AuthHttp } from "@effect-auth/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -27,6 +28,24 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { OAuth, OAuthApi, OAuthProvider } from "../src/index.ts";
+
+// Shipping-gap map (.scratch/shipping-gaps), ticket 19: `OAuth.layer` now
+// requires `Encryption` — a fixed test key, isolated from the real
+// `process.env`.
+const EncryptionLive = Encryption.layer.pipe(
+  Layer.provide(
+    KeyProvider.layerEnv.pipe(
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { EFFECT_AUTH_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+          }),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
 
 interface FakeRoutes {
   readonly [urlFragment: string]: unknown;
@@ -88,6 +107,7 @@ const AppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.jso
   Layer.provideMerge(RateLimiter.layerPermissive),
   Layer.provideMerge(RateLimits.layer),
   Layer.provideMerge(SqlTransaction.layerNoop),
+  Layer.provideMerge(EncryptionLive),
   Layer.provide(
     fakeHttpClient({
       "/token": { access_token: "at-1" },
@@ -115,6 +135,7 @@ const ThrottledAppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/op
   Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
   Layer.provideMerge(RateLimits.layer),
   Layer.provideMerge(SqlTransaction.layerNoop),
+  Layer.provideMerge(EncryptionLive),
   Layer.provide(
     fakeHttpClient({
       "/token": { access_token: "at-1" },
