@@ -1,0 +1,56 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs"]
+    },
+    "packages/api-key": {
+      "ignoreDependencies": [
+        "@effect-auth/api",
+        "@effect-auth/core",
+        "@effect-auth/ports",
+        "@effect-auth/server",
+        "@effect-auth/sql",
+        "@effect/vitest",
+        "effect"
+      ]
+    },
+    "packages/two-factor": {
+      "ignoreDependencies": [
+        "@effect-auth/api",
+        "@effect-auth/core",
+        "@effect-auth/ports",
+        "@effect-auth/server",
+        "@effect-auth/sql",
+        "@effect/vitest",
+        "effect"
+      ]
+    },
+    "packages/magic-link": {
+      "ignoreDependencies": [
+        "@effect-auth/api",
+        "@effect-auth/core",
+        "@effect-auth/ports",
+        "@effect-auth/server",
+        "@effect-auth/sql",
+        "@effect/vitest",
+        "effect"
+      ]
+    },
+    "packages/cli": {
+      "ignoreDependencies": [
+        "@effect-auth/api",
+        "@effect-auth/core",
+        "@effect-auth/ports",
+        "@effect-auth/qadi",
+        "@effect-auth/server",
+        "@effect-auth/sql",
+        "@effect/vitest",
+        "effect"
+      ]
+    },
+    "packages/next": {
+      "ignoreDependencies": ["@effect-auth/react"]
+    }
+  }
+}

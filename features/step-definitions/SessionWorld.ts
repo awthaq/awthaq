@@ -103,7 +103,7 @@ export const WorldLive = Layer.effect(
   }),
 );
 
-export const STRONG_PASSWORD = "correct horse battery staple";
+const STRONG_PASSWORD = "correct horse battery staple";
 let nextEmail = 0;
 
 const get = (
@@ -138,7 +138,7 @@ export const cookieFrom = (response: Response): string => {
   return raw.split(";")[0] ?? raw;
 };
 
-export const setCookieHeader = (response: Response): string => {
+const setCookieHeader = (response: Response): string => {
   const raw = response.headers.get("set-cookie");
   if (raw === null) throw new Error("expected a set-cookie header");
   return raw;

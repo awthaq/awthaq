@@ -34,7 +34,7 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 // ---- fake HttpClient: routes by URL substring ----
 
-export interface FakeRoutes {
+interface FakeRoutes {
   readonly [urlFragment: string]: unknown;
 }
 
@@ -247,9 +247,3 @@ export const getOutcome = Effect.fn("features.oauth.getOutcome")(function* (key:
   if (found === undefined) throw new Error(`no outcome recorded for "${key}"`);
   return found;
 });
-
-export const optionalField = <K extends string, V>(
-  key: K,
-  value: V | undefined,
-): { readonly [P in K]: V } | {} =>
-  value === undefined ? {} : ({ [key]: value } as { [P in K]: V });

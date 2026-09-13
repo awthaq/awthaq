@@ -35,7 +35,7 @@ import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 
-export const ORIGIN = "http://localhost:3000";
+const ORIGIN = "http://localhost:3000";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -135,7 +135,7 @@ export const configureApp = Effect.fn("features.admin.configureApp")(function* (
   yield* Ref.set(world.app, { handler, memoMap, appLayer, events });
 });
 
-export const appHandle = Effect.fn("features.admin.appHandle")(function* () {
+const appHandle = Effect.fn("features.admin.appHandle")(function* () {
   const world = yield* World;
   const found = yield* Ref.get(world.app);
   if (found === undefined) yield* configureApp({});
@@ -272,12 +272,5 @@ export const getOutcome = Effect.fn("features.admin.getOutcome")(function* (key:
   const { outcomes } = yield* World;
   const found = (yield* Ref.get(outcomes))[key];
   if (found === undefined) throw new Error(`no outcome recorded for "${key}"`);
-  return found;
-});
-
-export const getLastResponse = Effect.fn("features.admin.getLastResponse")(function* () {
-  const { lastResponse } = yield* World;
-  const found = yield* Ref.get(lastResponse);
-  if (found === undefined) throw new Error("no response recorded yet — call request() first");
   return found;
 });

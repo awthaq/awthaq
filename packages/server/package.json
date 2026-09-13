@@ -33,8 +33,6 @@
   "dependencies": {
     "@effect-auth/api": "workspace:*",
     "@effect-auth/core": "workspace:*",
-    "@effect-auth/ports": "workspace:*",
-    "@effect-auth/sql": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

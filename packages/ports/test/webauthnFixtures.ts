@@ -65,7 +65,7 @@ const counterBytes = (counter: number): Uint8Array_ => {
   return bytes;
 };
 
-export const buildRegistrationAuthenticatorData = (input: {
+const buildRegistrationAuthenticatorData = (input: {
   readonly rpId: string;
   readonly authenticator: SoftwareAuthenticator;
   readonly counter?: number;
@@ -91,7 +91,7 @@ export const buildRegistrationAuthenticatorData = (input: {
   ]);
 };
 
-export const buildAuthenticationAuthenticatorData = (input: {
+const buildAuthenticationAuthenticatorData = (input: {
   readonly rpId: string;
   readonly counter: number;
   readonly userVerified?: boolean;

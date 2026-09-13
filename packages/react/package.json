@@ -32,7 +32,6 @@
   },
   "dependencies": {
     "@effect-auth/api": "workspace:*",
-    "@effect-auth/client": "workspace:*",
     "@effect/atom-react": "catalog:",
     "@qadi/core": "^0.6.2",
     "@qadi/react": "^0.6.2",

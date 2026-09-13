@@ -31,7 +31,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
     "@effect-auth/ports": "workspace:*",
     "@effect-auth/sql": "workspace:*",
     "effect": "catalog:"

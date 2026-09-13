@@ -229,7 +229,7 @@ export const overrideWebAuthnBehavior = Effect.fn("features.passkey.overrideWebA
   },
 );
 
-export const appHandle = Effect.fn("features.passkey.appHandle")(function* () {
+const appHandle = Effect.fn("features.passkey.appHandle")(function* () {
   const world = yield* World;
   const found = yield* Ref.get(world.app);
   if (found === undefined) yield* configureApp({});

@@ -38,7 +38,6 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect-auth/test": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",

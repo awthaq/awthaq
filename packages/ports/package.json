@@ -31,7 +31,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect-auth/api": "workspace:*",
     "@simplewebauthn/server": "^14.0.1",
     "effect": "catalog:",
     "hash-wasm": "catalog:"
