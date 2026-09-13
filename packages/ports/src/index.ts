@@ -19,8 +19,12 @@
 // is implemented below too — see that module's own header comment for why
 // it lives here rather than in `@effect-auth/core`.
 //
+// `SqlTransaction` and `KeyProvider` (.scratch/shipping-gaps, tickets 16
+// and 17) round out the stratum — see each module's own header comment.
+//
 // See spec/overview.md for the full package map.
 
+export * as KeyProvider from "./KeyProvider.ts";
 export * as Mailer from "./Mailer.ts";
 export * as PasswordHasher from "./PasswordHasher.ts";
 export * as RateLimiter from "./RateLimiter.ts";
