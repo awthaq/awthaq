@@ -121,6 +121,16 @@ export interface AccountsRepositoryShape {
   ) => Effect.Effect<Option.Option<Account>, RepositoryError>;
   readonly listByUser: (userId: UserId) => Effect.Effect<ReadonlyArray<Account>, RepositoryError>;
   readonly delete: (id: AccountId) => Effect.Effect<void, RepositoryError>;
+  /**
+   * Shipping-gap map (.scratch/shipping-gaps), ticket 09/10: whole-user
+   * deletion's own cascade — deliberately bypasses `unlink`'s last-account
+   * refusal (BEH-EA-045), which exists to stop a user locking themselves
+   * out of an *otherwise-still-existing* account, not to block deleting
+   * the account entirely. Mirrors `SessionsRepositoryShape`'s own
+   * `deleteAllForUserExcept` — a raw bulk statement, not `delete` called
+   * once per row.
+   */
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
 }
 
 export class AccountsRepository extends Context.Service<
@@ -156,6 +166,9 @@ export const AccountsRepositoryLive: Layer.Layer<AccountsRepository, never, SqlC
         execute: (userId) => sql`SELECT * FROM accounts WHERE userId = ${userId}`,
       });
 
+      const deleteAllByUser: AccountsRepositoryShape["deleteAllByUser"] = (userId) =>
+        sql`DELETE FROM accounts WHERE userId = ${userId}`.pipe(Effect.asVoid);
+
       return {
         insert: repo.insert,
         update: repo.update,
@@ -164,6 +177,7 @@ export const AccountsRepositoryLive: Layer.Layer<AccountsRepository, never, SqlC
         findByProviderSubject: (providerId, subject, issuer) =>
           findByProviderSubject({ providerId, subject, issuer }),
         listByUser,
+        deleteAllByUser,
       };
     }),
   );

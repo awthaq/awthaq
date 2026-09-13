@@ -13,6 +13,7 @@
 // full plugin-composed `api` (BEH-EA-032) rather than the standalone `AuthCoreApi` here.
 // See spec/overview.md for the full package map.
 
+export * as AccountContract from "./Account.ts";
 export * as Api from "./Api.ts";
 export * as AuthCore from "./AuthCore.ts";
 export * as SessionContract from "./Session.ts";

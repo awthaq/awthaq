@@ -106,6 +106,14 @@ export interface AccountsShape {
   ) => Effect.Effect<void, AccountNotFound>;
   /** BEH-EA-045: refused when `id` is the user's only remaining Account. */
   readonly unlink: (id: AccountId) => Effect.Effect<void, AccountNotFound | LastAccountRefusal>;
+  /**
+   * Shipping-gap map (.scratch/shipping-gaps), ticket 09/10: whole-user
+   * deletion's own cascade — deliberately bypasses `unlink`'s last-account
+   * refusal, which exists to stop a user locking themselves out of an
+   * *otherwise-still-existing* account, not to block deleting the account
+   * entirely along with the user it belongs to.
+   */
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void>;
 }
 
 export class Accounts extends Context.Service<Accounts, AccountsShape>()(
@@ -277,6 +285,23 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
         ] as const;
       }).pipe(Effect.flatMap(Effect.fromResult));
 
+    const deleteAllByUser: AccountsShape["deleteAllByUser"] = (userId) =>
+      Ref.update(state, (s) => {
+        const toRemove = Array.from(HashMap.values(s.byId)).filter((row) => row.userId === userId);
+        let byId = s.byId;
+        let byProviderSubject = s.byProviderSubject;
+        let credentialHashes = s.credentialHashes;
+        for (const row of toRemove) {
+          byId = HashMap.remove(byId, row.id);
+          byProviderSubject = HashMap.remove(
+            byProviderSubject,
+            providerSubjectKey(row.providerId, row.subject, Option.getOrUndefined(row.issuer)),
+          );
+          credentialHashes = HashMap.remove(credentialHashes, row.id);
+        }
+        return { byId, byProviderSubject, credentialHashes };
+      });
+
     return {
       link,
       findByProviderSubject,
@@ -284,6 +309,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
       findCredentialHash,
       updateCredentialHash,
       unlink,
+      deleteAllByUser,
     };
   }),
 );
@@ -390,6 +416,9 @@ export const layerSql: Layer.Layer<
     const unlink: AccountsShape["unlink"] = (id) =>
       sql.withTransaction(performUnlink(id)).pipe(Effect.catchTag("SqlError", Effect.die));
 
+    const deleteAllByUser: AccountsShape["deleteAllByUser"] = (userId) =>
+      repo.deleteAllByUser(userId).pipe(Effect.orDie);
+
     const findCredentialHash: AccountsShape["findCredentialHash"] = (id) =>
       repo.findById(id).pipe(
         Effect.catchTags({
@@ -440,6 +469,7 @@ export const layerSql: Layer.Layer<
       findCredentialHash,
       updateCredentialHash,
       unlink,
+      deleteAllByUser,
     };
   }),
 );

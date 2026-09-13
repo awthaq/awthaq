@@ -6,8 +6,8 @@
 // mirroring `packages/organization/test/AuthHttp.test.ts`'s own
 // `issueSessionCookieHeader` pattern for setting one up.
 import { AuthCore } from "@effect-auth/api";
-import { Sessions, Users } from "@effect-auth/core";
-import { Authentication, AuthHttp, Session } from "@effect-auth/server";
+import { Accounts, Sessions, Users } from "@effect-auth/core";
+import { Account, Authentication, AuthHttp, Session } from "@effect-auth/server";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -177,7 +177,10 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
   // that file's comment) sees `Jwt`'s override regardless of which
   // branch's endpoint is actually being called.
   const CrossPluginAppLayer = Layer.mergeAll(
-    AuthHttp.routes(AuthCore.AuthCoreApi, {}).pipe(Layer.provide(Session.SessionHandlers)),
+    AuthHttp.routes(AuthCore.AuthCoreApi, {}).pipe(
+      Layer.provide(Session.SessionHandlers),
+      Layer.provide(Account.AccountHandlers),
+    ),
     AuthHttp.routes(JwtApi.JwtApi, {}),
   ).pipe(
     Layer.provideMerge(Jwt.Jwt.layer),
@@ -185,6 +188,8 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
     Layer.provideMerge(KeyRing.KeyRing.layer),
     Layer.provideMerge(SigningKeyRecords.layerMemory),
     Layer.provideMerge(Sessions.layerMemory),
+    Layer.provideMerge(Users.layerMemory),
+    Layer.provideMerge(Accounts.layerMemory),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),

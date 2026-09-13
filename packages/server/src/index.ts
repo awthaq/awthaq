@@ -7,6 +7,7 @@
 // handlers, BEH-EA-031), AuthHttp.ts (spec/behaviors/11-http-error-mapping.md, BEH-EA-083/084).
 // See spec/overview.md for the full package map.
 
+export * as Account from "./Account.ts";
 export * as Authentication from "./Authentication.ts";
 export * as AuthHttp from "./AuthHttp.ts";
 export * as Csrf from "./Csrf.ts";

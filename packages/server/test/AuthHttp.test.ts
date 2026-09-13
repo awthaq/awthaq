@@ -7,7 +7,7 @@
 // "any host that hands the application a `Request`" path), and `httpApiStatus`
 // annotations landing on the real response status (BEH-EA-088).
 import { AuthCore } from "@effect-auth/api";
-import { Sessions, Users } from "@effect-auth/core";
+import { Accounts, Sessions, Users } from "@effect-auth/core";
 import { NodeCrypto } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -21,7 +21,7 @@ import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { Authentication, AuthHttp, Session } from "../src/index.ts";
+import { Account, Authentication, AuthHttp, Session } from "../src/index.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -30,12 +30,15 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 const AppLayer = Layer.mergeAll(
   AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(Session.SessionHandlers),
+    Layer.provide(Account.AccountHandlers),
   ),
   AuthHttp.docs(AuthCore.AuthCoreApi),
 ).pipe(
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Authentication.PrincipalResolverLive),
   Layer.provideMerge(Sessions.layerMemory),
+  Layer.provideMerge(Users.layerMemory),
+  Layer.provideMerge(Accounts.layerMemory),
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(TestServices),
   Layer.provideMerge(HttpRouter.layer),
@@ -233,6 +236,98 @@ describe("AuthHttp + Session (real HTTP)", () => {
             ),
           );
         assert.strictEqual(aResponse.status, 200);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+});
+
+describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
+  it.effect("PATCH /user updates the caller's own name; requires authentication", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const user = yield* users.create({ email: "ada@example.com", name: "Ada" });
+        const issued = yield* sessions.issue({ userId: user.id });
+
+        const patch = (token?: Redacted.Redacted<string>) =>
+          router.asHttpEffect().pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              HttpServerRequest.fromWeb(
+                new Request("http://localhost/user", {
+                  method: "PATCH",
+                  headers: {
+                    ...(token ? cookieHeader(token) : {}),
+                    "content-type": "application/json",
+                  },
+                  body: JSON.stringify({ name: "Ada Lovelace" }),
+                }),
+              ),
+            ),
+          );
+
+        const unauthenticated = yield* patch();
+        assert.strictEqual(unauthenticated.status, 401);
+
+        const response = yield* patch(issued.token);
+        assert.strictEqual(response.status, 200);
+        const body = (yield* jsonBody(response)) as { name: string };
+        assert.strictEqual(body.name, "Ada Lovelace");
+
+        const stored = yield* users.findById(user.id);
+        assert.strictEqual(stored.name, "Ada Lovelace");
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("DELETE /user deletes the caller's own account, its accounts, and every session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const accounts = yield* Accounts.Accounts;
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const user = yield* users.create({ email: "bo@example.com", name: "Bo" });
+        yield* accounts.link({
+          userId: user.id,
+          providerId: "password",
+          subject: user.id,
+        });
+        const issued = yield* sessions.issue({ userId: user.id });
+
+        const del = router.asHttpEffect().pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/user", {
+                method: "DELETE",
+                headers: cookieHeader(issued.token),
+              }),
+            ),
+          ),
+        );
+        const response = yield* del;
+        assert.strictEqual(response.status, 204);
+
+        const stillHasUser = yield* Effect.exit(users.findById(user.id));
+        assert.isTrue(stillHasUser._tag === "Failure");
+
+        const remainingAccounts = yield* accounts.listByUser(user.id);
+        assert.strictEqual(remainingAccounts.length, 0);
+
+        const sessionCheck = yield* router
+          .asHttpEffect()
+          .pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              HttpServerRequest.fromWeb(
+                new Request("http://localhost/session", { headers: cookieHeader(issued.token) }),
+              ),
+            ),
+          );
+        assert.strictEqual(sessionCheck.status, 401);
       }),
     ).pipe(Effect.provide(AppLayer)),
   );

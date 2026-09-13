@@ -11,7 +11,31 @@ over HTTP via it.
 ticket 08's own `## Result` — so this ticket is now the `Account` group's
 actual first tenant, not a follower of it)
 
-**Status:** ready-for-agent
+**Status:** done
+
+## Result
+
+`packages/api/src/Account.ts`: new `AccountGroup` (`account`, top-level
+routes `/user` PATCH/DELETE, `Authentication` middleware), folded into
+`AuthCoreApi` alongside `SessionGroup`. `packages/server/src/Account.ts`:
+`AccountHandlers`, mirroring `Session.ts`'s own `currentUserPrincipal`/
+`HttpApiBuilder.group` shape; `updateProfile` wires onto the existing
+`Users.updateProfile` unchanged, `{ name }`-only.
+
+**Ripple, not in the original ticket text:** `AuthCoreApi` is shared —
+adding `AccountGroup` to it meant every consumer composing the full
+`AuthCoreApi` (not just this package's own test) now needs an
+`Account.AccountHandlers` provided too, or the composed contract is
+missing a handler. One other consumer existed:
+`packages/jwt/test/AuthHttp.test.ts`'s `CrossPluginAppLayer` — updated to
+provide it (plus `Users.layerMemory`/`Accounts.layerMemory`).
+
+Wire-level tests added to `packages/server/test/AuthHttp.test.ts`:
+authenticated update reflects in a subsequent read, unauthenticated is
+401. `pnpm --filter @effect-auth/server test` (24 tests) and
+`pnpm --filter @effect-auth/jwt test` (39 tests) both green;
+`pnpm test` — 564 tests, all green; `pnpm typecheck`/`pnpm lint`/
+`pnpm format:check` clean workspace-wide.
 
 - [ ] New `Account` `HttpApiGroup` exists in `packages/api`, composed
       into `AuthCoreApi` alongside `SessionGroup`/`SubjectGroup`, with
