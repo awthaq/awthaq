@@ -9,6 +9,17 @@
     "typecheck": "tsc -b tsconfig.json && tsc -p tsconfig.test.json"
   },
   "devDependencies": {
+    "@effect-auth/admin": "workspace:*",
+    "@effect-auth/api": "workspace:*",
+    "@effect-auth/core": "workspace:*",
+    "@effect-auth/jwt": "workspace:*",
+    "@effect-auth/oauth": "workspace:*",
+    "@effect-auth/organization": "workspace:*",
+    "@effect-auth/passkey": "workspace:*",
+    "@effect-auth/password": "workspace:*",
+    "@effect-auth/ports": "workspace:*",
+    "@effect-auth/server": "workspace:*",
+    "@effect-auth/sql": "workspace:*",
     "@effect-cucumber/gherkin": "^0.10.0",
     "@effect-cucumber/vitest": "^0.10.0",
     "@effect/platform-node": "catalog:",

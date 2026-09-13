@@ -4,6 +4,19 @@
   "compilerOptions": {
     "noEmit": true,
     "composite": false,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "@effect-auth/api": ["../packages/api/src/index.ts"],
+      "@effect-auth/core": ["../packages/core/src/index.ts"],
+      "@effect-auth/ports": ["../packages/ports/src/index.ts"],
+      "@effect-auth/server": ["../packages/server/src/index.ts"],
+      "@effect-auth/sql": ["../packages/sql/src/index.ts"],
+      "@effect-auth/password": ["../packages/password/src/index.ts"],
+      "@effect-auth/oauth": ["../packages/oauth/src/index.ts"],
+      "@effect-auth/passkey": ["../packages/passkey/src/index.ts"],
+      "@effect-auth/organization": ["../packages/organization/src/index.ts"],
+      "@effect-auth/admin": ["../packages/admin/src/index.ts"],
+      "@effect-auth/jwt": ["../packages/jwt/src/index.ts"]
+    }
   }
 }

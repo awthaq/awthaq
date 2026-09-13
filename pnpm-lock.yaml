@@ -104,6 +104,39 @@ importers:
 
   features:
     devDependencies:
+      '@effect-auth/admin':
+        specifier: workspace:*
+        version: link:../packages/admin
+      '@effect-auth/api':
+        specifier: workspace:*
+        version: link:../packages/api
+      '@effect-auth/core':
+        specifier: workspace:*
+        version: link:../packages/core
+      '@effect-auth/jwt':
+        specifier: workspace:*
+        version: link:../packages/jwt
+      '@effect-auth/oauth':
+        specifier: workspace:*
+        version: link:../packages/oauth
+      '@effect-auth/organization':
+        specifier: workspace:*
+        version: link:../packages/organization
+      '@effect-auth/passkey':
+        specifier: workspace:*
+        version: link:../packages/passkey
+      '@effect-auth/password':
+        specifier: workspace:*
+        version: link:../packages/password
+      '@effect-auth/ports':
+        specifier: workspace:*
+        version: link:../packages/ports
+      '@effect-auth/server':
+        specifier: workspace:*
+        version: link:../packages/server
+      '@effect-auth/sql':
+        specifier: workspace:*
+        version: link:../packages/sql
       '@effect-cucumber/gherkin':
         specifier: ^0.10.0
         version: 0.10.0(effect@4.0.0-rc.115)
