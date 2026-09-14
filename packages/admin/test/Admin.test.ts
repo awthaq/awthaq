@@ -120,7 +120,7 @@ describe("Admin", () => {
 
         // The caller's own original session is completely untouched.
         const stillWorks = yield* sessions.verify(callerSession.token);
-        assert.strictEqual(stillWorks.id, callerSession.session.id);
+        assert.strictEqual(stillWorks.session.id, callerSession.session.id);
       }).pipe(Effect.provide(buildLayer(allow))),
   );
 
@@ -202,7 +202,7 @@ describe("Admin", () => {
         // The target's own (separate, real) sessions are untouched.
         const targetOwnSession = yield* sessions.issue({ userId: targetId });
         const stillWorks = yield* sessions.verify(targetOwnSession.token);
-        assert.strictEqual(stillWorks.id, targetOwnSession.session.id);
+        assert.strictEqual(stillWorks.session.id, targetOwnSession.session.id);
       }).pipe(Effect.provide(buildLayer(allow))),
   );
 

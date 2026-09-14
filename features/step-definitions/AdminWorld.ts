@@ -214,7 +214,8 @@ export const inspectSession = Effect.fn("features.admin.inspectSession")(functio
           const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
           return yield* Effect.gen(function* () {
             const sessions = yield* Sessions.Sessions;
-            return yield* sessions.verify(Redacted.make(token));
+            const { session } = yield* sessions.verify(Redacted.make(token));
+            return session;
           }).pipe(Effect.provide(context));
         }),
       ),

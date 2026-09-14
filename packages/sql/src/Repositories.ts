@@ -325,12 +325,36 @@ export interface SessionsRepositoryShape {
     cursor?: Cursor,
     limit?: number,
   ) => Effect.Effect<Page<Session>, RepositoryError>;
+  /**
+   * Upstream-hardening map, ticket 01: the throttled touch/rotation
+   * write's own compare-and-swap — `expectedSecretHash` must still match
+   * the row's *current* `secretHash` for the update to apply. Two
+   * concurrent requests racing the same throttled window would otherwise
+   * both blindly overwrite `secretHash` via a plain `update`, leaving
+   * whichever response lost the race holding a token that no longer
+   * verifies. `None` means another request already won that race — not a
+   * failure — so the caller reports no rotation of its own rather than
+   * clobbering the winner's write.
+   */
+  readonly touch: (input: {
+    readonly id: SessionId;
+    readonly expectedSecretHash: string;
+    readonly secretHash: string;
+    readonly lastActiveAt: DateTime.Utc;
+    readonly idleExpiresAt: DateTime.Utc;
+  }) => Effect.Effect<Option.Option<Session>, RepositoryError>;
   readonly delete: (id: SessionId) => Effect.Effect<void, RepositoryError>;
   /** BEH-EA-054: bulk-revokes every session for `userId` except `keep`. */
   readonly deleteAllForUserExcept: (
     userId: UserId,
     keep: SessionId,
   ) => Effect.Effect<void, SqlError>;
+  /**
+   * Upstream-hardening map, ticket 02: bulk-revokes every session for
+   * `userId`, no exceptions — `revokeAll`'s own primitive, distinct from
+   * `deleteAllForUserExcept`'s "all but one" shape.
+   */
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
 }
 
 export class SessionsRepository extends Context.Service<
@@ -382,10 +406,45 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
           }),
         );
 
+      const touch = SqlSchema.findOneOption({
+        Request: Schema.Struct({
+          id: SessionId,
+          expectedSecretHash: Schema.String,
+          secretHash: Schema.String,
+          lastActiveAt: Schema.DateTimeUtcFromString,
+          idleExpiresAt: Schema.DateTimeUtcFromString,
+        }),
+        Result: Session,
+        // Quoted column names: this table's Postgres DDL (`CoreMigrations.ts`)
+        // declares `"secretHash"`/`"lastActiveAt"`/`"idleExpiresAt"` with
+        // preserved mixed case, which only an equally-quoted reference
+        // matches (Postgres folds an unquoted identifier to lowercase).
+        // SQLite's own identifier resolution is case-insensitive regardless
+        // of quoting, so the same quoted form is safe on both dialects.
+        execute: (request) => sql`
+          UPDATE sessions
+          SET "secretHash" = ${request.secretHash},
+              "lastActiveAt" = ${request.lastActiveAt},
+              "idleExpiresAt" = ${request.idleExpiresAt}
+          WHERE "id" = ${request.id}
+            AND "secretHash" = ${request.expectedSecretHash}
+          RETURNING *
+        `,
+      });
+
       const deleteAllForUserExcept: SessionsRepositoryShape["deleteAllForUserExcept"] = (
         userId,
         keep,
       ) => sql`DELETE FROM sessions WHERE userId = ${userId} AND id != ${keep}`.pipe(Effect.asVoid);
+
+      // Quoted `"userId"`: this table's Postgres DDL (`CoreMigrations.ts`)
+      // declares the column with preserved mixed case, which only an
+      // equally-quoted reference matches there (Postgres folds an
+      // unquoted identifier to lowercase); SQLite's own identifier
+      // resolution is case-insensitive regardless of quoting, so the same
+      // quoted form is correct on both dialects.
+      const deleteAllByUser: SessionsRepositoryShape["deleteAllByUser"] = (userId) =>
+        sql`DELETE FROM sessions WHERE "userId" = ${userId}`.pipe(Effect.asVoid);
 
       return {
         insert: repo.insert,
@@ -393,7 +452,9 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         findById: repo.findById,
         delete: repo.delete,
         listByUser,
+        touch,
         deleteAllForUserExcept,
+        deleteAllByUser,
       };
     }),
   );

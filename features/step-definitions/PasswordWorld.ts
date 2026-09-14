@@ -239,4 +239,22 @@ export const publishedEvents = Effect.fn("features.password.publishedEvents")(fu
   return yield* (yield* Ref.get(app)).publishedEvents;
 });
 
+/**
+ * Upstream-hardening map, ticket 04: `signIn` now hard-blocks an
+ * unverified account — every scenario that needs a real, working sign-in
+ * after sign-up must consume signUp's own dispatched verification mail
+ * first, the same wiring `packages/password/test/AuthHttp.test.ts`'s own
+ * `verifyLatestSignUp` proves works at the HTTP layer.
+ */
+export const verifyLatestSignUp = Effect.fn("features.password.verifyLatestSignUp")(function* () {
+  yield* letForkedFibersRun;
+  const mail = (yield* sentMail()).findLast((message) => message.template === "verify-email");
+  if (mail === undefined) throw new Error("expected a verify-email mail");
+  const token = (mail.data as { token: string }).token;
+  const response = yield* request("/verify-email", { token });
+  if (response.status !== 204) {
+    throw new Error(`verify-email failed: ${response.status}`);
+  }
+});
+
 export const STRONG_PASSWORD = "correct horse battery staple";

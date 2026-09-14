@@ -52,6 +52,21 @@ export class TokenConsumed extends Schema.TaggedError<TokenConsumed>()(
   { httpApiStatus: 410 },
 ) {}
 
+/**
+ * Upstream-hardening map, ticket 04: `signIn`'s hard block on an
+ * unverified account, checked only after password verification succeeds
+ * (BEH-EA-114's uniform-cost discipline — a wrong password can never be
+ * distinguished from an unverified one). `403`, not upstream's `400` —
+ * matching `EmailAlreadyExists`'s own precedent of picking the
+ * semantically-correct code: credentials are valid, the account state
+ * forbids proceeding.
+ */
+export class EmailNotVerified extends Schema.TaggedError<EmailNotVerified>()(
+  "EmailNotVerified",
+  {},
+  { httpApiStatus: 403 },
+) {}
+
 export const SignUpPayload = Schema.Struct({
   email: Schema.String,
   password: Schema.Redacted(Schema.String),
@@ -69,6 +84,12 @@ export const RequestResetPayload = Schema.Struct({
   email: Schema.String,
 });
 export type RequestResetPayload = typeof RequestResetPayload.Type;
+
+/** Upstream-hardening map, ticket 04: same shape as `RequestResetPayload` — answered identically regardless of whether `email` resolves to an account, or is already verified. */
+export const ResendVerificationPayload = Schema.Struct({
+  email: Schema.String,
+});
+export type ResendVerificationPayload = typeof ResendVerificationPayload.Type;
 
 export const ConfirmResetPayload = Schema.Struct({
   token: Schema.Redacted(Schema.String),
@@ -131,8 +152,9 @@ export const PasswordGroup = HttpApiGroup.make("password")
     HttpApiEndpoint.post("signIn", "/password/sign-in", {
       payload: SignInPayload,
       success: SessionContract.SessionDto,
-      // Ticket 12: rate-limited.
-      error: [Api.InvalidCredentials, Api.RateLimited],
+      // Ticket 12: rate-limited. Upstream-hardening ticket 04: hard-blocks
+      // an unverified account.
+      error: [Api.InvalidCredentials, EmailNotVerified, Api.RateLimited],
     }),
   )
   .add(
@@ -164,6 +186,19 @@ export const PasswordGroup = HttpApiGroup.make("password")
     HttpApiEndpoint.post("verifyEmail", "/verify-email", {
       payload: VerifyEmailPayload,
       error: TokenConsumed,
+    }),
+  )
+  .add(
+    // Upstream-hardening map, ticket 04: top-level, matching `verifyEmail`'s
+    // own convention above — same reasoning, this is account-lifecycle, not
+    // password-specific, even though this plugin happens to own the only
+    // verification mechanism today. Copies `requestReset`'s enumeration-safe
+    // shape exactly: identical `202` whether the email doesn't exist, the
+    // account is already verified, or a mail genuinely goes out.
+    HttpApiEndpoint.post("resendVerification", "/resend-verification", {
+      payload: ResendVerificationPayload,
+      success: HttpApiSchema.Empty(202),
+      error: Api.RateLimited,
     }),
   )
   .add(

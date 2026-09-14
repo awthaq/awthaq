@@ -68,13 +68,31 @@ export interface PasswordShape {
     IssuedSession,
     PasswordApi.WeakPassword | PasswordApi.EmailAlreadyExists | Api.RateLimited
   >;
-  /** BEH-EA-114/116: uniform `InvalidCredentials`, constant real hashing cost regardless of which of the three reasons applied; rehashes opportunistically on success. */
+  /**
+   * BEH-EA-114/116: uniform `InvalidCredentials`, constant real hashing cost
+   * regardless of which of the three reasons applied; rehashes
+   * opportunistically on success. Upstream-hardening ticket 04:
+   * `EmailNotVerified` is checked only once a genuinely correct password
+   * has already been confirmed — it can never be used to probe a guessed
+   * password's correctness.
+   */
   readonly signIn: (input: {
     readonly email: string;
     readonly password: Redacted.Redacted<string>;
-  }) => Effect.Effect<IssuedSession, Api.InvalidCredentials | Api.RateLimited>;
+  }) => Effect.Effect<
+    IssuedSession,
+    Api.InvalidCredentials | PasswordApi.EmailNotVerified | Api.RateLimited
+  >;
   /** BEH-EA-064/117: identical response whether or not `email` resolves to an account — the caller (the HTTP handler) always answers 202. */
   readonly requestReset: (input: {
+    readonly email: string;
+  }) => Effect.Effect<void, Api.RateLimited>;
+  /**
+   * Upstream-hardening ticket 04: identical response whether `email`
+   * doesn't exist, the account is already verified, or a mail genuinely
+   * goes out — same enumeration-safe shape as `requestReset`.
+   */
+  readonly resendVerification: (input: {
     readonly email: string;
   }) => Effect.Effect<void, Api.RateLimited>;
   /** BEH-EA-117: consumes the reset token and sets the new password in one call, then revokes every other session. */
@@ -109,6 +127,19 @@ const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /**
+ * `RateLimits.RateLimitKey`'s own `input` is untyped (`unknown`) — one
+ * registry list covers every endpoint's differently-shaped payload — so
+ * pulling `email` back out needs a real narrowing check rather than a type
+ * assertion (this repo forbids `as`/`as unknown as`/`as any` in library
+ * source). Empty string on a shape mismatch is a defect elsewhere, not a
+ * condition this key derivation needs its own error channel for.
+ */
+const emailFromRateLimitInput = (input: unknown): string =>
+  typeof input === "object" && input !== null && "email" in input && typeof input.email === "string"
+    ? input.email
+    : "";
+
+/**
  * Shipping-gap map (.scratch/shipping-gaps), ticket 12: one rule per
  * rate-limited endpoint — mirrors `usage-examples-v4.md` §16's own worked
  * `signin:${email}` example for `signIn`'s numbers exactly. Every rule
@@ -128,6 +159,10 @@ const RATE_LIMITS = {
   confirmReset: { limit: 5, window: Duration.minutes(15) },
   // Shipping-gap map (.scratch/shipping-gaps), ticket 14.
   changePassword: { limit: 5, window: Duration.minutes(15) },
+  // Upstream-hardening map, ticket 04: tighter than the generic 5-per-15-
+  // min default — resend-verification abuse is an inbox-flooding
+  // harassment vector against the *target*, not an account-takeover one.
+  resendVerification: { limit: 3, window: Duration.minutes(15) },
 } as const satisfies Record<string, { readonly limit: number; readonly window: Duration.Duration }>;
 
 /**
@@ -261,6 +296,14 @@ export const PasswordHandlers = HttpApiBuilder.group(
         yield* password.requestReset(payload);
       }),
 
+      resendVerification: Effect.fnUntraced(function* ({
+        payload,
+      }: {
+        payload: PasswordApi.ResendVerificationPayload;
+      }) {
+        yield* password.resendVerification(payload);
+      }),
+
       confirmReset: Effect.fnUntraced(function* ({
         payload,
       }: {
@@ -380,6 +423,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               key: (input) => `password:change-password:${JSON.stringify(input)}`,
               ...RATE_LIMITS.changePassword,
             },
+            {
+              endpoint: "resendVerification",
+              key: (input) => `password:resend-verification:${emailFromRateLimitInput(input)}`,
+              ...RATE_LIMITS.resendVerification,
+            },
           ] satisfies ReadonlyArray<{
             readonly endpoint: string;
             readonly key: RateLimits.RateLimitKey;
@@ -494,6 +542,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const account = accountOpt.value;
         const hash = hashOpt.value;
 
+        // Upstream-hardening ticket 04: checked only now that a genuinely
+        // correct password is confirmed — never before, so this can't be
+        // used to probe whether a guessed password is even close to right.
+        if (!user.emailVerified) {
+          return yield* Effect.fail(new PasswordApi.EmailNotVerified());
+        }
+
         if (config.rehashOnLogin && hasher.needsRehash(Redacted.value(hash))) {
           const rehashed = yield* hasher.hash(input.password);
           yield* accounts
@@ -533,6 +588,32 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           });
         }
       });
+
+      const resendVerification: PasswordShape["resendVerification"] = Effect.fnUntraced(
+        function* (input) {
+          yield* rateLimit(
+            `password:resend-verification:${input.email.toLowerCase()}`,
+            RATE_LIMITS.resendVerification,
+          );
+          const userOpt = yield* users.findByEmail(input.email);
+          // Enumeration-safe, same posture as `requestReset`: nothing in
+          // the response distinguishes "no such email" from "already
+          // verified" from "mail genuinely sent" — only whether the mail
+          // actually goes out differs, invisible to the caller.
+          if (Option.isSome(userOpt) && !userOpt.value.emailVerified) {
+            const user = userOpt.value;
+            const identifier = `${VERIFY_PREFIX}${user.id}`;
+            const { value } = yield* verification
+              .issue({ identifier, ttl: Duration.hours(24) })
+              .pipe(Effect.orDie);
+            yield* mailer.send({
+              to: user.email,
+              template: "verify-email",
+              data: { token: encodeVerificationToken(identifier, value) },
+            });
+          }
+        },
+      );
 
       const confirmReset: PasswordShape["confirmReset"] = Effect.fnUntraced(function* (input) {
         const decoded = decodeVerificationToken(Redacted.value(input.token));
@@ -575,10 +656,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const hash = yield* hasher.hash(input.password);
         yield* accounts.updateCredentialHash(account.id, Redacted.make(hash)).pipe(Effect.orDie);
 
-        // BEH-EA-117: every *other* session — there is no "current"
-        // session to keep here (the caller isn't authenticated at all),
-        // so an id no real session can ever have revokes all of them.
-        yield* sessions.revokeOthers(userId, Sessions.SessionId(""));
+        // BEH-EA-117: every session, no exceptions — the caller isn't
+        // authenticated at all here, so there is no "current" session to
+        // keep. Upstream-hardening ticket 02: the real `revokeAll`
+        // primitive, retiring the empty-string-id `revokeOthers` trick
+        // this call site used to stand in for it.
+        yield* sessions.revokeAll(userId);
       });
 
       const verifyEmail: PasswordShape["verifyEmail"] = Effect.fnUntraced(function* (input) {
@@ -648,6 +731,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         signUp,
         signIn,
         requestReset,
+        resendVerification,
         confirmReset,
         verifyEmail,
         changePassword,

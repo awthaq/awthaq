@@ -10,6 +10,7 @@
 import { AuthCore } from "@awthaq/api";
 import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import type { MailMessage } from "@awthaq/ports/Mailer";
 import { Password, PasswordApi } from "@awthaq/password";
 import { Account, Authentication, AuthHttp, Session } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -47,7 +48,26 @@ const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   ),
 );
 
+/**
+ * Mirrors `PasswordWorld.ts`'s own `capturingMailer` — a capture cell
+ * built *outside* the layer graph so `signUp` below can read it back after
+ * the graph is torn down into the handler closure. Upstream-hardening
+ * ticket 04: needed so `signUp` can consume its own dispatched
+ * verification mail and pass `signIn`'s new `emailVerified` gate — this
+ * file's own scope stays session behavior, not verification, so that
+ * consumption happens transparently inside `signUp` itself, never exposed
+ * to a scenario.
+ */
 const buildApp = () => {
+  const messages = Effect.runSync(Ref.make<ReadonlyArray<MailMessage>>([]));
+  const capturingMailer = Layer.succeed(
+    Mailer.Mailer,
+    Mailer.Mailer.of({
+      send: (message) => Ref.update(messages, (existing) => [...existing, message]),
+      sent: Ref.get(messages),
+    }),
+  );
+
   const appLayer = Layer.mergeAll(
     AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
       Layer.provide(Session.SessionHandlers),
@@ -63,7 +83,7 @@ const buildApp = () => {
     Layer.provideMerge(
       Layer.mergeAll(
         PasswordHasher.layerArgon2id,
-        Mailer.layerMemory,
+        capturingMailer,
         RateLimiter.layerPermissive,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
     ),
@@ -73,7 +93,7 @@ const buildApp = () => {
     Layer.provideMerge(HttpRouter.layer),
   );
   const { handler } = HttpRouter.toWebHandler(appLayer);
-  return handler;
+  return { handler, sentMail: Ref.get(messages) };
 };
 
 export interface ActorState {
@@ -86,6 +106,7 @@ export interface ActorState {
 
 export interface WorldShape {
   readonly handler: (request: Request) => Promise<Response>;
+  readonly sentMail: Effect.Effect<ReadonlyArray<MailMessage>>;
   readonly actors: Ref.Ref<Record<string, ActorState>>;
   readonly responses: Ref.Ref<Record<string, Response>>;
 }
@@ -95,8 +116,10 @@ export class World extends Context.Service<World, WorldShape>()("features/Sessio
 export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
+    const { handler, sentMail } = buildApp();
     return World.of({
-      handler: buildApp(),
+      handler,
+      sentMail,
       actors: yield* Ref.make<Record<string, ActorState>>({}),
       responses: yield* Ref.make<Record<string, Response>>({}),
     });
@@ -144,9 +167,19 @@ const setCookieHeader = (response: Response): string => {
   return raw;
 };
 
+/**
+ * `signUp`'s verification mail is dispatched via `Effect.forkDetach`
+ * (BEH-EA-113: never awaited) — a few cooperative scheduler turns give
+ * that detached fiber a chance to run to completion, mirroring
+ * `AuthHttp.test.ts`'s own `letForkedFibersRun`.
+ */
+const letForkedFibersRun = Effect.gen(function* () {
+  for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+});
+
 /** Signs a fresh user up (BEH-EA-113's own detail is out of scope here — Password's `AuthHttp.test.ts` already covers it), returning the resulting `__Host-session` cookie. */
 export const signUp = Effect.fn("features.session.signUp")(function* (name: string) {
-  const { handler } = yield* World;
+  const { handler, sentMail } = yield* World;
   const email = `${name}-${nextEmail++}@example.com`;
   const response = yield* Effect.promise(() =>
     post(handler, "/password/sign-up", { email, password: STRONG_PASSWORD }),
@@ -156,6 +189,26 @@ export const signUp = Effect.fn("features.session.signUp")(function* (name: stri
   const setCookie = setCookieHeader(response);
   const { actors } = yield* World;
   yield* Ref.update(actors, (existing) => ({ ...existing, [name]: { email, cookie, setCookie } }));
+
+  // Upstream-hardening map, ticket 04: `signIn` now hard-blocks an
+  // unverified account — consume signUp's own dispatched verification
+  // mail so every later sign-in this suite drives (`signInAgain`) passes
+  // that gate. Transparent to every scenario: this file's own scope is
+  // session behavior, not verification.
+  yield* letForkedFibersRun;
+  const messages = yield* sentMail;
+  const verifyMail = messages.findLast(
+    (message) => message.template === "verify-email" && message.to === email,
+  );
+  if (verifyMail === undefined) throw new Error(`expected a verify-email mail for ${email}`);
+  const verifyToken = (verifyMail.data as { token: string }).token;
+  const verified = yield* Effect.promise(() =>
+    post(handler, "/verify-email", { token: verifyToken }),
+  );
+  if (verified.status !== 204) {
+    throw new Error(`verify-email failed for ${email}: ${verified.status}`);
+  }
+
   return { response, cookie, setCookie };
 });
 

@@ -21,6 +21,7 @@ import {
   letForkedFibersRun,
   sentMail,
   publishedEvents,
+  verifyLatestSignUp,
   STRONG_PASSWORD,
 } from "./PasswordWorld.ts";
 
@@ -251,6 +252,7 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
         password: STRONG_PASSWORD,
       });
       assert.equal(signUp.status, 200);
+      yield* verifyLatestSignUp();
       const signIn = yield* request("/password/sign-in", {
         email: "argon2id-user@example.com",
         password: STRONG_PASSWORD,
@@ -265,6 +267,7 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
       password: STRONG_PASSWORD,
     });
     assert.equal(signUp.status, 200);
+    yield* verifyLatestSignUp();
     const signIn = yield* request("/password/sign-in", {
       email: "scrypt-user@example.com",
       password: STRONG_PASSWORD,
@@ -326,6 +329,7 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
         password: STRONG_PASSWORD,
         cookie: cookieFrom(signUp),
       });
+      yield* verifyLatestSignUp();
       yield* request("/password/request-reset", { email: `${name}-reset-flow@example.com` });
     },
   );

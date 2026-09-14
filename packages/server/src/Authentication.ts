@@ -11,8 +11,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import type { unhandled } from "effect/Types";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
-import type { HttpServerResponse } from "effect/unstable/http/HttpServerResponse";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 /**
  * BEH-EA-069: derives a `Principal` from a resolved `Session` alone, with no
@@ -74,8 +75,8 @@ export const PrincipalResolverLive: Layer.Layer<PrincipalResolver> = Layer.succe
 export interface PostAuthResponseHookShape {
   readonly decorate: (
     principal: Api.Principal,
-    response: HttpServerResponse,
-  ) => Effect.Effect<HttpServerResponse>;
+    response: HttpServerResponse.HttpServerResponse,
+  ) => Effect.Effect<HttpServerResponse.HttpServerResponse>;
 }
 
 export const PostAuthResponseHook = Context.Reference<PostAuthResponseHookShape>(
@@ -83,33 +84,88 @@ export const PostAuthResponseHook = Context.Reference<PostAuthResponseHookShape>
   { defaultValue: () => ({ decorate: (_principal, response) => Effect.succeed(response) }) },
 );
 
+/** What a resolved session carries once verified — including whether `verify` rotated its secret this call. */
+export interface ResolvedSession {
+  readonly session: Sessions.SessionView;
+  readonly rotated: Option.Option<Redacted.Redacted<string>>;
+}
+
 /**
  * BEH-EA-069/070: shared by both `Authentication` and `OptionalAuthentication`
  * — an empty credential (BEH-EA-065's cookie/bearer schemes decode to `""`
  * when the request carries neither, never a decode failure) and an invalid
  * or expired session are both reported as `Unauthenticated`, uniformly.
  *
+ * Upstream-hardening ticket 01: exposes `rotated` alongside the resolved
+ * `session` so a caller that owns an actual HTTP response (this module's
+ * own `AuthenticationLive`/`OptionalAuthenticationLive`) can deliver a
+ * rotated token; `resolvePrincipal` below is the principal-only wrapper
+ * for callers that don't.
+ */
+export const resolveSession = (
+  sessions: Sessions.SessionsShape,
+  credential: Redacted.Redacted<string>,
+) => {
+  const raw = Redacted.value(credential);
+  if (raw === "") {
+    return Effect.fail(new Api.Unauthenticated());
+  }
+  return sessions.verify(Redacted.make(raw)).pipe(Effect.mapError(() => new Api.Unauthenticated()));
+};
+
+/**
  * Exported (not module-private) so `@awthaq/qadi`'s `SubjectExtractor.ts`
  * (BEH-EA-153) can call the identical hash-comparison/expiry logic this
  * middleware uses, rather than reimplementing it against the raw request —
- * BEH-EA-153 requires exactly that reuse.
+ * BEH-EA-153 requires exactly that reuse. Discards `rotated`: a caller with
+ * no response to deliver a rotated token through has nowhere to put it.
  */
 export const resolvePrincipal = (
   sessions: Sessions.SessionsShape,
   resolver: PrincipalResolverShape,
   credential: Redacted.Redacted<string>,
-): Effect.Effect<Api.Principal, Api.Unauthenticated> => {
-  const raw = Redacted.value(credential);
-  if (raw === "") {
-    return Effect.fail(new Api.Unauthenticated());
-  }
-  return sessions.verify(Redacted.make(raw)).pipe(
-    Effect.mapError(() => new Api.Unauthenticated()),
-    Effect.flatMap(resolver.resolve),
+): Effect.Effect<Api.Principal, Api.Unauthenticated> =>
+  resolveSession(sessions, credential).pipe(
+    Effect.flatMap(({ session }) => resolver.resolve(session)),
   );
+
+/**
+ * Upstream-hardening ticket 01: `set-auth-token` alone would never rotate
+ * anything for a browser — only `Set-Cookie` updates a browser's own
+ * cookie jar. Delivery therefore splits by how the request authenticated:
+ * `cookie` gets the same `Set-Cookie` write `OAuth.ts` already uses after
+ * `issue`; `bearer` gets a `set-auth-token` response header, upstream's
+ * own mechanism and the only way a bearer client (presenting the raw
+ * secret directly, not through a plugin like `@awthaq/jwt`) can learn its
+ * token rotated. A no-op when `verify` didn't rotate this call.
+ */
+const deliverRotation = (
+  scheme: "cookie" | "bearer",
+  rotated: Option.Option<Redacted.Redacted<string>>,
+  response: HttpServerResponse.HttpServerResponse,
+) => {
+  if (Option.isNone(rotated)) {
+    return Effect.succeed(response);
+  }
+  const token = Redacted.value(rotated.value);
+  return scheme === "cookie"
+    ? HttpServerResponse.setCookie(
+        response,
+        Sessions.SESSION_COOKIE_NAME,
+        token,
+        Sessions.SESSION_COOKIE_ATTRIBUTES,
+      ).pipe(Effect.orDie)
+    : Effect.succeed(HttpServerResponse.setHeader(response, "set-auth-token", token));
 };
 
-/** BEH-EA-065 through 067/070: fails `Unauthenticated` only once every declared scheme has. */
+/**
+ * BEH-EA-065 through 067/070: fails `Unauthenticated` only once every
+ * declared scheme has. Ticket 01: `cookie` and `bearer` each resolve
+ * through the shared `resolveSession`/`resolver.resolve` core, then apply
+ * their own rotation-delivery step (`deliverRotation`) — no longer one
+ * literal `handle` shared between both slots, since delivery is genuinely
+ * scheme-specific.
+ */
 export const AuthenticationLive: Layer.Layer<
   Api.Authentication,
   never,
@@ -119,32 +175,54 @@ export const AuthenticationLive: Layer.Layer<
   Effect.gen(function* () {
     const sessions = yield* Sessions.Sessions;
     const resolver = yield* PrincipalResolver;
+    const authenticate = (
+      scheme: "cookie" | "bearer",
+      httpEffect: Effect.Effect<
+        HttpServerResponse.HttpServerResponse,
+        unhandled,
+        Api.CurrentPrincipal
+      >,
+      credential: Redacted.Redacted<string>,
+    ) =>
+      resolveSession(sessions, credential).pipe(
+        Effect.flatMap(({ session, rotated }) =>
+          resolver.resolve(session).pipe(
+            Effect.flatMap((principal) =>
+              Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
+                Effect.flatMap((response) =>
+                  // `PostAuthResponseHook` is resolved here, per request,
+                  // not captured once above alongside `sessions`/
+                  // `resolver` — a plugin overriding it (e.g.
+                  // `@awthaq/jwt`) may itself need `Api.Authentication`
+                  // for its own endpoints, which would make capturing the
+                  // override at THIS layer's own build time an
+                  // unresolvable circular build order. Resolved per
+                  // request instead, from whatever the request's own full
+                  // ambient context already has. Rotation delivery runs
+                  // first — always-on core session-security machinery,
+                  // orthogonal to the plugin decoration seam below.
+                  deliverRotation(scheme, rotated, response).pipe(
+                    Effect.flatMap((withRotation) =>
+                      Effect.flatMap(PostAuthResponseHook, (hook) =>
+                        hook.decorate(principal, withRotation),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
     const handle: HttpApiMiddleware.HttpApiMiddlewareSecurity<
       { readonly cookie: typeof Api.SessionCookie; readonly bearer: typeof Api.BearerToken },
       Api.CurrentPrincipal,
       typeof Api.Unauthenticated,
       never
-    >["cookie"] = (httpEffect, { credential }) =>
-      resolvePrincipal(sessions, resolver, credential).pipe(
-        Effect.flatMap((principal) =>
-          Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
-            Effect.flatMap((response) =>
-              // `PostAuthResponseHook` is resolved here, per request, not
-              // captured once above alongside `sessions`/`resolver` — a
-              // plugin overriding it (e.g. `@awthaq/jwt`) may itself
-              // need `Api.Authentication` for its own endpoints, which
-              // would make capturing the override at THIS layer's own
-              // build time an unresolvable circular build order. Resolved
-              // per request instead, from whatever the request's own full
-              // ambient context already has — no such ordering constraint
-              // applies there, and a `Context.Reference` lookup costs
-              // nothing beyond a context read.
-              Effect.flatMap(PostAuthResponseHook, (hook) => hook.decorate(principal, response)),
-            ),
-          ),
-        ),
-      );
-    return { cookie: handle, bearer: handle };
+    >["cookie"] = (httpEffect, { credential }) => authenticate("cookie", httpEffect, credential);
+    const bearer: typeof handle = (httpEffect, { credential }) =>
+      authenticate("bearer", httpEffect, credential);
+    return { cookie: handle, bearer };
   }),
 );
 
@@ -163,37 +241,50 @@ export const OptionalAuthenticationLive: Layer.Layer<
   Effect.gen(function* () {
     const sessions = yield* Sessions.Sessions;
     const resolver = yield* PrincipalResolver;
+    const authenticate = (
+      scheme: "cookie" | "bearer",
+      httpEffect: Effect.Effect<
+        HttpServerResponse.HttpServerResponse,
+        unhandled,
+        Api.CurrentPrincipal
+      >,
+      credential: Redacted.Redacted<string>,
+    ) =>
+      resolveSession(sessions, credential).pipe(
+        Effect.flatMap(({ session, rotated }) =>
+          resolver.resolve(session).pipe(
+            Effect.flatMap((principal) =>
+              Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
+                Effect.flatMap((response) =>
+                  // Per request, not captured at build time — see the
+                  // identical note on `AuthenticationLive` above.
+                  deliverRotation(scheme, rotated, response).pipe(
+                    Effect.flatMap((withRotation) =>
+                      Effect.flatMap(PostAuthResponseHook, (hook) =>
+                        hook.decorate(principal, withRotation),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
     const cookie: HttpApiMiddleware.HttpApiMiddlewareSecurity<
       { readonly cookie: typeof Api.SessionCookie; readonly bearer: typeof Api.BearerToken },
       Api.CurrentPrincipal,
       typeof Api.Unauthenticated,
       never
-    >["cookie"] = (httpEffect, { credential }) =>
-      resolvePrincipal(sessions, resolver, credential).pipe(
-        Effect.flatMap((principal) =>
-          Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
-            Effect.flatMap((response) =>
-              // Per request, not captured at build time — see the identical
-              // note on `AuthenticationLive` above.
-              Effect.flatMap(PostAuthResponseHook, (hook) => hook.decorate(principal, response)),
-            ),
-          ),
-        ),
-      );
+    >["cookie"] = (httpEffect, { credential }) => authenticate("cookie", httpEffect, credential);
     const bearer: typeof cookie = (httpEffect, { credential }) =>
-      resolvePrincipal(sessions, resolver, credential).pipe(
-        Effect.flatMap((principal) =>
-          Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
-            Effect.flatMap((response) =>
-              Effect.flatMap(PostAuthResponseHook, (hook) => hook.decorate(principal, response)),
-            ),
-          ),
-        ),
+      authenticate("bearer", httpEffect, credential).pipe(
         // The anonymous fallback below is a *recovery* from resolution
-        // failure, never a success `resolvePrincipal` itself produced —
-        // `PostAuthResponseHook` is only ever consulted above, on the
-        // genuine success path, so an anonymous/no-credential caller never
-        // gets a decorated (e.g. `@awthaq/jwt`-minted) response.
+        // failure, never a success `authenticate` itself produced —
+        // `PostAuthResponseHook`/rotation delivery are only ever
+        // consulted above, on the genuine success path, so an
+        // anonymous/no-credential caller never gets a decorated (e.g.
+        // `@awthaq/jwt`-minted) response.
         Effect.catchTag("Unauthenticated", () =>
           Effect.provideService(httpEffect, Api.CurrentPrincipal, Api.anonymousPrincipal),
         ),

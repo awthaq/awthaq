@@ -151,13 +151,47 @@ export interface SessionsShape {
    * stored hash in constant time; BEH-EA-052: also performs the
    * throttled-at-most-once-per-`touchEvery` idle refresh this same request
    * is the one to have earned.
+   *
+   * Upstream-hardening map, ticket 01: the same throttled-touch write also
+   * rotates the session's secret (the standard session-fixation defense) —
+   * `rotated` carries the freshly-minted full token exactly when this call
+   * performed that rotation, `Option.none()` otherwise (including every
+   * `actingAs` session, which never touches this path at all). The old
+   * secret's hash is overwritten in the same atomic write, so it stops
+   * verifying immediately — no grace window. A concurrent second `verify`
+   * racing the same throttled write never corrupts state (a compare-and-
+   * swap in both `Layer`s' own implementation lets only one winner rotate;
+   * the loser reports `rotated: Option.none()` over the winner's write),
+   * but calling `verify` a *second time within one request* against the
+   * same pre-rotation credential is a real, current architectural risk,
+   * not just a theoretical one: `@awthaq/qadi`'s `SubjectExtractorLive`
+   * (BEH-EA-153) calls `resolvePrincipal` — and so `verify` — independent
+   * of and potentially before `Authentication`'s own middleware runs on
+   * the same request (spec/behaviors/20-qadi-bridge-path-b.md). An
+   * endpoint wiring both Path A's `Api.Authentication` and Path B's
+   * `RequirePermission` together would rotate on the first call and then
+   * fail the second with `SessionNotFound`, once every `touchEvery`
+   * window, per session. No endpoint in this repository currently
+   * combines both bridges on one route (confirmed: `AdminApi.ts` uses
+   * only `Api.Authentication`), so this doesn't fire today — but fixing
+   * it properly needs request-scoped memoization of `verify`'s result,
+   * which doesn't exist anywhere in this codebase yet and would be new,
+   * speculative infrastructure beyond this ticket's own scope to build
+   * pre-emptively. Flagged here rather than silently risked; a real
+   * candidate for its own future ticket if/when an endpoint actually
+   * needs both bridges at once.
    */
   readonly verify: (
     token: Redacted.Redacted<string>,
-  ) => Effect.Effect<SessionView, SessionNotFound | SessionExpired | PlatformError.PlatformError>;
+  ) => Effect.Effect<
+    { readonly session: SessionView; readonly rotated: Option.Option<Redacted.Redacted<string>> },
+    SessionNotFound | SessionExpired | PlatformError.PlatformError
+  >;
   readonly revoke: (id: SessionId) => Effect.Effect<void, SessionNotFound>;
   /** BEH-EA-054: revokes every session for `userId` except `keep`. */
   readonly revokeOthers: (userId: UserId, keep: SessionId) => Effect.Effect<void>;
+  /** Ticket 02: revokes every session for `userId`, no exceptions — including the caller's own current session. */
+  readonly revokeAll: (userId: UserId) => Effect.Effect<void>;
   /** BEH-EA-054: `current` is set on whichever row's id equals `current`. */
   readonly list: (
     userId: UserId,
@@ -264,25 +298,57 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
       // BEH-EA-210: a session carrying `actingAs` never idle-refreshes — its
       // hard expiry is the whole mechanism, so `verify` never touches it.
       if (Option.isSome(row.value.actingAs)) {
-        return toView(row.value);
+        return { session: toView(row.value), rotated: Option.none() };
       }
       // BEH-EA-052: throttled idle refresh — at most one write per `touchEvery`.
       const dueForTouch =
         DateTime.toEpochMillis(now) >=
         DateTime.toEpochMillis(DateTime.addDuration(row.value.lastActiveAt, config.touchEvery));
       if (!dueForTouch) {
-        return toView(row.value);
+        return { session: toView(row.value), rotated: Option.none() };
       }
-      const refreshed: SessionRow = {
-        ...row.value,
-        lastActiveAt: now,
-        idleExpiresAt: DateTime.min(
-          DateTime.addDuration(now, config.idle),
-          row.value.absoluteExpiresAt,
-        ),
+      // Ticket 01: the same throttled write also rotates the secret — via
+      // `Ref.modify`'s own atomicity, compare-and-swapped against
+      // `row.value.secretHash` (the value this call just read) so a losing
+      // concurrent request never clobbers a winner's write with its own,
+      // independently-generated secret. Losing the race isn't a failure:
+      // this call simply reports no rotation of its own, over whatever the
+      // winner's write left behind.
+      const newSecret = toHex(yield* crypto.randomBytes(32));
+      const newSecretHash = yield* hashSecret(crypto, newSecret);
+      const expectedSecretHash = row.value.secretHash;
+      const touched = yield* Ref.modify(
+        state,
+        (s): readonly [Option.Option<SessionRow>, HashMap.HashMap<SessionId, SessionRow>] => {
+          const current = HashMap.get(s, id);
+          if (Option.isNone(current) || current.value.secretHash !== expectedSecretHash) {
+            return [Option.none(), s] as const;
+          }
+          const refreshed: SessionRow = {
+            ...current.value,
+            secretHash: newSecretHash,
+            lastActiveAt: now,
+            idleExpiresAt: DateTime.min(
+              DateTime.addDuration(now, config.idle),
+              current.value.absoluteExpiresAt,
+            ),
+          };
+          return [Option.some(refreshed), HashMap.set(s, id, refreshed)] as const;
+        },
+      );
+      if (Option.isNone(touched)) {
+        const current = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
+        if (Option.isNone(current)) {
+          return yield* Effect.fail(
+            new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+          );
+        }
+        return { session: toView(current.value), rotated: Option.none() };
+      }
+      return {
+        session: toView(touched.value),
+        rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
       };
-      yield* Ref.update(state, (s) => HashMap.set(s, id, refreshed));
-      return toView(refreshed);
     });
 
     const revoke: SessionsShape["revoke"] = (id) =>
@@ -310,6 +376,9 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
         HashMap.filter(s, (row, id) => id === keep || row.userId !== userId),
       );
 
+    const revokeAll: SessionsShape["revokeAll"] = (userId) =>
+      Ref.update(state, (s) => HashMap.filter(s, (row) => row.userId !== userId));
+
     const list: SessionsShape["list"] = (userId, current) =>
       Ref.get(state).pipe(
         Effect.map((s) =>
@@ -326,7 +395,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
         ),
       );
 
-    return { issue, verify, revoke, revokeOthers, list };
+    return { issue, verify, revoke, revokeOthers, revokeAll, list };
   }),
 );
 
@@ -433,26 +502,51 @@ export const layerSql: Layer.Layer<
       }
       // BEH-EA-210: a session carrying `actingAs` never idle-refreshes.
       if (row.actingAsType !== null || row.actingAsId !== null) {
-        return toSessionView(row);
+        return { session: toSessionView(row), rotated: Option.none() };
       }
       // BEH-EA-052: throttled idle refresh — at most one write per `touchEvery`.
       const dueForTouch =
         DateTime.toEpochMillis(now) >=
         DateTime.toEpochMillis(DateTime.addDuration(row.lastActiveAt, config.touchEvery));
       if (!dueForTouch) {
-        return toSessionView(row);
+        return { session: toSessionView(row), rotated: Option.none() };
       }
-      const update = yield* SqlModels.Session.update
-        .makeEffect({
+      // Ticket 01: the same throttled write also rotates the secret.
+      // `repo.touch`'s own compare-and-swap (guarded on `row.secretHash`,
+      // the value this call just read) means a losing concurrent request
+      // never clobbers a winner's write — see `SessionsRepositoryShape.touch`'s
+      // own doc comment. Losing the race isn't a failure: this call simply
+      // reports no rotation of its own, over whatever the winner's write
+      // left behind.
+      const newSecret = toHex(yield* crypto.randomBytes(32));
+      const newSecretHash = yield* hashSecret(crypto, newSecret);
+      const touched = yield* repo
+        .touch({
           id: row.id,
-          lastActiveAt: Model.Override(now),
-          idleExpiresAt: Model.Override(
-            DateTime.min(DateTime.addDuration(now, config.idle), row.absoluteExpiresAt),
+          expectedSecretHash: row.secretHash,
+          secretHash: newSecretHash,
+          lastActiveAt: now,
+          idleExpiresAt: DateTime.min(
+            DateTime.addDuration(now, config.idle),
+            row.absoluteExpiresAt,
           ),
         })
         .pipe(Effect.orDie);
-      const refreshed = yield* repo.update(update).pipe(Effect.orDie);
-      return toSessionView(refreshed);
+      if (Option.isNone(touched)) {
+        const current = yield* repo.findById(id).pipe(
+          Effect.catchTags({
+            NoSuchElementError: () =>
+              Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+            SchemaError: Effect.die,
+            SqlError: Effect.die,
+          }),
+        );
+        return { session: toSessionView(current), rotated: Option.none() };
+      }
+      return {
+        session: toSessionView(touched.value),
+        rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
+      };
     });
 
     const revoke: SessionsShape["revoke"] = (id) =>
@@ -469,6 +563,9 @@ export const layerSql: Layer.Layer<
     const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep) =>
       repo.deleteAllForUserExcept(userId, keep).pipe(Effect.orDie);
 
+    const revokeAll: SessionsShape["revokeAll"] = (userId) =>
+      repo.deleteAllByUser(userId).pipe(Effect.orDie);
+
     const list: SessionsShape["list"] = (userId, current) =>
       repo.listByUser(userId, undefined, LIST_PAGE_SIZE).pipe(
         Effect.map((page) =>
@@ -484,6 +581,6 @@ export const layerSql: Layer.Layer<
         Effect.orDie,
       );
 
-    return { issue, verify, revoke, revokeOthers, list };
+    return { issue, verify, revoke, revokeOthers, revokeAll, list };
   }),
 );

@@ -101,17 +101,18 @@ export class Account extends Model.Class<Account>("Account")({
  * BEH-EA-049/050: only `SHA-256(secret)` is ever persisted — `secretHash`
  * itself is `Model.Sensitive` on top of that, so a leaked JSON variant
  * cannot even disclose the hash. BEH-EA-051/052: `absoluteExpiresAt` is
- * fixed at issue (excluded from `update`); `lastActiveAt`/`idleExpiresAt`
- * are the only columns the idle-refresh touch (BEH-EA-052) may write.
+ * fixed at issue (excluded from `update`); `lastActiveAt`/`idleExpiresAt`/
+ * `secretHash` are the columns the idle-refresh touch (BEH-EA-052,
+ * upstream-hardening ticket 01's rotation) may write.
  */
 export class Session extends Model.Class<Session>("Session")({
   id: Model.UuidV7Insert(SessionId),
   userId: UserId.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
-  // `Model.Sensitive` alone omits every JSON variant but keeps `update`; a
-  // hash that is also immutable once issued needs both, so it is built
-  // directly as a bare `select`/`insert`-only field (no `update`, no JSON
-  // variant of any kind) rather than composed from `Sensitive`.
-  secretHash: Model.Field({ select: Schema.String, insert: Schema.String }),
+  // Ticket 01: rotation overwrites this on the same throttled touch write
+  // that already refreshes `lastActiveAt`/`idleExpiresAt`, so — unlike
+  // every other insert-only field on this table — it needs an `update`
+  // variant. `Model.Sensitive` still omits it from every JSON variant.
+  secretHash: Model.Sensitive(Schema.String),
   ipAddress: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   userAgent: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   absoluteExpiresAt: Schema.DateTimeUtcFromString.pipe(Model.FieldExcept(["update", "jsonUpdate"])),

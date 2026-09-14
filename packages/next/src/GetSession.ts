@@ -74,7 +74,13 @@ const resolve = (token: string) =>
     const sessions = yield* Sessions.Sessions;
     const users = yield* Users.Users;
     const resolver = yield* Authentication.PrincipalResolver;
-    const session = yield* sessions.verify(Redacted.make(token));
+    // Upstream-hardening ticket 01: `verify` may rotate the session's
+    // secret, but a Server Component/server action has no response to
+    // deliver a rotated cookie through (Next.js RSCs cannot set cookies at
+    // all) — `rotated` is intentionally discarded here; a real HTTP
+    // request through `@awthaq/server`'s `Authentication` middleware is
+    // what actually delivers rotation to the browser.
+    const { session } = yield* sessions.verify(Redacted.make(token));
     const user = yield* users.findById(session.userId);
     const principal = yield* resolver.resolve(session);
     return { principal, user, session };

@@ -140,6 +140,26 @@ const cookieFrom = (response: Response): string => {
   return raw.split(";")[0] ?? raw;
 };
 
+/**
+ * Upstream-hardening ticket 04: `signIn` now hard-blocks an unverified
+ * account — every test below that needs a real, working sign-in after
+ * sign-up must consume signUp's own dispatched verification mail first,
+ * the same wiring `shipping-gaps/08`'s own test already proves works.
+ */
+const verifyLatestSignUp = (
+  handler: (request: Request) => Promise<Response>,
+  mailer: { readonly sent: Effect.Effect<ReadonlyArray<Mailer.MailMessage>> },
+) =>
+  Effect.gen(function* () {
+    yield* letForkedFibersRun;
+    const messages = yield* mailer.sent;
+    const verifyMail = messages.findLast((m) => m.template === "verify-email");
+    if (verifyMail === undefined) throw new Error("expected a verify-email mail");
+    const token = (verifyMail.data as { token: string }).token;
+    const verified = yield* Effect.promise(() => post(handler, "/verify-email", { token }));
+    assert.strictEqual(verified.status, 204);
+  });
+
 describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("BEH-EA-113/083: sign-up sets a session cookie and answers 200", () =>
     Effect.gen(function* () {
@@ -178,12 +198,14 @@ describe("AuthHttp + Password (real HTTP)", () => {
     "BEH-EA-114/401: sign-in with the wrong password answers uniform InvalidCredentials",
     () =>
       Effect.gen(function* () {
-        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const mailer = capturingMailer();
+        const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
 
         const signedUp = yield* Effect.promise(() =>
           post(handler, "/password/sign-up", { email: "bo@example.com", password: strongPassword }),
         );
         assert.strictEqual(signedUp.status, 200);
+        yield* verifyLatestSignUp(handler, mailer);
 
         const wrongPassword = yield* Effect.promise(() =>
           post(handler, "/password/sign-in", {
@@ -227,6 +249,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
           }),
         );
         assert.strictEqual(signUp.status, 200);
+        yield* verifyLatestSignUp(handler, mailer);
 
         const requestUnknown = yield* Effect.promise(() =>
           post(handler, "/password/request-reset", { email: "not-a-real-user@example.com" }),
@@ -347,7 +370,8 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("shipping-gaps/11: change-password rotates the hash for the authenticated caller", () =>
     Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const mailer = capturingMailer();
+      const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
       const signUp = yield* Effect.promise(() =>
         post(handler, "/password/sign-up", {
           email: "change@example.com",
@@ -355,6 +379,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
         }),
       );
       assert.strictEqual(signUp.status, 200);
+      yield* verifyLatestSignUp(handler, mailer);
       const cookie = cookieFrom(signUp);
 
       const authed = (path: string, body: unknown) =>

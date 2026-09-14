@@ -328,6 +328,91 @@ describe("Repositories", () => {
   );
 
   it.effect(
+    "upstream-hardening ticket 02: deleteAllByUser revokes every session, no exceptions",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Repositories.SessionsRepository;
+        const users = yield* Repositories.UsersRepository;
+        const user = yield* users.insert(
+          yield* Models.User.insert.makeEffect({ email: "revoke-all@example.com", name: "R" }),
+        );
+        const now = yield* DateTime.now;
+        const make = () =>
+          sessions.insert(
+            Models.Session.insert.make({
+              userId: user.id,
+              secretHash: "h",
+              ipAddress: null,
+              userAgent: null,
+              absoluteExpiresAt: now,
+              idleExpiresAt: Model.Override(now),
+              actingAsType: null,
+              actingAsId: null,
+            }),
+          );
+        yield* make();
+        yield* make();
+
+        yield* sessions.deleteAllByUser(user.id);
+        const remaining = yield* sessions.listByUser(user.id, undefined, 10);
+        assert.strictEqual(remaining.items.length, 0);
+      }).pipe(Effect.provide(RepositoriesLive)),
+  );
+
+  it.effect(
+    "upstream-hardening ticket 01: touch's compare-and-swap lets only the first of two racing callers rotate",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Repositories.SessionsRepository;
+        const users = yield* Repositories.UsersRepository;
+        const user = yield* users.insert(
+          yield* Models.User.insert.makeEffect({ email: "touch-race@example.com", name: "T" }),
+        );
+        const now = yield* DateTime.now;
+        const session = yield* sessions.insert(
+          Models.Session.insert.make({
+            userId: user.id,
+            secretHash: "original-hash",
+            ipAddress: null,
+            userAgent: null,
+            absoluteExpiresAt: now,
+            idleExpiresAt: Model.Override(now),
+            actingAsType: null,
+            actingAsId: null,
+          }),
+        );
+
+        // Two callers both read the row before either wrote — both present
+        // the same `expectedSecretHash`, the value that was actually live
+        // at the time they read it.
+        const first = yield* sessions.touch({
+          id: session.id,
+          expectedSecretHash: "original-hash",
+          secretHash: "rotated-by-first",
+          lastActiveAt: now,
+          idleExpiresAt: now,
+        });
+        assert.isTrue(Option.isSome(first), "the first caller should win the race");
+        assert.strictEqual(Option.getOrThrow(first).secretHash, "rotated-by-first");
+
+        // The second caller's own compare-and-swap is guarded against the
+        // now-stale hash it read before the first caller's write landed —
+        // it must not clobber the winner's row with its own rotation.
+        const second = yield* sessions.touch({
+          id: session.id,
+          expectedSecretHash: "original-hash",
+          secretHash: "rotated-by-second",
+          lastActiveAt: now,
+          idleExpiresAt: now,
+        });
+        assert.isTrue(Option.isNone(second), "the second, losing caller must not overwrite");
+
+        const current = yield* sessions.findById(session.id);
+        assert.strictEqual(current.secretHash, "rotated-by-first");
+      }).pipe(Effect.provide(RepositoriesLive)),
+  );
+
+  it.effect(
     "BEH-EA-057/060: VerificationToken repository hashes at rest and is looked up by identifier",
     () =>
       Effect.gen(function* () {

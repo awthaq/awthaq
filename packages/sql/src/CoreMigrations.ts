@@ -193,4 +193,46 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // Upstream-hardening map, ticket 03: `Users.ts`'s own header comment and
+  // `layerSql.create`'s `UniqueViolation` handling both already assumed
+  // this constraint existed — it never did, so a real database silently
+  // accepted duplicate emails until this migration. A functional index
+  // over `lower(email)`, matching the app-level `.toLowerCase()`
+  // normalization `Users.ts` already does before every insert.
+  //
+  // This migrator is forward-only and whole-batch (no per-migration data
+  // fixup step) — on a real, already-deployed database that has
+  // accumulated case-insensitive duplicate emails (the exact condition
+  // this migration closes off, previously unenforced), this `CREATE
+  // UNIQUE INDEX` fails and blocks migrations 8/9 behind it. No such
+  // database exists yet (`"private": true`, no package published), so
+  // this doesn't fire today; a real deployment inheriting dirty data
+  // would need a one-time out-of-band de-duplication pass before this
+  // migration can run, the ordinary operational cost of adding any
+  // uniqueness constraint after the fact.
+  migration(7, "create_users_email_unique_index", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`CREATE UNIQUE INDEX users_email_unique ON users (lower(email))`,
+      sqlite: () => sql`CREATE UNIQUE INDEX users_email_unique ON users (lower(email))`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
+  // Ticket 03: `accounts.userId` is a real filter key (`Repositories.ts`'s
+  // `listByUser`/`deleteAllByUser`), unindexed until now.
+  migration(8, "create_accounts_user_id_index", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`CREATE INDEX accounts_user_id ON accounts("userId")`,
+      sqlite: () => sql`CREATE INDEX accounts_user_id ON accounts(userId)`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
+  // Ticket 03: `sessions.userId` is a real filter key (`Repositories.ts`'s
+  // `listByUser`/`deleteAllForUserExcept`), unindexed until now.
+  migration(9, "create_sessions_user_id_index", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`CREATE INDEX sessions_user_id ON sessions("userId")`,
+      sqlite: () => sql`CREATE INDEX sessions_user_id ON sessions(userId)`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);

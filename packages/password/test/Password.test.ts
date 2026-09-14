@@ -101,6 +101,27 @@ const letForkedFibersRun = Effect.gen(function* () {
   for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
 });
 
+/**
+ * Upstream-hardening ticket 04: `signIn` now hard-blocks an unverified
+ * account, so every test that needs a real, working sign-in after signUp
+ * must consume the verification mail `signUp` already dispatches first —
+ * mirrors what a real client would do, not a shortcut around the gate.
+ */
+const signUpAndVerify = (
+  password: Password.PasswordShape,
+  mailer: Mailer.MailerShape,
+  input: { readonly email: string; readonly password: Redacted.Redacted<string> },
+) =>
+  Effect.gen(function* () {
+    const issued = yield* password.signUp(input);
+    yield* letForkedFibersRun;
+    const sent = yield* mailer.sent;
+    const verifyMail = sent.findLast((mail) => mail.template === "verify-email");
+    const token = Redacted.make(String(verifyMail?.data?.["token"]));
+    yield* password.verifyEmail({ token });
+    return issued;
+  });
+
 describe("Password", () => {
   it.effect(
     "BEH-EA-113: signUp creates a user, links a credential, issues a session, and mails a verification token",
@@ -157,7 +178,11 @@ describe("Password", () => {
         const password = yield* Password.Password;
         const users = yield* Users.Users;
         const accounts = yield* Accounts.Accounts;
-        const { session } = yield* password.signUp({ email, password: strongPassword });
+        const mailer = yield* Mailer.Mailer;
+        const { session } = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
 
         const account = yield* accounts.findByProviderSubject(
           Accounts.PASSWORD_PROVIDER_ID,
@@ -211,6 +236,84 @@ describe("Password", () => {
       }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect(
+    "upstream-hardening ticket 04: signIn hard-blocks an unverified account with otherwise-correct credentials",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        yield* password.signUp({ email, password: strongPassword });
+        // No verifyEmail call — the account stays unverified.
+        const failure = yield* password
+          .signIn({ email, password: strongPassword })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "EmailNotVerified");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "upstream-hardening ticket 04: the verification gate never leaks ahead of credential verification",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        yield* password.signUp({ email, password: strongPassword });
+        // A wrong password on an unverified account still reports
+        // InvalidCredentials, never EmailNotVerified — the gate can't be
+        // used to probe whether a guessed password is close to correct.
+        const failure = yield* password
+          .signIn({ email, password: Redacted.make("totally wrong password") })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "InvalidCredentials");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "upstream-hardening ticket 04: signIn succeeds once verifyEmail has consumed signUp's own mailed token",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        const issued = yield* password.signIn({ email, password: strongPassword });
+        assert.isDefined(issued.token);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "upstream-hardening ticket 04: resendVerification is enumeration-safe and mails only an existing, unverified account",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        yield* password.signUp({ email, password: strongPassword });
+        yield* letForkedFibersRun; // let signUp's own verification mail land first
+
+        yield* password.resendVerification({ email: "nobody@example.com" });
+        const afterUnknown = yield* mailer.sent;
+        assert.strictEqual(
+          afterUnknown.filter((mail) => mail.template === "verify-email").length,
+          1, // only signUp's own mail so far
+        );
+
+        yield* password.resendVerification({ email });
+        const afterKnown = yield* mailer.sent;
+        assert.strictEqual(afterKnown.filter((mail) => mail.template === "verify-email").length, 2);
+
+        // Once verified, a further resend mails nothing new — same
+        // enumeration-safe response either way. `resendVerification`
+        // reissues against the same identifier, atomically replacing the
+        // still-live token signUp minted — the most recently mailed token
+        // is the only one still valid, not the first.
+        const verifyMail = afterKnown.findLast((mail) => mail.template === "verify-email");
+        yield* password.verifyEmail({ token: Redacted.make(String(verifyMail?.data?.["token"])) });
+        yield* password.resendVerification({ email });
+        const afterVerified = yield* mailer.sent;
+        assert.strictEqual(
+          afterVerified.filter((mail) => mail.template === "verify-email").length,
+          2,
+        );
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("BEH-EA-064/117: requestReset always succeeds; only a known email is mailed", () =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
@@ -238,8 +341,14 @@ describe("Password", () => {
 
         const { token: firstToken } = yield* password.signUp({ email, password: strongPassword });
         const second = yield* sessions.issue({
-          userId: (yield* sessions.verify(firstToken)).userId,
+          userId: (yield* sessions.verify(firstToken)).session.userId,
         });
+
+        // Upstream-hardening ticket 04: the final `signIn` below needs a
+        // verified account — consume signUp's own dispatched mail first.
+        yield* letForkedFibersRun;
+        const verifyMail = (yield* mailer.sent).find((mail) => mail.template === "verify-email");
+        yield* password.verifyEmail({ token: Redacted.make(String(verifyMail?.data?.["token"])) });
 
         yield* password.requestReset({ email });
         const sent = yield* mailer.sent;
@@ -374,7 +483,11 @@ describe("Password", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const issued = yield* password.signUp({ email, password: strongPassword });
+        const mailer = yield* Mailer.Mailer;
+        const issued = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
         const userId = issued.session.userId;
 
         const wrong = yield* password

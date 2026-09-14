@@ -88,7 +88,7 @@ const suite = (
           assert.include(raw, ".");
           assert.strictEqual(raw.split(".")[0], session.id);
 
-          const view = yield* sessions.verify(token);
+          const { session: view } = yield* sessions.verify(token);
           assert.strictEqual(view.id, session.id);
           assert.strictEqual(view.userId, userId);
         }).pipe(Effect.provide(layer)),
@@ -109,13 +109,18 @@ const suite = (
         const sessions = yield* Sessions.Sessions;
         const { token } = yield* sessions.issue({ userId });
         // Cross two touchEvery windows, staying under idle (500ms) each
-        // time, but past the 1000ms absolute ceiling in total.
+        // time, but past the 1000ms absolute ceiling in total. Ticket 01:
+        // each touched verify rotates the secret, so the freshly-rotated
+        // token (when present) must be used for the next call — the old
+        // one no longer verifies.
         yield* TestClock.adjust(Duration.millis(400));
-        yield* sessions.verify(token);
+        const first = yield* sessions.verify(token);
+        const afterFirst = Option.getOrElse(first.rotated, () => token);
         yield* TestClock.adjust(Duration.millis(400));
-        yield* sessions.verify(token);
+        const second = yield* sessions.verify(afterFirst);
+        const afterSecond = Option.getOrElse(second.rotated, () => afterFirst);
         yield* TestClock.adjust(Duration.millis(400));
-        const failure = yield* sessions.verify(token).pipe(Effect.flip);
+        const failure = yield* sessions.verify(afterSecond).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "SessionExpired");
       }).pipe(Effect.provide(shortLivedLayer)),
     );
@@ -140,16 +145,44 @@ const suite = (
         yield* TestClock.adjust(Duration.millis(10));
         const notTouched = yield* sessions.verify(token);
         assert.strictEqual(
-          DateTime.toEpochMillis(notTouched.lastActiveAt),
+          DateTime.toEpochMillis(notTouched.session.lastActiveAt),
           DateTime.toEpochMillis(session.createdAt),
         );
         // Past touchEvery — this verify earns a refresh.
         yield* TestClock.adjust(Duration.millis(200));
         const touched = yield* sessions.verify(token);
         assert.isTrue(
-          DateTime.toEpochMillis(touched.lastActiveAt) > DateTime.toEpochMillis(session.createdAt),
+          DateTime.toEpochMillis(touched.session.lastActiveAt) >
+            DateTime.toEpochMillis(session.createdAt),
         );
       }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    it.effect(
+      "upstream-hardening ticket 01: the same throttled touch rotates the secret, invalidating the old token immediately",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          // Under touchEvery — no rotation yet.
+          yield* TestClock.adjust(Duration.millis(10));
+          const notTouched = yield* sessions.verify(token);
+          assert.deepStrictEqual(notTouched.rotated, Option.none());
+
+          // Past touchEvery — this verify both refreshes and rotates.
+          yield* TestClock.adjust(Duration.millis(200));
+          const touched = yield* sessions.verify(token);
+          assert.isTrue(Option.isSome(touched.rotated));
+
+          // The old token no longer verifies — no grace window.
+          const oldFails = yield* sessions.verify(token).pipe(Effect.flip);
+          assert.strictEqual(oldFails._tag, "SessionNotFound");
+
+          // The freshly-rotated token verifies and resolves the same session.
+          const rotatedToken = Option.getOrThrow(touched.rotated);
+          const { session: newView } = yield* sessions.verify(rotatedToken);
+          assert.strictEqual(newView.id, touched.session.id);
+        }).pipe(Effect.provide(shortLivedLayer)),
     );
 
     it.effect("BEH-EA-053: issuing with `supersedes` deletes the prior row", () =>
@@ -160,7 +193,7 @@ const suite = (
         const oldFails = yield* sessions.verify(first.token).pipe(Effect.flip);
         assert.strictEqual(oldFails._tag, "SessionNotFound");
         const newWorks = yield* sessions.verify(second.token);
-        assert.strictEqual(newWorks.id, second.session.id);
+        assert.strictEqual(newWorks.session.id, second.session.id);
       }).pipe(Effect.provide(layer)),
     );
 
@@ -179,12 +212,29 @@ const suite = (
         const bFails = yield* sessions.verify(b.token).pipe(Effect.flip);
         assert.strictEqual(bFails._tag, "SessionNotFound");
         const aStillWorks = yield* sessions.verify(a.token);
-        assert.strictEqual(aStillWorks.id, a.session.id);
+        assert.strictEqual(aStillWorks.session.id, a.session.id);
 
         yield* sessions.revoke(a.session.id);
         const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
         assert.strictEqual(aFails._tag, "SessionNotFound");
       }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "upstream-hardening ticket 02: revokeAll kills every session, including the caller's own",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId, request: { userAgent: "device-a" } });
+          const b = yield* sessions.issue({ userId, request: { userAgent: "device-b" } });
+
+          yield* sessions.revokeAll(userId);
+
+          const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
+          assert.strictEqual(aFails._tag, "SessionNotFound");
+          const bFails = yield* sessions.verify(b.token).pipe(Effect.flip);
+          assert.strictEqual(bFails._tag, "SessionNotFound");
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("BEH-EA-209: actingAs round-trips through issue/verify", () =>
@@ -196,7 +246,13 @@ const suite = (
         });
         assert.deepStrictEqual(session.actingAs, Option.some({ type: "user", id: "admin-1" }));
         const verified = yield* sessions.verify(token);
-        assert.deepStrictEqual(verified.actingAs, Option.some({ type: "user", id: "admin-1" }));
+        assert.deepStrictEqual(
+          verified.session.actingAs,
+          Option.some({ type: "user", id: "admin-1" }),
+        );
+        // Ticket 01: an actingAs session never touches the touch/rotation
+        // path at all — its hard expiry is the whole security model.
+        assert.deepStrictEqual(verified.rotated, Option.none());
       }).pipe(Effect.provide(layer)),
     );
 
@@ -236,11 +292,11 @@ const suite = (
         yield* TestClock.adjust(Duration.millis(200));
         const verified = yield* sessions.verify(token);
         assert.strictEqual(
-          DateTime.toEpochMillis(verified.idleExpiresAt),
+          DateTime.toEpochMillis(verified.session.idleExpiresAt),
           DateTime.toEpochMillis(session.idleExpiresAt),
         );
         assert.strictEqual(
-          DateTime.toEpochMillis(verified.lastActiveAt),
+          DateTime.toEpochMillis(verified.session.lastActiveAt),
           DateTime.toEpochMillis(session.lastActiveAt),
         );
       }).pipe(Effect.provide(shortLivedLayer)),
@@ -272,7 +328,7 @@ const suite = (
           yield* TestClock.adjust(Duration.millis(200));
           const verified = yield* sessions.verify(token);
           assert.isTrue(
-            DateTime.toEpochMillis(verified.lastActiveAt) >
+            DateTime.toEpochMillis(verified.session.lastActiveAt) >
               DateTime.toEpochMillis(session.lastActiveAt),
           );
         }).pipe(Effect.provide(shortLivedLayer)),

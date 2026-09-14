@@ -114,6 +114,14 @@ export const SessionHandlers = HttpApiBuilder.group(
         const sessionId = Sessions.SessionId(principal.sessionId);
         yield* sessions.revokeOthers(userId, sessionId);
       }),
+
+      // Ticket 02: truly all, no exceptions — kills the caller's own
+      // current session too, as a natural consequence of "all" meaning all.
+      revokeAll: Effect.fnUntraced(function* () {
+        const principal = yield* currentUserPrincipal;
+        const userId = Users.UserId(principal.ref.id);
+        yield* sessions.revokeAll(userId);
+      }),
     });
   }),
 );

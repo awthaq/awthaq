@@ -50,4 +50,10 @@ export const SessionGroup = HttpApiGroup.make("session")
     }),
   )
   .add(HttpApiEndpoint.post("revokeOthers", "/session/revoke-others"))
+  // Upstream-hardening map, ticket 02: completes the `revoke`/
+  // `revokeOthers`/`revokeAll` naming symmetry — kills every session for
+  // the caller, no exceptions, including the caller's own current
+  // session. No payload, no response cookie-clearing, matching
+  // `signOut`'s existing precedent.
+  .add(HttpApiEndpoint.post("revokeAll", "/session/revoke-all"))
   .middleware(Authentication);
