@@ -24,6 +24,7 @@
     "packages/*/lib/**",
     "packages/*/dist/**",
     "features/lib/**",
-    "**/*.tsbuildinfo"
+    "**/*.tsbuildinfo",
+    ".scratch/**"
   ]
 }

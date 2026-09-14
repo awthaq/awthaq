@@ -23,12 +23,14 @@
     "format:check": "oxfmt --check packages features scripts vitest.config.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.base.json tsconfig.packages.json tsconfig.test.json .oxlintrc.json .changeset/config.json",
     "spec:verify": "bash spec/scripts/verify-traceability.sh",
     "spec:verify:strict": "bash spec/scripts/verify-traceability.sh --strict",
-    "check": "pnpm typecheck && pnpm lint && pnpm knip && pnpm format:check && pnpm circular && pnpm coverage && pnpm test:bdd && pnpm spec:verify:strict",
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "check": "pnpm typecheck && pnpm package:smoke && pnpm lint && pnpm knip && pnpm format:check && pnpm circular && pnpm coverage && pnpm test:bdd && pnpm spec:verify:strict",
     "changeset": "changeset",
     "changeset-version": "changeset version",
     "changeset-publish": "changeset publish"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@changesets/cli": "^3.0.2",
     "@effect/language-service": "^0.87.2",
     "@effect/tsgo": "0.45.0",
@@ -40,6 +42,7 @@
     "madge": "^8.0.0",
     "oxfmt": "^0.67.0",
     "oxlint": "^1.82.0",
+    "publint": "^0.3.24",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },

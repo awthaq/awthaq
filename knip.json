@@ -1,8 +1,10 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": [".scratch/**"],
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.mjs"]
+      "entry": ["scripts/*.mjs"],
+      "ignoreDependencies": ["@arethetypeswrong/cli"]
     },
     "packages/api-key": {
       "ignoreDependencies": [
