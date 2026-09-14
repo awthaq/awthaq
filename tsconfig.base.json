@@ -72,7 +72,25 @@
         "namespaceImportPackages": ["effect", "@effect/*", "@awthaq/*", "@effect-cucumber/*"],
         "includeSuggestionsInTsc": false,
         "ignoreEffectWarningsInTscExitCode": true,
-        "ignoreEffectErrorsInTscExitCode": false
+        "ignoreEffectErrorsInTscExitCode": false,
+        "diagnosticSeverity": {
+          "duplicatePackage": "error",
+          "genericEffectServices": "error",
+          "outdatedApi": "error",
+          "outdatedEffectCodegen": "error",
+          "unsupportedServiceAccessors": "error",
+          "effectFnIife": "error",
+          "effectGenUsesAdapter": "error",
+          "effectInFailure": "error",
+          "effectInVoidSuccess": "error",
+          "globalErrorInEffectCatch": "error",
+          "globalErrorInEffectFailure": "error",
+          "layerMergeAllWithDependencies": "error",
+          "lazyPromiseInEffectSync": "error",
+          "multipleEffectProvide": "error",
+          "scopeInLayerEffect": "error",
+          "unknownInEffectCatch": "error"
+        }
       }
     ]
   }
