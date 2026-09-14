@@ -1,11 +1,11 @@
 // Shipping-gap map (.scratch/shipping-gaps), ticket 15: `Migrations.run`
 // actually executes a plugin-declared `Migrations` list through the real
 // framework `Migrator`, in order, exactly once each.
-import { SqliteClient } from "@effect/sql-sqlite-node";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { SqlClient } from "effect/unstable/sql";
-import { Migrations } from "../src/index.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrations from "../src/Migrations.ts";
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 

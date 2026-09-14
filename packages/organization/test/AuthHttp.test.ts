@@ -5,7 +5,7 @@
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -16,17 +16,15 @@ import { TestAuth } from "@awthaq/test";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import {
-  ActiveContextRecords,
-  InvitationRecords,
-  MembershipRecords,
-  Organization,
-  OrganizationApi,
-  OrganizationHooks,
-  OrganizationRecords,
-  OrgRoleRecords,
-  TeamRecords,
-} from "../src/index.ts";
+import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
+import * as InvitationRecords from "../src/InvitationRecords.ts";
+import * as MembershipRecords from "../src/MembershipRecords.ts";
+import * as Organization from "../src/Organization.ts";
+import * as OrganizationApi from "../src/OrganizationApi.ts";
+import * as OrganizationHooks from "../src/OrganizationHooks.ts";
+import * as OrganizationRecords from "../src/OrganizationRecords.ts";
+import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
+import * as TeamRecords from "../src/TeamRecords.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),

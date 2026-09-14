@@ -11,7 +11,8 @@ import type * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Record from "effect/Record";
 import type * as Scope from "effect/Scope";
-import { HttpApi, HttpApiGroup } from "effect/unstable/httpapi";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type { Migrations } from "./Migrations.ts";
 
 /**

@@ -1,14 +1,14 @@
 // spec/behaviors/21-qadi-resolvers-obligations.md, BEH-EA-161, BEH-EA-165.
 import { Api } from "@awthaq/api";
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import { AttributeResolver, makeSubjectId } from "@qadi/core";
-import { Resolvers } from "../src/index.ts";
+import * as Resolvers from "../src/Resolvers.ts";
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),

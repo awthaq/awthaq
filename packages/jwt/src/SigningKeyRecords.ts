@@ -32,7 +32,8 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { SqlClient, SqlSchema } from "effect/unstable/sql";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import type { Algorithm } from "./JwtConfig.ts";
 
 export type Jwk = Record<string, unknown>;

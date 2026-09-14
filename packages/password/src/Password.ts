@@ -24,7 +24,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";

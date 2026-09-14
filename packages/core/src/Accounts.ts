@@ -21,7 +21,7 @@ import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
-import { SqlClient } from "effect/unstable/sql";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { UserId } from "./Users.ts";
 
 export type AccountId = string & Brand.Brand<"AccountId">;

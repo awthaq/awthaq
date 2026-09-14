@@ -3,7 +3,7 @@
 // `@awthaq/admin`'s own `AuthComposition.test.ts`.
 import { Auth } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
-import { Organization } from "../src/index.ts";
+import * as Organization from "../src/Organization.ts";
 
 describe("Auth.make([Organization])", () => {
   it("composes a real plugin", () => {

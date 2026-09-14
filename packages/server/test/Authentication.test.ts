@@ -1,7 +1,7 @@
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-065 through BEH-EA-072.
 import { Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -11,13 +11,15 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiTest from "effect/unstable/httpapi/HttpApiTest";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { Authentication } from "../src/index.ts";
+import * as Authentication from "../src/Authentication.ts";
 
 // `HttpApiTest.groups` needs these platform services regardless of which
 // middleware is under test — the same bundle effect's own HttpApiBuilder

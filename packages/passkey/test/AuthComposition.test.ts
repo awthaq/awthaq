@@ -3,7 +3,7 @@
 // `@awthaq/password`'s own `AuthComposition.test.ts`.
 import { Auth } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
-import { Passkey } from "../src/index.ts";
+import * as Passkey from "../src/Passkey.ts";
 
 describe("Auth.make([Passkey])", () => {
   it("composes a real plugin", () => {

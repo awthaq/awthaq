@@ -7,7 +7,7 @@
 import { isoBase64URL } from "@simplewebauthn/server/helpers";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { WebAuthn } from "../src/index.ts";
+import * as WebAuthn from "../src/WebAuthn.ts";
 import * as Fixtures from "./webauthnFixtures.ts";
 
 const RP_ID = "example.com";

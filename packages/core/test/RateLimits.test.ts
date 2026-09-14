@@ -6,9 +6,9 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { HttpApiGroup } from "effect/unstable/httpapi";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type { AuthPlugin } from "../src/index.ts";
-import { RateLimits } from "../src/index.ts";
+import * as RateLimits from "../src/RateLimits.ts";
 
 const fakePlugin = (id: string, groups: ReadonlyArray<string>): AuthPlugin.Any => ({
   id,

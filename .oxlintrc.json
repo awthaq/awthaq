@@ -1,7 +1,23 @@
 {
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "jsPlugins": ["./tools/oxc/index.ts"],
   "rules": {
-    "no-explicit-any": "error"
+    "no-explicit-any": "error",
+    "effect/no-bigint-literals": "error",
+    "effect/no-import-from-barrel-package": [
+      "error",
+      {
+        "checkPatterns": [
+          "^effect$",
+          "^effect/(.+/)?[a-z][a-z0-9]*$",
+          "^@effect/(?!vitest$)[^/]+$",
+          "^@effect/[^/]+/(.+/)?[a-z][a-z0-9]*$"
+        ],
+        "checkRelativeIndexImports": true
+      }
+    ],
+    "effect/no-js-extension-imports": "error",
+    "effect/no-opaque-instance-fields": "error"
   },
   "ignorePatterns": [
     "**/node_modules/**",

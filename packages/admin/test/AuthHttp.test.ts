@@ -8,7 +8,7 @@
 // `AuthHttp.test.ts`.
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -19,7 +19,9 @@ import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { TestAuth } from "@awthaq/test";
-import { Admin, AdminApi, ImpersonationRecords } from "../src/index.ts";
+import * as Admin from "../src/Admin.ts";
+import * as AdminApi from "../src/AdminApi.ts";
+import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),

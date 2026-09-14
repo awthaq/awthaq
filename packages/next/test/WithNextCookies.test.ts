@@ -17,7 +17,7 @@
 import { Api } from "@awthaq/api";
 import { Sessions, Users } from "@awthaq/core";
 import { AuthHttp } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -28,8 +28,11 @@ import * as Schema from "effect/Schema";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
-import { withNextCookies } from "../src/index.ts";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import { withNextCookies } from "../src/WithNextCookies.ts";
 import type { CookieSetOptions } from "../src/index.ts";
 
 type Recorded = readonly [name: string, value: string, options: CookieSetOptions | undefined];

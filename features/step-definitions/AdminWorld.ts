@@ -20,7 +20,7 @@ import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Admin, AdminApi, ImpersonationRecords } from "@awthaq/admin";
 import type { Api } from "@awthaq/api";
 import { Authentication, AuthHttp } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import type { AuthEvent } from "@awthaq/core/AuthEvents";
 import type { AuthSubject } from "@qadi/core";
 import * as Context from "effect/Context";

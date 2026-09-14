@@ -5,7 +5,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
-import { RateLimiter } from "../src/index.ts";
+import * as RateLimiter from "../src/RateLimiter.ts";
 
 const MemoryLive = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
 

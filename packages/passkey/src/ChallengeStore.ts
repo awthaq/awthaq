@@ -46,7 +46,8 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { SqlClient, SqlSchema } from "effect/unstable/sql";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 /** BEH-EA-132: e.g. `registration:<sessionId>`, `authentication:<nonce>` — the plugin's own concern, opaque here. */
 export type ChallengeScope = string;

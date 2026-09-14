@@ -31,7 +31,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as AdminApi from "./AdminApi.ts";
 import * as ImpersonationRecords from "./ImpersonationRecords.ts";
 

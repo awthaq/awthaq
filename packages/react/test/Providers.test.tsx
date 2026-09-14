@@ -9,14 +9,15 @@
 // would need a real HTTP round trip to prove, `@awthaq/qadi`'s own
 // `SubjectApi.test.ts` already covers the server half of that).
 import { SessionContract, SubjectContract } from "@awthaq/api";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react/Hooks";
 import { assert, describe, it } from "@effect/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { EvaluationServicesNone } from "@qadi/core";
 import { makeQadiAtoms, useSubject } from "@qadi/react";
 import type { ReactElement } from "react";
 import { afterEach } from "vitest";
-import { AuthClientAtom, Providers } from "../src/index.ts";
+import * as AuthClientAtom from "../src/AuthClientAtom.ts";
+import { Providers } from "../src/Providers.tsx";
 
 afterEach(cleanup);
 

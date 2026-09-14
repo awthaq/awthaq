@@ -41,7 +41,8 @@ import * as Ref from "effect/Ref";
 import * as Context from "effect/Context";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import type { HttpApi, HttpApiEndpoint } from "effect/unstable/httpapi";
-import { HttpApiClient, HttpApiMiddleware } from "effect/unstable/httpapi";
+import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
+import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 
 // ---------------------------------------------------------------------------
 // BEH-EA-169/173: the generated client and URL builder

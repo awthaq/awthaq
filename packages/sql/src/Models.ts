@@ -16,7 +16,7 @@
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { Model } from "effect/unstable/schema";
+import * as Model from "effect/unstable/schema/Model";
 
 export const UserId = Schema.String.pipe(Schema.brand("UserId"));
 export type UserId = typeof UserId.Type;

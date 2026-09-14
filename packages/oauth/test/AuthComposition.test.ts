@@ -4,7 +4,7 @@
 // be a `static` on the `OAuth` class for exactly this to type-check.
 import { Auth } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
-import { OAuth } from "../src/index.ts";
+import * as OAuth from "../src/OAuth.ts";
 
 describe("Auth.make([OAuth])", () => {
   it("composes a real plugin", () => {

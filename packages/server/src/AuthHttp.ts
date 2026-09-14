@@ -18,7 +18,8 @@
 // whatever `Layer` `AuthHttp.routes` (and an application's own handlers)
 // produce; see `test/AuthHttp.test.ts` for both exercised end to end.
 
-import { HttpApiBuilder, HttpApiScalar } from "effect/unstable/httpapi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
 
 /** BEH-EA-083/084: registers `api`'s routes with the ambient `HttpRouter`. */
 export const routes: typeof HttpApiBuilder.layer = HttpApiBuilder.layer;

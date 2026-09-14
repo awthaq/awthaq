@@ -8,7 +8,7 @@
 // annotations landing on the real response status (BEH-EA-088).
 import { AuthCore } from "@awthaq/api";
 import { Accounts, Sessions, Users } from "@awthaq/core";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -21,7 +21,10 @@ import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { Account, Authentication, AuthHttp, Session } from "../src/index.ts";
+import * as Account from "../src/Account.ts";
+import * as Authentication from "../src/Authentication.ts";
+import * as AuthHttp from "../src/AuthHttp.ts";
+import * as Session from "../src/Session.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),

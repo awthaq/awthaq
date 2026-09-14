@@ -17,7 +17,8 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { SqlClient, SqlSchema } from "effect/unstable/sql";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 export interface OrganizationRecord {
   readonly id: string;

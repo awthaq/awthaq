@@ -22,7 +22,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as ActiveContextRecords from "./ActiveContextRecords.ts";
 import * as InvitationRecords from "./InvitationRecords.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";

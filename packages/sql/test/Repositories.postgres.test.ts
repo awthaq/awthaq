@@ -7,15 +7,18 @@
 // Postgres service and sets it; a local run without one just proves nothing,
 // rather than reporting a false failure for an environment gap.
 import { Encryption, KeyProvider } from "@awthaq/ports";
-import { NodeCrypto } from "@effect/platform-node";
-import { PgClient } from "@effect/sql-pg";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as PgClient from "@effect/sql-pg/PgClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import { Migrator, SqlClient } from "effect/unstable/sql";
-import { CoreMigrations, Models, Repositories } from "../src/index.ts";
+import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as CoreMigrations from "../src/CoreMigrations.ts";
+import * as Models from "../src/Models.ts";
+import * as Repositories from "../src/Repositories.ts";
 
 const postgresUrl = process.env["AWTHAQ_POSTGRES_URL"];
 

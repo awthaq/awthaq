@@ -8,7 +8,7 @@
 import { Api } from "@awthaq/api";
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -17,7 +17,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { Admin, ImpersonationRecords } from "../src/index.ts";
+import * as Admin from "../src/Admin.ts";
+import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, AuthEvents.layer).pipe(
   Layer.provideMerge(NodeCrypto.layer),

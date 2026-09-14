@@ -1,7 +1,7 @@
 // spec.md's "Roles & permissions": pure, unit-level coverage of
 // `PermissionEngine.ts` — no HTTP layer, no service tag, no Effect provided.
 import { assert, describe, it } from "@effect/vitest";
-import { PermissionEngine } from "../src/index.ts";
+import * as PermissionEngine from "../src/PermissionEngine.ts";
 
 describe("PermissionEngine", () => {
   it("member holds no mutating statements by default (read-only)", () => {

@@ -16,7 +16,7 @@ import { AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import { Passkey, PasskeyApi, ChallengeStore, PasskeyCredentials } from "@awthaq/passkey";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";

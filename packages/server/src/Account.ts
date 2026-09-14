@@ -7,7 +7,7 @@
 import { AuthCore, Api, AccountContract } from "@awthaq/api";
 import { Accounts, Sessions, Users } from "@awthaq/core";
 import * as Effect from "effect/Effect";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 /**
  * Mirrors `Session.ts`'s own `currentUserPrincipal` exactly — `Account`

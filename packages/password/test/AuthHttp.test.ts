@@ -20,7 +20,7 @@
 import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@awthaq/core";
 import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -32,7 +32,8 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { Password, PasswordApi } from "../src/index.ts";
+import * as Password from "../src/Password.ts";
+import * as PasswordApi from "../src/PasswordApi.ts";
 
 /** BEH-EA-119: nothing in the corpus ever matches — this file never exercises the breach check itself. */
 const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(

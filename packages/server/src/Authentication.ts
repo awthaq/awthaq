@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import { HttpApiMiddleware } from "effect/unstable/httpapi";
+import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import type { HttpServerResponse } from "effect/unstable/http/HttpServerResponse";
 
 /**

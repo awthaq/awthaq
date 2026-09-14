@@ -1,12 +1,12 @@
 // spec.md's "Active organization/team state": the same
 // contract-suite-over-both-layers pattern `MembershipRecords.test.ts` uses.
-import { SqliteClient } from "@effect/sql-sqlite-node";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { SqlClient } from "effect/unstable/sql";
-import { ActiveContextRecords } from "../src/index.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
 
 const MemoryLayer = ActiveContextRecords.layerMemory;
 

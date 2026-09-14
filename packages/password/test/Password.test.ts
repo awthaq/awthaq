@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@awthaq/core";
 import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -21,7 +21,7 @@ import * as Redacted from "effect/Redacted";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { Password } from "../src/index.ts";
+import * as Password from "../src/Password.ts";
 
 const sha1Hex = (plain: string): string =>
   createHash("sha1").update(plain).digest("hex").toUpperCase();

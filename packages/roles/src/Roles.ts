@@ -26,7 +26,7 @@ import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import { HttpApi } from "effect/unstable/httpapi";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import type { Role } from "@qadi/core";
 import { fromRoles, withAttributes } from "@qadi/core";
 

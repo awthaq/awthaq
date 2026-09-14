@@ -7,7 +7,7 @@
 import { Api } from "@awthaq/api";
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -18,8 +18,12 @@ import * as Schema from "effect/Schema";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
-import { AuthorizedSubject, SubjectApi } from "../src/index.ts";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as AuthorizedSubject from "../src/AuthorizedSubject.ts";
+import * as SubjectApi from "../src/SubjectApi.ts";
 
 // A separate, standalone tiny `HttpApi` (its own id, its own group) rather
 // than folding a `/login` endpoint into `SubjectApi.SubjectApi` itself —

@@ -21,7 +21,7 @@ import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
-import { Model } from "effect/unstable/schema";
+import * as Model from "effect/unstable/schema/Model";
 import { UserId } from "./Users.ts";
 
 /** BEH-EA-049: the public half of a session's `id.secret` token. */

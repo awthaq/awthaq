@@ -1,13 +1,13 @@
 // spec.md's "Organization entity & CRUD": the same contract-suite-over-both-layers
 // pattern `@awthaq/admin`'s own `ImpersonationRecords.test.ts` establishes.
-import { NodeCrypto } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { SqlClient } from "effect/unstable/sql";
-import { OrganizationRecords } from "../src/index.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 
 const MemoryLayer = OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 

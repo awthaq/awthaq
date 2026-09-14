@@ -7,8 +7,8 @@
 // against the real encode/decode/SQL round-trip, not just against an
 // in-memory stand-in.
 import { Encryption, KeyProvider } from "@awthaq/ports";
-import { NodeCrypto } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
@@ -17,9 +17,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { Model } from "effect/unstable/schema";
-import { Migrator, SqlClient } from "effect/unstable/sql";
-import { CoreMigrations, Models, Repositories } from "../src/index.ts";
+import * as Model from "effect/unstable/schema/Model";
+import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as CoreMigrations from "../src/CoreMigrations.ts";
+import * as Models from "../src/Models.ts";
+import * as Repositories from "../src/Repositories.ts";
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 

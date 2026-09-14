@@ -9,7 +9,7 @@
 // header comment in `@awthaq/core`), not something this value needs
 // to anticipate.
 
-import { HttpApi } from "effect/unstable/httpapi";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import { AccountGroup } from "./Account.ts";
 import { SessionGroup } from "./Session.ts";
 

@@ -60,7 +60,7 @@
 import { Accounts, Auth, AuthPlugin, RateLimits, Sessions, Users } from "@awthaq/core";
 import { Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { AuthHttp } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";

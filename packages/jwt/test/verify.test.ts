@@ -6,18 +6,21 @@
 // JWKS document for `verify.ts` to be handed as plain data/HTTP
 // responses — mirroring `packages/oauth/test/OAuth.test.ts`'s own fake-
 // `HttpClient` pattern for exercising fetch-based code without a network.
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import { TestClock } from "effect/testing";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { Sessions } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
-import { Jwt, JwtConfig, KeyRing, SigningKeyRecords } from "../src/index.ts";
+import * as Jwt from "../src/Jwt.ts";
+import * as JwtConfig from "../src/JwtConfig.ts";
+import * as KeyRing from "../src/KeyRing.ts";
+import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
 import * as Verify from "../src/verify.ts";
 
 const ISSUER = "https://issuer.test";

@@ -4,13 +4,16 @@
 import { Api } from "@awthaq/api";
 import { Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { TestClock } from "effect/testing";
-import { Jwt, JwtConfig, KeyRing, SigningKeyRecords } from "../src/index.ts";
+import * as TestClock from "effect/testing/TestClock";
+import * as Jwt from "../src/Jwt.ts";
+import * as JwtConfig from "../src/JwtConfig.ts";
+import * as KeyRing from "../src/KeyRing.ts";
+import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
 
 /**
  * `Jwt.layer` now bundles the `jwt.token` mint endpoint's handlers

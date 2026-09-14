@@ -1,12 +1,13 @@
 // See src/Encryption.ts's own header comment for what this port is
 // grounded in — .scratch/shipping-gaps, ticket 18.
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import { Encryption, KeyProvider } from "../src/index.ts";
+import * as Encryption from "../src/Encryption.ts";
+import * as KeyProvider from "../src/KeyProvider.ts";
 
 const VALID_KEY_B64 = Buffer.alloc(32).toString("base64");
 

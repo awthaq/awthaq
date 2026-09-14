@@ -5,7 +5,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import { KeyProvider } from "../src/index.ts";
+import * as KeyProvider from "../src/KeyProvider.ts";
 
 // 32 zero bytes, base64-encoded — a valid AES-256 key length for these
 // contract tests; the actual bytes carry no meaning here.

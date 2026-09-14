@@ -31,7 +31,8 @@
 // resolve for every caller, logged in or not, never 401.
 import { Api, SubjectContract } from "@awthaq/api";
 import * as Effect from "effect/Effect";
-import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import type { AuthSubject } from "@qadi/core";
 import { CurrentSubject } from "@qadi/core";
 import { AuthorizedSubject } from "./AuthorizedSubject.ts";

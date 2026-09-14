@@ -37,7 +37,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as HttpBody from "effect/unstable/http/HttpBody";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Jwt from "./Jwt.ts";

@@ -1,6 +1,6 @@
 // spec/behaviors/10-csrf.md, BEH-EA-073 through BEH-EA-080.
 import { Api } from "@awthaq/api";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { createHmac, randomBytes } from "node:crypto";
 import * as FileSystem from "effect/FileSystem";
@@ -9,12 +9,15 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware } from "effect/unstable/httpapi";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiTest from "effect/unstable/httpapi/HttpApiTest";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import { Csrf } from "../src/index.ts";
+import * as Csrf from "../src/Csrf.ts";
 
 // `HttpApiTest.groups` needs these platform services regardless of which
 // middleware is under test — the same bundle effect's own HttpApiBuilder

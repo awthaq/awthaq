@@ -6,7 +6,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { anonymous, permission, role } from "@qadi/core";
-import { Roles } from "../src/index.ts";
+import * as Roles from "../src/Roles.ts";
 
 const projectRead = permission("project", "read");
 const projectDelete = permission("project", "delete");

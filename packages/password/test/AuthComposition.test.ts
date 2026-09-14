@@ -7,7 +7,7 @@
 // class (`AuthPlugin.Any["layer"]`).
 import { Auth } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
-import { Password } from "../src/index.ts";
+import * as Password from "../src/Password.ts";
 
 describe("Auth.make([Password])", () => {
   it("composes a real plugin, not just AuthPlugin.test.ts's toy fixtures", () => {

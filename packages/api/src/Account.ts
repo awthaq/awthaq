@@ -9,7 +9,8 @@
 // signed up with, so this group's own name is never part of the URL.
 
 import * as Schema from "effect/Schema";
-import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import { Authentication } from "./Api.ts";
 
 /** The wire shape of `@awthaq/core`'s `UserRecord`, minus internal ids/timestamps a caller has no use for. */

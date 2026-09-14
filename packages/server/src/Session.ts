@@ -10,7 +10,7 @@ import { Sessions, Users } from "@awthaq/core";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 const toDto = (item: Sessions.SessionListItem): SessionContract.SessionDto =>
   new SessionContract.SessionDto({

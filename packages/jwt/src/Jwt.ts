@@ -53,7 +53,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { JwksResponse, JwtApi, TokenResponse } from "./JwtApi.ts";
 import { JwtConfig } from "./JwtConfig.ts";

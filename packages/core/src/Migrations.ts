@@ -8,7 +8,8 @@
 // exist.
 
 import * as Effect from "effect/Effect";
-import { Migrator, SqlClient } from "effect/unstable/sql";
+import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
 export interface Migration {

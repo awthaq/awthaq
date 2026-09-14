@@ -15,8 +15,11 @@
 import { Api } from "@awthaq/api";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware } from "effect/unstable/httpapi";
-import { AuthClient } from "../src/index.ts";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import * as AuthClient from "../src/AuthClient.ts";
 
 const TestApi = HttpApi.make("test").add(
   HttpApiGroup.make("g").add(HttpApiEndpoint.get("x", "/x")).middleware(Api.CsrfProtection),

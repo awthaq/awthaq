@@ -16,7 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import { HookPoint } from "../src/index.ts";
+import * as HookPoint from "../src/HookPoint.ts";
 
 class SignUpInput extends Schema.Class<SignUpInput>("SignUpInput")({ email: Schema.String }) {}
 

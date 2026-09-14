@@ -12,7 +12,8 @@
 // `Subject.ts`'s header comment, and `AuthClientAtom.ts`'s, for why the
 // session and subject are two atoms, not one combined query).
 import type { SessionContract, SubjectContract } from "@awthaq/api";
-import { RegistryProvider, useAtomValue } from "@effect/atom-react";
+import { RegistryProvider } from "@effect/atom-react/RegistryContext";
+import { useAtomValue } from "@effect/atom-react/Hooks";
 import type { QadiAtoms } from "@qadi/react";
 import { QadiProvider } from "@qadi/react";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";

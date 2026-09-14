@@ -9,7 +9,7 @@ import { Password } from "@awthaq/password";
 import { AuthPlugin } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
-import { TestAuth } from "../src/index.ts";
+import * as TestAuth from "../src/TestAuth.ts";
 
 class Recorder {
   readonly passed: Array<string> = [];

@@ -1,14 +1,14 @@
 // spec/behaviors/20-qadi-bridge-path-b.md, BEH-EA-153.
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import { SubjectExtractor as QadiSubjectExtractor } from "@qadi/http";
-import { SubjectExtractor } from "../src/index.ts";
+import * as SubjectExtractor from "../src/SubjectExtractor.ts";
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),

@@ -9,7 +9,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { AuthPlugin } from "../src/index.ts";
-import { Slots } from "../src/index.ts";
+import * as Slots from "../src/Slots.ts";
 
 const fakePlugin = (id: string): AuthPlugin.Any => ({
   id,

@@ -13,7 +13,7 @@
 import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -27,7 +27,9 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { OAuth, OAuthApi, OAuthProvider } from "../src/index.ts";
+import * as OAuth from "../src/OAuth.ts";
+import * as OAuthApi from "../src/OAuthApi.ts";
+import * as OAuthProvider from "../src/OAuthProvider.ts";
 
 // Shipping-gap map (.scratch/shipping-gaps), ticket 19: `OAuth.layer` now
 // requires `Encryption` — a fixed test key, isolated from the real

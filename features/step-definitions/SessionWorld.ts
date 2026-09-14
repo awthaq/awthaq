@@ -12,7 +12,7 @@ import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from 
 import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { Password, PasswordApi } from "@awthaq/password";
 import { Account, Authentication, AuthHttp, Session } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";

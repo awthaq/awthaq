@@ -29,7 +29,7 @@
 // with `sessionAtom` in `Providers.tsx`, not merged into one query.
 import { AuthCore, SubjectContract } from "@awthaq/api";
 import * as Option from "effect/Option";
-import { FetchHttpClient } from "effect/unstable/http";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as AtomHttpApi from "effect/unstable/reactivity/AtomHttpApi";

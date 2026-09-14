@@ -10,8 +10,8 @@ import { afterEach, assert, describe, it } from "@effect/vitest";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { HttpApiClient } from "effect/unstable/httpapi";
-import { AuthClient } from "../src/index.ts";
+import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
+import * as AuthClient from "../src/AuthClient.ts";
 
 describe("AuthClient re-exports (BEH-EA-169/173)", () => {
   it("make/makeWith/group/endpoint/urlBuilder are the real HttpApiClient functions, not reimplementations", () => {

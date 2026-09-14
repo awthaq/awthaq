@@ -2,7 +2,7 @@
 // (no BEH-EA range is allocated for the Ports stratum yet).
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { Mailer } from "../src/index.ts";
+import * as Mailer from "../src/Mailer.ts";
 
 describe("Mailer.layerMemory", () => {
   it.effect("records every sent message, in order", () =>

@@ -3,7 +3,7 @@ import { Api } from "@awthaq/api";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { anonymous } from "@qadi/core";
-import { SubjectResolver } from "../src/index.ts";
+import * as SubjectResolver from "../src/SubjectResolver.ts";
 
 describe("SubjectResolver (default)", () => {
   it.effect("BEH-EA-137: a UserPrincipal resolves to id-only, no roles or permissions", () =>

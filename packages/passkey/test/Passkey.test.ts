@@ -10,13 +10,15 @@
 import { AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import { ChallengeStore, Passkey, PasskeyCredentials } from "../src/index.ts";
+import * as ChallengeStore from "../src/ChallengeStore.ts";
+import * as Passkey from "../src/Passkey.ts";
+import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
 import {
   ORIGIN,
   RP_ID,

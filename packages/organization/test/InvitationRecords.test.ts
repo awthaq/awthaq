@@ -1,16 +1,16 @@
 // spec.md's "Invitations": the same contract-suite-over-both-layers
 // pattern `MembershipRecords.test.ts` uses.
 import { Users } from "@awthaq/core";
-import { NodeCrypto } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { SqlClient } from "effect/unstable/sql";
-import { InvitationRecords } from "../src/index.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as InvitationRecords from "../src/InvitationRecords.ts";
 
 const MemoryLayer = InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 

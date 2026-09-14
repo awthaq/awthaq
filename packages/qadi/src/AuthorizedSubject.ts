@@ -33,7 +33,7 @@
 import { Api } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { HttpApiMiddleware } from "effect/unstable/httpapi";
+import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import { CurrentSubject } from "@qadi/core";
 import { SubjectResolver } from "./SubjectResolver.ts";
 

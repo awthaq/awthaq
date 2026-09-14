@@ -20,20 +20,18 @@ import { Api } from "@awthaq/api";
 import { AuthEvents, HookPoint, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import {
-  ActiveContextRecords,
-  InvitationRecords,
-  MembershipRecords,
-  Organization,
-  OrganizationHooks,
-  OrganizationRecords,
-  OrgRoleRecords,
-  TeamRecords,
-} from "../src/index.ts";
+import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
+import * as InvitationRecords from "../src/InvitationRecords.ts";
+import * as MembershipRecords from "../src/MembershipRecords.ts";
+import * as Organization from "../src/Organization.ts";
+import * as OrganizationHooks from "../src/OrganizationHooks.ts";
+import * as OrganizationRecords from "../src/OrganizationRecords.ts";
+import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
+import * as TeamRecords from "../src/TeamRecords.ts";
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, AuthEvents.layer, Users.layerMemory).pipe(
   Layer.provideMerge(NodeCrypto.layer),

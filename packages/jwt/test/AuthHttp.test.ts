@@ -8,7 +8,7 @@
 import { AuthCore } from "@awthaq/api";
 import { Accounts, Sessions, Users } from "@awthaq/core";
 import { Account, Authentication, AuthHttp, Session } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -19,7 +19,12 @@ import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { TestAuth } from "@awthaq/test";
-import { Jwt, JwtApi, JwtCodec, JwtConfig, KeyRing, SigningKeyRecords } from "../src/index.ts";
+import * as Jwt from "../src/Jwt.ts";
+import * as JwtApi from "../src/JwtApi.ts";
+import * as JwtCodec from "../src/JwtCodec.ts";
+import * as JwtConfig from "../src/JwtConfig.ts";
+import * as KeyRing from "../src/KeyRing.ts";
+import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),

@@ -39,7 +39,9 @@
 // practice, since that middleware never actually fails (`SubjectResolver`'s
 // own contract is `Effect.Effect<AuthSubject>` — no error channel at all).
 import * as Schema from "effect/Schema";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 
 /** The wire shape of `@qadi/core`'s `AuthSubject` — every field already public per-request data. */
 export class SubjectDto extends Schema.Class<SubjectDto>("SubjectDto")({

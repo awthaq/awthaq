@@ -21,7 +21,7 @@ import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from 
 import { RateLimiter, SqlTransaction, Encryption, KeyProvider } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import { OAuth, OAuthProvider } from "@awthaq/oauth";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";

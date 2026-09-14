@@ -9,7 +9,8 @@
 
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
-import { HttpApiMiddleware, HttpApiSecurity } from "effect/unstable/httpapi";
+import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity";
 
 /** BEH-EA-025: "who is asking," independent of what they may do (qadi's job). */
 export class PrincipalRef extends Schema.Class<PrincipalRef>("PrincipalRef")({

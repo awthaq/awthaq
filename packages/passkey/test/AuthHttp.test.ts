@@ -11,7 +11,7 @@
 import { Users, Accounts, Sessions, AuthEvents } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -21,7 +21,10 @@ import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import { ChallengeStore, Passkey, PasskeyApi, PasskeyCredentials } from "../src/index.ts";
+import * as ChallengeStore from "../src/ChallengeStore.ts";
+import * as Passkey from "../src/Passkey.ts";
+import * as PasskeyApi from "../src/PasskeyApi.ts";
+import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
 import {
   ORIGIN,
   RP_ID,

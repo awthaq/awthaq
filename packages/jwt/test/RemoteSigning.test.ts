@@ -4,12 +4,15 @@
 // the exact same `JwtCodec.verify` path a locally-signed token goes
 // through — no special-casing. Also confirms `SigningKeyRecords` never
 // gets `privateKeyJwk` populated for a remote-backed key.
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { JwtCodec, JwtConfig, KeyRing, SigningKeyRecords } from "../src/index.ts";
+import * as JwtCodec from "../src/JwtCodec.ts";
+import * as JwtConfig from "../src/JwtConfig.ts";
+import * as KeyRing from "../src/KeyRing.ts";
+import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
 
 /** A fake KMS: generates its own local keypair (so the test can sign for real) but exposes only the `JwtCodec.Signer` boundary — the plugin never touches its private half. */
 const makeFakeRemoteSigner = () =>

@@ -5,8 +5,8 @@
 // `@effect/sql-sqlite-node`) — per
 // spec/decisions/016-verification-sql-claiming.md (ADR-EA-016).
 import { Repositories } from "@awthaq/sql";
-import { NodeCrypto } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -15,8 +15,9 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { SqlClient } from "effect/unstable/sql";
-import { AuthEvents, Verification } from "../src/index.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as AuthEvents from "../src/AuthEvents.ts";
+import * as Verification from "../src/Verification.ts";
 
 const MemoryLayer = Verification.layerMemory.pipe(
   Layer.provide(NodeCrypto.layer),

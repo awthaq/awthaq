@@ -5,7 +5,8 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import { AuthEvents, Users } from "../src/index.ts";
+import * as AuthEvents from "../src/AuthEvents.ts";
+import * as Users from "../src/Users.ts";
 
 const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
 

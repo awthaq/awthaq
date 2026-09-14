@@ -13,7 +13,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
-import { HttpApiBuilder, HttpApiMiddleware } from "effect/unstable/httpapi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import * as Headers from "effect/unstable/http/Headers";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 

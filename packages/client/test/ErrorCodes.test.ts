@@ -8,8 +8,11 @@
 // assertion below exists only so this file reports as a real test.
 import { assert, describe, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware } from "effect/unstable/httpapi";
-import { AuthClient } from "../src/index.ts";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import * as AuthClient from "../src/AuthClient.ts";
 
 class NotFound extends Schema.TaggedError<NotFound>()("NotFound", {}, { httpApiStatus: 404 }) {}
 class Forbidden extends Schema.TaggedError<Forbidden>()("Forbidden", {}, { httpApiStatus: 403 }) {}

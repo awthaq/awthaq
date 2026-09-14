@@ -13,7 +13,7 @@ import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import type { MailMessage } from "@awthaq/ports/Mailer";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import { Password, PasswordApi } from "@awthaq/password";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";

@@ -14,7 +14,7 @@
 import { Api } from "@awthaq/api";
 import { Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -22,7 +22,7 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
-import { getSession } from "../src/index.ts";
+import { getSession } from "../src/GetSession.ts";
 import type { HeadersLike } from "../src/index.ts";
 
 const TestLayer = Layer.mergeAll(

@@ -4,13 +4,13 @@
 // same pattern `packages/core/test/Accounts.test.ts` etc. use for their own
 // two `Layer`s.
 import { Users } from "@awthaq/core";
-import { SqliteClient } from "@effect/sql-sqlite-node";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { SqlClient } from "effect/unstable/sql";
-import { PasskeyCredentials } from "../src/index.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
 
 const MemoryLayer = PasskeyCredentials.layerMemory;
 

@@ -8,8 +8,12 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
-import { Auth, AuthPlugin } from "../src/index.ts";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as Auth from "../src/Auth.ts";
+import * as AuthPlugin from "../src/AuthPlugin.ts";
 
 // --- Ping: a toy plugin with no dependencies -------------------------------
 

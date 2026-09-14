@@ -10,7 +10,8 @@
 // `@awthaq/server/src/Session.ts`.
 
 import * as Schema from "effect/Schema";
-import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import { Authentication } from "./Api.ts";
 
 /** One row of `list` — the wire shape of `@awthaq/core`'s `SessionListItem`. */

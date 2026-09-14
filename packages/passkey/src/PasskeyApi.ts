@@ -49,7 +49,10 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import * as Schema from "effect/Schema";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
 export class PasskeyChallengeInvalid extends Schema.TaggedError<PasskeyChallengeInvalid>()(
   "PasskeyChallengeInvalid",

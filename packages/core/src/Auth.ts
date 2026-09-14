@@ -18,7 +18,8 @@
 
 import * as Data from "effect/Data";
 import * as Layer from "effect/Layer";
-import { HttpApi, HttpApiGroup } from "effect/unstable/httpapi";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type * as AuthPlugin from "./AuthPlugin.ts";
 import type { Migrations } from "./Migrations.ts";
 

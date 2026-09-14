@@ -23,7 +23,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import { SqlClient, SqlSchema } from "effect/unstable/sql";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 export interface ActiveContextRecord {
   readonly sessionId: string;
