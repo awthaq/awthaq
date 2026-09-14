@@ -94,7 +94,7 @@ export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.
         const encodedNow = yield* Schema.encodeEffect(Schema.DateTimeUtcFromString)(
           yield* DateTime.now,
         );
-        yield* sql`UPDATE users SET emailVerified = 1, updatedAt = ${encodedNow} WHERE id = ${id}`;
+        yield* sql`UPDATE users SET "emailVerified" = 1, "updatedAt" = ${encodedNow} WHERE id = ${id}`;
         return yield* repo.findById(id);
       });
 
@@ -271,17 +271,17 @@ export const AccountsRepositoryLive: Layer.Layer<
       }),
       Result: Account,
       execute: (request) =>
-        sql`SELECT * FROM accounts WHERE providerId = ${request.providerId} AND subject = ${request.subject} AND issuer = ${request.issuer}`,
+        sql`SELECT * FROM accounts WHERE "providerId" = ${request.providerId} AND subject = ${request.subject} AND issuer = ${request.issuer}`,
     });
 
     const listByUser = SqlSchema.findAll({
       Request: UserId,
       Result: Account,
-      execute: (userId) => sql`SELECT * FROM accounts WHERE userId = ${userId}`,
+      execute: (userId) => sql`SELECT * FROM accounts WHERE "userId" = ${userId}`,
     });
 
     const deleteAllByUser: AccountsRepositoryShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM accounts WHERE userId = ${userId}`.pipe(Effect.asVoid);
+      sql`DELETE FROM accounts WHERE "userId" = ${userId}`.pipe(Effect.asVoid);
 
     return {
       insert,
@@ -380,12 +380,12 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         Result: Session,
         execute: (request) =>
           request.cursorCreatedAt === null || request.cursorId === null
-            ? sql`SELECT * FROM sessions WHERE userId = ${request.userId}
-                  ORDER BY createdAt ASC, id ASC LIMIT ${request.limit}`
-            : sql`SELECT * FROM sessions WHERE userId = ${request.userId}
-                  AND (createdAt > ${request.cursorCreatedAt}
-                       OR (createdAt = ${request.cursorCreatedAt} AND id > ${request.cursorId}))
-                  ORDER BY createdAt ASC, id ASC LIMIT ${request.limit}`,
+            ? sql`SELECT * FROM sessions WHERE "userId" = ${request.userId}
+                  ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit}`
+            : sql`SELECT * FROM sessions WHERE "userId" = ${request.userId}
+                  AND ("createdAt" > ${request.cursorCreatedAt}
+                       OR ("createdAt" = ${request.cursorCreatedAt} AND id > ${request.cursorId}))
+                  ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit}`,
       });
 
       const listByUser: SessionsRepositoryShape["listByUser"] = (userId, cursor, limit) =>
@@ -435,7 +435,8 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
       const deleteAllForUserExcept: SessionsRepositoryShape["deleteAllForUserExcept"] = (
         userId,
         keep,
-      ) => sql`DELETE FROM sessions WHERE userId = ${userId} AND id != ${keep}`.pipe(Effect.asVoid);
+      ) =>
+        sql`DELETE FROM sessions WHERE "userId" = ${userId} AND id != ${keep}`.pipe(Effect.asVoid);
 
       // Quoted `"userId"`: this table's Postgres DDL (`CoreMigrations.ts`)
       // declares the column with preserved mixed case, which only an
@@ -531,7 +532,7 @@ export const VerificationRepositoryLive: Layer.Layer<
       Request: Schema.String,
       Result: VerificationToken,
       execute: (identifier) =>
-        sql`SELECT * FROM verification_tokens WHERE identifier = ${identifier} ORDER BY createdAt DESC LIMIT 1`,
+        sql`SELECT * FROM verification_tokens WHERE identifier = ${identifier} ORDER BY "createdAt" DESC LIMIT 1`,
     });
 
     const upsertLive = SqlSchema.findOne({
@@ -545,16 +546,16 @@ export const VerificationRepositoryLive: Layer.Layer<
       }),
       Result: VerificationToken,
       execute: (request) => sql`
-        INSERT INTO verification_tokens (id, identifier, valueHash, expiresAt, consumedAt, createdAt, payload)
+        INSERT INTO verification_tokens (id, identifier, "valueHash", "expiresAt", "consumedAt", "createdAt", payload)
         VALUES (${request.id}, ${request.identifier}, ${request.valueHash}, ${request.expiresAt}, NULL, ${request.createdAt}, ${request.payload})
-        ON CONFLICT(identifier) WHERE consumedAt IS NULL
+        ON CONFLICT(identifier) WHERE "consumedAt" IS NULL
         DO UPDATE SET
           id = excluded.id,
-          valueHash = excluded.valueHash,
-          expiresAt = excluded.expiresAt,
-          createdAt = excluded.createdAt,
+          "valueHash" = excluded."valueHash",
+          "expiresAt" = excluded."expiresAt",
+          "createdAt" = excluded."createdAt",
           payload = excluded.payload,
-          consumedAt = NULL
+          "consumedAt" = NULL
         RETURNING *
       `,
     });
@@ -568,11 +569,11 @@ export const VerificationRepositoryLive: Layer.Layer<
       Result: VerificationToken,
       execute: (request) => sql`
         UPDATE verification_tokens
-        SET consumedAt = ${request.now}
+        SET "consumedAt" = ${request.now}
         WHERE identifier = ${request.identifier}
-          AND valueHash = ${request.valueHash}
-          AND expiresAt > ${request.now}
-          AND consumedAt IS NULL
+          AND "valueHash" = ${request.valueHash}
+          AND "expiresAt" > ${request.now}
+          AND "consumedAt" IS NULL
         RETURNING *
       `,
     });
@@ -641,10 +642,10 @@ export const VerificationReservationsRepositoryLive = Layer.effect(
       }),
       Result: VerificationReservation,
       execute: (request) => sql`
-        INSERT INTO verification_reservations (identifier, expiresAt)
+        INSERT INTO verification_reservations (identifier, "expiresAt")
         VALUES (${request.identifier}, ${request.expiresAt})
-        ON CONFLICT(identifier) DO UPDATE SET expiresAt = excluded.expiresAt
-        WHERE verification_reservations.expiresAt < ${request.now}
+        ON CONFLICT(identifier) DO UPDATE SET "expiresAt" = excluded."expiresAt"
+        WHERE verification_reservations."expiresAt" < ${request.now}
         RETURNING *
       `,
     });
