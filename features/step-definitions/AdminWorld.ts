@@ -34,6 +34,7 @@ import * as Stream from "effect/Stream";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
 const ORIGIN = "http://localhost:3000";
 
@@ -248,6 +249,15 @@ export const resolvePrincipal: (token: string) => Effect.Effect<Api.Principal, n
                 sessions,
                 resolver,
                 Redacted.make(token),
+              ).pipe(
+                // Ticket 03: `resolvePrincipal` keys its per-request verify
+                // memoization off the ambient `HttpServerRequest` — this
+                // helper calls it directly, outside any real HTTP request,
+                // so it provides a synthetic one instead.
+                Effect.provideService(
+                  HttpServerRequest.HttpServerRequest,
+                  HttpServerRequest.fromWeb(new Request(ORIGIN)),
+                ),
               );
             }).pipe(Effect.provide(context), Effect.provide(Authentication.PrincipalResolverLive));
           }),

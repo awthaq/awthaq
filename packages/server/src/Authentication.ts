@@ -8,11 +8,14 @@ import { Sessions } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import type { unhandled } from "effect/Types";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 /**
@@ -91,6 +94,50 @@ export interface ResolvedSession {
 }
 
 /**
+ * Upstream-hardening-followups ticket 03: `Api.Authentication`'s own
+ * middleware and `@awthaq/qadi`'s `SubjectExtractorLive` (Path B) both
+ * funnel through `resolveSession` below, independently, on the same
+ * request — `SubjectExtractorLive`'s own doc comment explains why it
+ * can't just call through `Api.Authentication`'s middleware instead. Once
+ * ticket 01 made `Sessions.verify` rotate the session secret on a
+ * throttled touch, a second call within the same request — against the
+ * credential the first call already rotated away from — would fail
+ * `SessionNotFound` instead of the harmless no-op it was before rotation
+ * existed.
+ *
+ * Keyed by the ambient `HttpServerRequest`'s own identity, not a new
+ * per-request service: Effect v4 has no `FiberRef` (everything moved to
+ * `Context.Reference`, whose own `defaultValue()` is memoized once,
+ * globally, on the reference itself — unsuitable for per-request state
+ * without a new middleware explicitly re-providing it every request,
+ * ahead of both bridges, which is exactly the ordering problem this
+ * ticket exists to route around). `HttpServerRequest` is already the one
+ * thing both bridges have ambient access to, is provided once per
+ * request by the router (confirmed via `effect`'s own `HttpRouter.ts`/
+ * `HttpApiBuilder.ts`), and is mutated in place rather than replaced
+ * (`@qadi/http`'s own `RequirePermission.ts` writes `request.payload`
+ * directly) — so its identity is stable for a request's whole lifetime
+ * and naturally garbage-collected once that request completes, with no
+ * explicit cleanup this module has to perform.
+ */
+const sessionResolutionCache = new WeakMap<
+  HttpServerRequest.HttpServerRequest,
+  Ref.Ref<HashMap.HashMap<string, Effect.Effect<ResolvedSession, Api.Unauthenticated>>>
+>();
+
+/** The current request's cache `Ref`, creating and registering an empty one on first access. */
+const perRequestCache = (request: HttpServerRequest.HttpServerRequest) =>
+  Option.fromNullishOr(sessionResolutionCache.get(request)).pipe(
+    Option.match({
+      onSome: Effect.succeed,
+      onNone: () =>
+        Ref.make(HashMap.empty<string, Effect.Effect<ResolvedSession, Api.Unauthenticated>>()).pipe(
+          Effect.tap((ref) => Effect.sync(() => sessionResolutionCache.set(request, ref))),
+        ),
+    }),
+  );
+
+/**
  * BEH-EA-069/070: shared by both `Authentication` and `OptionalAuthentication`
  * — an empty credential (BEH-EA-065's cookie/bearer schemes decode to `""`
  * when the request carries neither, never a decode failure) and an invalid
@@ -101,17 +148,35 @@ export interface ResolvedSession {
  * own `AuthenticationLive`/`OptionalAuthenticationLive`) can deliver a
  * rotated token; `resolvePrincipal` below is the principal-only wrapper
  * for callers that don't.
+ *
+ * Ticket 03: memoized per request (see `sessionResolutionCache` above),
+ * keyed on the raw presented credential — a second call in the same
+ * request with the identical credential reuses the first call's outcome
+ * (`Effect.cached` memoizes the `Exit`, so a failure is reused exactly
+ * like a success) rather than hitting `Sessions.verify` again.
  */
 export const resolveSession = (
   sessions: Sessions.SessionsShape,
   credential: Redacted.Redacted<string>,
-) => {
-  const raw = Redacted.value(credential);
-  if (raw === "") {
-    return Effect.fail(new Api.Unauthenticated());
-  }
-  return sessions.verify(Redacted.make(raw)).pipe(Effect.mapError(() => new Api.Unauthenticated()));
-};
+) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const cache = yield* perRequestCache(request);
+    const raw = Redacted.value(credential);
+    const existing = HashMap.get(yield* Ref.get(cache), raw);
+    if (Option.isSome(existing)) {
+      return yield* existing.value;
+    }
+    const memoized = yield* Effect.cached(
+      raw === ""
+        ? Effect.fail(new Api.Unauthenticated())
+        : sessions
+            .verify(Redacted.make(raw))
+            .pipe(Effect.mapError(() => new Api.Unauthenticated())),
+    );
+    yield* Ref.update(cache, HashMap.set(raw, memoized));
+    return yield* memoized;
+  });
 
 /**
  * Exported (not module-private) so `@awthaq/qadi`'s `SubjectExtractor.ts`
@@ -124,7 +189,7 @@ export const resolvePrincipal = (
   sessions: Sessions.SessionsShape,
   resolver: PrincipalResolverShape,
   credential: Redacted.Redacted<string>,
-): Effect.Effect<Api.Principal, Api.Unauthenticated> =>
+) =>
   resolveSession(sessions, credential).pipe(
     Effect.flatMap(({ session }) => resolver.resolve(session)),
   );

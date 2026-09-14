@@ -22,7 +22,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Headers from "effect/unstable/http/Headers";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import { SubjectExtractor } from "@qadi/http";
 import { SubjectResolver } from "./SubjectResolver.ts";
 
@@ -79,7 +79,16 @@ export const SubjectExtractorLive: Layer.Layer<
             sessions,
             principalResolver,
             credential,
-          ).pipe(Effect.catchTag("Unauthenticated", () => Effect.succeed(Api.anonymousPrincipal)));
+          ).pipe(
+            // Ticket 03: `resolvePrincipal` reads the ambient
+            // `HttpServerRequest` to key its per-request verify memoization
+            // — `extract` already received it as a plain parameter (Path B
+            // runs independent of the router's own middleware chain, per
+            // this module's own header comment), so it's provided here
+            // explicitly rather than assumed already in context.
+            Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+            Effect.catchTag("Unauthenticated", () => Effect.succeed(Api.anonymousPrincipal)),
+          );
           return yield* subjectResolver.resolve(principal);
         }),
     };

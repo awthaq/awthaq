@@ -162,24 +162,24 @@ export interface SessionsShape {
    * racing the same throttled write never corrupts state (a compare-and-
    * swap in both `Layer`s' own implementation lets only one winner rotate;
    * the loser reports `rotated: Option.none()` over the winner's write),
-   * but calling `verify` a *second time within one request* against the
-   * same pre-rotation credential is a real, current architectural risk,
-   * not just a theoretical one: `@awthaq/qadi`'s `SubjectExtractorLive`
-   * (BEH-EA-153) calls `resolvePrincipal` — and so `verify` — independent
-   * of and potentially before `Authentication`'s own middleware runs on
-   * the same request (spec/behaviors/20-qadi-bridge-path-b.md). An
-   * endpoint wiring both Path A's `Api.Authentication` and Path B's
-   * `RequirePermission` together would rotate on the first call and then
-   * fail the second with `SessionNotFound`, once every `touchEvery`
-   * window, per session. No endpoint in this repository currently
-   * combines both bridges on one route (confirmed: `AdminApi.ts` uses
-   * only `Api.Authentication`), so this doesn't fire today — but fixing
-   * it properly needs request-scoped memoization of `verify`'s result,
-   * which doesn't exist anywhere in this codebase yet and would be new,
-   * speculative infrastructure beyond this ticket's own scope to build
-   * pre-emptively. Flagged here rather than silently risked; a real
-   * candidate for its own future ticket if/when an endpoint actually
-   * needs both bridges at once.
+   * calling `verify` a *second time within one request* against the same
+   * pre-rotation credential used to be a real architectural risk:
+   * `@awthaq/qadi`'s `SubjectExtractorLive` (BEH-EA-153) calls
+   * `resolvePrincipal` — and so `verify` — independent of and potentially
+   * before `Authentication`'s own middleware runs on the same request
+   * (spec/behaviors/20-qadi-bridge-path-b.md), so an endpoint wiring both
+   * Path A's `Api.Authentication` and Path B's `RequirePermission`
+   * together would have rotated on the first call and then failed the
+   * second with `SessionNotFound`, once every `touchEvery` window, per
+   * session.
+   *
+   * Resolved (upstream-hardening-followups map, ticket 03):
+   * `@awthaq/server`'s `Authentication.resolveSession` now memoizes its
+   * result per request, keyed on the ambient `HttpServerRequest`'s own
+   * identity — both `AuthenticationLive`/`OptionalAuthenticationLive` and
+   * `SubjectExtractorLive` funnel through it, so a second call within the
+   * same request reuses the first's outcome (including whether it
+   * rotated) rather than calling `verify` again.
    */
   readonly verify: (
     token: Redacted.Redacted<string>,

@@ -3,9 +3,11 @@ import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import { SubjectExtractor as QadiSubjectExtractor } from "@qadi/http";
 import * as SubjectExtractor from "../src/SubjectExtractor.ts";
@@ -18,6 +20,25 @@ const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
 const TestLayer = SubjectExtractor.SubjectExtractorLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
   Layer.provideMerge(CoreLive),
+);
+
+// upstream-hardening-followups ticket 03: the same short touchEvery
+// Sessions.test.ts's own rotation tests use, so a single TestClock.adjust
+// crosses it.
+const shortLivedConfig = Layer.succeed(Sessions.SessionConfig, {
+  absolute: Duration.millis(1000),
+  idle: Duration.millis(500),
+  touchEvery: Duration.millis(100),
+});
+
+const ShortLivedCoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig)),
+);
+
+const ShortLivedTestLayer = SubjectExtractor.SubjectExtractorLive.pipe(
+  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provideMerge(ShortLivedCoreLive),
 );
 
 describe("SubjectExtractor (Path B adapter)", () => {
@@ -79,5 +100,45 @@ describe("SubjectExtractor (Path B adapter)", () => {
       const subject = yield* extractor.extract(request);
       assert.strictEqual(subject.id, "anonymous");
     }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "upstream-hardening-followups ticket 03: an endpoint combining Api.Authentication and " +
+      "SubjectExtractorLive on one route survives a touchEvery-crossing request without a false anonymous/SessionNotFound",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const users = yield* Users.Users;
+        const resolver = yield* Authentication.PrincipalResolver;
+        const extractor = yield* QadiSubjectExtractor;
+        const user = yield* users.create({ email: "both-bridges@example.com", name: "Both" });
+        const { token } = yield* sessions.issue({ userId: user.id });
+
+        // Past touchEvery — the next verify rotates the session secret.
+        yield* TestClock.adjust(Duration.millis(200));
+
+        const request = HttpServerRequest.fromWeb(
+          new Request("http://localhost/whatever", {
+            headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+          }),
+        );
+
+        // Path A: Api.Authentication's own resolution, against the raw
+        // (pre-rotation) credential — this is the call that actually
+        // rotates the secret, exactly as it would inside AuthenticationLive.
+        const principal = yield* Authentication.resolvePrincipal(sessions, resolver, token).pipe(
+          Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+        );
+        assert.strictEqual(principal.ref.id, user.id);
+
+        // Path B: SubjectExtractorLive, independently, on the SAME request
+        // and the SAME (now-rotated-away) raw credential — before ticket
+        // 03 this failed `SessionNotFound` internally and surfaced here as
+        // a false `anonymous`, not the real user.
+        const subject = yield* extractor.extract(request);
+        assert.strictEqual(subject.id, `user:${user.id}`);
+      }).pipe(
+        Effect.provide(Layer.mergeAll(Authentication.PrincipalResolverLive, ShortLivedTestLayer)),
+      ),
   );
 });
