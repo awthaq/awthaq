@@ -1,6 +1,10 @@
 packages:
   - packages/*
   - features
+  # Upstream-hardening map, ticket 09: runnable examples, additional to
+  # (never a replacement for) the README's own single-plugin Postgres
+  # quickstart.
+  - examples/*
 
 # `effect` is pinned exact, not a caret range, and (once packages exist) every
 # @awthaq package is expected to publish that exact pin as its own

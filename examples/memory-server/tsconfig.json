@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["index.ts"],
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "outDir": "./lib",
+    "rootDir": ".",
+    "tsBuildInfoFile": "./lib/.tsbuildinfo",
+    "paths": {
+      "@awthaq/core": ["../../packages/core/src/index.ts"],
+      "@awthaq/organization": ["../../packages/organization/src/index.ts"],
+      "@awthaq/password": ["../../packages/password/src/index.ts"],
+      "@awthaq/ports": ["../../packages/ports/src/index.ts"],
+      "@awthaq/server": ["../../packages/server/src/index.ts"],
+      "@awthaq/test": ["../../packages/test/src/index.ts"]
+    }
+  },
+  "references": [
+    { "path": "../../packages/core/tsconfig.src.json" },
+    { "path": "../../packages/organization/tsconfig.src.json" },
+    { "path": "../../packages/password/tsconfig.src.json" },
+    { "path": "../../packages/ports/tsconfig.src.json" },
+    { "path": "../../packages/server/tsconfig.src.json" },
+    { "path": "../../packages/test/tsconfig.src.json" }
+  ]
+}

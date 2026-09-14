@@ -66,6 +66,9 @@
     },
     {
       "path": "features"
+    },
+    {
+      "path": "examples/memory-server"
     }
   ]
 }

@@ -1,0 +1,27 @@
+{
+  "name": "@awthaq/example-memory-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Runnable example: Password + Organization composed over @awthaq/test's memory backend, through a real listening HTTP server. Additional to, not a replacement for, the README's own single-plugin Postgres quickstart.",
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types index.ts",
+    "typecheck": "tsc -b tsconfig.json"
+  },
+  "dependencies": {
+    "@awthaq/core": "workspace:*",
+    "@awthaq/organization": "workspace:*",
+    "@awthaq/password": "workspace:*",
+    "@awthaq/ports": "workspace:*",
+    "@awthaq/server": "workspace:*",
+    "@awthaq/test": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
