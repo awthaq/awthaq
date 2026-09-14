@@ -128,6 +128,7 @@ map's own grounding pass found stale or false.
   for promotion to `error` via `diagnosticSeverity` in a future ticket.
 
 - [01 — Session token rotation on refresh](issues/01-session-token-rotation.md) — piggybacks on the existing `touchEvery` throttle (one write path, no new timer); delivery splits by auth scheme per the user's "richest, complexity not a concern" steer — `Set-Cookie` for the `cookie` scheme (the only mechanism a browser actually acts on), a `set-auth-token` header for `bearer` (upstream's own mechanism, needed since a header alone can't rotate a browser's cookie jar); `AuthenticationLive`'s shared `cookie`/`bearer` handler splits into two closures to make this possible; `verify`'s return shape changes to carry an optional rotated token, a real public-API break whose call-site audit is deferred to `/to-tickets`; old secret invalidates immediately, no grace window (matches every other write in this codebase — no dual-valid-state precedent to extend).
+- [02 — `revoke-all` session operation](issues/02-revoke-all-sessions.md) — completes the `revoke`/`revokeOthers`/`revokeAll` naming symmetry, no exceptions (kills the caller's own session too); `POST /session/revoke-all` on the existing `session` group, no payload, no response cookie-clearing (matches `signOut`'s existing precedent); confirmed `confirmReset` already fakes this today via `revokeOthers(userId, SessionId(""))` — a real gap, not equivalent — and should swap to the real primitive once it exists.
 
 ## Not yet specified
 
