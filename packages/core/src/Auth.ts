@@ -47,6 +47,25 @@ export class EmptyPluginTuple extends Data.TaggedError("EmptyPluginTuple")<{
 }> {}
 
 /**
+ * BEH-EA-032: the installed `HttpApi.add` stores groups by identifier with
+ * last-wins `assignProperty` semantics and no collision check of its own —
+ * two plugins contributing a group with the same identifier would
+ * otherwise resolve to whichever was added last, silently dropping the
+ * loser's endpoints from the served surface while its handlers layer
+ * still merges underneath. `composeApi` checks for this itself and
+ * refuses it, matching `archive/design/usage-examples-v4.md` §2.2's own
+ * `E_GROUP_CONFLICT` failure shape (there phrased with a `package@version`
+ * pair; `AuthPlugin`'s own identity is `id`/`apiVersion`, used here
+ * instead of a fabricated semver).
+ */
+export class GroupIdConflict extends Data.TaggedError("GroupIdConflict")<{
+  readonly groupId: string;
+  readonly firstPluginId: string;
+  readonly secondPluginId: string;
+  readonly message: string;
+}> {}
+
+/**
  * A loop invariant `linkPlugins`/`findCycle` rely on (e.g. "a queue drained
  * one non-undefined element at a time never returns undefined while
  * non-empty") did not hold. Reachable only if one of those invariants is
@@ -371,7 +390,26 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
 const composeApi = (
   order: ReadonlyArray<AuthPlugin.Any>,
 ): HttpApi.HttpApi<"auth", HttpApiGroup.Constraint> => {
-  const groups = order.flatMap((plugin) => Object.values(plugin.contract.groups));
+  const contributions = order.flatMap((plugin) =>
+    Object.values(plugin.contract.groups).map((group) => ({ plugin, group })),
+  );
+  // BEH-EA-032: refuse a duplicate group id ourselves — `HttpApi.add`'s own
+  // last-wins semantics would otherwise silently drop the first
+  // contributor's endpoints.
+  const ownerOf = new Map<string, AuthPlugin.Any>();
+  for (const { plugin, group } of contributions) {
+    const owner = ownerOf.get(group.identifier);
+    if (owner !== undefined) {
+      throw new GroupIdConflict({
+        groupId: group.identifier,
+        firstPluginId: owner.id,
+        secondPluginId: plugin.id,
+        message: `awthaq: E_GROUP_CONFLICT: group "${group.identifier}" contributed by plugin "${owner.id}" and plugin "${plugin.id}"`,
+      });
+    }
+    ownerOf.set(group.identifier, plugin);
+  }
+  const groups = contributions.map((contribution) => contribution.group);
   const [firstGroup, ...restGroups] = groups;
   if (firstGroup === undefined) {
     throw new EmptyPluginTuple({ message: "awthaq: Auth.make requires at least one plugin" });

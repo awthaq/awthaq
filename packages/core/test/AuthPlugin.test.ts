@@ -7,6 +7,7 @@
 // shouldn't (an unused `@ts-expect-error` is itself a `tsc` error).
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -66,6 +67,71 @@ class Pong extends AuthPlugin.Service<Pong, PongShape>()("pong", {
   });
 }
 
+// --- BEH-EA-032: two different plugins colliding via a dotted sub-group ---
+
+// BEH-EA-004 confines a plugin's own contract groups to its own id or a
+// dotted sub-id of it (`GroupsFor<Id>`), so two DIFFERENT top-level plugin
+// ids can never contribute a group with the exact same *top-level* name —
+// that shape is already refused at compile time. The one collision
+// `GroupsFor<Id>` cannot see coming, and BEH-EA-032's own runtime check
+// exists for, is a dotted sub-group: `Alpha` (id "alpha") is entitled to
+// contribute "alpha.beta" as its own sub-group, but a wholly separate,
+// independently-valid plugin literally *id*'d "alpha.beta" is entitled to
+// contribute a top-level group of that same name — neither plugin's own
+// `GroupsFor<Id>` constraint, nor `Validate<P>`'s `DuplicateId` check
+// (which only compares full plugin ids), catches this; only `composeApi`'s
+// own runtime check does.
+const AlphaApi = HttpApi.make("auth")
+  .add(HttpApiGroup.make("alpha").add(HttpApiEndpoint.get("alpha", "/alpha", { success: Schema.String })))
+  .add(
+    HttpApiGroup.make("alpha.beta").add(
+      HttpApiEndpoint.get("alphaBeta", "/alpha/beta", { success: Schema.String }),
+    ),
+  );
+
+interface AlphaShape {
+  readonly alpha: () => Effect.Effect<string>;
+}
+
+class Alpha extends AuthPlugin.Service<Alpha, AlphaShape>()("alpha", {
+  apiVersion: 1,
+  contract: AlphaApi,
+}) {
+  static readonly layer = AuthPlugin.layer(Alpha, {
+    make: Effect.succeed({ alpha: () => Effect.succeed("alpha") }),
+    handlers: Layer.mergeAll(
+      HttpApiBuilder.group(AlphaApi, "alpha", (handlers) =>
+        handlers.handle("alpha", () => Effect.succeed("alpha")),
+      ),
+      HttpApiBuilder.group(AlphaApi, "alpha.beta", (handlers) =>
+        handlers.handle("alphaBeta", () => Effect.succeed("beta")),
+      ),
+    ),
+  });
+}
+
+const AlphaBetaApi = HttpApi.make("auth").add(
+  HttpApiGroup.make("alpha.beta").add(
+    HttpApiEndpoint.get("imposter", "/alpha-beta/imposter", { success: Schema.String }),
+  ),
+);
+
+interface AlphaBetaShape {
+  readonly imposter: () => Effect.Effect<string>;
+}
+
+class AlphaBeta extends AuthPlugin.Service<AlphaBeta, AlphaBetaShape>()("alpha.beta", {
+  apiVersion: 1,
+  contract: AlphaBetaApi,
+}) {
+  static readonly layer = AuthPlugin.layer(AlphaBeta, {
+    make: Effect.succeed({ imposter: () => Effect.succeed("imposter") }),
+    handlers: HttpApiBuilder.group(AlphaBetaApi, "alpha.beta", (handlers) =>
+      handlers.handle("imposter", () => Effect.succeed("imposter")),
+    ),
+  });
+}
+
 // --- BEH-EA-010: two plugins sharing an id refuses to type-check -----------
 
 class PingDuplicate extends AuthPlugin.Service<PingDuplicate, PingShape>()("ping", {
@@ -76,9 +142,6 @@ class PingDuplicate extends AuthPlugin.Service<PingDuplicate, PingShape>()("ping
     make: Effect.succeed({ ping: () => Effect.succeed("pong") }),
   });
 }
-
-// @ts-expect-error - plugin id "ping" appears more than once
-Auth.make([Ping, PingDuplicate]);
 
 // --- BEH-EA-011: a dependency missing from the tuple refuses to type-check --
 
@@ -145,6 +208,42 @@ describe("Auth.make", () => {
       });
       assert.isDefined(restoredPingLayer);
     }
+  });
+
+  it("BEH-EA-032: two plugins contributing the same group id refuses at runtime with a typed GroupIdConflict, naming both plugins", () => {
+    let thrown: unknown;
+    try {
+      Auth.make([Alpha, AlphaBeta]);
+    } catch (error) {
+      thrown = error;
+    }
+    assert.instanceOf(thrown, Auth.GroupIdConflict);
+    const error = thrown as Auth.GroupIdConflict;
+    assert.strictEqual(error._tag, "GroupIdConflict");
+    assert.strictEqual(error.groupId, "alpha.beta");
+    assert.strictEqual(error.firstPluginId, "alpha");
+    assert.strictEqual(error.secondPluginId, "alpha.beta");
+    assert.match(
+      error.message,
+      /awthaq: E_GROUP_CONFLICT: group "alpha\.beta" contributed by plugin "alpha" and plugin "alpha\.beta"/,
+    );
+  });
+
+  it("BEH-EA-010: a duplicate plugin id also trips composeApi's own GroupIdConflict at runtime", () => {
+    // `Validate<P>`'s `DuplicateId` check (BEH-EA-010) refuses this at the
+    // type level (`@ts-expect-error` below). Bypassing that, `Ping` and
+    // `PingDuplicate` both name their own group "ping" too (they share a
+    // `contract`), so this doubles as a second, independent proof that
+    // `composeApi`'s BEH-EA-032 check is a real runtime backstop, not only
+    // reachable through the dotted-sub-id shape above — previously this
+    // line silently produced a broken `Built<P>` (the topological sort
+    // itself collapses "ping" to one plugin, `HttpApiGroup`'s own overwrite
+    // masking the loss), which BEH-EA-032's fix now surfaces as a throw
+    // instead.
+    assert.throws(() => {
+      // @ts-expect-error - plugin id "ping" appears more than once
+      Auth.make([Ping, PingDuplicate]);
+    }, /awthaq: E_GROUP_CONFLICT: group "ping"/);
   });
 
   it("BEH-EA-009: an empty plugin tuple refuses to type-check, and its runtime backstop is a catchable EmptyPluginTuple", () => {
