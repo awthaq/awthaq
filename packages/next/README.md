@@ -114,3 +114,43 @@ export async function signIn(email: string, password: string) {
 CSRF rotation) — it takes a `Response` and a cookie jar, nothing more, so it
 composes with however your app already dispatches requests against its own
 composed router.
+
+## Session rotation and `applyRotatedSession`
+
+`Sessions.verify` may rotate the session's secret on a throttled idle touch
+(at most once per `SessionConfig.touchEvery`, 1 hour by default) — the old
+secret stops verifying the moment that happens, no grace window.
+`getSession`'s `Session` carries that fresh token on `session.rotated`
+(`undefined` when nothing rotated this call); deliver it in any context that
+holds a mutable cookie jar — a Server Action or a Route Handler:
+
+```ts
+// app/actions.ts
+"use server";
+import { cookies } from "next/headers";
+import { getSession, applyRotatedSession } from "@awthaq/next";
+import { runtime } from "./lib/runtime.ts";
+
+export async function doSomething() {
+  const session = await getSession(await headers(), runtime);
+  applyRotatedSession(session, await cookies());
+  // ...
+}
+```
+
+A pure Server Component render has no mutable cookie jar at all — Next.js
+RSCs cannot set cookies under any circumstances — so a rotation that happens
+to land during a Server-Component-only render is a genuine platform
+limitation, not something this package can route around. In practice this
+only matters for an app that routes essentially zero traffic through Server
+Actions/Route Handlers for an entire `touchEvery` window; the overwhelming
+common case (any interactive app with real mutating traffic) delivers
+rotation reliably the moment it happens. An app that is intentionally
+close to 100% static RSC rendering can raise `touchEvery` in its own
+`SessionConfig` to make this residual window rarer.
+
+`getSession` itself memoizes per request/render via `React.cache()`, so two
+calls against the same cookie within one render or one Server Action
+invocation hit `Sessions.verify` exactly once — this also closes the
+version of this bug where a second, un-memoized call could lose the
+rotation race mid-render.

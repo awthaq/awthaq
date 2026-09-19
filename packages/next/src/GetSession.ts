@@ -34,8 +34,11 @@ import { Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as Effect from "effect/Effect";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import { cache } from "react";
 import { findCookieValue } from "./CookieHeader.ts";
+import type { CookieJarLike } from "./WithNextCookies.ts";
 
 /**
  * The minimal shape both `await headers()` (Next's `ReadonlyHeaders`, in a
@@ -52,6 +55,16 @@ export interface Session {
   readonly principal: Api.Principal;
   readonly user: Users.UserRecord;
   readonly session: Sessions.SessionView;
+  /**
+   * BO-001/IC-001: `Sessions.verify` may rotate the session's secret on a
+   * throttled touch (`Sessions.ts`'s own header: the old secret "stops
+   * verifying immediately — no grace window"), and this field carries that
+   * fresh token exactly when this call was the one that rotated it —
+   * `undefined` otherwise. A Server Component render has no mutable cookie
+   * jar to deliver it through (Next.js RSCs cannot set cookies at all); a
+   * Server Action or Route Handler does, via `applyRotatedSession` below.
+   */
+  readonly rotated: Redacted.Redacted<string> | undefined;
 }
 
 /**
@@ -74,16 +87,10 @@ const resolve = (token: string) =>
     const sessions = yield* Sessions.Sessions;
     const users = yield* Users.Users;
     const resolver = yield* Authentication.PrincipalResolver;
-    // Upstream-hardening ticket 01: `verify` may rotate the session's
-    // secret, but a Server Component/server action has no response to
-    // deliver a rotated cookie through (Next.js RSCs cannot set cookies at
-    // all) — `rotated` is intentionally discarded here; a real HTTP
-    // request through `@awthaq/server`'s `Authentication` middleware is
-    // what actually delivers rotation to the browser.
-    const { session } = yield* sessions.verify(Redacted.make(token));
+    const { session, rotated } = yield* sessions.verify(Redacted.make(token));
     const user = yield* users.findById(session.userId);
     const principal = yield* resolver.resolve(session);
-    return { principal, user, session };
+    return { principal, user, session, rotated: Option.getOrUndefined(rotated) };
   }).pipe(
     // BEH-EA-185: "no valid session" — cookie names a session that doesn't
     // exist, has expired, or belongs to a user record that's gone — is the
@@ -96,6 +103,28 @@ const resolve = (token: string) =>
       UserNotFound: () => Effect.succeed(undefined),
     }),
   );
+
+/**
+ * NSA-002: `React.cache()` — the framework-idiomatic per-request/per-render
+ * dedup mechanism Next.js itself documents, scoped to exactly one render
+ * pass or one Server Action invocation, never spanning across them (so it
+ * doesn't relitigate BEH-EA-190's "a server action MUST call getSession
+ * fresh on every invocation"). Two `getSession` calls against the same
+ * cookie within one render/action now hit `sessions.verify` exactly once —
+ * closing the "second call loses the rotation race" scenario structurally,
+ * the same way ticket 03's `Authentication.ts` cache closed it for the HTTP
+ * path (a `WeakMap` keyed on `HttpServerRequest` identity, which a Server
+ * Component/Server Action never has — that mechanism doesn't reach here).
+ */
+const verifyCached = cache(
+  (
+    token: string,
+    runtime: ManagedRuntime.ManagedRuntime<
+      Sessions.Sessions | Users.Users | Authentication.PrincipalResolver,
+      never
+    >,
+  ): Promise<Session | undefined> => runtime.runPromise(resolve(token)),
+);
 
 /**
  * BEH-EA-185: verifies the incoming request's session cookie against the
@@ -111,5 +140,31 @@ export const getSession = <Extra = never>(
   >,
 ): Promise<Session | undefined> => {
   const token = cookieValue(headers.get("cookie"), Api.SessionCookie.key);
-  return token === undefined ? Promise.resolve(undefined) : runtime.runPromise(resolve(token));
+  return token === undefined ? Promise.resolve(undefined) : verifyCached(token, runtime);
+};
+
+/**
+ * BO-001/IC-001: delivers `session.rotated`, if any, into `jar` — a no-op
+ * when nothing rotated this call. Reuses `WithNextCookies.ts`'s
+ * `CookieJarLike`/`Sessions.SESSION_COOKIE_ATTRIBUTES`, the same shape and
+ * attribute set every other session-cookie write in this codebase already
+ * uses, rather than inventing a second cookie-jar interface.
+ *
+ * Only a Server Action or Route Handler — both of which hold a mutable
+ * `cookies()` jar per Next's own API — can call this meaningfully:
+ * `applyRotatedSession(await getSession(await headers(), runtime), await cookies())`.
+ * A pure Server Component render has no mutable jar at all; for that
+ * context, delivering a mid-render rotation is a genuine Next.js platform
+ * limitation, not something this function can work around. An app that is
+ * 100% pure-RSC rendering with no Server Action/Route Handler traffic ever
+ * touching a session can mitigate by raising `touchEvery` in its own
+ * `SessionConfig`.
+ */
+export const applyRotatedSession = (session: Session | undefined, jar: CookieJarLike): void => {
+  if (session?.rotated === undefined) return;
+  jar.set(
+    Api.SessionCookie.key,
+    Redacted.value(session.rotated),
+    Sessions.SESSION_COOKIE_ATTRIBUTES,
+  );
 };
