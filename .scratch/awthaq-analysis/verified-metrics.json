@@ -1,0 +1,35 @@
+{
+  "date": "2026-09-14",
+  "commands": {
+    "typecheck": { "cmd": "pnpm typecheck", "result": "pass" },
+    "lint": { "cmd": "pnpm lint (oxlint)", "result": "pass", "findings": 0 },
+    "circular": { "cmd": "pnpm circular (madge)", "result": "pass", "cycles": 0 },
+    "knip": { "cmd": "pnpm knip", "result": "pass", "findings": 0 },
+    "tests": {
+      "cmd": "pnpm coverage (vitest run --coverage)",
+      "files": { "passed": 70, "skipped": 1, "total": 71 },
+      "cases": { "passed": 586, "skipped": 2, "total": 588 },
+      "durationSeconds": 9.66
+    }
+  },
+  "coverage": {
+    "statements": { "pct": 93.11, "covered": 3748, "total": 4025 },
+    "branches": { "pct": 82.84, "covered": 927, "total": 1119 },
+    "functions": { "pct": 90.06, "covered": 1151, "total": 1278 },
+    "lines": { "pct": 93.27, "covered": 3551, "total": 3807 },
+    "notable_gaps": [
+      { "file": "packages/api/src/*", "stmts": 0.0, "note": "contract-only package, 0 test LOC" },
+      { "file": "packages/ports/src/SqlTransaction.ts", "stmts": 33.33 },
+      { "file": "packages/sql/src/CoreMigrations.ts", "stmts": 58.62, "note": "Postgres-dialect branches untested locally (CI-only)" },
+      { "file": "packages/react/src/AuthClientAtom.ts", "stmts": 66.66 }
+    ]
+  },
+  "loc": {
+    "src": 19255,
+    "test": 13728,
+    "features_bdd": 4889,
+    "largest_package": { "name": "organization", "src": 5471, "test": 2805 },
+    "packages_total": 21,
+    "stub_packages": ["two-factor", "magic-link", "api-key", "cli"]
+  }
+}

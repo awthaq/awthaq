@@ -1,0 +1,29 @@
+{
+ "overall": 7.23,
+ "pillarAvg": {
+  "API Design": 7.5,
+  "Code Quality": 7.14,
+  "Effect Native": 7.56,
+  "Cross-Cutting": 6.55
+ },
+ "pillarN": {
+  "API Design": 12,
+  "Code Quality": 14,
+  "Effect Native": 14,
+  "Cross-Cutting": 10
+ },
+ "sevTally": {
+  "critical": 21,
+  "high": 82,
+  "medium": 124,
+  "low": 94
+ },
+ "counts": {
+  "experts": 50,
+  "strengths": 243,
+  "weaknesses": 322,
+  "examples": 99,
+  "metrics": 522,
+  "kpis": 242
+ }
+}
