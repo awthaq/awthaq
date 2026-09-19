@@ -209,6 +209,21 @@ export interface SessionsShape {
     userId: UserId,
     current?: SessionId,
   ) => Effect.Effect<ReadonlyArray<SessionListItem>>;
+  /**
+   * TIR-002/FAMS-009/MAPS-006: the exact liveness check a caller holding
+   * only a bare `id` (no secret — `verify`'s own credential) needs — e.g.
+   * `@awthaq/jwt`'s `verifyLive`/`introspectLive`, checking whether a
+   * JWT's `sid` still names a live session. Applies `verify`'s own full
+   * expiry logic (both `absoluteExpiresAt` and `idleExpiresAt`, not just
+   * the single deadline `SessionListItem.expiresAt` exposes) and treats a
+   * tombstoned (RRS-003) row as not live — without `verify`'s secret
+   * check, throttled touch, or rotation, since this never claims to
+   * authenticate the caller, only to answer "is this session still live."
+   * `false` for a session belonging to a different `userId` than claimed,
+   * already tombstoned, past either expiry, or simply absent — a single
+   * keyed lookup, not `list`'s full per-user scan.
+   */
+  readonly isLive: (userId: UserId, id: SessionId) => Effect.Effect<boolean>;
 }
 
 export class Sessions extends Context.Service<Sessions, SessionsShape>()("awthaq/core/Sessions") {}
@@ -477,7 +492,23 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         ),
       );
 
-    return { issue, verify, revoke, revokeOthers, revokeAll, list };
+    const isLive: SessionsShape["isLive"] = (userId, id) =>
+      Effect.gen(function* () {
+        const row = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
+        if (Option.isNone(row)) return false;
+        if (row.value.userId !== userId) return false;
+        if (Option.isSome(row.value.supersededAt)) return false;
+        const now = yield* DateTime.now;
+        if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.absoluteExpiresAt)) {
+          return false;
+        }
+        if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.idleExpiresAt)) {
+          return false;
+        }
+        return true;
+      });
+
+    return { issue, verify, revoke, revokeOthers, revokeAll, list, isLive };
   }),
 );
 
@@ -710,6 +741,28 @@ export const layerSql: Layer.Layer<
         Effect.orDie,
       );
 
-    return { issue, verify, revoke, revokeOthers, revokeAll, list };
+    const isLive: SessionsShape["isLive"] = (userId, id) =>
+      Effect.gen(function* () {
+        const row = yield* repo.findById(id).pipe(
+          Effect.catchTags({
+            NoSuchElementError: () => Effect.succeed(null),
+            SchemaError: Effect.die,
+            SqlError: Effect.die,
+          }),
+        );
+        if (row === null) return false;
+        if (row.userId !== userId) return false;
+        if (row.supersededAt !== null) return false;
+        const now = yield* DateTime.now;
+        if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
+          return false;
+        }
+        if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
+          return false;
+        }
+        return true;
+      });
+
+    return { issue, verify, revoke, revokeOthers, revokeAll, list, isLive };
   }),
 );

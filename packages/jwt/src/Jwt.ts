@@ -36,13 +36,17 @@
 // own `verify` needs the full `id.secret` credential, which a JWT never
 // carries by design (embedding the session secret in a JWT would let a
 // JWT holder also use it as a raw session token elsewhere, defeating the
-// whole point of a narrower-scoped delegation credential). Reusing
-// `Sessions.list(userId, ...)` — matching the token's own `sub`/`sid`
-// claims — and checking for a still-unexpired row with that id is the
-// least-invasive way to ask "is this session still live," using only
-// capabilities `Sessions` already exposes; ticket 12 was scoped to avoid
-// touching `packages/core` (that's ticket 16's own, separately-justified
-// core touch), and this achieves the live check without doing so.
+// whole point of a narrower-scoped delegation credential). Ticket 12
+// originally reused `Sessions.list(userId, ...)` — matching the token's
+// own `sub`/`sid` claims against a per-user scan — to avoid touching
+// `packages/core`. TIR-002/FAMS-009/MAPS-006: that scan was also wrong by
+// half the expiry model (`SessionListItem.expiresAt` is only
+// `absoluteExpiresAt`; an idle-expired session kept passing this check),
+// not just O(sessions-per-user) instead of O(1) — a correctness bug, not
+// only a performance one, so it warranted the `packages/core` touch
+// ticket 12 deferred: `Sessions.isLive(userId, id)` is a real, keyed,
+// tombstone-aware liveness check applying `verify`'s own exact expiry
+// logic.
 
 import { Api } from "@awthaq/api";
 import { AuthPlugin, Migrations, Sessions, Users } from "@awthaq/core";
@@ -427,21 +431,19 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
         const verifyJWT: JwtShape["verifyJWT"] = verify;
 
         /**
-         * `sid`'s owning session is still a live row in `Sessions.list`.
-         * Shared by `verifyLive` and `introspectLive` (TIR-001) — one
-         * implementation, not two, per this file's own established
-         * "reuse, don't duplicate" posture for `verify`/`verifyJWT`.
+         * `sid`'s owning session is still a live row, per `Sessions.isLive`
+         * (TIR-002/FAMS-009/MAPS-006: a keyed, tombstone-aware lookup
+         * applying `Sessions.verify`'s own exact absolute+idle expiry
+         * logic — not the single-deadline, full-user-scan check this used
+         * to do via `Sessions.list`). Shared by `verifyLive` and
+         * `introspectLive` (TIR-001) — one implementation, not two, per
+         * this file's own established "reuse, don't duplicate" posture
+         * for `verify`/`verifyJWT`.
          */
         const sidStillLive = (sub: string, sid: string) =>
           Effect.gen(function* () {
             const sessions = yield* Sessions.Sessions;
-            const now = yield* DateTime.now;
-            const rows = yield* sessions.list(Users.UserId(sub));
-            return rows.some(
-              (row) =>
-                row.id === Sessions.SessionId(sid) &&
-                DateTime.toEpochMillis(row.expiresAt) > DateTime.toEpochMillis(now),
-            );
+            return yield* sessions.isLive(Users.UserId(sub), Sessions.SessionId(sid));
           });
 
         const verifyLive: JwtShape["verifyLive"] = (token) =>

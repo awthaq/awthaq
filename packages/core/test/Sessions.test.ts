@@ -151,6 +151,45 @@ const suite = (
         }).pipe(Effect.provide(shortLivedLayer)),
     );
 
+    // TIR-002: `isLive` must apply the exact same idle+absolute logic
+    // `verify` does — it exists specifically because `SessionListItem`
+    // (and the old `Jwt.ts` live-check built on `Sessions.list`) only ever
+    // carried the absolute deadline, silently accepting an idle-expired
+    // session as live.
+    it.effect("isLive is false once idle-expired, even though absolute expiry is far off", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.millis(600));
+        assert.isFalse(yield* sessions.isLive(userId, session.id));
+      }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    it.effect("isLive is true for a freshly issued, unexpired session", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId });
+        assert.isTrue(yield* sessions.isLive(userId, session.id));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("isLive is false for a session belonging to a different userId", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId });
+        assert.isFalse(
+          yield* sessions.isLive(Users.UserId("22222222-2222-2222-2222-222222222222"), session.id),
+        );
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("isLive is false for an unknown session id", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        assert.isFalse(yield* sessions.isLive(userId, Sessions.SessionId("does-not-exist")));
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("BEH-EA-052: idle refresh is throttled to at most one write per touchEvery", () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;

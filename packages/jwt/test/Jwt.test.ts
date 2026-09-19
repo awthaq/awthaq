@@ -178,6 +178,34 @@ describe("Jwt verifyLive", () => {
       assert.strictEqual(result._tag, "JwtInvalidError");
     }).pipe(Effect.provide(buildLayer())),
   );
+
+  // TIR-002: `verifyLive` used to compare only `SessionListItem.expiresAt`
+  // (`Sessions.list`'s own single deadline, always `absoluteExpiresAt`),
+  // so an idle-expired-but-absolute-live session kept passing. The
+  // session's default config (`absolute: 30d`/`idle: 7d`) means 8 elapsed
+  // days is idle-expired but nowhere near absolute-expired — a JWT `ttl`
+  // override is needed too, since the default 15-minute `ttl` would
+  // already fail plain `verify` at 8 days, masking which check actually
+  // fired. Asserting the specific `reason` (not just the error's `_tag`)
+  // is what proves this is the live-check branch, not e.g. a signature or
+  // basic-expiry failure.
+  it.effect(
+    "verifyLive fails for an idle-expired session even though absolute expiry is far off",
+    () =>
+      Effect.gen(function* () {
+        const jwt = yield* Jwt.Jwt;
+        const sessions = yield* Sessions.Sessions;
+        const issued = yield* sessions.issue({ userId: Users.UserId("user-2") });
+        const caller = asCaller({ id: "user-2", sessionId: issued.session.id });
+        const token = yield* jwt.sign(caller);
+
+        yield* TestClock.adjust(Duration.days(8));
+
+        const liveCheckFails = yield* jwt.verifyLive(token).pipe(Effect.flip);
+        assert.strictEqual(liveCheckFails._tag, "JwtInvalidError");
+        assert.strictEqual(liveCheckFails.reason, "session no longer live");
+      }).pipe(Effect.provide(buildLayer({ ttl: Duration.days(30) }))),
+  );
 });
 
 // .scratch/jwt/issues/14-general-purpose-primitives.md — arbitrary-payload
