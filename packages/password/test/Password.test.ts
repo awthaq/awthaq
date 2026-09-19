@@ -812,6 +812,137 @@ describe("Password", () => {
       ),
   );
 
+  it.effect("APS-003: verifyEmail is throttled per token identifier", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const mailer = yield* Mailer.Mailer;
+
+      yield* password.signUp({ email, password: strongPassword });
+      yield* letForkedFibersRun; // let signUp's own verification mail land
+
+      const sent = yield* mailer.sent;
+      const verifyMail = sent.findLast((mail) => mail.template === "verify-email");
+      const realToken = String(verifyMail?.data?.["token"]);
+      const separator = realToken.lastIndexOf(".");
+      const identifier = realToken.slice(0, separator);
+
+      // `RATE_LIMITS.verifyEmail` is `{ limit: 5, window: 15 minutes }` —
+      // exhaust it with wrong-secret guesses against the *real*
+      // identifier (each still a genuine, uniform-cost `TokenConsumed` up
+      // to the limit), then prove the 6th is rejected by the limiter
+      // itself.
+      for (let i = 0; i < 5; i++) {
+        const attempt = yield* password
+          .verifyEmail({ token: Redacted.make(`${identifier}.wrong-secret-${i}`) })
+          .pipe(Effect.flip);
+        assert.strictEqual(attempt._tag, "TokenConsumed");
+      }
+
+      const throttled = yield* password
+        .verifyEmail({ token: Redacted.make(`${identifier}.wrong-secret-5`) })
+        .pipe(Effect.flip);
+      assert.strictEqual(throttled._tag, "RateLimited");
+    }).pipe(
+      Effect.provide(
+        Password.Password.layer.pipe(
+          Layer.provideMerge(AuthenticationLive),
+          Layer.provide(CsrfProtectionLive),
+          Layer.provideMerge(CoreLive),
+          Layer.provideMerge(
+            Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
+              Layer.provideMerge(NodeCrypto.layer),
+            ),
+          ),
+          Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
+          Layer.provideMerge(RateLimits.layer),
+          Layer.provide(NoBreachHttpClient),
+          Layer.provide(SqlTransaction.layerNoop),
+          Layer.provide(ClientAddress.layerDirect),
+        ),
+      ),
+    ),
+  );
+
+  it.effect(
+    "APS-003: verifyEmail is throttled per source IP across distinct, unrelated tokens",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+
+        // `RATE_LIMITS.verifyEmailByIp` is `{ limit: 30, window: 15
+        // minutes }` — 31 distinct accounts, one wrong-secret guess each
+        // (so no single account's own per-identifier limit trips first),
+        // all from the same IP.
+        const identifiers: Array<string> = [];
+        for (let i = 0; i < 31; i++) {
+          // A distinct, unrelated `ip` per signUp — `RATE_LIMITS.signUpByIp`
+          // (20 per hour) is otherwise tripped by this test's own 31
+          // sign-ups sharing a single key, before ever reaching the
+          // `verifyEmail`-under-test throttling below.
+          yield* password.signUp({
+            email: `verify-spray-${i}@example.com`,
+            password: strongPassword,
+            ip: `198.51.100.${100 + i}`,
+          });
+        }
+        yield* letForkedFibersRun;
+        const sent = yield* mailer.sent;
+        for (let i = 0; i < 31; i++) {
+          const mail = sent.find((m) => m.template === "verify-email" && m.to === `verify-spray-${i}@example.com`);
+          const realToken = String(mail?.data?.["token"]);
+          identifiers.push(realToken.slice(0, realToken.lastIndexOf(".")));
+        }
+
+        for (let i = 0; i < 30; i++) {
+          const attempt = yield* password
+            .verifyEmail({
+              token: Redacted.make(`${identifiers[i]}.wrong-secret`),
+              ip: "203.0.113.9",
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(attempt._tag, "TokenConsumed");
+        }
+
+        const throttled = yield* password
+          .verifyEmail({
+            token: Redacted.make(`${identifiers[30]}.wrong-secret`),
+            ip: "203.0.113.9",
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(throttled._tag, "RateLimited");
+
+        // A different source IP, presenting its own never-before-seen
+        // (still bogus) token, is untouched by the first IP's exhausted
+        // budget.
+        const untouched = yield* password
+          .verifyEmail({
+            token: Redacted.make(`${identifiers[30]}.wrong-secret-2`),
+            ip: "198.51.100.4",
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(untouched._tag, "TokenConsumed");
+      }).pipe(
+        Effect.provide(
+          Password.Password.layer.pipe(
+            Layer.provideMerge(AuthenticationLive),
+            Layer.provide(CsrfProtectionLive),
+            Layer.provideMerge(CoreLive),
+            Layer.provideMerge(
+              Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
+                Layer.provideMerge(NodeCrypto.layer),
+              ),
+            ),
+            Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
+            Layer.provideMerge(RateLimits.layer),
+            Layer.provide(NoBreachHttpClient),
+            Layer.provide(SqlTransaction.layerNoop),
+            Layer.provide(ClientAddress.layerDirect),
+          ),
+        ),
+      ),
+  );
+
   it.effect(
     "shipping-gaps/14: changePassword is actually throttled once its own rule's limit is exceeded",
     () =>

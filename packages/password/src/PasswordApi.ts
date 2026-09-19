@@ -185,7 +185,7 @@ export const PasswordGroup = HttpApiGroup.make("password")
     // to `204`, matching `signOut`'s own convention.
     HttpApiEndpoint.post("verifyEmail", "/verify-email", {
       payload: VerifyEmailPayload,
-      error: TokenConsumed,
+      error: [TokenConsumed, Api.RateLimited],
     }),
   )
   .add(

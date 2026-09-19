@@ -130,7 +130,9 @@ export interface PasswordShape {
    */
   readonly verifyEmail: (input: {
     readonly token: Redacted.Redacted<string>;
-  }) => Effect.Effect<void, PasswordApi.TokenConsumed>;
+    /** APS-003: resolved via `ClientAddress`, mirroring `signIn`/`signUp`/`requestReset`. */
+    readonly ip?: string;
+  }) => Effect.Effect<void, PasswordApi.TokenConsumed | Api.RateLimited>;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 11: authenticated
    * change-password — distinct from the unauthenticated `requestReset`/
@@ -218,6 +220,17 @@ const RATE_LIMITS = {
   // min default — resend-verification abuse is an inbox-flooding
   // harassment vector against the *target*, not an account-takeover one.
   resendVerification: { limit: 3, window: Duration.minutes(15) },
+  // APS-003: `verifyEmail` had no rule at all — an unlimited flood of
+  // wrong guesses against `/verify-email` is hopeless against a 256-bit
+  // token, but each failed `consume` still publishes `auth.token.replay`
+  // (now a lossy, non-suspending publish — BEH-EA-098 — but still
+  // pointless churn/log-spam to leave completely unbounded). Same numbers
+  // as `confirmReset`, the closest structural sibling (also a bare
+  // token-consume endpoint).
+  verifyEmail: { limit: 5, window: Duration.minutes(15) },
+  // Mirrors `signInByIp`/`requestResetByIp`: bounds one source spraying
+  // guesses across many distinct, unrelated tokens/accounts.
+  verifyEmailByIp: { limit: 30, window: Duration.minutes(15) },
 } as const satisfies Record<string, { readonly limit: number; readonly window: Duration.Duration }>;
 
 /**
@@ -400,10 +413,16 @@ export const PasswordHandlers = HttpApiBuilder.group(
 
       verifyEmail: Effect.fnUntraced(function* ({
         payload,
+        request,
       }: {
         payload: PasswordApi.VerifyEmailPayload;
+        request: HttpServerRequest.HttpServerRequest;
       }) {
-        yield* password.verifyEmail(payload);
+        const resolvedAddress = yield* clientAddress.resolve(request);
+        yield* password.verifyEmail({
+          ...payload,
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+        });
       }),
 
       changePassword: Effect.fnUntraced(function* ({
@@ -545,6 +564,19 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               endpoint: "resendVerification",
               key: (input) => `password:resend-verification:${emailFromRateLimitInput(input)}`,
               ...RATE_LIMITS.resendVerification,
+            },
+            {
+              endpoint: "verifyEmail",
+              // Keyed on the token's own decoded identifier at enforcement
+              // time, not a payload field — mirrors `confirmReset`'s own
+              // identical description-is-approximate posture.
+              key: (input) => `password:verify-email:${JSON.stringify(input)}`,
+              ...RATE_LIMITS.verifyEmail,
+            },
+            {
+              endpoint: "verifyEmail",
+              key: (input) => `password:verify-email:ip:${ipFromRateLimitInput(input)}`,
+              ...RATE_LIMITS.verifyEmailByIp,
             },
           ] satisfies ReadonlyArray<{
             readonly endpoint: string;
@@ -851,11 +883,20 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       });
 
       const verifyEmail: PasswordShape["verifyEmail"] = Effect.fnUntraced(function* (input) {
+        // APS-003: per-IP first — guards against a flood of garbage
+        // tokens before even attempting to decode one, mirroring
+        // `signIn`/`requestReset`'s own IP-then-identity ordering.
+        yield* rateLimit(`password:verify-email:ip:${input.ip ?? "unknown"}`, RATE_LIMITS.verifyEmailByIp);
         const decoded = decodeVerificationToken(Redacted.value(input.token));
         if (Option.isNone(decoded)) {
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
         }
         const { identifier, value } = decoded.value;
+        // Keyed on the token's own decoded identifier, mirroring
+        // `confirmReset`'s identical posture — already available for
+        // free at this point, ties the limit to the specific account the
+        // token names.
+        yield* rateLimit(`password:verify-email:${identifier}`, RATE_LIMITS.verifyEmail);
         const userId = Users.UserId(identifier.slice(VERIFY_PREFIX.length));
 
         // RRC-002: same class of bug `ARF-001` closes for `confirmReset` —
