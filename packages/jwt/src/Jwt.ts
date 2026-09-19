@@ -283,6 +283,21 @@ const jwtMigrations: Migrations.Migrations = [
       });
     }),
   },
+  {
+    // SSMS-001's own recommended fix: `findCurrent`
+    // (`SigningKeyRecords.ts`) runs `WHERE rotatedAt IS NULL ORDER BY
+    // createdAt DESC LIMIT 1` on every lazy key mint — a partial index
+    // keeps that scan proportional to the (small, O(active keys)) live
+    // set rather than the whole key-history table. Both pg and sqlite
+    // (>= 3.8.0) support partial indexes with this exact syntax.
+    name: "create_jwt_signing_key_active_index",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        CREATE INDEX jwt_signing_key_active_idx ON jwt_signing_key (createdAt)
+        WHERE rotatedAt IS NULL`;
+    }),
+  },
 ];
 
 export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {

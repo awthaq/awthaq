@@ -87,13 +87,27 @@ describe("Jwt.Jwt.migrations", () => {
   it.effect("creates both jwt_signing_key and jwt_token_revocation from a fresh database", () =>
     Effect.gen(function* () {
       const applied = yield* Migrations.run(Jwt.Jwt.migrations);
-      assert.strictEqual(applied.length, 2);
+      assert.strictEqual(applied.length, 3);
       const sql = yield* SqlClient.SqlClient;
       // A working `SELECT` against each table is the real proof — a
       // missing table fails the query itself, not merely the migration
       // runner's own bookkeeping.
       yield* sql`SELECT * FROM jwt_signing_key`;
       yield* sql`SELECT * FROM jwt_token_revocation`;
+    }).pipe(Effect.provide(SqlLive)),
+  );
+
+  // SSMS-001: `findCurrent`'s `WHERE rotatedAt IS NULL` scan needs a real
+  // index behind it, not just a migration that runs without error —
+  // querying sqlite's own catalog is what proves the index exists (a
+  // typo in the `CREATE INDEX` DDL would still let the migration "pass").
+  it.effect("creates a partial index on jwt_signing_key for the active-key lookup", () =>
+    Effect.gen(function* () {
+      yield* Migrations.run(Jwt.Jwt.migrations);
+      const sql = yield* SqlClient.SqlClient;
+      const rows = yield* sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'jwt_signing_key_active_idx'`;
+      assert.strictEqual(rows.length, 1);
     }).pipe(Effect.provide(SqlLive)),
   );
 });
