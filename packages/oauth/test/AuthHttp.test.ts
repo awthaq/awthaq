@@ -167,6 +167,12 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
         const cookie = response.headers.get("set-cookie");
         assert.isString(cookie);
         assert.match(cookie ?? "", /^__Host-oauth-state=/);
+        // CSS-001: the `__Host-` prefix requires Secure, no Domain, and
+        // Path=/ exactly — a narrower path silently voids the prefix and
+        // real browsers drop the cookie.
+        assert.match(cookie ?? "", /;\s*Path=\/(;|$)/i);
+        assert.match(cookie ?? "", /;\s*Secure/i);
+        assert.notMatch(cookie ?? "", /;\s*Domain=/i);
       }),
   );
 

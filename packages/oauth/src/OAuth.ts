@@ -309,7 +309,10 @@ export const OAuthHandlers = HttpApiBuilder.group(
           httpOnly: true,
           secure: true,
           sameSite: "lax",
-          path: "/oauth",
+          // CSS-001: the `__Host-` prefix requires Path=/ exactly (no
+          // Domain, Secure) — a narrower path silently voids the prefix
+          // and conforming browsers drop the cookie.
+          path: "/",
           maxAge: FLOW_TTL,
         }).pipe(Effect.orDie);
       }),
