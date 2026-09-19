@@ -14,7 +14,7 @@
 // their shape.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, HookPoint, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -105,6 +105,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationSlugTaken
     | OrganizationApi.OrganizationCreationNotAllowed
     | OrganizationApi.OrganizationLimitReached
+    | HookPoint.HookAborted
   >;
   readonly checkSlug: (slug: string) => Effect.Effect<boolean>;
   readonly list: (
@@ -142,6 +143,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationNotFound
     | OrganizationApi.OrganizationSlugTaken
     | OrganizationApi.OrganizationPermissionDenied
+    | HookPoint.HookAborted
   >;
   readonly delete: (
     caller: Api.UserPrincipal,
@@ -151,6 +153,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationNotFound
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.OrganizationDeletionDisabled
+    | HookPoint.HookAborted
   >;
   readonly listMembers: (
     caller: Api.UserPrincipal,
@@ -170,6 +173,7 @@ export interface OrganizationShape {
     | OrganizationApi.MembershipNotFound
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.OwnerInvariantViolation
+    | HookPoint.HookAborted
   >;
   readonly updateMemberRole: (
     caller: Api.UserPrincipal,
@@ -182,6 +186,7 @@ export interface OrganizationShape {
     | OrganizationApi.MembershipNotFound
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.OwnerInvariantViolation
+    | HookPoint.HookAborted
   >;
   readonly leave: (
     caller: Api.UserPrincipal,
@@ -199,7 +204,7 @@ export interface OrganizationShape {
     readonly role: ReadonlyArray<string>;
   }) => Effect.Effect<
     MembershipRecords.MembershipRecord,
-    OrganizationApi.OrganizationNotFound | OrganizationApi.MembershipLimitReached
+    OrganizationApi.OrganizationNotFound | OrganizationApi.MembershipLimitReached | HookPoint.HookAborted
   >;
   readonly getActiveMember: (
     caller: Api.UserPrincipal,
@@ -232,6 +237,7 @@ export interface OrganizationShape {
     | OrganizationApi.MembershipLimitReached
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.TeamNotFound
+    | HookPoint.HookAborted
   >;
   readonly acceptInvitation: (
     caller: Api.UserPrincipal,
@@ -245,6 +251,7 @@ export interface OrganizationShape {
     | OrganizationApi.MembershipLimitReached
     | OrganizationApi.EmailVerificationRequired
     | OrganizationApi.TeamMemberLimitReached
+    | HookPoint.HookAborted
   >;
   readonly rejectInvitation: (
     caller: Api.UserPrincipal,
@@ -254,6 +261,7 @@ export interface OrganizationShape {
     | OrganizationApi.InvitationNotFound
     | OrganizationApi.InvitationNotPending
     | OrganizationApi.InvitationEmailMismatch
+    | HookPoint.HookAborted
   >;
   readonly cancelInvitation: (
     caller: Api.UserPrincipal,
@@ -263,6 +271,7 @@ export interface OrganizationShape {
     | OrganizationApi.InvitationNotFound
     | OrganizationApi.InvitationNotPending
     | OrganizationApi.OrganizationPermissionDenied
+    | HookPoint.HookAborted
   >;
   readonly getInvitation: (
     invitationId: string,
@@ -289,6 +298,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrgRoleNameTaken
     | OrganizationApi.RolePermissionEscalation
     | OrganizationApi.RoleLimitReached
+    | HookPoint.HookAborted
   >;
   readonly listRoles: (
     caller: Api.UserPrincipal,
@@ -322,6 +332,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.OrgRoleNotFound
     | OrganizationApi.RolePermissionEscalation
+    | HookPoint.HookAborted
   >;
   readonly deleteRole: (
     caller: Api.UserPrincipal,
@@ -333,6 +344,7 @@ export interface OrganizationShape {
     | OrganizationApi.DynamicAccessControlDisabled
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.OrgRoleNotFound
+    | HookPoint.HookAborted
   >;
   readonly createTeam: (
     caller: Api.UserPrincipal,
@@ -344,6 +356,7 @@ export interface OrganizationShape {
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.TeamLimitReached
+    | HookPoint.HookAborted
   >;
   readonly listTeams: (
     organizationId: string,
@@ -369,6 +382,7 @@ export interface OrganizationShape {
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.TeamNotFound
+    | HookPoint.HookAborted
   >;
   readonly removeTeam: (
     caller: Api.UserPrincipal,
@@ -381,6 +395,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.TeamNotFound
     | OrganizationApi.LastTeamCannotBeRemoved
+    | HookPoint.HookAborted
   >;
   readonly listTeamMembers: (
     organizationId: string,
@@ -404,6 +419,7 @@ export interface OrganizationShape {
     | OrganizationApi.TeamNotFound
     | OrganizationApi.MembershipNotFound
     | OrganizationApi.TeamMemberLimitReached
+    | HookPoint.HookAborted
   >;
   readonly removeTeamMember: (
     caller: Api.UserPrincipal,
@@ -417,6 +433,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.TeamNotFound
     | OrganizationApi.TeamMembershipNotFound
+    | HookPoint.HookAborted
   >;
   /** Upserts the caller's own session's active team; `teamId: null` unsets it. Rejects if the caller isn't a member of the named team. */
   readonly setActiveTeam: (
@@ -966,6 +983,28 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const beforeRemoveTeamMember = yield* OrganizationHooks.BeforeRemoveTeamMember;
       const afterRemoveTeamMember = yield* OrganizationHooks.AfterRemoveTeamMember;
 
+      /**
+       * JH-001/PERS-001: BEH-EA-090 requires a veto abort to reach the
+       * caller as a typed error naming its `code`, not the bare defect
+       * `Effect.orDie` previously turned every `before*.run(...)` failure
+       * into. Translates `HookPoint.HookAbort` into the shared, wire-shaped
+       * `HookPoint.HookAborted` right where each veto point is run, naming
+       * that point's own id — every other call site's `.pipe(Effect.orDie)`
+       * in this file (a DB-layer invariant violation, never a policy
+       * denial) is unaffected.
+       */
+      const veto = <A>(
+        point: string,
+        effect: Effect.Effect<A, HookPoint.HookAbort>,
+      ): Effect.Effect<A, HookPoint.HookAborted> =>
+        effect.pipe(
+          Effect.catchTag(
+            "HookAbort",
+            (abort) =>
+              new HookPoint.HookAborted({ point, code: abort.code, message: abort.message }),
+          ),
+        );
+
       /** Static statements plus, when dynamic access control is enabled, every custom role this organization has defined. */
       const statementsByRole = (organizationId: string) =>
         orgConfig.dynamicAccessControl.enabled
@@ -1047,7 +1086,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           return yield* Effect.fail(new OrganizationApi.OrganizationLimitReached());
         }
 
-        const vetoed = yield* beforeCreate.run({ callerId, name, slug }).pipe(Effect.orDie);
+        const vetoed = yield* veto(
+          "organization.create.before",
+          beforeCreate.run({ callerId, name, slug }),
+        );
 
         const record = yield* orgs
           .create({ name: vetoed.name, slug: vetoed.slug, logo, metadata })
@@ -1117,9 +1159,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "organization",
             "update",
           );
-          const vetoed = yield* beforeUpdate
-            .run({ organizationId, name: input.name, slug: input.slug })
-            .pipe(Effect.orDie);
+          const vetoed = yield* veto(
+            "organization.update.before",
+            beforeUpdate.run({ organizationId, name: input.name, slug: input.slug }),
+          );
           const record = yield* orgs
             .update(organizationId, { ...input, name: vetoed.name, slug: vetoed.slug })
             .pipe(
@@ -1148,7 +1191,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "organization",
             "delete",
           );
-          yield* beforeDelete.run({ organizationId }).pipe(Effect.orDie);
+          yield* veto("organization.delete.before", beforeDelete.run({ organizationId }));
           yield* members.removeAllForOrganization(organizationId);
           yield* invitations.removeAllForOrganization(organizationId);
           yield* teams.removeAllTeamsForOrganization(organizationId);
@@ -1202,7 +1245,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (violates) return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
 
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "member", "delete");
-          yield* beforeRemove.run({ organizationId, userId: targetUserId }).pipe(Effect.orDie);
+          yield* veto(
+            "organization.member.remove.before",
+            beforeRemove.run({ organizationId, userId: targetUserId }),
+          );
           yield* members
             .remove(targetUserId, organizationId)
             .pipe(
@@ -1238,9 +1284,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (violates) return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
 
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "member", "update");
-          const vetoed = yield* beforeUpdateRole
-            .run({ organizationId, userId: targetUserId, role })
-            .pipe(Effect.orDie);
+          const vetoed = yield* veto(
+            "organization.member.updateRole.before",
+            beforeUpdateRole.run({ organizationId, userId: targetUserId, role }),
+          );
           const updated = yield* members
             .updateRole(targetUserId, organizationId, vetoed.role)
             .pipe(
@@ -1303,7 +1350,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         if (count >= orgConfig.membershipLimit) {
           return yield* Effect.fail(new OrganizationApi.MembershipLimitReached());
         }
-        const vetoed = yield* beforeAdd.run({ organizationId, userId, role }).pipe(Effect.orDie);
+        const vetoed = yield* veto(
+          "organization.member.add.before",
+          beforeAdd.run({ organizationId, userId, role }),
+        );
         const membership = yield* members.create({ userId, organizationId, role: vetoed.role });
         yield* events.publish({
           _tag: "auth.organization.memberAdded",
@@ -1389,9 +1439,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             yield* requireTeam(organizationId, input.teamId);
           }
 
-          const vetoed = yield* beforeCreateInvitation
-            .run({ organizationId, email: input.email, role: input.role })
-            .pipe(Effect.orDie);
+          const vetoed = yield* veto(
+            "organization.invitation.create.before",
+            beforeCreateInvitation.run({ organizationId, email: input.email, role: input.role }),
+          );
 
           const alreadyMember = yield* users.findByEmail(vetoed.email).pipe(
             Effect.flatMap(
@@ -1480,7 +1531,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const acceptInvitation: OrganizationShape["acceptInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId) {
-          yield* beforeAccept.run({ invitationId }).pipe(Effect.orDie);
+          yield* veto("organization.invitation.accept.before", beforeAccept.run({ invitationId }));
 
           const record = yield* requirePendingInvitation(invitationId);
 
@@ -1558,7 +1609,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const rejectInvitation: OrganizationShape["rejectInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId) {
-          yield* beforeReject.run({ invitationId }).pipe(Effect.orDie);
+          yield* veto("organization.invitation.reject.before", beforeReject.run({ invitationId }));
 
           const record = yield* requirePendingInvitation(invitationId);
           const callerId = Users.UserId(caller.ref.id);
@@ -1578,7 +1629,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const cancelInvitation: OrganizationShape["cancelInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId) {
-          yield* beforeCancel.run({ invitationId }).pipe(Effect.orDie);
+          yield* veto("organization.invitation.cancel.before", beforeCancel.run({ invitationId }));
 
           const record = yield* requirePendingInvitation(invitationId);
           yield* requirePermission(
@@ -1647,9 +1698,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             return yield* Effect.fail(new OrganizationApi.RoleLimitReached());
           }
 
-          const vetoed = yield* beforeCreateRole
-            .run({ organizationId, role: input.role })
-            .pipe(Effect.orDie);
+          const vetoed = yield* veto(
+            "organization.role.create.before",
+            beforeCreateRole.run({ organizationId, role: input.role }),
+          );
 
           const record = yield* orgRoles
             .create({ organizationId, role: vetoed.role, permission: input.permission })
@@ -1713,7 +1765,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
           }
 
-          yield* beforeUpdateRoleHook.run({ organizationId, roleId }).pipe(Effect.orDie);
+          yield* veto(
+            "organization.role.update.before",
+            beforeUpdateRoleHook.run({ organizationId, roleId }),
+          );
 
           const updated = yield* orgRoles
             .update(organizationId, roleId, permission)
@@ -1738,7 +1793,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           yield* requireDynamicAccessControlEnabled;
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "role", "delete");
           const existing = yield* requireOrgRole(organizationId, roleId);
-          yield* beforeDeleteRole.run({ organizationId, roleId }).pipe(Effect.orDie);
+          yield* veto(
+            "organization.role.delete.before",
+            beforeDeleteRole.run({ organizationId, roleId }),
+          );
           yield* orgRoles
             .remove(organizationId, roleId)
             .pipe(
@@ -1780,7 +1838,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (count >= orgConfig.teams.maximumTeams) {
             return yield* Effect.fail(new OrganizationApi.TeamLimitReached());
           }
-          const vetoed = yield* beforeCreateTeam.run({ organizationId, name }).pipe(Effect.orDie);
+          const vetoed = yield* veto(
+            "organization.team.create.before",
+            beforeCreateTeam.run({ organizationId, name }),
+          );
           const record = yield* teams.createTeam({ organizationId, name: vetoed.name });
           yield* events.publish({
             _tag: "auth.organization.teamCreated",
@@ -1814,9 +1875,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           yield* requireTeamsEnabled;
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "team", "update");
           yield* requireTeam(organizationId, teamId);
-          const vetoed = yield* beforeUpdateTeam
-            .run({ organizationId, teamId, name })
-            .pipe(Effect.orDie);
+          const vetoed = yield* veto(
+            "organization.team.update.before",
+            beforeUpdateTeam.run({ organizationId, teamId, name }),
+          );
           const updated = yield* teams
             .updateTeam(organizationId, teamId, vetoed.name)
             .pipe(
@@ -1840,7 +1902,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (count <= 1 && !orgConfig.teams.allowRemovingAllTeams) {
             return yield* Effect.fail(new OrganizationApi.LastTeamCannotBeRemoved());
           }
-          yield* beforeDeleteTeam.run({ organizationId, teamId }).pipe(Effect.orDie);
+          yield* veto(
+            "organization.team.delete.before",
+            beforeDeleteTeam.run({ organizationId, teamId }),
+          );
           yield* teams
             .removeTeam(organizationId, teamId)
             .pipe(
@@ -1875,9 +1940,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (team.memberCount >= orgConfig.teams.maximumMembersPerTeam) {
             return yield* Effect.fail(new OrganizationApi.TeamMemberLimitReached());
           }
-          yield* beforeAddTeamMember
-            .run({ organizationId, teamId, userId: targetUserId })
-            .pipe(Effect.orDie);
+          yield* veto(
+            "organization.team.member.add.before",
+            beforeAddTeamMember.run({ organizationId, teamId, userId: targetUserId }),
+          );
           const record = yield* teams.addTeamMember({ teamId, userId: targetUserId });
           yield* events.publish({
             _tag: "auth.organization.teamMemberAdded",
@@ -1896,9 +1962,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           yield* requireTeamsEnabled;
           yield* requirePermission(Users.UserId(caller.ref.id), organizationId, "team", "update");
           yield* requireTeam(organizationId, teamId);
-          yield* beforeRemoveTeamMember
-            .run({ organizationId, teamId, userId: targetUserId })
-            .pipe(Effect.orDie);
+          yield* veto(
+            "organization.team.member.remove.before",
+            beforeRemoveTeamMember.run({ organizationId, teamId, userId: targetUserId }),
+          );
           yield* teams
             .removeTeamMember(teamId, targetUserId)
             .pipe(

@@ -92,10 +92,19 @@ describe("OrganizationHooks (BEH-EA-089-096, ticket 19)", () => {
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-1");
 
+        // JH-001/PERS-001: BEH-EA-090's own MUST — the veto abort reaches
+        // the caller as the typed `HookPoint.HookAborted`, naming this
+        // point's own id and the tap's own code, never a bare defect.
         const aborted = yield* organization
           .create({ caller: owner, name: "Nope", slug: "forbidden" })
-          .pipe(Effect.exit);
-        assert.strictEqual(aborted._tag, "Failure");
+          .pipe(
+            Effect.flip,
+            Effect.flatMap((error) =>
+              error._tag === "HookAborted" ? Effect.succeed(error) : Effect.die(error),
+            ),
+          );
+        assert.strictEqual(aborted.point, "organization.create.before");
+        assert.strictEqual(aborted.code, "SLUG_FORBIDDEN");
 
         const record = yield* organization.create({
           caller: owner,
@@ -134,10 +143,16 @@ describe("OrganizationHooks (BEH-EA-089-096, ticket 19)", () => {
         const owner = asCaller("owner-1");
         const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
 
-        const exit = yield* organization
+        const aborted = yield* organization
           .createTeam(owner, record.id, "forbidden-team")
-          .pipe(Effect.exit);
-        assert.strictEqual(exit._tag, "Failure");
+          .pipe(
+            Effect.flip,
+            Effect.flatMap((error) =>
+              error._tag === "HookAborted" ? Effect.succeed(error) : Effect.die(error),
+            ),
+          );
+        assert.strictEqual(aborted.point, "organization.team.create.before");
+        assert.strictEqual(aborted.code, "TEAM_NAME_FORBIDDEN");
 
         const teams = yield* organization.listTeams(record.id);
         assert.strictEqual(teams.length, 0);

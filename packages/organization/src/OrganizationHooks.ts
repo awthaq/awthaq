@@ -11,15 +11,15 @@
 // comment: never decoded here). Each `observe` point's schema additionally
 // carries the resulting record, per the ticket's own requirement.
 //
-// A `veto` tap may fail with `HookPoint.HookAbort` (BEH-EA-090). This
-// plugin's own design decision (documented in ticket 19's `## Result`):
-// an abort is converted to a defect (`Effect.orDie`) right where the veto
-// runs, inside `Organization.ts`'s own operation — never propagated as a
-// typed `OrganizationShape`/`OrganizationApi` contract error. This keeps
-// the wire contract's error surface exactly what it already was (no new
-// per-operation "aborted" error to design and thread through 15 endpoints)
-// while still giving an application a real way to block an operation
-// outright by tapping the veto point and failing.
+// A `veto` tap may fail with `HookPoint.HookAbort` (BEH-EA-090). JH-001/
+// PERS-001: ticket 19's original design decision (converting that to a
+// defect via `Effect.orDie` right where each veto runs) directly
+// contradicted BEH-EA-090's own MUST that an abort "surface to the caller
+// as a typed error naming the abort's code" — reversed. `Organization.ts`'s
+// own `veto(...)` helper translates `HookAbort` into the shared,
+// wire-shaped `HookPoint.HookAborted` (core, `httpApiStatus: 403`) at
+// every `before*.run(...)` call site, and every affected `OrganizationApi`
+// endpoint's `error:` array declares it.
 import { HookPoint } from "@awthaq/core";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";

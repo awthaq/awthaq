@@ -10,6 +10,7 @@
 // organization-CRUD and membership endpoints below in the same pass.
 
 import { Api } from "@awthaq/api";
+import { HookPoint } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -383,7 +384,12 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
     HttpApiEndpoint.post("create", "/organization", {
       payload: CreateOrganizationPayload,
       success: OrganizationDto,
-      error: [OrganizationSlugTaken, OrganizationCreationNotAllowed, OrganizationLimitReached],
+      error: [
+        OrganizationSlugTaken,
+        OrganizationCreationNotAllowed,
+        OrganizationLimitReached,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(
@@ -448,14 +454,24 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
       params: OrganizationIdParams,
       payload: UpdateOrganizationPayload,
       success: OrganizationDto,
-      error: [OrganizationNotFound, OrganizationSlugTaken, OrganizationPermissionDenied],
+      error: [
+        OrganizationNotFound,
+        OrganizationSlugTaken,
+        OrganizationPermissionDenied,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(
     HttpApiEndpoint.delete("delete", "/organization/:organizationId", {
       params: OrganizationIdParams,
       success: HttpApiSchema.Empty(204),
-      error: [OrganizationNotFound, OrganizationPermissionDenied, OrganizationDeletionDisabled],
+      error: [
+        OrganizationNotFound,
+        OrganizationPermissionDenied,
+        OrganizationDeletionDisabled,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(
@@ -475,6 +491,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         MembershipNotFound,
         OrganizationPermissionDenied,
         OwnerInvariantViolation,
+        HookPoint.HookAborted,
       ],
     }),
   )
@@ -488,6 +505,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         MembershipNotFound,
         OrganizationPermissionDenied,
         OwnerInvariantViolation,
+        HookPoint.HookAborted,
       ],
     }),
   )
@@ -510,6 +528,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         MembershipLimitReached,
         TeamsDisabled,
         TeamNotFound,
+        HookPoint.HookAborted,
       ],
     }),
   )
@@ -548,6 +567,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         MembershipLimitReached,
         EmailVerificationRequired,
         TeamMemberLimitReached,
+        HookPoint.HookAborted,
       ],
     }),
   )
@@ -555,14 +575,19 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
     HttpApiEndpoint.post("rejectInvitation", "/organization/invitations/:invitationId/reject", {
       params: InvitationIdParams,
       success: HttpApiSchema.Empty(204),
-      error: [InvitationNotFound, InvitationNotPending, InvitationEmailMismatch],
+      error: [InvitationNotFound, InvitationNotPending, InvitationEmailMismatch, HookPoint.HookAborted],
     }),
   )
   .add(
     HttpApiEndpoint.post("cancelInvitation", "/organization/invitations/:invitationId/cancel", {
       params: InvitationIdParams,
       success: HttpApiSchema.Empty(204),
-      error: [InvitationNotFound, InvitationNotPending, OrganizationPermissionDenied],
+      error: [
+        InvitationNotFound,
+        InvitationNotPending,
+        OrganizationPermissionDenied,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(
@@ -577,6 +602,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrgRoleNameTaken,
         RolePermissionEscalation,
         RoleLimitReached,
+        HookPoint.HookAborted,
       ],
     }),
   )
@@ -610,6 +636,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrganizationPermissionDenied,
         OrgRoleNotFound,
         RolePermissionEscalation,
+        HookPoint.HookAborted,
       ],
     }),
   )
@@ -622,6 +649,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         DynamicAccessControlDisabled,
         OrganizationPermissionDenied,
         OrgRoleNotFound,
+        HookPoint.HookAborted,
       ],
     }),
   )
@@ -630,7 +658,13 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
       params: OrganizationIdParams,
       payload: CreateTeamPayload,
       success: TeamDto,
-      error: [OrganizationNotFound, TeamsDisabled, OrganizationPermissionDenied, TeamLimitReached],
+      error: [
+        OrganizationNotFound,
+        TeamsDisabled,
+        OrganizationPermissionDenied,
+        TeamLimitReached,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(
@@ -652,7 +686,13 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
       params: TeamIdParams,
       payload: UpdateTeamPayload,
       success: TeamDto,
-      error: [OrganizationNotFound, TeamsDisabled, OrganizationPermissionDenied, TeamNotFound],
+      error: [
+        OrganizationNotFound,
+        TeamsDisabled,
+        OrganizationPermissionDenied,
+        TeamNotFound,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(
@@ -665,6 +705,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrganizationPermissionDenied,
         TeamNotFound,
         LastTeamCannotBeRemoved,
+        HookPoint.HookAborted,
       ],
     }),
   )
@@ -687,6 +728,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         TeamNotFound,
         MembershipNotFound,
         TeamMemberLimitReached,
+        HookPoint.HookAborted,
       ],
     }),
   )
@@ -703,6 +745,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
           OrganizationPermissionDenied,
           TeamNotFound,
           TeamMembershipNotFound,
+          HookPoint.HookAborted,
         ],
       },
     ),

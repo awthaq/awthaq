@@ -60,7 +60,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as Schema from "effect/Schema";
+import * as Schema from "effect/Schema";
 
 /** BEH-EA-089: a point's failure semantics are fixed once, at its own definition — never decided later by whichever plugin taps it. */
 export type Kind = "veto" | "observe" | "divert";
@@ -70,6 +70,29 @@ export class HookAbort extends Data.TaggedError("HookAbort")<{
   readonly code: string;
   readonly message?: string;
 }> {}
+
+/**
+ * JH-001/PERS-001: BEH-EA-090's own MUST — a veto abort "surface[s] to the
+ * caller as a typed error naming the abort's `code`," never as a bare
+ * defect. `HookAbort` above is the in-process value a tap fails with (it
+ * never itself crosses the wire); this is what a veto call site translates
+ * it into right where the point is run, one shared type rather than a
+ * class per operation — `code`/`message` are already point-agnostic by
+ * design (the point's own owner doesn't know a tap author's business rule
+ * in advance), so a client `catchTag("HookAborted", ...)`es once and
+ * branches on `code`, regardless of which veto point fired. `point` names
+ * that point's own id so a caller (or a log) can tell which one, when an
+ * operation guards more than one.
+ */
+export class HookAborted extends Schema.TaggedError<HookAborted>()(
+  "HookAborted",
+  {
+    point: Schema.String,
+    code: Schema.String,
+    message: Schema.optional(Schema.String),
+  },
+  { httpApiStatus: 403 },
+) {}
 
 /** Reachable only if a tap is installed (its Layer built) after the point it targets has already run once — a construction-order bug, not a normal-flow error (BEH-EA-024's "frozen at first read"). */
 export class HookPointFrozen extends Data.TaggedError("HookPointFrozen")<{
