@@ -6,7 +6,7 @@ This is the Gherkin/BDD acceptance suite for awthaq. It exists because `spec/pro
 
 ## How this maps to `spec/behaviors/`
 
-One `.feature` file per `spec/behaviors/NN-*.md` file (26 total), grouped into 9 directories under `features/features/` that mirror the same stratification `spec/README.md` uses (foundations → contract/persistence → domain → HTTP → cross-cutting → authentication methods → authorization bridge → client integration → tooling):
+One `.feature` file per `spec/behaviors/NN-*.md` file (27 total), grouped into 10 directories under `features/features/` that mirror the same stratification `spec/README.md` uses (foundations → contract/persistence → domain → HTTP → cross-cutting → authentication methods → authorization bridge → client integration → tooling → admin/impersonation):
 
 | Directory                            | Feature files                                                                              | `BEH-EA` range |
 | ------------------------------------ | ------------------------------------------------------------------------------------------ | -------------- |
@@ -19,6 +19,7 @@ One `.feature` file per `spec/behaviors/NN-*.md` file (26 total), grouped into 9
 | `06-roles-and-authorization-bridge/` | roles-subject-resolver, qadi-bridge-path-a, qadi-bridge-path-b, qadi-resolvers-obligations | 137–168        |
 | `07-client-integration/`             | client-effect, react, nextjs-ssr                                                           | 169–192        |
 | `08-tooling/`                        | testing-harness, cli                                                                       | 193–208        |
+| `09-admin-and-impersonation/`        | admin-impersonation                                                                        | 209–220        |
 
 Inside each `.feature` file: one `Rule:` per `BEH-EA-NNN` (tagged `@BEH-EA-NNN`), one or more `Scenario:`/`Scenario Outline:` per rule covering its requirement clauses and the edge cases the source prose names. See [`STYLE.md`](STYLE.md) for the full authoring contract, and [`traceability.md`](traceability.md) for the complete `REQ-EA-NNN` → `BEH-EA-NNN` → scenario manifest.
 

@@ -49,6 +49,7 @@ ORDER = [
     "07-client-integration/24-nextjs-ssr.feature",
     "08-tooling/25-testing-harness.feature",
     "08-tooling/26-cli.feature",
+    "09-admin-and-impersonation/27-admin-impersonation.feature",
 ]
 
 # Explicit feature-file -> source-behavior-md map (most basenames match
@@ -80,6 +81,7 @@ SOURCE_MD = {
     "24-nextjs-ssr.feature": "24-nextjs-ssr.md",
     "25-testing-harness.feature": "25-testing-harness.md",
     "26-cli.feature": "26-cli.md",
+    "27-admin-impersonation.feature": "27-admin-impersonation.md",
 }
 
 RULE_RE = re.compile(r'^\s*Rule:')
@@ -112,7 +114,55 @@ def build_anchor_index():
     return index
 
 
+def check_order_matches_disk():
+    """
+    AH-001 (aslak-hellesoy): `27-admin-impersonation.feature` was hand-tagged
+    with 25 @REQ-EA ids outside this script's deterministic pass because it
+    was simply missing from ORDER — a file present on disk but absent here
+    has its tags silently unscanned, so nothing ever detects a collision
+    against numbers a *listed* file already owns. Raises before any
+    allocation runs, rather than letting a missing/stale entry produce an
+    ambiguous manifest.
+    """
+    # `_smoke/smoke.feature` is deliberately outside the numbered
+    # specification (its own header comment: "Not part of the awthaq
+    # specification") — no @BEH-EA/@REQ-EA tags, exists only to prove the
+    # Cucumber/vitest pipeline wiring, so it is exempt from this check
+    # rather than something ORDER needs to ever list.
+    on_disk = {
+        p.relative_to(FEATURES).as_posix()
+        for p in FEATURES.rglob("*.feature")
+        if p.relative_to(FEATURES).parts[0] != "_smoke"
+    }
+    in_order = set(ORDER)
+    missing_from_order = sorted(on_disk - in_order)
+    if missing_from_order:
+        raise SystemExit(
+            "allocate-req-ea.py: the following .feature file(s) exist on disk but are "
+            f"not listed in ORDER — add them before running: {missing_from_order}"
+        )
+    stale_in_order = sorted(in_order - on_disk)
+    if stale_in_order:
+        raise SystemExit(
+            f"allocate-req-ea.py: ORDER lists file(s) that no longer exist on disk: {stale_in_order}"
+        )
+
+
+def check_no_duplicate_req_ids(manifest):
+    """Raises if any @REQ-EA-NNN id is tagged in more than one feature file — the collision this allocator exists to prevent, never to silently paper over."""
+    owner_by_req_id = {}
+    for req_id, _beh_id, rel, _title in manifest:
+        owner = owner_by_req_id.get(req_id)
+        if owner is not None and owner != rel:
+            raise SystemExit(
+                f"allocate-req-ea.py: {req_id} is tagged in both {owner} and {rel} — "
+                "duplicate REQ-EA id, refusing to write an ambiguous manifest."
+            )
+        owner_by_req_id[req_id] = rel
+
+
 def main():
+    check_order_matches_disk()
     anchor_index = build_anchor_index()
 
     # First pass: find the highest REQ-EA number already in use, across the
@@ -159,6 +209,7 @@ def main():
             out.append(line)
         path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
+    check_no_duplicate_req_ids(manifest)
     manifest.sort(key=lambda row: int(row[0].split("-")[-1]))
     print(f"{counter} REQ-EA id(s) now allocated across {len(ORDER)} files "
           f"({counter - max_existing} newly assigned this run).")
