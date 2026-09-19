@@ -108,6 +108,37 @@ const suite = (
         }).pipe(Effect.provide(layer)),
     );
 
+    // RSC-001: a `SessionView` must never carry the stored secret hash (or
+    // any other internal row field) at runtime — its own doc comment
+    // promises "never the secret, never the stored hash," and a careless
+    // prop pass to a Client Component would otherwise serialize it into an
+    // RSC flight payload. `deepStrictEqual` against the full expected key
+    // set (not just `notProperty("secretHash", ...)`) also catches any
+    // other internal-only field (e.g. `familyId`) leaking the same way.
+    it.effect("issue/verify never expose secretHash or other internal row fields", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session, token } = yield* sessions.issue({ userId });
+        const expectedKeys = [
+          "id",
+          "userId",
+          "createdAt",
+          "lastActiveAt",
+          "absoluteExpiresAt",
+          "idleExpiresAt",
+          "ipAddress",
+          "userAgent",
+          "actingAs",
+        ].sort();
+        assert.deepStrictEqual(Object.keys(session).sort(), expectedKeys);
+        assert.notProperty(session, "secretHash");
+
+        const { session: verified } = yield* sessions.verify(token);
+        assert.deepStrictEqual(Object.keys(verified).sort(), expectedKeys);
+        assert.notProperty(verified, "secretHash");
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("BEH-EA-050/056: a tampered secret is rejected", () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;

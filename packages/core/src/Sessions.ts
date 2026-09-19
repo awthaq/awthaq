@@ -252,7 +252,26 @@ interface SessionRow {
   readonly reusedAt: Option.Option<DateTime.Utc>;
 }
 
-const toView = (row: SessionRow): SessionView => row;
+// RSC-001: an explicit object, not `row` by identity — a bare identity
+// return type-checks (a variable reference is exempt from excess-property
+// checks) while still carrying `secretHash`/`familyId`/`supersededBy`/
+// `supersededAt`/`reusedAt` at runtime, contradicting `SessionView`'s own
+// doc comment ("never the secret, never the stored hash"). One careless
+// prop pass of a `SessionView` to a Client Component (e.g. `@awthaq/next`'s
+// `getSession`) would otherwise serialize the stored hash into the RSC
+// flight payload. Mirrors `toSessionView`'s own explicit-construction
+// pattern below, which the SQL layer already gets right.
+const toView = (row: SessionRow): SessionView => ({
+  id: row.id,
+  userId: row.userId,
+  createdAt: row.createdAt,
+  lastActiveAt: row.lastActiveAt,
+  absoluteExpiresAt: row.absoluteExpiresAt,
+  idleExpiresAt: row.idleExpiresAt,
+  ipAddress: row.ipAddress,
+  userAgent: row.userAgent,
+  actingAs: row.actingAs,
+});
 
 export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvents.AuthEvents> =
   Layer.effect(
