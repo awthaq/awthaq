@@ -832,7 +832,7 @@ describe("Organization", () => {
       const team = yield* organization.createTeam(owner, org.id, "Engineering");
       assert.strictEqual(team.memberCount, 0);
 
-      const listed = yield* organization.listTeams(org.id);
+      const listed = yield* organization.listTeams(owner, org.id);
       assert.strictEqual(listed.length, 1);
 
       const updated = yield* organization.updateTeam(owner, org.id, team.id, "Eng");
@@ -840,8 +840,39 @@ describe("Organization", () => {
 
       yield* organization.createTeam(owner, org.id, "Sales");
       yield* organization.removeTeam(owner, org.id, team.id);
-      const afterRemove = yield* organization.listTeams(org.id);
+      const afterRemove = yield* organization.listTeams(owner, org.id);
       assert.strictEqual(afterRemove.length, 1);
+    }).pipe(Effect.provide(withTeams())),
+  );
+
+  // MTI-002: listTeams/listTeamMembers used to take no caller at all — any
+  // authenticated principal of the deployment could enumerate another
+  // tenant's team names and rosters. Mirrors the identical
+  // "getFull/listMembers/... denied to a non-member" test above.
+  it.effect("listTeams/listTeamMembers are denied to a non-member", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const outsider = asCaller("outsider-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const team = yield* organization.createTeam(owner, org.id, "Engineering");
+
+      const teamsDenied = yield* organization.listTeams(outsider, org.id).pipe(Effect.flip);
+      assert.strictEqual(teamsDenied._tag, "OrganizationPermissionDenied");
+
+      const membersDenied = yield* organization
+        .listTeamMembers(outsider, org.id, team.id)
+        .pipe(Effect.flip);
+      assert.strictEqual(membersDenied._tag, "OrganizationPermissionDenied");
+
+      // A real member (not just owner/admin) may still read both.
+      yield* organization.addMember({
+        organizationId: org.id,
+        userId: Users.UserId("outsider-1"),
+        role: ["member"],
+      });
+      yield* organization.listTeams(outsider, org.id);
+      yield* organization.listTeamMembers(outsider, org.id, team.id);
     }).pipe(Effect.provide(withTeams())),
   );
 
@@ -870,11 +901,11 @@ describe("Organization", () => {
       );
       assert.strictEqual(membership.userId, Users.UserId("member-1"));
 
-      const members = yield* organization.listTeamMembers(org.id, team.id);
+      const members = yield* organization.listTeamMembers(owner, org.id, team.id);
       assert.strictEqual(members.length, 1);
 
       yield* organization.removeTeamMember(owner, org.id, team.id, Users.UserId("member-1"));
-      const afterRemove = yield* organization.listTeamMembers(org.id, team.id);
+      const afterRemove = yield* organization.listTeamMembers(owner, org.id, team.id);
       assert.strictEqual(afterRemove.length, 0);
     }).pipe(Effect.provide(withTeams())),
   );
@@ -929,7 +960,7 @@ describe("Organization", () => {
       });
       yield* organization.acceptInvitation(asCaller(invitee.id), invitation.id);
 
-      const members = yield* organization.listTeamMembers(org.id, team.id);
+      const members = yield* organization.listTeamMembers(owner, org.id, team.id);
       assert.strictEqual(members.length, 1);
       assert.strictEqual(members[0]?.userId, invitee.id);
     }).pipe(Effect.provide(withTeams())),

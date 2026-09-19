@@ -671,7 +671,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
     HttpApiEndpoint.get("listTeams", "/organization/:organizationId/teams", {
       params: OrganizationIdParams,
       success: Schema.Array(TeamDto),
-      error: [OrganizationNotFound, TeamsDisabled],
+      error: [OrganizationNotFound, TeamsDisabled, OrganizationPermissionDenied],
     }),
   )
   .add(
@@ -713,7 +713,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
     HttpApiEndpoint.get("listTeamMembers", "/organization/:organizationId/teams/:teamId/members", {
       params: TeamIdParams,
       success: Schema.Array(TeamMembershipDto),
-      error: [OrganizationNotFound, TeamsDisabled, TeamNotFound],
+      error: [OrganizationNotFound, TeamsDisabled, TeamNotFound, OrganizationPermissionDenied],
     }),
   )
   .add(

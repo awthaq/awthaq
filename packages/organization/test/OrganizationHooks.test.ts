@@ -156,7 +156,7 @@ describe("OrganizationHooks (BEH-EA-089-096, ticket 19)", () => {
         assert.strictEqual(aborted.point, "organization.team.create.before");
         assert.strictEqual(aborted.code, "TEAM_NAME_FORBIDDEN");
 
-        const teams = yield* organization.listTeams(record.id);
+        const teams = yield* organization.listTeams(owner, record.id);
         assert.strictEqual(teams.length, 0);
       }).pipe(
         Effect.provide(

@@ -358,11 +358,15 @@ export interface OrganizationShape {
     | OrganizationApi.TeamLimitReached
     | HookPoint.HookAborted
   >;
+  /** MTI-002: member-only — a full team roster/directory is confidential to the organization, not deployment-public. */
   readonly listTeams: (
+    caller: Api.UserPrincipal,
     organizationId: string,
   ) => Effect.Effect<
     ReadonlyArray<TeamRecords.TeamRecord>,
-    OrganizationApi.OrganizationNotFound | OrganizationApi.TeamsDisabled
+    | OrganizationApi.OrganizationNotFound
+    | OrganizationApi.TeamsDisabled
+    | OrganizationApi.OrganizationPermissionDenied
   >;
   readonly listUserTeams: (
     caller: Api.UserPrincipal,
@@ -397,7 +401,9 @@ export interface OrganizationShape {
     | OrganizationApi.LastTeamCannotBeRemoved
     | HookPoint.HookAborted
   >;
+  /** MTI-002: member-only — a team roster is personal data about the organization's own staff, not deployment-public. */
   readonly listTeamMembers: (
+    caller: Api.UserPrincipal,
     organizationId: string,
     teamId: string,
   ) => Effect.Effect<
@@ -405,6 +411,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationNotFound
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.TeamNotFound
+    | OrganizationApi.OrganizationPermissionDenied
   >;
   readonly addTeamMember: (
     caller: Api.UserPrincipal,
@@ -838,7 +845,8 @@ export const OrganizationHandlers = HttpApiBuilder.group(
       }: {
         params: OrganizationApi.OrganizationIdParams;
       }) {
-        const records = yield* organization.listTeams(params.organizationId);
+        const caller = yield* currentUserPrincipal;
+        const records = yield* organization.listTeams(caller, params.organizationId);
         return records.map(toTeamDto);
       }),
       listUserTeams: Effect.fnUntraced(function* ({
@@ -879,7 +887,12 @@ export const OrganizationHandlers = HttpApiBuilder.group(
       }: {
         params: OrganizationApi.TeamIdParams;
       }) {
-        const records = yield* organization.listTeamMembers(params.organizationId, params.teamId);
+        const caller = yield* currentUserPrincipal;
+        const records = yield* organization.listTeamMembers(
+          caller,
+          params.organizationId,
+          params.teamId,
+        );
         return records.map(toTeamMembershipDto);
       }),
       addTeamMember: Effect.fnUntraced(function* ({
@@ -1854,9 +1867,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       );
 
       const listTeams: OrganizationShape["listTeams"] = Effect.fnUntraced(
-        function* (organizationId) {
+        function* (caller, organizationId) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsEnabled;
+          // MTI-002: any authenticated principal could otherwise enumerate
+          // another tenant's team names/counts — member-only, mirroring
+          // `getFull`'s own `requireMembership` posture for a read.
+          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
           return yield* teams.listTeamsByOrganization(organizationId);
         },
       );
@@ -1919,10 +1936,14 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       );
 
       const listTeamMembers: OrganizationShape["listTeamMembers"] = Effect.fnUntraced(
-        function* (organizationId, teamId) {
+        function* (caller, organizationId, teamId) {
           yield* requireOrganization(organizationId);
           yield* requireTeamsEnabled;
           yield* requireTeam(organizationId, teamId);
+          // MTI-002: a team roster is personal data about another tenant's
+          // staff — member-only, mirroring `getFull`'s own
+          // `requireMembership` posture for a read.
+          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
           return yield* teams.listTeamMembers(teamId);
         },
       );
