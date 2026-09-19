@@ -709,6 +709,16 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           Option.isNone(hashOpt) ||
           !verified
         ) {
+          // ALF-003: the one forensic signal a brute-force/credential-
+          // stuffing campaign otherwise leaves nowhere — see
+          // `UserSignInFailedEvent`'s own doc comment for why this
+          // carries no `userId`/email despite the wire response's own
+          // uniform-response discipline not applying here.
+          yield* events.publish({
+            _tag: "auth.user.signInFailed",
+            strategy: "password",
+            reason: "invalidCredentials",
+          });
           return yield* Effect.fail(new Api.InvalidCredentials());
         }
         const user = userOpt.value;
@@ -719,6 +729,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // correct password is confirmed — never before, so this can't be
         // used to probe whether a guessed password is even close to right.
         if (!user.emailVerified) {
+          yield* events.publish({
+            _tag: "auth.user.signInFailed",
+            strategy: "password",
+            reason: "emailNotVerified",
+          });
           return yield* Effect.fail(new PasswordApi.EmailNotVerified());
         }
 

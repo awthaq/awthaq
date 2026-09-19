@@ -15,9 +15,11 @@ import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -306,6 +308,70 @@ describe("Password", () => {
           .signIn({ email, password: Redacted.make("totally wrong password") })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "InvalidCredentials");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "ALF-003: signIn publishes auth.user.signInFailed (reason: invalidCredentials) on a wrong password, with no userId/email in the payload",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const events = yield* AuthEvents.AuthEvents;
+        yield* password.signUp({ email, password: strongPassword });
+
+        const failed = yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((event) => event._tag === "auth.user.signInFailed"),
+            Stream.take(1),
+            Stream.runCollect,
+          ),
+          { startImmediately: true },
+        );
+
+        yield* password
+          .signIn({ email, password: Redacted.make("totally wrong password") })
+          .pipe(Effect.flip);
+
+        const collected = yield* Fiber.join(failed);
+        assert.strictEqual(collected.length, 1);
+        const [event] = collected;
+        assert.strictEqual(event?._tag, "auth.user.signInFailed");
+        if (event?._tag === "auth.user.signInFailed") {
+          assert.strictEqual(event.strategy, "password");
+          assert.strictEqual(event.reason, "invalidCredentials");
+          assert.notProperty(event, "userId");
+          assert.notProperty(event, "email");
+        }
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "ALF-003: signIn publishes auth.user.signInFailed (reason: emailNotVerified) for an otherwise-correct, unverified account",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const events = yield* AuthEvents.AuthEvents;
+        yield* password.signUp({ email, password: strongPassword });
+        // No verifyEmail call — the account stays unverified.
+
+        const failed = yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((event) => event._tag === "auth.user.signInFailed"),
+            Stream.take(1),
+            Stream.runCollect,
+          ),
+          { startImmediately: true },
+        );
+
+        yield* password.signIn({ email, password: strongPassword }).pipe(Effect.flip);
+
+        const collected = yield* Fiber.join(failed);
+        assert.strictEqual(collected.length, 1);
+        const [event] = collected;
+        assert.strictEqual(event?._tag, "auth.user.signInFailed");
+        if (event?._tag === "auth.user.signInFailed") {
+          assert.strictEqual(event.reason, "emailNotVerified");
+        }
       }).pipe(Effect.provide(TestLayer)),
   );
 

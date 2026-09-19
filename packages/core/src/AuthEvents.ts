@@ -40,6 +40,25 @@ export interface UserSignedInEvent {
 }
 
 /**
+ * ALF-003: published by `@awthaq/password`'s `signIn` on every failure
+ * path — the wire response's uniform-response discipline (BEH-EA-116,
+ * hides which of the underlying reasons applied from the caller) is
+ * deliberately NOT extended to this audit channel: the whole point of
+ * this event is to make brute-force/credential-stuffing attempts visible
+ * to a defender, which requires the distinction the wire response hides.
+ * No `userId` and no email: a nonexistent-account attempt has no `userId`
+ * to carry, and a *present* `userId` would itself leak account existence
+ * through the event's own shape — the same oracle the wire response's
+ * uniform response exists to close, just relocated to whoever is
+ * subscribed to this stream instead of to the caller.
+ */
+export interface UserSignInFailedEvent {
+  readonly _tag: "auth.user.signInFailed";
+  readonly strategy: string;
+  readonly reason: "invalidCredentials" | "emailNotVerified";
+}
+
+/**
  * RRS-003: published by `Sessions.verify` the first time a tombstoned
  * (already-superseded) session token is presented again — refresh-token
  * reuse, the standard signal a token family has been compromised. Every
@@ -228,6 +247,7 @@ export type AuthEvent =
   | TokenReplayEvent
   | UserCreatedEvent
   | UserSignedInEvent
+  | UserSignInFailedEvent
   | SessionReuseEvent
   | PasskeyCounterAnomalyEvent
   | AdminImpersonationStartedEvent
