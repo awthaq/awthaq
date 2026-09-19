@@ -163,7 +163,13 @@ const resolveCallbackURL = (
   fallback: string,
 ): string => {
   if (raw === undefined) return fallback;
-  if (raw.startsWith("/")) return raw;
+  // OAP-001/AP-001: a bare leading slash alone isn't enough to prove
+  // same-origin — a network-path reference (`//evil.com/phish`) or a
+  // backslash variant (`/\evil.com/phish`) also starts with `/`, and a
+  // browser still resolves either off-origin against the current scheme.
+  // Only when the second character is neither `/` nor `\` is `raw`
+  // genuinely a same-origin relative path.
+  if (raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/\\")) return raw;
   const parsed = Option.fromNullOr(URL.parse(raw));
   return parsed.pipe(
     Option.filter((url) => trustedOrigins.includes(url.origin)),

@@ -780,6 +780,97 @@ describe("OAuth", () => {
         ),
       ),
     );
+
+    it.effect(
+      "OAP-001/AP-001: a scheme-relative //host callbackURL is never redirected to",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state } = yield* oauth.authorize("acme", {
+            callbackURL: "//evil.example.com/phish",
+            link: undefined,
+          });
+          const outcome = yield* oauth.callback("acme", {
+            code: "c1",
+            state,
+            iss: undefined,
+            cookieState: state,
+          });
+          // A browser resolves `//evil.example.com/phish` against the
+          // current scheme (e.g. `https://evil.example.com/phish`) despite
+          // its leading `/` — this must fall back to the safe default,
+          // exactly like an untrusted absolute URL does.
+          assert.notInclude(outcome.callbackURL, "evil.example.com");
+          assert.strictEqual(outcome.callbackURL, "/");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                "/token": { access_token: "at-1" },
+                "/userinfo": { id: "np-sub", email: "np@example.com" },
+              },
+            }),
+          ),
+        ),
+    );
+
+    it.effect(
+      "OAP-001/AP-001: a backslash-variant /\\host callbackURL is never redirected to",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state } = yield* oauth.authorize("acme", {
+            callbackURL: "/\\evil.example.com/phish",
+            link: undefined,
+          });
+          const outcome = yield* oauth.callback("acme", {
+            code: "c1",
+            state,
+            iss: undefined,
+            cookieState: state,
+          });
+          assert.notInclude(outcome.callbackURL, "evil.example.com");
+          assert.strictEqual(outcome.callbackURL, "/");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                "/token": { access_token: "at-1" },
+                "/userinfo": { id: "bs-sub", email: "bs@example.com" },
+              },
+            }),
+          ),
+        ),
+    );
+
+    it.effect("a bare single slash is still honored as a same-origin relative path", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("acme", {
+          callbackURL: "/",
+          link: undefined,
+        });
+        const outcome = yield* oauth.callback("acme", {
+          code: "c1",
+          state,
+          iss: undefined,
+          cookieState: state,
+        });
+        assert.strictEqual(outcome.callbackURL, "/");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": { access_token: "at-1" },
+              "/userinfo": { id: "root-sub", email: "root@example.com" },
+            },
+          }),
+        ),
+      ),
+    );
   });
 
   describe("OIDC id_token: real RS256 signature + claim verification", () => {
