@@ -158,6 +158,19 @@ export interface PasswordShape {
     IssuedSession,
     PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited
   >;
+  /**
+   * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+   * (AAPS-001): re-verifies `currentPassword` and, on success, calls
+   * `Sessions.reauthenticate(currentSessionId)` — refreshes the session's
+   * own `authenticatedAt` without superseding it (distinct from
+   * `changePassword`, which mints a fresh session because the credential
+   * itself changed).
+   */
+  readonly reauthenticate: (input: {
+    readonly userId: Users.UserId;
+    readonly currentSessionId: Sessions.SessionId;
+    readonly currentPassword: Redacted.Redacted<string>;
+  }) => Effect.Effect<void, PasswordApi.WrongPassword | Api.RateLimited>;
 }
 
 const toHex = (bytes: Uint8Array): string =>
@@ -217,6 +230,10 @@ const RATE_LIMITS = {
   confirmReset: { limit: 5, window: Duration.minutes(15) },
   // Shipping-gap map (.scratch/shipping-gaps), ticket 14.
   changePassword: { limit: 5, window: Duration.minutes(15) },
+  // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15:
+  // mirrors `changePassword`'s own numbers — the identical
+  // authenticated-password-recheck shape.
+  reauthenticate: { limit: 5, window: Duration.minutes(15) },
   // Upstream-hardening map, ticket 04: tighter than the generic 5-per-15-
   // min default — resend-verification abuse is an inbox-flooding
   // harassment vector against the *target*, not an account-takeover one.
@@ -465,6 +482,24 @@ export const PasswordHandlers = HttpApiBuilder.group(
         );
         return toSessionDto(issued.session);
       }),
+
+      reauthenticate: Effect.fnUntraced(function* ({
+        payload,
+      }: {
+        payload: PasswordApi.ReauthenticatePayload;
+      }) {
+        const principal = yield* Api.CurrentPrincipal;
+        if (principal._tag !== "User") {
+          return yield* Effect.die(
+            new Error(`awthaq: reauthenticate reached with a non-User principal: ${principal._tag}`),
+          );
+        }
+        yield* password.reauthenticate({
+          userId: Users.UserId(principal.ref.id),
+          currentSessionId: Sessions.SessionId(principal.sessionId),
+          currentPassword: payload.password,
+        });
+      }),
     });
   }),
 );
@@ -569,6 +604,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // time (the authenticated caller), not a payload field.
               key: (input) => `password:change-password:${JSON.stringify(input)}`,
               ...RATE_LIMITS.changePassword,
+            },
+            {
+              endpoint: "reauthenticate",
+              // Keyed on `CurrentPrincipal`'s own userId at enforcement
+              // time, mirroring `changePassword`'s own posture.
+              key: (input) => `password:reauthenticate:${JSON.stringify(input)}`,
+              ...RATE_LIMITS.reauthenticate,
             },
             {
               endpoint: "resendVerification",
@@ -1007,6 +1049,44 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           .pipe(Effect.orDie);
       });
 
+      const reauthenticate: PasswordShape["reauthenticate"] = Effect.fnUntraced(function* (input) {
+        // Keyed on `userId` directly — this endpoint is authenticated,
+        // mirroring `changePassword`'s own posture.
+        yield* rateLimit(`password:reauthenticate:${input.userId}`, RATE_LIMITS.reauthenticate);
+        const accountOpt = yield* accounts.findByProviderSubject(
+          Accounts.PASSWORD_PROVIDER_ID,
+          input.userId,
+        );
+        const hashOpt = yield* Option.match(accountOpt, {
+          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
+          onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
+        });
+        // Same uniform-cost shape as `changePassword`'s own `dummyHash`
+        // check — this endpoint is authenticated (no enumeration
+        // concern), but there is no reason to let a caller with no
+        // password credential at all distinguish "wrong password" from
+        // "no password set" by timing.
+        const verified = yield* hasher.verify(
+          input.currentPassword,
+          Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+        );
+        if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
+          return yield* Effect.fail(new PasswordApi.WrongPassword());
+        }
+        yield* sessions.reauthenticate(input.currentSessionId).pipe(
+          Effect.catchTag("SessionNotFound", () =>
+            // `changePassword`'s own `Authentication` middleware already
+            // proved this exact session live moments ago — a
+            // `SessionNotFound` here would mean it was revoked in the
+            // narrow window since, a race this endpoint has no
+            // request-level recovery for.
+            Effect.die(
+              new Error(`awthaq: reauthenticate's own current session vanished: ${input.currentSessionId}`),
+            ),
+          ),
+        );
+      });
+
       return Password.of({
         signUp,
         signIn,
@@ -1015,6 +1095,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         confirmReset,
         verifyEmail,
         changePassword,
+        reauthenticate,
       });
     }),
   });

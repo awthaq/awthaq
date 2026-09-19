@@ -268,4 +268,29 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+  // (AAPS-001/BPAS-001): "when this session last proved a credential" — a
+  // real column, not a computed value, since `reauthenticate` writes it
+  // independently of `createdAt`. Backfilled from `createdAt` for every
+  // pre-existing row (no session is retroactively treated as stale) —
+  // this repo has no real deployment yet (`Models.ts`'s own header
+  // comment), so this backfill is a no-op today, same posture as
+  // migration 10's own `familyId` comment.
+  migration(12, "add_sessions_authenticated_at_column", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`ALTER TABLE sessions ADD COLUMN "authenticatedAt" TIMESTAMPTZ`.pipe(
+          Effect.andThen(
+            sql`UPDATE sessions SET "authenticatedAt" = "createdAt" WHERE "authenticatedAt" IS NULL`,
+          ),
+        ),
+      sqlite: () =>
+        sql`ALTER TABLE sessions ADD COLUMN authenticatedAt TEXT`.pipe(
+          Effect.andThen(
+            sql`UPDATE sessions SET authenticatedAt = createdAt WHERE authenticatedAt IS NULL`,
+          ),
+        ),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);

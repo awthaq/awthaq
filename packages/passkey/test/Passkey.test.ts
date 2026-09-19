@@ -12,11 +12,13 @@ import { WebAuthn } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as ChallengeStore from "../src/ChallengeStore.ts";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
@@ -548,5 +550,157 @@ describe("Passkey — Conditional Create (ticket 07)", () => {
       }).pipe(
         Effect.provide(buildLayer(mockWebAuthn({ registrationVerified: { userVerified: false } }))),
       ),
+  );
+});
+
+describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", () => {
+  it.effect("registerOptions refuses a stale session with PasskeyReauthRequired", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      const users = yield* Users.Users;
+      const sessions = yield* Sessions.Sessions;
+      const user = yield* users.create({ email: "stale-options@example.com", name: "Stale" });
+      const issued = yield* sessions.issue({ userId: user.id });
+
+      // `PasskeyConfig.reauthMaxAgeSeconds` defaults to 5 minutes.
+      yield* TestClock.adjust(Duration.minutes(6));
+
+      const failure = yield* passkey.registerOptions(user.id, issued.session.id).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "PasskeyReauthRequired");
+      assert.strictEqual(failure.maxAgeSeconds, 300);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("registerVerify refuses a stale session even with a valid completed ceremony", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      const users = yield* Users.Users;
+      const sessions = yield* Sessions.Sessions;
+      const user = yield* users.create({ email: "stale-verify@example.com", name: "Stale" });
+      const issued = yield* sessions.issue({ userId: user.id });
+      const options = yield* passkey.registerOptions(user.id, issued.session.id);
+
+      // Closes the window between fetching options while fresh and
+      // presenting the completed ceremony after the session has since
+      // gone stale.
+      yield* TestClock.adjust(Duration.minutes(6));
+
+      const failure = yield* passkey
+        .registerVerify(user.id, issued.session.id, {
+          credential: {
+            id: "cred-mock-1",
+            rawId: "cred-mock-1",
+            type: "public-key",
+            response: {
+              clientDataJSON: buildClientDataJSON({
+                type: "webauthn.create",
+                challenge: extractChallenge(options),
+                origin: ORIGIN,
+              }),
+              attestationObject: "",
+            },
+          },
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "PasskeyReauthRequired");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "reauthenticateVerify refreshes authenticatedAt, unblocking a subsequently stale-gated enrollment",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const { userId, sessionId } = yield* registerNewUser("stepup@example.com");
+
+        yield* TestClock.adjust(Duration.minutes(6));
+
+        const gated = yield* passkey.registerOptions(userId, sessionId).pipe(Effect.flip);
+        assert.strictEqual(gated._tag, "PasskeyReauthRequired");
+
+        const options = yield* passkey.reauthenticateOptions(userId, sessionId);
+        yield* passkey.reauthenticateVerify(userId, sessionId, {
+          credential: {
+            id: "cred-mock-1",
+            rawId: "cred-mock-1",
+            type: "public-key",
+            response: {
+              clientDataJSON: buildClientDataJSON({
+                type: "webauthn.get",
+                challenge: extractChallenge(options),
+                origin: ORIGIN,
+              }),
+              authenticatorData: "",
+              signature: "",
+            },
+          },
+        });
+
+        // The gate is now clear — same session, no new sign-in.
+        yield* passkey.registerOptions(userId, sessionId);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("reauthenticateVerify requires user verification unconditionally", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      const { userId, sessionId } = yield* registerNewUser("stepup-uv@example.com");
+
+      const options = yield* passkey.reauthenticateOptions(userId, sessionId);
+      const failure = yield* passkey
+        .reauthenticateVerify(userId, sessionId, {
+          credential: {
+            id: "cred-mock-1",
+            rawId: "cred-mock-1",
+            type: "public-key",
+            response: {
+              clientDataJSON: buildClientDataJSON({
+                type: "webauthn.get",
+                challenge: extractChallenge(options),
+                origin: ORIGIN,
+              }),
+              authenticatorData: "",
+              signature: "",
+            },
+          },
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "PasskeyUserVerificationRequired");
+    }).pipe(
+      Effect.provide(buildLayer(mockWebAuthn({ authenticationVerified: { userVerified: false } }))),
+    ),
+  );
+
+  it.effect("reauthenticateVerify refuses a credential belonging to a different user", () =>
+    Effect.gen(function* () {
+      const passkey = yield* Passkey.Passkey;
+      const users = yield* Users.Users;
+      const sessions = yield* Sessions.Sessions;
+      yield* registerNewUser("owner@example.com");
+      const other = yield* users.create({ email: "other@example.com", name: "Other" });
+      const otherIssued = yield* sessions.issue({ userId: other.id });
+
+      const options = yield* passkey.reauthenticateOptions(other.id, otherIssued.session.id);
+      // `cred-mock-1` belongs to the first user, not `other`.
+      const failure = yield* passkey
+        .reauthenticateVerify(other.id, otherIssued.session.id, {
+          credential: {
+            id: "cred-mock-1",
+            rawId: "cred-mock-1",
+            type: "public-key",
+            response: {
+              clientDataJSON: buildClientDataJSON({
+                type: "webauthn.get",
+                challenge: extractChallenge(options),
+                origin: ORIGIN,
+              }),
+              authenticatorData: "",
+              signature: "",
+            },
+          },
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "PasskeyCredentialNotFound");
+    }).pipe(Effect.provide(TestLayer)),
   );
 });

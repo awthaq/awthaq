@@ -92,6 +92,17 @@ export interface SessionView {
   readonly id: SessionId;
   readonly userId: UserId;
   readonly createdAt: DateTime.Utc;
+  /**
+   * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+   * (AAPS-001/BPAS-001): "when this session last *proved* a credential" —
+   * equal to `createdAt` at `issue` time (every mint follows a real
+   * credential presentation), advanced only by `reauthenticate`, and never
+   * touched by `verify`'s own idle-refresh/rotation. This is the field a
+   * step-up check (`isStale`) compares against, not `createdAt`, which
+   * rotation deliberately preserves across an otherwise-unrelated secret
+   * refresh.
+   */
+  readonly authenticatedAt: DateTime.Utc;
   readonly lastActiveAt: DateTime.Utc;
   readonly absoluteExpiresAt: DateTime.Utc;
   readonly idleExpiresAt: DateTime.Utc;
@@ -105,11 +116,27 @@ export interface SessionView {
 export interface SessionListItem {
   readonly id: SessionId;
   readonly createdAt: DateTime.Utc;
+  /** Ticket 15: see `SessionView.authenticatedAt`'s own doc comment — the field a step-up check compares against. */
+  readonly authenticatedAt: DateTime.Utc;
   readonly lastActiveAt: DateTime.Utc;
   readonly expiresAt: DateTime.Utc;
   readonly userAgent: Option.Option<string>;
   readonly current: boolean;
 }
+
+/**
+ * Ticket 15: the one staleness comparison a step-up/reauth check needs —
+ * factored out here so `@awthaq/qadi`'s `reauthHandler` and
+ * `@awthaq/passkey`'s own enrollment gate both compare `authenticatedAt`
+ * the same way, rather than each re-deriving the
+ * `DateTime.distance`/`Duration.isGreaterThan` pair independently.
+ */
+export const isStale = (
+  authenticatedAt: DateTime.Utc,
+  maxAgeSeconds: number,
+  now: DateTime.Utc,
+): boolean =>
+  Duration.isGreaterThan(DateTime.distance(authenticatedAt, now), Duration.seconds(maxAgeSeconds));
 
 export class SessionNotFound extends Data.TaggedError("SessionNotFound")<{
   readonly message: string;
@@ -224,6 +251,17 @@ export interface SessionsShape {
    * keyed lookup, not `list`'s full per-user scan.
    */
   readonly isLive: (userId: UserId, id: SessionId) => Effect.Effect<boolean>;
+  /**
+   * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+   * (AAPS-001/BPAS-001): sets `authenticatedAt = now` only — deliberately a
+   * different write path from `verify`'s own throttled touch/rotation (does
+   * not rotate the secret/id, does not touch `idleExpiresAt`/
+   * `absoluteExpiresAt`). Reauthentication is an explicit, credential-
+   * proving event a caller invokes directly (e.g.
+   * `@awthaq/password`/`@awthaq/passkey`'s own `reauthenticate` endpoints),
+   * not a passive idle refresh, so it gets its own always-available method.
+   */
+  readonly reauthenticate: (id: SessionId) => Effect.Effect<SessionView, SessionNotFound>;
 }
 
 export class Sessions extends Context.Service<Sessions, SessionsShape>()("awthaq/core/Sessions") {}
@@ -233,6 +271,7 @@ interface SessionRow {
   readonly userId: UserId;
   readonly secretHash: string;
   readonly createdAt: DateTime.Utc;
+  readonly authenticatedAt: DateTime.Utc;
   readonly lastActiveAt: DateTime.Utc;
   readonly absoluteExpiresAt: DateTime.Utc;
   readonly idleExpiresAt: DateTime.Utc;
@@ -265,6 +304,7 @@ const toView = (row: SessionRow): SessionView => ({
   id: row.id,
   userId: row.userId,
   createdAt: row.createdAt,
+  authenticatedAt: row.authenticatedAt,
   lastActiveAt: row.lastActiveAt,
   absoluteExpiresAt: row.absoluteExpiresAt,
   idleExpiresAt: row.idleExpiresAt,
@@ -326,6 +366,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         userId: input.userId,
         secretHash,
         createdAt: now,
+        authenticatedAt: now,
         lastActiveAt: now,
         absoluteExpiresAt,
         idleExpiresAt,
@@ -503,6 +544,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             .map((row): SessionListItem => ({
               id: row.id,
               createdAt: row.createdAt,
+              authenticatedAt: row.authenticatedAt,
               lastActiveAt: row.lastActiveAt,
               expiresAt: row.absoluteExpiresAt,
               userAgent: row.userAgent,
@@ -527,7 +569,28 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         return true;
       });
 
-    return { issue, verify, revoke, revokeOthers, revokeAll, list, isLive };
+    const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id) {
+      const now = yield* DateTime.now;
+      const updated = yield* Ref.modify(
+        state,
+        (
+          s,
+        ): readonly [Option.Option<SessionRow>, HashMap.HashMap<SessionId, SessionRow>] => {
+          const current = HashMap.get(s, id);
+          if (Option.isNone(current)) return [Option.none(), s] as const;
+          const refreshed: SessionRow = { ...current.value, authenticatedAt: now };
+          return [Option.some(refreshed), HashMap.set(s, id, refreshed)] as const;
+        },
+      );
+      if (Option.isNone(updated)) {
+        return yield* Effect.fail(
+          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+        );
+      }
+      return toView(updated.value);
+    });
+
+    return { issue, verify, revoke, revokeOthers, revokeAll, list, isLive, reauthenticate };
   }),
 );
 
@@ -535,6 +598,7 @@ const toSessionView = (row: SqlModels.Session): SessionView => ({
   id: SessionId(row.id),
   userId: UserId(row.userId),
   createdAt: row.createdAt,
+  authenticatedAt: row.authenticatedAt,
   lastActiveAt: row.lastActiveAt,
   absoluteExpiresAt: row.absoluteExpiresAt,
   idleExpiresAt: row.idleExpiresAt,
@@ -751,6 +815,7 @@ export const layerSql: Layer.Layer<
           page.items.map((row): SessionListItem => ({
             id: SessionId(row.id),
             createdAt: row.createdAt,
+            authenticatedAt: row.authenticatedAt,
             lastActiveAt: row.lastActiveAt,
             expiresAt: row.absoluteExpiresAt,
             userAgent: Option.fromNullishOr(row.userAgent),
@@ -782,6 +847,19 @@ export const layerSql: Layer.Layer<
         return true;
       });
 
-    return { issue, verify, revoke, revokeOthers, revokeAll, list, isLive };
+    const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id) {
+      const now = yield* DateTime.now;
+      const row = yield* repo.reauthenticate(id, now).pipe(
+        Effect.catchTags({
+          NoSuchElementError: () =>
+            Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+          SchemaError: Effect.die,
+          SqlError: Effect.die,
+        }),
+      );
+      return toSessionView(row);
+    });
+
+    return { issue, verify, revoke, revokeOthers, revokeAll, list, isLive, reauthenticate };
   }),
 );

@@ -105,6 +105,35 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
     }).pipe(Effect.provide(CoreLive)),
   );
 
+  // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+  // (AAPS-001): before this fix, the handler compared `createdAt` — which
+  // rotation/idle-refresh never advance — so a session minted long ago had
+  // no way to discharge this obligation short of a full sign-out/sign-in,
+  // even immediately after a real, fresh credential re-proof. This is the
+  // scenario that regressed: `createdAt` is old, but `authenticatedAt` was
+  // just refreshed.
+  it.effect(
+    "a session reauthenticated recently discharges even though it was minted long ago",
+    () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const user = yield* users.create({ email: "reauthed@example.com", name: "Reauthed" });
+        const { session } = yield* sessions.issue({ userId: user.id });
+        const principal = new Api.UserPrincipal({
+          ref: new Api.PrincipalRef({ type: "user", id: user.id }),
+          sessionId: session.id,
+        });
+
+        yield* TestClock.adjust(Duration.seconds(301));
+        yield* sessions.reauthenticate(session.id);
+
+        yield* Resolvers.ObligationHandlers.reauth([Resolvers.reauth(300)]).pipe(
+          Effect.provideService(Api.CurrentPrincipal, principal),
+        );
+      }).pipe(Effect.provide(CoreLive)),
+  );
+
   it.effect("an ApiKey principal (no session at all) fails with ReauthRequired", () =>
     Effect.gen(function* () {
       const principal = new Api.ApiKeyPrincipal({

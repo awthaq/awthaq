@@ -14,12 +14,15 @@ import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } fr
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -779,6 +782,51 @@ describe("Password", () => {
         })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WeakPassword");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "ticket 15 (AAPS-001): reauthenticate refreshes authenticatedAt without minting a new session",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const sessions = yield* Sessions.Sessions;
+        const mailer = yield* Mailer.Mailer;
+        const issued = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        const currentSessionId = issued.session.id;
+
+        yield* TestClock.adjust(Duration.minutes(30));
+
+        yield* password.reauthenticate({
+          userId: issued.session.userId,
+          currentSessionId,
+          currentPassword: strongPassword,
+        });
+
+        // Unlike `changePassword`, the session itself is unchanged — same
+        // id, still verifies with the original token.
+        const verified = yield* sessions.verify(issued.token);
+        assert.strictEqual(verified.session.id, currentSessionId);
+        assert.isAbove(
+          DateTime.toEpochMillis(verified.session.authenticatedAt),
+          DateTime.toEpochMillis(issued.session.authenticatedAt),
+        );
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("ticket 15 (AAPS-001): reauthenticate rejects a wrong current password", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const issued = yield* password.signUp({ email, password: strongPassword });
+
+      const failure = yield* password
+        .reauthenticate({
+          userId: issued.session.userId,
+          currentSessionId: issued.session.id,
+          currentPassword: Redacted.make("totally wrong password"),
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "WrongPassword");
     }).pipe(Effect.provide(TestLayer)),
   );
 

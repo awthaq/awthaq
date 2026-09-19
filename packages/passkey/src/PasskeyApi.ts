@@ -105,6 +105,22 @@ export class PasskeyConditionalCreateDisabled extends Schema.TaggedError<Passkey
 ) {}
 
 /**
+ * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+ * (BPAS-001): the current session's own `authenticatedAt` is older than
+ * `PasskeyConfig.reauthMaxAgeSeconds` — enrollment (and this plugin's own
+ * step-up ceremony's `options` call) refuses until the caller re-proves a
+ * credential, closing the "hijacked-cookie enrolls a durable credential"
+ * gap. `403`, matching `@awthaq/password`'s `EmailNotVerified` reasoning:
+ * the session is genuinely live, but its own freshness forbids this
+ * specific action.
+ */
+export class PasskeyReauthRequired extends Schema.TaggedError<PasskeyReauthRequired>()(
+  "PasskeyReauthRequired",
+  { maxAgeSeconds: Schema.Number },
+  { httpApiStatus: 403 },
+) {}
+
+/**
  * BEH-EA-136's eighth named error. Declared here for completeness with that
  * behavior's own closed list, but deliberately never appears in any
  * endpoint's `error` union below: ticket 08's "log + step-up, not an
@@ -179,6 +195,19 @@ export const AuthenticateVerifyPayload = Schema.Struct({
 });
 export type AuthenticateVerifyPayload = typeof AuthenticateVerifyPayload.Type;
 
+/**
+ * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+ * (AAPS-001/BPAS-001): unlike `AuthenticateVerifyPayload`, no `ceremonyId`
+ * correlator — this ceremony always runs for an already-authenticated
+ * caller, so the challenge is scoped server-side by the caller's own
+ * session id (the same scoping `registerOptions`/`registerVerify` already
+ * use), not a client-echoed value.
+ */
+export const ReauthenticateVerifyPayload = Schema.Struct({
+  credential: AuthenticationCredentialSchema,
+});
+export type ReauthenticateVerifyPayload = typeof ReauthenticateVerifyPayload.Type;
+
 export const RenamePayload = Schema.Struct({ name: Schema.String });
 export type RenamePayload = typeof RenamePayload.Type;
 
@@ -201,12 +230,14 @@ export const PasskeyGroup = HttpApiGroup.make("passkey")
   .add(
     HttpApiEndpoint.post("registerOptions", "/passkey/register/options", {
       success: Schema.Unknown,
+      // Ticket 15: gated behind the same freshness check as `registerVerify`.
+      error: PasskeyReauthRequired,
     }),
   )
   .add(
     HttpApiEndpoint.post("registerOptionsConditional", "/passkey/register/options/conditional", {
       success: Schema.Unknown,
-      error: PasskeyConditionalCreateDisabled,
+      error: [PasskeyConditionalCreateDisabled, PasskeyReauthRequired],
     }),
   )
   .add(
@@ -219,6 +250,11 @@ export const PasskeyGroup = HttpApiGroup.make("passkey")
         PasskeyRpIdMismatch,
         PasskeyVerificationFailed,
         PasskeyUserVerificationRequired,
+        // Ticket 15 (BPAS-001): re-checked here too, not just at
+        // `.../options` time — closes the window between a caller
+        // fetching options while still fresh and presenting the
+        // completed ceremony after their session has since gone stale.
+        PasskeyReauthRequired,
       ],
     }),
   )
@@ -274,7 +310,46 @@ export const PasskeyCredentialsGroup = HttpApiGroup.make("passkey.credentials")
   .middleware(Api.Authentication)
   .middleware(Api.CsrfProtection);
 
+/**
+ * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+ * (AAPS-001/BPAS-001): the passkey-credential half of the step-up
+ * discharge path — a normal WebAuthn authentication ceremony scoped to
+ * the caller's own already-live session (not a fresh sign-in, unlike
+ * `passkey.authenticate`), requiring UV=1, refreshing `authenticatedAt`
+ * on success. Lets a passkey-only user step up without ever having set a
+ * password. Both endpoints run only for an already-authenticated caller
+ * re-proving their own credential — no identifier to enumerate, so
+ * (mirroring `registerVerify`'s own reasoning) failures report the full,
+ * precise BEH-EA-136 taxonomy rather than collapsing into
+ * `Api.InvalidCredentials`.
+ */
+export const PasskeyReauthenticateGroup = HttpApiGroup.make("passkey.reauthenticate")
+  .add(
+    HttpApiEndpoint.post("reauthenticateOptions", "/passkey/reauthenticate/options", {
+      success: Schema.Unknown,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("reauthenticateVerify", "/passkey/reauthenticate/verify", {
+      payload: ReauthenticateVerifyPayload,
+      success: HttpApiSchema.Empty(204),
+      error: [
+        PasskeyChallengeInvalid,
+        PasskeyOriginMismatch,
+        PasskeyRpIdMismatch,
+        PasskeyVerificationFailed,
+        PasskeyUserVerificationRequired,
+        PasskeyCredentialNotFound,
+      ],
+    }),
+  )
+  // See `@awthaq/api`'s `Session.ts`: `CsrfProtection` declared last so it
+  // runs first.
+  .middleware(Api.Authentication)
+  .middleware(Api.CsrfProtection);
+
 export const PasskeyApi = HttpApi.make("auth")
   .add(PasskeyGroup)
   .add(PasskeyAuthenticateGroup)
-  .add(PasskeyCredentialsGroup);
+  .add(PasskeyCredentialsGroup)
+  .add(PasskeyReauthenticateGroup);

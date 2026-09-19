@@ -57,6 +57,7 @@ const Migrated = Layer.effectDiscard(
         absoluteExpiresAt TEXT NOT NULL,
         idleExpiresAt TEXT NOT NULL,
         createdAt TEXT NOT NULL,
+        authenticatedAt TEXT NOT NULL,
         lastActiveAt TEXT NOT NULL,
         actingAsType TEXT,
         actingAsId TEXT,
@@ -123,6 +124,7 @@ const suite = (
           "id",
           "userId",
           "createdAt",
+          "authenticatedAt",
           "lastActiveAt",
           "absoluteExpiresAt",
           "idleExpiresAt",
@@ -218,6 +220,57 @@ const suite = (
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         assert.isFalse(yield* sessions.isLive(userId, Sessions.SessionId("does-not-exist")));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+    // (AAPS-001): every mint follows a real credential presentation, so
+    // `authenticatedAt` starts out identical to `createdAt`.
+    it.effect("issue sets authenticatedAt equal to createdAt", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId });
+        assert.strictEqual(
+          DateTime.toEpochMillis(session.authenticatedAt),
+          DateTime.toEpochMillis(session.createdAt),
+        );
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "reauthenticate advances authenticatedAt without touching the secret or expiry timestamps",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { session, token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.seconds(30));
+          const reauthenticated = yield* sessions.reauthenticate(session.id);
+          assert.isAbove(
+            DateTime.toEpochMillis(reauthenticated.authenticatedAt),
+            DateTime.toEpochMillis(session.authenticatedAt),
+          );
+          assert.strictEqual(
+            DateTime.toEpochMillis(reauthenticated.idleExpiresAt),
+            DateTime.toEpochMillis(session.idleExpiresAt),
+          );
+          assert.strictEqual(
+            DateTime.toEpochMillis(reauthenticated.absoluteExpiresAt),
+            DateTime.toEpochMillis(session.absoluteExpiresAt),
+          );
+          // The original secret must still verify — `reauthenticate` must
+          // never rotate it (unlike `verify`'s own throttled touch).
+          const { session: verified } = yield* sessions.verify(token);
+          assert.strictEqual(verified.id, session.id);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("reauthenticate fails with SessionNotFound for an unknown session id", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const failure = yield* sessions
+          .reauthenticate(Sessions.SessionId("does-not-exist"))
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "SessionNotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -530,6 +583,25 @@ describe("Sessions", () => {
       httpOnly: true,
       sameSite: "strict",
       path: "/",
+    });
+  });
+
+  // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+  // (AAPS-001/BPAS-001): the shared comparison `@awthaq/qadi`'s
+  // `reauthHandler` and `@awthaq/passkey`'s enrollment gate both apply.
+  describe("isStale", () => {
+    it("is false exactly at the maxAgeSeconds boundary, true just past it", () => {
+      const authenticatedAt = DateTime.makeUnsafe(0);
+      const atBoundary = DateTime.makeUnsafe(300_000);
+      const pastBoundary = DateTime.makeUnsafe(300_001);
+      assert.isFalse(Sessions.isStale(authenticatedAt, 300, atBoundary));
+      assert.isTrue(Sessions.isStale(authenticatedAt, 300, pastBoundary));
+    });
+
+    it("is false for a session authenticated after `now` (a defensive, not expected, input)", () => {
+      const authenticatedAt = DateTime.makeUnsafe(10_000);
+      const now = DateTime.makeUnsafe(0);
+      assert.isFalse(Sessions.isStale(authenticatedAt, 300, now));
     });
   });
 });

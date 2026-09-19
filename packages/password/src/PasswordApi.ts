@@ -109,6 +109,18 @@ export const ChangePasswordPayload = Schema.Struct({
 export type ChangePasswordPayload = typeof ChangePasswordPayload.Type;
 
 /**
+ * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+ * (AAPS-001): the password-credential half of the step-up discharge path —
+ * re-submits the current password to refresh the session's own
+ * `authenticatedAt` without minting a new session (unlike `changePassword`,
+ * which mints and returns a fresh, superseding one).
+ */
+export const ReauthenticatePayload = Schema.Struct({
+  password: Schema.Redacted(Schema.String),
+});
+export type ReauthenticatePayload = typeof ReauthenticatePayload.Type;
+
+/**
  * Shipping-gap map (.scratch/shipping-gaps), ticket 11: a wrong current
  * password is a distinct condition from "not authenticated at all"
  * (`Api.Unauthenticated`, from this endpoint's own `Authentication`
@@ -218,6 +230,19 @@ export const PasswordGroup = HttpApiGroup.make("password")
       success: SessionContract.SessionDto,
       // Ticket 14: rate-limited.
       error: [WrongPassword, WeakPassword, Api.RateLimited],
+    }).middleware(Api.Authentication),
+  )
+  .add(
+    // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+    // (AAPS-001): this obligation's own real discharge path — re-verifies
+    // the submitted password (reusing `signIn`'s own hash-comparison
+    // path) and, on success, calls `Sessions.reauthenticate`. Top-level
+    // route, matching `changePassword`'s own convention; authenticated,
+    // same as `changePassword`. No `success` schema — defaults to `204`,
+    // since this never mints a new session.
+    HttpApiEndpoint.post("reauthenticate", "/password/reauthenticate", {
+      payload: ReauthenticatePayload,
+      error: [WrongPassword, Api.RateLimited],
     }).middleware(Api.Authentication),
   )
   // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: every endpoint here

@@ -28,6 +28,7 @@ import { WebAuthn } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
@@ -53,6 +54,16 @@ export interface PasskeyConfigShape {
   readonly authenticatorSelection: WebAuthn.AuthenticatorSelection;
   /** Ticket 07: defaults to `true`, per this spec's own "richness over complexity" decision. */
   readonly conditionalCreate: boolean;
+  /**
+   * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+   * (BPAS-001): a baked-in, fail-closed freshness gate on enrollment —
+   * mirroring `@awthaq/admin`'s own `AdminConfig.canImpersonate`
+   * precedent (a core safety invariant a plugin bakes in itself, not left
+   * to an app-composed qadi policy the host might forget to attach).
+   * Defaults to 5 minutes, matching the `reauth(300)` example already in
+   * `@awthaq/qadi`'s own `Resolvers.ts` doc comments.
+   */
+  readonly reauthMaxAgeSeconds: Duration.Duration;
 }
 
 const defaultPasskeyConfig: PasskeyConfigShape = {
@@ -65,6 +76,7 @@ const defaultPasskeyConfig: PasskeyConfigShape = {
   attestation: "none",
   authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
   conditionalCreate: true,
+  reauthMaxAgeSeconds: Duration.minutes(5),
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -172,6 +184,8 @@ const toBase64Url = (bytes: Uint8Array): string => Encoding.encodeBase64Url(byte
 const registrationScope = (sessionId: string): string => `passkey.register:${sessionId}`;
 const conditionalScope = (sessionId: string): string => `passkey.register.conditional:${sessionId}`;
 const authenticateScope = (ceremonyId: string): string => `passkey.authenticate:${ceremonyId}`;
+/** Ticket 15: scoped by the caller's own session id, mirroring `registrationScope` — this ceremony always has one, unlike `passkey.authenticate`'s anonymous `ceremonyId`. */
+const reauthenticateScope = (sessionId: string): string => `passkey.reauthenticate:${sessionId}`;
 
 const toCredentialDto = (
   record: PasskeyCredentials.PasskeyCredentialRecord,
@@ -201,11 +215,17 @@ export interface IssuedSession {
 }
 
 export interface PasskeyShape {
-  readonly registerOptions: (userId: Users.UserId, sessionId: string) => Effect.Effect<unknown>;
+  readonly registerOptions: (
+    userId: Users.UserId,
+    sessionId: string,
+  ) => Effect.Effect<unknown, PasskeyApi.PasskeyReauthRequired>;
   readonly registerOptionsConditional: (
     userId: Users.UserId,
     sessionId: string,
-  ) => Effect.Effect<unknown, PasskeyApi.PasskeyConditionalCreateDisabled>;
+  ) => Effect.Effect<
+    unknown,
+    PasskeyApi.PasskeyConditionalCreateDisabled | PasskeyApi.PasskeyReauthRequired
+  >;
   readonly registerVerify: (
     userId: Users.UserId,
     sessionId: string,
@@ -217,6 +237,30 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyRpIdMismatch
     | PasskeyApi.PasskeyVerificationFailed
     | PasskeyApi.PasskeyUserVerificationRequired
+    | PasskeyApi.PasskeyReauthRequired
+  >;
+  /**
+   * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+   * (AAPS-001/BPAS-001): the passkey-credential half of the step-up
+   * discharge path — see `PasskeyApi.PasskeyReauthenticateGroup`'s own
+   * doc comment.
+   */
+  readonly reauthenticateOptions: (
+    userId: Users.UserId,
+    sessionId: string,
+  ) => Effect.Effect<unknown>;
+  readonly reauthenticateVerify: (
+    userId: Users.UserId,
+    sessionId: string,
+    input: PasskeyApi.ReauthenticateVerifyPayload,
+  ) => Effect.Effect<
+    void,
+    | PasskeyApi.PasskeyChallengeInvalid
+    | PasskeyApi.PasskeyOriginMismatch
+    | PasskeyApi.PasskeyRpIdMismatch
+    | PasskeyApi.PasskeyVerificationFailed
+    | PasskeyApi.PasskeyUserVerificationRequired
+    | PasskeyApi.PasskeyCredentialNotFound
   >;
   readonly authenticateOptions: (
     email: string | undefined,
@@ -361,6 +405,34 @@ export const PasskeyHandlers = Layer.mergeAll(
       });
     }),
   ),
+  HttpApiBuilder.group(
+    PasskeyApi.PasskeyApi,
+    "passkey.reauthenticate",
+    Effect.fnUntraced(function* (handlers) {
+      const passkey = yield* Passkey;
+      return handlers.handleAll({
+        reauthenticateOptions: Effect.fnUntraced(function* () {
+          const principal = yield* currentUserPrincipal;
+          return yield* passkey.reauthenticateOptions(
+            Users.UserId(principal.ref.id),
+            principal.sessionId,
+          );
+        }),
+        reauthenticateVerify: Effect.fnUntraced(function* ({
+          payload,
+        }: {
+          payload: PasskeyApi.ReauthenticateVerifyPayload;
+        }) {
+          const principal = yield* currentUserPrincipal;
+          yield* passkey.reauthenticateVerify(
+            Users.UserId(principal.ref.id),
+            principal.sessionId,
+            payload,
+          );
+        }),
+      });
+    }),
+  ),
 );
 
 export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passkey", {
@@ -381,8 +453,36 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const config = yield* PasskeyConfig;
       const crypto = yield* Crypto.Crypto;
 
+      /**
+       * Ticket 15 (BPAS-001): the shared freshness gate `registerOptions`/
+       * `registerOptionsConditional`/`registerVerify` all apply before
+       * doing anything else — `Sessions.list` + `find` mirrors
+       * `@awthaq/qadi`'s own `reauthHandler`, the closest existing
+       * precedent for "read the caller's own current `SessionListItem`."
+       * A session absent from its own owner's list (already
+       * revoked/tombstoned) fails closed the same as a stale one — there
+       * is no live session left to have proven anything recently.
+       */
+      const requireFreshSession = (
+        userId: Users.UserId,
+        sessionId: string,
+      ): Effect.Effect<void, PasskeyApi.PasskeyReauthRequired> =>
+        Effect.gen(function* () {
+          const maxAgeSeconds = Duration.toSeconds(config.reauthMaxAgeSeconds);
+          const items = yield* sessions.list(userId, Sessions.SessionId(sessionId));
+          const current = items.find((item) => item.id === sessionId);
+          if (current === undefined) {
+            return yield* Effect.fail(new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds }));
+          }
+          const now = yield* DateTime.now;
+          if (Sessions.isStale(current.authenticatedAt, maxAgeSeconds, now)) {
+            return yield* Effect.fail(new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds }));
+          }
+        });
+
       const registerOptions: PasskeyShape["registerOptions"] = Effect.fnUntraced(
         function* (userId, sessionId) {
+          yield* requireFreshSession(userId, sessionId);
           const user = yield* users.findById(userId).pipe(Effect.orDie);
           const existing = yield* credentials.listByUser(userId);
           const challenge = yield* challengeStore.issue(registrationScope(sessionId));
@@ -403,6 +503,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 
       const registerOptionsConditional: PasskeyShape["registerOptionsConditional"] =
         Effect.fnUntraced(function* (userId, sessionId) {
+          yield* requireFreshSession(userId, sessionId);
           if (!config.conditionalCreate) {
             return yield* Effect.fail(new PasskeyApi.PasskeyConditionalCreateDisabled());
           }
@@ -432,6 +533,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 
       const registerVerify: PasskeyShape["registerVerify"] = Effect.fnUntraced(
         function* (userId, sessionId, input) {
+          yield* requireFreshSession(userId, sessionId);
           const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
           if (Option.isNone(clientDataOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
@@ -664,6 +766,108 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         },
       );
 
+      const reauthenticateOptions: PasskeyShape["reauthenticateOptions"] = Effect.fnUntraced(
+        function* (userId, sessionId) {
+          const owned = yield* credentials.listByUser(userId);
+          const challenge = yield* challengeStore.issue(reauthenticateScope(sessionId));
+          return yield* webAuthn.authenticationOptions({
+            rpId: config.rpId,
+            challenge: Redacted.value(challenge),
+            allowCredentials: owned.map((row) => ({ id: row.id, transports: row.transports })),
+            // Ticket 15: UV=1, unconditionally — this ceremony's whole
+            // purpose is proving fresh possession-plus-verification, not
+            // merely possession, unlike ordinary `authenticateOptions`
+            // which defers to `config.authenticatorSelection`.
+            userVerification: "required",
+          });
+        },
+      );
+
+      const reauthenticateVerify: PasskeyShape["reauthenticateVerify"] = Effect.fnUntraced(
+        function* (userId, sessionId, input) {
+          const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
+          if (Option.isNone(clientDataOpt)) {
+            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
+          }
+          const clientData = clientDataOpt.value;
+
+          if (!config.origins.includes(clientData.origin)) {
+            return yield* Effect.fail(new PasskeyApi.PasskeyOriginMismatch());
+          }
+          if (!originMatchesRpId(clientData.origin, config.rpId)) {
+            return yield* Effect.fail(new PasskeyApi.PasskeyRpIdMismatch());
+          }
+
+          const consumed = yield* challengeStore.consume(
+            reauthenticateScope(sessionId),
+            clientData.challenge,
+          );
+          if (!consumed) {
+            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
+          }
+
+          const storedOpt = yield* credentials.findById(input.credential.id);
+          if (Option.isNone(storedOpt) || storedOpt.value.userId !== userId) {
+            // Ticket 15: unlike `authenticateVerify`'s anonymous
+            // ceremony, this caller is already authenticated as
+            // `userId` — presenting someone else's credential id here
+            // is a real, precise condition to report, not an
+            // enumeration risk (mirrors `registerVerify`'s own posture,
+            // see this file's header comment).
+            return yield* Effect.fail(new PasskeyApi.PasskeyCredentialNotFound());
+          }
+          const stored = storedOpt.value;
+
+          const verified = yield* webAuthn
+            .verifyAuthentication({
+              response: toAuthenticationResponseJSON(input.credential),
+              expectedChallenge: clientData.challenge,
+              expectedOrigin: config.origins,
+              expectedRpId: config.rpId,
+              credential: {
+                id: stored.id,
+                publicKey: new Uint8Array(stored.publicKey),
+                counter: stored.counter,
+              },
+            })
+            .pipe(
+              Effect.catchTag("PasskeyVerificationFailed", () =>
+                Effect.fail(new PasskeyApi.PasskeyVerificationFailed()),
+              ),
+            );
+
+          if (!verified.userVerified) {
+            return yield* Effect.fail(new PasskeyApi.PasskeyUserVerificationRequired());
+          }
+
+          // BEH-EA-131: same "log + step-up, not an instant kill" posture as `authenticateVerify`.
+          const counterRegressed =
+            verified.newCounter <= stored.counter &&
+            !(verified.newCounter === 0 && stored.counter === 0);
+          if (counterRegressed) {
+            yield* events.publish({
+              _tag: "auth.passkey.counterAnomaly",
+              userId: stored.userId,
+              credentialId: stored.id,
+            });
+          }
+          yield* credentials
+            .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
+            .pipe(Effect.orDie);
+
+          yield* sessions.reauthenticate(Sessions.SessionId(sessionId)).pipe(
+            Effect.catchTag("SessionNotFound", () =>
+              // `passkey.reauthenticate`'s own `Authentication` middleware
+              // already proved this exact session live moments ago — see
+              // `Password.ts`'s own identical `reauthenticate` comment.
+              Effect.die(
+                new Error(`awthaq: reauthenticate's own current session vanished: ${sessionId}`),
+              ),
+            ),
+          );
+        },
+      );
+
       return Passkey.of({
         registerOptions,
         registerOptionsConditional,
@@ -673,6 +877,8 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         listCredentials,
         renameCredential,
         removeCredential,
+        reauthenticateOptions,
+        reauthenticateVerify,
       });
     }),
   });

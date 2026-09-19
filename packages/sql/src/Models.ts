@@ -118,6 +118,13 @@ export class Session extends Model.Class<Session>("Session")({
   absoluteExpiresAt: Schema.DateTimeUtcFromString.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   idleExpiresAt: Model.DateTimeUpdate,
   createdAt: Model.DateTimeInsert,
+  // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+  // (AAPS-001/BPAS-001): "when this session last proved a credential" —
+  // defaulted to now at insert (identical to `createdAt` at issue time),
+  // and the one column `Sessions.reauthenticate` writes; needs the same
+  // `update` variant `secretHash`/`lastActiveAt`/`idleExpiresAt` already
+  // have, for the identical reason.
+  authenticatedAt: Model.DateTimeUpdate,
   lastActiveAt: Model.DateTimeUpdate,
   // BEH-EA-209: the caller's own identity, immutable once issued — no
   // `update`/`jsonUpdate` variant, the same insert-only shape `secretHash`/

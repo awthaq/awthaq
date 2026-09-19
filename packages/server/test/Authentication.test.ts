@@ -126,6 +126,7 @@ const UnreliableSessions: Layer.Layer<Sessions.Sessions> = Layer.succeed(Session
   revokeAll: () => Effect.die("not used in this test"),
   list: () => Effect.die("not used in this test"),
   isLive: () => Effect.die("not used in this test"),
+  reauthenticate: () => Effect.die("not used in this test"),
 });
 
 describe("Authentication", () => {

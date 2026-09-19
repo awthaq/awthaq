@@ -23,7 +23,6 @@ import { Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { Obligation, ObligationHandler } from "@qadi/core";
@@ -96,13 +95,17 @@ export class ReauthRequired extends Data.TaggedError("ReauthRequired")<{
 
 /**
  * BEH-EA-165: reads `CurrentPrincipal`'s session and compares its
- * `createdAt` — a session is minted once at sign-in and never mutated in
- * place by anything short of a fresh sign-in (idle refresh advances
- * `lastActiveAt`/`idleExpiresAt`, never `createdAt`), so `createdAt` **is**
- * "when this session last proved a credential," not a proxy for it — to the
- * obligation's own `maxAgeSeconds`. A stale session fails with
- * `ReauthRequired`, never silently passes because it happens to still be
- * live.
+ * `authenticatedAt` (wayfinder map .scratch/resolve-ready-for-human-findings,
+ * ticket 15 — AAPS-001: "when this session last *proved* a credential,"
+ * set at `issue` and advanced only by `Sessions.reauthenticate`, never by
+ * idle refresh/rotation, unlike `createdAt` this handler used to compare
+ * instead) to the obligation's own `maxAgeSeconds` via `Sessions.isStale`.
+ * A stale session fails with `ReauthRequired`, never silently passes
+ * because it happens to still be live; `@awthaq/password`'s
+ * `POST /password/reauthenticate` and `@awthaq/passkey`'s
+ * `POST /passkey/reauthenticate/*` are this obligation's real discharge
+ * paths — each re-proves the session's own credential and calls
+ * `Sessions.reauthenticate` on success.
  *
  * Applies only to the `awthaq/reauth` obligation id; a binding
  * obligation with any other id reaching this handler is a wiring mistake
@@ -138,8 +141,7 @@ const reauthHandler: ObligationHandler<ReauthRequired, Api.CurrentPrincipal | Se
       return yield* Effect.fail(new ReauthRequired({ maxAgeSeconds }));
     }
     const now = yield* DateTime.now;
-    const age = DateTime.distance(current.createdAt, now);
-    if (Duration.isGreaterThan(age, Duration.seconds(maxAgeSeconds))) {
+    if (Sessions.isStale(current.authenticatedAt, maxAgeSeconds, now)) {
       return yield* Effect.fail(new ReauthRequired({ maxAgeSeconds }));
     }
   });

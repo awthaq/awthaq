@@ -267,9 +267,20 @@ changeEmail: ({ payload }) =>
 `ObligationHandlers.reauth` is awthaq's contribution, not qadi's: it
 reads the session off `CurrentPrincipal`, compares `authenticatedAt` to the
 obligation's `maxAgeSeconds`, and fails with a typed error the client maps to
-a "confirm your password" screen. `client.session.reauthenticate` is the
-client-side counterpart — it refreshes `authenticatedAt` without issuing an
-entirely new session.
+a "confirm your password" screen.
+
+There is no single generic `client.session.reauthenticate` — re-proving a
+credential is owned by whichever plugin minted it in the first place, not by
+`session` itself, since a password account and an OAuth-only account have
+nothing in common to re-prove through one endpoint. The client-side
+counterpart is per credential type instead: `client.password.reauthenticate`
+(re-submits the current password) or `client.passkey.reauthenticate` (a
+normal WebAuthn authentication ceremony scoped to the caller's own live
+session, requiring user verification) — each calls `Sessions.reauthenticate`
+on success, refreshing `authenticatedAt` without issuing an entirely new
+session. `@awthaq/passkey`'s own credential-enrollment endpoints gate behind
+the identical freshness check, baked in rather than left to an
+app-composed qadi policy — see `.scratch/resolve-ready-for-human-findings/issues/15-step-up-reauth-mechanism.md`.
 
 ## 6. Pushing the policy into SQL
 

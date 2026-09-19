@@ -391,6 +391,17 @@ export interface SessionsRepositoryShape {
   ) => Effect.Effect<void, RepositoryError>;
   /** RRS-003: bulk hard-deletes every still-live (non-tombstoned) row sharing `familyId` — a confirmed-compromised family has no further lineage worth preserving. */
   readonly revokeFamily: (familyId: SessionId) => Effect.Effect<void, SqlError>;
+  /**
+   * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+   * (AAPS-001/BPAS-001): the one column `Sessions.reauthenticate` writes —
+   * a targeted `UPDATE`, mirroring `tombstone`'s own shape, not the
+   * generic `update` (which would also require supplying every other
+   * `update`-variant field this call has no business touching).
+   */
+  readonly reauthenticate: (
+    id: SessionId,
+    authenticatedAt: DateTime.Utc,
+  ) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
 }
 
 export class SessionsRepository extends Context.Service<
@@ -521,6 +532,23 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
           Effect.asVoid,
         );
 
+      const reauthenticateQuery = SqlSchema.findOne({
+        Request: Schema.Struct({
+          id: SessionId,
+          authenticatedAt: Schema.DateTimeUtcFromString,
+        }),
+        Result: Session,
+        execute: (request) => sql`
+          UPDATE sessions
+          SET "authenticatedAt" = ${request.authenticatedAt}
+          WHERE "id" = ${request.id}
+          RETURNING *
+        `,
+      });
+
+      const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (id, authenticatedAt) =>
+        reauthenticateQuery({ id, authenticatedAt });
+
       return {
         insert: repo.insert,
         update: repo.update,
@@ -533,6 +561,7 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         tombstone,
         markReused,
         revokeFamily,
+        reauthenticate,
       };
     }),
   );
