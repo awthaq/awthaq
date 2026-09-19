@@ -94,7 +94,19 @@ export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.
         const encodedNow = yield* Schema.encodeEffect(Schema.DateTimeUtcFromString)(
           yield* DateTime.now,
         );
-        yield* sql`UPDATE users SET "emailVerified" = 1, "updatedAt" = ${encodedNow} WHERE id = ${id}`;
+        // TS-002: `= 1` is verbatim SQL text, not a bind parameter Postgres's
+        // driver could type as boolean — Postgres has no implicit
+        // integer→boolean assignment cast (`emailVerified BOOLEAN` per
+        // `CoreMigrations.ts`), while SQLite's own `emailVerified INTEGER`
+        // needs exactly this literal. Same `sql.onDialectOrElse` branching
+        // `CoreMigrations.ts` already uses for DDL, here for a DML literal.
+        yield* sql.onDialectOrElse({
+          pg: () =>
+            sql`UPDATE users SET "emailVerified" = TRUE, "updatedAt" = ${encodedNow} WHERE id = ${id}`,
+          sqlite: () =>
+            sql`UPDATE users SET "emailVerified" = 1, "updatedAt" = ${encodedNow} WHERE id = ${id}`,
+          orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for verifyEmail")),
+        });
         return yield* repo.findById(id);
       });
 
