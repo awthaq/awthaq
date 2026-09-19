@@ -2,19 +2,23 @@
 //
 // spec/behaviors/23-react.md, BEH-EA-177/178/179.
 //
-// `RegistryProvider` (`@effect/atom-react`, `effect`'s own native reactivity
-// — see `AuthClientAtom.ts`'s header comment) owns `sessionAtom`/
-// `subjectDtoAtom`'s registry; `SubjectBridge` reads `subjectDtoAtom` (via
-// that same ambient registry) and feeds the derived `AuthSubject` into
-// `@qadi/react`'s `QadiProvider`, whose OWN registry is a second, entirely
-// separate one — the two providers interoperate only through the `subject`
-// prop passed between them here, never through a shared registry (see
-// `Subject.ts`'s header comment, and `AuthClientAtom.ts`'s, for why the
-// session and subject are two atoms, not one combined query).
+// `@qadi/react@0.7.0`'s `QadiProvider` provides its own registry through
+// `@effect/atom-react`'s `RegistryContext`, becoming the ambient registry
+// for everything rendered as its `children` — which is where `Providers`
+// places its own `children`. So the outer `RegistryProvider` here seeds an
+// *outer* registry that only `SubjectBridge`'s own `useAtomValue(subjectDtoAtom)`
+// read (evaluated before `QadiProvider` exists, to compute the `subject` prop
+// `QadiProvider` needs) ever sees, and `QadiProvider`'s `initialValues` prop
+// is given the same seed pairs so its own (now-ambient-for-`children`)
+// registry has `sessionAtom`/`subjectDtoAtom` pre-seeded too — otherwise a
+// consumer under `Providers` would see `sessionAtom` resolve from scratch,
+// defeating BEH-EA-177's whole point. (See `Subject.ts`'s header comment,
+// and `AuthClientAtom.ts`'s, for why the session and subject are two atoms,
+// not one combined query.)
 import type { SessionContract, SubjectContract } from "@awthaq/api";
 import { RegistryProvider } from "@effect/atom-react/RegistryContext";
 import { useAtomValue } from "@effect/atom-react/Hooks";
-import type { QadiAtoms } from "@qadi/react";
+import type { InitialValues, QadiAtoms } from "@qadi/react";
 import { QadiProvider } from "@qadi/react";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import type * as Atom from "effect/unstable/reactivity/Atom";
@@ -43,10 +47,12 @@ export interface ProvidersProps {
 const SubjectBridge = ({
   atoms,
   instrument,
+  initialValues,
   children,
 }: {
   readonly atoms: QadiAtoms;
   readonly instrument?: boolean | undefined;
+  readonly initialValues: InitialValues;
   readonly children: ReactNode;
 }): ReactNode => {
   const subjectResult = useAtomValue(subjectDtoAtom);
@@ -65,7 +71,12 @@ const SubjectBridge = ({
   }
   const dto = AsyncResult.isSuccess(subjectResult) ? subjectResult.value : undefined;
   return (
-    <QadiProvider atoms={atoms} subject={toSubject(dto)} instrument={instrument ?? false}>
+    <QadiProvider
+      atoms={atoms}
+      subject={toSubject(dto)}
+      initialValues={initialValues}
+      instrument={instrument ?? false}
+    >
       {children}
     </QadiProvider>
   );
@@ -80,19 +91,20 @@ export const Providers = ({
   atoms,
   instrument,
   children,
-}: ProvidersProps): ReactNode => (
-  <RegistryProvider
-    initialValues={[
-      ...(initialSession === undefined
-        ? []
-        : [seed(sessionAtom, AsyncResult.success(initialSession))]),
-      ...(initialSubject === undefined
-        ? []
-        : [seed(subjectDtoAtom, AsyncResult.success(initialSubject))]),
-    ]}
-  >
-    <SubjectBridge atoms={atoms} instrument={instrument}>
-      {children}
-    </SubjectBridge>
-  </RegistryProvider>
-);
+}: ProvidersProps): ReactNode => {
+  const initialValues = [
+    ...(initialSession === undefined
+      ? []
+      : [seed(sessionAtom, AsyncResult.success(initialSession))]),
+    ...(initialSubject === undefined
+      ? []
+      : [seed(subjectDtoAtom, AsyncResult.success(initialSubject))]),
+  ];
+  return (
+    <RegistryProvider initialValues={initialValues}>
+      <SubjectBridge atoms={atoms} instrument={instrument} initialValues={initialValues}>
+        {children}
+      </SubjectBridge>
+    </RegistryProvider>
+  );
+};

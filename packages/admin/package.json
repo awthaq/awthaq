@@ -34,7 +34,7 @@
     "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
     "@awthaq/server": "workspace:*",
-    "@qadi/core": "^0.6.2",
+    "@qadi/core": "^0.7.0",
     "effect": "catalog:"
   },
   "devDependencies": {

@@ -14,12 +14,12 @@ packages:
 # releases are, so a resolution conflict on mismatch should be loud, not
 # silent. Revisit once effect 4.0.0 ships stable.
 catalog:
-  effect: 4.0.0-rc.115
-  "@effect/platform-node": 4.0.0-rc.115
-  "@effect/sql-sqlite-node": 4.0.0-rc.115
-  "@effect/sql-pg": 4.0.0-rc.115
-  "@effect/vitest": 4.0.0-rc.115
-  "@effect/atom-react": 4.0.0-rc.115
+  effect: 4.0.0-rc.116
+  "@effect/platform-node": 4.0.0-rc.116
+  "@effect/sql-sqlite-node": 4.0.0-rc.116
+  "@effect/sql-pg": 4.0.0-rc.116
+  "@effect/vitest": 4.0.0-rc.116
+  "@effect/atom-react": 4.0.0-rc.116
   vitest: 5.0.0
   "@vitest/coverage-v8": 5.0.0
   typescript: ^7.0.0
@@ -36,15 +36,15 @@ catalog:
   happy-dom: ^20.11.1
 
 minimumReleaseAgeExclude:
-  - "@effect-cucumber/gherkin@0.10.0"
-  - "@effect-cucumber/vitest@0.10.0"
-  - "@effect/platform-node-shared@4.0.0-rc.115"
-  - "@effect/platform-node@4.0.0-rc.115"
-  - "@effect/sql-sqlite-node@4.0.0-rc.115"
-  - "@effect/sql-pg@4.0.0-rc.115"
-  - "@effect/vitest@4.0.0-rc.115"
-  - effect@4.0.0-rc.115
-  - "@effect/atom-react@4.0.0-rc.115"
-  - "@qadi/core@0.6.2"
-  - "@qadi/http@0.6.2"
-  - "@qadi/react@0.6.2"
+  - "@effect-cucumber/gherkin@0.10.1"
+  - "@effect-cucumber/vitest@0.10.1"
+  - "@effect/platform-node-shared@4.0.0-rc.116"
+  - "@effect/platform-node@4.0.0-rc.116"
+  - "@effect/sql-sqlite-node@4.0.0-rc.116"
+  - "@effect/sql-pg@4.0.0-rc.116"
+  - "@effect/vitest@4.0.0-rc.116"
+  - effect@4.0.0-rc.116
+  - "@effect/atom-react@4.0.0-rc.116"
+  - "@qadi/core@0.7.0"
+  - "@qadi/http@0.7.0"
+  - "@qadi/react@0.7.0"
