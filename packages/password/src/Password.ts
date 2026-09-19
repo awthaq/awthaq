@@ -641,21 +641,29 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           RATE_LIMITS.requestReset,
         );
         const userOpt = yield* users.findByEmail(input.email);
-        // BEH-EA-064: nothing distinguishes this branch from "no such
-        // email" in the response either handler produces — only whether
-        // the mail actually goes out differs, and that's invisible to the
-        // caller.
+        // TSS-001/EEM-001/MLO-001: BEH-EA-064 requires the response to be
+        // uniform whether or not `email` resolves to an account — status
+        // and body alone aren't enough, since an inline-awaited
+        // `verification.issue` + real `mailer.send` (network I/O) only
+        // ever runs in this branch, making response *latency* (and, if
+        // the mail provider is down, response *status*) an enumeration
+        // oracle. `signUp`'s own `Effect.forkDetach`+`Effect.ignore`
+        // posture (above) fixes the identical hazard there; mirrored here
+        // so both branches cost one user lookup and return with the same
+        // latency distribution regardless of mail-provider health.
         if (Option.isSome(userOpt)) {
           const user = userOpt.value;
-          const identifier = `${RESET_PREFIX}${user.id}`;
-          const { value } = yield* verification
-            .issue({ identifier, ttl: config.resetTtl })
-            .pipe(Effect.orDie);
-          yield* mailer.send({
-            to: user.email,
-            template: "reset-password",
-            data: { token: encodeVerificationToken(identifier, value) },
-          });
+          yield* Effect.forkDetach(
+            Effect.gen(function* () {
+              const identifier = `${RESET_PREFIX}${user.id}`;
+              const { value } = yield* verification.issue({ identifier, ttl: config.resetTtl });
+              yield* mailer.send({
+                to: user.email,
+                template: "reset-password",
+                data: { token: encodeVerificationToken(identifier, value) },
+              });
+            }).pipe(Effect.ignore),
+          );
         }
       });
 
@@ -666,21 +674,28 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             RATE_LIMITS.resendVerification,
           );
           const userOpt = yield* users.findByEmail(input.email);
-          // Enumeration-safe, same posture as `requestReset`: nothing in
-          // the response distinguishes "no such email" from "already
-          // verified" from "mail genuinely sent" — only whether the mail
-          // actually goes out differs, invisible to the caller.
+          // TSS-002: same forkDetach+ignore posture as `requestReset`
+          // above — without it this branch is the only one paying for a
+          // `verification.issue` + awaited `mailer.send`, which (combined
+          // with `requestReset`'s own timing) lets a caller classify any
+          // address as unknown / known-unverified / known-verified purely
+          // by latency.
           if (Option.isSome(userOpt) && !userOpt.value.emailVerified) {
             const user = userOpt.value;
-            const identifier = `${VERIFY_PREFIX}${user.id}`;
-            const { value } = yield* verification
-              .issue({ identifier, ttl: Duration.hours(24) })
-              .pipe(Effect.orDie);
-            yield* mailer.send({
-              to: user.email,
-              template: "verify-email",
-              data: { token: encodeVerificationToken(identifier, value) },
-            });
+            yield* Effect.forkDetach(
+              Effect.gen(function* () {
+                const identifier = `${VERIFY_PREFIX}${user.id}`;
+                const { value } = yield* verification.issue({
+                  identifier,
+                  ttl: Duration.hours(24),
+                });
+                yield* mailer.send({
+                  to: user.email,
+                  template: "verify-email",
+                  data: { token: encodeVerificationToken(identifier, value) },
+                });
+              }).pipe(Effect.ignore),
+            );
           }
         },
       );

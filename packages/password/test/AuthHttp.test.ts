@@ -303,6 +303,10 @@ describe("AuthHttp + Password (real HTTP)", () => {
         );
         assert.strictEqual(requestReal.status, 202);
 
+        // TSS-001/EEM-001/MLO-001: request-reset now forkDetaches its
+        // mail dispatch (mirroring sign-up's own posture) — give that
+        // fiber a chance to run before reading `mailer.sent`.
+        yield* letForkedFibersRun;
         const messages = yield* mailer.sent;
         const resetMail = messages.findLast((m) => m.template === "reset-password");
         if (resetMail === undefined) throw new Error("expected a reset-password mail");
@@ -350,6 +354,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
         yield* Effect.promise(() =>
           post(handler, "/password/request-reset", { email: "replay@example.com" }),
         );
+        yield* letForkedFibersRun;
         const messages = yield* mailer.sent;
         const resetMail = messages.findLast((m) => m.template === "reset-password");
         if (resetMail === undefined) throw new Error("expected a reset-password mail");

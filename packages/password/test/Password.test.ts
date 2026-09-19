@@ -105,6 +105,25 @@ const TestLayer = Password.Password.layer.pipe(
   Layer.provide(NoBreachHttpClient),
 );
 
+/** TSS-001/TSS-002: a `Mailer` whose `send` never resolves — see the tests below that provide this in place of `PortsLive`'s own `Mailer.layerMemory`. */
+const HangingMailerLayer: Layer.Layer<Mailer.Mailer> = Layer.succeed(
+  Mailer.Mailer,
+  Mailer.Mailer.of({ send: () => Effect.never, sent: Effect.succeed([]) }),
+);
+
+const TestLayerHangingMailer = Password.Password.layer.pipe(
+  Layer.provideMerge(AuthenticationLive),
+  Layer.provide(CsrfProtectionLive),
+  Layer.provideMerge(CoreLive),
+  Layer.provideMerge(
+    Layer.mergeAll(PasswordHasher.layerArgon2id, HangingMailerLayer, RateLimiter.layerPermissive).pipe(
+      Layer.provideMerge(NodeCrypto.layer),
+    ),
+  ),
+  Layer.provideMerge(RateLimits.layer),
+  Layer.provide(NoBreachHttpClient),
+);
+
 const email = "ada@example.com";
 const strongPassword = Redacted.make("correct horse battery staple");
 
@@ -306,6 +325,7 @@ describe("Password", () => {
         yield* letForkedFibersRun; // let signUp's own verification mail land first
 
         yield* password.resendVerification({ email: "nobody@example.com" });
+        yield* letForkedFibersRun;
         const afterUnknown = yield* mailer.sent;
         assert.strictEqual(
           afterUnknown.filter((mail) => mail.template === "verify-email").length,
@@ -313,6 +333,7 @@ describe("Password", () => {
         );
 
         yield* password.resendVerification({ email });
+        yield* letForkedFibersRun;
         const afterKnown = yield* mailer.sent;
         assert.strictEqual(afterKnown.filter((mail) => mail.template === "verify-email").length, 2);
 
@@ -324,6 +345,7 @@ describe("Password", () => {
         const verifyMail = afterKnown.findLast((mail) => mail.template === "verify-email");
         yield* password.verifyEmail({ token: Redacted.make(String(verifyMail?.data?.["token"])) });
         yield* password.resendVerification({ email });
+        yield* letForkedFibersRun;
         const afterVerified = yield* mailer.sent;
         assert.strictEqual(
           afterVerified.filter((mail) => mail.template === "verify-email").length,
@@ -340,13 +362,40 @@ describe("Password", () => {
       yield* letForkedFibersRun; // let signUp's own verification mail land first
 
       yield* password.requestReset({ email: "nobody@example.com" });
+      yield* letForkedFibersRun;
       const afterUnknown = yield* mailer.sent;
       assert.strictEqual(afterUnknown.filter((m) => m.template === "reset-password").length, 0);
 
       yield* password.requestReset({ email });
+      yield* letForkedFibersRun;
       const afterKnown = yield* mailer.sent;
       assert.strictEqual(afterKnown.filter((m) => m.template === "reset-password").length, 1);
     }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "TSS-001/EEM-001/MLO-001: requestReset for a known account doesn't wait on mailer.send",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        yield* password.signUp({ email, password: strongPassword });
+        // Under `HangingMailerLayer` (below), `mailer.send` never resolves
+        // — if `requestReset` awaited it inline (the pre-fix shape), this
+        // call itself would never complete and the test would time out.
+        // Completing proves the dispatch is genuinely forked, not just
+        // that a mail eventually lands in some store.
+        yield* password.requestReset({ email });
+      }).pipe(Effect.provide(TestLayerHangingMailer)),
+  );
+
+  it.effect(
+    "TSS-002: resendVerification for a known, unverified account doesn't wait on mailer.send",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        yield* password.signUp({ email, password: strongPassword });
+        yield* password.resendVerification({ email });
+      }).pipe(Effect.provide(TestLayerHangingMailer)),
   );
 
   it.effect(
@@ -369,6 +418,7 @@ describe("Password", () => {
         yield* password.verifyEmail({ token: Redacted.make(String(verifyMail?.data?.["token"])) });
 
         yield* password.requestReset({ email });
+        yield* letForkedFibersRun;
         const sent = yield* mailer.sent;
         const resetMail = sent.find((m) => m.template === "reset-password");
         assert.isDefined(resetMail);
@@ -399,6 +449,7 @@ describe("Password", () => {
         const mailer = yield* Mailer.Mailer;
         yield* password.signUp({ email, password: strongPassword });
         yield* password.requestReset({ email });
+        yield* letForkedFibersRun;
         const sent = yield* mailer.sent;
         const resetMail = sent.find((m) => m.template === "reset-password");
         const mailedToken = Redacted.make(String(resetMail?.data?.["token"]));
