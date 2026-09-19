@@ -2,11 +2,13 @@
 // `HttpRouter.toWebHandler` — real HTTP requests/responses, real status
 // codes, a real session cookie — mirroring `@awthaq/admin`'s own
 // `AuthHttp.test.ts`.
+import { Api } from "@awthaq/api";
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -38,6 +40,38 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+// CSS-001/CDS-001-class fix: `OrganizationGroup` now carries
+// `.middleware(Api.CsrfProtection)` (see `OrganizationApi.ts`), so building
+// `Organization.Organization.layer`'s handlers requires a live
+// `Api.CsrfProtection` in context — and, since this file drives real HTTP
+// through `HttpRouter.toWebHandler`, every mutating request below must also
+// carry a valid double-submit cookie/header pair or it gets rejected with a
+// real `CsrfRejected` at runtime. Mirrors `packages/server/test/Csrf.test.ts`'s
+// own `validCookieValue()`.
+const CSRF_SECRET = "organization-authhttp-test-csrf-secret";
+
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make(CSRF_SECRET),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
+const CSRF_TOKEN: string = (() => {
+  const token = randomBytes(32).toString("hex");
+  const signature = createHmac("sha256", CSRF_SECRET).update(token).digest("hex");
+  return `${token}.${signature}`;
+})();
+
+/** Appends the double-submit CSRF cookie to an existing `cookie` header value, if any. */
+const withCsrfCookie = (cookie?: string): string =>
+  cookie
+    ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TOKEN}`
+    : `${Api.CSRF_COOKIE_NAME}=${CSRF_TOKEN}`;
+
 const buildAppLayer = (configOverrides: Partial<Organization.OrganizationConfigShape> = {}) =>
   Layer.mergeAll(
     AuthHttp.routes(OrganizationApi.OrganizationApi, { openapiPath: "/openapi.json" }).pipe(
@@ -47,6 +81,7 @@ const buildAppLayer = (configOverrides: Partial<Organization.OrganizationConfigS
     ),
     AuthHttp.docs(OrganizationApi.OrganizationApi),
   ).pipe(
+    Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
@@ -86,6 +121,8 @@ const buildHandler = (configOverrides: Partial<Organization.OrganizationConfigSh
   return { handler, issueSessionCookieHeader };
 };
 
+const UNSAFE_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 const request = (
   handler: (request: Request) => Promise<Response>,
   method: string,
@@ -96,7 +133,16 @@ const request = (
   handler(
     new Request(`${ORIGIN}${path}`, {
       method,
-      headers: { "content-type": "application/json", ...headers },
+      headers: {
+        "content-type": "application/json",
+        ...headers,
+        ...(UNSAFE_METHODS.has(method)
+          ? {
+              cookie: withCsrfCookie(headers?.["cookie"]),
+              [Api.CSRF_HEADER_NAME]: CSRF_TOKEN,
+            }
+          : {}),
+      },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
   );

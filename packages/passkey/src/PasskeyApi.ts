@@ -222,7 +222,10 @@ export const PasskeyGroup = HttpApiGroup.make("passkey")
       ],
     }),
   )
-  .middleware(Api.Authentication);
+  // See `@awthaq/api`'s `Session.ts`: `CsrfProtection` declared last so it
+  // runs first.
+  .middleware(Api.Authentication)
+  .middleware(Api.CsrfProtection);
 
 export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate")
   .add(
@@ -237,7 +240,13 @@ export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate"
       success: SessionContract.SessionDto,
       error: [PasskeyChallengeInvalid, PasskeyUserVerificationRequired, Api.InvalidCredentials],
     }),
-  );
+  )
+  // Public and anonymous by design (see this file's header), but still two
+  // unsafe-method (POST) endpoints a browser client reaches — CSRF-worth
+  // protecting the same as `PasswordApi.ts`'s public `signIn`/`signUp`,
+  // even though WebAuthn's own origin binding is a second, independent
+  // defense here.
+  .middleware(Api.CsrfProtection);
 
 export const PasskeyCredentialsGroup = HttpApiGroup.make("passkey.credentials")
   .add(
@@ -260,7 +269,10 @@ export const PasskeyCredentialsGroup = HttpApiGroup.make("passkey.credentials")
       error: [PasskeyCredentialNotFound, PasskeyLastCredential],
     }),
   )
-  .middleware(Api.Authentication);
+  // See `@awthaq/api`'s `Session.ts`: `CsrfProtection` declared last so it
+  // runs first.
+  .middleware(Api.Authentication)
+  .middleware(Api.CsrfProtection);
 
 export const PasskeyApi = HttpApi.make("auth")
   .add(PasskeyGroup)

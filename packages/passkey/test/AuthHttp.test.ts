@@ -8,11 +8,13 @@
 // contract, mirroring `@awthaq/password`'s own `AuthHttp.test.ts`.
 // `WebAuthn` is still mocked (`Layer.mock`, BEH-EA-195) — this proves the
 // wire contract, not the cryptography (ticket 02's own job).
+import { Api } from "@awthaq/api";
 import { Users, Accounts, Sessions, AuthEvents } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -46,6 +48,47 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+/**
+ * CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `PasskeyGroup`,
+ * `PasskeyAuthenticateGroup` (public/anonymous, BEH-EA-131), and
+ * `PasskeyCredentialsGroup` all now carry `.middleware(Api.CsrfProtection)`
+ * (`PasskeyApi.ts`) — this file calls the composed app's real HTTP handler
+ * directly, never through `@awthaq/client`'s generated `CsrfClientLive`, so
+ * every unsafe-method request built below (including the anonymous
+ * authenticate-ceremony ones) has to play the double-submit role a real
+ * browser client would. A reference HMAC computed independently of
+ * `Csrf.ts`'s own implementation (Node's `node:crypto`), mirroring
+ * `packages/server/test/Csrf.test.ts`'s own `validCookieValue()`.
+ *
+ * Plain `Layer.provide`, not `Layer.provideMerge` — this file's composed
+ * layer already carries the most services of any file in this migration;
+ * `provideMerge` exposing `Api.CsrfProtection` in its own output type
+ * triggers a real `TS2883` portability error under this repo's `tsc -b`
+ * composite project-reference build (see `PasskeyWorld.ts`'s own comment
+ * on the identical issue).
+ */
+const CSRF_TEST_SECRET = "passkey-authhttp-test-csrf-secret";
+const CSRF_TEST_COOKIE_VALUE: string = (() => {
+  const token = randomBytes(32).toString("hex");
+  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(token).digest("hex");
+  return `${token}.${signature}`;
+})();
+
+const withCsrfCookie = (cookie?: string): string =>
+  cookie
+    ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
+    : `${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;
+
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make(CSRF_TEST_SECRET),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
 const buildAppLayer = (webAuthn: Layer.Layer<WebAuthn.WebAuthn>) =>
   Layer.mergeAll(
     AuthHttp.routes(PasskeyApi.PasskeyApi, { openapiPath: "/openapi.json" }).pipe(
@@ -55,6 +98,7 @@ const buildAppLayer = (webAuthn: Layer.Layer<WebAuthn.WebAuthn>) =>
     ),
     AuthHttp.docs(PasskeyApi.PasskeyApi),
   ).pipe(
+    Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
       Layer.mergeAll(webAuthn, ChallengeStore.layerMemory, PasskeyCredentials.layerMemory).pipe(
@@ -87,7 +131,12 @@ const post = (
   handler(
     new Request(`${ORIGIN}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", ...headers },
+      headers: {
+        "content-type": "application/json",
+        ...headers,
+        cookie: withCsrfCookie(headers?.["cookie"]),
+        [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
+      },
       body: JSON.stringify(body),
     }),
   );
@@ -347,7 +396,11 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
           handler(
             new Request(`${ORIGIN}/passkey/credentials/cred-mock-1`, {
               method: "PATCH",
-              headers: { "content-type": "application/json", cookie },
+              headers: {
+                "content-type": "application/json",
+                cookie: withCsrfCookie(cookie),
+                [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
+              },
               body: JSON.stringify({ name: "My Renamed Passkey" }),
             }),
           ),
@@ -358,7 +411,10 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
           handler(
             new Request(`${ORIGIN}/passkey/credentials/cred-mock-1`, {
               method: "DELETE",
-              headers: { cookie },
+              headers: {
+                cookie: withCsrfCookie(cookie),
+                [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
+              },
             }),
           ),
         );
@@ -368,7 +424,10 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
           handler(
             new Request(`${ORIGIN}/passkey/credentials/does-not-exist`, {
               method: "DELETE",
-              headers: { cookie },
+              headers: {
+                cookie: withCsrfCookie(cookie),
+                [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
+              },
             }),
           ),
         );

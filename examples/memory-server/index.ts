@@ -23,12 +23,14 @@ import {
 import { Password } from "@awthaq/password";
 import { Auth, AuthEvents, Verification } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Csrf } from "@awthaq/server";
 import * as TestAuth from "@awthaq/test/TestAuth";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import { createServer } from "node:http";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 
@@ -51,6 +53,22 @@ const built = Auth.make([Password.Password, Organization.Organization]);
 //    supplied here, in the same position, for the identical reason.
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
+);
+// CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: every mutating group
+// `Password`/`Organization` compose now carries `Api.CsrfProtection`
+// (see each plugin's own `*Api.ts`), so this composition must supply its
+// implementation the same way it supplies `Authentication`'s. The secret
+// below is a fixed, checked-in placeholder fit only for this local demo —
+// `CsrfConfig`'s own doc comment is explicit that a real deployment must
+// never default it.
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make("memory-server-example-dev-only-csrf-secret"),
+      allowedOrigins: [],
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
 );
 const OrganizationMemory = Layer.mergeAll(
   OrganizationRecords.layerMemory,
@@ -75,7 +93,7 @@ const PasswordExtras = Layer.mergeAll(
 //    packaged as something runnable on its own.
 const AppLayer = TestAuth.layer(
   built,
-  Layer.mergeAll(AuthenticationLive, OrganizationMemory, PasswordExtras),
+  Layer.mergeAll(AuthenticationLive, CsrfProtectionLive, OrganizationMemory, PasswordExtras),
 );
 
 // 4. A real listening server — the same `HttpRouter.serve` +

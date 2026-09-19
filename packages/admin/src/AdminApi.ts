@@ -108,6 +108,11 @@ export const AdminGroup = HttpApiGroup.make("admin")
       error: AdminImpersonationDenied,
     }),
   )
-  .middleware(Api.Authentication);
+  // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `CsrfProtection`
+  // declared last so it runs first (rejects a forgery before any
+  // credential work) — see `@awthaq/api`'s `Session.ts` for the same
+  // comment.
+  .middleware(Api.Authentication)
+  .middleware(Api.CsrfProtection);
 
 export const AdminApi = HttpApi.make("auth").add(AdminGroup);

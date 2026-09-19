@@ -214,6 +214,14 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // Ticket 14: rate-limited.
       error: [WrongPassword, WeakPassword, Api.RateLimited],
     }).middleware(Api.Authentication),
-  );
+  )
+  // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: every endpoint here
+  // is an unsafe method, and most (signUp/signIn/requestReset/
+  // confirmReset/verifyEmail/resendVerification) are otherwise-public —
+  // exactly the login-CSRF surface `CsrfProtectionLive` exists to close,
+  // and `CsrfProtection` doesn't require an authenticated principal, so it
+  // applies at the group level regardless of `changePassword`'s own
+  // per-endpoint `Authentication`.
+  .middleware(Api.CsrfProtection);
 
 export const PasswordApi = HttpApi.make("auth").add(PasswordGroup);

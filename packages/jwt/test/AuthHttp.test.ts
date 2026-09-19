@@ -7,7 +7,7 @@
 // `issueSessionCookieHeader` pattern for setting one up.
 import { AuthCore } from "@awthaq/api";
 import { Accounts, Sessions, Users } from "@awthaq/core";
-import { Account, Authentication, AuthHttp, Session } from "@awthaq/server";
+import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -32,6 +32,24 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
+);
+
+/**
+ * `Jwt`'s own `jwt`/`jwt.token` groups are GET-only and were deliberately
+ * NOT given `Api.CsrfProtection` (CSRF only ever rejects unsafe methods,
+ * BEH-EA-077), so the plain `AppLayer` below (JwtApi alone) never needs
+ * this. `CrossPluginAppLayer` further down composes `AuthCore.AuthCoreApi`
+ * (`SessionGroup`/`AccountGroup`, both now CSRF-protected) alongside it, so
+ * only that layer needs it.
+ */
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make("jwt-authhttp-test-csrf-secret"),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
 );
 
 const AppLayer = Layer.mergeAll(
@@ -188,6 +206,7 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
     ),
     AuthHttp.routes(JwtApi.JwtApi, {}),
   ).pipe(
+    Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(Jwt.Jwt.layer),
     Layer.provideMerge(AuthenticationLive),
     Layer.provideMerge(KeyRing.KeyRing.layer),

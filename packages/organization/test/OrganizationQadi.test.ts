@@ -7,11 +7,12 @@
 import { Api } from "@awthaq/api";
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import { AttributeResolver, makeResourceId, makeSubjectId, RelationshipResolver } from "@qadi/core";
 import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
 import * as InvitationRecords from "../src/InvitationRecords.ts";
@@ -31,6 +32,16 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make("organization-test-csrf-secret"),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
 const OrganizationLive = Organization.Organization.layer.pipe(
   Layer.provide(
     Organization.config({
@@ -43,6 +54,7 @@ const OrganizationLive = Organization.Organization.layer.pipe(
     }),
   ),
   Layer.provide(AuthenticationLive),
+  Layer.provide(CsrfProtectionLive),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
   Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),

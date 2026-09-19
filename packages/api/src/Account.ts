@@ -11,7 +11,7 @@
 import * as Schema from "effect/Schema";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { Authentication } from "./Api.ts";
+import { Authentication, CsrfProtection } from "./Api.ts";
 
 /** The wire shape of `@awthaq/core`'s `UserRecord`, minus internal ids/timestamps a caller has no use for. */
 export class AccountDto extends Schema.Class<AccountDto>("AccountDto")({
@@ -32,4 +32,7 @@ export const AccountGroup = HttpApiGroup.make("account")
     }),
   )
   .add(HttpApiEndpoint.delete("deleteUser", "/user"))
-  .middleware(Authentication);
+  // See Session.ts's identical comment: `CsrfProtection` declared last so
+  // it runs first.
+  .middleware(Authentication)
+  .middleware(CsrfProtection);

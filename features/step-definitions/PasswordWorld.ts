@@ -11,9 +11,10 @@ import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from 
 import type { AuthEvent } from "@awthaq/core/AuthEvents";
 import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import type { MailMessage } from "@awthaq/ports/Mailer";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { Password, PasswordApi } from "@awthaq/password";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -42,6 +43,11 @@ const CoreLive = Layer.mergeAll(
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
+);
+
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
+  Layer.provide(NodeCrypto.layer),
 );
 
 /** BEH-EA-119: a corpus nothing ever matches, the same default `AuthHttp.test.ts` uses — a Scenario opting into a real breach lookup overrides this via `configureBreach`. */
@@ -99,6 +105,7 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
     AuthHttp.docs(PasswordApi.PasswordApi),
   ).pipe(
     Layer.provideMerge(AuthenticationLive),
+    Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(eventsLayer),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
@@ -166,7 +173,11 @@ const post = (
   handler(
     new Request(`http://localhost${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) },
+      headers: {
+        "content-type": "application/json",
+        cookie: withCsrfCookie(cookie),
+        "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
+      },
       body: JSON.stringify(body),
     }),
   );

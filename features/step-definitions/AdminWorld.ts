@@ -19,8 +19,9 @@
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Admin, AdminApi, ImpersonationRecords } from "@awthaq/admin";
 import type { Api } from "@awthaq/api";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
 import type { AuthEvent } from "@awthaq/core/AuthEvents";
 import type { AuthSubject } from "@qadi/core";
 import * as Context from "effect/Context";
@@ -49,6 +50,11 @@ const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
+);
+
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
+  Layer.provide(NodeCrypto.layer),
 );
 
 export interface AppOptions {
@@ -91,6 +97,7 @@ const buildAppLayer = (options: AppOptions, events: Ref.Ref<ReadonlyArray<AuthEv
     AuthHttp.docs(AdminApi.AdminApi),
   ).pipe(
     Layer.provideMerge(eventsLayer),
+    Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(ImpersonationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(TestServices),
@@ -156,6 +163,8 @@ export const request = Effect.fn("features.admin.request")(function* (
         headers: {
           ...(options?.body === undefined ? {} : { "content-type": "application/json" }),
           ...options?.headers,
+          cookie: withCsrfCookie(options?.headers?.["cookie"]),
+          "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
         },
         ...(options?.body === undefined ? {} : { body: JSON.stringify(options.body) }),
       }),

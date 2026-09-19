@@ -7,7 +7,7 @@
 // predicate, not a service).
 import { Api } from "@awthaq/api";
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
@@ -34,10 +35,29 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+/**
+ * `admin` also now declares `.middleware(Api.CsrfProtection)` — merged into
+ * `Admin.Admin.layer` regardless of whether a test ever issues real HTTP
+ * (`HttpApiBuilder.group` requires it in context to even build the handlers
+ * layer). No request is ever built in this domain-level suite, so nothing
+ * downstream of this actually exercises the double-submit check — only its
+ * presence in context is load-bearing here.
+ */
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make("admin-domain-test-csrf-secret"),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
 const buildLayer = (canImpersonate: Admin.AdminConfigShape["canImpersonate"]) =>
   Admin.Admin.layer.pipe(
     Layer.provide(Admin.config({ canImpersonate })),
     Layer.provide(AuthenticationLive),
+    Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(ImpersonationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
   );

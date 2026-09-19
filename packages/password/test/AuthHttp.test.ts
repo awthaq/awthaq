@@ -17,15 +17,18 @@
 // only actually runs as part of the full handled-request lifecycle
 // (`HttpEffect.toHandled`'s `sendResponse`), which `toWebHandler` goes
 // through and a bare `router.asHttpEffect()` call does not.
+import { Api } from "@awthaq/api";
 import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@awthaq/core";
 import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpClient from "effect/unstable/http/HttpClient";
@@ -62,6 +65,39 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+/**
+ * CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `PasswordGroup` now
+ * carries `.middleware(Api.CsrfProtection)` at the group level — this file
+ * calls the composed app's real HTTP handler directly, never through
+ * `@awthaq/client`'s generated `CsrfClientLive`, so every unsafe-method
+ * request built below has to play the double-submit role a real browser
+ * client would (see `withCsrfCookie`/`CSRF_TEST_COOKIE_VALUE` below).
+ * A reference HMAC computed independently of `Csrf.ts`'s own implementation
+ * (Node's `node:crypto`), mirroring `packages/server/test/Csrf.test.ts`'s
+ * own `validCookieValue()`.
+ */
+const CSRF_TEST_SECRET = "password-authhttp-test-csrf-secret";
+const CSRF_TEST_COOKIE_VALUE: string = (() => {
+  const token = randomBytes(32).toString("hex");
+  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(token).digest("hex");
+  return `${token}.${signature}`;
+})();
+
+const withCsrfCookie = (cookie?: string): string =>
+  cookie
+    ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
+    : `${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;
+
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make(CSRF_TEST_SECRET),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
 const buildAppLayer = (mailerLayer: Layer.Layer<Mailer.Mailer>) =>
   Layer.mergeAll(
     AuthHttp.routes(PasswordApi.PasswordApi, { openapiPath: "/openapi.json" }).pipe(
@@ -70,6 +106,7 @@ const buildAppLayer = (mailerLayer: Layer.Layer<Mailer.Mailer>) =>
     AuthHttp.docs(PasswordApi.PasswordApi),
   ).pipe(
     Layer.provideMerge(AuthenticationLive),
+    Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
       Layer.mergeAll(PasswordHasher.layerArgon2id, mailerLayer, RateLimiter.layerPermissive).pipe(
@@ -125,11 +162,16 @@ const post = (
   handler: (request: Request) => Promise<Response>,
   path: string,
   body: unknown,
+  cookie?: string,
 ): Promise<Response> =>
   handler(
     new Request(`http://localhost${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        cookie: withCsrfCookie(cookie),
+        [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
+      },
       body: JSON.stringify(body),
     }),
   );
@@ -386,7 +428,11 @@ describe("AuthHttp + Password (real HTTP)", () => {
         handler(
           new Request(`http://localhost${path}`, {
             method: "POST",
-            headers: { "content-type": "application/json", cookie },
+            headers: {
+              "content-type": "application/json",
+              cookie: withCsrfCookie(cookie),
+              [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
+            },
             body: JSON.stringify(body),
           }),
         );

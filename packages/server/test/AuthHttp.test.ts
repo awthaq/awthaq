@@ -6,10 +6,11 @@
 // `HttpRouter`, requests built from actual `Request` objects (BEH-EA-085's
 // "any host that hands the application a `Request`" path), and `httpApiStatus`
 // annotations landing on the real response status (BEH-EA-088).
-import { AuthCore } from "@awthaq/api";
+import { Api, AuthCore } from "@awthaq/api";
 import { Accounts, Sessions, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -24,11 +25,48 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Account from "../src/Account.ts";
 import * as Authentication from "../src/Authentication.ts";
 import * as AuthHttp from "../src/AuthHttp.ts";
+import * as Csrf from "../src/Csrf.ts";
 import * as Session from "../src/Session.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
+
+// CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `SessionGroup`/
+// `AccountGroup` now also carry `.middleware(Api.CsrfProtection)`, so this
+// file's real HTTP requests need to play the double-submit role a real
+// browser client would. Mirrors `packages/server/test/Csrf.test.ts`'s own
+// `validCookieValue()`: an HMAC computed independently of `Csrf.ts`'s own
+// implementation (Node's `node:crypto`), so a passing run exercises RFC
+// 2104 compatibility, not just self-consistency with the code under test.
+const CSRF_TEST_SECRET = "server-authhttp-test-csrf-secret";
+
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make(CSRF_TEST_SECRET),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
+const CSRF_TEST_COOKIE_VALUE: string = (() => {
+  const token = randomBytes(32).toString("hex");
+  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(token).digest("hex");
+  return `${token}.${signature}`;
+})();
+
+const withCsrfCookie = (cookie?: string): string =>
+  cookie
+    ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
+    : `${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;
+
+/** Every request built in this file goes through this (or `cookieHeader` below), which folds it in — so an unsafe-method request always carries a valid double-submit pair, even one meant to exercise an *unauthenticated* 401 (otherwise it would hit `CsrfRejected`'s 403 first, since CSRF is declared last/outermost and runs before `Api.Authentication`). */
+const csrfHeaders = (cookie?: string): Record<string, string> => ({
+  cookie: withCsrfCookie(cookie),
+  "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
+});
 
 const AppLayer = Layer.mergeAll(
   AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
@@ -39,6 +77,7 @@ const AppLayer = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provide(CsrfProtectionLive),
   Layer.provideMerge(Sessions.layerMemory),
   Layer.provideMerge(Users.layerMemory),
   Layer.provideMerge(Accounts.layerMemory),
@@ -50,9 +89,8 @@ const AppLayer = Layer.mergeAll(
 const userId = Users.UserId("44444444-4444-4444-4444-444444444444");
 const otherUserId = Users.UserId("55555555-5555-5555-5555-555555555555");
 
-const cookieHeader = (token: Redacted.Redacted<string>): Record<string, string> => ({
-  cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
-});
+const cookieHeader = (token: Redacted.Redacted<string>): Record<string, string> =>
+  csrfHeaders(`${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`);
 
 const jsonBody = (response: HttpServerResponse.HttpServerResponse): Effect.Effect<unknown> =>
   Effect.promise(() => HttpServerResponse.toWeb(response).json());
@@ -262,7 +300,7 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
                 new Request("http://localhost/user", {
                   method: "PATCH",
                   headers: {
-                    ...(token ? cookieHeader(token) : {}),
+                    ...(token ? cookieHeader(token) : csrfHeaders()),
                     "content-type": "application/json",
                   },
                   body: JSON.stringify({ name: "Ada Lovelace" }),

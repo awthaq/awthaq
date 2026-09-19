@@ -14,9 +14,10 @@
 // `AuthHttp.test.ts`'s own `issueSessionCookieHeader` uses.
 import { AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { Passkey, PasskeyApi, ChallengeStore, PasskeyCredentials } from "@awthaq/passkey";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
@@ -135,6 +136,11 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
+  Layer.provide(NodeCrypto.layer),
+);
+
 export interface AppOptions {
   readonly rpId?: string;
   readonly origins?: ReadonlyArray<string>;
@@ -161,6 +167,7 @@ const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAut
     ),
     AuthHttp.docs(PasskeyApi.PasskeyApi),
   ).pipe(
+    Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
       Layer.mergeAll(
@@ -249,6 +256,8 @@ export const request = Effect.fn("features.passkey.request")(function* (
         headers: {
           ...(options?.body === undefined ? {} : { "content-type": "application/json" }),
           ...options?.headers,
+          cookie: withCsrfCookie(options?.headers?.["cookie"]),
+          "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
         },
         ...(options?.body === undefined ? {} : { body: JSON.stringify(options.body) }),
       }),

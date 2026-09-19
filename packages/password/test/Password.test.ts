@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@awthaq/core";
 import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -79,8 +79,26 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+/**
+ * CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `PasswordGroup` now
+ * carries `.middleware(Api.CsrfProtection)` at the group level — building
+ * `Password.Password.layer` at all now needs it satisfied, the same as
+ * `AuthenticationLive` above, even though no HTTP request is ever issued
+ * from this domain-level suite.
+ */
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make("password-domain-test-csrf-secret"),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
 const TestLayer = Password.Password.layer.pipe(
   Layer.provideMerge(AuthenticationLive),
+  Layer.provide(CsrfProtectionLive),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(PortsLive),
   Layer.provideMerge(RateLimits.layer),
@@ -429,6 +447,7 @@ describe("Password", () => {
         Effect.provide(
           Password.Password.layer.pipe(
             Layer.provideMerge(AuthenticationLive),
+            Layer.provide(CsrfProtectionLive),
             Layer.provideMerge(CoreLive),
             Layer.provideMerge(PortsLive),
             Layer.provideMerge(RateLimits.layer),
@@ -449,6 +468,7 @@ describe("Password", () => {
       Effect.provide(
         Password.Password.layer.pipe(
           Layer.provideMerge(AuthenticationLive),
+          Layer.provide(CsrfProtectionLive),
           Layer.provideMerge(CoreLive),
           Layer.provideMerge(PortsLive),
           Layer.provideMerge(RateLimits.layer),
@@ -468,6 +488,7 @@ describe("Password", () => {
       Effect.provide(
         Password.Password.layer.pipe(
           Layer.provideMerge(AuthenticationLive),
+          Layer.provide(CsrfProtectionLive),
           Layer.provideMerge(CoreLive),
           Layer.provideMerge(PortsLive),
           Layer.provideMerge(RateLimits.layer),
@@ -565,6 +586,7 @@ describe("Password", () => {
         Effect.provide(
           Password.Password.layer.pipe(
             Layer.provideMerge(AuthenticationLive),
+            Layer.provide(CsrfProtectionLive),
             Layer.provideMerge(CoreLive),
             Layer.provideMerge(
               Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
@@ -610,6 +632,7 @@ describe("Password", () => {
         Effect.provide(
           Password.Password.layer.pipe(
             Layer.provideMerge(AuthenticationLive),
+            Layer.provide(CsrfProtectionLive),
             Layer.provideMerge(CoreLive),
             Layer.provideMerge(
               Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(

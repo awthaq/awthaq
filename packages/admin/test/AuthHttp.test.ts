@@ -6,10 +6,12 @@
 // `HttpRouter.toWebHandler` — real HTTP requests/responses, real status
 // codes, a real session cookie — mirroring `@awthaq/passkey`'s own
 // `AuthHttp.test.ts`.
+import { Api } from "@awthaq/api";
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
-import { Authentication, AuthHttp } from "@awthaq/server";
+import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -22,6 +24,36 @@ import { TestAuth } from "@awthaq/test";
 import * as Admin from "../src/Admin.ts";
 import * as AdminApi from "../src/AdminApi.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
+
+// CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `admin` now also carries
+// `.middleware(Api.CsrfProtection)`, so this file's real HTTP requests need
+// to play the double-submit role a real browser client would — mirrors
+// `packages/server/test/Csrf.test.ts`'s own `validCookieValue()`: an HMAC
+// computed independently of `Csrf.ts`'s own implementation (Node's
+// `node:crypto`), so a passing run exercises RFC 2104 compatibility, not
+// just self-consistency with the code under test.
+const CSRF_TEST_SECRET = "admin-authhttp-test-csrf-secret";
+
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make(CSRF_TEST_SECRET),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
+const CSRF_TEST_COOKIE_VALUE: string = (() => {
+  const token = randomBytes(32).toString("hex");
+  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(token).digest("hex");
+  return `${token}.${signature}`;
+})();
+
+const withCsrfCookie = (cookie?: string): string =>
+  cookie
+    ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
+    : `${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -44,6 +76,7 @@ const buildAppLayer = (canImpersonate: Admin.AdminConfigShape["canImpersonate"])
     ),
     AuthHttp.docs(AdminApi.AdminApi),
   ).pipe(
+    Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(ImpersonationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(TestServices),
@@ -93,7 +126,12 @@ const post = (
   handler(
     new Request(`${ORIGIN}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", ...headers },
+      headers: {
+        "content-type": "application/json",
+        ...headers,
+        cookie: withCsrfCookie(headers?.["cookie"]),
+        "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
+      },
       body: JSON.stringify(body),
     }),
   );

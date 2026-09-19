@@ -9,12 +9,13 @@
 // `packages/ports/test/WebAuthn.test.ts`'s own job).
 import { AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as ChallengeStore from "../src/ChallengeStore.ts";
 import * as Passkey from "../src/Passkey.ts";
@@ -42,6 +43,23 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+/**
+ * CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `PasskeyGroup` and
+ * `PasskeyCredentialsGroup` now also carry `.middleware(Api.CsrfProtection)`
+ * (`PasskeyApi.ts`) — merged into `Passkey.Passkey.layer` regardless of
+ * whether a test ever dispatches real HTTP, the same as `AuthenticationLive`
+ * above.
+ */
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make("passkey-domain-test-csrf-secret"),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
 const PortsLive = (webAuthn: Layer.Layer<WebAuthn.WebAuthn>) =>
   Layer.mergeAll(webAuthn, ChallengeStore.layerMemory, PasskeyCredentials.layerMemory).pipe(
     Layer.provideMerge(NodeCrypto.layer),
@@ -54,6 +72,7 @@ const buildLayer = (
   Passkey.Passkey.layer.pipe(
     Layer.provide(Passkey.config({ rpId: RP_ID, origins: [ORIGIN], ...configOverrides })),
     Layer.provide(AuthenticationLive),
+    Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(PortsLive(webAuthn)),
   );

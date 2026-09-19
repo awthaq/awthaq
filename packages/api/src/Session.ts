@@ -12,7 +12,7 @@
 import * as Schema from "effect/Schema";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { Authentication } from "./Api.ts";
+import { Authentication, CsrfProtection } from "./Api.ts";
 
 /** One row of `list` — the wire shape of `@awthaq/core`'s `SessionListItem`. */
 export class SessionDto extends Schema.Class<SessionDto>("SessionDto")({
@@ -56,4 +56,9 @@ export const SessionGroup = HttpApiGroup.make("session")
   // session. No payload, no response cookie-clearing, matching
   // `signOut`'s existing precedent.
   .add(HttpApiEndpoint.post("revokeAll", "/session/revoke-all"))
-  .middleware(Authentication);
+  // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `CsrfProtection`
+  // declared last (outermost, runs first — see `AuthorizedSubject.ts`'s
+  // header on declaration order) so a forged request is rejected before
+  // `Authentication` does any credential work.
+  .middleware(Authentication)
+  .middleware(CsrfProtection);

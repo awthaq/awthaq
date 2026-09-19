@@ -12,8 +12,9 @@ import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from 
 import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import type { MailMessage } from "@awthaq/ports/Mailer";
 import { Password, PasswordApi } from "@awthaq/password";
-import { Account, Authentication, AuthHttp, Session } from "@awthaq/server";
+import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -39,6 +40,11 @@ const CoreLive = Layer.mergeAll(
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
+);
+
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
+  Layer.provide(NodeCrypto.layer),
 );
 
 const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
@@ -79,6 +85,7 @@ const buildApp = () => {
     AuthHttp.docs(AuthCore.AuthCoreApi),
   ).pipe(
     Layer.provideMerge(AuthenticationLive),
+    Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
       Layer.mergeAll(
@@ -137,7 +144,7 @@ const get = (
   handler(
     new Request(`http://localhost${path}`, {
       method: "GET",
-      headers: cookie ? { cookie } : {},
+      headers: { cookie: withCsrfCookie(cookie) },
     }),
   );
 
@@ -150,7 +157,11 @@ const post = (
   handler(
     new Request(`http://localhost${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) },
+      headers: {
+        "content-type": "application/json",
+        cookie: withCsrfCookie(cookie),
+        "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
+      },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
   );

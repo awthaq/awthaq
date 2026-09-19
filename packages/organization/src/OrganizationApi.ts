@@ -707,6 +707,9 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
       },
     ),
   )
-  .middleware(Api.Authentication);
+  // See `@awthaq/api`'s `Session.ts`: `CsrfProtection` declared last so it
+  // runs first.
+  .middleware(Api.Authentication)
+  .middleware(Api.CsrfProtection);
 
 export const OrganizationApi = HttpApi.make("auth").add(OrganizationGroup);
