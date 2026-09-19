@@ -24,6 +24,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as Layer from "effect/Layer";
@@ -280,7 +281,16 @@ const isBreached = (
     const hex = toHex(digest).toUpperCase();
     const prefix = hex.slice(0, 5);
     const suffix = hex.slice(5);
-    const response = yield* httpClient.get(`https://api.pwnedpasswords.com/range/${prefix}`);
+    // CSD-001: `HttpClient` resolves for any status — a 429/503 from HIBP
+    // (its own aggressive throttling is the most common failure mode at
+    // scale) would otherwise read as an ordinary body, fail the suffix
+    // match, and silently report "not breached" even under
+    // `onUnavailable: "reject"`. `filterStatusOk` turns any non-2xx into a
+    // failure, routed to `onUnavailable` by the same catch-all below a
+    // transport error already used.
+    const response = yield* httpClient
+      .get(`https://api.pwnedpasswords.com/range/${prefix}`)
+      .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
     const body = yield* response.text;
     return body.split("\n").some((line) => line.split(":")[0]?.trim().toUpperCase() === suffix);
   }).pipe(Effect.catch(() => Effect.succeed(onUnavailable === "reject")));

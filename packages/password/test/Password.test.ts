@@ -52,6 +52,18 @@ const UnavailableHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   ),
 );
 
+// CSD-001: a resolved-but-non-2xx response (HIBP's own aggressive
+// throttling makes 429 the most common failure mode at scale) — distinct
+// from `UnavailableHttpClient`'s transport-level failure, since Effect's
+// `HttpClient` resolves normally for any status.
+const httpClientReturningStatus = (status: number): Layer.Layer<HttpClient.HttpClient> =>
+  Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status }))),
+    ),
+  );
+
 const CoreLive = Layer.mergeAll(
   Users.layerMemory,
   Accounts.layerMemory,
@@ -620,6 +632,57 @@ describe("Password", () => {
           Layer.provideMerge(PortsLive),
           Layer.provideMerge(RateLimits.layer),
           Layer.provide(UnavailableHttpClient),
+          Layer.provide(SqlTransaction.layerNoop),
+          Layer.provide(ClientAddress.layerDirect),
+          Layer.provideMerge(Password.config({ breachCheck: { onUnavailable: "reject" } })),
+        ),
+      ),
+    ),
+  );
+
+  // CSD-001: a resolved-but-non-2xx response (HIBP throttling, most common
+  // at deployment scale) used to read as an ordinary body — its error text
+  // would simply fail the suffix match and report "not breached" even
+  // under `onUnavailable: "reject"`. These mirror the two
+  // `UnavailableHttpClient` tests above exactly, substituting a 429/503
+  // response for a transport failure, to prove HTTP-level failures now
+  // route through the same `onUnavailable` branch as transport failures.
+  it.effect("CSD-001: a 429 from the breach check fails open by default", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const issued = yield* password.signUp({ email, password: strongPassword });
+      assert.isDefined(issued.token);
+    }).pipe(
+      Effect.provide(
+        Password.Password.layer.pipe(
+          Layer.provideMerge(AuthenticationLive),
+          Layer.provide(CsrfProtectionLive),
+          Layer.provideMerge(CoreLive),
+          Layer.provideMerge(PortsLive),
+          Layer.provideMerge(RateLimits.layer),
+          Layer.provide(httpClientReturningStatus(429)),
+          Layer.provide(SqlTransaction.layerNoop),
+          Layer.provide(ClientAddress.layerDirect),
+          Layer.provideMerge(Password.config({ breachCheck: true })),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("CSD-001: a 503 from the breach check fails closed when configured", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const failure = yield* password.signUp({ email, password: strongPassword }).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "WeakPassword");
+    }).pipe(
+      Effect.provide(
+        Password.Password.layer.pipe(
+          Layer.provideMerge(AuthenticationLive),
+          Layer.provide(CsrfProtectionLive),
+          Layer.provideMerge(CoreLive),
+          Layer.provideMerge(PortsLive),
+          Layer.provideMerge(RateLimits.layer),
+          Layer.provide(httpClientReturningStatus(503)),
           Layer.provide(SqlTransaction.layerNoop),
           Layer.provide(ClientAddress.layerDirect),
           Layer.provideMerge(Password.config({ breachCheck: { onUnavailable: "reject" } })),
