@@ -6,6 +6,7 @@ import { Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -13,6 +14,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
+import * as RevocationStore from "../src/RevocationStore.ts";
 import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
 
 /**
@@ -47,6 +49,10 @@ const buildLayer = (overrides?: Partial<JwtConfig.JwtConfigShape>) =>
     // body needs the same `Sessions` instance exposed too, both to issue/
     // revoke a real session and to satisfy `jwt.verifyLive`'s own `R`.
     Layer.provideMerge(Sessions.layerMemory),
+    // TIR-001: `RevocationStore` is captured once in `make` now (not a
+    // per-call `R` the way `Sessions` is), so this discharges it for the
+    // whole plugin rather than merely exposing it to the test body.
+    Layer.provideMerge(RevocationStore.layerMemory),
     Layer.provide(NodeCrypto.layer),
     // last: both `Jwt.layer` and `KeyRing.layer` independently need
     // `JwtConfig` — `Layer.provide` folds each step's own open
@@ -210,6 +216,112 @@ describe("Jwt signJWT/verifyJWT", () => {
 
       const result = yield* jwt.verifyJWT(token).pipe(Effect.flip);
       assert.strictEqual(result._tag, "JwtInvalidError");
+    }).pipe(Effect.provide(buildLayer())),
+  );
+});
+
+// TIR-001/TRBS-001/MAPS-002 — .scratch/resolve-ready-for-human-findings/
+// issues/11-token-lifecycle-store.md. `verify`/`verifyJWT` stay unchanged
+// (still revocation-lagging by design, still `R = never`); `introspect`/
+// `introspectLive` are the new, opt-in denylist-aware path.
+describe("Jwt introspect/introspectLive", () => {
+  it.effect("every minted token carries a jti claim", () =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+      const caller = asCaller({ id: "user-1", sessionId: "session-1" });
+      const token = yield* jwt.sign(caller);
+      const claims = yield* jwt.verify(token);
+      assert.isString(claims["jti"]);
+      assert.isAbove((claims["jti"] as string).length, 0);
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect("introspect reports active:true with claims for a fresh, unrevoked token", () =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+      const token = yield* jwt.signJWT({ sub: "service-a" });
+      const result = yield* jwt.introspect(token);
+      assert.isTrue(result.active);
+      if (result.active) assert.strictEqual(result.claims["sub"], "service-a");
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect("introspect reports active:false for a revoked token's jti", () =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+      const revocationStore = yield* RevocationStore.RevocationStore;
+      const token = yield* jwt.signJWT({ sub: "service-a" });
+      const claims = yield* jwt.verify(token);
+      const jti = claims["jti"] as string;
+
+      const beforeRevoke = yield* jwt.introspect(token);
+      assert.isTrue(beforeRevoke.active);
+
+      const exp = claims["exp"] as number;
+      yield* revocationStore.revoke(jti, DateTime.fromEpochSeconds(exp));
+
+      const afterRevoke = yield* jwt.introspect(token);
+      assert.isFalse(afterRevoke.active);
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect("introspect reports active:false for a bad signature or expired token", () =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+
+      const token = yield* jwt.signJWT({ sub: "service-a" });
+      const segments = token.split(".");
+      const tampered = `${segments[0]}.${segments[1]}.${segments[2]?.slice(0, -2)}aa`;
+      const tamperedResult = yield* jwt.introspect(tampered);
+      assert.isFalse(tamperedResult.active);
+
+      const expiring = yield* jwt.signJWT({ sub: "service-a" }, { ttl: Duration.minutes(1) });
+      yield* TestClock.adjust(Duration.minutes(2));
+      const expiredResult = yield* jwt.introspect(expiring);
+      assert.isFalse(expiredResult.active);
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect("introspectLive reports active:true for a token whose session is still live", () =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+      const sessions = yield* Sessions.Sessions;
+      const issued = yield* sessions.issue({ userId: Users.UserId("user-1") });
+      const caller = asCaller({ id: "user-1", sessionId: issued.session.id });
+      const token = yield* jwt.sign(caller);
+
+      const result = yield* jwt.introspectLive(token);
+      assert.isTrue(result.active);
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect("introspectLive reports active:false once the underlying session is revoked", () =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+      const sessions = yield* Sessions.Sessions;
+      const issued = yield* sessions.issue({ userId: Users.UserId("user-1") });
+      const caller = asCaller({ id: "user-1", sessionId: issued.session.id });
+      const token = yield* jwt.sign(caller);
+
+      yield* sessions.revoke(issued.session.id);
+
+      // `introspect` alone (no session-liveness check) still sees it
+      // active — the same deliberate distinction `verify`/`verifyLive`
+      // already draw.
+      const introspectOnly = yield* jwt.introspect(token);
+      assert.isTrue(introspectOnly.active);
+
+      const live = yield* jwt.introspectLive(token);
+      assert.isFalse(live.active);
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect("introspectLive reports active:true for a token with no sid to check (signJWT-minted)", () =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+      const token = yield* jwt.signJWT({ sub: "service-a" });
+      const result = yield* jwt.introspectLive(token);
+      assert.isTrue(result.active);
     }).pipe(Effect.provide(buildLayer())),
   );
 });

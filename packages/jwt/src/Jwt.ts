@@ -45,20 +45,29 @@
 // core touch), and this achieves the live check without doing so.
 
 import { Api } from "@awthaq/api";
-import { AuthPlugin, Sessions, Users } from "@awthaq/core";
+import { AuthPlugin, Migrations, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Result from "effect/Result";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { JwksResponse, JwtApi, TokenResponse } from "./JwtApi.ts";
+import { IntrospectionResponse, JwksResponse, JwtApi, TokenResponse } from "./JwtApi.ts";
 import { JwtConfig } from "./JwtConfig.ts";
 import * as JwtCodec from "./JwtCodec.ts";
 import * as KeyRing from "./KeyRing.ts";
+import * as RevocationStore from "./RevocationStore.ts";
+
+/** RFC 7662 shape (TIR-001/TRBS-001/MAPS-002): `claims` present iff `active`. */
+export type IntrospectionResult =
+  | { readonly active: true; readonly claims: Record<string, unknown> }
+  | { readonly active: false };
 
 export interface JwtShape {
   readonly sign: (principal: Api.Principal) => Effect.Effect<string, JwtCodec.JwtInvalidError>;
@@ -79,6 +88,33 @@ export interface JwtShape {
     token: string,
   ) => Effect.Effect<Record<string, unknown>, JwtCodec.JwtInvalidError>;
   readonly jwks: Effect.Effect<{ readonly keys: ReadonlyArray<Record<string, unknown>> }>;
+  /**
+   * TIR-001/MAPS-002: `verify` plus a denylist lookup by the token's own
+   * `jti` — the RFC 7662-shaped path for a caller that needs freshness
+   * `verify` alone deliberately doesn't offer. `RevocationStore` is
+   * captured once in `make` (this file's own convention for every method
+   * but `verifyLive`), so this stays `R = never` and is safely wired to
+   * the `/jwt/introspect` handler below. A token with no `jti` (minted
+   * before this claim existed, or foreign) simply can't be denylisted and
+   * is treated as not revoked.
+   */
+  readonly introspect: (token: string) => Effect.Effect<IntrospectionResult>;
+  /**
+   * TIR-001: `introspect` plus, when the token carries a `sid`, the same
+   * session-liveness check `verifyLive` runs — a superset, reusing its
+   * logic rather than duplicating it. `Sessions` is a per-call `R`, not
+   * captured in `make` — the same deliberate exception `verifyLive`
+   * itself already is, and for the same reason: `Sessions` must not
+   * become a hard dependency of installing `Jwt` at all. Also mirrors
+   * `verifyLive` in never being wired to an HTTP handler — `Effect`'s own
+   * `HttpApiBuilder.group` has no way to discharge a handler's own extra,
+   * un-captured `R` via ordinary `Layer.provide` (see `make`'s own
+   * comment on `revocationStore`), so `/jwt/introspect` calls `introspect`
+   * alone; a caller wanting the live-session check calls this directly.
+   */
+  readonly introspectLive: (
+    token: string,
+  ) => Effect.Effect<IntrospectionResult, never, Sessions.Sessions>;
 }
 
 /**
@@ -129,6 +165,21 @@ export const JwtHandlers = Layer.mergeAll(
           const token = yield* jwt.sign(principal).pipe(Effect.orDie);
           return new TokenResponse({ token });
         }),
+        // TIR-001/MAPS-002: `introspect`, not `introspectLive` — the
+        // latter carries `Sessions` as its own per-call `R`, exactly like
+        // `verifyLive`, which this codebase's own established convention
+        // (and a genuine `HttpApiBuilder.group` limitation — see `make`'s
+        // comment on `revocationStore`) keeps off of every HTTP handler.
+        // This endpoint is still the full denylist-aware RFC 7662 path
+        // TIR-001/MAPS-002 ask for; a caller that also wants the
+        // live-session check calls `jwt.introspectLive` directly (the
+        // in-process API), the same way `jwt.verifyLive` already works.
+        introspect: Effect.fnUntraced(function* ({ payload }) {
+          const result = yield* jwt.introspect(payload.token);
+          return new IntrospectionResponse(
+            result.active ? { active: true, claims: result.claims } : { active: false },
+          );
+        }),
       });
     }),
   ),
@@ -166,10 +217,79 @@ const PostAuthResponseHookLive = Layer.effect(
   }),
 );
 
+/**
+ * .scratch/resolve-ready-for-human-findings/issues/11-token-lifecycle-store.md:
+ * no production migration existed anywhere for `jwt_signing_key` before
+ * this — only `KeyRing.test.ts`'s own inline `CREATE TABLE` for that
+ * test's ad hoc setup — a pre-existing gap this closes in passing, since
+ * this is the first migration this plugin declares at all (no plugin in
+ * this codebase populated `migrations` before now — `Migrations.ts`'s own
+ * header comment). `jwt_token_revocation` is `RevocationStore.layerSql`'s
+ * own table (TRBS-001/TIR-001/MAPS-002). Dialect-branched via
+ * `sql.onDialectOrElse`, mirroring `@awthaq/sql`'s own `CoreMigrations.ts`
+ * — one definition, not two duplicated schema files. Columns left
+ * unquoted under `pg` (unlike `CoreMigrations.ts`'s `users`/`sessions`
+ * tables): `SigningKeyRecords.ts`'s own queries already reference every
+ * column unquoted, so Postgres's automatic lowercase-folding is what
+ * keeps migration and query consistent here, not literal camelCase
+ * preservation.
+ */
+const jwtMigrations: Migrations.Migrations = [
+  {
+    name: "create_jwt_signing_key",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE jwt_signing_key (
+            kid TEXT PRIMARY KEY,
+            alg TEXT NOT NULL,
+            publicKeyJwk TEXT NOT NULL,
+            privateKeyJwk TEXT,
+            createdAt TIMESTAMPTZ NOT NULL,
+            rotatedAt TIMESTAMPTZ,
+            retiresAt TIMESTAMPTZ
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE jwt_signing_key (
+            kid TEXT PRIMARY KEY,
+            alg TEXT NOT NULL,
+            publicKeyJwk TEXT NOT NULL,
+            privateKeyJwk TEXT,
+            createdAt TEXT NOT NULL,
+            rotatedAt TEXT,
+            retiresAt TEXT
+          )`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+  {
+    name: "create_jwt_token_revocation",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE jwt_token_revocation (
+            jti TEXT PRIMARY KEY,
+            expiresAt TIMESTAMPTZ NOT NULL
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE jwt_token_revocation (
+            jti TEXT PRIMARY KEY,
+            expiresAt TEXT NOT NULL
+          )`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+];
+
 export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
   apiVersion: 1,
   contract: JwtApi,
-  tables: ["jwt_signing_key"],
+  tables: ["jwt_signing_key", "jwt_token_revocation"],
+  migrations: jwtMigrations,
 }) {
   static readonly layer = Layer.provideMerge(
     PostAuthResponseHookLive,
@@ -179,6 +299,20 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
         const config = yield* JwtConfig;
         const ref = yield* KeyRing.KeyRing;
         const remoteSigner = yield* JwtCodec.RemoteSigner;
+        const crypto = yield* Crypto.Crypto;
+        // Captured here, not left as `introspect`'s own per-call `R` the
+        // way `verifyLive`'s `Sessions` is: `introspect` is wired to the
+        // `/jwt/introspect` handler below, and `HttpApiBuilder.group`
+        // wraps any `R` a handler references that ISN'T already captured
+        // in `make` into an internal `Request.From<"Requires", R>` marker
+        // that ordinary `Layer.provide`/`provideMerge` cannot discharge
+        // (only `HttpRouter.provideRequest` can — the exact mechanism
+        // `verifyLive`'s own header comment sidesteps entirely by simply
+        // never being wired to a handler). Capturing `RevocationStore`
+        // here, the same way `config`/`ref` are, keeps `introspect`'s own
+        // `R = never` and the handler ordinarily dischargeable — matching
+        // every other plugin method's convention.
+        const revocationStore = yield* RevocationStore.RevocationStore;
 
         // Discharges `KeyRing.current`/`KeyRing.verifiable`'s own `R`
         // (`KeyRing | JwtConfig` — ticket 11's rotation-aware accessors) down
@@ -205,6 +339,12 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             const now = yield* DateTime.now;
             const iat = Math.floor(DateTime.toEpochMillis(now) / 1000);
             const exp = iat + Math.floor(Duration.toMillis(ttl ?? config.ttl) / 1000);
+            // TRBS-001/TIR-001: every minted token gets a UUIDv7 `jti`,
+            // this codebase's established UUIDv7-for-identifiers convention
+            // (`Sessions.issue`/`Users.create` mint their own ids the same
+            // way) — the handle `RevocationStore`/`introspect` key a
+            // denylist entry by.
+            const jti = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
             // A key with local private material (every key ticket 07's `mint`
             // produces) signs via `JwtCodec.localSigner`; one with none (a
             // remote-signing key — ticket 15's `KeyRing.registerRemoteKey`)
@@ -229,7 +369,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
               kid: key.kid,
               alg: key.alg,
               signer,
-              claims: { ...claims, iat, exp, iss: config.issuer, aud: config.audience },
+              claims: { ...claims, iat, exp, jti, iss: config.issuer, aud: config.audience },
             });
           });
 
@@ -271,6 +411,24 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
         // that same function, not a second implementation.
         const verifyJWT: JwtShape["verifyJWT"] = verify;
 
+        /**
+         * `sid`'s owning session is still a live row in `Sessions.list`.
+         * Shared by `verifyLive` and `introspectLive` (TIR-001) — one
+         * implementation, not two, per this file's own established
+         * "reuse, don't duplicate" posture for `verify`/`verifyJWT`.
+         */
+        const sidStillLive = (sub: string, sid: string) =>
+          Effect.gen(function* () {
+            const sessions = yield* Sessions.Sessions;
+            const now = yield* DateTime.now;
+            const rows = yield* sessions.list(Users.UserId(sub));
+            return rows.some(
+              (row) =>
+                row.id === Sessions.SessionId(sid) &&
+                DateTime.toEpochMillis(row.expiresAt) > DateTime.toEpochMillis(now),
+            );
+          });
+
         const verifyLive: JwtShape["verifyLive"] = (token) =>
           Effect.gen(function* () {
             const claims = yield* verify(token);
@@ -281,14 +439,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
                 new JwtCodec.JwtInvalidError({ reason: "no session to live-check" }),
               );
             }
-            const sessions = yield* Sessions.Sessions;
-            const now = yield* DateTime.now;
-            const rows = yield* sessions.list(Users.UserId(sub));
-            const stillLive = rows.some(
-              (row) =>
-                row.id === Sessions.SessionId(sid) &&
-                DateTime.toEpochMillis(row.expiresAt) > DateTime.toEpochMillis(now),
-            );
+            const stillLive = yield* sidStillLive(sub, sid);
             if (!stillLive) {
               return yield* Effect.fail(
                 new JwtCodec.JwtInvalidError({ reason: "session no longer live" }),
@@ -301,7 +452,45 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
           keys: keys.map((key) => key.publicKeyJwk),
         }));
 
-        return { sign, verify, verifyLive, signJWT, verifyJWT, jwks };
+        const introspect: JwtShape["introspect"] = (token) =>
+          Effect.gen(function* () {
+            const outcome = yield* Effect.result(verify(token));
+            if (Result.isFailure(outcome)) return { active: false };
+            const claims = outcome.success;
+            const jti = claims["jti"];
+            // A token with no `jti` (minted before this claim existed, or
+            // foreign) simply can't be denylisted — not the uniform
+            // "reject anything unusual" the rest of this collapse applies
+            // to, since it's the expected shape for anything predating
+            // this ticket.
+            if (typeof jti === "string") {
+              const revoked = yield* revocationStore.isRevoked(jti);
+              if (revoked) return { active: false };
+            }
+            return { active: true, claims };
+          });
+
+        const introspectLive: JwtShape["introspectLive"] = (token) =>
+          Effect.gen(function* () {
+            const result = yield* introspect(token);
+            if (!result.active) return result;
+            const sid = result.claims["sid"];
+            const sub = result.claims["sub"];
+            if (typeof sid !== "string" || typeof sub !== "string") return result;
+            const stillLive = yield* sidStillLive(sub, sid);
+            return stillLive ? result : { active: false };
+          });
+
+        return {
+          sign,
+          verify,
+          verifyLive,
+          signJWT,
+          verifyJWT,
+          jwks,
+          introspect,
+          introspectLive,
+        };
       }),
     }),
   );

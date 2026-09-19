@@ -20,6 +20,7 @@ import { Authentication } from "@awthaq/server";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
+import * as RevocationStore from "../src/RevocationStore.ts";
 import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
 import * as Verify from "../src/verify.ts";
 
@@ -50,6 +51,9 @@ const buildJwtLayer = () =>
     Layer.provideMerge(SigningKeyRecords.layerMemory),
     Layer.provideMerge(AuthenticationLive),
     Layer.provideMerge(Sessions.layerMemory),
+    // TIR-001: `RevocationStore` is now captured once in `Jwt`'s own
+    // `make`, so it must be provided for the plugin to build at all.
+    Layer.provideMerge(RevocationStore.layerMemory),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(JwtConfig.config({ issuer: ISSUER })),
   );

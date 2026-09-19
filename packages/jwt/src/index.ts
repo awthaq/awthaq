@@ -13,4 +13,5 @@ export * as JwtApi from "./JwtApi.ts";
 export * as JwtCodec from "./JwtCodec.ts";
 export * as JwtConfig from "./JwtConfig.ts";
 export * as KeyRing from "./KeyRing.ts";
+export * as RevocationStore from "./RevocationStore.ts";
 export * as SigningKeyRecords from "./SigningKeyRecords.ts";

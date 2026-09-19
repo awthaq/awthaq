@@ -34,6 +34,25 @@ export class TokenResponse extends Schema.Class<TokenResponse>("TokenResponse")(
   token: Schema.String,
 }) {}
 
+/** TIR-001/TRBS-001/MAPS-002: the `/jwt/introspect` request — any bearer-shaped string, not necessarily one this issuer minted. */
+export class IntrospectRequest extends Schema.Class<IntrospectRequest>("IntrospectRequest")({
+  token: Schema.String,
+}) {}
+
+/**
+ * RFC 7662 shape, narrowed to this codebase's own claims: `claims` is
+ * present exactly when `active` is `true` — every failure mode (bad
+ * signature, expired, denylisted, dead session) collapses to
+ * `{ active: false }` alone, matching `JwtCodec`'s own undifferentiated
+ * `JwtInvalidError` and `Verification.ts`'s own uniform-response posture.
+ */
+export class IntrospectionResponse extends Schema.Class<IntrospectionResponse>(
+  "IntrospectionResponse",
+)({
+  active: Schema.Boolean,
+  claims: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+}) {}
+
 export const JwtGroup = HttpApiGroup.make("jwt").add(
   HttpApiEndpoint.get("jwks", "/jwt/jwks", {
     success: JwksResponse,
@@ -44,6 +63,14 @@ export const JwtTokenGroup = HttpApiGroup.make("jwt.token")
   .add(
     HttpApiEndpoint.get("mint", "/jwt/token", {
       success: TokenResponse,
+    }),
+  )
+  .add(
+    // Gated by `Api.Authentication` exactly like `mint` above — no new
+    // trust model invented for this endpoint (ticket 11's own decision).
+    HttpApiEndpoint.post("introspect", "/jwt/introspect", {
+      payload: IntrospectRequest,
+      success: IntrospectionResponse,
     }),
   )
   .middleware(Api.Authentication);

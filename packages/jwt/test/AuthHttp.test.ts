@@ -11,6 +11,7 @@ import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server
 import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -25,6 +26,7 @@ import * as JwtApi from "../src/JwtApi.ts";
 import * as JwtCodec from "../src/JwtCodec.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
 import * as KeyRing from "../src/KeyRing.ts";
+import * as RevocationStore from "../src/RevocationStore.ts";
 import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
@@ -70,6 +72,10 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(KeyRing.KeyRing.layer),
   Layer.provideMerge(SigningKeyRecords.layerMemory),
   Layer.provideMerge(Sessions.layerMemory),
+  // TIR-001: `/jwt/introspect`'s handler calls `jwt.introspectLive`, which
+  // requires `RevocationStore` at its own call site (not captured in
+  // `make`) — same shape `Sessions` above already has.
+  Layer.provideMerge(RevocationStore.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
   Layer.provideMerge(TestServices),
   Layer.provideMerge(HttpRouter.layer),
@@ -112,6 +118,15 @@ const buildHandler = () => {
       }),
     );
 
+  /** TIR-001: denylists `jti` directly against the same `RevocationStore` instance `/jwt/introspect`'s handler reads. */
+  const revokeJti = (jti: string, expiresAt: DateTime.Utc): Promise<void> =>
+    withAppContext(
+      Effect.gen(function* () {
+        const revocationStore = yield* RevocationStore.RevocationStore;
+        yield* revocationStore.revoke(jti, expiresAt);
+      }),
+    );
+
   /**
    * `Jwt.Jwt` itself is a dependency `AuthHttp.routes` discharges, not an
    * output `AppLayer` exposes, so it can't be `yield*`-ed back out of
@@ -139,7 +154,7 @@ const buildHandler = () => {
       }),
     );
 
-  return { handler, issueSessionCookieHeader, verifyToken };
+  return { handler, issueSessionCookieHeader, revokeJti, verifyToken };
 };
 
 describe("AuthHttp + Jwt (real HTTP)", () => {
@@ -182,6 +197,51 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
     const claims = await verifyToken(body.token);
     assert.strictEqual(claims["sub"], "user-1");
   });
+
+  it("POST /jwt/introspect requires authentication", async () => {
+    const { handler } = buildHandler();
+    const response = await handler(
+      new Request(`${ORIGIN}/jwt/introspect`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: "whatever" }),
+      }),
+    );
+    assert.strictEqual(response.status, 401);
+  });
+
+  it("POST /jwt/introspect reports active:true for a freshly minted token, active:false once its jti is revoked", async () => {
+    const { handler, issueSessionCookieHeader, revokeJti, verifyToken } = buildHandler();
+    const cookie = await issueSessionCookieHeader("user-1");
+
+    const mintedResponse = await handler(new Request(`${ORIGIN}/jwt/token`, { headers: { cookie } }));
+    const { token } = (await mintedResponse.json()) as { token: string };
+
+    const introspect = (): Promise<Response> =>
+      handler(
+        new Request(`${ORIGIN}/jwt/introspect`, {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({ token }),
+        }),
+      );
+
+    const active = await introspect();
+    assert.strictEqual(active.status, 200);
+    const activeBody = (await active.json()) as { active: boolean; claims?: { sub: string } };
+    assert.isTrue(activeBody.active);
+    assert.strictEqual(activeBody.claims?.sub, "user-1");
+
+    const claims = await verifyToken(token);
+    const jti = claims["jti"] as string;
+    const exp = claims["exp"] as number;
+    await revokeJti(jti, DateTime.fromEpochSeconds(exp));
+
+    const inactive = await introspect();
+    assert.strictEqual(inactive.status, 200);
+    const inactiveBody = (await inactive.json()) as { active: boolean };
+    assert.isFalse(inactiveBody.active);
+  });
 });
 
 // .scratch/jwt/issues/16-automatic-response-mirroring.md — the one test
@@ -216,6 +276,7 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
     Layer.provideMerge(KeyRing.KeyRing.layer),
     Layer.provideMerge(SigningKeyRecords.layerMemory),
     Layer.provideMerge(Sessions.layerMemory),
+    Layer.provideMerge(RevocationStore.layerMemory),
     Layer.provideMerge(Users.layerMemory),
     Layer.provideMerge(Accounts.layerMemory),
     Layer.provideMerge(NodeCrypto.layer),
