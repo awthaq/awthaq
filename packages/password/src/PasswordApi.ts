@@ -211,6 +211,11 @@ export const PasswordGroup = HttpApiGroup.make("password")
     // `204`.
     HttpApiEndpoint.post("changePassword", "/change-password", {
       payload: ChangePasswordPayload,
+      // PIL-002/RRS-001/SMS-001: BEH-EA-053 requires every privilege-change
+      // to mint a fresh session and revoke every other one — the caller's
+      // own session is rotated (superseded), not merely kept, so the
+      // response carries the new session the same way signUp/signIn's do.
+      success: SessionContract.SessionDto,
       // Ticket 14: rate-limited.
       error: [WrongPassword, WeakPassword, Api.RateLimited],
     }).middleware(Api.Authentication),

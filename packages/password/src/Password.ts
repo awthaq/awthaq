@@ -116,11 +116,24 @@ export interface PasswordShape {
    * `confirmReset` pair, which no capability here provided at all before
    * this ticket.
    */
+  /**
+   * PIL-002/RRS-001/SMS-001: BEH-EA-053 — every privilege-changing
+   * operation mints a fresh session and deletes the row it supersedes.
+   * `currentSessionId` names the caller's own session so it can be
+   * rotated (superseded, not merely kept) while every *other* session for
+   * this user is revoked outright, closing the classic "attacker holds a
+   * hijacked session through a password change" gap `confirmReset`'s own
+   * `revokeAll` already closes for the reset path.
+   */
   readonly changePassword: (input: {
     readonly userId: Users.UserId;
+    readonly currentSessionId: Sessions.SessionId;
     readonly currentPassword: Redacted.Redacted<string>;
     readonly newPassword: Redacted.Redacted<string>;
-  }) => Effect.Effect<void, PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited>;
+  }) => Effect.Effect<
+    IssuedSession,
+    PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited
+  >;
 }
 
 const toHex = (bytes: Uint8Array): string =>
@@ -337,11 +350,18 @@ export const PasswordHandlers = HttpApiBuilder.group(
             ),
           );
         }
-        yield* password.changePassword({
+        const issued = yield* password.changePassword({
           userId: Users.UserId(principal.ref.id),
+          currentSessionId: Sessions.SessionId(principal.sessionId),
           currentPassword: payload.currentPassword,
           newPassword: payload.newPassword,
         });
+        yield* HttpApiBuilder.securitySetCookie(
+          Api.SessionCookie,
+          Redacted.value(issued.token),
+          Sessions.SESSION_COOKIE_ATTRIBUTES,
+        );
+        return toSessionDto(issued.session);
       }),
     });
   }),
@@ -725,6 +745,16 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
 
         const hash = yield* hasher.hash(input.newPassword);
         yield* accounts.updateCredentialHash(account.id, Redacted.make(hash)).pipe(Effect.orDie);
+
+        // BEH-EA-053: revoke every *other* session first, while
+        // `currentSessionId` still names a live row — then supersede that
+        // row with a freshly minted one. Reversing this order would leave
+        // `revokeOthers` nothing to `keep` (the superseded id no longer
+        // exists once `issue` has run).
+        yield* sessions.revokeOthers(input.userId, input.currentSessionId);
+        return yield* sessions
+          .issue({ userId: input.userId, supersedes: input.currentSessionId })
+          .pipe(Effect.orDie);
       });
 
       return Password.of({

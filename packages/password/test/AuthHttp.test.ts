@@ -451,7 +451,12 @@ describe("AuthHttp + Password (real HTTP)", () => {
           newPassword: "a whole new strong password",
         }),
       );
-      assert.strictEqual(changed.status, 204);
+      // PIL-002/RRS-001/SMS-001: BEH-EA-053 — changePassword now rotates
+      // the caller's own session, so the response carries a fresh
+      // SessionDto and Set-Cookie instead of a bare 204.
+      assert.strictEqual(changed.status, 200);
+      const rotatedCookie = cookieFrom(changed);
+      assert.notStrictEqual(rotatedCookie, cookie);
 
       const oldPassword = yield* Effect.promise(() =>
         post(handler, "/password/sign-in", {

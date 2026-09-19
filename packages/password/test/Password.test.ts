@@ -510,21 +510,27 @@ describe("Password", () => {
           password: strongPassword,
         });
         const userId = issued.session.userId;
+        const currentSessionId = issued.session.id;
 
         const wrong = yield* password
           .changePassword({
             userId,
+            currentSessionId,
             currentPassword: Redacted.make("totally wrong password"),
             newPassword: Redacted.make("a whole new strong password"),
           })
           .pipe(Effect.flip);
         assert.strictEqual(wrong._tag, "WrongPassword");
 
-        yield* password.changePassword({
+        const rotated = yield* password.changePassword({
           userId,
+          currentSessionId,
           currentPassword: strongPassword,
           newPassword: Redacted.make("a whole new strong password"),
         });
+        // BEH-EA-053: the caller's own session is rotated (superseded),
+        // not merely kept — a genuinely new session id, not the old one.
+        assert.notStrictEqual(rotated.session.id, currentSessionId);
 
         const oldFails = yield* password
           .signIn({ email, password: strongPassword })
@@ -539,6 +545,34 @@ describe("Password", () => {
       }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect(
+    "PIL-002/RRS-001/SMS-001: changePassword revokes every other session, closing a hijacked-session hold",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const sessions = yield* Sessions.Sessions;
+        const mailer = yield* Mailer.Mailer;
+        const first = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        // A second, independent session for the same user — stands in for
+        // an attacker's hijacked session, or simply the user's other
+        // device.
+        const hijacked = yield* password.signIn({ email, password: strongPassword });
+
+        const rotated = yield* password.changePassword({
+          userId: first.session.userId,
+          currentSessionId: first.session.id,
+          currentPassword: strongPassword,
+          newPassword: Redacted.make("a whole new strong password"),
+        });
+
+        const hijackedStillValid = yield* sessions.verify(hijacked.token).pipe(Effect.flip);
+        assert.strictEqual(hijackedStillValid._tag, "SessionNotFound");
+
+        const rotatedIsValid = yield* sessions.verify(rotated.token);
+        assert.strictEqual(rotatedIsValid.session.id, rotated.session.id);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("shipping-gaps/11: changePassword rejects a weak new password", () =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
@@ -547,6 +581,7 @@ describe("Password", () => {
       const failure = yield* password
         .changePassword({
           userId: issued.session.userId,
+          currentSessionId: issued.session.id,
           currentPassword: strongPassword,
           newPassword: Redacted.make("short"),
         })
@@ -608,11 +643,13 @@ describe("Password", () => {
         const password = yield* Password.Password;
         const issued = yield* password.signUp({ email, password: strongPassword });
         const userId = issued.session.userId;
+        const currentSessionId = issued.session.id;
 
         for (let i = 0; i < 5; i++) {
           const attempt = yield* password
             .changePassword({
               userId,
+              currentSessionId,
               currentPassword: Redacted.make("wrong password"),
               newPassword: Redacted.make("a whole new strong password"),
             })
@@ -623,6 +660,7 @@ describe("Password", () => {
         const throttled = yield* password
           .changePassword({
             userId,
+            currentSessionId,
             currentPassword: Redacted.make("wrong password"),
             newPassword: Redacted.make("a whole new strong password"),
           })
