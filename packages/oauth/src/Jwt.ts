@@ -99,16 +99,27 @@ export const verifyRs256 = (
     catch: () => new JwtVerificationError({ reason: "signature verification failed" }),
   });
 
-/** Picks the JWKS entry matching a decoded JWT's `kid` (or its lone RSA key, absent one). */
+/**
+ * Picks the JWKS entry matching a decoded JWT's `kid` (or its lone RSA
+ * key, absent one).
+ *
+ * JJS-001/JR-002/KRS-004/OIT-002: a *present* `kid` that matches no
+ * candidate now fails — the `candidates[0]` fallback applies only to a
+ * `kid`-less token. A silent fallback here was the reason
+ * `verifyIdToken`'s documented "refetch once on a `kid` cache miss" was
+ * dead code: `Effect.catch` can only fire on a real failure, and a
+ * mismatched-but-present `kid` never used to produce one. It also let a
+ * mismatched-`kid` token verify against an arbitrary key instead of being
+ * rejected, defeating `kid`'s purpose as an explicit key selector —
+ * `@awthaq/jwt`'s own `JwtCodec.verify` already enforces this same
+ * strictness for the identical class of input.
+ */
 export const findKey = (
   jwks: Jwks,
   kid: string | undefined,
 ): Effect.Effect<Jwk, JwtVerificationError> => {
   const candidates = jwks.keys.filter((key) => key.kty === "RSA" || key.kty === undefined);
-  const matched =
-    kid === undefined
-      ? candidates[0]
-      : (candidates.find((key) => key.kid === kid) ?? candidates[0]);
+  const matched = kid === undefined ? candidates[0] : candidates.find((key) => key.kid === kid);
   return matched === undefined
     ? Effect.fail(new JwtVerificationError({ reason: "no matching JWKS key" }))
     : Effect.succeed(matched);

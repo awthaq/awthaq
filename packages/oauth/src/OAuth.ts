@@ -76,6 +76,15 @@ export const config = (partial: Partial<OAuthConfigShape>): Layer.Layer<never> =
 const OAUTH_STATE_COOKIE = "__Host-oauth-state";
 const FLOW_TTL = Duration.minutes(10);
 const FLOW_PREFIX = "oauth.flow:";
+/**
+ * JJS-001/KRS-004/OIT-002: bounds how long a provider-removed JWKS key
+ * keeps verifying tokens. The kid-miss refetch (see `verifyIdToken`)
+ * already converges as soon as a provider *rotates in* a new kid; a TTL
+ * additionally converges the case a `kid` cache miss never catches at
+ * all — a key the provider has *removed*, with no new kid ever presented
+ * to force a refetch.
+ */
+const JWKS_CACHE_TTL = Duration.minutes(15);
 
 const toBase64Url = (bytes: Uint8Array): string => {
   let binary = "";
@@ -225,9 +234,14 @@ const exchangeCode = (
  * nonce; the signature itself is verified against the provider's JWKS via
  * `Jwt.ts` (RS256 only — see that module's own header comment).
  */
+interface JwksCacheEntry {
+  readonly jwks: Jwt.Jwks;
+  readonly fetchedAt: number;
+}
+
 const verifyIdToken = (
   httpClient: HttpClient.HttpClient,
-  jwksCache: Ref.Ref<HashMap.HashMap<string, Jwt.Jwks>>,
+  jwksCache: Ref.Ref<HashMap.HashMap<string, JwksCacheEntry>>,
   provider: OAuthProvider.ResolvedProvider,
   idToken: string,
   nonce: string | undefined,
@@ -252,12 +266,22 @@ const verifyIdToken = (
     // function, instead of flowing forward fully typed into `findKey`.
     const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(
       Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),
-      Effect.tap((jwks) => Ref.update(jwksCache, (cache) => HashMap.set(cache, provider.id, jwks))),
+      Effect.tap((jwks) =>
+        Ref.update(jwksCache, (cache) =>
+          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),
+        ),
+      ),
       Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),
     );
 
-    const cached = HashMap.get(yield* Ref.get(jwksCache), provider.id);
-    const jwks = Option.isSome(cached) ? cached.value : yield* fetchAndCacheJwks;
+    // JJS-001/KRS-004/OIT-002: a TTL'd-out entry is treated the same as a
+    // cache miss — refetched below, same as an empty cache.
+    const cachedEntry = HashMap.get(yield* Ref.get(jwksCache), provider.id);
+    const jwks =
+      Option.isSome(cachedEntry) &&
+      Date.now() - cachedEntry.value.fetchedAt < Duration.toMillis(JWKS_CACHE_TTL)
+        ? cachedEntry.value.jwks
+        : yield* fetchAndCacheJwks;
 
     const verified = yield* Jwt.findKey(jwks, decoded.header.kid).pipe(
       // A `kid` cache miss gets exactly one refetch — the provider may
@@ -416,7 +440,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const config_ = yield* OAuthConfig;
       const crypto = yield* Crypto.Crypto;
       const httpClient = yield* HttpClient.HttpClient;
-      const jwksCache = yield* Ref.make(HashMap.empty<string, Jwt.Jwks>());
+      const jwksCache = yield* Ref.make(HashMap.empty<string, JwksCacheEntry>());
       const limiter = yield* RateLimiter.RateLimiter;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const encryption = yield* Encryption.Encryption;

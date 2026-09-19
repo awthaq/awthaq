@@ -57,8 +57,9 @@ const toBase64Url = (buf: Buffer): string => buf.toString("base64url");
 const signJwt = (
   payload: Record<string, unknown>,
   privateKey: KeyObject = keyPair.privateKey,
+  kid: string = KID,
 ): string => {
-  const header = { alg: "RS256", typ: "JWT", kid: KID };
+  const header = { alg: "RS256", typ: "JWT", kid };
   const headerSegment = toBase64Url(Buffer.from(JSON.stringify(header)));
   const payloadSegment = toBase64Url(Buffer.from(JSON.stringify(payload)));
   const signingInput = `${headerSegment}.${payloadSegment}`;
@@ -894,6 +895,124 @@ describe("OAuth", () => {
             }),
           ),
         ),
+    );
+
+    it.effect(
+      "JJS-001/JR-002/KRS-004/OIT-002: an id_token whose kid matches no JWKS entry is rejected, not verified against an unrelated key",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state, location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          currentClaims = {
+            iss: "https://okta.example.com/oauth2/default",
+            aud: "okta-client-id",
+            sub: "okta-user-1",
+            exp: Math.floor(Date.now() / 1000) + 3600,
+            nonce: nonceFrom(location),
+          };
+          // The `/token` route below signs with the *only* key the fake
+          // JWKS endpoint serves — a real, otherwise-valid signature —
+          // but the token's own header claims a `kid` that key was never
+          // registered under. Before the fix, `findKey`'s
+          // `?? candidates[0]` fallback would have resolved this to the
+          // JWKS's one entry regardless, and `verifyRs256` would then
+          // have succeeded, silently accepting a token whose declared
+          // key selector was simply wrong.
+          const failure = yield* oauth
+            .callback("okta", {
+              code: "c1",
+              state,
+              iss: undefined,
+              cookieState: state,
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta()],
+              httpRoutes: {
+                ...idTokenRoutes(),
+                "/token": () => ({
+                  access_token: "at-1",
+                  id_token: signJwt(currentClaims, keyPair.privateKey, "unregistered-kid"),
+                }),
+              },
+            }),
+          ),
+        ),
+    );
+
+    it.effect(
+      "JJS-001/JR-002/KRS-004/OIT-002: a rotated signing key is picked up via the kid-miss refetch, not stuck on the stale cache",
+      () => {
+        const rotatedKeyPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
+        const ROTATED_KID = "test-key-2";
+        const rotatedJwk = {
+          ...(rotatedKeyPair.publicKey.export({ format: "jwk" }) as Record<string, unknown>),
+          kid: ROTATED_KID,
+          alg: "RS256",
+        };
+        // The provider's JWKS starts with only the original key — mutated
+        // to also serve the rotated key only *after* the first round trip
+        // has already cached the original set, so the second round trip's
+        // kid-miss is what has to force the refetch, not a fresh,
+        // already-up-to-date fetch.
+        let jwksKeys: ReadonlyArray<Record<string, unknown>> = [jwk];
+        let activePrivateKey = keyPair.privateKey;
+        let activeKid = KID;
+        const httpRoutes: FakeRoutes = {
+          ".well-known/openid-configuration": oktaDiscovery,
+          "/jwks": () => ({ keys: jwksKeys }),
+          "/token": () => ({
+            access_token: "at-1",
+            id_token: signJwt(currentClaims, activePrivateKey, activeKid),
+          }),
+        };
+
+        const roundTrip = Effect.fnUntraced(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state, location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          currentClaims = {
+            iss: "https://okta.example.com/oauth2/default",
+            aud: "okta-client-id",
+            sub: "okta-user-1",
+            exp: Math.floor(Date.now() / 1000) + 3600,
+            nonce: nonceFrom(location),
+          };
+          return yield* oauth.callback("okta", {
+            code: "c1",
+            state,
+            iss: undefined,
+            cookieState: state,
+          });
+        });
+
+        // Both round trips share one `Effect.provide` — and therefore one
+        // built `OAuth` service, one `jwksCache` — so the second call's
+        // kid-miss genuinely hits the first call's stale cache rather
+        // than a fresh one.
+        return Effect.gen(function* () {
+          const first = yield* roundTrip();
+          assert.isDefined(first.session);
+
+          // The provider rotates: the old key is retired, only the new
+          // one remains — the cache built by the first round trip still
+          // only knows the old kid.
+          jwksKeys = [rotatedJwk];
+          activePrivateKey = rotatedKeyPair.privateKey;
+          activeKid = ROTATED_KID;
+
+          const second = yield* roundTrip();
+          assert.isDefined(second.session);
+        }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes })));
+      },
     );
 
     it.effect("an id_token with the wrong issuer claim is rejected", () =>
