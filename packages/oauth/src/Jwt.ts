@@ -15,6 +15,7 @@
 
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 /**
@@ -55,28 +56,58 @@ const base64UrlToUint8Array = (segment: string): Uint8Array<ArrayBuffer> => {
 const decodeJson = (segment: string): unknown =>
   JSON.parse(new TextDecoder().decode(base64UrlToUint8Array(segment)));
 
+/**
+ * AH-001/ESS-004: a JWT header/payload segment is fully attacker-controlled
+ * and decoded before signature verification — `JSON.parse` alone accepts
+ * any valid JSON value (`null`, an array, a bare string...), not only an
+ * object, so a plain `as` cast previously let a segment encoding the JSON
+ * literal `null` reach a caller's ordinary property access
+ * (`decoded.header.alg`, `claims["iss"]`) as an unhandled fiber defect
+ * instead of this module's own typed `JwtVerificationError`. Schema-decoded
+ * here instead, exactly like `JwksDocumentSchema` above.
+ */
+export const JwtHeaderSchema = Schema.Struct({
+  alg: Schema.optional(Schema.String),
+  kid: Schema.optional(Schema.String),
+});
+
+export const JwtPayloadSchema = Schema.Record(Schema.String, Schema.Unknown);
+
 export interface DecodedJwt {
-  readonly header: { readonly alg?: string; readonly kid?: string };
-  readonly payload: Record<string, unknown>;
+  readonly header: typeof JwtHeaderSchema.Type;
+  readonly payload: typeof JwtPayloadSchema.Type;
   readonly signingInput: Uint8Array<ArrayBuffer>;
   readonly signature: Uint8Array<ArrayBuffer>;
 }
 
 /** Splits and decodes a compact JWS/JWT without verifying its signature. */
 export const decode = (token: string): Effect.Effect<DecodedJwt, JwtVerificationError> =>
-  Effect.try({
-    try: () => {
-      const parts = token.split(".");
-      if (parts.length !== 3) throw new Error("not a compact JWS");
-      const [headerSegment, payloadSegment, signatureSegment] = parts as [string, string, string];
-      return {
-        header: decodeJson(headerSegment) as DecodedJwt["header"],
-        payload: decodeJson(payloadSegment) as Record<string, unknown>,
-        signingInput: new TextEncoder().encode(`${headerSegment}.${payloadSegment}`),
-        signature: base64UrlToUint8Array(signatureSegment),
-      };
-    },
-    catch: () => new JwtVerificationError({ reason: "malformed JWT" }),
+  Effect.gen(function* () {
+    const decoded = yield* Effect.try({
+      try: () => {
+        const parts = token.split(".");
+        if (parts.length !== 3) throw new Error("not a compact JWS");
+        const [headerSegment, payloadSegment, signatureSegment] = parts as [string, string, string];
+        return {
+          header: decodeJson(headerSegment),
+          payload: decodeJson(payloadSegment),
+          signingInput: new TextEncoder().encode(`${headerSegment}.${payloadSegment}`),
+          signature: base64UrlToUint8Array(signatureSegment),
+        };
+      },
+      catch: () => new JwtVerificationError({ reason: "malformed JWT" }),
+    });
+    const header = Schema.decodeUnknownOption(JwtHeaderSchema)(decoded.header);
+    const payload = Schema.decodeUnknownOption(JwtPayloadSchema)(decoded.payload);
+    if (Option.isNone(header) || Option.isNone(payload)) {
+      return yield* Effect.fail(new JwtVerificationError({ reason: "malformed JWT" }));
+    }
+    return {
+      header: header.value,
+      payload: payload.value,
+      signingInput: decoded.signingInput,
+      signature: decoded.signature,
+    };
   });
 
 /** Verifies an RS256 signature against one JWKS entry (matched by `kid` beforehand). */
