@@ -8,6 +8,7 @@
 import { AuthCore } from "@awthaq/api";
 import { Accounts, Sessions, Users } from "@awthaq/core";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
+import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -207,6 +208,9 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
     AuthHttp.routes(JwtApi.JwtApi, {}),
   ).pipe(
     Layer.provide(CsrfProtectionLive),
+    // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
+    // `SqlTransaction` — a no-op wrapper for this in-memory composition.
+    Layer.provide(SqlTransaction.layerNoop),
     Layer.provideMerge(Jwt.Jwt.layer),
     Layer.provideMerge(AuthenticationLive),
     Layer.provideMerge(KeyRing.KeyRing.layer),

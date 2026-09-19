@@ -8,6 +8,7 @@
 // annotations landing on the real response status (BEH-EA-088).
 import { Api, AuthCore } from "@awthaq/api";
 import { Accounts, Sessions, Users } from "@awthaq/core";
+import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { createHmac, randomBytes } from "node:crypto";
@@ -78,6 +79,9 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Authentication.PrincipalResolverLive),
   Layer.provide(CsrfProtectionLive),
+  // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
+  // `SqlTransaction` — a no-op wrapper for this in-memory composition.
+  Layer.provide(SqlTransaction.layerNoop),
   Layer.provideMerge(Sessions.layerMemory),
   Layer.provideMerge(Users.layerMemory),
   Layer.provideMerge(Accounts.layerMemory),

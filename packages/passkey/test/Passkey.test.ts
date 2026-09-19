@@ -217,6 +217,69 @@ describe("Passkey", () => {
       }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect(
+    "WPS-001: a credential surviving its own deleted user cannot mint a session for that dead user",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+
+        const user = yield* users.create({ email: "ghost@example.com", name: "Ghost" });
+        const registerSession = yield* sessions.issue({ userId: user.id });
+        const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
+        // `mockWebAuthn`'s `verifyRegistration` always reports
+        // `credentialId: "cred-mock-1"` regardless of what's submitted
+        // (see `passkeyTestFixtures.ts`), and `registerVerify` stores the
+        // row under *that* id, not the submitted one — so the id used
+        // below must match it, the same way every other test in this
+        // file does, or `authenticateVerify` would fail on the earlier
+        // "unknown credential" branch instead of the one this test means
+        // to exercise.
+        yield* passkey.registerVerify(user.id, registerSession.session.id, {
+          credential: {
+            id: "cred-mock-1",
+            rawId: "cred-mock-1",
+            type: "public-key",
+            response: {
+              clientDataJSON: buildClientDataJSON({
+                type: "webauthn.create",
+                challenge: extractChallenge(registerOptions),
+                origin: ORIGIN,
+              }),
+              attestationObject: "",
+            },
+          },
+        });
+
+        // The user row is gone, but — today's still-incomplete erasure
+        // cascade (CSG-001/DRS-002, tracked separately) — the credential
+        // row is deliberately left untouched here, to exercise exactly
+        // the orphan this defense-in-depth check exists for regardless
+        // of whether a future cascade also cleans it up.
+        yield* users.delete(user.id);
+
+        const { ceremonyId, options } = yield* passkey.authenticateOptions(undefined);
+        const clientDataJSON = buildClientDataJSON({
+          type: "webauthn.get",
+          challenge: extractChallenge(options),
+          origin: ORIGIN,
+        });
+        const failure = yield* passkey
+          .authenticateVerify({
+            ceremonyId,
+            credential: {
+              id: "cred-mock-1",
+              rawId: "cred-mock-1",
+              type: "public-key",
+              response: { clientDataJSON, authenticatorData: "", signature: "" },
+            },
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "InvalidCredentials");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("a replayed or expired challenge is rejected as PasskeyChallengeInvalid", () =>
     Effect.gen(function* () {
       const passkey = yield* Passkey.Passkey;

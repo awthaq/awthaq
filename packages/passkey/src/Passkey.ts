@@ -596,6 +596,18 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
             .pipe(Effect.orDie);
 
+          // WPS-001: a deleted user's passkey credential row can outlive
+          // the account (no FK, no cascade) — cryptographic verification
+          // above only proves possession of *a* registered authenticator,
+          // never that the account it names still exists. Defense in
+          // depth, right where `Sessions.issue` would otherwise mint a
+          // session for a dead `userId` with no existence check of its
+          // own: same uniform `InvalidCredentials` collapse BEH-EA-136
+          // already applies to every other failure in this ceremony.
+          yield* users
+            .findById(stored.userId)
+            .pipe(Effect.catchTag("UserNotFound", () => Effect.fail(new Api.InvalidCredentials())));
+
           const issued = yield* sessions.issue({ userId: stored.userId }).pipe(Effect.orDie);
           yield* events.publish({
             _tag: "auth.user.signedIn",

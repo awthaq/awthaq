@@ -33,6 +33,7 @@
   "dependencies": {
     "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
+    "@awthaq/ports": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
