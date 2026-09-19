@@ -13,15 +13,25 @@
 // away, the same way `Verification.layerSql`/`WebAuthn` are documented as
 // deferred elsewhere in this codebase rather than pretended not to exist.
 
-import type { webcrypto } from "node:crypto";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
-export type Jwk = webcrypto.JsonWebKey & { readonly kid?: string; readonly alg?: string };
-
-export interface Jwks {
-  readonly keys: ReadonlyArray<Jwk>;
-}
+/**
+ * ESS-001/GC-001/SFS-002/TTE-001: a JWKS document is untrusted, network-fetched
+ * input — decoded via `Schema`, never a cast. Each entry is a bare
+ * `Record<string, unknown>` (mirroring `@awthaq/jwt/verify.ts`'s own
+ * `JwksDocumentSchema`, this codebase's established idiom for the identical
+ * shape): a JWK's full field set (`kty`/`n`/`e`/`crv`/`x`/`y`/... per RFC
+ * 7517) isn't narrowed here since `findKey` only ever reads `kty`/`kid` by
+ * plain property access, and `verifyRs256` passes a matched entry to
+ * `crypto.subtle.importKey` wholesale, needing no narrower type either.
+ */
+export const JwksDocumentSchema = Schema.Struct({
+  keys: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
+});
+export type Jwks = typeof JwksDocumentSchema.Type;
+export type Jwk = Jwks["keys"][number];
 
 export class JwtVerificationError extends Data.TaggedError("JwtVerificationError")<{
   readonly reason: string;

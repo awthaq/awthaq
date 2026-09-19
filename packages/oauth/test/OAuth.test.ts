@@ -862,6 +862,40 @@ describe("OAuth", () => {
       ),
     );
 
+    it.effect(
+      "ESS-001/GC-001/SFS-002/TTE-001: a malformed JWKS document fails typed, not as an unchecked cast",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state, location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          currentClaims = {
+            iss: "https://okta.example.com/oauth2/default",
+            aud: "okta-client-id",
+            sub: "okta-user-1",
+            exp: Math.floor(Date.now() / 1000) + 3600,
+            nonce: nonceFrom(location),
+          };
+          const failure = yield* oauth
+            .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta()],
+              // `keys` is a string, not an array — the shape `body as
+              // unknown as Jwt.Jwks` would have laundered straight through
+              // to `findKey` as a defect-shaped crash instead of this typed
+              // `OAuthCallbackFailed`.
+              httpRoutes: { ...idTokenRoutes(), "/jwks": { keys: "not-an-array" } },
+            }),
+          ),
+        ),
+    );
+
     it.effect("an id_token with the wrong issuer claim is rejected", () =>
       Effect.gen(function* () {
         const oauth = yield* OAuth.OAuth;

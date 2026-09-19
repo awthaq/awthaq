@@ -37,6 +37,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as HttpBody from "effect/unstable/http/HttpBody";
 import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
@@ -243,9 +244,14 @@ const verifyIdToken = (
       return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
     }
 
+    // ESS-001/GC-001/SFS-002/TTE-001: the provider's JWKS document is
+    // untrusted, network-fetched input — decoded via `Schema`, never a
+    // cast (`packages/jwt/src/verify.ts`'s own established idiom for the
+    // identical shape). A malformed body now fails typed as
+    // `OAuthCallbackFailed`, the same as every other check in this
+    // function, instead of flowing forward fully typed into `findKey`.
     const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(
-      Effect.flatMap((response) => response.json),
-      Effect.map((body) => body as unknown as Jwt.Jwks),
+      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),
       Effect.tap((jwks) => Ref.update(jwksCache, (cache) => HashMap.set(cache, provider.id, jwks))),
       Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),
     );
