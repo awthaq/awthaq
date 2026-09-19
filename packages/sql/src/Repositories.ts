@@ -125,8 +125,24 @@ export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.
 
 export interface AccountsRepositoryShape {
   readonly insert: (input: typeof Account.insert.Type) => Effect.Effect<Account, RepositoryError>;
-  /** BEH-EA-116 (`@awthaq/password`'s rehash-on-login): the generic write path — `passwordHash`/`accessToken`/`refreshToken` are all `Model.Sensitive` (included in `update`, not excluded), so a caller updating one must pass the other two through unchanged. */
-  readonly update: (input: typeof Account.update.Type) => Effect.Effect<Account, RepositoryError>;
+  /**
+   * BEH-EA-116 (`@awthaq/password`'s rehash-on-login): the generic write
+   * path — `passwordHash`/`accessToken`/`refreshToken` are all
+   * `Model.Sensitive` (included in `update`, not excluded), so a caller
+   * updating one must pass the other two through unchanged.
+   *
+   * PPS-001: `aad` (the row's own `providerId`/`userId`, immutable and
+   * excluded from `Account.update.Type` itself) is required from the
+   * caller rather than re-derived via an internal `findById` — the only
+   * caller (`@awthaq/core`'s `updateCredentialHash`) already has both from
+   * its own prior read, so re-reading them here was a pure duplicate
+   * round trip on the login hot path, not a genuine second source of
+   * truth.
+   */
+  readonly update: (
+    input: typeof Account.update.Type,
+    aad: { readonly providerId: string; readonly userId: string },
+  ) => Effect.Effect<Account, RepositoryError>;
   readonly findById: (
     id: AccountId,
   ) => Effect.Effect<Account, Cause.NoSuchElementError | RepositoryError>;
@@ -245,26 +261,17 @@ export const AccountsRepositoryLive: Layer.Layer<
         return yield* decryptRow(row);
       });
 
-    const update: AccountsRepositoryShape["update"] = (input) =>
+    const update: AccountsRepositoryShape["update"] = (input, aad) =>
       Effect.gen(function* () {
-        // A vanished row between the caller's own existence check and this
-        // call is an unexpected condition — `update`'s own contract has
-        // always presupposed the row still exists (see
-        // `AccountsShape.updateCredentialHash`'s own `repo.findById` call
-        // in `@awthaq/core`) — not a new recoverable outcome this
-        // repository method's signature needs to grow a case for.
-        const existing = yield* repo
-          .findById(input.id)
-          .pipe(Effect.catchTag("NoSuchElementError", Effect.die));
         const accessToken = yield* encryptToken(
-          existing.providerId,
-          existing.userId,
+          aad.providerId,
+          aad.userId,
           "accessToken",
           input.accessToken,
         );
         const refreshToken = yield* encryptToken(
-          existing.providerId,
-          existing.userId,
+          aad.providerId,
+          aad.userId,
           "refreshToken",
           input.refreshToken,
         );

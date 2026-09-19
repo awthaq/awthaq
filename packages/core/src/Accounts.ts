@@ -426,25 +426,41 @@ export const layerSql: Layer.Layer<
     // `passwordHash` still has to read the row first and pass the other two
     // straight through, the same pattern `Users.layerSql.updateProfile` uses
     // for `email`.
+    //
+    // PPS-001: wrapped in `sql.withTransaction`, mirroring `unlink`'s own
+    // precedent above — unwrapped, a concurrent `unlink`/account-deletion
+    // racing between this read and its write could see the final `UPDATE`
+    // silently apply to nothing (or the read itself die on a row that
+    // vanished mid-flight). `existing.providerId`/`existing.userId` (this
+    // read's own, decrypted result) are passed straight through as `repo
+    // .update`'s AAD, so `AccountsRepositoryLive.update` no longer needs
+    // its own second, redundant `findById` just to recover them.
     const updateCredentialHash: AccountsShape["updateCredentialHash"] = Effect.fnUntraced(
       function* (id, hash) {
-        const existing = yield* repo.findById(id).pipe(
-          Effect.catchTags({
-            NoSuchElementError: () =>
-              Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
-            SchemaError: Effect.die,
-            SqlError: Effect.die,
-          }),
-        );
-        const update = yield* SqlModels.Account.update
-          .makeEffect({
-            id,
-            passwordHash: Redacted.value(hash),
-            accessToken: existing.accessToken,
-            refreshToken: existing.refreshToken,
-          })
-          .pipe(Effect.orDie);
-        yield* repo.update(update).pipe(Effect.orDie);
+        const performUpdate = Effect.gen(function* () {
+          const existing = yield* repo.findById(id).pipe(
+            Effect.catchTags({
+              NoSuchElementError: () =>
+                Effect.fail(
+                  new AccountNotFound({ message: `awthaq: no such account: ${id}`, id }),
+                ),
+              SchemaError: Effect.die,
+              SqlError: Effect.die,
+            }),
+          );
+          const update = yield* SqlModels.Account.update
+            .makeEffect({
+              id,
+              passwordHash: Redacted.value(hash),
+              accessToken: existing.accessToken,
+              refreshToken: existing.refreshToken,
+            })
+            .pipe(Effect.orDie);
+          yield* repo
+            .update(update, { providerId: existing.providerId, userId: existing.userId })
+            .pipe(Effect.orDie);
+        });
+        yield* sql.withTransaction(performUpdate).pipe(Effect.catchTag("SqlError", Effect.die));
       },
     );
 

@@ -192,8 +192,56 @@ describe("Repositories", () => {
             accessToken: account.accessToken,
             refreshToken: account.refreshToken,
           }),
+          { providerId: account.providerId, userId: account.userId },
         );
         assert.strictEqual(updated.passwordHash, "new-hash");
+      }).pipe(Effect.provide(RepositoriesLive)),
+  );
+
+  // PPS-001: `update` now takes `aad` from the caller instead of an
+  // internal `findById` re-derivation — a real, non-null accessToken/
+  // refreshToken (unlike the null ones above, which can't distinguish a
+  // correct AAD from a wrong one, since encrypting/decrypting `null` is a
+  // no-op either way) proves the caller-supplied `providerId`/`userId`
+  // genuinely round-trips through re-encryption correctly, not just that
+  // the call compiles.
+  it.effect(
+    "AccountsRepository.update's caller-supplied aad correctly re-encrypts a real accessToken/refreshToken",
+    () =>
+      Effect.gen(function* () {
+        const accounts = yield* Repositories.AccountsRepository;
+        const users = yield* Repositories.UsersRepository;
+        const user = yield* users.insert(
+          yield* Models.User.insert.makeEffect({ email: "aad-update@example.com", name: "Aad" }),
+        );
+        const account = yield* accounts.insert(
+          yield* Models.Account.insert.makeEffect({
+            userId: user.id,
+            providerId: "github",
+            subject: "gh-aad-update",
+            issuer: "",
+            passwordHash: null,
+            accessToken: "plaintext-access-token",
+            refreshToken: "plaintext-refresh-token",
+          }),
+        );
+        const updated = yield* accounts.update(
+          yield* Models.Account.update.makeEffect({
+            id: account.id,
+            passwordHash: null,
+            accessToken: account.accessToken,
+            refreshToken: account.refreshToken,
+          }),
+          { providerId: account.providerId, userId: account.userId },
+        );
+        assert.strictEqual(updated.accessToken, "plaintext-access-token");
+        assert.strictEqual(updated.refreshToken, "plaintext-refresh-token");
+
+        // The re-encrypted write is independently re-readable too, not
+        // just the write call's own in-memory return value.
+        const reread = yield* accounts.findById(account.id);
+        assert.strictEqual(reread.accessToken, "plaintext-access-token");
+        assert.strictEqual(reread.refreshToken, "plaintext-refresh-token");
       }).pipe(Effect.provide(RepositoriesLive)),
   );
 
