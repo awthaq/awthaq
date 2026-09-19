@@ -134,8 +134,20 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.doesNotMatch(state, /verifier|nonce|challenge/i);
   });
 
+  // AH-002/ESS-004-style no-op fix: the redirect `location` captured by
+  // the earlier "an OAuth flow initiated" Given is now actually
+  // inspected, not merely fetched and discarded. `google()` here is
+  // `oauth2Provider`, not `oidcProvider` — `OAuth.ts`'s own
+  // `authorize`'s `nonce` is `undefined` whenever `provider.kind !==
+  // "oidc"`, so this fixture's own `location` genuinely never carries a
+  // `nonce` param at all; `code_challenge` (the public PKCE value) is
+  // still expected, since only the secret `code_verifier` must never
+  // reach the browser.
   Then("neither the PKCE verifier nor the nonce is ever sent to the browser", function* () {
-    yield* Effect.void;
+    const location = (yield* getOutcome("location")) as string;
+    assert.match(location, /[?&]code_challenge=/);
+    assert.doesNotMatch(location, /[?&]code_verifier=/);
+    assert.doesNotMatch(location, /[?&]nonce=/);
   });
 
   // ---- REQ-EA-333: replay fails ----
@@ -546,6 +558,7 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
         .link({ userId: userId as Users.UserId, providerId, subject, issuer })
         .pipe(Effect.exit);
       yield* setOutcome("secondIssuerResult", result);
+      yield* setOutcome("secondIssuer", issuer);
     },
   );
 
@@ -554,8 +567,21 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.ok(Exit.isSuccess(result as Exit.Exit<unknown, unknown>));
   });
 
+  // AH-002 fix: previously a bare `Effect.void`. Both issuers' accounts
+  // share the same (provider, subject) half of the identity tuple by
+  // construction — the only thing that can prove they were never
+  // conflated into one row is comparing their own distinct `AccountId`s.
   Then("the two issuers' accounts are never treated as the same account", function* () {
-    yield* Effect.void;
+    const accounts = yield* accountsService();
+    const providerId = (yield* getOutcome("provider")) as string;
+    const subject = (yield* getOutcome("subject")) as string;
+    const firstIssuer = (yield* getOutcome("issuer")) as string;
+    const secondIssuer = (yield* getOutcome("secondIssuer")) as string;
+    const first = yield* accounts.findByProviderSubject(providerId, subject, firstIssuer);
+    const second = yield* accounts.findByProviderSubject(providerId, subject, secondIssuer);
+    assert.ok(Option.isSome(first), "expected the first issuer's account to still exist");
+    assert.ok(Option.isSome(second), "expected the second issuer's account to exist");
+    assert.notStrictEqual(Option.getOrThrow(first).id, Option.getOrThrow(second).id);
   });
 
   Given(
@@ -569,6 +595,8 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* accounts.link({ userId: userA.id, providerId, subject: "sub-a" }).pipe(Effect.orDie);
       yield* accounts.link({ userId: userB.id, providerId, subject: "sub-b" }).pipe(Effect.orDie);
       yield* setOutcome("emailProvider", providerId);
+      yield* setOutcome("emailUserAId", userA.id);
+      yield* setOutcome("emailUserBId", userB.id);
     },
   );
 
@@ -589,8 +617,24 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
+  // AH-002 fix: previously a bare `Effect.void`. The real risk this
+  // scenario guards against is a callback handler that "helpfully"
+  // resolves/merges an incoming profile by its self-reported email
+  // instead of the (provider, subject, issuer) tuple — which would leave
+  // both accounts pointing at the same `userId`. Checked directly here,
+  // distinct from the preceding Then (which only compares the two
+  // Account rows' own ids, not which `User` each is actually linked to).
   Then("neither callback is matched or merged by the shared email", function* () {
-    yield* Effect.void;
+    const accounts = yield* accountsService();
+    const providerId = (yield* getOutcome("emailProvider")) as string;
+    const expectedUserAId = yield* getOutcome("emailUserAId");
+    const expectedUserBId = yield* getOutcome("emailUserBId");
+    const accountA = yield* accounts.findByProviderSubject(providerId, "sub-a");
+    const accountB = yield* accounts.findByProviderSubject(providerId, "sub-b");
+    assert.ok(Option.isSome(accountA));
+    assert.ok(Option.isSome(accountB));
+    assert.strictEqual(Option.getOrThrow(accountA).userId, expectedUserAId);
+    assert.strictEqual(Option.getOrThrow(accountB).userId, expectedUserBId);
   });
 
   // ---- REQ-EA-346: client secret via Config.Redacted ----
