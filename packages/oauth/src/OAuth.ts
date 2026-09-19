@@ -25,7 +25,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { Encryption, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Encryption, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
@@ -320,6 +320,7 @@ export const OAuthHandlers = HttpApiBuilder.group(
   "oauth",
   Effect.fnUntraced(function* (handlers) {
     const oauth = yield* OAuth;
+    const clientAddress = yield* ClientAddress.ClientAddress;
 
     return handlers.handleAll({
       authorize: Effect.fnUntraced(function* ({
@@ -363,12 +364,19 @@ export const OAuthHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         const cookieState = request.cookies[OAUTH_STATE_COOKIE];
+        // AGA-001/NHS-003: resolved through the application-provided
+        // `ClientAddress` port rather than `request.remoteAddress`
+        // directly — behind an L7 gateway/load balancer that's the
+        // proxy's own address, collapsing every client into one shared
+        // rate-limit bucket unless the composition opts into
+        // `ClientAddress.layerTrustedProxy`.
+        const resolvedAddress = yield* clientAddress.resolve(request);
         const outcome = yield* oauth.callback(params.provider, {
           code: query.code,
           state: query.state,
           iss: query.iss,
           cookieState,
-          ...(Option.isSome(request.remoteAddress) ? { ip: request.remoteAddress.value } : {}),
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
         });
         if (outcome.session !== undefined) {
           const response = HttpServerResponse.redirect(outcome.callbackURL);

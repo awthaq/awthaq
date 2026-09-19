@@ -10,7 +10,7 @@
 // business-logic mock).
 import { createHash } from "node:crypto";
 import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@awthaq/core";
-import { Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -106,6 +106,7 @@ const TestLayer = Password.Password.layer.pipe(
   // ARF-001: `confirmReset` now runs inside a `SqlTransaction` — a no-op
   // wrapper for this in-memory composition.
   Layer.provide(SqlTransaction.layerNoop),
+  Layer.provide(ClientAddress.layerDirect),
 );
 
 /** TSS-001/TSS-002: a `Mailer` whose `send` never resolves — see the tests below that provide this in place of `PortsLive`'s own `Mailer.layerMemory`. */
@@ -126,6 +127,7 @@ const TestLayerHangingMailer = Password.Password.layer.pipe(
   Layer.provideMerge(RateLimits.layer),
   Layer.provide(NoBreachHttpClient),
   Layer.provide(SqlTransaction.layerNoop),
+  Layer.provide(ClientAddress.layerDirect),
 );
 
 const email = "ada@example.com";
@@ -508,6 +510,7 @@ describe("Password", () => {
             Layer.provideMerge(RateLimits.layer),
             Layer.provide(BreachedHttpClient),
             Layer.provide(SqlTransaction.layerNoop),
+            Layer.provide(ClientAddress.layerDirect),
             Layer.provideMerge(Password.config({ breachCheck: true })),
           ),
         ),
@@ -530,6 +533,7 @@ describe("Password", () => {
           Layer.provideMerge(RateLimits.layer),
           Layer.provide(UnavailableHttpClient),
           Layer.provide(SqlTransaction.layerNoop),
+          Layer.provide(ClientAddress.layerDirect),
           Layer.provideMerge(Password.config({ breachCheck: true })),
         ),
       ),
@@ -551,6 +555,7 @@ describe("Password", () => {
           Layer.provideMerge(RateLimits.layer),
           Layer.provide(UnavailableHttpClient),
           Layer.provide(SqlTransaction.layerNoop),
+          Layer.provide(ClientAddress.layerDirect),
           Layer.provideMerge(Password.config({ breachCheck: { onUnavailable: "reject" } })),
         ),
       ),
@@ -690,6 +695,7 @@ describe("Password", () => {
             Layer.provideMerge(RateLimits.layer),
             Layer.provide(NoBreachHttpClient),
             Layer.provide(SqlTransaction.layerNoop),
+            Layer.provide(ClientAddress.layerDirect),
           ),
         ),
       ),
@@ -754,6 +760,53 @@ describe("Password", () => {
             Layer.provideMerge(RateLimits.layer),
             Layer.provide(NoBreachHttpClient),
             Layer.provide(SqlTransaction.layerNoop),
+            Layer.provide(ClientAddress.layerDirect),
+          ),
+        ),
+      ),
+  );
+
+  it.effect(
+    "AGA-001/NHS-003: requestReset is throttled per source IP across distinct, unrelated emails",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+
+        // `RATE_LIMITS.requestResetByIp` is `{ limit: 30, window: 15
+        // minutes }` — spray 30 distinct, never-registered emails from
+        // the same IP, then prove the 31st is throttled even though its
+        // own email has never been requested before.
+        for (let i = 0; i < 30; i++) {
+          yield* password.requestReset({
+            email: `reset-spray-${i}@example.com`,
+            ip: "203.0.113.9",
+          });
+        }
+        const throttled = yield* password
+          .requestReset({ email: "reset-spray-30@example.com", ip: "203.0.113.9" })
+          .pipe(Effect.flip);
+        assert.strictEqual(throttled._tag, "RateLimited");
+
+        // A different source IP is untouched by the first IP's exhausted
+        // budget — `requestReset` always succeeds (`void`), so nothing to
+        // flip here.
+        yield* password.requestReset({ email: "reset-spray-31@example.com", ip: "198.51.100.4" });
+      }).pipe(
+        Effect.provide(
+          Password.Password.layer.pipe(
+            Layer.provideMerge(AuthenticationLive),
+            Layer.provide(CsrfProtectionLive),
+            Layer.provideMerge(CoreLive),
+            Layer.provideMerge(
+              Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
+                Layer.provideMerge(NodeCrypto.layer),
+              ),
+            ),
+            Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
+            Layer.provideMerge(RateLimits.layer),
+            Layer.provide(NoBreachHttpClient),
+            Layer.provide(SqlTransaction.layerNoop),
+            Layer.provide(ClientAddress.layerDirect),
           ),
         ),
       ),
@@ -804,6 +857,7 @@ describe("Password", () => {
             Layer.provideMerge(RateLimits.layer),
             Layer.provide(NoBreachHttpClient),
             Layer.provide(SqlTransaction.layerNoop),
+            Layer.provide(ClientAddress.layerDirect),
           ),
         ),
       ),

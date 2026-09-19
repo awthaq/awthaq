@@ -18,7 +18,7 @@
 // other step does. Several of this feature's own scenarios (REQ-EA-334's
 // flow-TTL expiry) depend on that.
 import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
-import { RateLimiter, SqlTransaction, Encryption, KeyProvider } from "@awthaq/ports";
+import { ClientAddress, RateLimiter, SqlTransaction, Encryption, KeyProvider } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import { OAuth, OAuthProvider } from "@awthaq/oauth";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -155,6 +155,10 @@ const buildLayer = (options: BuildOptions) =>
     Layer.provideMerge(RateLimiter.layerPermissive),
     Layer.provideMerge(RateLimits.layer),
     Layer.provideMerge(SqlTransaction.layerNoop),
+    // AGA-001/NHS-003: `OAuth`'s callback handler now resolves through
+    // `ClientAddress` — the direct passthrough is byte-for-byte today's
+    // `remoteAddress` behavior.
+    Layer.provideMerge(ClientAddress.layerDirect),
     Layer.provideMerge(EncryptionLive),
     Layer.provide(fakeHttpClient(options.httpRoutes ?? {})),
     Layer.provide(

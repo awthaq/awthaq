@@ -58,7 +58,7 @@
 // roles.assign(userId, "member")`; `signInAs` runs it, if given, right after
 // issuing the user and before minting the session.
 import { Accounts, Auth, AuthPlugin, RateLimits, Sessions, Users } from "@awthaq/core";
-import { Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
@@ -89,6 +89,11 @@ const MemoryPorts = Layer.mergeAll(
   RateLimiter.layerPermissive,
   RateLimits.layer,
   SqlTransaction.layerNoop,
+  // AGA-001/NHS-003: `ClientAddress.layerDirect` — the raw-`remoteAddress`
+  // passthrough every zero-config app (and every composition here) gets
+  // by default; `layerTrustedProxy` is an opt-in an application makes for
+  // itself when it actually sits behind a gateway/load balancer.
+  ClientAddress.layerDirect,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 /**

@@ -11,7 +11,7 @@
 // domain-level tests could not — this file exists for the same reason,
 // against `OAuthApi.ts`'s own array-form `error` declarations.
 import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
-import { Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -109,6 +109,7 @@ const AppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.jso
   Layer.provideMerge(RateLimiter.layerPermissive),
   Layer.provideMerge(RateLimits.layer),
   Layer.provideMerge(SqlTransaction.layerNoop),
+  Layer.provideMerge(ClientAddress.layerDirect),
   Layer.provideMerge(EncryptionLive),
   Layer.provide(
     fakeHttpClient({
@@ -137,6 +138,7 @@ const ThrottledAppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/op
   Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
   Layer.provideMerge(RateLimits.layer),
   Layer.provideMerge(SqlTransaction.layerNoop),
+  Layer.provideMerge(ClientAddress.layerDirect),
   Layer.provideMerge(EncryptionLive),
   Layer.provide(
     fakeHttpClient({

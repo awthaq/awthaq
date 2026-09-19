@@ -17,7 +17,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -65,6 +65,12 @@ export interface PasswordShape {
   readonly signUp: (input: {
     readonly email: string;
     readonly password: Redacted.Redacted<string>;
+    /**
+     * AGA-001/NHS-003: same per-source dimension `signIn`'s own `ip`
+     * documents below — bounds mass account creation from one source
+     * independently of the (attacker-chosen) email each attempt names.
+     */
+    readonly ip?: string;
   }) => Effect.Effect<
     IssuedSession,
     PasswordApi.WeakPassword | PasswordApi.EmailAlreadyExists | Api.RateLimited
@@ -81,14 +87,15 @@ export interface PasswordShape {
     readonly email: string;
     readonly password: Redacted.Redacted<string>;
     /**
-     * RBS-001/CSD-002: the per-email budget below is keyed on a value the
-     * attacker fully controls, so it alone neither stops distributed
-     * credential spraying across many accounts nor attributes it to a
-     * source — `ip` (mirroring `OAuthShape["callback"]`'s own optional
-     * `ip`, sourced from `HttpServerRequest.remoteAddress`) backs a second,
-     * independent per-source budget. `undefined` when the handler's own
-     * request carries none, which the rate limiter treats as a single
-     * shared "unknown origin" bucket, never as unthrottled.
+     * RBS-001/CSD-002/AGA-001/NHS-003: the per-email budget below is
+     * keyed on a value the attacker fully controls, so it alone neither
+     * stops distributed credential spraying across many accounts nor
+     * attributes it to a source — `ip` (mirroring `OAuthShape["callback"]`'s
+     * own optional `ip`, sourced from the application-provided
+     * `ClientAddress` port rather than raw `remoteAddress`) backs a
+     * second, independent per-source budget. `undefined` when the
+     * handler's own request carries none, which the rate limiter treats
+     * as a single shared "unknown origin" bucket, never as unthrottled.
      */
     readonly ip?: string;
   }) => Effect.Effect<
@@ -98,6 +105,8 @@ export interface PasswordShape {
   /** BEH-EA-064/117: identical response whether or not `email` resolves to an account — the caller (the HTTP handler) always answers 202. */
   readonly requestReset: (input: {
     readonly email: string;
+    /** AGA-001/NHS-003: same per-source dimension as `signIn`'s own `ip`. */
+    readonly ip?: string;
   }) => Effect.Effect<void, Api.RateLimited>;
   /**
    * Upstream-hardening ticket 04: identical response whether `email`
@@ -185,6 +194,10 @@ const ipFromRateLimitInput = (input: unknown): string =>
  */
 const RATE_LIMITS = {
   signUp: { limit: 5, window: Duration.hours(1) },
+  // AGA-001/NHS-003: same reasoning as `signInByIp` below — bounds mass
+  // account creation from one source independently of the (freely
+  // chosen) email each attempt names.
+  signUpByIp: { limit: 20, window: Duration.hours(1) },
   signIn: { limit: 5, window: Duration.minutes(15) },
   // RBS-001/CSD-002: the per-account budget above is keyed on an
   // attacker-controlled email — an attacker can burn a victim's 5
@@ -195,6 +208,9 @@ const RATE_LIMITS = {
   // every real user behind it.
   signInByIp: { limit: 30, window: Duration.minutes(15) },
   requestReset: { limit: 5, window: Duration.minutes(15) },
+  // AGA-001/NHS-003: mirrors `signInByIp` — bounds one source spraying
+  // reset requests across many distinct, unrelated emails.
+  requestResetByIp: { limit: 30, window: Duration.minutes(15) },
   confirmReset: { limit: 5, window: Duration.minutes(15) },
   // Shipping-gap map (.scratch/shipping-gaps), ticket 14.
   changePassword: { limit: 5, window: Duration.minutes(15) },
@@ -305,10 +321,21 @@ export const PasswordHandlers = HttpApiBuilder.group(
   "password",
   Effect.fnUntraced(function* (handlers) {
     const password = yield* Password;
+    const clientAddress = yield* ClientAddress.ClientAddress;
 
     return handlers.handleAll({
-      signUp: Effect.fnUntraced(function* ({ payload }: { payload: PasswordApi.SignUpPayload }) {
-        const issued = yield* password.signUp(payload);
+      signUp: Effect.fnUntraced(function* ({
+        payload,
+        request,
+      }: {
+        payload: PasswordApi.SignUpPayload;
+        request: HttpServerRequest.HttpServerRequest;
+      }) {
+        const resolvedAddress = yield* clientAddress.resolve(request);
+        const issued = yield* password.signUp({
+          ...payload,
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+        });
         yield* HttpApiBuilder.securitySetCookie(
           Api.SessionCookie,
           Redacted.value(issued.token),
@@ -324,9 +351,14 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.SignInPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
+        // AGA-001/NHS-003: resolved through the application-provided
+        // `ClientAddress` port rather than `request.remoteAddress`
+        // directly, so a trusted-proxy-aware composition gets a real
+        // client IP here too, not just for `OAuth`'s own callback.
+        const resolvedAddress = yield* clientAddress.resolve(request);
         const issued = yield* password.signIn({
           ...payload,
-          ...(Option.isSome(request.remoteAddress) ? { ip: request.remoteAddress.value } : {}),
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
         });
         yield* HttpApiBuilder.securitySetCookie(
           Api.SessionCookie,
@@ -338,10 +370,16 @@ export const PasswordHandlers = HttpApiBuilder.group(
 
       requestReset: Effect.fnUntraced(function* ({
         payload,
+        request,
       }: {
         payload: PasswordApi.RequestResetPayload;
+        request: HttpServerRequest.HttpServerRequest;
       }) {
-        yield* password.requestReset(payload);
+        const resolvedAddress = yield* clientAddress.resolve(request);
+        yield* password.requestReset({
+          ...payload,
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+        });
       }),
 
       resendVerification: Effect.fnUntraced(function* ({
@@ -454,6 +492,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               ...RATE_LIMITS.signUp,
             },
             {
+              // AGA-001/NHS-003: a second, independent rule for the same
+              // endpoint, mirroring `signIn`'s own IP rule below.
+              endpoint: "signUp",
+              key: (input) => `password:signup:ip:${ipFromRateLimitInput(input)}`,
+              ...RATE_LIMITS.signUpByIp,
+            },
+            {
               endpoint: "signIn",
               key: (input) => `password:signin:${(input as { readonly email: string }).email}`,
               ...RATE_LIMITS.signIn,
@@ -473,6 +518,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               key: (input) =>
                 `password:reset-request:${(input as { readonly email: string }).email}`,
               ...RATE_LIMITS.requestReset,
+            },
+            {
+              // AGA-001/NHS-003: a second, independent rule for the same
+              // endpoint, mirroring `signIn`'s own IP rule above.
+              endpoint: "requestReset",
+              key: (input) => `password:reset-request:ip:${ipFromRateLimitInput(input)}`,
+              ...RATE_LIMITS.requestResetByIp,
             },
             {
               endpoint: "confirmReset",
@@ -534,6 +586,9 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           );
 
       const signUp: PasswordShape["signUp"] = Effect.fnUntraced(function* (input) {
+        // AGA-001/NHS-003: per-IP first, cheaper to enforce, bounds mass
+        // account creation from one source before the per-email check.
+        yield* rateLimit(`password:signup:ip:${input.ip ?? "unknown"}`, RATE_LIMITS.signUpByIp);
         yield* rateLimit(`password:signup:${input.email.toLowerCase()}`, RATE_LIMITS.signUp);
         const hints = yield* checkPolicy(httpClient, crypto, input.password, config);
         if (hints.length > 0) {
@@ -652,6 +707,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       });
 
       const requestReset: PasswordShape["requestReset"] = Effect.fnUntraced(function* (input) {
+        // AGA-001/NHS-003: per-IP first, bounds one source spraying
+        // reset requests across many distinct, unrelated emails.
+        yield* rateLimit(
+          `password:reset-request:ip:${input.ip ?? "unknown"}`,
+          RATE_LIMITS.requestResetByIp,
+        );
         yield* rateLimit(
           `password:reset-request:${input.email.toLowerCase()}`,
           RATE_LIMITS.requestReset,

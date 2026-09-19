@@ -9,7 +9,7 @@
 // needs an actual sign-in flow, the same way any real deployment would.
 import { AuthCore } from "@awthaq/api";
 import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
-import { Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import type { MailMessage } from "@awthaq/ports/Mailer";
 import { Password, PasswordApi } from "@awthaq/password";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
@@ -100,6 +100,9 @@ const buildApp = () => {
     // `SqlTransaction` — a no-op wrapper for this in-memory composition,
     // same as `TestAuth.layer`'s own default and `OAuth.test.ts`'s.
     Layer.provide(SqlTransaction.layerNoop),
+    // AGA-001/NHS-003: `Password`'s `signUp`/`signIn`/`requestReset` now
+    // resolve through `ClientAddress` too.
+    Layer.provide(ClientAddress.layerDirect),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
   );

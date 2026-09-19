@@ -9,7 +9,7 @@
 // checks — not a stub that always returns `true`.
 import { generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
 import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
-import { Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Authentication } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
@@ -142,6 +142,10 @@ const buildLayer = (options: {
     // Ticket 16: `SqlTransaction`'s no-op layer — this test's own `CoreLive`
     // is in-memory, with nothing a transaction would need to wrap.
     Layer.provideMerge(SqlTransaction.layerNoop),
+    // AGA-001/NHS-003: `OAuth`'s callback handler now resolves through
+    // `ClientAddress` — the direct passthrough is byte-for-byte today's
+    // `remoteAddress` behavior.
+    Layer.provideMerge(ClientAddress.layerDirect),
     Layer.provideMerge(EncryptionLive),
     Layer.provide(fakeHttpClient(options.httpRoutes ?? {})),
     Layer.provide(
