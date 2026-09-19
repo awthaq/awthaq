@@ -637,6 +637,69 @@ describe("Password", () => {
   );
 
   it.effect(
+    "RBS-001/CSD-002: signIn is throttled per source IP across distinct, unrelated emails",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+
+        // `RATE_LIMITS.signInByIp` is `{ limit: 30, window: 15 minutes }` —
+        // spray 30 distinct, never-registered emails from the same IP
+        // (each still real, uniform-cost `InvalidCredentials`, exactly as
+        // the per-email limiter's own test exhausts real attempts), then
+        // prove the 31st — a brand-new email never seen before, so the
+        // per-email limiter has no opinion on it — is rejected anyway,
+        // because the per-IP budget (not the per-email one) is what's
+        // exhausted.
+        for (let i = 0; i < 30; i++) {
+          const attempt = yield* password
+            .signIn({
+              email: `spray-${i}@example.com`,
+              password: Redacted.make("wrong password"),
+              ip: "203.0.113.9",
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(attempt._tag, "InvalidCredentials");
+        }
+
+        const throttled = yield* password
+          .signIn({
+            email: "spray-30@example.com",
+            password: Redacted.make("wrong password"),
+            ip: "203.0.113.9",
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(throttled._tag, "RateLimited");
+
+        // A different source IP, same never-seen email pattern, is
+        // untouched by the first IP's exhausted budget.
+        const otherIp = yield* password
+          .signIn({
+            email: "spray-31@example.com",
+            password: Redacted.make("wrong password"),
+            ip: "198.51.100.4",
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(otherIp._tag, "InvalidCredentials");
+      }).pipe(
+        Effect.provide(
+          Password.Password.layer.pipe(
+            Layer.provideMerge(AuthenticationLive),
+            Layer.provide(CsrfProtectionLive),
+            Layer.provideMerge(CoreLive),
+            Layer.provideMerge(
+              Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerMemory).pipe(
+                Layer.provideMerge(NodeCrypto.layer),
+              ),
+            ),
+            Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
+            Layer.provideMerge(RateLimits.layer),
+            Layer.provide(NoBreachHttpClient),
+          ),
+        ),
+      ),
+  );
+
+  it.effect(
     "shipping-gaps/14: changePassword is actually throttled once its own rule's limit is exceeded",
     () =>
       Effect.gen(function* () {

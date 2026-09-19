@@ -24,6 +24,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -79,6 +80,17 @@ export interface PasswordShape {
   readonly signIn: (input: {
     readonly email: string;
     readonly password: Redacted.Redacted<string>;
+    /**
+     * RBS-001/CSD-002: the per-email budget below is keyed on a value the
+     * attacker fully controls, so it alone neither stops distributed
+     * credential spraying across many accounts nor attributes it to a
+     * source — `ip` (mirroring `OAuthShape["callback"]`'s own optional
+     * `ip`, sourced from `HttpServerRequest.remoteAddress`) backs a second,
+     * independent per-source budget. `undefined` when the handler's own
+     * request carries none, which the rate limiter treats as a single
+     * shared "unknown origin" bucket, never as unthrottled.
+     */
+    readonly ip?: string;
   }) => Effect.Effect<
     IssuedSession,
     Api.InvalidCredentials | PasswordApi.EmailNotVerified | Api.RateLimited
@@ -152,6 +164,12 @@ const emailFromRateLimitInput = (input: unknown): string =>
     ? input.email
     : "";
 
+/** Same narrowing shape as `emailFromRateLimitInput`, for `signIn`'s per-IP rule (RBS-001/CSD-002). */
+const ipFromRateLimitInput = (input: unknown): string =>
+  typeof input === "object" && input !== null && "ip" in input && typeof input.ip === "string"
+    ? input.ip
+    : "unknown";
+
 /**
  * Shipping-gap map (.scratch/shipping-gaps), ticket 12: one rule per
  * rate-limited endpoint — mirrors `usage-examples-v4.md` §16's own worked
@@ -168,6 +186,14 @@ const emailFromRateLimitInput = (input: unknown): string =>
 const RATE_LIMITS = {
   signUp: { limit: 5, window: Duration.hours(1) },
   signIn: { limit: 5, window: Duration.minutes(15) },
+  // RBS-001/CSD-002: the per-account budget above is keyed on an
+  // attacker-controlled email — an attacker can burn a victim's 5
+  // attempts to lock them out, and distributed spraying across many
+  // distinct addresses never trips it at all. This second, per-IP rule
+  // bounds spraying independently of which account is targeted; looser
+  // than the per-account limit so one shared office NAT can't lock out
+  // every real user behind it.
+  signInByIp: { limit: 30, window: Duration.minutes(15) },
   requestReset: { limit: 5, window: Duration.minutes(15) },
   confirmReset: { limit: 5, window: Duration.minutes(15) },
   // Shipping-gap map (.scratch/shipping-gaps), ticket 14.
@@ -291,8 +317,17 @@ export const PasswordHandlers = HttpApiBuilder.group(
         return toSessionDto(issued.session);
       }),
 
-      signIn: Effect.fnUntraced(function* ({ payload }: { payload: PasswordApi.SignInPayload }) {
-        const issued = yield* password.signIn(payload);
+      signIn: Effect.fnUntraced(function* ({
+        payload,
+        request,
+      }: {
+        payload: PasswordApi.SignInPayload;
+        request: HttpServerRequest.HttpServerRequest;
+      }) {
+        const issued = yield* password.signIn({
+          ...payload,
+          ...(Option.isSome(request.remoteAddress) ? { ip: request.remoteAddress.value } : {}),
+        });
         yield* HttpApiBuilder.securitySetCookie(
           Api.SessionCookie,
           Redacted.value(issued.token),
@@ -423,6 +458,16 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               ...RATE_LIMITS.signIn,
             },
             {
+              // RBS-001/CSD-002: a second, independent rule for the same
+              // endpoint — the registry has no one-rule-per-endpoint
+              // constraint, and `OAuth.ts`'s own `callback` rule already
+              // establishes the "declare a `key: \"ip\"` rule alongside a
+              // manually-keyed `rateLimit(...)` call" pattern this follows.
+              endpoint: "signIn",
+              key: (input) => `password:signin:ip:${ipFromRateLimitInput(input)}`,
+              ...RATE_LIMITS.signInByIp,
+            },
+            {
               endpoint: "requestReset",
               key: (input) =>
                 `password:reset-request:${(input as { readonly email: string }).email}`,
@@ -534,6 +579,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       });
 
       const signIn: PasswordShape["signIn"] = Effect.fnUntraced(function* (input) {
+        // RBS-001/CSD-002: the per-IP budget runs first — cheaper to
+        // enforce (no DB lookup) and bounds a distributed spray across
+        // many distinct emails before the per-account check below ever
+        // sees them.
+        yield* rateLimit(`password:signin:ip:${input.ip ?? "unknown"}`, RATE_LIMITS.signInByIp);
         yield* rateLimit(`password:signin:${input.email.toLowerCase()}`, RATE_LIMITS.signIn);
         const userOpt = yield* users.findByEmail(input.email);
         const accountOpt = yield* Option.match(userOpt, {
