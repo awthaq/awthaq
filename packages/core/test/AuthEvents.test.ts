@@ -34,6 +34,38 @@ describe("AuthEvents", () => {
   );
 
   it.effect(
+    "ALF-002/ESS-001/TMS-002/TRBS-003: publish never suspends against a stuck subscriber; overflow is dropped and counted, not blocked on",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        // A subscription that registers, takes exactly one event, then
+        // hangs mid-handler forever — its queue stays open (still an
+        // active subscriber) but is never drained again, the
+        // "lagging/stuck consumer" these findings describe (an
+        // audit/SIEM sink writing to SQL is exactly this shape).
+        // `startImmediately` ensures the subscription is registered
+        // before any publish below races it.
+        yield* Effect.forkChild(events.stream.pipe(Stream.runForEach(() => Effect.never)), {
+          startImmediately: true,
+        });
+        // With the old `PubSub.bounded`, the (CAPACITY + 1)th publish
+        // below would suspend the fiber forever (the stuck subscriber
+        // never frees space), hanging this test rather than merely
+        // failing an assertion.
+        const overflow = 6;
+        for (let i = 0; i < AuthEvents.CAPACITY + overflow; i++) {
+          yield* events.publish({ _tag: "auth.token.replay", identifier: `stress:${i}` });
+        }
+        // The stuck subscriber's `runForEach` does take (and free the slot
+        // for) exactly its first event before stalling on `Effect.never`
+        // — so `CAPACITY + 1` of the published events are absorbed (one
+        // delivered, `CAPACITY` buffered) and only the remaining
+        // `overflow - 1` are dropped.
+        assert.strictEqual(yield* events.droppedCount, overflow - 1);
+      }).pipe(Effect.provide(AuthEvents.layer)),
+  );
+
+  it.effect(
     "BEH-EA-099/104: a failing subscriber doesn't affect another subscriber or the publisher",
     () =>
       Effect.gen(function* () {

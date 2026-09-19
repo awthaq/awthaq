@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import type { UserId } from "./Users.ts";
 
@@ -242,6 +243,13 @@ export interface AuthEventsShape {
   readonly publish: (event: AuthEvent) => Effect.Effect<void>;
   /** BEH-EA-102: raw stream access for a consumer that needs custom filtering/multiplexing. */
   readonly stream: Stream.Stream<AuthEvent>;
+  /**
+   * ALF-002/ESS-001/TMS-002/TRBS-003: how many `publish` calls have been
+   * silently dropped (the bus was at capacity) since this `AuthEvents`
+   * instance was built — the observable cost of `publish` never
+   * suspending, so loss is visible rather than merely possible.
+   */
+  readonly droppedCount: Effect.Effect<number>;
 }
 
 export class AuthEvents extends Context.Service<AuthEvents, AuthEventsShape>()(
@@ -255,15 +263,44 @@ export class AuthEvents extends Context.Service<AuthEvents, AuthEventsShape>()(
  * application with a genuinely different tolerance can still swap this
  * `Layer` entirely, the same way any other capability is swapped.
  */
-const CAPACITY = 1024;
+export const CAPACITY = 1024;
 
 export const layer: Layer.Layer<AuthEvents> = Layer.effect(
   AuthEvents,
   Effect.gen(function* () {
-    const pubsub = yield* PubSub.bounded<AuthEvent>(CAPACITY);
+    // ALF-002/ESS-001/TMS-002/TRBS-003: `PubSub.bounded` applies
+    // backpressure — its own publish suspends the calling fiber once the
+    // buffer is full, directly contradicting this shape's own "never
+    // suspends on a subscriber" contract (BEH-EA-098) and coupling the
+    // auth hot path (every one of Password.signIn/signUp,
+    // Verification.consume's replay/failure paths, OAuth's callback, …
+    // publishes inline) to whatever subscriber happens to be installed —
+    // a lagging or entirely absent one turns into a denial of service on
+    // sign-in itself. `PubSub.dropping` keeps the identical bounded-memory
+    // guarantee (BEH-EA-097) but never suspends the publisher: a full
+    // buffer drops the newest event instead, which `droppedCount` below
+    // makes observable rather than silent.
+    const pubsub = yield* PubSub.dropping<AuthEvent>(CAPACITY);
+    const dropped = yield* Ref.make(0);
     const publish: AuthEventsShape["publish"] = (event) =>
-      PubSub.publish(pubsub, event).pipe(Effect.asVoid);
-    return AuthEvents.of({ publish, stream: Stream.fromPubSub(pubsub) });
+      PubSub.publish(pubsub, event).pipe(
+        Effect.flatMap((accepted) =>
+          accepted
+            ? Effect.void
+            : Ref.update(dropped, (n) => n + 1).pipe(
+                Effect.andThen(
+                  Effect.logWarning(
+                    `awthaq: AuthEvents dropped a "${event._tag}" event — subscriber(s) not keeping up`,
+                  ),
+                ),
+              ),
+        ),
+      );
+    return AuthEvents.of({
+      publish,
+      stream: Stream.fromPubSub(pubsub),
+      droppedCount: Ref.get(dropped),
+    });
   }),
 );
 
