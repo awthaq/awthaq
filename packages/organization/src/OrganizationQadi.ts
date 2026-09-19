@@ -128,6 +128,14 @@ export const relationships = Layer.effect(
  * it owns. `undefined` for a non-`"user:"` subject or an unrecognized
  * attribute name, mirroring `Resolvers.ts`'s own `UserAttributes` exactly.
  */
+/**
+ * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 14
+ * (AAPS-002): the attribute names `attributes` actually answers, declared
+ * alongside the `Layer` itself — mirrors `@awthaq/qadi`'s own
+ * `Resolvers.UserAttributeNames`, for the identical reason.
+ */
+export const OrganizationAttributeNames = ["organizationCount", "ownedOrganizationCount"] as const;
+
 export const attributes = Layer.effect(
   AttributeResolver,
   Effect.gen(function* () {

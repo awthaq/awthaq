@@ -11,13 +11,18 @@
 // (spec/behaviors/20-qadi-bridge-path-b.md, BEH-EA-153), Resolvers.ts
 // (spec/behaviors/21-qadi-resolvers-obligations.md, BEH-EA-161/165 — see
 // that module's own header comment for what is deliberately deferred),
-// SubjectApi.ts (the server half — real middleware attachment plus the
-// handler — of `@awthaq/api`'s `SubjectContract`, BEH-EA-026's
-// `SubjectDto`; added for spec/behaviors/23-react.md's BEH-EA-179 — see
-// that module's own header comment for why the middleware/handler live
-// here while the plain contract lives in `@awthaq/api`).
+// AttributeResolvers.ts (wayfinder map .scratch/resolve-ready-for-human-findings,
+// ticket 14 — AAPS-002: a conflict-checked registry combinator for
+// composing multiple `AttributeResolver` contributions without one silently
+// shadowing another), SubjectApi.ts (the server half — real middleware
+// attachment plus the handler — of `@awthaq/api`'s `SubjectContract`,
+// BEH-EA-026's `SubjectDto`; added for spec/behaviors/23-react.md's
+// BEH-EA-179 — see that module's own header comment for why the
+// middleware/handler live here while the plain contract lives in
+// `@awthaq/api`).
 // See spec/overview.md for the full package map.
 
+export * as AttributeResolvers from "./AttributeResolvers.ts";
 export * as AuthorizedSubject from "./AuthorizedSubject.ts";
 export * as Resolvers from "./Resolvers.ts";
 export * as SubjectApi from "./SubjectApi.ts";

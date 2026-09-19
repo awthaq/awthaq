@@ -50,6 +50,15 @@ const USER_SUBJECT_PREFIX = "user:";
  * to; a real SQL outage would surface as an unhandled defect, not a typed
  * failure caught here — a real, open gap, not a swallowed one.
  */
+/**
+ * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 14
+ * (AAPS-002): the attribute names `UserAttributes` actually answers,
+ * declared alongside the `Layer` itself so a composing application's own
+ * `AttributeResolvers.attributeResolverRegistry` call never hand-copies a
+ * list that can drift from `resolve`'s own `switch` below.
+ */
+export const UserAttributeNames = ["email", "emailVerified", "name"] as const;
+
 export const UserAttributes: Layer.Layer<AttributeResolver, never, Users.Users> = Layer.effect(
   AttributeResolver,
   Effect.gen(function* () {
