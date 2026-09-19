@@ -6,7 +6,7 @@
 // mirroring `packages/organization/test/AuthHttp.test.ts`'s own
 // `issueSessionCookieHeader` pattern for setting one up.
 import { AuthCore } from "@awthaq/api";
-import { Accounts, Sessions, Users } from "@awthaq/core";
+import { Accounts, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
 import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -72,9 +72,10 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(KeyRing.KeyRing.layer),
   Layer.provideMerge(SigningKeyRecords.layerMemory),
   Layer.provideMerge(Sessions.layerMemory),
-  // TIR-001: `/jwt/introspect`'s handler calls `jwt.introspectLive`, which
-  // requires `RevocationStore` at its own call site (not captured in
-  // `make`) — same shape `Sessions` above already has.
+  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
+  Layer.provideMerge(AuthEvents.layer),
+  // TIR-001: `RevocationStore` is captured once in `Jwt`'s own `make`
+  // now, so it must be provided for the plugin to build at all.
   Layer.provideMerge(RevocationStore.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
   Layer.provideMerge(TestServices),
@@ -276,6 +277,8 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
     Layer.provideMerge(KeyRing.KeyRing.layer),
     Layer.provideMerge(SigningKeyRecords.layerMemory),
     Layer.provideMerge(Sessions.layerMemory),
+    // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
+    Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(RevocationStore.layerMemory),
     Layer.provideMerge(Users.layerMemory),
     Layer.provideMerge(Accounts.layerMemory),

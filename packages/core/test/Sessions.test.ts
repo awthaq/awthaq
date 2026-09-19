@@ -13,15 +13,21 @@ import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Sessions from "../src/Sessions.ts";
 import * as Users from "../src/Users.ts";
 
-const MemoryLayer = Sessions.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
+const MemoryLayer = Sessions.layerMemory.pipe(
+  Layer.provide(NodeCrypto.layer),
+  Layer.provide(AuthEvents.layer),
+);
 
 const shortLivedConfig = Layer.succeed(Sessions.SessionConfig, {
   absolute: Duration.millis(1000),
@@ -30,11 +36,14 @@ const shortLivedConfig = Layer.succeed(Sessions.SessionConfig, {
 });
 
 const ShortLivedMemoryLayer = Sessions.layerMemory.pipe(
-  Layer.provide(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig)),
+  Layer.provide(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig, AuthEvents.layer)),
 );
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
+// RRS-003: `familyId`/`supersededBy`/`supersededAt`/`reusedAt` —
+// `@awthaq/sql`'s own `CoreMigrations.ts` migration 10 is the production
+// equivalent of this ad hoc test-only schema.
 const Migrated = Layer.effectDiscard(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -50,7 +59,11 @@ const Migrated = Layer.effectDiscard(
         createdAt TEXT NOT NULL,
         lastActiveAt TEXT NOT NULL,
         actingAsType TEXT,
-        actingAsId TEXT
+        actingAsId TEXT,
+        familyId TEXT NOT NULL,
+        supersededBy TEXT,
+        supersededAt TEXT,
+        reusedAt TEXT
       )
     `;
   }),
@@ -59,13 +72,14 @@ const Migrated = Layer.effectDiscard(
 const SqlLayer = Sessions.layerSql.pipe(
   Layer.provide(Repositories.SessionsRepositoryLive),
   Layer.provide(NodeCrypto.layer),
+  Layer.provide(AuthEvents.layer),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
 
 const ShortLivedSqlLayer = Sessions.layerSql.pipe(
   Layer.provide(Repositories.SessionsRepositoryLive),
-  Layer.provide(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig)),
+  Layer.provide(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig, AuthEvents.layer)),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
@@ -185,16 +199,22 @@ const suite = (
         }).pipe(Effect.provide(shortLivedLayer)),
     );
 
-    it.effect("BEH-EA-053: issuing with `supersedes` deletes the prior row", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const first = yield* sessions.issue({ userId });
-        const second = yield* sessions.issue({ userId, supersedes: first.session.id });
-        const oldFails = yield* sessions.verify(first.token).pipe(Effect.flip);
-        assert.strictEqual(oldFails._tag, "SessionNotFound");
-        const newWorks = yield* sessions.verify(second.token);
-        assert.strictEqual(newWorks.session.id, second.session.id);
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "BEH-EA-053/RRS-003: issuing with `supersedes` tombstones the prior row — the new one works, the old one stops verifying",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const first = yield* sessions.issue({ userId });
+          const second = yield* sessions.issue({ userId, supersedes: first.session.id });
+          // Checked before the old token is ever presented: presenting a
+          // tombstoned row (below) is itself a reuse signal (RRS-003) that
+          // revokes the whole family, `second` included — so this order
+          // matters, not just style.
+          const newWorks = yield* sessions.verify(second.token);
+          assert.strictEqual(newWorks.session.id, second.session.id);
+          const oldFails = yield* sessions.verify(first.token).pipe(Effect.flip);
+          assert.strictEqual(oldFails._tag, "SessionNotFound");
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("BEH-EA-054: list/revoke/revokeOthers", () =>
@@ -338,6 +358,99 @@ const suite = (
 
 suite("Sessions (layerMemory)", MemoryLayer, ShortLivedMemoryLayer);
 suite("Sessions (layerSql)", SqlLayer, ShortLivedSqlLayer);
+
+// RRS-003 — .scratch/resolve-ready-for-human-findings/issues/
+// 11-token-lifecycle-store.md: the `supersedes` rotation path tombstones
+// rather than deletes, so a presented-again old token is a detectable
+// reuse signal — a compromised token family gets revoked wholesale, not
+// silently accepted (the previous hard-delete behavior). These need
+// `AuthEvents` exposed to the test body itself (to assert the published
+// event), unlike `suite`'s own `layer`/`shortLivedLayer` params.
+const MemoryLayerWithEvents = Sessions.layerMemory.pipe(
+  Layer.provide(NodeCrypto.layer),
+  Layer.provideMerge(AuthEvents.layer),
+);
+
+const SqlLayerWithEvents = Sessions.layerSql.pipe(
+  Layer.provide(Repositories.SessionsRepositoryLive),
+  Layer.provide(NodeCrypto.layer),
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(Migrated),
+);
+
+const reuseSuite = (
+  name: string,
+  layer: Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
+): void => {
+  describe(name, () => {
+    it.effect(
+      "a tombstoned row's second presentation revokes every live session in its family and publishes auth.session.reuse exactly once",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const events = yield* AuthEvents.AuthEvents;
+
+          const reused = yield* Effect.forkChild(
+            events.stream.pipe(
+              Stream.filter((event) => event._tag === "auth.session.reuse"),
+              Stream.take(1),
+              Stream.runCollect,
+            ),
+            { startImmediately: true },
+          );
+
+          // A family of three: A -> B -> C, each rotation superseding the
+          // one before it.
+          const a = yield* sessions.issue({ userId });
+          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
+          const c = yield* sessions.issue({ userId, supersedes: b.session.id });
+
+          // A's own token, presented again — A is already tombstoned
+          // (superseded by B), so this is the reuse signal.
+          const firstReplay = yield* sessions.verify(a.token).pipe(Effect.flip);
+          assert.strictEqual(firstReplay._tag, "SessionNotFound");
+
+          // C — the only still-live member of the family — is revoked as
+          // a side effect of that one reuse.
+          const cFails = yield* sessions.verify(c.token).pipe(Effect.flip);
+          assert.strictEqual(cFails._tag, "SessionNotFound");
+
+          // A second presentation of the same already-flagged row is
+          // still met with the uniform `SessionNotFound` — no
+          // distinguishable signal leaked — but does not publish a
+          // second event.
+          const secondReplay = yield* sessions.verify(a.token).pipe(Effect.flip);
+          assert.strictEqual(secondReplay._tag, "SessionNotFound");
+
+          const collected = yield* Fiber.join(reused);
+          assert.strictEqual(collected.length, 1);
+          const [event] = collected;
+          assert.strictEqual(event?._tag, "auth.session.reuse");
+          if (event?._tag === "auth.session.reuse") {
+            assert.strictEqual(event.sessionId, a.session.id);
+            assert.strictEqual(event.familyId, a.session.id);
+            assert.strictEqual(event.userId, userId);
+          }
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("Sessions.list excludes a tombstoned (superseded) row", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        yield* sessions.issue({ userId, supersedes: a.session.id });
+
+        const listed = yield* sessions.list(userId);
+        assert.strictEqual(listed.length, 1);
+        assert.isUndefined(listed.find((row) => row.id === a.session.id));
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+};
+
+reuseSuite("Sessions reuse detection (layerMemory)", MemoryLayerWithEvents);
+reuseSuite("Sessions reuse detection (layerSql)", SqlLayerWithEvents);
 
 describe("Sessions", () => {
   it("BEH-EA-055: the session cookie name and attributes are fixed", () => {

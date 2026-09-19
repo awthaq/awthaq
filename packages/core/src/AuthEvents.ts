@@ -40,6 +40,19 @@ export interface UserSignedInEvent {
 }
 
 /**
+ * RRS-003: published by `Sessions.verify` the first time a tombstoned
+ * (already-superseded) session token is presented again — refresh-token
+ * reuse, the standard signal a token family has been compromised. Every
+ * still-live row sharing `familyId` is revoked in the same call.
+ */
+export interface SessionReuseEvent {
+  readonly _tag: "auth.session.reuse";
+  readonly sessionId: string;
+  readonly familyId: string;
+  readonly userId: UserId;
+}
+
+/**
  * Published by `@awthaq/passkey`'s authentication ceremony (BEH-EA-131,
  * ticket 08): a verified assertion's reported counter did not exceed the
  * stored one — "log + step-up, not an instant kill" per that ticket's own
@@ -215,6 +228,7 @@ export type AuthEvent =
   | TokenReplayEvent
   | UserCreatedEvent
   | UserSignedInEvent
+  | SessionReuseEvent
   | PasskeyCounterAnomalyEvent
   | AdminImpersonationStartedEvent
   | AdminImpersonationStoppedEvent

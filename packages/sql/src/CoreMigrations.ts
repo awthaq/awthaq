@@ -235,4 +235,37 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // RRS-003 — .scratch/resolve-ready-for-human-findings/issues/
+  // 11-token-lifecycle-store.md: refresh-token reuse detection and token
+  // families for the `supersedes` rotation path. `familyId` has no
+  // `NOT NULL`/backfill concern (this repo has no real deployment yet —
+  // `Models.ts`'s own header comment — so there are no pre-existing rows
+  // to migrate); every new row always supplies it explicitly.
+  migration(10, "add_sessions_reuse_detection_columns", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`
+        ALTER TABLE sessions
+          ADD COLUMN "familyId" TEXT,
+          ADD COLUMN "supersededBy" TEXT,
+          ADD COLUMN "supersededAt" TIMESTAMPTZ,
+          ADD COLUMN "reusedAt" TIMESTAMPTZ`,
+      sqlite: () => sql`
+        ALTER TABLE sessions ADD COLUMN familyId TEXT`.pipe(
+        Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN supersededBy TEXT`),
+        Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN supersededAt TEXT`),
+        Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN reusedAt TEXT`),
+      ),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
+  // RRS-003: `familyId` is the walk key `revokeFamily` bulk-deletes on;
+  // `supersededAt` is the filter every `listByUser`/reuse-check query
+  // applies on nearly every read.
+  migration(11, "create_sessions_reuse_detection_indexes", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`CREATE INDEX sessions_family_id ON sessions("familyId")`,
+      sqlite: () => sql`CREATE INDEX sessions_family_id ON sessions(familyId)`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);

@@ -240,6 +240,10 @@ describe("Repositories", () => {
           idleExpiresAt: Model.Override(now),
           actingAsType: null,
           actingAsId: null,
+          familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
+          supersededBy: null,
+          supersededAt: null,
+          reusedAt: null,
         }),
       );
       assert.strictEqual(session.secretHash, "hashed-secret-value");
@@ -267,6 +271,10 @@ describe("Repositories", () => {
             idleExpiresAt: Model.Override(now),
             actingAsType: null,
             actingAsId: null,
+            familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
+            supersededBy: null,
+            supersededAt: null,
+            reusedAt: null,
           }),
         );
       }
@@ -314,6 +322,10 @@ describe("Repositories", () => {
             idleExpiresAt: Model.Override(now),
             actingAsType: null,
             actingAsId: null,
+            familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
+            supersededBy: null,
+            supersededAt: null,
+            reusedAt: null,
           }),
         );
       const keep = yield* make();
@@ -348,6 +360,10 @@ describe("Repositories", () => {
               idleExpiresAt: Model.Override(now),
               actingAsType: null,
               actingAsId: null,
+              familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
+              supersededBy: null,
+              supersededAt: null,
+              reusedAt: null,
             }),
           );
         yield* make();
@@ -379,6 +395,10 @@ describe("Repositories", () => {
             idleExpiresAt: Model.Override(now),
             actingAsType: null,
             actingAsId: null,
+            familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
+            supersededBy: null,
+            supersededAt: null,
+            reusedAt: null,
           }),
         );
 

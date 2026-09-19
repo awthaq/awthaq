@@ -21,7 +21,9 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, AuthEvents.layer).pipe(
+const CoreLive = Layer.mergeAll(Sessions.layerMemory).pipe(
+  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
+  Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

@@ -126,6 +126,21 @@ export class Session extends Model.Class<Session>("Session")({
   // forces on any other persistence layer.
   actingAsType: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   actingAsId: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
+  // RRS-003 — .scratch/resolve-ready-for-human-findings/issues/
+  // 11-token-lifecycle-store.md: refresh-token reuse detection and token
+  // families for the `supersedes` rotation path (see `Sessions.ts`'s own
+  // header comment on `issue`/`verify` for the full mechanism). `familyId`
+  // is set once, at insert — to this row's own `id` when it founds a
+  // family (no `supersedes` given), or inherited from the superseded
+  // row's own `familyId` otherwise — so it is always explicitly supplied
+  // by `Sessions.ts`, never left to a constructor default.
+  familyId: SessionId.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
+  /** Set at most once, when this row is superseded by a rotation — never on insert. */
+  supersededBy: Schema.NullOr(SessionId),
+  /** Set at most once, alongside `supersededBy`. */
+  supersededAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  /** Set at most once — the first (and only ever recorded) time a tombstoned row is presented again. */
+  reusedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }) {}
 
 /**

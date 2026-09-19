@@ -22,6 +22,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Model from "effect/unstable/schema/Model";
+import * as AuthEvents from "./AuthEvents.ts";
 import { UserId } from "./Users.ts";
 
 /** BEH-EA-049: the public half of a session's `id.secret` token. */
@@ -131,8 +132,11 @@ export const SESSION_COOKIE_ATTRIBUTES = {
 export interface SessionsShape {
   /**
    * BEH-EA-049/050/053: mints a fresh `id.secret` token, persists only the
-   * secret's hash, and — when `supersedes` names a prior session — deletes
-   * that row in the same call rather than leaving both live.
+   * secret's hash, and — when `supersedes` names a prior session —
+   * tombstones that row in the same call (RRS-003: `supersededBy`/
+   * `supersededAt` set, never deleted) rather than leaving both live. The
+   * new row inherits the old row's `familyId` — see `verify`'s own doc
+   * comment for what presenting a tombstoned row again means.
    */
   readonly issue: (input: {
     readonly userId: UserId;
@@ -180,6 +184,14 @@ export interface SessionsShape {
    * `SubjectExtractorLive` funnel through it, so a second call within the
    * same request reuses the first's outcome (including whether it
    * rotated) rather than calling `verify` again.
+   *
+   * RRS-003: presenting a tombstoned row (one `issue`'s own `supersedes`
+   * already rotated away) is refresh-token reuse — every still-live
+   * session sharing its `familyId` is revoked in the same call, and
+   * `AuthEvents.ts`'s `auth.session.reuse` is published (once, on the
+   * first such presentation only). The external response stays the
+   * uniform `SessionNotFound` either way — no distinguishable signal
+   * leaked, matching `Verification.ts`'s own posture.
    */
   readonly verify: (
     token: Redacted.Redacted<string>,
@@ -212,25 +224,58 @@ interface SessionRow {
   readonly ipAddress: Option.Option<string>;
   readonly userAgent: Option.Option<string>;
   readonly actingAs: Option.Option<ActingAs>;
+  /**
+   * RRS-003: this row's founding session id — its own `id` when it has no
+   * ancestor, inherited from the superseded row's own `familyId`
+   * otherwise. `revokeFamily`'s own walk key.
+   */
+  readonly familyId: SessionId;
+  /** Set at most once, when this row is superseded by a rotation — never at issue. */
+  readonly supersededBy: Option.Option<SessionId>;
+  readonly supersededAt: Option.Option<DateTime.Utc>;
+  /** Set at most once — the first time a tombstoned row is presented again. */
+  readonly reusedAt: Option.Option<DateTime.Utc>;
 }
 
 const toView = (row: SessionRow): SessionView => row;
 
-export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.effect(
+export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvents.AuthEvents> =
+  Layer.effect(
   Sessions,
   Effect.gen(function* () {
     const state = yield* Ref.make(HashMap.empty<SessionId, SessionRow>());
     const crypto = yield* Crypto.Crypto;
     const config = yield* SessionConfig;
+    const events = yield* AuthEvents.AuthEvents;
 
     const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
-      if (input.supersedes !== undefined) {
-        yield* Ref.update(state, (s) => HashMap.remove(s, input.supersedes as SessionId));
-      }
       const id = SessionId(yield* crypto.randomUUIDv7);
       const secret = toHex(yield* crypto.randomBytes(32));
       const secretHash = yield* hashSecret(crypto, secret);
       const now = yield* DateTime.now;
+      // RRS-003: tombstoned, not deleted — the old row's own `familyId` is
+      // what this new row inherits; a row this new one has no `supersedes`
+      // ancestor for founds a fresh family, `familyId = id`.
+      let familyId = id;
+      if (input.supersedes !== undefined) {
+        const supersedes = input.supersedes;
+        const ancestor = yield* Ref.modify(
+          state,
+          (
+            s,
+          ): readonly [Option.Option<SessionRow>, HashMap.HashMap<SessionId, SessionRow>] => {
+            const current = HashMap.get(s, supersedes);
+            if (Option.isNone(current)) return [Option.none(), s] as const;
+            const tombstoned: SessionRow = {
+              ...current.value,
+              supersededBy: Option.some(id),
+              supersededAt: Option.some(now),
+            };
+            return [Option.some(tombstoned), HashMap.set(s, tombstoned.id, tombstoned)] as const;
+          },
+        );
+        if (Option.isSome(ancestor)) familyId = ancestor.value.familyId;
+      }
       const absoluteExpiresAt = DateTime.addDuration(
         now,
         input.absoluteDuration ?? config.absolute,
@@ -253,6 +298,10 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
         ipAddress: Option.fromNullishOr(input.request?.ip),
         userAgent: Option.fromNullishOr(input.request?.userAgent),
         actingAs: Option.fromNullishOr(input.actingAs),
+        familyId,
+        supersededBy: Option.none(),
+        supersededAt: Option.none(),
+        reusedAt: Option.none(),
       };
       yield* Ref.update(state, (s) => HashMap.set(s, id, row));
       return { session: toView(row), token: Redacted.make(`${id}.${secret}`) };
@@ -275,6 +324,34 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
         );
       }
       const now = yield* DateTime.now;
+      // RRS-003: a tombstoned row is a presented-already-rotated token —
+      // reuse. Checked before expiry: a rotated-away row's own expiry
+      // timestamps are stale and not the interesting signal here. The
+      // external response stays the uniform `SessionNotFound` whether this
+      // is the first reuse or a later presentation of an already-flagged
+      // row — no distinguishable signal leaked, matching `Verification.ts`'s
+      // own posture.
+      if (Option.isSome(row.value.supersededAt)) {
+        if (Option.isNone(row.value.reusedAt)) {
+          const familyId = row.value.familyId;
+          yield* Ref.update(state, (s) => {
+            const marked = HashMap.modify(s, id, (r) => ({ ...r, reusedAt: Option.some(now) }));
+            return HashMap.filter(
+              marked,
+              (r) => r.familyId !== familyId || Option.isSome(r.supersededAt),
+            );
+          });
+          yield* events.publish({
+            _tag: "auth.session.reuse",
+            sessionId: id,
+            familyId,
+            userId: row.value.userId,
+          });
+        }
+        return yield* Effect.fail(
+          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+        );
+      }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.absoluteExpiresAt)) {
         return yield* Effect.fail(
           new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),
@@ -379,11 +456,16 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto> = Layer.ef
     const revokeAll: SessionsShape["revokeAll"] = (userId) =>
       Ref.update(state, (s) => HashMap.filter(s, (row) => row.userId !== userId));
 
+    // RRS-003: `Option.isNone(row.supersededAt)` — load-bearing, not
+    // cosmetic. A tombstoned row must never appear in a user's device
+    // list, and this is also what makes `verifyLive`/`Jwt.introspectLive`
+    // correctly reject a reused/family-revoked session's JWT for free —
+    // both call this same `list`.
     const list: SessionsShape["list"] = (userId, current) =>
       Ref.get(state).pipe(
         Effect.map((s) =>
           Array.from(HashMap.values(s))
-            .filter((row) => row.userId === userId)
+            .filter((row) => row.userId === userId && Option.isNone(row.supersededAt))
             .map((row): SessionListItem => ({
               id: row.id,
               createdAt: row.createdAt,
@@ -420,21 +502,41 @@ const LIST_PAGE_SIZE = 200;
 export const layerSql: Layer.Layer<
   Sessions,
   never,
-  SqlRepositories.SessionsRepository | Crypto.Crypto
+  SqlRepositories.SessionsRepository | Crypto.Crypto | AuthEvents.AuthEvents
 > = Layer.effect(
   Sessions,
   Effect.gen(function* () {
     const repo = yield* SqlRepositories.SessionsRepository;
     const crypto = yield* Crypto.Crypto;
     const config = yield* SessionConfig;
+    const events = yield* AuthEvents.AuthEvents;
 
     const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
-      if (input.supersedes !== undefined) {
-        yield* repo.delete(input.supersedes).pipe(Effect.orDie);
-      }
+      // Generated here, not left to `Model.UuidV7Insert`'s own
+      // constructor-default: `familyId` needs this row's own `id` before
+      // insert (to self-reference when it founds a fresh family), so `id`
+      // must be known up front — mirrors `layerMemory.issue`'s own
+      // already-explicit generation.
+      const id = SessionId(yield* crypto.randomUUIDv7);
       const secret = toHex(yield* crypto.randomBytes(32));
       const secretHash = yield* hashSecret(crypto, secret);
       const now = yield* DateTime.now;
+      // RRS-003: tombstoned, not deleted — the old row's own `familyId` is
+      // what this new row inherits; no `supersedes` ancestor founds a
+      // fresh family, `familyId = id`.
+      let familyId = id;
+      if (input.supersedes !== undefined) {
+        const ancestor = yield* repo
+          .tombstone({ id: input.supersedes, supersededBy: id, supersededAt: now })
+          .pipe(
+            Effect.catchTags({
+              NoSuchElementError: () => Effect.succeed(undefined),
+              SchemaError: Effect.die,
+              SqlError: Effect.die,
+            }),
+          );
+        if (ancestor !== undefined) familyId = SessionId(ancestor.familyId);
+      }
       const absoluteExpiresAt = DateTime.addDuration(
         now,
         input.absoluteDuration ?? config.absolute,
@@ -447,6 +549,7 @@ export const layerSql: Layer.Layer<
           : absoluteExpiresAt;
       const insert = yield* SqlModels.Session.insert
         .makeEffect({
+          id,
           userId: input.userId,
           secretHash,
           ipAddress: input.request?.ip ?? null,
@@ -455,6 +558,10 @@ export const layerSql: Layer.Layer<
           idleExpiresAt: Model.Override(idleExpiresAt),
           actingAsType: input.actingAs?.type ?? null,
           actingAsId: input.actingAs?.id ?? null,
+          familyId,
+          supersededBy: null,
+          supersededAt: null,
+          reusedAt: null,
         })
         .pipe(Effect.orDie);
       const row = yield* repo.insert(insert).pipe(Effect.orDie);
@@ -480,6 +587,28 @@ export const layerSql: Layer.Layer<
         }),
       );
       const now = yield* DateTime.now;
+      // RRS-003: a tombstoned row is a presented-already-rotated token —
+      // reuse. Checked before expiry, and before the secret comparison
+      // below: a rotated-away row's own expiry/secret are stale and not
+      // the interesting signal here. The external response stays the
+      // uniform `SessionNotFound` whether this is the first reuse or a
+      // later presentation of an already-flagged row.
+      if (row.supersededAt !== null) {
+        if (row.reusedAt === null) {
+          const familyId = SessionId(row.familyId);
+          yield* repo.markReused(id, now).pipe(Effect.orDie);
+          yield* repo.revokeFamily(familyId).pipe(Effect.orDie);
+          yield* events.publish({
+            _tag: "auth.session.reuse",
+            sessionId: id,
+            familyId,
+            userId: UserId(row.userId),
+          });
+        }
+        return yield* Effect.fail(
+          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+        );
+      }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
         return yield* Effect.fail(
           new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),

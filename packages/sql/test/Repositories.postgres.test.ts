@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -186,6 +187,10 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
               idleExpiresAt: Model.Override(now),
               actingAsType: null,
               actingAsId: null,
+              familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
+              supersededBy: null,
+              supersededAt: null,
+              reusedAt: null,
             }),
           );
         const keep = yield* make();

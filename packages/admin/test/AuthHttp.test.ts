@@ -59,7 +59,9 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, AuthEvents.layer).pipe(
+const CoreLive = Layer.mergeAll(Sessions.layerMemory).pipe(
+  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
+  Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

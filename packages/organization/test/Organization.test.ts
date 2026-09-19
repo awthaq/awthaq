@@ -23,7 +23,12 @@ import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, AuthEvents.layer, Users.layerMemory).pipe(
+const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
+  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents` (session
+  // reuse publishes `auth.session.reuse`) — `provideMerge`, not a sibling
+  // inside `mergeAll` above, so it also satisfies that need rather than
+  // merely sitting alongside it unsatisfied.
+  Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

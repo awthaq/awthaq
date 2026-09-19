@@ -355,6 +355,23 @@ export interface SessionsRepositoryShape {
    * `deleteAllForUserExcept`'s "all but one" shape.
    */
   readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
+  /**
+   * RRS-003: tombstones the superseded row in a rotation — sets
+   * `supersededBy`/`supersededAt`, never deletes it. Returns the
+   * now-tombstoned row (its own `familyId` is what the new row inherits).
+   */
+  readonly tombstone: (input: {
+    readonly id: SessionId;
+    readonly supersededBy: SessionId;
+    readonly supersededAt: DateTime.Utc;
+  }) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
+  /** RRS-003: marks a tombstoned row's own `reusedAt`, the first time it is presented again. */
+  readonly markReused: (
+    id: SessionId,
+    reusedAt: DateTime.Utc,
+  ) => Effect.Effect<void, RepositoryError>;
+  /** RRS-003: bulk hard-deletes every still-live (non-tombstoned) row sharing `familyId` — a confirmed-compromised family has no further lineage worth preserving. */
+  readonly revokeFamily: (familyId: SessionId) => Effect.Effect<void, SqlError>;
 }
 
 export class SessionsRepository extends Context.Service<
@@ -375,14 +392,21 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         idColumn: "id",
       });
 
+      // RRS-003: `"supersededAt" IS NULL` — load-bearing, not cosmetic. A
+      // tombstoned row must never appear in a user's device list, and this
+      // is also what makes `Sessions.verifyLive`/`Jwt.introspectLive`
+      // correctly reject a reused/family-revoked session's JWT for free —
+      // both call this same `list`.
       const page = SqlSchema.findAll({
         Request: SessionCursorRequest,
         Result: Session,
         execute: (request) =>
           request.cursorCreatedAt === null || request.cursorId === null
             ? sql`SELECT * FROM sessions WHERE "userId" = ${request.userId}
+                  AND "supersededAt" IS NULL
                   ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit}`
             : sql`SELECT * FROM sessions WHERE "userId" = ${request.userId}
+                  AND "supersededAt" IS NULL
                   AND ("createdAt" > ${request.cursorCreatedAt}
                        OR ("createdAt" = ${request.cursorCreatedAt} AND id > ${request.cursorId}))
                   ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit}`,
@@ -447,6 +471,37 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
       const deleteAllByUser: SessionsRepositoryShape["deleteAllByUser"] = (userId) =>
         sql`DELETE FROM sessions WHERE "userId" = ${userId}`.pipe(Effect.asVoid);
 
+      const tombstoneQuery = SqlSchema.findOne({
+        Request: Schema.Struct({
+          id: SessionId,
+          supersededBy: SessionId,
+          supersededAt: Schema.DateTimeUtcFromString,
+        }),
+        Result: Session,
+        execute: (request) => sql`
+          UPDATE sessions
+          SET "supersededBy" = ${request.supersededBy}, "supersededAt" = ${request.supersededAt}
+          WHERE "id" = ${request.id}
+          RETURNING *
+        `,
+      });
+
+      const tombstone: SessionsRepositoryShape["tombstone"] = (input) => tombstoneQuery(input);
+
+      // `reusedAt` must be pre-encoded — unlike `tombstoneQuery`/`touch`
+      // above, this is a plain template query with no `SqlSchema` `Request`
+      // to do that encoding for it; interpolating a raw `DateTime.Utc`
+      // object here binds its internal fields instead of a string.
+      const markReused: SessionsRepositoryShape["markReused"] = (id, reusedAt) =>
+        sql`UPDATE sessions SET "reusedAt" = ${Schema.encodeSync(Schema.DateTimeUtcFromString)(reusedAt)} WHERE "id" = ${id}`.pipe(
+          Effect.asVoid,
+        );
+
+      const revokeFamily: SessionsRepositoryShape["revokeFamily"] = (familyId) =>
+        sql`DELETE FROM sessions WHERE "familyId" = ${familyId} AND "supersededAt" IS NULL`.pipe(
+          Effect.asVoid,
+        );
+
       return {
         insert: repo.insert,
         update: repo.update,
@@ -456,6 +511,9 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         touch,
         deleteAllForUserExcept,
         deleteAllByUser,
+        tombstone,
+        markReused,
+        revokeFamily,
       };
     }),
   );

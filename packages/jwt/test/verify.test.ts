@@ -15,7 +15,7 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { Sessions } from "@awthaq/core";
+import { AuthEvents, Sessions } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
@@ -51,6 +51,8 @@ const buildJwtLayer = () =>
     Layer.provideMerge(SigningKeyRecords.layerMemory),
     Layer.provideMerge(AuthenticationLive),
     Layer.provideMerge(Sessions.layerMemory),
+    // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
+    Layer.provideMerge(AuthEvents.layer),
     // TIR-001: `RevocationStore` is now captured once in `Jwt`'s own
     // `make`, so it must be provided for the plugin to build at all.
     Layer.provideMerge(RevocationStore.layerMemory),
