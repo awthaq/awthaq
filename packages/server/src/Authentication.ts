@@ -167,12 +167,29 @@ export const resolveSession = (
     if (Option.isSome(existing)) {
       return yield* existing.value;
     }
+    // NHS-002/EEM-003: `verify`'s three failure tags used to collapse
+    // uniformly to `Unauthenticated` via a blanket `Effect.mapError` — a
+    // backing-store outage (`PlatformError`) answered 401 on every
+    // request, indistinguishable from a bad credential, RFC-inverted (401
+    // claims the credential is wrong, not that the server is broken), and
+    // invisible to status-code-keyed alerting. `PlatformError` alone dies
+    // (this codebase's own established idiom, e.g. `Password.ts`/
+    // `OAuth.ts`'s identical `Effect.catchTag("PlatformError", Effect.die)`)
+    // — a real infrastructure fault, reported as a server error by the
+    // framework's own default defect handling instead. Only what's left
+    // after that (`SessionNotFound`/`SessionExpired`, a genuinely absent or
+    // expired session) maps to `Unauthenticated`; ordering matters here —
+    // `catchTag` must run before `mapError`, or the die would itself get
+    // mapped away.
     const memoized = yield* Effect.cached(
       raw === ""
         ? Effect.fail(new Api.Unauthenticated())
         : sessions
             .verify(Redacted.make(raw))
-            .pipe(Effect.mapError(() => new Api.Unauthenticated())),
+            .pipe(
+              Effect.catchTag("PlatformError", Effect.die),
+              Effect.mapError(() => new Api.Unauthenticated()),
+            ),
     );
     yield* Ref.update(cache, HashMap.set(raw, memoized));
     return yield* memoized;

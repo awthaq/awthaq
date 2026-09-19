@@ -3,11 +3,14 @@ import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -18,6 +21,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiTest from "effect/unstable/httpapi/HttpApiTest";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Authentication from "../src/Authentication.ts";
 
@@ -103,6 +107,26 @@ const TestLayer = Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
 );
 
 const userId = Users.UserId("33333333-3333-3333-3333-333333333333");
+
+// NHS-002/EEM-003: simulates a backing-store outage — `verify` fails with
+// the same `PlatformError` a real `Sessions.layerSql` would report on a
+// database failure, distinct from `SessionNotFound`/`SessionExpired`.
+const outage = PlatformError.systemError({
+  _tag: "Unknown",
+  module: "Sessions",
+  method: "verify",
+  description: "simulated backing-store outage",
+});
+
+const UnreliableSessions: Layer.Layer<Sessions.Sessions> = Layer.succeed(Sessions.Sessions, {
+  issue: () => Effect.die("not used in this test"),
+  verify: () => Effect.fail(outage),
+  revoke: () => Effect.die("not used in this test"),
+  revokeOthers: () => Effect.die("not used in this test"),
+  revokeAll: () => Effect.die("not used in this test"),
+  list: () => Effect.die("not used in this test"),
+  isLive: () => Effect.die("not used in this test"),
+});
 
 describe("Authentication", () => {
   it.effect("BEH-EA-067: fails Unauthenticated when neither cookie nor bearer resolves", () =>
@@ -287,4 +311,27 @@ describe("Authentication", () => {
       ),
     );
   });
+
+  // NHS-002/EEM-003: `resolveSession` used to blanket-map every `verify`
+  // failure — including a `PlatformError` backing-store outage — to
+  // `Api.Unauthenticated`, so a database outage answered 401 on every
+  // request, indistinguishable from a bad credential. `Effect.exit` (not
+  // `Effect.flip`) is required here: the fix turns `PlatformError` into an
+  // unhandled defect via `Effect.orDie`, which `flip` cannot observe (it
+  // only flips a typed failure) but `exit` captures as `Cause.isDie`.
+  it.effect(
+    "resolveSession dies (does not fail Unauthenticated) when the session store is unreachable",
+    () =>
+      Effect.gen(function* () {
+        const request = HttpServerRequest.fromWeb(new Request("http://localhost/whatever"));
+        const exit = yield* Authentication.resolveSession(
+          yield* Sessions.Sessions,
+          Redacted.make("some-id.some-secret"),
+        ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request), Effect.exit);
+        assert.isTrue(Exit.isFailure(exit));
+        if (!Exit.isFailure(exit)) return;
+        assert.isTrue(Cause.hasDies(exit.cause));
+        assert.isFalse(Cause.hasFails(exit.cause));
+      }).pipe(Effect.provide(UnreliableSessions)),
+  );
 });

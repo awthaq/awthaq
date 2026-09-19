@@ -51,15 +51,17 @@ const extractCredential = (
 };
 
 /**
- * BEH-EA-153: an absent or invalid credential is `anonymousPrincipal` —
- * `resolvePrincipal` already collapses every failure (an unknown session, an
- * expired one, even a lookup `PlatformError`) into `Api.Unauthenticated`,
- * the same uniform treatment `OptionalAuthenticationLive`'s bearer handler
- * relies on — never `SubjectExtractionFailed`, which is reserved for a
- * genuinely broken store (`@qadi/http`'s own `SubjectExtractionFailed` doc
- * comment), a distinction this awthaq-backed extractor has no way to
- * observe yet: `Sessions`/`Users` report typed domain errors, not a
- * store-is-unreachable signal distinct from "no such session."
+ * BEH-EA-153: an absent or invalid credential is `anonymousPrincipal` — only
+ * `Api.Unauthenticated` (an unknown or expired session) is caught below and
+ * mapped to it, the same uniform treatment `OptionalAuthenticationLive`'s
+ * bearer handler relies on. NHS-002: `resolvePrincipal`'s own
+ * `resolveSession` no longer collapses a genuinely broken store into
+ * `Unauthenticated` — a lookup `PlatformError` is `Effect.orDie`d into a
+ * defect there, so it propagates through here uncaught rather than being
+ * silently reported as an anonymous caller, giving this extractor the
+ * store-is-unreachable distinction `@qadi/http`'s own
+ * `SubjectExtractionFailed` is reserved for, without this module needing to
+ * construct that error itself.
  */
 export const SubjectExtractorLive: Layer.Layer<
   SubjectExtractor,
