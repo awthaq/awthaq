@@ -19,7 +19,7 @@
 // through and a bare `router.asHttpEffect()` call does not.
 import { Api } from "@awthaq/api";
 import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@awthaq/core";
-import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -115,6 +115,9 @@ const buildAppLayer = (mailerLayer: Layer.Layer<Mailer.Mailer>) =>
     ),
     Layer.provideMerge(RateLimits.layer),
     Layer.provide(NoBreachHttpClient),
+    // ARF-001: `confirmReset` now runs inside a `SqlTransaction` — a
+    // no-op wrapper for this in-memory composition.
+    Layer.provide(SqlTransaction.layerNoop),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
   );

@@ -17,7 +17,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -430,6 +430,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const crypto = yield* Crypto.Crypto;
       const httpClient = yield* HttpClient.HttpClient;
       const limiter = yield* RateLimiter.RateLimiter;
+      const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
 
       /**
@@ -543,20 +544,35 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // used as a placeholder the user can change later via
         // `updateProfile`.
         const name = input.email.split("@")[0] ?? input.email;
-        const user = yield* users.create({ email: input.email, name }).pipe(
-          Effect.catchTag("EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
-          Effect.catchTag("PlatformError", Effect.die),
-        );
         const hash = yield* hasher.hash(input.password);
-        yield* accounts
-          .link({
-            userId: user.id,
-            providerId: Accounts.PASSWORD_PROVIDER_ID,
-            subject: user.id,
-            credentialHash: Redacted.make(hash),
-          })
-          .pipe(Effect.orDie);
-        const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+
+        // RRC-002/BEH-EA-113: "MUST create the user and session in one
+        // transaction" — create+link+issue previously committed
+        // independently; a crash between them could leave a real,
+        // unlinked `User` row with no credential (the same orphaned-row
+        // hazard `OAuth.ts`'s own create+link fix, ticket 16, closes for
+        // its own flow) or a linked account with no session to hand back
+        // to the caller who just paid for account creation.
+        const { user, issued } = yield* sqlTransaction
+          .withTransaction(
+            Effect.gen(function* () {
+              const user = yield* users.create({ email: input.email, name }).pipe(
+                Effect.catchTag("EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
+                Effect.catchTag("PlatformError", Effect.die),
+              );
+              yield* accounts
+                .link({
+                  userId: user.id,
+                  providerId: Accounts.PASSWORD_PROVIDER_ID,
+                  subject: user.id,
+                  credentialHash: Redacted.make(hash),
+                })
+                .pipe(Effect.orDie);
+              const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+              return { user, issued };
+            }),
+          )
+          .pipe(Effect.catchTag("SqlError", Effect.die));
         yield* events.publish({ _tag: "auth.user.created", userId: user.id });
 
         // BEH-EA-113: dispatched, never awaited — response latency must
@@ -712,41 +728,65 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // account the token names, matching `signIn`/`requestReset`'s own
         // identity-keyed posture without a second lookup.
         yield* rateLimit(`password:reset-confirm:${identifier}`, RATE_LIMITS.confirmReset);
-        yield* verification.consume(identifier, value).pipe(
-          Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
-          Effect.catchTag("PlatformError", Effect.die),
-        );
-
-        const hints = yield* checkPolicy(httpClient, crypto, input.password, config);
-        if (hints.length > 0) {
-          return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
-        }
-
         const userId = Users.UserId(identifier.slice(RESET_PREFIX.length));
-        const account = yield* accounts
-          .findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId)
-          .pipe(
-            Effect.flatMap(
-              Option.match({
-                // The token was only ever issued right after `signUp`
-                // created this exact row (BEH-EA-113/117) — its absence
-                // here is a defect, not a request-level condition the
-                // caller can act on.
-                onNone: () =>
-                  Effect.die(new Error(`awthaq: password credential missing for user ${userId}`)),
-                onSome: Effect.succeed,
-              }),
-            ),
-          );
-        const hash = yield* hasher.hash(input.password);
-        yield* accounts.updateCredentialHash(account.id, Redacted.make(hash)).pipe(Effect.orDie);
 
-        // BEH-EA-117: every session, no exceptions — the caller isn't
-        // authenticated at all here, so there is no "current" session to
-        // keep. Upstream-hardening ticket 02: the real `revokeAll`
-        // primitive, retiring the empty-string-id `revokeOthers` trick
-        // this call site used to stand in for it.
-        yield* sessions.revokeAll(userId);
+        // ARF-001: BEH-EA-058/117 require consuming the token, setting the
+        // new password, and revoking every other session to commit as one
+        // unit — three independent commits previously left a crash-window
+        // where the token was burned but the old password still live, or
+        // the new password live while an attacker's pre-reset sessions
+        // survived. Mirrors `OAuth.ts`'s own `sqlTransaction.withTransaction`
+        // usage: only the transaction's own `SqlError` dies below —
+        // `TokenConsumed`/`WeakPassword` are real, expected outcomes and
+        // must still reach the caller as themselves (and, as a consequence
+        // of the wrap, a `WeakPassword` failure now rolls the token
+        // consumption back too, rather than burning a single-use token on
+        // a rejected password).
+        yield* sqlTransaction
+          .withTransaction(
+            Effect.gen(function* () {
+              yield* verification.consume(identifier, value).pipe(
+                Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
+                Effect.catchTag("PlatformError", Effect.die),
+              );
+
+              const hints = yield* checkPolicy(httpClient, crypto, input.password, config);
+              if (hints.length > 0) {
+                return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
+              }
+
+              const account = yield* accounts
+                .findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId)
+                .pipe(
+                  Effect.flatMap(
+                    Option.match({
+                      // The token was only ever issued right after `signUp`
+                      // created this exact row (BEH-EA-113/117) — its
+                      // absence here is a defect, not a request-level
+                      // condition the caller can act on.
+                      onNone: () =>
+                        Effect.die(
+                          new Error(`awthaq: password credential missing for user ${userId}`),
+                        ),
+                      onSome: Effect.succeed,
+                    }),
+                  ),
+                );
+              const hash = yield* hasher.hash(input.password);
+              yield* accounts
+                .updateCredentialHash(account.id, Redacted.make(hash))
+                .pipe(Effect.orDie);
+
+              // BEH-EA-117: every session, no exceptions — the caller
+              // isn't authenticated at all here, so there is no "current"
+              // session to keep. Upstream-hardening ticket 02: the real
+              // `revokeAll` primitive, retiring the empty-string-id
+              // `revokeOthers` trick this call site used to stand in for
+              // it.
+              yield* sessions.revokeAll(userId);
+            }),
+          )
+          .pipe(Effect.catchTag("SqlError", Effect.die));
       });
 
       const verifyEmail: PasswordShape["verifyEmail"] = Effect.fnUntraced(function* (input) {
@@ -755,25 +795,43 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
         }
         const { identifier, value } = decoded.value;
-        yield* verification.consume(identifier, value).pipe(
-          Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
-          Effect.catchTag("PlatformError", Effect.die),
-        );
-
-        // Mirrors `confirmReset`'s own posture on the analogous case: this
-        // token was only ever issued right after `signUp` created this
-        // exact user (BEH-EA-113), so a missing user here is a defect, not
-        // a request-level condition the caller can act on — never
-        // re-surfaced as `TokenConsumed`, which would misleadingly imply a
-        // bad/replayed token rather than a genuine invariant violation.
         const userId = Users.UserId(identifier.slice(VERIFY_PREFIX.length));
-        yield* users
-          .verifyEmail(userId)
-          .pipe(
-            Effect.catchTag("UserNotFound", () =>
-              Effect.die(new Error(`awthaq: verify-email token's own user missing: ${userId}`)),
-            ),
-          );
+
+        // RRC-002: same class of bug `ARF-001` closes for `confirmReset` —
+        // a crash between `consume` and `verifyEmail` previously burned
+        // the token without ever flipping `emailVerified`, permanently
+        // stranding the account unverified with no usable token left to
+        // retry. `resendVerification` mints a fresh token, so it isn't
+        // fatal, but it's still the identical consume-then-apply
+        // atomicity gap `SqlTransaction` exists to close.
+        yield* sqlTransaction
+          .withTransaction(
+            Effect.gen(function* () {
+              yield* verification.consume(identifier, value).pipe(
+                Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
+                Effect.catchTag("PlatformError", Effect.die),
+              );
+
+              // Mirrors `confirmReset`'s own posture on the analogous
+              // case: this token was only ever issued right after
+              // `signUp` created this exact user (BEH-EA-113), so a
+              // missing user here is a defect, not a request-level
+              // condition the caller can act on — never re-surfaced as
+              // `TokenConsumed`, which would misleadingly imply a
+              // bad/replayed token rather than a genuine invariant
+              // violation.
+              yield* users
+                .verifyEmail(userId)
+                .pipe(
+                  Effect.catchTag("UserNotFound", () =>
+                    Effect.die(
+                      new Error(`awthaq: verify-email token's own user missing: ${userId}`),
+                    ),
+                  ),
+                );
+            }),
+          )
+          .pipe(Effect.catchTag("SqlError", Effect.die));
       });
 
       const changePassword: PasswordShape["changePassword"] = Effect.fnUntraced(function* (input) {

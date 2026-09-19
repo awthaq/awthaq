@@ -9,7 +9,7 @@
 // `packages/password/test/Password.test.ts`.
 import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import type { AuthEvent } from "@awthaq/core/AuthEvents";
-import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import type { MailMessage } from "@awthaq/ports/Mailer";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { Password, PasswordApi } from "@awthaq/password";
@@ -117,6 +117,10 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
     ),
     Layer.provideMerge(RateLimits.layer),
     Layer.provide(options.breachHttpClient ?? NoBreachHttpClient),
+    // ARF-001: `confirmReset` now runs inside a `SqlTransaction` — a
+    // no-op wrapper for this in-memory composition, same as
+    // `SessionWorld.ts`'s own precedent.
+    Layer.provide(SqlTransaction.layerNoop),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
     Layer.provideMerge(options.config ?? Password.config({})),

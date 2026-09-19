@@ -10,7 +10,7 @@
 // business-logic mock).
 import { createHash } from "node:crypto";
 import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@awthaq/core";
-import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -103,6 +103,9 @@ const TestLayer = Password.Password.layer.pipe(
   Layer.provideMerge(PortsLive),
   Layer.provideMerge(RateLimits.layer),
   Layer.provide(NoBreachHttpClient),
+  // ARF-001: `confirmReset` now runs inside a `SqlTransaction` — a no-op
+  // wrapper for this in-memory composition.
+  Layer.provide(SqlTransaction.layerNoop),
 );
 
 /** TSS-001/TSS-002: a `Mailer` whose `send` never resolves — see the tests below that provide this in place of `PortsLive`'s own `Mailer.layerMemory`. */
@@ -122,6 +125,7 @@ const TestLayerHangingMailer = Password.Password.layer.pipe(
   ),
   Layer.provideMerge(RateLimits.layer),
   Layer.provide(NoBreachHttpClient),
+  Layer.provide(SqlTransaction.layerNoop),
 );
 
 const email = "ada@example.com";
@@ -503,6 +507,7 @@ describe("Password", () => {
             Layer.provideMerge(PortsLive),
             Layer.provideMerge(RateLimits.layer),
             Layer.provide(BreachedHttpClient),
+            Layer.provide(SqlTransaction.layerNoop),
             Layer.provideMerge(Password.config({ breachCheck: true })),
           ),
         ),
@@ -524,6 +529,7 @@ describe("Password", () => {
           Layer.provideMerge(PortsLive),
           Layer.provideMerge(RateLimits.layer),
           Layer.provide(UnavailableHttpClient),
+          Layer.provide(SqlTransaction.layerNoop),
           Layer.provideMerge(Password.config({ breachCheck: true })),
         ),
       ),
@@ -544,6 +550,7 @@ describe("Password", () => {
           Layer.provideMerge(PortsLive),
           Layer.provideMerge(RateLimits.layer),
           Layer.provide(UnavailableHttpClient),
+          Layer.provide(SqlTransaction.layerNoop),
           Layer.provideMerge(Password.config({ breachCheck: { onUnavailable: "reject" } })),
         ),
       ),
@@ -682,6 +689,7 @@ describe("Password", () => {
             Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
             Layer.provideMerge(RateLimits.layer),
             Layer.provide(NoBreachHttpClient),
+            Layer.provide(SqlTransaction.layerNoop),
           ),
         ),
       ),
@@ -745,6 +753,7 @@ describe("Password", () => {
             Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
             Layer.provideMerge(RateLimits.layer),
             Layer.provide(NoBreachHttpClient),
+            Layer.provide(SqlTransaction.layerNoop),
           ),
         ),
       ),
@@ -794,6 +803,7 @@ describe("Password", () => {
             Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
             Layer.provideMerge(RateLimits.layer),
             Layer.provide(NoBreachHttpClient),
+            Layer.provide(SqlTransaction.layerNoop),
           ),
         ),
       ),
