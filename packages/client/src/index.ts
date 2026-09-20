@@ -9,7 +9,13 @@
 // `effect/unstable/reactivity`) but left for `@awthaq/react`'s own
 // package to build, and the `{csrf: false}` contract variant, which has
 // nothing to strip yet since no plugin group in this repository declares
-// `CsrfProtection` middleware today).
+// `CsrfProtection` middleware today). PasskeyClient.ts/PasskeyClientError.ts
+// (BPAS-002, wayfinder ticket 32): the browser-side WebAuthn ceremony
+// helper over `@simplewebauthn/browser`, layered on an already-built
+// `PasskeyApi` client slice the same way `AuthClient.ts`'s own
+// `SessionStore`/`toPromiseFacade` layer on a caller-supplied client.
 // See spec/overview.md for the full package map.
 
 export * as AuthClient from "./AuthClient.ts";
+export * as PasskeyClient from "./passkey/PasskeyClient.ts";
+export * as PasskeyClientError from "./passkey/PasskeyClientError.ts";

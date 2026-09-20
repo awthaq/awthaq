@@ -9,12 +9,16 @@
     "tsBuildInfoFile": "./.tsbuildinfo",
     "paths": {
       "@/*": ["./src/*"],
-      "@awthaq/api": ["../api/src/index.ts"]
+      "@awthaq/api": ["../api/src/index.ts"],
+      "@awthaq/passkey": ["../passkey/src/index.ts"]
     }
   },
   "references": [
     {
       "path": "../api/tsconfig.src.json"
+    },
+    {
+      "path": "../passkey/tsconfig.src.json"
     }
   ]
 }

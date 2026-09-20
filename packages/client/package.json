@@ -26,6 +26,8 @@
   },
   "dependencies": {
     "@awthaq/api": "workspace:*",
+    "@awthaq/passkey": "workspace:*",
+    "@simplewebauthn/browser": "^14.0.0",
     "effect": "catalog:"
   },
   "devDependencies": {
