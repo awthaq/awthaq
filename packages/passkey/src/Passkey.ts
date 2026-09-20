@@ -23,7 +23,7 @@
 // header comment for how it correlates its two anonymous calls instead.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Accounts, Hooks, Sessions, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, Accounts, Hooks, Migrations, Sessions, Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -37,6 +37,7 @@ import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ChallengeStore from "./ChallengeStore.ts";
 import * as PasskeyApi from "./PasskeyApi.ts";
 import * as PasskeyCredentials from "./PasskeyCredentials.ts";
@@ -436,10 +437,106 @@ export const PasskeyHandlers = Layer.mergeAll(
   ),
 );
 
+/**
+ * BAM-002 (.issues/high): first migrations this plugin declares — ported
+ * verbatim from `PasskeyCredentials.test.ts`'s/`ChallengeStore.test.ts`'s
+ * own inline `CREATE TABLE` (each table's canonical, already-working
+ * shape), dialect-branched via `sql.onDialectOrElse` like `@awthaq/sql`'s
+ * own `CoreMigrations.ts`. `backedUp` mirrors `users.emailVerified`'s own
+ * `BOOLEAN`(pg)/`INTEGER`(sqlite) split — `PasskeyCredentials.ts`'s own
+ * `Schema.BooleanFromBit` on that column. `passkey_credential.userId` is
+ * `PasskeyCredentials.ts`'s own real filter key (`listByUser`), unindexed
+ * until now, the same class of gap `CoreMigrations.ts`'s own
+ * `accounts_user_id`/`sessions_user_id` migrations closed;
+ * `passkey_challenge.scope` needs no separate index — it's already this
+ * table's own primary key. Columns left unquoted under `pg` (unlike
+ * `CoreMigrations.ts`'s own `users`/`sessions` tables, like `@awthaq/jwt`'s
+ * own `jwtMigrations`): both `PasskeyCredentials.ts`'s and
+ * `ChallengeStore.ts`'s own queries already reference every column
+ * unquoted, so Postgres's automatic lowercase-folding is what keeps
+ * migration and query consistent here.
+ */
+const passkeyMigrations: Migrations.Migrations = [
+  {
+    name: "create_passkey_credential",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE passkey_credential (
+            id TEXT PRIMARY KEY,
+            userId TEXT NOT NULL,
+            webauthnUserId TEXT NOT NULL,
+            publicKey TEXT NOT NULL,
+            counter INTEGER NOT NULL,
+            deviceType TEXT NOT NULL,
+            backedUp BOOLEAN NOT NULL,
+            transports TEXT NOT NULL,
+            aaguid TEXT NOT NULL,
+            name TEXT NOT NULL,
+            createdAt TIMESTAMPTZ NOT NULL,
+            lastUsedAt TIMESTAMPTZ NOT NULL
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE passkey_credential (
+            id TEXT PRIMARY KEY,
+            userId TEXT NOT NULL,
+            webauthnUserId TEXT NOT NULL,
+            publicKey TEXT NOT NULL,
+            counter INTEGER NOT NULL,
+            deviceType TEXT NOT NULL,
+            backedUp INTEGER NOT NULL,
+            transports TEXT NOT NULL,
+            aaguid TEXT NOT NULL,
+            name TEXT NOT NULL,
+            createdAt TEXT NOT NULL,
+            lastUsedAt TEXT NOT NULL
+          )`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+  {
+    name: "create_passkey_credential_user_id_index",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`CREATE INDEX passkey_credential_user_id ON passkey_credential(userId)`,
+        sqlite: () => sql`CREATE INDEX passkey_credential_user_id ON passkey_credential(userId)`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+  {
+    name: "create_passkey_challenge",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE passkey_challenge (
+            scope TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            expiresAt TIMESTAMPTZ NOT NULL,
+            createdAt TIMESTAMPTZ NOT NULL
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE passkey_challenge (
+            scope TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            expiresAt TEXT NOT NULL,
+            createdAt TEXT NOT NULL
+          )`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+];
+
 export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passkey", {
   apiVersion: 1,
   contract: PasskeyApi.PasskeyApi,
   tables: ["passkey_credential", "passkey_challenge"],
+  migrations: passkeyMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Passkey, {
     handlers: PasskeyHandlers,

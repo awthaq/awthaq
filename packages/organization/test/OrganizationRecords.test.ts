@@ -1,33 +1,26 @@
 // spec.md's "Organization entity & CRUD": the same contract-suite-over-both-layers
 // pattern `@awthaq/admin`'s own `ImpersonationRecords.test.ts` establishes.
+// `layerSql` here is migrated via `Organization.Organization`'s own real
+// `migrations` (`Migrations.run`, `@awthaq/core`) rather than a hand-rolled
+// inline `CREATE TABLE` — BAM-002 (.issues/high) verification, the same
+// `packages/jwt/test/RevocationStore.test.ts` establishes.
+import { Migrations } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Organization from "../src/Organization.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 
 const MemoryLayer = OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
-const Migrated = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      CREATE TABLE organization_org (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        slug TEXT NOT NULL UNIQUE,
-        logo TEXT,
-        metadata TEXT,
-        createdAt TEXT NOT NULL
-      )
-    `;
-  }),
-).pipe(Layer.provide(SqlLive));
+const Migrated = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
+  Layer.provide(SqlLive),
+);
 
 const SqlLayer = OrganizationRecords.layerSql.pipe(
   Layer.provide(NodeCrypto.layer),

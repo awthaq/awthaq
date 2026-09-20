@@ -1,44 +1,28 @@
 // spec.md's "Teams": the same contract-suite-over-both-layers pattern
 // `OrgRoleRecords.test.ts`/`MembershipRecords.test.ts` use, covering both
 // `organization_team` and `organization_team_membership` together since
-// they're managed by the same `TeamRecords` module.
-import { Users } from "@awthaq/core";
+// they're managed by the same `TeamRecords` module. `layerSql` here is
+// migrated via `Organization.Organization`'s own real `migrations`
+// (`Migrations.run`, `@awthaq/core`) rather than hand-rolled inline
+// `CREATE TABLE`s — BAM-002 (.issues/high) verification, the same
+// `packages/jwt/test/RevocationStore.test.ts` establishes.
+import { Migrations, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Organization from "../src/Organization.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
 
 const MemoryLayer = TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
-const Migrated = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      CREATE TABLE organization_team (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        organizationId TEXT NOT NULL,
-        memberCount INTEGER NOT NULL,
-        createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL
-      )
-    `;
-    yield* sql`
-      CREATE TABLE organization_team_membership (
-        id TEXT PRIMARY KEY,
-        teamId TEXT NOT NULL,
-        userId TEXT NOT NULL,
-        createdAt TEXT NOT NULL
-      )
-    `;
-  }),
-).pipe(Layer.provide(SqlLive));
+const Migrated = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
+  Layer.provide(SqlLive),
+);
 
 const SqlLayer = TeamRecords.layerSql.pipe(
   Layer.provide(NodeCrypto.layer),

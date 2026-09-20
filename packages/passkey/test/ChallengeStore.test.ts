@@ -6,7 +6,11 @@
 // own header comment documents why strict single-use cannot be a property
 // of a genuinely stateless design, so that one assertion is replaced with
 // a test that states the actual, weaker guarantee explicitly rather than
-// silently skip it.
+// silently skip it. `layerSql` here is migrated via `Passkey.Passkey`'s
+// own real `migrations` (`Migrations.run`, `@awthaq/core`) rather than a
+// hand-rolled inline `CREATE TABLE` — BAM-002 (.issues/high) verification,
+// the same `packages/jwt/test/RevocationStore.test.ts` establishes.
+import { Migrations } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
@@ -17,24 +21,15 @@ import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ChallengeStore from "../src/ChallengeStore.ts";
+import * as Passkey from "../src/Passkey.ts";
 
 const MemoryLayer = ChallengeStore.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
-const Migrated = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      CREATE TABLE passkey_challenge (
-        scope TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        expiresAt TEXT NOT NULL,
-        createdAt TEXT NOT NULL
-      )
-    `;
-  }),
-).pipe(Layer.provide(SqlLive));
+const Migrated = Layer.effectDiscard(Migrations.run(Passkey.Passkey.migrations)).pipe(
+  Layer.provide(SqlLive),
+);
 
 const SqlLayer = ChallengeStore.layerSql.pipe(
   Layer.provide(NodeCrypto.layer),

@@ -2,8 +2,13 @@
 //
 // The same contract suite runs against `layerMemory` and `layerSql` — the
 // same pattern `packages/passkey/test/PasskeyCredentials.test.ts` uses for
-// its own two `Layer`s.
-import { Users } from "@awthaq/core";
+// its own two `Layer`s. `layerSql` here is migrated via `Admin.Admin`'s own
+// real `migrations` (`Migrations.run`, `@awthaq/core`) rather than a
+// hand-rolled inline `CREATE TABLE` — the same BAM-002 (.issues/high)
+// verification `packages/jwt/test/RevocationStore.test.ts` establishes:
+// genuine end-to-end proof that this plugin's own declared migrations
+// produce a working schema.
+import { Migrations, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
@@ -12,30 +17,16 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Admin from "../src/Admin.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 
 const MemoryLayer = ImpersonationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
-const Migrated = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      CREATE TABLE admin_impersonation (
-        id TEXT PRIMARY KEY,
-        adminUserId TEXT NOT NULL,
-        targetUserId TEXT NOT NULL,
-        sessionId TEXT NOT NULL,
-        reason TEXT NOT NULL,
-        startedAt TEXT NOT NULL,
-        endedAt TEXT,
-        endedBy TEXT
-      )
-    `;
-  }),
-).pipe(Layer.provide(SqlLive));
+const Migrated = Layer.effectDiscard(Migrations.run(Admin.Admin.migrations)).pipe(
+  Layer.provide(SqlLive),
+);
 
 const SqlLayer = ImpersonationRecords.layerSql.pipe(
   Layer.provide(NodeCrypto.layer),

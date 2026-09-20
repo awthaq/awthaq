@@ -21,7 +21,7 @@
 // violation above.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Sessions, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, Migrations, Sessions, Users } from "@awthaq/core";
 import type { AuthSubject } from "@qadi/core";
 import { makeSubject } from "@qadi/core";
 import * as Context from "effect/Context";
@@ -32,6 +32,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AdminApi from "./AdminApi.ts";
 import * as ImpersonationRecords from "./ImpersonationRecords.ts";
 
@@ -184,10 +185,73 @@ export const AdminHandlers = HttpApiBuilder.group(
   }),
 );
 
+/**
+ * BAM-002 (.issues/high): no plugin populated `migrations` before AOMS-006's
+ * cluster resolution added `@awthaq/jwt`'s own — this is the same pattern
+ * (`ImpersonationRecords.test.ts`'s own inline `CREATE TABLE` is this
+ * table's canonical, already-working shape; ported verbatim, dialect-
+ * branched via `sql.onDialectOrElse` like `@awthaq/sql`'s own
+ * `CoreMigrations.ts`). `sessionId` is `ImpersonationRecords.ts`'s own real
+ * filter key (`findBySessionId`/`endBySessionId`), unindexed until now —
+ * the same class of gap `CoreMigrations.ts`'s own `accounts_user_id`/
+ * `sessions_user_id` migrations closed. Columns left unquoted under `pg`
+ * (unlike `CoreMigrations.ts`'s own `users`/`sessions` tables, like
+ * `@awthaq/jwt`'s own `jwtMigrations`): `ImpersonationRecords.ts`'s own
+ * queries already reference every column unquoted, so Postgres's automatic
+ * lowercase-folding is what keeps migration and query consistent here.
+ */
+const adminMigrations: Migrations.Migrations = [
+  {
+    name: "create_admin_impersonation",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE admin_impersonation (
+            id TEXT PRIMARY KEY,
+            adminUserId TEXT NOT NULL,
+            targetUserId TEXT NOT NULL,
+            sessionId TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            startedAt TIMESTAMPTZ NOT NULL,
+            endedAt TIMESTAMPTZ,
+            endedBy TEXT
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE admin_impersonation (
+            id TEXT PRIMARY KEY,
+            adminUserId TEXT NOT NULL,
+            targetUserId TEXT NOT NULL,
+            sessionId TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            startedAt TEXT NOT NULL,
+            endedAt TEXT,
+            endedBy TEXT
+          )`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+  {
+    name: "create_admin_impersonation_session_id_index",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () =>
+          sql`CREATE INDEX admin_impersonation_session_id ON admin_impersonation(sessionId)`,
+        sqlite: () =>
+          sql`CREATE INDEX admin_impersonation_session_id ON admin_impersonation(sessionId)`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+];
+
 export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
   apiVersion: 1,
   contract: AdminApi.AdminApi,
   tables: ["admin_impersonation"],
+  migrations: adminMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Admin, {
     handlers: AdminHandlers,

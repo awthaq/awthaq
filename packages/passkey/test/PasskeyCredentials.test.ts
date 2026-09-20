@@ -2,41 +2,26 @@
 //
 // The same contract suite runs against `layerMemory` and `layerSql` — the
 // same pattern `packages/core/test/Accounts.test.ts` etc. use for their own
-// two `Layer`s.
-import { Users } from "@awthaq/core";
+// two `Layer`s. `layerSql` here is migrated via `Passkey.Passkey`'s own
+// real `migrations` (`Migrations.run`, `@awthaq/core`) rather than a
+// hand-rolled inline `CREATE TABLE` — BAM-002 (.issues/high) verification,
+// the same `packages/jwt/test/RevocationStore.test.ts` establishes.
+import { Migrations, Users } from "@awthaq/core";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
 
 const MemoryLayer = PasskeyCredentials.layerMemory;
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
-const Migrated = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      CREATE TABLE passkey_credential (
-        id TEXT PRIMARY KEY,
-        userId TEXT NOT NULL,
-        webauthnUserId TEXT NOT NULL,
-        publicKey TEXT NOT NULL,
-        counter INTEGER NOT NULL,
-        deviceType TEXT NOT NULL,
-        backedUp INTEGER NOT NULL,
-        transports TEXT NOT NULL,
-        aaguid TEXT NOT NULL,
-        name TEXT NOT NULL,
-        createdAt TEXT NOT NULL,
-        lastUsedAt TEXT NOT NULL
-      )
-    `;
-  }),
-).pipe(Layer.provide(SqlLive));
+const Migrated = Layer.effectDiscard(Migrations.run(Passkey.Passkey.migrations)).pipe(
+  Layer.provide(SqlLive),
+);
 
 const SqlLayer = PasskeyCredentials.layerSql.pipe(
   Layer.provideMerge(SqlLive),
