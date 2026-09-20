@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @authorization-bridge @roles-subject-resolver
+@skip @unwired
 Feature: Roles and the Subject Resolver
 
   # BEH-EA-137 — spec/behaviors/18-roles-subject-resolver.md. The fail-closed

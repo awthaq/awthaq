@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @foundations @plugin-contract
+@skip @unwired
 Feature: Plugin Contract
 
   # BEH-EA-001 — spec/behaviors/01-plugin-contract.md; see also

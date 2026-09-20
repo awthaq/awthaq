@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @cross-cutting @hooks
+@skip @unwired
 Feature: Hooks
 
   # BEH-EA-089 — spec/behaviors/12-hooks.md; see also ADR-EA-001.

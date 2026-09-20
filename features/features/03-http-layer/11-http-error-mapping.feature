@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @http-layer @http-error-mapping
+@skip @unwired
 Feature: HTTP Serving and Error Mapping
 
   # BEH-EA-081 — spec/behaviors/11-http-error-mapping.md; see also

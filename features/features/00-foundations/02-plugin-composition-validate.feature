@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @foundations @plugin-composition
+@skip @unwired
 Feature: Plugin Composition and Validate<P>
 
   # BEH-EA-009 — spec/behaviors/02-plugin-composition-validate.md; see also

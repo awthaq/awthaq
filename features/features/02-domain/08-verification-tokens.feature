@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @domain @verification-tokens
+@skip @unwired
 Feature: Verification Tokens
 
   # BEH-EA-057 — spec/behaviors/08-verification-tokens.md

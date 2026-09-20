@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @http-layer @csrf
+@skip @unwired
 Feature: CSRF Protection
 
   # BEH-EA-073 — spec/behaviors/10-csrf.md

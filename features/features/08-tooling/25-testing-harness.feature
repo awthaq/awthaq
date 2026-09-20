@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @tooling @testing-harness
+@skip @unwired
 Feature: Testing Harness
 
   # BEH-EA-193 — spec/behaviors/25-testing-harness.md

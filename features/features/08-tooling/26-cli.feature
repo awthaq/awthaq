@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @tooling @cli
+@skip @unwired
 Feature: CLI
 
   # BEH-EA-201 — spec/behaviors/26-cli.md

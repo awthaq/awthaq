@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @client-integration @effect-client
+@skip @unwired
 Feature: The Effect Client
 
   # BEH-EA-169 — spec/behaviors/22-client-effect.md; see also ADR-EA-003

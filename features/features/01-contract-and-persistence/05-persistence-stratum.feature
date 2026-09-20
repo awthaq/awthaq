@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @foundations @persistence
+@skip @unwired
 Feature: The Persistence Stratum
 
   # BEH-EA-033 — spec/behaviors/05-persistence-stratum.md; see also ADR-EA-004

@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @authorization-bridge @qadi-bridge-path-b
+@skip @unwired
 Feature: Qadi Bridge — Path B (Declared Permissions)
 
   # BEH-EA-153 — spec/behaviors/20-qadi-bridge-path-b.md; see also

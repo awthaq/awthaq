@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @client-integration @react
+@skip @unwired
 Feature: React Bindings
 
   # BEH-EA-177 — spec/behaviors/23-react.md

@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @client-integration @nextjs-ssr
+@skip @unwired
 Feature: Next.js Server Rendering
 
   # BEH-EA-185 — spec/behaviors/24-nextjs-ssr.md

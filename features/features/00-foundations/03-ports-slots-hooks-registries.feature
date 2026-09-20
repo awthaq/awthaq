@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @foundations @ports-slots-hooks-registries
+@skip @unwired
 Feature: Ports, Slots, Hook Points, and Registries
 
   # BEH-EA-017 — spec/behaviors/03-ports-slots-hooks-registries.md; see also
@@ -164,7 +165,7 @@ Feature: Ports, Slots, Hook Points, and Registries
       Given a "veto" hook point tapped by plugin "B" (declared order 2), plugin "A" (declared order 1, depends on "B"), and plugin "C" (declared order 1)
       When the hook point fires
       Then taps run in an order that places "B" before "A" (dependency order)
-      And, among taps with no dependency relationship, taps run by declared "order" and then by plugin id
+      And among taps with no dependency relationship, taps run by declared "order" and then by plugin id
 
   # BEH-EA-023 — spec/behaviors/03-ports-slots-hooks-registries.md
   # Compile-time contract: the enforcing mechanism is the TypeScript

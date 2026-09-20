@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @foundations @contract
+@skip @unwired
 Feature: The Contract Stratum
 
   # BEH-EA-025 — spec/behaviors/04-contract-stratum.md; see also ADR-EA-003

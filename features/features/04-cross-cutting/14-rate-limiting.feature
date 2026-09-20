@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @cross-cutting @rate-limiting
+@skip @unwired
 Feature: Rate Limiting
 
   # BEH-EA-105 — spec/behaviors/14-rate-limiting.md; see also ADR-EA-010.

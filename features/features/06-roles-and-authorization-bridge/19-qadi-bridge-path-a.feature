@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @authorization-bridge @qadi-bridge-path-a
+@skip @unwired
 Feature: Qadi Bridge — Path A (Decide in Handler)
 
   # BEH-EA-145 — spec/behaviors/19-qadi-bridge-path-a.md; see also

@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @cross-cutting @events
+@skip @unwired
 Feature: Events
 
   # BEH-EA-097 — spec/behaviors/13-events.md; see also ADR-EA-001.

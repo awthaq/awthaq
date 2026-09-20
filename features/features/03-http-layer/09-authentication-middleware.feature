@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @http-layer @authentication-middleware
+@skip @unwired
 Feature: Authentication Middleware
 
   # BEH-EA-065 — spec/behaviors/09-authentication-middleware.md; see also

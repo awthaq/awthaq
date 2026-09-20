@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @domain @users-accounts
+@skip @unwired
 Feature: Users and Accounts
 
   # BEH-EA-041 — spec/behaviors/06-domain-users-accounts.md

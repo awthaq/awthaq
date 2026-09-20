@@ -4,6 +4,7 @@
 # execute against, not a record of anything verified today.
 
 @authorization-bridge @qadi-resolvers-obligations
+@skip @unwired
 Feature: Qadi Resolvers and Obligations
 
   # BEH-EA-161 — spec/behaviors/21-qadi-resolvers-obligations.md; see also
