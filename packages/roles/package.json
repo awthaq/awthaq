@@ -32,6 +32,7 @@
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

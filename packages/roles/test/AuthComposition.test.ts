@@ -43,12 +43,12 @@ describe("Auth.make([Roles])", () => {
     assert.throws(() => Auth.make([Roles.Roles]), /Auth.make requires at least one plugin/);
   });
 
-  it("composes alongside another plugin, contributing no groups and no tables", () => {
+  it("composes alongside another plugin, contributing no groups but a real table", () => {
     const auth = Auth.make([Ping, Roles.Roles]);
     assert.strictEqual(auth.api.identifier, "auth");
     assert.deepStrictEqual(auth.manifest.plugins, [
       { id: "ping", apiVersion: 1, tables: [], dependsOn: [] },
-      { id: "roles", apiVersion: 1, tables: [], dependsOn: [] },
+      { id: "roles", apiVersion: 1, tables: ["role_assignments"], dependsOn: [] },
     ]);
   });
 });

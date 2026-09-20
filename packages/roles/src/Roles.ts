@@ -12,13 +12,16 @@
 // on `ApiKeyPrincipal`/`ServicePrincipal` — is documented once, in
 // `@awthaq/qadi`'s `SubjectResolver.ts`, not repeated here).
 //
-// SQL persistence for role assignments is deferred: only `layerMemory`
-// exists today, the same class of not-yet-designed persistence
-// `@awthaq/ports`'s deferred `WebAuthn` interface documents. A real
-// reservation/uniqueness design for a `role_assignments` table is separate,
-// later work, not a gap silently papered over.
+// BAM-006 (.issues/high): `layerSql` closes the persistence gap this
+// header used to document as deferred — a `role_assignments` table,
+// `UNIQUE(userId, role)` making `assign` idempotent at the database layer
+// too (matching `layerMemory`'s own "assigning an already-held role name
+// is a no-op" contract), mirroring `@awthaq/jwt`'s own
+// `RevocationStore.layerSql` (`INSERT ... ON CONFLICT ... DO NOTHING`,
+// same plugin-owned-table pattern this plugin now follows).
+import { Api } from "@awthaq/api";
 import { Users } from "@awthaq/core";
-import { AuthPlugin, Slots } from "@awthaq/core";
+import { AuthPlugin, Migrations, Slots } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -26,7 +29,10 @@ import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import type { Role } from "@qadi/core";
 import { fromRoles, withAttributes } from "@qadi/core";
 
@@ -80,6 +86,126 @@ const rolesMake: Effect.Effect<RolesShape> = Effect.gen(function* () {
   };
 });
 
+// ---- layerSql -----------------------------------------------------------------
+
+const RoleAssignmentRow = Schema.Struct({
+  userId: Schema.String,
+  role: Schema.String,
+});
+
+const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient> = Effect.gen(
+  function* () {
+    const sql = yield* SqlClient.SqlClient;
+
+    const assignQuery = (r: typeof RoleAssignmentRow.Type) =>
+      sql`
+        INSERT INTO role_assignments (userId, role)
+        VALUES (${r.userId}, ${r.role})
+        ON CONFLICT (userId, role) DO NOTHING
+      `;
+
+    const revokeQuery = (r: typeof RoleAssignmentRow.Type) =>
+      sql`DELETE FROM role_assignments WHERE userId = ${r.userId} AND role = ${r.role}`;
+
+    const listQuery = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: Schema.Struct({ role: Schema.String }),
+      execute: (userId) => sql`SELECT role FROM role_assignments WHERE userId = ${userId}`,
+    });
+
+    return {
+      assign: (userId, roleName) =>
+        assignQuery({ userId, role: roleName }).pipe(Effect.orDie, Effect.asVoid),
+      revoke: (userId, roleName) =>
+        revokeQuery({ userId, role: roleName }).pipe(Effect.orDie, Effect.asVoid),
+      listRoleNames: (userId) =>
+        listQuery(userId).pipe(
+          Effect.map((rows) => rows.map((row) => row.role)),
+          Effect.orDie,
+        ),
+    };
+  },
+);
+
+/**
+ * BAM-006 (.issues/high): the migration this plugin's own header used to
+ * defer — `UNIQUE(userId, role)` makes `assign` idempotent at the database
+ * layer too, matching `layerMemory`'s own "assigning an already-held role
+ * name is a no-op" contract. Columns left unquoted under `pg`, like
+ * `@awthaq/jwt`'s own `jwtMigrations`: this table's own queries above
+ * already reference every column unquoted.
+ */
+const rolesMigrations: Migrations.Migrations = [
+  {
+    name: "create_role_assignments",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE role_assignments (
+            userId TEXT NOT NULL,
+            role TEXT NOT NULL,
+            createdAt TIMESTAMPTZ NOT NULL DEFAULT now(),
+            UNIQUE (userId, role)
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE role_assignments (
+            userId TEXT NOT NULL,
+            role TEXT NOT NULL,
+            createdAt TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            UNIQUE (userId, role)
+          )`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+  {
+    name: "create_role_assignments_user_id_index",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments(userId)`,
+        sqlite: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments(userId)`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+];
+
+/**
+ * Factored out of `Roles.layer` so `layerSql` can share it: builds the
+ * `SubjectResolver` override from whichever `RolesShape` implementation
+ * gets merged underneath (`rolesMake`/`rolesMakeSql`) — see `Roles.layer`'s
+ * own doc comment for why the self-reference to `Roles` here is safe.
+ */
+const subjectResolverMake = Effect.gen(function* () {
+  const roles = yield* Roles;
+  const rolesConfig = yield* RolesConfig;
+  const catalog = new Map(rolesConfig.catalog.map((role) => [role.name, role] as const));
+
+  return {
+    resolve: (principal: Api.Principal) => {
+      if (principal._tag !== "User") {
+        return Effect.succeed(QadiSubjectResolver.resolveIdentityOnly(principal));
+      }
+      return Effect.gen(function* () {
+        const userId = Users.UserId(principal.ref.id);
+        const names = yield* roles.listRoleNames(userId);
+        const matched = names.flatMap((name) => {
+          const found = catalog.get(name);
+          return found === undefined ? [] : [found];
+        });
+        const subject = fromRoles({ id: `user:${userId}`, roles: matched });
+        return principal.actingAs === undefined
+          ? subject
+          : withAttributes(subject, {
+              actingAs: { type: principal.actingAs.type, id: principal.actingAs.id },
+            });
+      });
+    },
+  };
+});
+
 export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   apiVersion: 1,
   // BEH-EA-018/roadmap M3: no HTTP contract of its own — this plugin's whole
@@ -90,7 +216,8 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   // trivially, the same bottom-type reasoning `Auth.ts`'s own comments use
   // for `Layer`'s contravariant `ROut`).
   contract: HttpApi.make("auth"),
-  tables: [],
+  tables: ["role_assignments"],
+  migrations: rolesMigrations,
 }) {
   /**
    * Self-referential the same way `Password`'s own `static readonly layer`
@@ -116,32 +243,13 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   static readonly layer = Slots.override(
     Roles,
     QadiSubjectResolver.SubjectResolver,
-    Effect.gen(function* () {
-      const roles = yield* Roles;
-      const rolesConfig = yield* RolesConfig;
-      const catalog = new Map(rolesConfig.catalog.map((role) => [role.name, role] as const));
-
-      return {
-        resolve: (principal) => {
-          if (principal._tag !== "User") {
-            return Effect.succeed(QadiSubjectResolver.resolveIdentityOnly(principal));
-          }
-          return Effect.gen(function* () {
-            const userId = Users.UserId(principal.ref.id);
-            const names = yield* roles.listRoleNames(userId);
-            const matched = names.flatMap((name) => {
-              const found = catalog.get(name);
-              return found === undefined ? [] : [found];
-            });
-            const subject = fromRoles({ id: `user:${userId}`, roles: matched });
-            return principal.actingAs === undefined
-              ? subject
-              : withAttributes(subject, {
-                  actingAs: { type: principal.actingAs.type, id: principal.actingAs.id },
-                });
-          });
-        },
-      };
-    }),
+    subjectResolverMake,
   ).pipe(Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMake })));
+
+  /** BAM-006: the same composition as `layer`, over `rolesMakeSql` instead of the in-memory `rolesMake`. */
+  static readonly layerSql = Slots.override(
+    Roles,
+    QadiSubjectResolver.SubjectResolver,
+    subjectResolverMake,
+  ).pipe(Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMakeSql })));
 }
