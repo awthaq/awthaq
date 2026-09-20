@@ -653,7 +653,14 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             registrationScope(sessionId),
             clientData.challenge,
           );
-          let enforceUserVerification = consumedOrdinary;
+          // CB-001 (.issues/high): enforcement must follow the RP's own
+          // conveyed `userVerification` policy (WebAuthn §7.1), the same
+          // config-gated check `authenticateVerify` already applies below —
+          // an unconditional `= consumedOrdinary` rejected any UV=0
+          // response even under the default `"preferred"` config, which
+          // itself tells authenticators UV is optional.
+          let enforceUserVerification =
+            consumedOrdinary && config.authenticatorSelection.userVerification === "required";
           if (!consumedOrdinary) {
             const consumedConditional = yield* challengeStore.consume(
               conditionalScope(sessionId),

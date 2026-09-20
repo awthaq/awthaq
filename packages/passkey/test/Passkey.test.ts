@@ -521,7 +521,44 @@ describe("Passkey — Conditional Create (ticket 07)", () => {
   );
 
   it.effect(
-    "register/verify still requires user verification via the ordinary (non-conditional) scope",
+    "CB-001: register/verify via the ordinary scope accepts UV=0 under the default 'preferred' policy",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const user = yield* users.create({ email: "preferred@example.com", name: "Preferred" });
+        const issued = yield* sessions.issue({ userId: user.id });
+
+        const options = yield* passkey.registerOptions(user.id, issued.session.id);
+        // `defaultPasskeyConfig.authenticatorSelection.userVerification` is
+        // `"preferred"` — a PIN-less FIDO2 security key legitimately
+        // answers such a ceremony with UV=0, and the RP must accept it
+        // (WebAuthn §7.1: enforcement follows the RP's own conveyed
+        // policy), not reject a response its own options invited.
+        const record = yield* passkey.registerVerify(user.id, issued.session.id, {
+          credential: {
+            id: "cred-mock-1",
+            rawId: "cred-mock-1",
+            type: "public-key",
+            response: {
+              clientDataJSON: buildClientDataJSON({
+                type: "webauthn.create",
+                challenge: extractChallenge(options),
+                origin: ORIGIN,
+              }),
+              attestationObject: "",
+            },
+          },
+        });
+        assert.strictEqual(record.id, "cred-mock-1");
+      }).pipe(
+        Effect.provide(buildLayer(mockWebAuthn({ registrationVerified: { userVerified: false } }))),
+      ),
+  );
+
+  it.effect(
+    "CB-001: register/verify via the ordinary scope still rejects UV=0 when the policy is 'required'",
     () =>
       Effect.gen(function* () {
         const passkey = yield* Passkey.Passkey;
@@ -550,7 +587,11 @@ describe("Passkey — Conditional Create (ticket 07)", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "PasskeyUserVerificationRequired");
       }).pipe(
-        Effect.provide(buildLayer(mockWebAuthn({ registrationVerified: { userVerified: false } }))),
+        Effect.provide(
+          buildLayer(mockWebAuthn({ registrationVerified: { userVerified: false } }), {
+            authenticatorSelection: { userVerification: "required" },
+          }),
+        ),
       ),
   );
 });
