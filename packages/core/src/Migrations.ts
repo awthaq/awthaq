@@ -28,11 +28,22 @@ export type Migrations = ReadonlyArray<Migration>;
  * `renumberMigrations`) onto Effect's real `Migrator` — the same runner
  * `@awthaq/sql`'s `CoreMigrations.coreMigrations` uses for the core
  * tables. Array index (already the correct dependency order) becomes the
- * migrator's own numeric id; no plugin populates `migrations` yet (the
- * "no line of source exists yet" era's own scaffold-only starting point),
- * so this has no real caller today — proportionate for a first wiring,
- * not dead weight: a plugin author adding `migrations: [...]` to their
- * own `AuthPlugin.Service` options gets a real, tested runner for free.
+ * migrator's own numeric id.
+ *
+ * BE-001 (.issues/high): every plugin that owns a table now populates its
+ * own `migrations` (`admin`, `jwt`, `organization`, `passkey`, `roles` —
+ * see each plugin's own `src/*.ts`, and `packages/core/test/AuthPlugin.test.ts`'s
+ * `Auth.make` suite for the aggregation itself under test), each plugin's
+ * own test suite runs its real migrations rather than a hand-rolled inline
+ * `CREATE TABLE`, and `oauth`/`password` deliberately keep `tables: []`
+ * (see either plugin's own comment for why). This module's own `run` still
+ * has no PRODUCTION call site — no bootstrap/CLI/deployment path invokes
+ * it yet — because that requires `AuthCore` (M1 Core, this module's own
+ * original "no line of source exists yet" era) to exist as a real
+ * `AuthPlugin` `Auth.make` can prepend core's own migrations alongside;
+ * see `Auth.ts`'s own module header for that scoping. A plugin author
+ * adding `migrations: [...]` to their own `AuthPlugin.Service` options
+ * still gets a real, tested runner for free the moment that lands.
  */
 export const run = (
   migrations: Migrations,

@@ -3,6 +3,16 @@
 // persisting it. The same contract suite runs against `layerMemory` and
 // `layerSql`, mirroring `@awthaq/admin`'s own
 // `ImpersonationRecords.test.ts`.
+//
+// BE-001 (.issues/high): `layerSql` is migrated via `Jwt.Jwt`'s own real
+// `migrations` (`Migrations.run`, `@awthaq/core`) rather than a hand-rolled
+// inline `CREATE TABLE` — the same conversion `RevocationStore.test.ts`
+// already made, and `Jwt.ts`'s own `jwtMigrations` doc comment names this
+// file as the pre-existing gap it closed "in passing." Running the full
+// `Jwt.Jwt.migrations` (not just the `jwt_signing_key` migration this suite
+// needs) also creates `jwt_token_revocation`, unused here but harmless —
+// the same shape `RevocationStore.test.ts` already accepts in reverse.
+import { Migrations } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
@@ -11,8 +21,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as JwtConfig from "../src/JwtConfig.ts";
+import * as Jwt from "../src/Jwt.ts";
 import * as KeyRing from "../src/KeyRing.ts";
 import * as SigningKeyRecords from "../src/SigningKeyRecords.ts";
 
@@ -20,22 +30,9 @@ const TestConfig = JwtConfig.config({ issuer: "https://issuer.test" });
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
-const Migrated = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      CREATE TABLE jwt_signing_key (
-        kid TEXT PRIMARY KEY,
-        alg TEXT NOT NULL,
-        publicKeyJwk TEXT NOT NULL,
-        privateKeyJwk TEXT,
-        createdAt TEXT NOT NULL,
-        rotatedAt TEXT,
-        retiresAt TEXT
-      )
-    `;
-  }),
-).pipe(Layer.provide(SqlLive));
+const Migrated = Layer.effectDiscard(Migrations.run(Jwt.Jwt.migrations)).pipe(
+  Layer.provide(SqlLive),
+);
 
 const SqlRecords = SigningKeyRecords.layerSql.pipe(
   Layer.provideMerge(SqlLive),
