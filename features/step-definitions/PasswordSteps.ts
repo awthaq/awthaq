@@ -331,6 +331,13 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
       });
       yield* verifyLatestSignUp();
       yield* request("/password/request-reset", { email: `${name}-reset-flow@example.com` });
+      // `requestReset`'s own mail dispatch is `Effect.forkDetach`ed
+      // (BEH-EA-064: response latency must not be an enumeration oracle)
+      // — never awaited by the HTTP response, so the very next step's
+      // `sentMail()` read needs these scheduler turns first, the same
+      // race `verifyLatestSignUp` above already guards against for its
+      // own `signUp`-dispatched mail.
+      yield* letForkedFibersRun;
     },
   );
 
@@ -400,6 +407,10 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   When("{string} confirms a password reset", function* (name: string) {
     yield* request("/password/request-reset", { email: (yield* getActor(name)).email });
+    // See the identical comment on the sibling reset-confirmation step
+    // above: `requestReset`'s mail dispatch is forked and detached, never
+    // awaited by the response.
+    yield* letForkedFibersRun;
     const messages = yield* sentMail();
     const resetMail = messages.findLast((m) => m.template === "reset-password");
     if (resetMail === undefined) throw new Error("expected a reset-password mail");

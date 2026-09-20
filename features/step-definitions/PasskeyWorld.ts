@@ -148,6 +148,7 @@ export interface AppOptions {
   readonly origins?: ReadonlyArray<string>;
   readonly attestation?: WebAuthn.AttestationConveyance;
   readonly conditionalCreate?: boolean;
+  readonly authenticatorSelection?: WebAuthn.AuthenticatorSelection;
   readonly webAuthn?: MockWebAuthnOverrides;
 }
 
@@ -163,6 +164,9 @@ const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAut
           ...(options.conditionalCreate === undefined
             ? {}
             : { conditionalCreate: options.conditionalCreate }),
+          ...(options.authenticatorSelection === undefined
+            ? {}
+            : { authenticatorSelection: options.authenticatorSelection }),
         }),
       ),
       Layer.provide(AuthenticationLive),

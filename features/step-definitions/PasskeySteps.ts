@@ -836,7 +836,16 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
         known.tag === "PasskeyVerificationFailed"
           ? { webAuthn: { failVerifyRegistration: true } }
           : known.tag === "PasskeyUserVerificationRequired"
-            ? { webAuthn: { registrationVerified: { userVerified: false } } }
+            ? // CB-001 (.issues/high): enforcement follows the RP's own
+              // conveyed `userVerification` policy — the default
+              // `"preferred"` no longer rejects UV=0, so this scenario
+              // must explicitly opt into `"required"` to still exercise
+              // the failure it names, mirroring the sign-in path's own
+              // already-`"required"`-gated equivalent.
+              {
+                webAuthn: { registrationVerified: { userVerified: false } },
+                authenticatorSelection: { userVerification: "required" },
+              }
             : known.tag === "PasskeyRpIdMismatch"
               ? // An accepted origin whose host doesn't match `rpId` as a
                 // registrable-domain suffix — needed to reach the rpId
