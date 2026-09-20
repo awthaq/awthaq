@@ -10,10 +10,16 @@
 //
 // Scoped deliberately, documented rather than silently assumed: no
 // `google()`/`github()`/`apple()` vendor presets (see `OAuthProvider.ts`'s
-// own header), no token refresh operation (nothing in BEH-EA-121..128
-// requires it — a real gap for a production deployment, the same category
-// of documented deferral as `Verification.layerSql`), and `Jwt.ts`'s own
-// header documents its RS256-only signature-verification scope.
+// own header), and `Jwt.ts`'s own header documents its RS256-only
+// signature-verification scope.
+//
+// BE-002 (.issues/high): the exchanged access/refresh token pair is now
+// persisted (`@awthaq/core`'s `Accounts.ProviderTokenSet`, via `link`/
+// `updateProviderTokens` in this file's own `callback` handler) rather
+// than discarded after the transient userinfo/id-token use, and
+// `OAuthTokenAccess.ts` exposes a scoped refresh port so application code
+// calling the provider's API on the user's behalf never handles a raw
+// token directly.
 
 import { Api } from "@awthaq/api";
 import {
@@ -29,6 +35,7 @@ import {
 import { ClientAddress, Encryption, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
@@ -201,9 +208,24 @@ const buildAuthorizeUrl = (
   return url.toString();
 };
 
+/**
+ * BE-002 (.issues/high): `refreshToken`/`expiresIn`/`scope`/`tokenType`
+ * carry the rest of a standard OAuth2 token response (RFC 6749 §5.1) this
+ * module previously discarded after the transient userinfo/id-token use —
+ * `toProviderTokenSet` below maps them onto `@awthaq/core`'s own
+ * `Accounts.ProviderTokenSet` for persistence. Deliberately excludes any
+ * refresh-token TTL: no standard field carries one (some providers expose
+ * a non-standard `refresh_expires_in`; this module doesn't guess at
+ * provider-specific extensions), so `ProviderTokenSet.refreshTokenExpiresAt`
+ * is always `None` from this module's own conversion.
+ */
 interface TokenSet {
   readonly accessToken: string;
   readonly idToken: string | undefined;
+  readonly refreshToken: string | undefined;
+  readonly expiresIn: number | undefined;
+  readonly scope: string | undefined;
+  readonly tokenType: string | undefined;
 }
 
 const exchangeCode = (
@@ -228,12 +250,39 @@ const exchangeCode = (
     const body = (yield* response.json) as {
       readonly access_token?: string;
       readonly id_token?: string;
+      readonly refresh_token?: string;
+      readonly expires_in?: number;
+      readonly scope?: string;
+      readonly token_type?: string;
     };
     if (typeof body.access_token !== "string") {
       return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
     }
-    return { accessToken: body.access_token, idToken: body.id_token };
+    return {
+      accessToken: body.access_token,
+      idToken: body.id_token,
+      refreshToken: body.refresh_token,
+      expiresIn: typeof body.expires_in === "number" ? body.expires_in : undefined,
+      scope: body.scope,
+      tokenType: body.token_type,
+    };
   }).pipe(Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())));
+
+/** BE-002: the `TokenSet` half of the `Accounts.ProviderTokenSet` conversion — see `TokenSet`'s own comment. */
+const toProviderTokenSet = (tokens: TokenSet, now: DateTime.Utc): Accounts.ProviderTokenSet => ({
+  accessToken: Redacted.make(tokens.accessToken),
+  refreshToken:
+    tokens.refreshToken === undefined
+      ? Option.none()
+      : Option.some(Redacted.make(tokens.refreshToken)),
+  accessTokenExpiresAt:
+    tokens.expiresIn === undefined
+      ? Option.none()
+      : Option.some(DateTime.addDuration(now, Duration.seconds(tokens.expiresIn))),
+  refreshTokenExpiresAt: Option.none(),
+  scope: tokens.scope === undefined ? Option.none() : Option.some(tokens.scope),
+  tokenType: tokens.tokenType === undefined ? Option.none() : Option.some(tokens.tokenType),
+});
 
 /**
  * BEH-EA-127 (claims side): `iss`/`aud`/`exp`/`nonce` are checked against
@@ -637,6 +686,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           codeVerifier,
           redirectUri,
         });
+        const exchangedAt = yield* DateTime.now;
 
         const idClaims: Record<string, unknown> | undefined =
           provider.kind === "oidc"
@@ -666,16 +716,22 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
         const profile = provider.mapProfile({ ...idClaims, ...userinfoClaims });
 
-        const userIdIfLinked = yield* accounts
-          .findByProviderSubject(
-            providerId,
-            profile.subject,
-            Option.getOrUndefined(provider.issuer),
-          )
-          .pipe(Effect.map(Option.map((account) => account.userId)));
+        const accountIfLinked = yield* accounts.findByProviderSubject(
+          providerId,
+          profile.subject,
+          Option.getOrUndefined(provider.issuer),
+        );
 
-        const targetUserId: Users.UserId = yield* Option.match(userIdIfLinked, {
-          onSome: (userId) => Effect.succeed(userId),
+        const targetUserId: Users.UserId = yield* Option.match(accountIfLinked, {
+          // BE-002: every successful OAuth sign-in against an
+          // already-linked account persists the freshly exchanged token
+          // set — previously discarded here on every re-authentication,
+          // silently leaving a stale (possibly already-expired) access
+          // token as this account's only stored credential.
+          onSome: (account) =>
+            accounts
+              .updateProviderTokens(account.id, toProviderTokenSet(tokens, exchangedAt))
+              .pipe(Effect.as(account.userId), Effect.orDie),
           onNone: () =>
             Effect.gen(function* () {
               if (flow.link !== undefined) {
@@ -685,6 +741,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     userId,
                     providerId,
                     subject: profile.subject,
+                    tokens: toProviderTokenSet(tokens, exchangedAt),
                     ...issuerField(provider.issuer),
                   })
                   .pipe(
@@ -715,6 +772,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     userId: existing.value.id,
                     providerId,
                     subject: profile.subject,
+                    tokens: toProviderTokenSet(tokens, exchangedAt),
                     ...issuerField(provider.issuer),
                   })
                   .pipe(Effect.orDie);
@@ -752,6 +810,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                         userId: user.id,
                         providerId,
                         subject: profile.subject,
+                        tokens: toProviderTokenSet(tokens, exchangedAt),
                         ...issuerField(provider.issuer),
                       })
                       .pipe(

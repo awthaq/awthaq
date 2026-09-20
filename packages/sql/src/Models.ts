@@ -102,6 +102,23 @@ export class Account extends Model.Class<Account>("Account")({
   passwordHash: Model.Sensitive(Schema.NullOr(Schema.String)),
   accessToken: Model.Sensitive(Schema.NullOr(Schema.String)),
   refreshToken: Model.Sensitive(Schema.NullOr(Schema.String)),
+  // BE-002 (.issues/high): token *metadata*, not secrets themselves — no
+  // `Model.Sensitive` (matching how `providerId`/`subject`/`issuer` already
+  // sit unencrypted alongside `accessToken`/`refreshToken` on this same
+  // row). Constructor-defaulted to `null` (`User.metadata`'s own
+  // precedent) so a pre-existing insert/update call site that predates
+  // OAuth token persistence keeps compiling unchanged; the real writers
+  // (`@awthaq/core`'s `Accounts.ts` `link`/`updateProviderTokens`) always
+  // pass every field of this group explicitly, never relying on the
+  // default themselves.
+  accessTokenExpiresAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
+  refreshTokenExpiresAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
+    Schema.withConstructorDefault(Effect.succeed(null)),
+  ),
+  scope: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  tokenType: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
   createdAt: Model.DateTimeInsert,
   updatedAt: Model.DateTimeUpdate,
 }) {}

@@ -371,4 +371,28 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // BE-002 (.issues/high): `accessToken`/`refreshToken` (migration 2) were
+  // already persisted and encrypted at rest but had nowhere to carry their
+  // own expiry, scope, or token type — `@awthaq/core`'s `Accounts.ts` gains
+  // `findProviderTokens`/`updateProviderTokens` alongside this migration.
+  // All four columns nullable: an existing row's `NULL` here means "no
+  // stored token metadata for this pre-existing link," which is simply
+  // true, not a backfill gap.
+  migration(17, "add_accounts_provider_token_metadata_columns", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`ALTER TABLE accounts ADD COLUMN "accessTokenExpiresAt" TIMESTAMPTZ`.pipe(
+          Effect.andThen(sql`ALTER TABLE accounts ADD COLUMN "refreshTokenExpiresAt" TIMESTAMPTZ`),
+          Effect.andThen(sql`ALTER TABLE accounts ADD COLUMN scope TEXT`),
+          Effect.andThen(sql`ALTER TABLE accounts ADD COLUMN "tokenType" TEXT`),
+        ),
+      sqlite: () =>
+        sql`ALTER TABLE accounts ADD COLUMN accessTokenExpiresAt TEXT`.pipe(
+          Effect.andThen(sql`ALTER TABLE accounts ADD COLUMN refreshTokenExpiresAt TEXT`),
+          Effect.andThen(sql`ALTER TABLE accounts ADD COLUMN scope TEXT`),
+          Effect.andThen(sql`ALTER TABLE accounts ADD COLUMN tokenType TEXT`),
+        ),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);

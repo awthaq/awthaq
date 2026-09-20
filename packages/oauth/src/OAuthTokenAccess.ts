@@ -1,0 +1,223 @@
+// @awthaq/oauth — OAuthTokenAccess
+//
+// BE-002 (.issues/high): the second half of this finding's recommended
+// fix — "expose a token-refresh port so downstream apps never handle raw
+// provider credentials." A separate `Context.Service`, not folded into
+// `OAuth`/`OAuthShape` itself: nothing about calling a provider's API on
+// an already-linked user's behalf belongs to the authorize/callback HTTP
+// flow `OAuth`'s own contract serves, and an application that never needs
+// this capability shouldn't have to provide anything for it.
+//
+// Lives here rather than `@awthaq/ports` (`OAuth.ts`'s own module header):
+// a refresh call needs the provider registry — `tokenEndpoint`/`clientId`/
+// `clientSecret` per provider — which only this plugin's own `OAuthConfig`
+// resolves, and a port in `@awthaq/ports` cannot depend on a plugin
+// package.
+
+import { Accounts } from "@awthaq/core";
+import * as Context from "effect/Context";
+import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
+import * as HttpBody from "effect/unstable/http/HttpBody";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as OAuth from "./OAuth.ts";
+import * as OAuthProvider from "./OAuthProvider.ts";
+
+/** No account, no stored tokens for it, or a stored access token expired with no refresh token to recover it. */
+export class OAuthTokenUnavailable extends Data.TaggedError("OAuthTokenUnavailable")<{
+  readonly accountId: Accounts.AccountId;
+  readonly message: string;
+}> {}
+
+/** The provider's own `grant_type=refresh_token` exchange failed or returned no `access_token`. */
+export class OAuthRefreshFailed extends Data.TaggedError("OAuthRefreshFailed")<{
+  readonly accountId: Accounts.AccountId;
+  readonly message: string;
+}> {}
+
+export interface OAuthTokenAccessShape {
+  /**
+   * Reads this account's stored token set, refreshes it first if the
+   * access token is expired (or within `REFRESH_SKEW` of expiring) and a
+   * refresh token is on record, then hands the (possibly just-refreshed)
+   * raw token to `use` — never returning it to the caller, so "downstream
+   * apps never handle raw provider credentials" holds structurally, not
+   * by convention. A provider whose response carried no `refresh_token`
+   * simply can't refresh: this fails `OAuthTokenUnavailable` once the
+   * stored access token expires, rather than silently handing `use` a
+   * token already rejected by the provider.
+   */
+  readonly withAccessToken: <A, E, R>(
+    accountId: Accounts.AccountId,
+    use: (token: Redacted.Redacted<string>) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | OAuthTokenUnavailable | OAuthRefreshFailed, R>;
+}
+
+export class OAuthTokenAccess extends Context.Service<OAuthTokenAccess, OAuthTokenAccessShape>()(
+  "awthaq/oauth/OAuthTokenAccess",
+) {}
+
+/**
+ * A small skew window, not just `now >= accessTokenExpiresAt`: without it,
+ * a token that expires between this check and the moment `use`'s own
+ * request actually reaches the provider is handed out already-stale,
+ * turning a should-have-refreshed case into a provider-side 401 this port
+ * exists to prevent.
+ */
+const REFRESH_SKEW = Duration.seconds(30);
+
+const refresh = (
+  httpClient: HttpClient.HttpClient,
+  accounts: Accounts.AccountsShape,
+  accountId: Accounts.AccountId,
+  provider: OAuthProvider.ResolvedProvider,
+  refreshToken: Redacted.Redacted<string>,
+): Effect.Effect<Redacted.Redacted<string>, OAuthRefreshFailed> =>
+  Effect.gen(function* () {
+    const form: Record<string, string> = {
+      grant_type: "refresh_token",
+      refresh_token: Redacted.value(refreshToken),
+      client_id: provider.clientId,
+    };
+    if (Option.isSome(provider.clientSecret)) {
+      form["client_secret"] = Redacted.value(provider.clientSecret.value);
+    }
+    const response = yield* httpClient.post(provider.tokenEndpoint, {
+      body: HttpBody.urlParams(form),
+    });
+    const body = (yield* response.json) as {
+      readonly access_token?: string;
+      readonly refresh_token?: string;
+      readonly expires_in?: number;
+      readonly scope?: string;
+      readonly token_type?: string;
+    };
+    if (typeof body.access_token !== "string") {
+      return yield* Effect.fail(
+        new OAuthRefreshFailed({
+          accountId,
+          message: `awthaq: token refresh for account ${accountId} returned no access_token`,
+        }),
+      );
+    }
+    const now = yield* DateTime.now;
+    const accessToken = Redacted.make(body.access_token);
+    // RFC 6749 §6: a provider MAY omit `refresh_token` to mean "keep using
+    // the one you already have" — never treated as "the refresh token is
+    // gone now," which would strand this account unable to refresh again.
+    const nextRefreshToken =
+      body.refresh_token === undefined
+        ? Option.some(refreshToken)
+        : Option.some(Redacted.make(body.refresh_token));
+    const nextTokens: Accounts.ProviderTokenSet = {
+      accessToken,
+      refreshToken: nextRefreshToken,
+      accessTokenExpiresAt:
+        body.expires_in === undefined
+          ? Option.none()
+          : Option.some(DateTime.addDuration(now, Duration.seconds(body.expires_in))),
+      refreshTokenExpiresAt: Option.none(),
+      scope: body.scope === undefined ? Option.none() : Option.some(body.scope),
+      tokenType: body.token_type === undefined ? Option.none() : Option.some(body.token_type),
+    };
+    yield* accounts.updateProviderTokens(accountId, nextTokens).pipe(Effect.orDie);
+    return accessToken;
+  }).pipe(
+    // Mirrors `OAuth.ts`'s own `exchangeCode`: every failure this block can
+    // produce — the explicit `OAuthRefreshFailed` above, or an unexpected
+    // network/JSON error `httpClient.post`/`response.json` themselves
+    // raise — normalizes to the one typed failure this function promises.
+    Effect.catch(
+      () =>
+        new OAuthRefreshFailed({
+          accountId,
+          message: `awthaq: token refresh failed for account ${accountId}`,
+        }),
+    ),
+  );
+
+export const layer: Layer.Layer<
+  OAuthTokenAccess,
+  never,
+  Accounts.Accounts | HttpClient.HttpClient
+> = Layer.effect(
+  OAuthTokenAccess,
+  Effect.gen(function* () {
+    const accounts = yield* Accounts.Accounts;
+    const httpClient = yield* HttpClient.HttpClient;
+    const config_ = yield* OAuth.OAuthConfig;
+
+    // BEH-EA-127's own reasoning, reapplied here: resolved once at boot,
+    // the same as `OAuth.layer`'s own registry — a mismatched or
+    // unfetchable discovery document dies at startup, not mid-request.
+    const resolved = yield* Effect.all(
+      config_.providers.map((provider) => OAuthProvider.resolve(httpClient, provider)),
+    );
+    const registry = new Map(resolved.map((provider) => [provider.id, provider] as const));
+
+    const withAccessToken: OAuthTokenAccessShape["withAccessToken"] = (accountId, use) =>
+      Effect.gen(function* () {
+        const account = yield* accounts.findById(accountId).pipe(
+          Effect.catchTag(
+            "AccountNotFound",
+            () =>
+              new OAuthTokenUnavailable({
+                accountId,
+                message: `awthaq: no such account: ${accountId}`,
+              }),
+          ),
+        );
+        const provider = registry.get(account.providerId);
+        const stored = yield* accounts.findProviderTokens(accountId).pipe(
+          Effect.catchTag(
+            "AccountNotFound",
+            () =>
+              new OAuthTokenUnavailable({
+                accountId,
+                message: `awthaq: no such account: ${accountId}`,
+              }),
+          ),
+        );
+        if (provider === undefined || Option.isNone(stored)) {
+          return yield* Effect.fail(
+            new OAuthTokenUnavailable({
+              accountId,
+              message: `awthaq: no stored provider tokens for account ${accountId}`,
+            }),
+          );
+        }
+        const tokens = stored.value;
+        const now = yield* DateTime.now;
+        const expiringSoon =
+          Option.isSome(tokens.accessTokenExpiresAt) &&
+          DateTime.toEpochMillis(tokens.accessTokenExpiresAt.value) <=
+            DateTime.toEpochMillis(DateTime.addDuration(now, REFRESH_SKEW));
+        if (!expiringSoon) {
+          return yield* use(tokens.accessToken);
+        }
+        if (Option.isNone(tokens.refreshToken)) {
+          return yield* Effect.fail(
+            new OAuthTokenUnavailable({
+              accountId,
+              message: `awthaq: access token expired and no refresh token stored for account ${accountId}`,
+            }),
+          );
+        }
+        const refreshed = yield* refresh(
+          httpClient,
+          accounts,
+          accountId,
+          provider,
+          tokens.refreshToken.value,
+        );
+        return yield* use(refreshed);
+      });
+
+    return OAuthTokenAccess.of({ withAccessToken });
+  }),
+);

@@ -1185,4 +1185,213 @@ describe("OAuth", () => {
       }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() }))),
     );
   });
+
+  describe("BE-002: exchanged provider tokens are persisted, not discarded", () => {
+    it.effect("a new sign-up persists the full exchanged token set on the linked account", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("acme", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        yield* oauth.callback("acme", { code: "c1", state, iss: undefined, cookieState: state });
+
+        const accounts = yield* Accounts.Accounts;
+        const linked = yield* accounts.findByProviderSubject("acme", "new-sub");
+        const account = Option.getOrThrow(linked);
+        const stored = yield* accounts.findProviderTokens(account.id);
+        const tokens = Option.getOrThrow(stored);
+        assert.strictEqual(Redacted.value(tokens.accessToken), "at-1");
+        assert.strictEqual(Redacted.value(Option.getOrThrow(tokens.refreshToken)), "rt-1");
+        assert.isTrue(Option.isSome(tokens.accessTokenExpiresAt));
+        assert.isTrue(Option.isNone(tokens.refreshTokenExpiresAt));
+        assert.strictEqual(Option.getOrThrow(tokens.scope), "read write");
+        assert.strictEqual(Option.getOrThrow(tokens.tokenType), "Bearer");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": {
+                access_token: "at-1",
+                refresh_token: "rt-1",
+                expires_in: 3600,
+                scope: "read write",
+                token_type: "Bearer",
+              },
+              "/userinfo": { id: "new-sub", email: "new-provider-tokens@example.com" },
+            },
+          }),
+        ),
+      ),
+    );
+
+    it.effect(
+      "a linked account with no token fields in the response stores none — no crash on the missing keys",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state } = yield* oauth.authorize("acme", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          yield* oauth.callback("acme", { code: "c1", state, iss: undefined, cookieState: state });
+
+          const accounts = yield* Accounts.Accounts;
+          const linked = yield* accounts.findByProviderSubject("acme", "bare-sub");
+          const account = Option.getOrThrow(linked);
+          const stored = yield* accounts.findProviderTokens(account.id);
+          const tokens = Option.getOrThrow(stored);
+          assert.strictEqual(Redacted.value(tokens.accessToken), "at-bare");
+          assert.isTrue(Option.isNone(tokens.refreshToken));
+          assert.isTrue(Option.isNone(tokens.accessTokenExpiresAt));
+          assert.isTrue(Option.isNone(tokens.scope));
+          assert.isTrue(Option.isNone(tokens.tokenType));
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                "/token": { access_token: "at-bare" },
+                "/userinfo": { id: "bare-sub", email: "bare-provider-tokens@example.com" },
+              },
+            }),
+          ),
+        ),
+    );
+
+    it.effect(
+      "re-authenticating an already-linked account overwrites the stored token set with the fresh one",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const first = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+          yield* oauth.callback("acme", {
+            code: "c1",
+            state: first.state,
+            iss: undefined,
+            cookieState: first.state,
+          });
+
+          const accounts = yield* Accounts.Accounts;
+          const linked = yield* accounts.findByProviderSubject("acme", "returning-tokens-sub");
+          const account = Option.getOrThrow(linked);
+          const firstStored = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+          assert.strictEqual(Redacted.value(firstStored.accessToken), "at-old");
+
+          const second = yield* oauth.authorize("acme", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          yield* oauth.callback("acme", {
+            code: "c2",
+            state: second.state,
+            iss: undefined,
+            cookieState: second.state,
+          });
+
+          const secondStored = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+          assert.strictEqual(Redacted.value(secondStored.accessToken), "at-new");
+          assert.strictEqual(
+            Redacted.value(Option.getOrThrow(secondStored.refreshToken)),
+            "rt-new",
+          );
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                // A fake route's value may itself be a function
+                // (`fakeHttpClient`'s own dispatch) — closing over a
+                // counter reproduces the real world's "each callback gets
+                // a fresh exchange" shape, exercising the re-authentication
+                // branch's own `updateProviderTokens` call, not just the
+                // first-link one.
+                "/token": (() => {
+                  let call = 0;
+                  return () => {
+                    call += 1;
+                    return call === 1
+                      ? { access_token: "at-old", refresh_token: "rt-old" }
+                      : { access_token: "at-new", refresh_token: "rt-new" };
+                  };
+                })(),
+                "/userinfo": { id: "returning-tokens-sub", email: "returning-tokens@example.com" },
+              },
+            }),
+          ),
+        ),
+    );
+
+    it.effect("an authenticated caller's explicit link also persists the exchanged token set", () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const alice = yield* users.create({ email: "alice-tokens@example.com", name: "Alice" });
+
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("acme", {
+          callbackURL: undefined,
+          link: { userId: alice.id },
+        });
+        yield* oauth.callback("acme", { code: "c1", state, iss: undefined, cookieState: state });
+
+        const accounts = yield* Accounts.Accounts;
+        const linked = yield* accounts.findByProviderSubject("acme", "link-tokens-sub");
+        const account = Option.getOrThrow(linked);
+        const stored = yield* accounts.findProviderTokens(account.id);
+        assert.strictEqual(Redacted.value(Option.getOrThrow(stored).accessToken), "at-link");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": { access_token: "at-link" },
+              "/userinfo": { id: "link-tokens-sub", email: "link-tokens-target@example.com" },
+            },
+          }),
+        ),
+      ),
+    );
+
+    it.effect(
+      "auto-linking a trusted provider to an existing user also persists the token set",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const existing = yield* users.create({
+            email: "auto-link-tokens@example.com",
+            name: "Auto Link",
+          });
+
+          const oauth = yield* OAuth.OAuth;
+          const { state } = yield* oauth.authorize("acme", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          yield* oauth.callback("acme", { code: "c1", state, iss: undefined, cookieState: state });
+
+          const accounts = yield* Accounts.Accounts;
+          const linked = yield* accounts.findByProviderSubject("acme", "auto-link-tokens-sub");
+          const account = Option.getOrThrow(linked);
+          assert.strictEqual(account.userId, existing.id);
+          const stored = yield* accounts.findProviderTokens(account.id);
+          assert.strictEqual(Redacted.value(Option.getOrThrow(stored).accessToken), "at-autolink");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              linking: { trustedProviders: ["acme"] },
+              httpRoutes: {
+                "/token": { access_token: "at-autolink" },
+                "/userinfo": {
+                  id: "auto-link-tokens-sub",
+                  email: "auto-link-tokens@example.com",
+                  email_verified: true,
+                },
+              },
+            }),
+          ),
+        ),
+    );
+  });
 });

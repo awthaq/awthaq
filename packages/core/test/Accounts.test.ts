@@ -3,17 +3,26 @@
 // The same contract suite runs against both `Layer`s — `layerMemory` (a
 // `Ref`) and `layerSql` (a real, in-memory SQLite database via
 // `@effect/sql-sqlite-node`).
+//
+// BE-002 (.issues/high): `layerSql` is migrated via `@awthaq/sql`'s own
+// real `CoreMigrations.coreMigrations` (`Migrator.make`) rather than a
+// hand-rolled inline `CREATE TABLE` — the same BAM-002/BE-001 conversion
+// applied to every other core/plugin table's own test suite, and the
+// reason this file's own fixture needed touching at all for a finding
+// that otherwise only added columns: a hand-rolled fixture has no way to
+// pick up a new migration.
 import { Encryption, KeyProvider } from "@awthaq/ports";
-import { Repositories } from "@awthaq/sql";
+import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Accounts from "../src/Accounts.ts";
 import * as Users from "../src/Users.ts";
 
@@ -41,28 +50,7 @@ const EncryptionLive = Encryption.layer.pipe(
 );
 
 const Migrated = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      CREATE TABLE accounts (
-        id TEXT PRIMARY KEY,
-        userId TEXT NOT NULL,
-        providerId TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        issuer TEXT NOT NULL DEFAULT '',
-        passwordHash TEXT,
-        accessToken TEXT,
-        refreshToken TEXT,
-        createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL
-      )
-    `;
-    // BEH-EA-043/125: the uniqueness `layerSql`'s `link` relies on is this
-    // real constraint, not an in-process check — `issuer` is part of the
-    // key itself (`''`, not SQL NULL, for a non-federated provider) so two
-    // rows that only differ by issuer are never treated as a collision.
-    yield* sql`CREATE UNIQUE INDEX accounts_provider_subject_issuer_unique ON accounts (providerId, subject, issuer)`;
-  }),
+  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
 ).pipe(Layer.provide(SqlLive));
 
 const SqlTestLayer = Accounts.layerSql.pipe(
@@ -96,6 +84,22 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
         });
         const found = yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId);
         assert.isTrue(Option.isSome(found));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("BE-002: findById reads back the same record link produced, by id alone", () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts.Accounts;
+        const linked = yield* accounts.link({
+          userId,
+          providerId: "google",
+          subject: "sub-find-by-id",
+        });
+        const found = yield* accounts.findById(linked.id);
+        assert.deepStrictEqual(found, linked);
+        const unknown = Accounts.AccountId("00000000-0000-0000-0000-000000000000");
+        const failure = yield* accounts.findById(unknown).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "AccountNotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -222,6 +226,182 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
         assert.strictEqual(findFailure._tag, "AccountNotFound");
         const updateFailure = yield* accounts
           .updateCredentialHash(unknown, Redacted.make("x"))
+          .pipe(Effect.flip);
+        assert.strictEqual(updateFailure._tag, "AccountNotFound");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "BE-002: link with tokens stores a full ProviderTokenSet, never in AccountRecord",
+      () =>
+        Effect.gen(function* () {
+          const accounts = yield* Accounts.Accounts;
+          const account = yield* accounts.link({
+            userId,
+            providerId: "google",
+            subject: "sub-tokens-1",
+            tokens: {
+              accessToken: Redacted.make("access-1"),
+              refreshToken: Option.some(Redacted.make("refresh-1")),
+              accessTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
+              refreshTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-02-01T00:00:00.000Z")),
+              scope: Option.some("email profile"),
+              tokenType: Option.some("Bearer"),
+            },
+          });
+          assert.isFalse("accessToken" in account);
+          assert.isFalse("refreshToken" in account);
+          const stored = yield* accounts.findProviderTokens(account.id);
+          assert.isTrue(Option.isSome(stored));
+          const tokens = Option.getOrThrow(stored);
+          assert.strictEqual(Redacted.value(tokens.accessToken), "access-1");
+          assert.strictEqual(Redacted.value(Option.getOrThrow(tokens.refreshToken)), "refresh-1");
+          assert.strictEqual(
+            DateTime.toEpochMillis(Option.getOrThrow(tokens.accessTokenExpiresAt)),
+            DateTime.toEpochMillis(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
+          );
+          assert.strictEqual(
+            DateTime.toEpochMillis(Option.getOrThrow(tokens.refreshTokenExpiresAt)),
+            DateTime.toEpochMillis(DateTime.makeUnsafe("2026-02-01T00:00:00.000Z")),
+          );
+          assert.strictEqual(Option.getOrThrow(tokens.scope), "email profile");
+          assert.strictEqual(Option.getOrThrow(tokens.tokenType), "Bearer");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("BE-002: a linked account with no tokens given has none stored", () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts.Accounts;
+        const account = yield* accounts.link({
+          userId,
+          providerId: "google",
+          subject: "sub-tokens-2",
+        });
+        const stored = yield* accounts.findProviderTokens(account.id);
+        assert.isTrue(Option.isNone(stored));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("BE-002: updateProviderTokens replaces the stored token set in place", () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts.Accounts;
+        const account = yield* accounts.link({
+          userId,
+          providerId: "google",
+          subject: "sub-tokens-3",
+          tokens: {
+            accessToken: Redacted.make("access-old"),
+            refreshToken: Option.some(Redacted.make("refresh-old")),
+            accessTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
+            refreshTokenExpiresAt: Option.none(),
+            scope: Option.some("email"),
+            tokenType: Option.some("Bearer"),
+          },
+        });
+        yield* accounts.updateProviderTokens(account.id, {
+          accessToken: Redacted.make("access-new"),
+          refreshToken: Option.none(),
+          accessTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-06-01T00:00:00.000Z")),
+          refreshTokenExpiresAt: Option.none(),
+          scope: Option.none(),
+          tokenType: Option.none(),
+        });
+        const stored = yield* accounts.findProviderTokens(account.id);
+        const tokens = Option.getOrThrow(stored);
+        assert.strictEqual(Redacted.value(tokens.accessToken), "access-new");
+        assert.isTrue(Option.isNone(tokens.refreshToken));
+        assert.strictEqual(
+          DateTime.toEpochMillis(Option.getOrThrow(tokens.accessTokenExpiresAt)),
+          DateTime.toEpochMillis(DateTime.makeUnsafe("2026-06-01T00:00:00.000Z")),
+        );
+        assert.isTrue(Option.isNone(tokens.scope));
+        assert.isTrue(Option.isNone(tokens.tokenType));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "BE-002: updateCredentialHash on a token-carrying account leaves the tokens untouched",
+      () =>
+        Effect.gen(function* () {
+          const accounts = yield* Accounts.Accounts;
+          // A row can carry both — an OAuth-first-then-relinked-password
+          // account is unusual but not excluded by this schema; the point
+          // is only that writing one update-eligible field group must not
+          // silently null out the other.
+          const account = yield* accounts.link({
+            userId,
+            providerId: "google",
+            subject: "sub-tokens-4",
+            credentialHash: Redacted.make("hash-1"),
+            tokens: {
+              accessToken: Redacted.make("access-stays"),
+              refreshToken: Option.some(Redacted.make("refresh-stays")),
+              accessTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-03-01T00:00:00.000Z")),
+              refreshTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-04-01T00:00:00.000Z")),
+              scope: Option.some("stays-scope"),
+              tokenType: Option.some("stays-type"),
+            },
+          });
+          yield* accounts.updateCredentialHash(account.id, Redacted.make("hash-2"));
+          const stored = yield* accounts.findProviderTokens(account.id);
+          const tokens = Option.getOrThrow(stored);
+          assert.strictEqual(Redacted.value(tokens.accessToken), "access-stays");
+          assert.strictEqual(
+            Redacted.value(Option.getOrThrow(tokens.refreshToken)),
+            "refresh-stays",
+          );
+          assert.strictEqual(
+            DateTime.toEpochMillis(Option.getOrThrow(tokens.accessTokenExpiresAt)),
+            DateTime.toEpochMillis(DateTime.makeUnsafe("2026-03-01T00:00:00.000Z")),
+          );
+          assert.strictEqual(
+            DateTime.toEpochMillis(Option.getOrThrow(tokens.refreshTokenExpiresAt)),
+            DateTime.toEpochMillis(DateTime.makeUnsafe("2026-04-01T00:00:00.000Z")),
+          );
+          assert.strictEqual(Option.getOrThrow(tokens.scope), "stays-scope");
+          assert.strictEqual(Option.getOrThrow(tokens.tokenType), "stays-type");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "BE-002: updateProviderTokens on a credential-carrying account leaves the hash untouched",
+      () =>
+        Effect.gen(function* () {
+          const accounts = yield* Accounts.Accounts;
+          const account = yield* accounts.link({
+            userId,
+            providerId: Accounts.PASSWORD_PROVIDER_ID,
+            subject: userId,
+            credentialHash: Redacted.make("hash-stays"),
+          });
+          yield* accounts.updateProviderTokens(account.id, {
+            accessToken: Redacted.make("access-1"),
+            refreshToken: Option.none(),
+            accessTokenExpiresAt: Option.none(),
+            refreshTokenExpiresAt: Option.none(),
+            scope: Option.none(),
+            tokenType: Option.none(),
+          });
+          const stored = yield* accounts.findCredentialHash(account.id);
+          assert.strictEqual(Redacted.value(Option.getOrThrow(stored)), "hash-stays");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("findProviderTokens/updateProviderTokens fail for an unknown account", () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts.Accounts;
+        const unknown = Accounts.AccountId("00000000-0000-0000-0000-000000000000");
+        const findFailure = yield* accounts.findProviderTokens(unknown).pipe(Effect.flip);
+        assert.strictEqual(findFailure._tag, "AccountNotFound");
+        const updateFailure = yield* accounts
+          .updateProviderTokens(unknown, {
+            accessToken: Redacted.make("x"),
+            refreshToken: Option.none(),
+            accessTokenExpiresAt: Option.none(),
+            refreshTokenExpiresAt: Option.none(),
+            scope: Option.none(),
+            tokenType: Option.none(),
+          })
           .pipe(Effect.flip);
         assert.strictEqual(updateFailure._tag, "AccountNotFound");
       }).pipe(Effect.provide(layer)),
