@@ -7,7 +7,7 @@
 // "any host that hands the application a `Request`" path), and `httpApiStatus`
 // annotations landing on the real response status (BEH-EA-088).
 import { Api, AuthCore } from "@awthaq/api";
-import { Accounts, AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Accounts, AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -88,6 +88,7 @@ const AppLayer = Layer.mergeAll(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(TestServices),
   Layer.provideMerge(HttpRouter.layer),

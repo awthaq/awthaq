@@ -12,7 +12,7 @@
 // simulated time and have `Sessions.layerMemory`'s own `DateTime.now` reads
 // see it.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -34,6 +34,7 @@ const TestLayer = Layer.mergeAll(
   Layer.provideMerge(NodeCrypto.layer),
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Hooks.HooksLive),
 );
 
 const runtime = ManagedRuntime.make(TestLayer);
@@ -49,6 +50,7 @@ const ShortTouchLayer = Layer.mergeAll(
     Layer.mergeAll(
       NodeCrypto.layer,
       AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory)),
+      Hooks.HooksLive,
       Layer.succeed(Sessions.SessionConfig, {
         absolute: Duration.days(30),
         idle: Duration.days(7),

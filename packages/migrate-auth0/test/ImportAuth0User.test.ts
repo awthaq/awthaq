@@ -2,7 +2,7 @@
 // import half of the recipe, wired end-to-end into `PasswordHasher` so a
 // freshly-imported account's bcrypt hash actually verifies and flags
 // itself for rehash — the whole point of the finding.
-import { Accounts, Users } from "@awthaq/core";
+import { Accounts, Hooks, Users } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -16,6 +16,7 @@ import * as ImportAuth0User from "../src/ImportAuth0User.ts";
 
 const DomainLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory).pipe(
   Layer.provide(NodeCrypto.layer),
+  Layer.provide(Hooks.HooksLive),
 );
 
 const HasherLive = PasswordHasher.layerArgon2id.pipe(

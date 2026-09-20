@@ -5,7 +5,7 @@
 // actually serve a decodable `SubjectDto`, not just that the underlying
 // `AuthorizedSubject` middleware chain resolves a subject in memory.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -66,6 +66,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

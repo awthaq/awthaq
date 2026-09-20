@@ -63,6 +63,7 @@ import {
   AuditLog,
   AuthEvents,
   AuthPlugin,
+  Hooks,
   RateLimits,
   Sessions,
   Users,
@@ -110,6 +111,11 @@ const MemoryPorts = Layer.mergeAll(
   // BEH-EA-100: `AuthEvents.layer` now needs `AuditLog` too — see its own
   // header comment.
   Layer.provideMerge(AuditLog.layerMemory),
+  // AOMS-006/BCR-004/CSG-002/THS-002 (wayfinder ticket 03): every hook
+  // point's own default (no-tap) layer — `Users.layerMemory` and every
+  // plugin's own `make` now consult one directly. See `Hooks.HooksLive`'s
+  // own doc comment.
+  Layer.provideMerge(Hooks.HooksLive),
 );
 
 /**

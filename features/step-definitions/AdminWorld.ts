@@ -16,7 +16,7 @@
 // or a resolved `UserPrincipal`'s `actingAs` — so this World also exposes
 // direct domain-level access to `Sessions`/`Authentication.resolvePrincipal`
 // over the same shared `MemoMap` the HTTP handler itself resolves against.
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
 import { Admin, AdminApi, ImpersonationRecords } from "@awthaq/admin";
 import type { Api } from "@awthaq/api";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
@@ -46,6 +46,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

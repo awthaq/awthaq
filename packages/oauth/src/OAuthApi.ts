@@ -12,6 +12,7 @@
 // went wrong" redirect belongs, not this plugin.
 
 import { Api } from "@awthaq/api";
+import { Hooks } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -97,7 +98,15 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
       query: CallbackQuery,
       success: HttpApiSchema.Empty(302),
       // Shipping-gap map (.scratch/shipping-gaps), ticket 13: rate-limited.
-      error: [ProviderNotFound, OAuthCallbackFailed, AccountExists, Api.RateLimited],
+      // Wayfinder ticket 03 (BCR-004/THS-002): `Hooks.TwoFactorRequired`
+      // when a `Hooks.BeforeSessionIssue` tap diverts.
+      error: [
+        ProviderNotFound,
+        OAuthCallbackFailed,
+        AccountExists,
+        Api.RateLimited,
+        Hooks.TwoFactorRequired,
+      ],
     }),
   )
   .middleware(Api.OptionalAuthentication);

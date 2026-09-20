@@ -10,6 +10,7 @@
 import { generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
 import {
   AuditLog,
+  Hooks,
   AuthEvents,
   Accounts,
   RateLimits,
@@ -122,6 +123,7 @@ const CoreLive = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

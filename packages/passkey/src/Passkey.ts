@@ -23,7 +23,7 @@
 // header comment for how it correlates its two anonymous calls instead.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Accounts, Sessions, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, Accounts, Hooks, Sessions, Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -272,6 +272,7 @@ export interface PasskeyShape {
     | Api.InvalidCredentials
     | PasskeyApi.PasskeyChallengeInvalid
     | PasskeyApi.PasskeyUserVerificationRequired
+    | Hooks.TwoFactorRequired
   >;
   readonly listCredentials: (
     userId: Users.UserId,
@@ -452,6 +453,10 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const credentials = yield* PasskeyCredentials.PasskeyCredentials;
       const config = yield* PasskeyConfig;
       const crypto = yield* Crypto.Crypto;
+      // AOMS-006/BCR-004 (wayfinder ticket 03): the MFA divert point a
+      // future `TwoFactor` plugin taps.
+      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
+      const afterSignIn = yield* Hooks.AfterSignIn;
 
       /**
        * Ticket 15 (BPAS-001): the shared freshness gate `registerOptions`/
@@ -710,12 +715,23 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             .findById(stored.userId)
             .pipe(Effect.catchTag("UserNotFound", () => Effect.fail(new Api.InvalidCredentials())));
 
+          // BCR-004/THS-002: same canonical MFA attachment point
+          // `@awthaq/password`'s own `signIn` consults, right before this
+          // flow's own `sessions.issue`.
+          const point = yield* beforeSessionIssue.run({
+            userId: stored.userId,
+            strategy: "passkey",
+          });
+          if (point._tag === "Diverted") {
+            return yield* Effect.fail(point.value);
+          }
           const issued = yield* sessions.issue({ userId: stored.userId }).pipe(Effect.orDie);
           yield* events.publish({
             _tag: "auth.user.signedIn",
             userId: stored.userId,
             strategy: "passkey",
           });
+          yield* afterSignIn.run({ userId: stored.userId, strategy: "passkey" });
           return issued;
         },
       );

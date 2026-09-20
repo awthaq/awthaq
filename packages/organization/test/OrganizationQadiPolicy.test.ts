@@ -7,7 +7,7 @@
 // `@qadi/core`, mirroring `usage-qadi.md` §7's own worked example
 // (`hasRelationship("member", { depth: 2 })` inside a real policy).
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -37,6 +37,7 @@ const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

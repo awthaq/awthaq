@@ -12,6 +12,8 @@ import {
   AuthEvents,
   AuthPlugin,
   Accounts,
+  Hooks,
+  HookPoint,
   RateLimits,
   Sessions,
   Users,
@@ -74,7 +76,10 @@ export interface PasswordShape {
     readonly ip?: string;
   }) => Effect.Effect<
     IssuedSession,
-    PasswordApi.WeakPassword | PasswordApi.EmailAlreadyExists | Api.RateLimited
+    | PasswordApi.WeakPassword
+    | PasswordApi.EmailAlreadyExists
+    | Api.RateLimited
+    | HookPoint.HookAborted
   >;
   /**
    * BEH-EA-114/116: uniform `InvalidCredentials`, constant real hashing cost
@@ -101,7 +106,10 @@ export interface PasswordShape {
     readonly ip?: string;
   }) => Effect.Effect<
     IssuedSession,
-    Api.InvalidCredentials | PasswordApi.EmailNotVerified | Api.RateLimited
+    | Api.InvalidCredentials
+    | PasswordApi.EmailNotVerified
+    | Api.RateLimited
+    | Hooks.TwoFactorRequired
   >;
   /** BEH-EA-064/117: identical response whether or not `email` resolves to an account — the caller (the HTTP handler) always answers 202. */
   readonly requestReset: (input: {
@@ -536,6 +544,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const limiter = yield* RateLimiter.RateLimiter;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
+      // AOMS-006/BCR-004 (.issues/high, wayfinder ticket 03): the mechanism
+      // an Auth0-Rule-style sign-up policy, and the MFA divert point a
+      // future `TwoFactor` plugin taps, both attach through.
+      const beforeSignUp = yield* Hooks.BeforeSignUp;
+      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
+      const afterSignIn = yield* Hooks.AfterSignIn;
 
       /**
        * Ticket 12: registers this plugin's own limits into the
@@ -671,6 +685,30 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             ),
           );
 
+      /**
+       * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s
+       * own `veto` helper — the same translation): BEH-EA-090 requires a
+       * veto abort to reach the caller as a typed `HookAborted`, not the
+       * bare `HookAbort` a tap itself fails with.
+       */
+      const vetoBeforeSignUp = (
+        effect: Effect.Effect<
+          { readonly email: string; readonly name: string },
+          HookPoint.HookAbort
+        >,
+      ): Effect.Effect<{ readonly email: string; readonly name: string }, HookPoint.HookAborted> =>
+        effect.pipe(
+          Effect.catchTag(
+            "HookAbort",
+            (abort) =>
+              new HookPoint.HookAborted({
+                point: "auth.user.signUp",
+                code: abort.code,
+                message: abort.message,
+              }),
+          ),
+        );
+
       const signUp: PasswordShape["signUp"] = Effect.fnUntraced(function* (input) {
         // AGA-001/NHS-003: per-IP first, cheaper to enforce, bounds mass
         // account creation from one source before the per-email check.
@@ -685,6 +723,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // used as a placeholder the user can change later via
         // `updateProfile`.
         const name = input.email.split("@")[0] ?? input.email;
+        // AOMS-006: an Auth0-Rule-style policy (e.g. an email-domain
+        // allow-list) may reject the sign-up outright, or amend the input
+        // for whatever taps run after it — before the (comparatively
+        // expensive) password hash is even computed.
+        const vetoedSignUp = yield* vetoBeforeSignUp(
+          beforeSignUp.run({ email: input.email, name }),
+        );
         const hash = yield* hasher.hash(input.password);
 
         // RRC-002/BEH-EA-113: "MUST create the user and session in one
@@ -697,10 +742,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const { user, issued } = yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
-              const user = yield* users.create({ email: input.email, name }).pipe(
-                Effect.catchTag("EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
-                Effect.catchTag("PlatformError", Effect.die),
-              );
+              const user = yield* users
+                .create({ email: vetoedSignUp.email, name: vetoedSignUp.name })
+                .pipe(
+                  Effect.catchTag("EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
+                  Effect.catchTag("PlatformError", Effect.die),
+                );
               yield* accounts
                 .link({
                   userId: user.id,
@@ -803,6 +850,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             .pipe(Effect.orDie);
         }
 
+        // BCR-004/THS-002: THE canonical MFA attachment point — consulted
+        // here, right before this flow's own `sessions.issue`, never
+        // centralized inside `Sessions.issue` itself (which is also
+        // called for admin impersonation and same-session token rotation,
+        // neither of which is "a first factor just succeeded").
+        const point = yield* beforeSessionIssue.run({ userId: user.id, strategy: "password" });
+        if (point._tag === "Diverted") {
+          return yield* Effect.fail(point.value);
+        }
         const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.user.signedIn",
@@ -814,6 +870,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           sessionId: issued.session.id,
           userId: user.id,
         });
+        yield* afterSignIn.run({ userId: user.id, strategy: "password" });
         return issued;
       });
 

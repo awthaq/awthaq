@@ -48,6 +48,7 @@
 // so it reports the full, precise BEH-EA-136 taxonomy.
 
 import { Api, SessionContract } from "@awthaq/api";
+import { Hooks } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -274,7 +275,14 @@ export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate"
     HttpApiEndpoint.post("authenticateVerify", "/passkey/authenticate/verify", {
       payload: AuthenticateVerifyPayload,
       success: SessionContract.SessionDto,
-      error: [PasskeyChallengeInvalid, PasskeyUserVerificationRequired, Api.InvalidCredentials],
+      // Wayfinder ticket 03 (BCR-004/THS-002): `Hooks.TwoFactorRequired`
+      // when a `Hooks.BeforeSessionIssue` tap diverts.
+      error: [
+        PasskeyChallengeInvalid,
+        PasskeyUserVerificationRequired,
+        Api.InvalidCredentials,
+        Hooks.TwoFactorRequired,
+      ],
     }),
   )
   // Public and anonymous by design (see this file's header), but still two

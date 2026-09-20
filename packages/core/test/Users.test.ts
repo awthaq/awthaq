@@ -12,9 +12,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Hooks from "../src/Hooks.ts";
 import * as Users from "../src/Users.ts";
 
-const MemoryLayer = Users.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
+const MemoryLayer = Users.layerMemory.pipe(
+  Layer.provide(NodeCrypto.layer),
+  Layer.provide(Hooks.BeforeUserDelete.layer),
+);
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
@@ -40,6 +44,7 @@ const Migrated = Layer.effectDiscard(
 
 const SqlTestLayer = Users.layerSql.pipe(
   Layer.provide(Repositories.UsersRepositoryLive),
+  Layer.provide(Hooks.BeforeUserDelete.layer),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );

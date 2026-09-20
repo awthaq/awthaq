@@ -20,6 +20,7 @@ import {
   AuthEvents,
   AuthPlugin,
   Accounts,
+  Hooks,
   RateLimits,
   Sessions,
   Users,
@@ -432,6 +433,7 @@ export interface OAuthShape {
     | OAuthApi.OAuthCallbackFailed
     | OAuthApi.AccountExists
     | Api.RateLimited
+    | Hooks.TwoFactorRequired
   >;
 }
 
@@ -459,6 +461,12 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const encryption = yield* Encryption.Encryption;
       const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
+      // AOMS-006/BCR-004 (wayfinder ticket 03): the MFA divert point a
+      // future `TwoFactor` plugin taps, consulted at the sign-in-completing
+      // path of `callback` only (never `flow.link`, which issues no new
+      // session).
+      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
+      const afterSignIn = yield* Hooks.AfterSignIn;
 
       /**
        * Ticket 13: 20 callback attempts per minute per source IP — loose
@@ -773,12 +781,23 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           return { callbackURL: flow.callbackURL, session: undefined };
         }
 
+        // BCR-004/THS-002: same canonical MFA attachment point
+        // `@awthaq/password`'s own `signIn` consults, right before this
+        // flow's own `sessions.issue`.
+        const point = yield* beforeSessionIssue.run({
+          userId: targetUserId,
+          strategy: providerId,
+        });
+        if (point._tag === "Diverted") {
+          return yield* Effect.fail(point.value);
+        }
         const issued = yield* sessions.issue({ userId: targetUserId }).pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.user.signedIn",
           userId: targetUserId,
           strategy: providerId,
         });
+        yield* afterSignIn.run({ userId: targetUserId, strategy: providerId });
         return { callbackURL: flow.callbackURL, session: issued };
       });
 

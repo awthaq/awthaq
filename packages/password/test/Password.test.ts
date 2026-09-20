@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import {
   AuditLog,
+  Hooks,
   AuthEvents,
   RateLimits,
   Sessions,
@@ -83,6 +84,7 @@ const CoreLive = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

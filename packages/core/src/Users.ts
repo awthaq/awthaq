@@ -20,6 +20,29 @@ import * as Option from "effect/Option";
 import type * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as HookPoint from "./HookPoint.ts";
+import * as Hooks from "./Hooks.ts";
+
+/**
+ * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s own
+ * `veto` helper — the same translation, one-point version): BEH-EA-090
+ * requires a veto abort to reach the caller as a typed `HookAborted`, not
+ * the bare `HookAbort` a tap itself fails with.
+ */
+const beforeUserDeleteVeto = <A>(
+  effect: Effect.Effect<A, HookPoint.HookAbort>,
+): Effect.Effect<A, HookPoint.HookAborted> =>
+  effect.pipe(
+    Effect.catchTag(
+      "HookAbort",
+      (abort) =>
+        new HookPoint.HookAborted({
+          point: "auth.user.beforeDelete",
+          code: abort.code,
+          message: abort.message,
+        }),
+    ),
+  );
 
 /** BEH-EA-033: the id every `Account`/`Session` foreign-keys to. */
 export type UserId = string & Brand.Brand<"UserId">;
@@ -75,7 +98,13 @@ export interface UsersShape {
     input: { readonly name: string; readonly metadata?: string | null },
   ) => Effect.Effect<UserRecord, UserNotFound>;
   readonly verifyEmail: (id: UserId) => Effect.Effect<UserRecord, UserNotFound>;
-  readonly delete: (id: UserId) => Effect.Effect<void, UserNotFound>;
+  /**
+   * AOMS-006/CSG-002 (.issues/high): consults `Hooks.BeforeUserDelete`
+   * (BEH-EA-095's own worked example — an Invite-purge veto) after the
+   * existence check, before the row is actually removed; a tap's abort
+   * surfaces as `HookPoint.HookAborted`, never a bare defect.
+   */
+  readonly delete: (id: UserId) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted>;
 }
 
 export class Users extends Context.Service<Users, UsersShape>()("awthaq/core/Users") {}
@@ -88,129 +117,140 @@ interface State {
 const emptyState: State = { byId: HashMap.empty(), byEmail: HashMap.empty() };
 
 /** BEH-EA-046: dropping a user's own row is this Layer's whole job — cascading to `Accounts`/`Sessions` is each of those services' own responsibility, triggered by the caller that also calls `Users.delete`, not by this module reaching into them. */
-export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto> = Layer.effect(
-  Users,
-  Effect.gen(function* () {
-    const state = yield* Ref.make(emptyState);
-    const crypto = yield* Crypto.Crypto;
+export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.BeforeUserDelete> =
+  Layer.effect(
+    Users,
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const crypto = yield* Crypto.Crypto;
+      const beforeDelete = yield* Hooks.BeforeUserDelete;
 
-    const findById: UsersShape["findById"] = (id) =>
-      Ref.get(state).pipe(
-        Effect.flatMap((s) =>
-          Option.match(HashMap.get(s.byId, id), {
-            onNone: () =>
-              Effect.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
-            onSome: Effect.succeed,
-          }),
-        ),
-      );
-
-    const findByEmail: UsersShape["findByEmail"] = (email) =>
-      Ref.get(state)
-        .pipe(Effect.map((s) => HashMap.get(s.byEmail, email.toLowerCase())))
-        .pipe(
-          Effect.flatMap((userId) =>
-            Option.match(userId, {
-              onNone: () => Effect.succeed(Option.none()),
-              onSome: (id) => Ref.get(state).pipe(Effect.map((s) => HashMap.get(s.byId, id))),
+      const findById: UsersShape["findById"] = (id) =>
+        Ref.get(state).pipe(
+          Effect.flatMap((s) =>
+            Option.match(HashMap.get(s.byId, id), {
+              onNone: () =>
+                Effect.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
+              onSome: Effect.succeed,
             }),
           ),
         );
 
-    const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
-      const email = input.email.toLowerCase();
-      const id = UserId(yield* crypto.randomUUIDv7);
-      const timestamp = yield* now;
-      const record: UserRecord = {
-        id,
-        email,
-        emailVerified: false,
-        name: input.name,
-        metadata: Option.fromNullishOr(input.metadata),
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-      const outcome = yield* Ref.modify(
-        state,
-        (s): readonly [Result.Result<UserRecord, EmailAlreadyExists>, State] => {
-          if (HashMap.has(s.byEmail, email)) {
+      const findByEmail: UsersShape["findByEmail"] = (email) =>
+        Ref.get(state)
+          .pipe(Effect.map((s) => HashMap.get(s.byEmail, email.toLowerCase())))
+          .pipe(
+            Effect.flatMap((userId) =>
+              Option.match(userId, {
+                onNone: () => Effect.succeed(Option.none()),
+                onSome: (id) => Ref.get(state).pipe(Effect.map((s) => HashMap.get(s.byId, id))),
+              }),
+            ),
+          );
+
+      const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
+        const email = input.email.toLowerCase();
+        const id = UserId(yield* crypto.randomUUIDv7);
+        const timestamp = yield* now;
+        const record: UserRecord = {
+          id,
+          email,
+          emailVerified: false,
+          name: input.name,
+          metadata: Option.fromNullishOr(input.metadata),
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        const outcome = yield* Ref.modify(
+          state,
+          (s): readonly [Result.Result<UserRecord, EmailAlreadyExists>, State] => {
+            if (HashMap.has(s.byEmail, email)) {
+              return [
+                Result.fail(
+                  new EmailAlreadyExists({
+                    message: `awthaq: email already exists: ${email}`,
+                    email,
+                  }),
+                ),
+                s,
+              ] as const;
+            }
             return [
-              Result.fail(
-                new EmailAlreadyExists({
-                  message: `awthaq: email already exists: ${email}`,
-                  email,
-                }),
-              ),
+              Result.succeed(record),
+              { byId: HashMap.set(s.byId, id, record), byEmail: HashMap.set(s.byEmail, email, id) },
+            ] as const;
+          },
+        );
+        return yield* Effect.fromResult(outcome);
+      });
+
+      const updateProfile: UsersShape["updateProfile"] = (id, input) =>
+        Ref.modify(state, (s): readonly [Result.Result<UserRecord, UserNotFound>, State] => {
+          const existing = HashMap.get(s.byId, id);
+          if (Option.isNone(existing)) {
+            return [
+              Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
               s,
             ] as const;
           }
+          const updated: UserRecord = {
+            ...existing.value,
+            name: input.name,
+            metadata:
+              input.metadata === undefined
+                ? existing.value.metadata
+                : Option.fromNullishOr(input.metadata),
+          };
           return [
-            Result.succeed(record),
-            { byId: HashMap.set(s.byId, id, record), byEmail: HashMap.set(s.byEmail, email, id) },
+            Result.succeed(updated),
+            { ...s, byId: HashMap.set(s.byId, id, updated) },
           ] as const;
-        },
-      );
-      return yield* Effect.fromResult(outcome);
-    });
+        }).pipe(Effect.flatMap(Effect.fromResult));
 
-    const updateProfile: UsersShape["updateProfile"] = (id, input) =>
-      Ref.modify(state, (s): readonly [Result.Result<UserRecord, UserNotFound>, State] => {
-        const existing = HashMap.get(s.byId, id);
-        if (Option.isNone(existing)) {
+      const verifyEmail: UsersShape["verifyEmail"] = (id) =>
+        Ref.modify(state, (s): readonly [Result.Result<UserRecord, UserNotFound>, State] => {
+          const existing = HashMap.get(s.byId, id);
+          if (Option.isNone(existing)) {
+            return [
+              Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
+              s,
+            ] as const;
+          }
+          if (existing.value.emailVerified) {
+            return [Result.succeed(existing.value), s] as const;
+          }
+          const updated: UserRecord = { ...existing.value, emailVerified: true };
           return [
-            Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
-            s,
+            Result.succeed(updated),
+            { ...s, byId: HashMap.set(s.byId, id, updated) },
           ] as const;
-        }
-        const updated: UserRecord = {
-          ...existing.value,
-          name: input.name,
-          metadata:
-            input.metadata === undefined
-              ? existing.value.metadata
-              : Option.fromNullishOr(input.metadata),
-        };
-        return [Result.succeed(updated), { ...s, byId: HashMap.set(s.byId, id, updated) }] as const;
-      }).pipe(Effect.flatMap(Effect.fromResult));
+        }).pipe(Effect.flatMap(Effect.fromResult));
 
-    const verifyEmail: UsersShape["verifyEmail"] = (id) =>
-      Ref.modify(state, (s): readonly [Result.Result<UserRecord, UserNotFound>, State] => {
-        const existing = HashMap.get(s.byId, id);
-        if (Option.isNone(existing)) {
-          return [
-            Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
-            s,
-          ] as const;
-        }
-        if (existing.value.emailVerified) {
-          return [Result.succeed(existing.value), s] as const;
-        }
-        const updated: UserRecord = { ...existing.value, emailVerified: true };
-        return [Result.succeed(updated), { ...s, byId: HashMap.set(s.byId, id, updated) }] as const;
-      }).pipe(Effect.flatMap(Effect.fromResult));
-
-    const delete_: UsersShape["delete"] = (id) =>
-      Ref.modify(state, (s): readonly [Result.Result<void, UserNotFound>, State] => {
-        const existing = HashMap.get(s.byId, id);
-        if (Option.isNone(existing)) {
-          return [
-            Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
-            s,
-          ] as const;
-        }
-        const ok: Result.Result<void, UserNotFound> = Result.succeed(undefined);
-        return [
-          ok,
-          {
+      // AOMS-006/CSG-002: `Hooks.BeforeUserDelete` runs between the
+      // existence read and the actual removal — ticket 03's own accepted
+      // trade-off, splitting what used to be one atomic `Ref.modify` into
+      // read-then-hook-then-update. Nothing else in this in-memory,
+      // test-only layer observes a concurrent mutation in that gap (a
+      // single-threaded Effect fiber has no true concurrent writer unless a
+      // tap itself yields to one).
+      const delete_: UsersShape["delete"] = (id) =>
+        Effect.gen(function* () {
+          const existing = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s.byId, id)));
+          if (Option.isNone(existing)) {
+            return yield* Effect.fail(
+              new UserNotFound({ message: `awthaq: no such user: ${id}`, id }),
+            );
+          }
+          yield* beforeUserDeleteVeto(beforeDelete.run({ id, email: existing.value.email }));
+          yield* Ref.update(state, (s) => ({
             byId: HashMap.remove(s.byId, id),
             byEmail: HashMap.remove(s.byEmail, existing.value.email),
-          },
-        ] as const;
-      }).pipe(Effect.flatMap(Effect.fromResult));
+          }));
+        });
 
-    return { create, findById, findByEmail, updateProfile, verifyEmail, delete: delete_ };
-  }),
-);
+      return { create, findById, findByEmail, updateProfile, verifyEmail, delete: delete_ };
+    }),
+  );
 
 const toUserRecord = (row: SqlModels.User): UserRecord => ({
   id: UserId(row.id),
@@ -232,10 +272,15 @@ const toUserRecord = (row: SqlModels.User): UserRecord => ({
  * domain error this service's callers are meant to recover from, so it is
  * left to `die`.
  */
-export const layerSql: Layer.Layer<Users, never, SqlRepositories.UsersRepository> = Layer.effect(
+export const layerSql: Layer.Layer<
+  Users,
+  never,
+  SqlRepositories.UsersRepository | Hooks.BeforeUserDelete
+> = Layer.effect(
   Users,
   Effect.gen(function* () {
     const repo = yield* SqlRepositories.UsersRepository;
+    const beforeDelete = yield* Hooks.BeforeUserDelete;
 
     const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
       const email = input.email.toLowerCase();
@@ -302,7 +347,8 @@ export const layerSql: Layer.Layer<Users, never, SqlRepositories.UsersRepository
     });
 
     const delete_: UsersShape["delete"] = Effect.fnUntraced(function* (id) {
-      yield* findById(id);
+      const found = yield* findById(id);
+      yield* beforeUserDeleteVeto(beforeDelete.run({ id, email: found.email }));
       yield* repo.delete(id).pipe(Effect.orDie);
     });
 

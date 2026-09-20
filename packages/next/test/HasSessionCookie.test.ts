@@ -5,7 +5,7 @@
 // one — the whole point being that it performs no verification at all, not
 // merely that it happens to tolerate expired sessions.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -43,6 +43,7 @@ describe("hasSessionCookie (BEH-EA-188)", () => {
       Layer.provideMerge(NodeCrypto.layer),
       Layer.provideMerge(AuthEvents.layer),
       Layer.provideMerge(AuditLog.layerMemory),
+      Layer.provideMerge(Hooks.HooksLive),
     );
     const runtime = ManagedRuntime.make(TestLayer);
     const token = await runtime.runPromise(

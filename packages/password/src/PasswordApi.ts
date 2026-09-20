@@ -9,6 +9,7 @@
 // schemas, errors, and contract `HttpApi`").
 
 import { Api, SessionContract } from "@awthaq/api";
+import { HookPoint, Hooks } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -157,7 +158,10 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // here would be stored as a single member whose own AST carries no
       // `httpApiStatus` annotation, silently falling back to 500.
       // Shipping-gap map (.scratch/shipping-gaps), ticket 12: rate-limited.
-      error: [WeakPassword, EmailAlreadyExists, Api.RateLimited],
+      // Wayfinder ticket 03 (AOMS-006/BCR-004): `HookPoint.HookAborted`
+      // from a `Hooks.BeforeSignUp` veto tap (e.g. an email-domain
+      // allow-list).
+      error: [WeakPassword, EmailAlreadyExists, Api.RateLimited, HookPoint.HookAborted],
     }),
   )
   .add(
@@ -165,8 +169,10 @@ export const PasswordGroup = HttpApiGroup.make("password")
       payload: SignInPayload,
       success: SessionContract.SessionDto,
       // Ticket 12: rate-limited. Upstream-hardening ticket 04: hard-blocks
-      // an unverified account.
-      error: [Api.InvalidCredentials, EmailNotVerified, Api.RateLimited],
+      // an unverified account. Wayfinder ticket 03 (BCR-004/THS-002):
+      // `Hooks.TwoFactorRequired` when a `Hooks.BeforeSessionIssue` tap
+      // (a future `TwoFactor` plugin) diverts.
+      error: [Api.InvalidCredentials, EmailNotVerified, Api.RateLimited, Hooks.TwoFactorRequired],
     }),
   )
   .add(

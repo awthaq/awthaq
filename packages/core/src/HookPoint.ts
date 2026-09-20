@@ -47,13 +47,16 @@
 // Threading dependency order through is a follow-up once a plugin's own
 // identity is available at `.tap()`'s call site.
 //
-// Also scoped smaller in not yet wiring any concrete hook point into
-// `Users.ts`/`Sessions.ts`'s real `signUp`/`signIn` flows (BEH-EA-090's
-// `BeforeSignUp`, BEH-EA-092's `AfterSignIn`) — `AuthCore`, the fixed tuple
-// those flows would run inside, does not exist yet (`Auth.ts`'s own header
-// comment). What ships here is the mechanism every future hook point is
-// built from, exercised directly in `test/HookPoint.test.ts` rather than
-// through a real signUp/signIn call.
+// AOMS-006/BCR-004/CSG-002/THS-002 (.issues/high) — wayfinder ticket 03:
+// the concrete hook points this module's mechanism supports are now
+// declared and wired into real flows, in `./Hooks.ts`
+// (`BeforeSignUp`/`AfterSignIn`/`BeforeSessionIssue`/`BeforeUserDelete`),
+// consumed directly by `Users.ts`'s own `delete_` and by
+// `@awthaq/password`/`@awthaq/oauth`/`@awthaq/passkey`'s own sign-in-
+// completing flows — no "AuthCore" prerequisite needed (see `Hooks.ts`'s
+// own header for why that reasoning was stale). This module itself stays
+// the generic, plugin-agnostic mechanism, exercised directly in
+// `test/HookPoint.test.ts`.
 
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";

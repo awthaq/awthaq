@@ -17,7 +17,7 @@
 // and `after`) up front, in the same `Effect.provide`, so nothing runs
 // untapped before the tap is installed.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, HookPoint, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Hooks, AuthEvents, HookPoint, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -38,6 +38,7 @@ const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

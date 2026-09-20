@@ -6,7 +6,7 @@
 // mirroring `packages/organization/test/AuthHttp.test.ts`'s own
 // `issueSessionCookieHeader` pattern for setting one up.
 import { AuthCore } from "@awthaq/api";
-import { Accounts, AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Accounts, AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
 import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -75,6 +75,7 @@ const AppLayer = Layer.mergeAll(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Hooks.HooksLive),
   // TIR-001: `RevocationStore` is captured once in `Jwt`'s own `make`
   // now, so it must be provided for the plugin to build at all.
   Layer.provideMerge(RevocationStore.layerMemory),
@@ -286,6 +287,7 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
     Layer.provideMerge(RevocationStore.layerMemory),
     Layer.provideMerge(Users.layerMemory),
     Layer.provideMerge(Accounts.layerMemory),
+    Layer.provideMerge(Hooks.HooksLive),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),

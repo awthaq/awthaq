@@ -30,6 +30,7 @@ export * as AuditLog from "./AuditLog.ts";
 export * as AuthEvents from "./AuthEvents.ts";
 export * as AuthPlugin from "./AuthPlugin.ts";
 export * as HookPoint from "./HookPoint.ts";
+export * as Hooks from "./Hooks.ts";
 export * as Migrations from "./Migrations.ts";
 export * as RateLimits from "./RateLimits.ts";
 export * as Sessions from "./Sessions.ts";

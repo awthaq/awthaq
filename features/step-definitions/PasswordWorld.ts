@@ -11,6 +11,7 @@ import {
   AuditLog,
   AuthEvents,
   Accounts,
+  Hooks,
   RateLimits,
   Sessions,
   Users,
@@ -50,6 +51,7 @@ const CoreLive = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
