@@ -27,6 +27,7 @@
 export * as ClientAddress from "./ClientAddress.ts";
 export * as Encryption from "./Encryption.ts";
 export * as KeyProvider from "./KeyProvider.ts";
+export * as LegacySessionBridge from "./LegacySessionBridge.ts";
 export * as Mailer from "./Mailer.ts";
 export * as PasswordHasher from "./PasswordHasher.ts";
 export * as RateLimiter from "./RateLimiter.ts";

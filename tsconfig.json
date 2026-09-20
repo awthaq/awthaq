@@ -68,6 +68,9 @@
       "path": "packages/migrate-auth0"
     },
     {
+      "path": "packages/migrate-better-auth"
+    },
+    {
       "path": "features"
     },
     {
