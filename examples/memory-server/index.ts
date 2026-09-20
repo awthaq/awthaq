@@ -24,7 +24,7 @@ import { Password } from "@awthaq/password";
 import { AuditLog, Auth, AuthEvents, Verification } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
-import * as TestAuth from "@awthaq/test/TestAuth";
+import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";

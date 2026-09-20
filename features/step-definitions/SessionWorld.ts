@@ -19,7 +19,6 @@ import {
   Verification,
 } from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import type { MailMessage } from "@awthaq/ports/Mailer";
 import { Password, PasswordApi } from "@awthaq/password";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -79,7 +78,7 @@ const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
  * to a scenario.
  */
 const buildApp = () => {
-  const messages = Effect.runSync(Ref.make<ReadonlyArray<MailMessage>>([]));
+  const messages = Effect.runSync(Ref.make<ReadonlyArray<Mailer.MailMessage>>([]));
   const capturingMailer = Layer.succeed(
     Mailer.Mailer,
     Mailer.Mailer.of({
@@ -134,7 +133,7 @@ export interface ActorState {
 
 export interface WorldShape {
   readonly handler: (request: Request) => Promise<Response>;
-  readonly sentMail: Effect.Effect<ReadonlyArray<MailMessage>>;
+  readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
   readonly actors: Ref.Ref<Record<string, ActorState>>;
   readonly responses: Ref.Ref<Record<string, Response>>;
 }

@@ -22,7 +22,6 @@ import type { Api } from "@awthaq/api";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
-import type { AuthEvent } from "@awthaq/core/AuthEvents";
 import type { AuthSubject } from "@qadi/core";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -64,7 +63,10 @@ export interface AppOptions {
   readonly canImpersonate?: (subject: AuthSubject) => Effect.Effect<boolean>;
 }
 
-const buildAppLayer = (options: AppOptions, events: Ref.Ref<ReadonlyArray<AuthEvent>>) => {
+const buildAppLayer = (
+  options: AppOptions,
+  events: Ref.Ref<ReadonlyArray<AuthEvents.AuthEvent>>,
+) => {
   const eventsLayer = Layer.effectDiscard(
     Effect.gen(function* () {
       const authEvents = yield* AuthEvents.AuthEvents;
@@ -111,7 +113,7 @@ export interface AppHandle {
   readonly handler: (request: Request) => Promise<Response>;
   readonly memoMap: Layer.MemoMap;
   readonly appLayer: ReturnType<typeof buildAppLayer>;
-  readonly events: Ref.Ref<ReadonlyArray<AuthEvent>>;
+  readonly events: Ref.Ref<ReadonlyArray<AuthEvents.AuthEvent>>;
 }
 
 export interface WorldShape {
@@ -138,7 +140,7 @@ export const configureApp = Effect.fn("features.admin.configureApp")(function* (
   options: AppOptions,
 ) {
   const world = yield* World;
-  const events = Ref.makeUnsafe<ReadonlyArray<AuthEvent>>([]);
+  const events = Ref.makeUnsafe<ReadonlyArray<AuthEvents.AuthEvent>>([]);
   const appLayer = buildAppLayer(options, events);
   const memoMap = Layer.makeMemoMapUnsafe();
   const { handler } = HttpRouter.toWebHandler(appLayer, { memoMap });

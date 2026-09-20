@@ -37,7 +37,7 @@
 import { Organization as OrganizationService } from "./Organization.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as TeamRecords from "./TeamRecords.ts";
-import * as Users from "@awthaq/core/Users";
+import { Users } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";

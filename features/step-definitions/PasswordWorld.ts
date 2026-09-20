@@ -17,9 +17,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import type { AuthEvent } from "@awthaq/core/AuthEvents";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import type { MailMessage } from "@awthaq/ports/Mailer";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { Password, PasswordApi } from "@awthaq/password";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -80,8 +78,8 @@ export interface AppOptions {
 
 export interface AppHandle {
   readonly handler: (request: Request) => Promise<Response>;
-  readonly sentMail: Effect.Effect<ReadonlyArray<MailMessage>>;
-  readonly publishedEvents: Effect.Effect<ReadonlyArray<AuthEvent>>;
+  readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
+  readonly publishedEvents: Effect.Effect<ReadonlyArray<AuthEvents.AuthEvent>>;
 }
 
 /**
@@ -92,7 +90,7 @@ export interface AppHandle {
  * `AuthEvents.test.ts`'s own `seen` `Ref` does.
  */
 const buildApp = (options: AppOptions = {}): AppHandle => {
-  const messages = Effect.runSync(Ref.make<ReadonlyArray<MailMessage>>([]));
+  const messages = Effect.runSync(Ref.make<ReadonlyArray<Mailer.MailMessage>>([]));
   const capturingMailer = Layer.succeed(
     Mailer.Mailer,
     Mailer.Mailer.of({
@@ -101,7 +99,7 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
     }),
   );
 
-  const events = Effect.runSync(Ref.make<ReadonlyArray<AuthEvent>>([]));
+  const events = Effect.runSync(Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]));
   const eventsLayer = Layer.effectDiscard(
     Effect.gen(function* () {
       const authEvents = yield* AuthEvents.AuthEvents;
