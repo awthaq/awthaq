@@ -51,6 +51,15 @@ export class User extends Model.Class<User>("User")({
     jsonCreate: Schema.Boolean,
   }),
   name: Schema.String,
+  // AOMS-002 (.issues/high): free-form per-user metadata this service
+  // stores opaquely and never parses — the same
+  // `organization_org.metadata` precedent `@awthaq/organization`'s own
+  // `OrganizationRecords.ts` already uses. `NULL` means "none set"; a
+  // constructor default (unlike `Account`'s always-explicit
+  // `passwordHash`/`accessToken`/`refreshToken`) so every pre-existing
+  // `User.insert` call site that predates this field keeps compiling
+  // unchanged, matching `emailVerified`'s own default just above.
+  metadata: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
   createdAt: Model.DateTimeInsert,
   updatedAt: Model.DateTimeUpdate,
 }) {}

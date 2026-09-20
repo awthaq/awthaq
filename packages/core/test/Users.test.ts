@@ -27,6 +27,7 @@ const Migrated = Layer.effectDiscard(
         email TEXT NOT NULL,
         emailVerified INTEGER NOT NULL,
         name TEXT NOT NULL,
+        metadata TEXT,
         createdAt TEXT NOT NULL,
         updatedAt TEXT NOT NULL
       )
@@ -108,6 +109,43 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
         const found = yield* users.findByEmail("nobody@example.com");
         assert.isTrue(Option.isNone(found));
       }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "AOMS-002: metadata defaults to None, is stored opaquely on create, and updateProfile can set/leave/clear it independently of name",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+
+          const noMetadata = yield* users.create({ email: "dee@example.com", name: "Dee" });
+          assert.isTrue(Option.isNone(noMetadata.metadata));
+
+          const withMetadata = yield* users.create({
+            email: "eve@example.com",
+            name: "Eve",
+            metadata: '{"tier":"gold"}',
+          });
+          assert.deepStrictEqual(withMetadata.metadata, Option.some('{"tier":"gold"}'));
+
+          // Omitting `metadata` on updateProfile leaves it untouched.
+          const renamedOnly = yield* users.updateProfile(withMetadata.id, { name: "Eve Renamed" });
+          assert.strictEqual(renamedOnly.name, "Eve Renamed");
+          assert.deepStrictEqual(renamedOnly.metadata, Option.some('{"tier":"gold"}'));
+
+          // An explicit value overwrites it.
+          const overwritten = yield* users.updateProfile(withMetadata.id, {
+            name: "Eve Renamed",
+            metadata: '{"tier":"platinum"}',
+          });
+          assert.deepStrictEqual(overwritten.metadata, Option.some('{"tier":"platinum"}'));
+
+          // `null` explicitly clears it.
+          const cleared = yield* users.updateProfile(withMetadata.id, {
+            name: "Eve Renamed",
+            metadata: null,
+          });
+          assert.isTrue(Option.isNone(cleared.metadata));
+        }).pipe(Effect.provide(layer)),
     );
   });
 };

@@ -31,6 +31,15 @@ export interface UserRecord {
   readonly email: string;
   readonly emailVerified: boolean;
   readonly name: string;
+  /**
+   * AOMS-002: free-form, opaque per-user metadata (e.g. a JSON-encoded
+   * string) — mirrors `@awthaq/organization`'s own
+   * `OrganizationRecord.metadata`. This service never parses or
+   * interprets it; an IdP migration (Auth0's `user_metadata`/
+   * `app_metadata`) or an application-level claims-enrichment hook is
+   * exactly the kind of caller that reads/writes it.
+   */
+  readonly metadata: Option.Option<string>;
   readonly createdAt: DateTime.Utc;
   readonly updatedAt: DateTime.Utc;
 }
@@ -56,12 +65,14 @@ export interface UsersShape {
   readonly create: (input: {
     readonly email: string;
     readonly name: string;
+    readonly metadata?: string;
   }) => Effect.Effect<UserRecord, EmailAlreadyExists | PlatformError.PlatformError>;
   readonly findById: (id: UserId) => Effect.Effect<UserRecord, UserNotFound>;
   readonly findByEmail: (email: string) => Effect.Effect<Option.Option<UserRecord>>;
+  /** AOMS-002: `metadata` left `undefined` leaves it untouched; `null` clears it. */
   readonly updateProfile: (
     id: UserId,
-    input: { readonly name: string },
+    input: { readonly name: string; readonly metadata?: string | null },
   ) => Effect.Effect<UserRecord, UserNotFound>;
   readonly verifyEmail: (id: UserId) => Effect.Effect<UserRecord, UserNotFound>;
   readonly delete: (id: UserId) => Effect.Effect<void, UserNotFound>;
@@ -115,6 +126,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto> = Layer.effec
         email,
         emailVerified: false,
         name: input.name,
+        metadata: Option.fromNullishOr(input.metadata),
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -150,7 +162,14 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto> = Layer.effec
             s,
           ] as const;
         }
-        const updated: UserRecord = { ...existing.value, name: input.name };
+        const updated: UserRecord = {
+          ...existing.value,
+          name: input.name,
+          metadata:
+            input.metadata === undefined
+              ? existing.value.metadata
+              : Option.fromNullishOr(input.metadata),
+        };
         return [Result.succeed(updated), { ...s, byId: HashMap.set(s.byId, id, updated) }] as const;
       }).pipe(Effect.flatMap(Effect.fromResult));
 
@@ -198,6 +217,7 @@ const toUserRecord = (row: SqlModels.User): UserRecord => ({
   email: row.email,
   emailVerified: row.emailVerified,
   name: row.name,
+  metadata: Option.fromNullOr(row.metadata),
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });
@@ -220,7 +240,7 @@ export const layerSql: Layer.Layer<Users, never, SqlRepositories.UsersRepository
     const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
       const email = input.email.toLowerCase();
       const insert = yield* SqlModels.User.insert
-        .makeEffect({ email, name: input.name })
+        .makeEffect({ email, name: input.name, metadata: input.metadata ?? null })
         .pipe(Effect.orDie);
       const row = yield* repo.insert(insert).pipe(
         Effect.catchTag("SqlError", (error) =>
@@ -254,8 +274,10 @@ export const layerSql: Layer.Layer<Users, never, SqlRepositories.UsersRepository
 
     const updateProfile: UsersShape["updateProfile"] = Effect.fnUntraced(function* (id, input) {
       const existing = yield* findById(id);
+      const nextMetadata =
+        input.metadata === undefined ? Option.getOrNull(existing.metadata) : input.metadata;
       const update = yield* SqlModels.User.update
-        .makeEffect({ id, email: existing.email, name: input.name })
+        .makeEffect({ id, email: existing.email, name: input.name, metadata: nextMetadata })
         .pipe(Effect.orDie);
       const row = yield* repo.update(update).pipe(Effect.orDie);
       return toUserRecord(row);

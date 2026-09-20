@@ -335,4 +335,18 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // AOMS-001/AOMS-002 (.issues/high): free-form JSON metadata, mirroring
+  // `organization_org.metadata`'s own free-form-string column (migration
+  // reference in `@awthaq/organization`'s own repository) — an IdP
+  // import's `user_metadata`/`app_metadata` (Auth0), or any other
+  // application-level per-user attribute, otherwise has nowhere to land.
+  // `NULL`, not `''`, means "no metadata set" (`UserRecord.metadata`'s own
+  // `Option.Option<string>`).
+  migration(14, "add_users_metadata_column", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`ALTER TABLE users ADD COLUMN metadata TEXT`,
+      sqlite: () => sql`ALTER TABLE users ADD COLUMN metadata TEXT`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);
