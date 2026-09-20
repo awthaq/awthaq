@@ -31,6 +31,10 @@ export * as AuthEvents from "./AuthEvents.ts";
 export * as AuthPlugin from "./AuthPlugin.ts";
 export * as HookPoint from "./HookPoint.ts";
 export * as Hooks from "./Hooks.ts";
+// MA-003: re-exported, not wrapped — see this file's own header comment
+// for why a plugin author should import the httpapi contract classes from
+// here rather than straight from `effect/unstable/httpapi/*`.
+export * from "./HttpApiTypes.ts";
 export * as Migrations from "./Migrations.ts";
 export * as RateLimits from "./RateLimits.ts";
 export * as Sessions from "./Sessions.ts";
