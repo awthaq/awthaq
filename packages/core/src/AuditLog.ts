@@ -75,6 +75,10 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.user.created":
     case "auth.user.signedIn":
     case "auth.session.reuse":
+    case "auth.session.issued":
+    case "auth.session.revoked":
+    case "auth.password.changed":
+    case "auth.password.resetCompleted":
     case "auth.passkey.counterAnomaly":
     case "auth.organization.memberAdded":
     case "auth.organization.memberRemoved":

@@ -405,6 +405,45 @@ describe("Password", () => {
   );
 
   it.effect(
+    "ALF-004: signUp and signIn each publish auth.session.issued for the session they mint",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const events = yield* AuthEvents.AuthEvents;
+
+        const issuedEvents = yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((event) => event._tag === "auth.session.issued"),
+            Stream.take(2),
+            Stream.runCollect,
+          ),
+          { startImmediately: true },
+        );
+
+        const signedUp = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
+        const signedIn = yield* password.signIn({ email, password: strongPassword });
+
+        const collected = yield* Fiber.join(issuedEvents);
+        assert.strictEqual(collected.length, 2);
+        const [fromSignUp, fromSignIn] = collected;
+        assert.strictEqual(fromSignUp?._tag, "auth.session.issued");
+        assert.strictEqual(fromSignIn?._tag, "auth.session.issued");
+        if (fromSignUp?._tag === "auth.session.issued") {
+          assert.strictEqual(fromSignUp.sessionId, signedUp.session.id);
+          assert.strictEqual(fromSignUp.userId, signedUp.session.userId);
+        }
+        if (fromSignIn?._tag === "auth.session.issued") {
+          assert.strictEqual(fromSignIn.sessionId, signedIn.session.id);
+          assert.strictEqual(fromSignIn.userId, signedIn.session.userId);
+        }
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
     "upstream-hardening ticket 04: signIn succeeds once verifyEmail has consumed signUp's own mailed token",
     () =>
       Effect.gen(function* () {
@@ -539,6 +578,55 @@ describe("Password", () => {
           .signIn({ email, password: strongPassword })
           .pipe(Effect.flip);
         assert.strictEqual(oldPasswordFails._tag, "InvalidCredentials");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "ALF-004: confirmReset publishes auth.password.resetCompleted and auth.session.revoked(reason: passwordReset), only after the transaction commits",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const events = yield* AuthEvents.AuthEvents;
+
+        const issued = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
+        yield* password.requestReset({ email });
+        yield* letForkedFibersRun;
+        const resetMail = (yield* mailer.sent).findLast((m) => m.template === "reset-password");
+        const mailedToken = Redacted.make(String(resetMail?.data?.["token"]));
+
+        const captured = yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter(
+              (event) =>
+                event._tag === "auth.password.resetCompleted" ||
+                event._tag === "auth.session.revoked",
+            ),
+            Stream.take(2),
+            Stream.runCollect,
+          ),
+          { startImmediately: true },
+        );
+
+        const newPassword = Redacted.make("a brand new strong password");
+        yield* password.confirmReset({ token: mailedToken, password: newPassword });
+
+        const collected = yield* Fiber.join(captured);
+        assert.strictEqual(collected.length, 2);
+        const resetCompleted = collected.find((e) => e._tag === "auth.password.resetCompleted");
+        const revoked = collected.find((e) => e._tag === "auth.session.revoked");
+        assert.isDefined(resetCompleted);
+        assert.isDefined(revoked);
+        if (resetCompleted?._tag === "auth.password.resetCompleted") {
+          assert.strictEqual(resetCompleted.userId, issued.session.userId);
+        }
+        if (revoked?._tag === "auth.session.revoked") {
+          assert.strictEqual(revoked.userId, issued.session.userId);
+          assert.strictEqual(revoked.reason, "passwordReset");
+        }
       }).pipe(Effect.provide(TestLayer)),
   );
 
@@ -779,6 +867,63 @@ describe("Password", () => {
 
         const rotatedIsValid = yield* sessions.verify(rotated.token);
         assert.strictEqual(rotatedIsValid.session.id, rotated.session.id);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "ALF-004: changePassword publishes auth.password.changed, auth.session.revoked(reason: passwordChanged), and auth.session.issued for the rotated session",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const events = yield* AuthEvents.AuthEvents;
+        const issued = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
+        const userId = issued.session.userId;
+        const currentSessionId = issued.session.id;
+
+        const captured = yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter(
+              (event) =>
+                event._tag === "auth.password.changed" ||
+                event._tag === "auth.session.revoked" ||
+                event._tag === "auth.session.issued",
+            ),
+            Stream.take(3),
+            Stream.runCollect,
+          ),
+          { startImmediately: true },
+        );
+
+        const rotated = yield* password.changePassword({
+          userId,
+          currentSessionId,
+          currentPassword: strongPassword,
+          newPassword: Redacted.make("a whole new strong password"),
+        });
+
+        const collected = yield* Fiber.join(captured);
+        assert.strictEqual(collected.length, 3);
+        const changed = collected.find((e) => e._tag === "auth.password.changed");
+        const revoked = collected.find((e) => e._tag === "auth.session.revoked");
+        const sessionIssued = collected.find((e) => e._tag === "auth.session.issued");
+        assert.isDefined(changed);
+        assert.isDefined(revoked);
+        assert.isDefined(sessionIssued);
+        if (changed?._tag === "auth.password.changed") {
+          assert.strictEqual(changed.userId, userId);
+        }
+        if (revoked?._tag === "auth.session.revoked") {
+          assert.strictEqual(revoked.userId, userId);
+          assert.strictEqual(revoked.reason, "passwordChanged");
+        }
+        if (sessionIssued?._tag === "auth.session.issued") {
+          assert.strictEqual(sessionIssued.sessionId, rotated.session.id);
+          assert.strictEqual(sessionIssued.userId, userId);
+        }
       }).pipe(Effect.provide(TestLayer)),
   );
 

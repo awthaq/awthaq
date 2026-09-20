@@ -491,7 +491,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
         const principal = yield* Api.CurrentPrincipal;
         if (principal._tag !== "User") {
           return yield* Effect.die(
-            new Error(`awthaq: reauthenticate reached with a non-User principal: ${principal._tag}`),
+            new Error(
+              `awthaq: reauthenticate reached with a non-User principal: ${principal._tag}`,
+            ),
           );
         }
         yield* password.reauthenticate({
@@ -713,6 +715,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
         yield* events.publish({ _tag: "auth.user.created", userId: user.id });
+        yield* events.publish({
+          _tag: "auth.session.issued",
+          sessionId: issued.session.id,
+          userId: user.id,
+        });
 
         // BEH-EA-113: dispatched, never awaited — response latency must
         // not depend on mail-provider latency, and per
@@ -801,6 +808,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           _tag: "auth.user.signedIn",
           userId: user.id,
           strategy: "password",
+        });
+        yield* events.publish({
+          _tag: "auth.session.issued",
+          sessionId: issued.session.id,
+          userId: user.id,
         });
         return issued;
       });
@@ -947,13 +959,25 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
+        // ALF-004: published only after the transaction above has actually
+        // committed — mirroring `signUp`'s own `auth.user.created`
+        // placement, never inside the transaction itself.
+        yield* events.publish({ _tag: "auth.password.resetCompleted", userId });
+        yield* events.publish({
+          _tag: "auth.session.revoked",
+          userId,
+          reason: "passwordReset",
+        });
       });
 
       const verifyEmail: PasswordShape["verifyEmail"] = Effect.fnUntraced(function* (input) {
         // APS-003: per-IP first — guards against a flood of garbage
         // tokens before even attempting to decode one, mirroring
         // `signIn`/`requestReset`'s own IP-then-identity ordering.
-        yield* rateLimit(`password:verify-email:ip:${input.ip ?? "unknown"}`, RATE_LIMITS.verifyEmailByIp);
+        yield* rateLimit(
+          `password:verify-email:ip:${input.ip ?? "unknown"}`,
+          RATE_LIMITS.verifyEmailByIp,
+        );
         const decoded = decodeVerificationToken(Redacted.value(input.token));
         if (Option.isNone(decoded)) {
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
@@ -1037,6 +1061,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
 
         const hash = yield* hasher.hash(input.newPassword);
         yield* accounts.updateCredentialHash(account.id, Redacted.make(hash)).pipe(Effect.orDie);
+        yield* events.publish({ _tag: "auth.password.changed", userId: input.userId });
 
         // BEH-EA-053: revoke every *other* session first, while
         // `currentSessionId` still names a live row — then supersede that
@@ -1044,9 +1069,20 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // `revokeOthers` nothing to `keep` (the superseded id no longer
         // exists once `issue` has run).
         yield* sessions.revokeOthers(input.userId, input.currentSessionId);
-        return yield* sessions
+        yield* events.publish({
+          _tag: "auth.session.revoked",
+          userId: input.userId,
+          reason: "passwordChanged",
+        });
+        const issued = yield* sessions
           .issue({ userId: input.userId, supersedes: input.currentSessionId })
           .pipe(Effect.orDie);
+        yield* events.publish({
+          _tag: "auth.session.issued",
+          sessionId: issued.session.id,
+          userId: input.userId,
+        });
+        return issued;
       });
 
       const reauthenticate: PasswordShape["reauthenticate"] = Effect.fnUntraced(function* (input) {
@@ -1081,7 +1117,9 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             // narrow window since, a race this endpoint has no
             // request-level recovery for.
             Effect.die(
-              new Error(`awthaq: reauthenticate's own current session vanished: ${input.currentSessionId}`),
+              new Error(
+                `awthaq: reauthenticate's own current session vanished: ${input.currentSessionId}`,
+              ),
             ),
           ),
         );

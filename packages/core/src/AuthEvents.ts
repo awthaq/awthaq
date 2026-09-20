@@ -72,6 +72,39 @@ export interface SessionReuseEvent {
   readonly userId: UserId;
 }
 
+/** ALF-004: published whenever `@awthaq/password` mints a session — signUp's initial session, signIn, and changePassword's own rotation alike. */
+export interface SessionIssuedEvent {
+  readonly _tag: "auth.session.issued";
+  readonly sessionId: string;
+  readonly userId: UserId;
+}
+
+/**
+ * ALF-004: published whenever `@awthaq/password` bulk-revokes sessions as
+ * part of a credential change — `confirmReset`'s `revokeAll` (no
+ * authenticated "current" session to keep) and `changePassword`'s
+ * `revokeOthers` (the caller's own session survives, rotated) alike. Carries
+ * no `sessionId`: the underlying `Sessions.revokeAll`/`revokeOthers`
+ * primitives are bulk operations with no per-row identity to report.
+ */
+export interface SessionRevokedEvent {
+  readonly _tag: "auth.session.revoked";
+  readonly userId: UserId;
+  readonly reason: "passwordChanged" | "passwordReset";
+}
+
+/** ALF-004: published by `@awthaq/password`'s `changePassword`, after the new hash is persisted. */
+export interface PasswordChangedEvent {
+  readonly _tag: "auth.password.changed";
+  readonly userId: UserId;
+}
+
+/** ALF-004: published by `@awthaq/password`'s `confirmReset`, once the transaction (consume + rehash + revoke) has committed. */
+export interface PasswordResetCompletedEvent {
+  readonly _tag: "auth.password.resetCompleted";
+  readonly userId: UserId;
+}
+
 /**
  * Published by `@awthaq/passkey`'s authentication ceremony (BEH-EA-131,
  * ticket 08): a verified assertion's reported counter did not exceed the
@@ -250,6 +283,10 @@ export type AuthEvent =
   | UserSignedInEvent
   | UserSignInFailedEvent
   | SessionReuseEvent
+  | SessionIssuedEvent
+  | SessionRevokedEvent
+  | PasswordChangedEvent
+  | PasswordResetCompletedEvent
   | PasskeyCounterAnomalyEvent
   | AdminImpersonationStartedEvent
   | AdminImpersonationStoppedEvent
