@@ -8,7 +8,15 @@
 // RSA keypair signing a real RS256 `id_token` that `Jwt.ts`'s own verifier
 // checks — not a stub that always returns `true`.
 import { generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  Accounts,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Authentication } from "@awthaq/server";
@@ -111,7 +119,11 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(NodeCrypto.layer));
+).pipe(
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(NodeCrypto.layer),
+);
 
 const baseUrl = "https://app.example.com";
 
@@ -785,38 +797,36 @@ describe("OAuth", () => {
       ),
     );
 
-    it.effect(
-      "OAP-001/AP-001: a scheme-relative //host callbackURL is never redirected to",
-      () =>
-        Effect.gen(function* () {
-          const oauth = yield* OAuth.OAuth;
-          const { state } = yield* oauth.authorize("acme", {
-            callbackURL: "//evil.example.com/phish",
-            link: undefined,
-          });
-          const outcome = yield* oauth.callback("acme", {
-            code: "c1",
-            state,
-            iss: undefined,
-            cookieState: state,
-          });
-          // A browser resolves `//evil.example.com/phish` against the
-          // current scheme (e.g. `https://evil.example.com/phish`) despite
-          // its leading `/` — this must fall back to the safe default,
-          // exactly like an untrusted absolute URL does.
-          assert.notInclude(outcome.callbackURL, "evil.example.com");
-          assert.strictEqual(outcome.callbackURL, "/");
-        }).pipe(
-          Effect.provide(
-            buildLayer({
-              providers: [acme()],
-              httpRoutes: {
-                "/token": { access_token: "at-1" },
-                "/userinfo": { id: "np-sub", email: "np@example.com" },
-              },
-            }),
-          ),
+    it.effect("OAP-001/AP-001: a scheme-relative //host callbackURL is never redirected to", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("acme", {
+          callbackURL: "//evil.example.com/phish",
+          link: undefined,
+        });
+        const outcome = yield* oauth.callback("acme", {
+          code: "c1",
+          state,
+          iss: undefined,
+          cookieState: state,
+        });
+        // A browser resolves `//evil.example.com/phish` against the
+        // current scheme (e.g. `https://evil.example.com/phish`) despite
+        // its leading `/` — this must fall back to the safe default,
+        // exactly like an untrusted absolute URL does.
+        assert.notInclude(outcome.callbackURL, "evil.example.com");
+        assert.strictEqual(outcome.callbackURL, "/");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": { access_token: "at-1" },
+              "/userinfo": { id: "np-sub", email: "np@example.com" },
+            },
+          }),
         ),
+      ),
     );
 
     it.effect(

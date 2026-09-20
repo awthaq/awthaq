@@ -18,7 +18,15 @@
 // (`HttpEffect.toHandled`'s `sendResponse`), which `toWebHandler` goes
 // through and a bare `router.asHttpEffect()` call does not.
 import { Api } from "@awthaq/api";
-import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+  Accounts,
+} from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -55,7 +63,11 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(NodeCrypto.layer));
+).pipe(
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(NodeCrypto.layer),
+);
 
 /**
  * `changePassword` (shipping-gap map, ticket 11) is the one endpoint in

@@ -10,7 +10,15 @@
 // real bug (`Schema.Union` collapsing per-member `httpApiStatus`) that its
 // domain-level tests could not — this file exists for the same reason,
 // against `OAuthApi.ts`'s own array-form `error` declarations.
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  Accounts,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -81,7 +89,11 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(NodeCrypto.layer));
+).pipe(
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(NodeCrypto.layer),
+);
 
 const baseUrl = "https://app.example.com";
 

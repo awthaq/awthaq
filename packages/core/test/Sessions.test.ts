@@ -20,6 +20,7 @@ import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Sessions from "../src/Sessions.ts";
 import * as Users from "../src/Users.ts";
@@ -27,6 +28,7 @@ import * as Users from "../src/Users.ts";
 const MemoryLayer = Sessions.layerMemory.pipe(
   Layer.provide(NodeCrypto.layer),
   Layer.provide(AuthEvents.layer),
+  Layer.provide(AuditLog.layerMemory),
 );
 
 const shortLivedConfig = Layer.succeed(Sessions.SessionConfig, {
@@ -37,6 +39,7 @@ const shortLivedConfig = Layer.succeed(Sessions.SessionConfig, {
 
 const ShortLivedMemoryLayer = Sessions.layerMemory.pipe(
   Layer.provide(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig, AuthEvents.layer)),
+  Layer.provide(AuditLog.layerMemory),
 );
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
@@ -74,6 +77,7 @@ const SqlLayer = Sessions.layerSql.pipe(
   Layer.provide(Repositories.SessionsRepositoryLive),
   Layer.provide(NodeCrypto.layer),
   Layer.provide(AuthEvents.layer),
+  Layer.provide(AuditLog.layerMemory),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
@@ -81,6 +85,7 @@ const SqlLayer = Sessions.layerSql.pipe(
 const ShortLivedSqlLayer = Sessions.layerSql.pipe(
   Layer.provide(Repositories.SessionsRepositoryLive),
   Layer.provide(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig, AuthEvents.layer)),
+  Layer.provide(AuditLog.layerMemory),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
@@ -492,12 +497,14 @@ suite("Sessions (layerSql)", SqlLayer, ShortLivedSqlLayer);
 const MemoryLayerWithEvents = Sessions.layerMemory.pipe(
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
 );
 
 const SqlLayerWithEvents = Sessions.layerSql.pipe(
   Layer.provide(Repositories.SessionsRepositoryLive),
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );

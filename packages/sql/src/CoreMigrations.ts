@@ -249,12 +249,13 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           ADD COLUMN "supersededBy" TEXT,
           ADD COLUMN "supersededAt" TIMESTAMPTZ,
           ADD COLUMN "reusedAt" TIMESTAMPTZ`,
-      sqlite: () => sql`
+      sqlite: () =>
+        sql`
         ALTER TABLE sessions ADD COLUMN familyId TEXT`.pipe(
-        Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN supersededBy TEXT`),
-        Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN supersededAt TEXT`),
-        Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN reusedAt TEXT`),
-      ),
+          Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN supersededBy TEXT`),
+          Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN supersededAt TEXT`),
+          Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN reusedAt TEXT`),
+        ),
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
@@ -288,6 +289,47 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
         sql`ALTER TABLE sessions ADD COLUMN authenticatedAt TEXT`.pipe(
           Effect.andThen(
             sql`UPDATE sessions SET authenticatedAt = createdAt WHERE authenticatedAt IS NULL`,
+          ),
+        ),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
+  // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 01
+  // (ALF-001/ESA-001/ESS-002/CSG-004/EP-002): BEH-EA-100's durable audit
+  // table. `payload` is an opaque JSON envelope, the same
+  // `verification_tokens.payload` precedent migration 4 already
+  // establishes — a new `AuthEvent` tag needs no migration to be durably
+  // recorded. `correlationId` is reserved, unpopulated until ALF-006.
+  migration(13, "create_auth_audit_log", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`
+        CREATE TABLE auth_audit_log (
+          id TEXT PRIMARY KEY,
+          "eventTag" TEXT NOT NULL,
+          "actorUserId" TEXT,
+          "occurredAt" TIMESTAMPTZ NOT NULL,
+          "correlationId" TEXT,
+          payload TEXT NOT NULL
+        )`.pipe(
+          Effect.andThen(sql`CREATE INDEX auth_audit_log_event_tag ON auth_audit_log ("eventTag")`),
+          Effect.andThen(
+            sql`CREATE INDEX auth_audit_log_actor_user_id ON auth_audit_log ("actorUserId")`,
+          ),
+        ),
+      sqlite: () =>
+        sql`
+        CREATE TABLE auth_audit_log (
+          id TEXT PRIMARY KEY,
+          "eventTag" TEXT NOT NULL,
+          "actorUserId" TEXT,
+          "occurredAt" TEXT NOT NULL,
+          "correlationId" TEXT,
+          payload TEXT NOT NULL
+        )`.pipe(
+          Effect.andThen(sql`CREATE INDEX auth_audit_log_event_tag ON auth_audit_log ("eventTag")`),
+          Effect.andThen(
+            sql`CREATE INDEX auth_audit_log_actor_user_id ON auth_audit_log ("actorUserId")`,
           ),
         ),
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),

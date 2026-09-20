@@ -3,7 +3,7 @@
 // `MembershipRecords`, a hand-built `Api.UserPrincipal` the same way
 // `@awthaq/admin`'s own `Admin.test.ts` does.
 import { Api } from "@awthaq/api";
-import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -29,6 +29,7 @@ const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   // inside `mergeAll` above, so it also satisfies that need rather than
   // merely sitting alongside it unsatisfied.
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

@@ -8,7 +8,15 @@
 // already-issued cookie), so a real Set-Cookie response (REQ-EA-136/154/155)
 // needs an actual sign-in flow, the same way any real deployment would.
 import { AuthCore } from "@awthaq/api";
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  Accounts,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import type { MailMessage } from "@awthaq/ports/Mailer";
 import { Password, PasswordApi } from "@awthaq/password";
@@ -36,7 +44,11 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(NodeCrypto.layer));
+).pipe(
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(NodeCrypto.layer),
+);
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),

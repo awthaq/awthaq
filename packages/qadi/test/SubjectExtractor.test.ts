@@ -1,5 +1,5 @@
 // spec/behaviors/20-qadi-bridge-path-b.md, BEH-EA-153.
-import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -14,6 +14,7 @@ import * as SubjectExtractor from "../src/SubjectExtractor.ts";
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -33,6 +34,7 @@ const shortLivedConfig = Layer.succeed(Sessions.SessionConfig, {
 
 const ShortLivedCoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig)),
 );
 

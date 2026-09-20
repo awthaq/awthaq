@@ -9,7 +9,15 @@
 // transport (the same category of swap `TestClock` is for time — not a
 // business-logic mock).
 import { createHash } from "node:crypto";
-import { AuthEvents, RateLimits, Sessions, Users, Verification, Accounts } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+  Accounts,
+} from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -72,7 +80,11 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(NodeCrypto.layer));
+).pipe(
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(NodeCrypto.layer),
+);
 
 /**
  * `changePassword` (ticket 11) needs `RateLimiter.layerPermissive` too
@@ -137,9 +149,11 @@ const TestLayerHangingMailer = Password.Password.layer.pipe(
   Layer.provide(CsrfProtectionLive),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(
-    Layer.mergeAll(PasswordHasher.layerArgon2id, HangingMailerLayer, RateLimiter.layerPermissive).pipe(
-      Layer.provideMerge(NodeCrypto.layer),
-    ),
+    Layer.mergeAll(
+      PasswordHasher.layerArgon2id,
+      HangingMailerLayer,
+      RateLimiter.layerPermissive,
+    ).pipe(Layer.provideMerge(NodeCrypto.layer)),
   ),
   Layer.provideMerge(RateLimits.layer),
   Layer.provide(NoBreachHttpClient),
@@ -792,7 +806,10 @@ describe("Password", () => {
         const password = yield* Password.Password;
         const sessions = yield* Sessions.Sessions;
         const mailer = yield* Mailer.Mailer;
-        const issued = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        const issued = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
         const currentSessionId = issued.session.id;
 
         yield* TestClock.adjust(Duration.minutes(30));
@@ -1066,7 +1083,9 @@ describe("Password", () => {
         yield* letForkedFibersRun;
         const sent = yield* mailer.sent;
         for (let i = 0; i < 31; i++) {
-          const mail = sent.find((m) => m.template === "verify-email" && m.to === `verify-spray-${i}@example.com`);
+          const mail = sent.find(
+            (m) => m.template === "verify-email" && m.to === `verify-spray-${i}@example.com`,
+          );
           const realToken = String(mail?.data?.["token"]);
           identifiers.push(realToken.slice(0, realToken.lastIndexOf(".")));
         }

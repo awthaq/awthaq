@@ -17,7 +17,15 @@
 // depends on (e.g. `DateTime.now`) see the same simulated `TestClock` every
 // other step does. Several of this feature's own scenarios (REQ-EA-334's
 // flow-TTL expiry) depend on that.
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  Accounts,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { ClientAddress, RateLimiter, SqlTransaction, Encryption, KeyProvider } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import { OAuth, OAuthProvider } from "@awthaq/oauth";
@@ -114,7 +122,11 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(NodeCrypto.layer));
+).pipe(
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(NodeCrypto.layer),
+);
 
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(

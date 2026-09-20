@@ -12,7 +12,7 @@
 // directly against `Sessions` through the same shared `MemoMap` the app's
 // own handler resolves against — the identical technique
 // `AuthHttp.test.ts`'s own `issueSessionCookieHeader` uses.
-import { AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { Passkey, PasskeyApi, ChallengeStore, PasskeyCredentials } from "@awthaq/passkey";
@@ -129,6 +129,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

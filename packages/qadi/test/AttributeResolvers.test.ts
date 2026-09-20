@@ -1,6 +1,6 @@
 // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 14
 // (AAPS-002).
-import { AuthEvents, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -20,6 +20,7 @@ const fakeResolver = (
 
 const CoreLive = Users.layerMemory.pipe(
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -90,7 +91,10 @@ describe("attributeResolverRegistry (AAPS-002)", () => {
           Layer.provideMerge(
             AttributeResolvers.attributeResolverRegistry([
               { names: Resolvers.UserAttributeNames, layer: Resolvers.UserAttributes },
-              { names: ["organizationCount"], layer: fakeResolver("orgs", { organizationCount: 3 }) },
+              {
+                names: ["organizationCount"],
+                layer: fakeResolver("orgs", { organizationCount: 3 }),
+              },
             ]),
             CoreLive,
           ),

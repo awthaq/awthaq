@@ -9,7 +9,7 @@
 // `WebAuthn` is still mocked (`Layer.mock`, BEH-EA-195) — this proves the
 // wire contract, not the cryptography (ticket 02's own job).
 import { Api } from "@awthaq/api";
-import { Users, Accounts, Sessions, AuthEvents } from "@awthaq/core";
+import { Users, Accounts, Sessions, AuditLog, AuthEvents } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -41,6 +41,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

@@ -57,7 +57,16 @@
 // caller that has installed `Roles` passes `onSignedUp: (userId) =>
 // roles.assign(userId, "member")`; `signInAs` runs it, if given, right after
 // issuing the user and before minting the session.
-import { Accounts, Auth, AuthEvents, AuthPlugin, RateLimits, Sessions, Users } from "@awthaq/core";
+import {
+  Accounts,
+  Auth,
+  AuditLog,
+  AuthEvents,
+  AuthPlugin,
+  RateLimits,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -98,6 +107,9 @@ const MemoryPorts = Layer.mergeAll(
   Layer.provideMerge(NodeCrypto.layer),
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
+  // BEH-EA-100: `AuthEvents.layer` now needs `AuditLog` too — see its own
+  // header comment.
+  Layer.provideMerge(AuditLog.layerMemory),
 );
 
 /**

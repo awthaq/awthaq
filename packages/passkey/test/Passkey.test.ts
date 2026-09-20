@@ -7,7 +7,7 @@
 // this suite proves the plugin's own ceremony/persistence/enumeration-safety
 // logic, not `@simplewebauthn/server`'s cryptography (that's
 // `packages/ports/test/WebAuthn.test.ts`'s own job).
-import { AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -32,6 +32,7 @@ import {
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

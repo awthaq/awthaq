@@ -7,7 +7,7 @@
 // codes, a real session cookie — mirroring `@awthaq/passkey`'s own
 // `AuthHttp.test.ts`.
 import { Api } from "@awthaq/api";
-import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -62,6 +62,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 const CoreLive = Layer.mergeAll(Sessions.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

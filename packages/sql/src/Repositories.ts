@@ -762,3 +762,103 @@ export const VerificationReservationsRepositoryLive = Layer.effect(
     return { claim };
   }),
 );
+
+// ---- AuditLog ---------------------------------------------------------------
+
+/**
+ * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 01
+ * (ALF-001/ESA-001/ESS-002/CSG-004/EP-002): one `auth_audit_log` row per
+ * `AuthEvent`, envelope columns plus an opaque `payload` — the same
+ * "opaque JSON blob, typed envelope around it" shape `verification_tokens`
+ * already uses, not `SqlModel.makeRepository` (which assumes a flat
+ * per-entity row; `AuthEvent` is a closed, many-variant union).
+ */
+export interface AuditLogRow {
+  readonly id: string;
+  readonly eventTag: string;
+  readonly actorUserId: string | null;
+  readonly occurredAt: DateTime.Utc;
+  readonly correlationId: string | null;
+  readonly payload: unknown;
+}
+
+export interface AuditLogRepositoryShape {
+  readonly insert: (input: {
+    readonly id: string;
+    readonly eventTag: string;
+    readonly actorUserId: string | null;
+    readonly occurredAt: DateTime.Utc;
+    readonly correlationId: string | null;
+    readonly payload: unknown;
+  }) => Effect.Effect<AuditLogRow, Cause.NoSuchElementError | RepositoryError>;
+  readonly list: (input: {
+    readonly eventTag: string | null;
+    readonly actorUserId: string | null;
+    readonly occurredAfter: DateTime.Utc | null;
+    readonly occurredBefore: DateTime.Utc | null;
+  }) => Effect.Effect<ReadonlyArray<AuditLogRow>, RepositoryError>;
+}
+
+export class AuditLogRepository extends Context.Service<
+  AuditLogRepository,
+  AuditLogRepositoryShape
+>()("awthaq/sql/AuditLogRepository") {}
+
+const AuditLogRowSchema = Schema.Struct({
+  id: Schema.String,
+  eventTag: Schema.String,
+  actorUserId: Schema.NullOr(Schema.String),
+  occurredAt: Schema.DateTimeUtcFromString,
+  correlationId: Schema.NullOr(Schema.String),
+  payload: Schema.fromJsonString(Schema.Unknown),
+});
+
+export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlClient.SqlClient> =
+  Layer.effect(
+    AuditLogRepository,
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      const insertQuery = SqlSchema.findOne({
+        Request: Schema.Struct({
+          id: Schema.String,
+          eventTag: Schema.String,
+          actorUserId: Schema.NullOr(Schema.String),
+          occurredAt: Schema.DateTimeUtcFromString,
+          correlationId: Schema.NullOr(Schema.String),
+          payload: Schema.fromJsonString(Schema.Unknown),
+        }),
+        Result: AuditLogRowSchema,
+        execute: (r) => sql`
+        INSERT INTO auth_audit_log (id, "eventTag", "actorUserId", "occurredAt", "correlationId", payload)
+        VALUES (${r.id}, ${r.eventTag}, ${r.actorUserId}, ${r.occurredAt}, ${r.correlationId}, ${r.payload})
+        RETURNING *
+      `,
+      });
+
+      const listQuery = SqlSchema.findAll({
+        Request: Schema.Struct({
+          eventTag: Schema.NullOr(Schema.String),
+          actorUserId: Schema.NullOr(Schema.String),
+          occurredAfter: Schema.NullOr(Schema.DateTimeUtcFromString),
+          occurredBefore: Schema.NullOr(Schema.DateTimeUtcFromString),
+        }),
+        Result: AuditLogRowSchema,
+        execute: (r) => {
+          const conditions = [
+            ...(r.eventTag === null ? [] : [sql`"eventTag" = ${r.eventTag}`]),
+            ...(r.actorUserId === null ? [] : [sql`"actorUserId" = ${r.actorUserId}`]),
+            ...(r.occurredAfter === null ? [] : [sql`"occurredAt" >= ${r.occurredAfter}`]),
+            ...(r.occurredBefore === null ? [] : [sql`"occurredAt" <= ${r.occurredBefore}`]),
+          ];
+          return sql`SELECT * FROM auth_audit_log WHERE ${sql.and(conditions)} ORDER BY "occurredAt" DESC`;
+        },
+      });
+
+      const insert: AuditLogRepositoryShape["insert"] = (input) => insertQuery(input);
+
+      const list: AuditLogRepositoryShape["list"] = (input) => listQuery(input);
+
+      return { insert, list };
+    }),
+  );

@@ -21,7 +21,7 @@ import {
   TeamRecords,
 } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
-import { Auth, AuthEvents, Verification } from "@awthaq/core";
+import { AuditLog, Auth, AuthEvents, Verification } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as TestAuth from "@awthaq/test/TestAuth";
@@ -85,7 +85,7 @@ const PasswordExtras = Layer.mergeAll(
   Verification.layerMemory,
   PasswordHasher.layerArgon2id,
   FetchHttpClient.layer,
-).pipe(Layer.provideMerge(AuthEvents.layer));
+).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(AuditLog.layerMemory));
 
 // 3. `TestAuth.layer` is the whole pipeline over memory — the same
 //    machinery `packages/*/test/AuthHttp.test.ts` files and this repo's

@@ -17,7 +17,7 @@
 // and `after`) up front, in the same `Effect.provide`, so nothing runs
 // untapped before the tap is installed.
 import { Api } from "@awthaq/api";
-import { AuthEvents, HookPoint, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, HookPoint, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -37,6 +37,7 @@ import * as TeamRecords from "../src/TeamRecords.ts";
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -145,14 +146,12 @@ describe("OrganizationHooks (BEH-EA-089-096, ticket 19)", () => {
         const owner = asCaller("owner-1");
         const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
 
-        const aborted = yield* organization
-          .createTeam(owner, record.id, "forbidden-team")
-          .pipe(
-            Effect.flip,
-            Effect.flatMap((error) =>
-              error._tag === "HookAborted" ? Effect.succeed(error) : Effect.die(error),
-            ),
-          );
+        const aborted = yield* organization.createTeam(owner, record.id, "forbidden-team").pipe(
+          Effect.flip,
+          Effect.flatMap((error) =>
+            error._tag === "HookAborted" ? Effect.succeed(error) : Effect.die(error),
+          ),
+        );
         assert.strictEqual(aborted.point, "organization.team.create.before");
         assert.strictEqual(aborted.code, "TEAM_NAME_FORBIDDEN");
 

@@ -16,12 +16,14 @@ import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Verification from "../src/Verification.ts";
 
 const MemoryLayer = Verification.layerMemory.pipe(
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
 );
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
@@ -58,6 +60,7 @@ const SqlLayer = Verification.layerSql.pipe(
   Layer.provide(Repositories.VerificationReservationsRepositoryLive),
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );

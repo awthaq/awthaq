@@ -2,7 +2,7 @@
 // result succeeds with every claim correct; a tampered signature fails;
 // an expired token fails (`TestClock`-driven).
 import { Api } from "@awthaq/api";
-import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -51,6 +51,7 @@ const buildLayer = (overrides?: Partial<JwtConfig.JwtConfigShape>) =>
     Layer.provideMerge(Sessions.layerMemory),
     // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
     Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
     // TIR-001: `RevocationStore` is captured once in `make` now (not a
     // per-call `R` the way `Sessions` is), so this discharges it for the
     // whole plugin rather than merely exposing it to the test body.
@@ -346,12 +347,14 @@ describe("Jwt introspect/introspectLive", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("introspectLive reports active:true for a token with no sid to check (signJWT-minted)", () =>
-    Effect.gen(function* () {
-      const jwt = yield* Jwt.Jwt;
-      const token = yield* jwt.signJWT({ sub: "service-a" });
-      const result = yield* jwt.introspectLive(token);
-      assert.isTrue(result.active);
-    }).pipe(Effect.provide(buildLayer())),
+  it.effect(
+    "introspectLive reports active:true for a token with no sid to check (signJWT-minted)",
+    () =>
+      Effect.gen(function* () {
+        const jwt = yield* Jwt.Jwt;
+        const token = yield* jwt.signJWT({ sub: "service-a" });
+        const result = yield* jwt.introspectLive(token);
+        assert.isTrue(result.active);
+      }).pipe(Effect.provide(buildLayer())),
   );
 });

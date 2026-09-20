@@ -6,7 +6,7 @@
 // `canImpersonate` function (no `Layer.mock` needed — it is a bare config
 // predicate, not a service).
 import { Api } from "@awthaq/api";
-import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -24,6 +24,7 @@ import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 const CoreLive = Layer.mergeAll(Sessions.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

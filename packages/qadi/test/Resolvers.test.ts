@@ -1,6 +1,6 @@
 // spec/behaviors/21-qadi-resolvers-obligations.md, BEH-EA-161, BEH-EA-165.
 import { Api } from "@awthaq/api";
-import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -12,6 +12,7 @@ import * as Resolvers from "../src/Resolvers.ts";
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

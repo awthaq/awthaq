@@ -15,7 +15,7 @@
 // reused for both requests, since each independent build would otherwise
 // own its own, unrelated `Sessions`/`Users` state.
 import { Api } from "@awthaq/api";
-import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -73,6 +73,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

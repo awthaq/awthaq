@@ -1,5 +1,5 @@
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-065 through BEH-EA-072.
-import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -102,6 +102,7 @@ const TestLayer = Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
   Layer.provideMerge(Sessions.layerMemory),
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(TestServices),
 );
@@ -267,6 +268,7 @@ describe("Authentication", () => {
           Layer.provideMerge(Sessions.layerMemory),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
           Layer.provideMerge(AuthEvents.layer),
+          Layer.provideMerge(AuditLog.layerMemory),
           Layer.provide(NodeCrypto.layer),
           Layer.provideMerge(TestServices),
         ),
@@ -306,6 +308,7 @@ describe("Authentication", () => {
           Layer.provideMerge(Sessions.layerMemory),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
           Layer.provideMerge(AuthEvents.layer),
+          Layer.provideMerge(AuditLog.layerMemory),
           Layer.provide(NodeCrypto.layer),
           Layer.provideMerge(TestServices),
         ),

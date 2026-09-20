@@ -7,7 +7,15 @@
 // domain-service access — matching that file's own scope: "this only checks
 // the HTTP plumbing," with domain rules already proven in
 // `packages/password/test/Password.test.ts`.
-import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  AuditLog,
+  AuthEvents,
+  Accounts,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import type { AuthEvent } from "@awthaq/core/AuthEvents";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import type { MailMessage } from "@awthaq/ports/Mailer";
@@ -39,7 +47,11 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(NodeCrypto.layer));
+).pipe(
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(NodeCrypto.layer),
+);
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),

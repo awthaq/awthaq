@@ -5,10 +5,13 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Users from "../src/Users.ts";
 
 const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
+
+const AuthEventsLive = AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory));
 
 describe("AuthEvents", () => {
   it.effect("BEH-EA-098/102: publish returns immediately; stream sees every published event", () =>
@@ -30,7 +33,7 @@ describe("AuthEvents", () => {
         result.map((e) => e._tag),
         ["auth.user.created", "auth.token.replay"],
       );
-    }).pipe(Effect.provide(AuthEvents.layer)),
+    }).pipe(Effect.provide(AuthEventsLive)),
   );
 
   it.effect(
@@ -62,7 +65,7 @@ describe("AuthEvents", () => {
         // delivered, `CAPACITY` buffered) and only the remaining
         // `overflow - 1` are dropped.
         assert.strictEqual(yield* events.droppedCount, overflow - 1);
-      }).pipe(Effect.provide(AuthEvents.layer)),
+      }).pipe(Effect.provide(AuthEventsLive)),
   );
 
   it.effect(
@@ -94,7 +97,7 @@ describe("AuthEvents", () => {
         yield* Fiber.join(healthy);
         assert.deepStrictEqual(yield* Ref.get(seen), ["reset-password:u2"]);
         yield* Fiber.interrupt(failing);
-      }).pipe(Effect.provide(AuthEvents.layer)),
+      }).pipe(Effect.provide(AuthEventsLive)),
   );
 
   const seen = Effect.runSync(Ref.make<ReadonlyArray<string>>([]));
@@ -115,6 +118,22 @@ describe("AuthEvents", () => {
       yield* events.publish({ _tag: "auth.token.replay", identifier: "reset-password:u1" });
       yield* Effect.sleep("20 millis");
       assert.deepStrictEqual(yield* Ref.get(seen), ["reset-password:u1"]);
-    }).pipe(Effect.provide(Subscription.pipe(Layer.provideMerge(AuthEvents.layer)))),
+    }).pipe(Effect.provide(Subscription.pipe(Layer.provideMerge(AuthEventsLive)))),
+  );
+
+  it.effect(
+    "BEH-EA-100: publish durably records every event via AuditLog, with zero subscribers",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* events.publish({ _tag: "auth.user.created", userId });
+        yield* events.publish({ _tag: "auth.token.replay", identifier: "verify-email:u1" });
+        const recorded = yield* auditLog.list();
+        assert.deepStrictEqual(recorded.map((r) => r.eventTag).toSorted(), [
+          "auth.token.replay",
+          "auth.user.created",
+        ]);
+      }).pipe(Effect.provide(AuthEventsLive)),
   );
 });

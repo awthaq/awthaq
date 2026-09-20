@@ -18,6 +18,7 @@ import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import { AuditLog } from "./AuditLog.ts";
 import type { UserId } from "./Users.ts";
 
 /** BEH-EA-059: published whenever `Verification.consume` fails — expired, unknown, or already-consumed alike (the same uniform-response reasoning as `TokenConsumed` itself). */
@@ -299,9 +300,17 @@ export class AuthEvents extends Context.Service<AuthEvents, AuthEventsShape>()(
  */
 export const CAPACITY = 1024;
 
-export const layer: Layer.Layer<AuthEvents> = Layer.effect(
+/**
+ * BEH-EA-100: `AuditLog` is a hard dependency — `publish` writes the
+ * durable row inline, before the event ever reaches the `PubSub`. This is
+ * what actually satisfies "MUST NOT depend on any `AuthEvents` subscriber":
+ * durability lives structurally inside `publish` itself, not in something
+ * optional a caller composes alongside it.
+ */
+export const layer: Layer.Layer<AuthEvents, never, AuditLog> = Layer.effect(
   AuthEvents,
   Effect.gen(function* () {
+    const auditLog = yield* AuditLog;
     // ALF-002/ESS-001/TMS-002/TRBS-003: `PubSub.bounded` applies
     // backpressure — its own publish suspends the calling fiber once the
     // buffer is full, directly contradicting this shape's own "never
@@ -317,19 +326,16 @@ export const layer: Layer.Layer<AuthEvents> = Layer.effect(
     const pubsub = yield* PubSub.dropping<AuthEvent>(CAPACITY);
     const dropped = yield* Ref.make(0);
     const publish: AuthEventsShape["publish"] = (event) =>
-      PubSub.publish(pubsub, event).pipe(
-        Effect.flatMap((accepted) =>
-          accepted
-            ? Effect.void
-            : Ref.update(dropped, (n) => n + 1).pipe(
-                Effect.andThen(
-                  Effect.logWarning(
-                    `awthaq: AuthEvents dropped a "${event._tag}" event — subscriber(s) not keeping up`,
-                  ),
-                ),
-              ),
-        ),
-      );
+      Effect.gen(function* () {
+        yield* auditLog.record(event);
+        const accepted = yield* PubSub.publish(pubsub, event);
+        if (!accepted) {
+          yield* Ref.update(dropped, (n) => n + 1);
+          yield* Effect.logWarning(
+            `awthaq: AuthEvents dropped a "${event._tag}" event — subscriber(s) not keeping up`,
+          );
+        }
+      });
     return AuthEvents.of({
       publish,
       stream: Stream.fromPubSub(pubsub),
