@@ -349,4 +349,26 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // BCR-003 (.issues/high): nullable — an OAuth sign-in flow's own state
+  // token (`@awthaq/oauth`) has no real user at issue time, unlike
+  // verify-email/reset-password tokens, which always do. Lets
+  // `Account.ts`'s own `deleteUser` cascade (`packages/server`) sweep a
+  // deleted user's still-live tokens, the same gap `accounts`/`sessions`
+  // already closed via their own `userId` column + `deleteAllByUser`.
+  migration(15, "add_verification_tokens_user_id_column", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`ALTER TABLE verification_tokens ADD COLUMN "userId" TEXT`,
+      sqlite: () => sql`ALTER TABLE verification_tokens ADD COLUMN userId TEXT`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
+  // `deleteAllByUser`'s own real filter key, unindexed until now — the same
+  // class of gap migrations 8/9 already closed for `accounts`/`sessions`.
+  migration(16, "create_verification_tokens_user_id_index", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`CREATE INDEX verification_tokens_user_id ON verification_tokens("userId")`,
+      sqlite: () => sql`CREATE INDEX verification_tokens_user_id ON verification_tokens(userId)`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);

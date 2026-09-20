@@ -46,6 +46,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as AuthEvents from "./AuthEvents.ts";
+import { UserId } from "./Users.ts";
 
 export type VerificationTokenId = string & Brand.Brand<"VerificationTokenId">;
 export const VerificationTokenId = Brand.nominal<VerificationTokenId>();
@@ -84,6 +85,8 @@ export interface VerificationTokenView {
    * knows how to decode it back.
    */
   readonly payload: unknown;
+  /** BCR-003: `None` for a token with no real user at issue time (e.g. an OAuth sign-in flow's own state token). */
+  readonly userId: Option.Option<UserId>;
 }
 
 export interface VerificationShape {
@@ -92,6 +95,8 @@ export interface VerificationShape {
     readonly identifier: string;
     readonly ttl: Duration.Duration;
     readonly payload?: unknown;
+    /** BCR-003: attached when the caller already knows the real user this token concerns — lets a later account deletion sweep it. */
+    readonly userId?: UserId;
   }) => Effect.Effect<
     { readonly token: VerificationTokenView; readonly value: Redacted.Redacted<string> },
     PlatformError.PlatformError
@@ -117,6 +122,8 @@ export interface VerificationShape {
     readonly identifier: string;
     readonly ttl: Duration.Duration;
   }) => Effect.Effect<boolean>;
+  /** BCR-003: sweeps every token (live or already-consumed) naming `userId` — the cascade an account deletion needs. */
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void>;
 }
 
 export class Verification extends Context.Service<Verification, VerificationShape>()(
@@ -126,6 +133,7 @@ export class Verification extends Context.Service<Verification, VerificationShap
 interface TokenRow {
   readonly id: VerificationTokenId;
   readonly identifier: string;
+  readonly userId: Option.Option<UserId>;
   readonly valueHash: string;
   readonly createdAt: DateTime.Utc;
   readonly expiresAt: DateTime.Utc;
@@ -155,6 +163,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
         const row: TokenRow = {
           id,
           identifier: input.identifier,
+          userId: Option.fromNullishOr(input.userId),
           valueHash,
           createdAt: now,
           expiresAt: DateTime.addDuration(now, input.ttl),
@@ -168,6 +177,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
             createdAt: row.createdAt,
             expiresAt: row.expiresAt,
             payload: row.payload,
+            userId: row.userId,
           },
           value: Redacted.make(value),
         };
@@ -212,6 +222,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
                   createdAt: row.value.createdAt,
                   expiresAt: row.value.expiresAt,
                   payload: row.value.payload,
+                  userId: row.value.userId,
                 }),
                 HashMap.remove(s, identifier),
               ] as const;
@@ -243,7 +254,12 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
         });
       });
 
-      return { issue, consume, reserve };
+      const deleteAllByUser: VerificationShape["deleteAllByUser"] = (userId) =>
+        Ref.update(state, (s) =>
+          HashMap.filter(s, (row) => !(Option.isSome(row.userId) && row.userId.value === userId)),
+        );
+
+      return { issue, consume, reserve, deleteAllByUser };
     }),
   );
 
@@ -253,6 +269,7 @@ const toTokenView = (row: SqlModels.VerificationToken): VerificationTokenView =>
   createdAt: row.createdAt,
   expiresAt: row.expiresAt,
   payload: row.payload === null ? undefined : row.payload,
+  userId: Option.fromNullishOr(row.userId).pipe(Option.map((id) => UserId(id))),
 });
 
 export const layerSql = Layer.effect(
@@ -273,6 +290,7 @@ export const layerSql = Layer.effect(
       const insert = yield* SqlModels.VerificationToken.insert
         .makeEffect({
           identifier: input.identifier,
+          userId: input.userId ?? null,
           valueHash,
           expiresAt: DateTime.addDuration(now, input.ttl),
           consumedAt: null,
@@ -327,6 +345,9 @@ export const layerSql = Layer.effect(
         .pipe(Effect.orDie);
     });
 
-    return { issue, consume, reserve };
+    const deleteAllByUser: VerificationShape["deleteAllByUser"] = (userId) =>
+      repo.deleteAllByUser(userId).pipe(Effect.orDie);
+
+    return { issue, consume, reserve, deleteAllByUser };
   }),
 );

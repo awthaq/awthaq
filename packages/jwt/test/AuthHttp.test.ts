@@ -6,7 +6,7 @@
 // mirroring `packages/organization/test/AuthHttp.test.ts`'s own
 // `issueSessionCookieHeader` pattern for setting one up.
 import { AuthCore } from "@awthaq/api";
-import { Accounts, AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Accounts, AuditLog, Hooks, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
 import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -281,6 +281,7 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
     Layer.provideMerge(KeyRing.KeyRing.layer),
     Layer.provideMerge(SigningKeyRecords.layerMemory),
     Layer.provideMerge(Sessions.layerMemory),
+    Layer.provideMerge(Verification.layerMemory),
     // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layerMemory),

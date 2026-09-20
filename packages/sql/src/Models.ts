@@ -192,6 +192,18 @@ export class Session extends Model.Class<Session>("Session")({
 export class VerificationToken extends Model.Class<VerificationToken>("VerificationToken")({
   id: Model.UuidV7Insert(VerificationTokenId),
   identifier: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
+  /**
+   * BCR-003 (.issues/high): nullable — not every token names a real user at
+   * `issue` time (an OAuth sign-in flow's own state token, `@awthaq/oauth`'s
+   * `OAuth.ts`, has none until the callback resolves one), unlike
+   * `accounts.userId`/`sessions.userId`, which are always attached to a
+   * concrete account. Set once, at insert, never updated — the identity a
+   * token names does not change over its own lifetime.
+   */
+  userId: Schema.NullOr(UserId).pipe(
+    Schema.withConstructorDefault(Effect.succeed(null)),
+    Model.FieldExcept(["update", "jsonUpdate"]),
+  ),
   valueHash: Model.Field({ select: Schema.String, insert: Schema.String }),
   expiresAt: Schema.DateTimeUtcFromString.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   consumedAt: Schema.NullOr(Schema.DateTimeUtcFromString),

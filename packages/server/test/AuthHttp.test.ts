@@ -7,11 +7,12 @@
 // "any host that hands the application a `Request`" path), and `httpApiStatus`
 // annotations landing on the real response status (BEH-EA-088).
 import { Api, AuthCore } from "@awthaq/api";
-import { Accounts, AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Accounts, AuditLog, Hooks, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { createHmac, randomBytes } from "node:crypto";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -85,6 +86,7 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(Sessions.layerMemory),
   Layer.provideMerge(Users.layerMemory),
   Layer.provideMerge(Accounts.layerMemory),
+  Layer.provideMerge(Verification.layerMemory),
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
@@ -331,54 +333,74 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
     ).pipe(Effect.provide(AppLayer)),
   );
 
-  it.effect("DELETE /user deletes the caller's own account, its accounts, and every session", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        const accounts = yield* Accounts.Accounts;
-        const sessions = yield* Sessions.Sessions;
-        const router = yield* HttpRouter.HttpRouter;
-        const user = yield* users.create({ email: "bo@example.com", name: "Bo" });
-        yield* accounts.link({
-          userId: user.id,
-          providerId: "password",
-          subject: user.id,
-        });
-        const issued = yield* sessions.issue({ userId: user.id });
+  it.effect(
+    "DELETE /user deletes the caller's own account, its accounts, sessions, and verification tokens",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const accounts = yield* Accounts.Accounts;
+          const sessions = yield* Sessions.Sessions;
+          const verification = yield* Verification.Verification;
+          const router = yield* HttpRouter.HttpRouter;
+          const user = yield* users.create({ email: "bo@example.com", name: "Bo" });
+          yield* accounts.link({
+            userId: user.id,
+            providerId: "password",
+            subject: user.id,
+          });
+          const issued = yield* sessions.issue({ userId: user.id });
+          // BCR-003 (.issues/high): a still-live token naming this same
+          // user (e.g. a not-yet-consumed reset-password mail) must not
+          // outlive the account it recovers.
+          const verifyIdentifier = `verify-email:${user.id}`;
+          const { value: verifyValue } = yield* verification.issue({
+            identifier: verifyIdentifier,
+            ttl: Duration.minutes(10),
+            userId: user.id,
+          });
 
-        const del = router.asHttpEffect().pipe(
-          Effect.provideService(
-            HttpServerRequest.HttpServerRequest,
-            HttpServerRequest.fromWeb(
-              new Request("http://localhost/user", {
-                method: "DELETE",
-                headers: cookieHeader(issued.token),
-              }),
-            ),
-          ),
-        );
-        const response = yield* del;
-        assert.strictEqual(response.status, 204);
-
-        const stillHasUser = yield* Effect.exit(users.findById(user.id));
-        assert.isTrue(stillHasUser._tag === "Failure");
-
-        const remainingAccounts = yield* accounts.listByUser(user.id);
-        assert.strictEqual(remainingAccounts.length, 0);
-
-        const sessionCheck = yield* router
-          .asHttpEffect()
-          .pipe(
+          const del = router.asHttpEffect().pipe(
             Effect.provideService(
               HttpServerRequest.HttpServerRequest,
               HttpServerRequest.fromWeb(
-                new Request("http://localhost/session", { headers: cookieHeader(issued.token) }),
+                new Request("http://localhost/user", {
+                  method: "DELETE",
+                  headers: cookieHeader(issued.token),
+                }),
               ),
             ),
           );
-        assert.strictEqual(sessionCheck.status, 401);
-      }),
-    ).pipe(Effect.provide(AppLayer)),
+          const response = yield* del;
+          assert.strictEqual(response.status, 204);
+
+          const stillHasUser = yield* Effect.exit(users.findById(user.id));
+          assert.isTrue(stillHasUser._tag === "Failure");
+
+          const remainingAccounts = yield* accounts.listByUser(user.id);
+          assert.strictEqual(remainingAccounts.length, 0);
+
+          // The real, correct value now fails — proof the row is gone, not
+          // merely a coincidental rejection (BEH-EA-059's uniform response
+          // would otherwise hide the difference).
+          const verifyOutcome = yield* verification
+            .consume(verifyIdentifier, verifyValue)
+            .pipe(Effect.flip);
+          assert.strictEqual(verifyOutcome._tag, "TokenConsumed");
+
+          const sessionCheck = yield* router
+            .asHttpEffect()
+            .pipe(
+              Effect.provideService(
+                HttpServerRequest.HttpServerRequest,
+                HttpServerRequest.fromWeb(
+                  new Request("http://localhost/session", { headers: cookieHeader(issued.token) }),
+                ),
+              ),
+            );
+          assert.strictEqual(sessionCheck.status, 401);
+        }),
+      ).pipe(Effect.provide(AppLayer)),
   );
 });
 

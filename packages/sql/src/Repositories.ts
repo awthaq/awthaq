@@ -596,6 +596,7 @@ export interface VerificationRepositoryShape {
   readonly upsertLive: (input: {
     readonly id: VerificationTokenId;
     readonly identifier: string;
+    readonly userId: UserId | null;
     readonly valueHash: string;
     readonly expiresAt: DateTime.Utc;
     readonly createdAt: DateTime.Utc;
@@ -613,6 +614,8 @@ export interface VerificationRepositoryShape {
     readonly valueHash: string;
     readonly now: DateTime.Utc;
   }) => Effect.Effect<Option.Option<VerificationToken>, RepositoryError>;
+  /** BCR-003: sweeps every token (live or already-consumed) naming this user — the cascade `Account.ts`'s `deleteUser` needs. */
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
 }
 
 export class VerificationRepository extends Context.Service<
@@ -645,6 +648,7 @@ export const VerificationRepositoryLive: Layer.Layer<
       Request: Schema.Struct({
         id: VerificationTokenId,
         identifier: Schema.String,
+        userId: Schema.NullOr(UserId),
         valueHash: Schema.String,
         expiresAt: Schema.DateTimeUtcFromString,
         createdAt: Schema.DateTimeUtcFromString,
@@ -652,11 +656,12 @@ export const VerificationRepositoryLive: Layer.Layer<
       }),
       Result: VerificationToken,
       execute: (request) => sql`
-        INSERT INTO verification_tokens (id, identifier, "valueHash", "expiresAt", "consumedAt", "createdAt", payload)
-        VALUES (${request.id}, ${request.identifier}, ${request.valueHash}, ${request.expiresAt}, NULL, ${request.createdAt}, ${request.payload})
+        INSERT INTO verification_tokens (id, identifier, "userId", "valueHash", "expiresAt", "consumedAt", "createdAt", payload)
+        VALUES (${request.id}, ${request.identifier}, ${request.userId}, ${request.valueHash}, ${request.expiresAt}, NULL, ${request.createdAt}, ${request.payload})
         ON CONFLICT(identifier) WHERE "consumedAt" IS NULL
         DO UPDATE SET
           id = excluded.id,
+          "userId" = excluded."userId",
           "valueHash" = excluded."valueHash",
           "expiresAt" = excluded."expiresAt",
           "createdAt" = excluded."createdAt",
@@ -665,6 +670,9 @@ export const VerificationRepositoryLive: Layer.Layer<
         RETURNING *
       `,
     });
+
+    const deleteAllByUser: VerificationRepositoryShape["deleteAllByUser"] = (userId) =>
+      sql`DELETE FROM verification_tokens WHERE "userId" = ${userId}`.pipe(Effect.asVoid);
 
     const tryConsume = SqlSchema.findOneOption({
       Request: Schema.Struct({
@@ -692,6 +700,7 @@ export const VerificationRepositoryLive: Layer.Layer<
       findByIdentifier,
       upsertLive,
       tryConsume,
+      deleteAllByUser,
     };
   }),
 );

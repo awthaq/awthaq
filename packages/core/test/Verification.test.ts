@@ -4,7 +4,7 @@
 // `Ref`) and `layerSql` (a real, in-memory SQLite database via
 // `@effect/sql-sqlite-node`) — per
 // spec/decisions/016-verification-sql-claiming.md (ADR-EA-016).
-import { Repositories } from "@awthaq/sql";
+import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
@@ -12,12 +12,14 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrator from "effect/unstable/sql/Migrator";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import * as Users from "../src/Users.ts";
 import * as Verification from "../src/Verification.ts";
 
 const MemoryLayer = Verification.layerMemory.pipe(
@@ -28,31 +30,13 @@ const MemoryLayer = Verification.layerMemory.pipe(
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
+// BCR-003 (.issues/high): run against the real framework `Migrator` over
+// `CoreMigrations.coreMigrations` — the same `packages/sql/test/
+// Repositories.test.ts` precedent — rather than a hand-maintained fixture,
+// so this suite also proves the real `verification_tokens` migration
+// (including its own `userId` column) produces a working schema.
 const Migrated = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      CREATE TABLE verification_tokens (
-        id TEXT PRIMARY KEY,
-        identifier TEXT NOT NULL,
-        valueHash TEXT NOT NULL,
-        expiresAt TEXT NOT NULL,
-        consumedAt TEXT,
-        createdAt TEXT NOT NULL,
-        payload TEXT NOT NULL
-      )
-    `;
-    yield* sql`
-      CREATE UNIQUE INDEX verification_tokens_live_identifier
-      ON verification_tokens(identifier) WHERE consumedAt IS NULL
-    `;
-    yield* sql`
-      CREATE TABLE verification_reservations (
-        identifier TEXT PRIMARY KEY,
-        expiresAt TEXT NOT NULL
-      )
-    `;
-  }),
+  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
 ).pipe(Layer.provide(SqlLive));
 
 const SqlLayer = Verification.layerSql.pipe(
@@ -243,6 +227,88 @@ const suite = (
         });
         assert.isTrue(first);
         assert.isTrue(second);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("BCR-003: a token issued with no userId carries None", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "oauth-flow:no-user-yet";
+        const { token } = yield* verification.issue({ identifier, ttl: Duration.minutes(10) });
+        assert.isTrue(Option.isNone(token.userId));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("BCR-003: a token issued with userId carries it through issue and consume", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const userId = Users.UserId("bcr-003-user-1");
+        const identifier = `verify-email:${userId}`;
+        const { token, value } = yield* verification.issue({
+          identifier,
+          ttl: Duration.minutes(10),
+          userId,
+        });
+        assert.deepStrictEqual(token.userId, Option.some(userId));
+        const consumed = yield* verification.consume(identifier, value);
+        assert.deepStrictEqual(consumed.userId, Option.some(userId));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "BCR-003: deleteAllByUser removes that user's live token, leaves another user's untouched",
+      () =>
+        Effect.gen(function* () {
+          const verification = yield* Verification.Verification;
+          const target = Users.UserId("bcr-003-user-2");
+          const other = Users.UserId("bcr-003-user-3");
+
+          const targetIdentifier = `verify-email:${target}`;
+          const { value: targetValue } = yield* verification.issue({
+            identifier: targetIdentifier,
+            ttl: Duration.minutes(10),
+            userId: target,
+          });
+          const otherIdentifier = `verify-email:${other}`;
+          const { value: otherValue } = yield* verification.issue({
+            identifier: otherIdentifier,
+            ttl: Duration.minutes(10),
+            userId: other,
+          });
+
+          yield* verification.deleteAllByUser(target);
+
+          // The real, correct value now fails — proof the row is gone, not
+          // merely that a wrong guess was rejected (both would otherwise
+          // collapse into the same uniform `TokenConsumed`, BEH-EA-059).
+          const targetOutcome = yield* verification
+            .consume(targetIdentifier, targetValue)
+            .pipe(Effect.flip);
+          assert.strictEqual(targetOutcome._tag, "TokenConsumed");
+
+          // The unrelated user's own live token is untouched — its real
+          // value still consumes successfully.
+          const otherConsumed = yield* verification.consume(otherIdentifier, otherValue);
+          assert.strictEqual(otherConsumed.identifier, otherIdentifier);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("BCR-003: deleteAllByUser also sweeps that user's already-consumed history", () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const target = Users.UserId("bcr-003-user-4");
+        const identifier = `reset-password:${target}`;
+        const { value } = yield* verification.issue({
+          identifier,
+          ttl: Duration.minutes(10),
+          userId: target,
+        });
+        yield* verification.consume(identifier, value);
+        // Consumed history sweeps without error — nothing to assert on the
+        // read side (a consumed row is already unreachable via `consume`),
+        // this proves `deleteAllByUser` doesn't die on a userId with only
+        // historical rows.
+        yield* verification.deleteAllByUser(target);
       }).pipe(Effect.provide(layer)),
     );
   });

@@ -775,7 +775,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         yield* Effect.forkDetach(
           Effect.gen(function* () {
             const identifier = `${VERIFY_PREFIX}${user.id}`;
-            const { value } = yield* verification.issue({ identifier, ttl: Duration.hours(24) });
+            const { value } = yield* verification.issue({
+              identifier,
+              ttl: Duration.hours(24),
+              userId: user.id,
+            });
             yield* mailer.send({
               to: user.email,
               template: "verify-email",
@@ -901,7 +905,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           yield* Effect.forkDetach(
             Effect.gen(function* () {
               const identifier = `${RESET_PREFIX}${user.id}`;
-              const { value } = yield* verification.issue({ identifier, ttl: config.resetTtl });
+              const { value } = yield* verification.issue({
+                identifier,
+                ttl: config.resetTtl,
+                userId: user.id,
+              });
               yield* mailer.send({
                 to: user.email,
                 template: "reset-password",
@@ -933,6 +941,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 const { value } = yield* verification.issue({
                   identifier,
                   ttl: Duration.hours(24),
+                  userId: user.id,
                 });
                 yield* mailer.send({
                   to: user.email,

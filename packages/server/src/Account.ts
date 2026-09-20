@@ -5,7 +5,7 @@
 // the same way `Session.SessionHandlers` is.
 
 import { AuthCore, Api, AccountContract } from "@awthaq/api";
-import { Accounts, Sessions, Users } from "@awthaq/core";
+import { Accounts, Sessions, Users, Verification } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -42,6 +42,7 @@ export const AccountHandlers = HttpApiBuilder.group(
     const users = yield* Users.Users;
     const accounts = yield* Accounts.Accounts;
     const sessions = yield* Sessions.Sessions;
+    const verification = yield* Verification.Verification;
     const sqlTransaction = yield* SqlTransaction.SqlTransaction;
 
     return handlers.handleAll({
@@ -82,15 +83,19 @@ export const AccountHandlers = HttpApiBuilder.group(
       // own `Ref.modify`) makes this a no-op wrapper there, same as every
       // other `SqlTransaction` consumer in this codebase.
       //
-      // Still open (tracked separately, not this fix's scope): plugin-owned
-      // PII — passkey credentials, organization membership/invitations,
-      // admin impersonation records, verification tokens — is not erased
-      // by this cascade. `@awthaq/server` cannot reach into an optional
-      // plugin's own tables without a real dependency-inversion mechanism
-      // (a cross-plugin hook point), and this repo's own `HookPoint`
-      // module documents that concrete hook points are not yet wired into
-      // any real flow — see that module's own header and `Auth.ts`'s
-      // header on `AuthCore` not yet existing. Passkey's own
+      // BCR-003 (.issues/high): `verification.deleteAllByUser` closes this
+      // cascade's own verification-token gap — see `Verification.ts`'s own
+      // `userId` column comment for why not every row is reachable this
+      // way (a not-yet-authenticated OAuth flow's own state token has no
+      // real user at issue time). Still open (tracked separately, not this
+      // fix's scope): the rest of plugin-owned PII — passkey credentials,
+      // organization membership/invitations, admin impersonation records —
+      // is not erased by this cascade. `@awthaq/server` cannot reach into
+      // an optional plugin's own tables without a real dependency-inversion
+      // mechanism (a cross-plugin hook point), and this repo's own
+      // `HookPoint` module documents that concrete hook points are not yet
+      // wired into any real flow — see that module's own header and
+      // `Auth.ts`'s header on `AuthCore` not yet existing. Passkey's own
       // authenticateVerify closes the concrete, exploitable consequence
       // of this gap independently (WPS-001: a surviving credential can no
       // longer mint a session for a deleted user, checked at
@@ -103,6 +108,7 @@ export const AccountHandlers = HttpApiBuilder.group(
             Effect.gen(function* () {
               yield* accounts.deleteAllByUser(userId);
               yield* sessions.revokeOthers(userId, Sessions.SessionId(""));
+              yield* verification.deleteAllByUser(userId);
               yield* users
                 .delete(userId)
                 .pipe(
