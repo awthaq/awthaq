@@ -1,0 +1,48 @@
+{
+  "name": "@awthaq/migrate-auth0",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Import Auth0 database-connection users, including their bcrypt password hashes, without forcing a mass password reset.",
+  "license": "MIT",
+  "files": [
+    "lib",
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./lib/index.js",
+      "default": "./lib/index.js"
+    },
+    "./*": {
+      "types": "./lib/*.d.ts",
+      "bun": "./src/*.ts",
+      "import": "./lib/*.js",
+      "default": "./lib/*.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@awthaq/core": "workspace:*",
+    "@awthaq/ports": "workspace:*",
+    "bcryptjs": "^3.0.3",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

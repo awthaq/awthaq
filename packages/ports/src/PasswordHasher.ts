@@ -39,13 +39,16 @@
 // per OWASP is to upgrade, never to silently keep a hash whose provenance
 // this layer cannot vouch for.
 //
-// Known non-goal: swapping `PasswordHasher` implementations mid-flight
-// (e.g. migrating a fleet from scrypt to argon2id) is not designed against
-// here — `verify` only understands its own layer's hash format, matching
-// archive/design/plugins-as-layers.md §3.3's "swapping a port is a
-// `Layer.provide` at composition time", one implementation in scope at a
-// time. A dual-format verifier for live algorithm migration is future work
-// this module doesn't attempt to anticipate.
+// AOMS-001/FAMS-001 (.scratch/resolve-ready-for-human-findings, ticket 21):
+// `LegacyPasswordVerifiers` below closes the "Known non-goal" this comment
+// used to describe in full — an IdP-migration import (Auth0's bcrypt,
+// Firebase's modified scrypt, …) lands a foreign hash format in
+// `credentialHash` that neither shipped layer's own `verify` can parse.
+// This is deliberately *not* a second first-class hasher: `hash()` still
+// only ever produces argon2id/scrypt output for either layer below — a
+// legacy format is something `verify` can recognize and retire (via the
+// existing `needsRehash`/`rehashOnLogin` path, unchanged by this), never
+// something re-adopted as a standing target.
 
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -86,6 +89,34 @@ export class PasswordHasher extends Context.Service<PasswordHasher, PasswordHash
   "awthaq/ports/PasswordHasher",
 ) {}
 
+/**
+ * AOMS-001/FAMS-001: one foreign hash format an IdP migration package
+ * knows how to verify. `recognizes` must be a cheap, crypto-free format
+ * sniff (a PHC-tag prefix test) — never runs a KDF — since it runs on
+ * every `verify` call regardless of whether the stored hash is actually
+ * this format.
+ */
+export interface LegacyPasswordVerifierShape {
+  /** e.g. "bcrypt", "firebase-scrypt" — observability only. */
+  readonly id: string;
+  readonly recognizes: (phc: string) => boolean;
+  readonly verify: (plain: Redacted.Redacted<string>, phc: string) => Effect.Effect<boolean>;
+}
+
+/**
+ * BEH-EA-017's `Context.Reference`-with-default pattern (matching
+ * `.scratch/resolve-ready-for-human-findings` ticket 20's
+ * `LegacySessionBridge`): a no-op `[]` default, so a deployment that
+ * installs neither `@awthaq/migrate-auth0` nor a similar package sees
+ * zero behavior change. `layerArgon2id`/`layerScrypt` both consult this,
+ * legacy-first, inside their own `verify`.
+ */
+export const LegacyPasswordVerifiers: Context.Reference<
+  ReadonlyArray<LegacyPasswordVerifierShape>
+> = Context.Reference("awthaq/ports/LegacyPasswordVerifiers", {
+  defaultValue: (): ReadonlyArray<LegacyPasswordVerifierShape> => [],
+});
+
 // $argon2id$v=19$m=<memorySize>,t=<iterations>,p=<parallelism>$<salt>$<hash>
 const ARGON2ID_PARAMS = /^\$argon2id\$v=\d+\$m=(\d+),t=(\d+),p=(\d+)\$/;
 
@@ -118,6 +149,7 @@ export const layerArgon2id: Layer.Layer<PasswordHasher, Config.ConfigError, Cryp
     PasswordHasher,
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
+      const legacy = yield* LegacyPasswordVerifiers;
       const memorySize = yield* Config.Int("AUTH_ARGON2_MEMORY_KIB").pipe(
         Config.withDefault(19_456),
       );
@@ -140,10 +172,13 @@ export const layerArgon2id: Layer.Layer<PasswordHasher, Config.ConfigError, Cryp
           );
         }).pipe(Effect.orDie);
 
-      const verify: PasswordHasherShape["verify"] = (plain, phc) =>
-        Effect.tryPromise(() => argon2Verify({ password: Redacted.value(plain), hash: phc })).pipe(
-          Effect.orElseSucceed(() => false),
-        );
+      const verify: PasswordHasherShape["verify"] = (plain, phc) => {
+        const match = legacy.find((verifier) => verifier.recognizes(phc));
+        if (match !== undefined) return match.verify(plain, phc);
+        return Effect.tryPromise(() =>
+          argon2Verify({ password: Redacted.value(plain), hash: phc }),
+        ).pipe(Effect.orElseSucceed(() => false));
+      };
 
       const needsRehash: PasswordHasherShape["needsRehash"] = (phc) => {
         const params = parseArgon2idParams(phc);
@@ -211,6 +246,7 @@ export const layerScrypt: Layer.Layer<PasswordHasher, Config.ConfigError, Crypto
     PasswordHasher,
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
+      const legacy = yield* LegacyPasswordVerifiers;
       const costLog2 = yield* Config.Int("AUTH_SCRYPT_COST_LOG2").pipe(Config.withDefault(17));
       const blockSize = yield* Config.Int("AUTH_SCRYPT_BLOCK_SIZE").pipe(Config.withDefault(8));
       const parallelism = yield* Config.Int("AUTH_SCRYPT_PARALLELISM").pipe(Config.withDefault(1));
@@ -233,8 +269,10 @@ export const layerScrypt: Layer.Layer<PasswordHasher, Config.ConfigError, Crypto
           return `$scrypt$ln=${costLog2},r=${blockSize},p=${parallelism}$${Encoding.encodeBase64(salt)}$${digest}`;
         }).pipe(Effect.orDie);
 
-      const verify: PasswordHasherShape["verify"] = (plain, phc) =>
-        Effect.gen(function* () {
+      const verify: PasswordHasherShape["verify"] = (plain, phc) => {
+        const match = legacy.find((verifier) => verifier.recognizes(phc));
+        if (match !== undefined) return match.verify(plain, phc);
+        return Effect.gen(function* () {
           const parsed = parseScryptHash(phc);
           if (parsed === undefined) return false;
           const digest = yield* Effect.promise(() =>
@@ -250,6 +288,7 @@ export const layerScrypt: Layer.Layer<PasswordHasher, Config.ConfigError, Crypto
           );
           return timingSafeEqualHex(digest, parsed.hash);
         }).pipe(Effect.orElseSucceed(() => false));
+      };
 
       const needsRehash: PasswordHasherShape["needsRehash"] = (phc) => {
         const parsed = parseScryptHash(phc);
