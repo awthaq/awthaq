@@ -14,7 +14,7 @@
 // their shape.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, HookPoint, Migrations, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, HookPoint, Hooks, Migrations, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -2373,3 +2373,42 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     }),
   });
 }
+
+/**
+ * CSG-001/DRS-002 (.issues/high): a real tap on the core
+ * `Hooks.BeforeUserDelete` veto point (CSG-002) that sweeps this plugin's
+ * own `organization_membership` rows for the deleted user.
+ * `MembershipRecords` is resolved once at layer-build time so the tap
+ * handler carries no further service requirement, matching `VetoTap`'s
+ * own fixed-`R` signature.
+ *
+ * **A separate export, not merged into `Organization.layer` itself** —
+ * see `@awthaq/passkey`'s own `beforeUserDeleteErasure` for why:
+ * `Hooks.BeforeUserDelete`'s tap registry is a module-level singleton
+ * that freezes permanently after its first `run()` (BEH-EA-024,
+ * empirically confirmed per CSG-002's own resolution comment), so
+ * merging a tap into a `Layer` rebuilt repeatedly across a test suite
+ * would die with `HookPointFrozen` once the point has run anywhere in
+ * the same process. A composition provides
+ * `Organization.beforeUserDeleteErasure` once, application-wide — the
+ * same opt-in posture `RateLimits.layer`/`Slots.layer` already use.
+ *
+ * Deliberately scoped to membership only in this pass —
+ * `organization_team_membership` and `organization_invitation` (the
+ * latter matched by both `inviterId` and the deleted user's own email)
+ * are real, still-open gaps this same mechanism can close, tracked as
+ * explicit follow-up rather than silently left undone (CSG-001's own
+ * resolution comment).
+ */
+export const beforeUserDeleteErasure: Layer.Layer<
+  never,
+  never,
+  MembershipRecords.MembershipRecords
+> = Layer.unwrap(
+  Effect.gen(function* () {
+    const membershipRecords = yield* MembershipRecords.MembershipRecords;
+    return Hooks.BeforeUserDelete.tap((input) =>
+      membershipRecords.deleteAllByUser(Users.UserId(input.id)).pipe(Effect.as(input)),
+    );
+  }),
+);

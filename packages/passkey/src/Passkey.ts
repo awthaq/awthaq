@@ -1003,3 +1003,39 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
     }),
   });
 }
+
+/**
+ * CSG-001/DRS-002 (.issues/high): a real tap on the core
+ * `Hooks.BeforeUserDelete` veto point (CSG-002, already wired into
+ * `Users.ts`'s own `delete_` for both layers) that sweeps this plugin's
+ * own `passkey_credential` rows for the deleted user. `PasskeyCredentials`
+ * is resolved once at layer-build time so the tap handler itself carries
+ * no further service requirement, matching `VetoTap`'s own fixed-`R`
+ * signature. Fires from inside `Users.delete_`, which
+ * `@awthaq/server`'s `Account.ts` already calls from within its own
+ * `SqlTransaction` — this tap's own write joins that same transaction.
+ *
+ * **A separate export, not merged into `Passkey.layer` itself:**
+ * `Hooks.BeforeUserDelete` is a module-level singleton whose tap registry
+ * freezes permanently after its first `run()` (BEH-EA-024) — a real,
+ * empirically-confirmed constraint (CSG-002's own resolution comment).
+ * `Passkey.layer` is built repeatedly across a real test suite (a fresh
+ * `Layer` per test/file, all sharing one module load); merging the tap in
+ * there means every build after the point's first run anywhere in the
+ * same process dies with `HookPointFrozen`. A composition that wants this
+ * erasure guarantee provides `Passkey.beforeUserDeleteErasure` once,
+ * application-wide, the same opt-in posture `RateLimits.layer`/
+ * `Slots.layer` already use for their own registries.
+ */
+export const beforeUserDeleteErasure: Layer.Layer<
+  never,
+  never,
+  PasskeyCredentials.PasskeyCredentials
+> = Layer.unwrap(
+  Effect.gen(function* () {
+    const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+    return Hooks.BeforeUserDelete.tap((input) =>
+      credentials.deleteAllByUser(Users.UserId(input.id)).pipe(Effect.as(input)),
+    );
+  }),
+);

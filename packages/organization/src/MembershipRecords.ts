@@ -68,6 +68,8 @@ export interface MembershipRecordsShape {
   ) => Effect.Effect<void, MembershipRecordNotFound>;
   /** Deletes every membership row for an organization — used by `Organization.delete`'s cascade. */
   readonly removeAllForOrganization: (organizationId: string) => Effect.Effect<void>;
+  /** CSG-001/DRS-002 (.issues/high): deletes every membership row for a user across every organization — the erasure cascade's own `Hooks.BeforeUserDelete` tap needs (`Organization.ts`'s own `layer`). */
+  readonly deleteAllByUser: (userId: Users.UserId) => Effect.Effect<void>;
 }
 
 export class MembershipRecords extends Context.Service<MembershipRecords, MembershipRecordsShape>()(
@@ -197,6 +199,14 @@ export const layerMemory = Layer.effect(
         ),
       );
 
+    const deleteAllByUser: MembershipRecordsShape["deleteAllByUser"] = (userId) =>
+      Ref.update(state, (s) =>
+        Array.from(HashMap.entries(s)).reduce(
+          (acc, [key, row]) => (row.userId === userId ? HashMap.remove(acc, key) : acc),
+          s,
+        ),
+      );
+
     return {
       create,
       findByUserAndOrg,
@@ -207,6 +217,7 @@ export const layerMemory = Layer.effect(
       updateRole,
       remove,
       removeAllForOrganization,
+      deleteAllByUser,
     };
   }),
 );
@@ -367,6 +378,12 @@ export const layerSql = Layer.effect(
         Effect.asVoid,
       );
 
+    const deleteAllByUser: MembershipRecordsShape["deleteAllByUser"] = (userId) =>
+      sql`DELETE FROM organization_membership WHERE userId = ${userId}`.pipe(
+        Effect.orDie,
+        Effect.asVoid,
+      );
+
     return {
       create,
       findByUserAndOrg,
@@ -377,6 +394,7 @@ export const layerSql = Layer.effect(
       updateRole,
       remove,
       removeAllForOrganization,
+      deleteAllByUser,
     };
   }),
 );

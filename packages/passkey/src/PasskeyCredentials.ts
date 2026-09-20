@@ -83,6 +83,8 @@ export interface PasskeyCredentialsShape {
   ) => Effect.Effect<PasskeyCredentialRecord, PasskeyCredentialNotFound>;
   /** Enumeration-safe by construction: fails identically for an unknown id and for one belonging to another user. */
   readonly delete: (id: string, userId: UserId) => Effect.Effect<void, PasskeyCredentialNotFound>;
+  /** CSG-001/DRS-002 (.issues/high): sweeps every credential owned by `userId` in one bulk statement — the erasure cascade's own `Hooks.BeforeUserDelete` tap needs (`Passkey.ts`'s own `layer`), unlike `delete`'s single-id, enumeration-safe shape. */
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void>;
 }
 
 export class PasskeyCredentials extends Context.Service<
@@ -167,7 +169,15 @@ export const layerMemory: Layer.Layer<PasskeyCredentials> = Layer.effect(
         },
       ).pipe(Effect.flatMap(Effect.fromResult));
 
-    return { create, findById, listByUser, recordUsage, rename, delete: del };
+    const deleteAllByUser: PasskeyCredentialsShape["deleteAllByUser"] = (userId) =>
+      Ref.update(state, (s) =>
+        Array.from(HashMap.entries(s)).reduce(
+          (acc, [id, row]) => (row.userId === userId ? HashMap.remove(acc, id) : acc),
+          s,
+        ),
+      );
+
+    return { create, findById, listByUser, recordUsage, rename, delete: del, deleteAllByUser };
   }),
 );
 
@@ -352,6 +362,12 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
         ),
       );
 
-    return { create, findById, listByUser, recordUsage, rename, delete: del };
+    const deleteAllByUser: PasskeyCredentialsShape["deleteAllByUser"] = (userId) =>
+      sql`DELETE FROM passkey_credential WHERE userId = ${userId}`.pipe(
+        Effect.orDie,
+        Effect.asVoid,
+      );
+
+    return { create, findById, listByUser, recordUsage, rename, delete: del, deleteAllByUser };
   }),
 );

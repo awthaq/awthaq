@@ -70,9 +70,8 @@ export const AccountHandlers = HttpApiBuilder.group(
       // credential (bypassing `unlink`'s last-account refusal — the whole
       // user is going away, so ending up with zero accounts is expected,
       // not a lockout), and every session including the one making this
-      // very request (the sentinel empty `SessionId` mirrors `Password`'s
-      // own `confirmReset` trick: no real session can ever have that id,
-      // so `revokeOthers` with it revokes all of them).
+      // very request (`revokeAll`, not `revokeOthers` plus a sentinel
+      // empty `SessionId` standing in for "keep none" — CSG-007/TRBS-008).
       //
       // CSG-001/DRS-002: the three-call cascade now runs inside one
       // `SqlTransaction` — a failure partway through used to strand the
@@ -87,19 +86,17 @@ export const AccountHandlers = HttpApiBuilder.group(
       // cascade's own verification-token gap — see `Verification.ts`'s own
       // `userId` column comment for why not every row is reachable this
       // way (a not-yet-authenticated OAuth flow's own state token has no
-      // real user at issue time). Still open (tracked separately, not this
-      // fix's scope): the rest of plugin-owned PII — passkey credentials,
-      // organization membership/invitations, admin impersonation records —
-      // is not erased by this cascade. `@awthaq/server` cannot reach into
-      // an optional plugin's own tables without a real dependency-inversion
-      // mechanism (a cross-plugin hook point), and this repo's own
-      // `HookPoint` module documents that concrete hook points are not yet
-      // wired into any real flow — see that module's own header and
-      // `Auth.ts`'s header on `AuthCore` not yet existing. Passkey's own
-      // authenticateVerify closes the concrete, exploitable consequence
-      // of this gap independently (WPS-001: a surviving credential can no
-      // longer mint a session for a deleted user, checked at
-      // authentication time rather than relying on erasure completeness).
+      // real user at issue time). CSG-001/DRS-002: the rest of
+      // plugin-owned PII no longer needs `@awthaq/server` to reach into an
+      // optional plugin's own tables directly — `Users.delete` (called
+      // below) itself fires the core `Hooks.BeforeUserDelete` veto point
+      // (CSG-002), which `@awthaq/passkey`'s and `@awthaq/organization`'s
+      // own `.layer` each tap to sweep their own PII (`passkey_credential`,
+      // `organization_membership`) inside this same transaction. Still
+      // open, deliberately scoped out (see CSG-001's own resolution
+      // comment): `organization_team_membership`, `organization_invitation`,
+      // and `admin_impersonation` (the last a genuine audit-retention
+      // tension, not a mechanical gap).
       deleteUser: Effect.fnUntraced(function* () {
         const principal = yield* currentUserPrincipal;
         const userId = Users.UserId(principal.ref.id);
@@ -107,7 +104,12 @@ export const AccountHandlers = HttpApiBuilder.group(
           .withTransaction(
             Effect.gen(function* () {
               yield* accounts.deleteAllByUser(userId);
-              yield* sessions.revokeOthers(userId, Sessions.SessionId(""));
+              // CSG-007/TRBS-008 (.issues/low): `revokeAll` directly, not
+              // `revokeOthers` with a sentinel empty `SessionId` standing
+              // in for "no session to keep" — that trick predates
+              // `revokeAll` existing at all; bundled here since this line
+              // was already being rewritten for CSG-001/DRS-002.
+              yield* sessions.revokeAll(userId);
               yield* verification.deleteAllByUser(userId);
               yield* users
                 .delete(userId)
