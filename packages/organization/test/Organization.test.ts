@@ -71,6 +71,12 @@ const asCaller = (id: string): Api.UserPrincipal =>
     sessionId: `${id}-session`,
   });
 
+/** An audit record's `payload` is opaque (`unknown`); narrow it to a plain record for assertions. */
+const payloadOf = (record: { readonly payload: unknown } | undefined): Record<string, unknown> =>
+  typeof record?.payload === "object" && record.payload !== null
+    ? Object.fromEntries(Object.entries(record.payload))
+    : {};
+
 /**
  * MTI-010: the invitation capability only ever travels by email — read it back
  * from the recording `Mailer`, exactly as an invitee would receive it.
@@ -1606,6 +1612,55 @@ describe("Organization", () => {
           .pipe(Effect.flip);
         assert.strictEqual(stale._tag, "InvitationNotFound");
         yield* organization.acceptInvitation(inviteeCaller, invitation.id, second);
+      }).pipe(Effect.provide(buildLayer())),
+    );
+  });
+
+  // PERS-005: the plugin authorizes itself (no qadi round trip), so its denials
+  // are published into the durable AuditLog.
+  describe("permission denials are audited (PERS-005)", () => {
+    it.effect("a denied updateMemberRole publishes auth.organization.permissionDenied (missingStatement)", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const auditLog = yield* AuditLog.AuditLog;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        yield* organization.addMember({
+          organizationId: org.id,
+          userId: Users.UserId("member-1"),
+          role: ["member"],
+        });
+        yield* organization.addMember({
+          organizationId: org.id,
+          userId: Users.UserId("member-2"),
+          role: ["member"],
+        });
+        const failure = yield* organization
+          .updateMemberRole(asCaller("member-1"), org.id, Users.UserId("member-2"), ["member"])
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "OrganizationPermissionDenied");
+
+        const recorded = yield* auditLog.list({ eventTag: "auth.organization.permissionDenied" });
+        assert.strictEqual(recorded.length, 1);
+        assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some("member-1"));
+        assert.strictEqual(payloadOf(recorded[0])["reason"], "missingStatement");
+        assert.strictEqual(payloadOf(recorded[0])["resource"], "member");
+        assert.strictEqual(payloadOf(recorded[0])["action"], "update");
+      }).pipe(Effect.provide(buildLayer())),
+    );
+
+    it.effect("a non-member's denied delete is recorded with reason notMember", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const auditLog = yield* AuditLog.AuditLog;
+        const org = yield* organization.create({
+          caller: asCaller("owner-1"),
+          name: "Acme",
+          slug: "acme",
+        });
+        yield* organization.delete(asCaller("outsider-1"), org.id).pipe(Effect.flip);
+        const recorded = yield* auditLog.list({ eventTag: "auth.organization.permissionDenied" });
+        assert.strictEqual(payloadOf(recorded[0])["reason"], "notMember");
       }).pipe(Effect.provide(buildLayer())),
     );
   });

@@ -276,6 +276,22 @@ export interface OrganizationTeamMemberRemovedEvent {
   readonly userId: UserId;
 }
 
+/**
+ * Published by `@awthaq/organization` whenever its own `PermissionEngine`
+ * gating denies an operation (PERS-005) — the plugin authorizes without a
+ * qadi round trip, so without this its denials would leave no durable record.
+ * `reason` says why: the caller is not a member (`notMember`, answered to the
+ * caller as a 404) or is a member without the statement (`missingStatement`).
+ */
+export interface OrganizationPermissionDeniedEvent {
+  readonly _tag: "auth.organization.permissionDenied";
+  readonly organizationId: string;
+  readonly userId: UserId;
+  readonly resource: string;
+  readonly action: string;
+  readonly reason: "notMember" | "missingStatement";
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
@@ -308,7 +324,8 @@ export type AuthEvent =
   | OrganizationTeamUpdatedEvent
   | OrganizationTeamDeletedEvent
   | OrganizationTeamMemberAddedEvent
-  | OrganizationTeamMemberRemovedEvent;
+  | OrganizationTeamMemberRemovedEvent
+  | OrganizationPermissionDeniedEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */

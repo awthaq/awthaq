@@ -86,6 +86,7 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.organization.invitationAccepted":
     case "auth.organization.teamMemberAdded":
     case "auth.organization.teamMemberRemoved":
+    case "auth.organization.permissionDenied":
       return Option.some(event.userId);
     case "auth.admin.impersonationStarted":
     case "auth.admin.impersonationDenied":

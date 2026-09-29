@@ -97,9 +97,13 @@ const OrganizationLive = Organization.Organization.layer.pipe(
 );
 
 // The app-scoped cache, plus the opt-in bridge that keeps it honest.
+const RelationshipsLive = OrganizationQadi.relationships.pipe(
+  Layer.provide(OrganizationQadi.ResourceOrganizationLookup.layerNone),
+);
+
 const AppLive = Layer.mergeAll(
   EvaluationServicesNone,
-  OrganizationQadi.relationships,
+  RelationshipsLive,
   DecisionCacheInvalidation.DecisionCacheInvalidationLive,
 ).pipe(
   Layer.provideMerge(decisionCacheLayer({ capacity: 64 })),
@@ -230,7 +234,7 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
   // The control: the identical scenario against a cache the bridge does NOT
   // watch shows the stale Allow the bridge exists to prevent.
   layer(
-    Layer.mergeAll(EvaluationServicesNone, OrganizationQadi.relationships).pipe(
+    Layer.mergeAll(EvaluationServicesNone, RelationshipsLive).pipe(
       Layer.provideMerge(OrganizationLive),
     ),
   )((it) => {

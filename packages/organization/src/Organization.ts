@@ -1486,12 +1486,24 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         action: string,
       ) =>
         Effect.gen(function* () {
+          // PERS-005: every PermissionEngine denial leaves a durable who/what/why.
+          const denied = (reason: "notMember" | "missingStatement") =>
+            events.publish({
+              _tag: "auth.organization.permissionDenied",
+              organizationId,
+              userId: callerId,
+              resource,
+              action,
+              reason,
+            });
           const membership = yield* members.findByUserAndOrg(callerId, organizationId);
           if (Option.isNone(membership)) {
+            yield* denied("notMember");
             return yield* Effect.fail(new OrganizationApi.OrganizationNotFound());
           }
           const effective = yield* effectivePermissionsOf(organizationId, membership.value);
           if (!PermissionEngine.hasPermission(effective, resource, action)) {
+            yield* denied("missingStatement");
             return yield* Effect.fail(new OrganizationApi.OrganizationPermissionDenied());
           }
           return membership.value;
