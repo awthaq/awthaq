@@ -3,7 +3,7 @@ ID: "DAG-007"
 Title: "Zero test or BDD coverage allocated to the device domain"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/13-device-authorization.md:63"
 Auditor: "device-authorization-grant-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `—` · reported by **Device Authorization Grant Specialist** (`device-authorization-grant-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ At Phase-3 kickoff, add feature scenarios before code: authorization_pending →
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `device-authorization-design`. Evidence at HEAD ec065a7: `spec/models/13-device-authorization.md:63`. Fix: Author the device-authorization feature file (scenarios before code) and its traceability, registered as @skip @unwired until the plugin exists. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Authored features/features/05-authentication-methods/28-device-authorization.feature (13 scenarios, @skip @unwired: pending->approved once, denied cleanup, slow_down, rejected polls still count, expired cleanup, two concurrent polls exactly one session + invalid_grant, session only after the atomic claim, claim idempotent for same session / impossible for another, approve without claim refused, unrelated caller sees only code+status, user-code rate limits (DAG-004 numbers), normalization + hashed storage, session carries device ip/UA) plus 28-device-authorization.steps.test.ts placeholder (zero steps, mirrors 26-cli), REQ-EA-634..646. Because the plugin has no BEH range, Rules are tagged @MOD-EA-013 and features/scripts/allocate-req-ea.py gained @MOD-EA support (SOURCE_MODEL, ORDER entry) so the manifest links to the model; features/traceability.md regenerated (+ oxfmt-formatted, diff limited to new rows), spec/traceability.md §6 rows/totals, features/README note, model 13 'Verification' points at the feature. pnpm run test:bdd lists the scenarios as skipped (717 total: 114 passed, 603 skipped); spec:verify:strict passes.

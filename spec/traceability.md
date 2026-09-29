@@ -5,7 +5,7 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-RTM |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-09-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
@@ -233,11 +233,11 @@ Every other planned test file below is listed for structural completeness only. 
 
 ## 6. Acceptance scenarios (REQ-EA)
 
-A Gherkin acceptance suite now exists at [`features/features/`](../features/features/) (see [`features/README.md`](../features/README.md) for its structure and [`features/STYLE.md`](../features/STYLE.md) for its authoring conventions), and `REQ-EA-001` through `REQ-EA-632` are allocated from it — one id per `Scenario:`/`Scenario Outline:`, tagged directly on the scenario, in one contiguous pass across the suite in the file order below. Every scenario also carries its `BEH-EA-NNN` `Rule:` tag, so a scenario traces to its normative requirement and back without leaving this repository.
+A Gherkin acceptance suite now exists at [`features/features/`](../features/features/) (see [`features/README.md`](../features/README.md) for its structure and [`features/STYLE.md`](../features/STYLE.md) for its authoring conventions), and `REQ-EA-001` through `REQ-EA-646` are allocated from it — one id per `Scenario:`/`Scenario Outline:`, tagged directly on the scenario, in one contiguous pass across the suite in the file order below. Every scenario also carries its `BEH-EA-NNN` `Rule:` tag, so a scenario traces to its normative requirement and back without leaving this repository.
 
 **This allocation does not mean the suite runs.** awthaq is still pre-implementation: there is no `package.json`, no Cucumber configuration, and no step-definition layer, so no `.feature` file here currently passes or fails anything — see [`behaviors/25-testing-harness.md`](behaviors/25-testing-harness.md) (`BEH-EA-193`–`200`) for the still-not-yet-built testing harness that will eventually execute them. What exists today is the Gherkin restatement of the behavior catalog, not a running test suite.
 
-The table below is a file-level summary, at the same granularity as §1's behavior→module table; the full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, 632 rows) lives in [`features/traceability.md`](../features/traceability.md) and is regenerated mechanically by [`features/scripts/allocate-req-ea.py`](../features/scripts/allocate-req-ea.py) whenever the suite grows.
+The table below is a file-level summary, at the same granularity as §1's behavior→module table; the full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, 646 rows) lives in [`features/traceability.md`](../features/traceability.md) and is regenerated mechanically by [`features/scripts/allocate-req-ea.py`](../features/scripts/allocate-req-ea.py) whenever the suite grows.
 
 | Feature file | `BEH-EA` range | `REQ-EA` range |
 |---|---|---|
@@ -256,7 +256,7 @@ The table below is a file-level summary, at the same granularity as §1's behavi
 | [04-cross-cutting/13-events.feature](../features/features/04-cross-cutting/13-events.feature) | 097–104 | 259–277 |
 | [04-cross-cutting/14-rate-limiting.feature](../features/features/04-cross-cutting/14-rate-limiting.feature) | 105–112 | 278–303 |
 | [05-authentication-methods/15-password.feature](../features/features/05-authentication-methods/15-password.feature) | 113–120 | 304–327 |
-| [05-authentication-methods/16-oauth.feature](../features/features/05-authentication-methods/16-oauth.feature) | 121–128 | 328–354 |
+| [05-authentication-methods/16-oauth.feature](../features/features/05-authentication-methods/16-oauth.feature) | 121–128 | 328–354, 633 |
 | [05-authentication-methods/17-passkey.feature](../features/features/05-authentication-methods/17-passkey.feature) | 129–136 | 355–381 |
 | [06-roles-and-authorization-bridge/18-roles-subject-resolver.feature](../features/features/06-roles-and-authorization-bridge/18-roles-subject-resolver.feature) | 137–144 | 382–404 |
 | [06-roles-and-authorization-bridge/19-qadi-bridge-path-a.feature](../features/features/06-roles-and-authorization-bridge/19-qadi-bridge-path-a.feature) | 145–152 | 405–427 |
@@ -268,6 +268,7 @@ The table below is a file-level summary, at the same granularity as §1's behavi
 | [08-tooling/25-testing-harness.feature](../features/features/08-tooling/25-testing-harness.feature) | 193–200 | 545–572 |
 | [08-tooling/26-cli.feature](../features/features/08-tooling/26-cli.feature) | 201–208 | 573–602 |
 | [09-admin-and-impersonation/27-admin-impersonation.feature](../features/features/09-admin-and-impersonation/27-admin-impersonation.feature) | 209–224 | 603–632 |
+| [05-authentication-methods/28-device-authorization.feature](../features/features/05-authentication-methods/28-device-authorization.feature) | none yet — traces to [MOD-EA-013](models/13-device-authorization.md) (`@skip @unwired`, DAG-007) | 634–646 |
 
 Authorization-decision content is deliberately out of scope for this suite: scenarios touching an authorization outcome (chiefly `06-roles-and-authorization-bridge/`) treat qadi's own policy evaluation as a black box and assert only on awthaq's own bridge responsibilities, per `ADR-EA-009`. qadi's own `features/features/*.feature` (in the sibling `qadi` repository) is the suite that covers role/permission/policy-combination behavior; this suite does not duplicate it.
 
