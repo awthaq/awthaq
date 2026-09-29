@@ -84,7 +84,7 @@ REQUIREMENT: A test asserting a policy's behavior in isolation MUST construct
              pipeline merely to test a policy's logic.
 ```
 
-**As shipped (PV-261):** the names in the original text (`subjectWith`, `qadiTestLayer` from `@qadi/testing`) are illustrative and do not exist in the installed `@qadi/*` (no `@qadi/testing` package is installed); the real helpers are the ones above (see also `TestAuth.ts`'s header). Nothing in awthaq exports them: this is authoring guidance, exercised by `packages/qadi/test/AuthorizedSubject.test.ts`.
+**As shipped (PV-261):** the names in the original text (`subjectWith`, `qadiTestLayer` from `@qadi/testing`) are illustrative and do not exist in the installed `@qadi/*` (no `@qadi/testing` package is installed); the real helpers are the ones above (see also `TestAuth.ts`'s header). Nothing in awthaq exports them: this is authoring guidance, exercised by `packages/qadi/test/AuthorizedSubject.test.ts` and run as written by REQ-EA-553..555 (`makeSubject`, then `check` under `currentSubjectLayer` + `EvaluationServicesNone` alone: no `TestAuth.layer`, client or server layer).
 
 `usage-examples-v4.md` §22.2 and `usage-qadi.md` §15 both use this shape for policy-level tests (`only the owner may delete`), separate from the HTTP-level test in BEH-EA-197. Testing the policy directly, without going through `TestAuth.layer` and an HTTP client, keeps a policy-logic test fast and keeps its failure message about the policy rather than about an incidental HTTP or session-wiring detail.
 

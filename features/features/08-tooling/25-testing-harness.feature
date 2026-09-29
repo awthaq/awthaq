@@ -51,9 +51,7 @@ Feature: Testing Harness
         | verification token TTL     |
         | a rate-limit window        |
 
-    # @skip: the passkey challenge TTL is elapsed under TestClock by 17-passkey.feature ("five minutes
-    # elapse, driven by TestClock") against the real passkey plugin; this World composes no passkey.
-    @skip
+    # The passkey plugin's own ChallengeStore, elapsed under TestClock like the other invariants (17-passkey.feature REQ-EA-367 drives the same store).
     @REQ-EA-699
     Scenario: A passkey challenge's expiry is asserted by advancing TestClock
       Given a whole-pipeline HTTP test asserting passkey challenge expiry
@@ -97,33 +95,24 @@ Feature: Testing Harness
   @BEH-EA-196
   Rule: qadiTestLayer and subjectWith for authorization unit tests
 
-    # @skip: authoring guidance, no runtime behavior to observe (PV-261: BEH-EA-196 now names the real
-    # helpers, makeSubject/fromRoles from @qadi/core, not the illustrative subjectWith). Covered by
-    # packages/qadi/test/AuthorizedSubject.test.ts
-    @skip
+    # PV-261: the guidance names the real helpers (makeSubject/fromRoles, currentSubjectLayer, EvaluationServicesNone), not the illustrative subjectWith/qadiTestLayer; the scenarios run exactly that recipe.
     @REQ-EA-553
-    Scenario: A policy-level unit test constructs its subject with subjectWith
+    Scenario: A policy-level unit test constructs its subject with qadi's own constructors
       Given a test asserting a single policy's behavior in isolation
       When the test constructs the calling subject
-      Then it builds that subject with "subjectWith"
+      Then it builds that subject with "makeSubject" and the policy answers for it as the subject's permissions dictate
 
-    # @skip: authoring guidance (PV-261: there is no qadiTestLayer or @qadi/testing; the guidance names
-    # currentSubjectLayer and EvaluationServicesNone). Covered by packages/qadi/test/AuthorizedSubject.test.ts
-    @skip
     @REQ-EA-554
-    Scenario: A policy-level unit test provides qadi's services via qadiTestLayer
+    Scenario: A policy-level unit test provides qadi's services via currentSubjectLayer and EvaluationServicesNone
       Given a test asserting a single policy's behavior in isolation
       When qadi's services are provided to the test
-      Then they are provided via "qadiTestLayer" from "@qadi/testing"
+      Then they are provided via "currentSubjectLayer" with "EvaluationServicesNone" and nothing else
 
-    # @skip: a statement about how a policy unit test is composed (no runtime behavior to observe; PV-261);
-    # the policy-level tests live in packages/qadi/test/
-    @skip
     @REQ-EA-555
     Scenario: A policy-level unit test does not stand up the full HTTP pipeline
       Given a test whose only concern is a single policy's behavior
       When the test is composed
-      Then it does not compose "TestAuth.layer", an HTTP client, or any server layer merely to exercise that policy
+      Then it does not compose "TestAuth.layer", an HTTP client, or any server layer merely to exercise that policy, and still gets a real evaluation
 
   # BEH-EA-197 — spec/behaviors/25-testing-harness.md
   @BEH-EA-197

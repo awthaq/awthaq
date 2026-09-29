@@ -2,6 +2,17 @@
 import { HookPoint, Hooks, Sessions, Users, Verification } from "@awthaq/core";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
+import {
+  EvaluationServicesNone,
+  check,
+  currentSubjectLayer,
+  hasPermission,
+  makeSubject,
+  permission,
+  permissionKey,
+} from "@qadi/core";
+import { ChallengeStore } from "@awthaq/passkey";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { TestAuth } from "@awthaq/test";
 import { defineSteps } from "@effect-cucumber/vitest";
 import * as Clock from "effect/Clock";
@@ -156,6 +167,24 @@ const verificationTtlElapse = Effect.gen(function* () {
     realMillis: Date.now() - realStart,
   };
 }).pipe(Effect.provide(passwordApp));
+
+/** The passkey plugin's challenge store: a challenge lives five minutes and is single-use, so the "live" side is a separate, identical challenge. */
+const passkeyChallengeElapse = Effect.gen(function* () {
+  const store = yield* ChallengeStore.ChallengeStore;
+  const probe = yield* store.issue("harness:probe");
+  const issued = yield* store.issue("harness:ttl");
+  const liveNow = yield* store.consume("harness:probe", Redacted.value(probe));
+  const realStart = Date.now();
+  const virtualStart = yield* Clock.currentTimeMillis;
+  yield* TestClock.adjust(Duration.toMillis(ChallengeStore.CHALLENGE_TTL) + 60_000);
+  const stillLive = yield* store.consume("harness:ttl", Redacted.value(issued));
+  return {
+    beforeBoundary: liveNow,
+    afterBoundary: stillLive,
+    virtualMillis: (yield* Clock.currentTimeMillis) - virtualStart,
+    realMillis: Date.now() - realStart,
+  };
+}).pipe(Effect.provide(ChallengeStore.layerMemory.pipe(Layer.provide(NodeCrypto.layer))));
 
 const rateLimitElapse = Effect.gen(function* () {
   const limiter = yield* RateLimiter.RateLimiter;
@@ -313,7 +342,9 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
           ? yield* verificationTtlElapse
           : invariant === "a rate-limit window"
             ? yield* rateLimitElapse
-            : yield* Effect.die(new Error(`no elapse wiring for "${invariant}"`));
+            : invariant === "passkey challenge expiry"
+              ? yield* passkeyChallengeElapse
+              : yield* Effect.die(new Error(`no elapse wiring for "${invariant}"`));
     yield* outcomes.set("elapse", facts);
   });
 
@@ -486,6 +517,81 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     function* (_mock: string) {
       const { outcomes } = yield* World;
       assert.deepEqual(yield* outcomes.getAs("calls", isStringArray), ["welcome:ada@example.com"]);
+    },
+  );
+
+  // ---- BEH-EA-196 (PV-261): the recommended recipe, run --------------------------------------
+  // makeSubject builds the caller, currentSubjectLayer + EvaluationServicesNone are the whole
+  // environment: no TestAuth.layer, no client, no server layer.
+
+  const deleteProject = permission("project", "delete");
+  const canDelete = hasPermission(deleteProject);
+  const ownerSubject = makeSubject({ id: "user:u1", permissions: [permissionKey(deleteProject)] });
+  const strangerSubject = makeSubject({ id: "user:u2" });
+
+  /** The whole environment a policy-level test provides. */
+  const policyEnvironment = (subject: typeof ownerSubject) =>
+    Layer.merge(currentSubjectLayer(subject), EvaluationServicesNone);
+
+  Given("a test asserting a single policy's behavior in isolation", function* () {
+    yield* Effect.void;
+  });
+
+  Given("a test whose only concern is a single policy's behavior", function* () {
+    yield* Effect.void;
+  });
+
+  When("the test constructs the calling subject", function* () {
+    const { outcomes } = yield* World;
+    const [owner, stranger] = yield* Effect.all([
+      Effect.provide(check(canDelete), policyEnvironment(ownerSubject)),
+      Effect.provide(check(canDelete), policyEnvironment(strangerSubject)),
+    ]);
+    yield* outcomes.set("owner", owner);
+    yield* outcomes.set("stranger", stranger);
+  });
+
+  Then(
+    "it builds that subject with {string} and the policy answers for it as the subject's permissions dictate",
+    function* (constructor: string) {
+      assert.equal(constructor, "makeSubject");
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("owner", isBoolean), true);
+      assert.equal(yield* outcomes.getAs("stranger", isBoolean), false);
+    },
+  );
+
+  When("qadi's services are provided to the test", function* () {
+    const { outcomes } = yield* World;
+    // Only these two layers: the effect is closed by them, which is the compile-time half of the claim.
+    const answer = yield* Effect.provide(check(canDelete), policyEnvironment(ownerSubject));
+    yield* outcomes.set("provided", answer);
+  });
+
+  Then(
+    "they are provided via {string} with {string} and nothing else",
+    function* (subjectLayer: string, services: string) {
+      assert.deepEqual([subjectLayer, services], ["currentSubjectLayer", "EvaluationServicesNone"]);
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("provided", isBoolean), true);
+    },
+  );
+
+  When("the test is composed", function* () {
+    const { outcomes } = yield* World;
+    yield* outcomes.set(
+      "composed",
+      yield* Effect.provide(check(canDelete), policyEnvironment(ownerSubject)),
+    );
+  });
+
+  Then(
+    "it does not compose {string}, an HTTP client, or any server layer merely to exercise that policy, and still gets a real evaluation",
+    function* (layer: string) {
+      assert.equal(layer, "TestAuth.layer");
+      const { outcomes } = yield* World;
+      // The test's own environment held no HTTP router, client or memory port; the answer is qadi's evaluator's.
+      assert.equal(yield* outcomes.getAs("composed", isBoolean), true);
     },
   );
 
