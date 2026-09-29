@@ -340,6 +340,18 @@ export interface RolesAssignedEvent {
   readonly actorUserId?: UserId | undefined;
 }
 
+/**
+ * FAMS-004: published by `@awthaq/qadi`'s `UserClaims` on a real change. `keys` names the
+ * claim keys that changed — never their values, which may be sensitive and must not enter the
+ * audit trail; `actorUserId` is who made the change, when known.
+ */
+export interface UserClaimsUpdatedEvent {
+  readonly _tag: "auth.user.claimsUpdated";
+  readonly userId: UserId;
+  readonly keys: ReadonlyArray<string>;
+  readonly actorUserId?: UserId | undefined;
+}
+
 export interface RolesRevokedEvent {
   readonly _tag: "auth.roles.revoked";
   readonly userId: UserId;
@@ -385,6 +397,7 @@ export type AuthEvent =
   | OrganizationPermissionDeniedEvent
   | AuthorizationDeniedEvent
   | RolesAssignedEvent
+  | UserClaimsUpdatedEvent
   | RolesRevokedEvent;
 
 export interface AuthEventsShape {

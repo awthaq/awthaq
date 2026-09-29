@@ -30,5 +30,6 @@ export * as DecisionLogging from "./DecisionLogging.ts";
 export * as RequestDecisionCache from "./RequestDecisionCache.ts";
 export * as Resolvers from "./Resolvers.ts";
 export * as SubjectApi from "./SubjectApi.ts";
+export * as UserClaims from "./UserClaims.ts";
 export * as SubjectExtractor from "./SubjectExtractor.ts";
 export * as SubjectResolver from "./SubjectResolver.ts";

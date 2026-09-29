@@ -94,6 +94,7 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
       return Option.some(event.adminUserId);
     case "auth.roles.assigned":
     case "auth.roles.revoked":
+    case "auth.user.claimsUpdated":
       // The actor is who *changed* the roles, not whose roles changed.
       return Option.fromNullishOr(event.actorUserId);
     case "auth.authz.denied":
