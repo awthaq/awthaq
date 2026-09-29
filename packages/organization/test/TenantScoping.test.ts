@@ -63,6 +63,14 @@ const ALLOWLIST: ReadonlyArray<{ readonly match: RegExp; readonly why: string }>
     why: "status transition by the invitation's own id, only after a tenant/invitee check in Organization",
   },
   {
+    match: /^SELECT \* FROM organization_invitation WHERE tokenHash = /,
+    why: "findByTokenHash: the emailed token's hash IS the capability; the landing lookup then checks the invitee's email",
+  },
+  {
+    match: /^UPDATE organization_invitation SET tokenHash = .* WHERE id = /,
+    why: "token rotation on resend, by the invitation's own id, after the inviter's permission check",
+  },
+  {
     match: /^SELECT \* FROM organization_invitation WHERE email = /,
     why: "listByEmail: the invitee's own pending invitations, keyed by their verified email",
   },

@@ -17,6 +17,7 @@ import { Api } from "@awthaq/api";
 import { AuthEvents, AuthPlugin, HookPoint, Hooks, Migrations, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -127,7 +128,9 @@ export interface OrganizationShape {
   readonly list: (
     caller: Api.UserPrincipal,
   ) => Effect.Effect<ReadonlyArray<OrganizationRecords.OrganizationRecord>>;
+  /** MTI-008: member-only — a non-member gets the same `OrganizationNotFound` an unknown id gets. */
   readonly get: (
+    caller: Api.UserPrincipal,
     organizationId: string,
   ) => Effect.Effect<OrganizationRecords.OrganizationRecord, OrganizationApi.OrganizationNotFound>;
   readonly getFull: (
@@ -265,9 +268,11 @@ export interface OrganizationShape {
     | OrganizationApi.UnknownOrgRole
     | HookPoint.HookAborted
   >;
+  /** MTI-010: `token` is the emailed capability; the invitation id alone accepts nothing. */
   readonly acceptInvitation: (
     caller: Api.UserPrincipal,
     invitationId: string,
+    token: string,
   ) => Effect.Effect<
     MembershipRecords.MembershipRecord,
     | OrganizationApi.InvitationNotFound
@@ -283,6 +288,7 @@ export interface OrganizationShape {
   readonly rejectInvitation: (
     caller: Api.UserPrincipal,
     invitationId: string,
+    token: string,
   ) => Effect.Effect<
     void,
     | OrganizationApi.InvitationNotFound
@@ -300,8 +306,18 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationPermissionDenied
     | HookPoint.HookAborted
   >;
+  /**
+   * MTI-010: readable only by the invitee (email match) or a member holding
+   * `invitation:create`; anyone else gets the same `InvitationNotFound` an unknown id gets.
+   */
   readonly getInvitation: (
+    caller: Api.UserPrincipal,
     invitationId: string,
+  ) => Effect.Effect<InvitationRecords.InvitationRecord, OrganizationApi.InvitationNotFound>;
+  /** MTI-010: the landing-page lookup — resolves the emailed token, for the invitee only. */
+  readonly getInvitationByToken: (
+    caller: Api.UserPrincipal,
+    token: string,
   ) => Effect.Effect<InvitationRecords.InvitationRecord, OrganizationApi.InvitationNotFound>;
   readonly listInvitationsForOrganization: (
     caller: Api.UserPrincipal,
@@ -498,6 +514,26 @@ export interface OrganizationShape {
   >;
 }
 
+// ---- invitation token helpers ---------------------------------------------------
+
+const hexOf = (bytes: Uint8Array): string =>
+  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+/**
+ * What a presented token's hash is compared against when no invitation (or no
+ * stored hash) exists, so a miss does the same hash + compare work as a wrong
+ * token for a real invitation. Never equals a real SHA-256 hex digest.
+ */
+const NO_INVITATION_TOKEN_HASH = "0".repeat(64);
+
+/** Constant-time comparison of two equal-length hex digests (same shape as `Sessions.ts`'s). */
+const constantTimeEqual = (a: string, b: string): boolean => {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+};
+
 // ---- dto mapping ----------------------------------------------------------------
 
 const toOrganizationDto = (
@@ -657,7 +693,8 @@ export const OrganizationHandlers = HttpApiBuilder.group(
       }: {
         params: OrganizationApi.OrganizationIdParams;
       }) {
-        const record = yield* organization.get(params.organizationId);
+        const caller = yield* currentUserPrincipal;
+        const record = yield* organization.get(caller, params.organizationId);
         return toOrganizationDto(record);
       }),
       getFull: Effect.fnUntraced(function* ({
@@ -781,25 +818,43 @@ export const OrganizationHandlers = HttpApiBuilder.group(
       }: {
         params: OrganizationApi.InvitationIdParams;
       }) {
-        const record = yield* organization.getInvitation(params.invitationId);
+        const caller = yield* currentUserPrincipal;
+        const record = yield* organization.getInvitation(caller, params.invitationId);
+        return toInvitationDto(record);
+      }),
+      getInvitationByToken: Effect.fnUntraced(function* ({
+        params,
+      }: {
+        params: OrganizationApi.InvitationTokenParams;
+      }) {
+        const caller = yield* currentUserPrincipal;
+        const record = yield* organization.getInvitationByToken(caller, params.token);
         return toInvitationDto(record);
       }),
       acceptInvitation: Effect.fnUntraced(function* ({
         params,
+        payload,
       }: {
         params: OrganizationApi.InvitationIdParams;
+        payload: OrganizationApi.InvitationTokenPayload;
       }) {
         const caller = yield* currentUserPrincipal;
-        const record = yield* organization.acceptInvitation(caller, params.invitationId);
+        const record = yield* organization.acceptInvitation(
+          caller,
+          params.invitationId,
+          payload.token,
+        );
         return toMembershipDto(record);
       }),
       rejectInvitation: Effect.fnUntraced(function* ({
         params,
+        payload,
       }: {
         params: OrganizationApi.InvitationIdParams;
+        payload: OrganizationApi.InvitationTokenPayload;
       }) {
         const caller = yield* currentUserPrincipal;
-        yield* organization.rejectInvitation(caller, params.invitationId);
+        yield* organization.rejectInvitation(caller, params.invitationId, payload.token);
       }),
       cancelInvitation: Effect.fnUntraced(function* ({
         params,
@@ -1275,6 +1330,17 @@ const organizationMigrations: Migrations.Migrations = [
       yield* sql`CREATE INDEX organization_active_context_user_id ON organization_active_context(userId)`;
     }),
   },
+  // MTI-010: the emailed invitation capability is a random token, stored only as
+  // its SHA-256; the invitation's own id is no longer the secret. Nullable so
+  // rows written before this column stay readable (they cannot be accepted).
+  {
+    name: "organization_invitation_token_hash",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`ALTER TABLE organization_invitation ADD COLUMN tokenHash TEXT`;
+      yield* sql`CREATE UNIQUE INDEX organization_invitation_token_hash ON organization_invitation(tokenHash)`;
+    }),
+  },
   // OHS-003: one membership per (team, user), and `memberCount` recomputed from
   // the surviving rows so a previously over-counted team is repaired.
   {
@@ -1322,6 +1388,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       // OHS-002: the cascades below commit or roll back as one unit. `layerNoop`
       // for an in-memory composition, `layerSql` over the real client otherwise.
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
+      const crypto = yield* Crypto.Crypto;
       const orgConfig = yield* OrganizationConfig;
       const beforeCreate = yield* OrganizationHooks.BeforeCreateOrganization;
       const afterCreate = yield* OrganizationHooks.AfterCreateOrganization;
@@ -1405,7 +1472,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           Effect.map((byRole) => PermissionEngine.effectivePermissions(membership.role, byRole)),
         );
 
-      /** Fails `OrganizationPermissionDenied` if the caller isn't a member, or lacks the requested statement. */
+      /**
+       * MTI-009 (BEH-EA-147): a caller who is not a member of the organization
+       * gets `OrganizationNotFound` — byte-identical to the answer for an id that
+       * does not exist, so a denial never reveals that a tenant exists.
+       * `OrganizationPermissionDenied` (403) is reserved for a *member* who lacks
+       * the requested statement.
+       */
       const requirePermission = (
         callerId: Users.UserId,
         organizationId: string,
@@ -1415,7 +1488,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         Effect.gen(function* () {
           const membership = yield* members.findByUserAndOrg(callerId, organizationId);
           if (Option.isNone(membership)) {
-            return yield* Effect.fail(new OrganizationApi.OrganizationPermissionDenied());
+            return yield* Effect.fail(new OrganizationApi.OrganizationNotFound());
           }
           const effective = yield* effectivePermissionsOf(organizationId, membership.value);
           if (!PermissionEngine.hasPermission(effective, resource, action)) {
@@ -1471,12 +1544,12 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           }
         });
 
-      /** Fails `OrganizationPermissionDenied` if the caller isn't a member — no statement check, for read endpoints any member may use. */
+      /** Fails `OrganizationNotFound` (MTI-009) if the caller isn't a member — no statement check, for read endpoints any member may use. */
       const requireMembership = (callerId: Users.UserId, organizationId: string) =>
         members.findByUserAndOrg(callerId, organizationId).pipe(
           Effect.flatMap(
             Option.match({
-              onNone: () => Effect.fail(new OrganizationApi.OrganizationPermissionDenied()),
+              onNone: () => Effect.fail(new OrganizationApi.OrganizationNotFound()),
               onSome: Effect.succeed,
             }),
           ),
@@ -1560,7 +1633,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           .listByUser(Users.UserId(caller.ref.id))
           .pipe(Effect.flatMap((rows) => orgs.listByIds(rows.map((r) => r.organizationId))));
 
-      const get: OrganizationShape["get"] = (organizationId) => requireOrganization(organizationId);
+      const get: OrganizationShape["get"] = Effect.fnUntraced(function* (caller, organizationId) {
+        const record = yield* requireOrganization(organizationId);
+        yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
+        return record;
+      });
 
       const getFull: OrganizationShape["getFull"] = Effect.fnUntraced(
         function* (caller, organizationId, input) {
@@ -1713,6 +1790,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const removeMember: OrganizationShape["removeMember"] = Effect.fnUntraced(
         function* (caller, organizationId, targetUserId) {
           yield* requireOrganization(organizationId);
+          // MTI-009: a non-member learns nothing about who else is in the
+          // organization — the target lookup below would otherwise answer
+          // `MembershipNotFound` before any permission check.
+          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
           const target = yield* members.findByUserAndOrg(targetUserId, organizationId).pipe(
             Effect.flatMap(
               Option.match({
@@ -1747,6 +1828,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const updateMemberRole: OrganizationShape["updateMemberRole"] = Effect.fnUntraced(
         function* (caller, organizationId, targetUserId, role) {
           yield* requireOrganization(organizationId);
+          // MTI-009: see `removeMember`.
+          yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
           const target = yield* members.findByUserAndOrg(targetUserId, organizationId).pipe(
             Effect.flatMap(
               Option.match({
@@ -1965,7 +2048,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const invite: OrganizationShape["invite"] = Effect.fnUntraced(
         function* (caller, organizationId, input) {
-          yield* requireOrganization(organizationId);
+          const organizationRecord = yield* requireOrganization(organizationId);
           const callerId = Users.UserId(caller.ref.id);
           const inviter = yield* requirePermission(callerId, organizationId, "invitation", "create");
 
@@ -2015,30 +2098,45 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             Effect.map((now) => DateTime.addDuration(now, orgConfig.invitationExpiresIn)),
           );
 
-          const sendInvite = (record: InvitationRecords.InvitationRecord) =>
+          // MTI-010: the mailed capability is a fresh random token (only its hash
+          // is stored), never the invitation's own id.
+          const sendInvite = (record: InvitationRecords.InvitationRecord, token: string) =>
             mailer.send({
               to: record.email,
               template: "organization-invite",
-              data: { token: record.id, organizationId, role: record.role },
+              data: {
+                token,
+                invitationId: record.id,
+                organizationId,
+                organizationName: organizationRecord.name,
+                role: record.role,
+              },
             });
 
           if (Option.isNone(alreadyMember) && Option.isSome(existing)) {
             if (orgConfig.cancelPendingInvitationsOnReInvite) {
               yield* invitations.updateStatus(existing.value.id, "canceled").pipe(Effect.orDie);
             } else if (input.resend) {
-              yield* sendInvite(existing.value);
+              // A resend mints a new token (only the hash is kept, so the old
+              // mail cannot be re-sent) and retires the previous one.
+              const fresh = yield* mintInvitationToken;
+              const rotated = yield* invitations
+                .setTokenHash(existing.value.id, fresh.tokenHash)
+                .pipe(Effect.orDie);
+              yield* sendInvite(rotated, fresh.token);
               yield* events.publish({
                 _tag: "auth.organization.invitationCreated",
-                invitationId: existing.value.id,
+                invitationId: rotated.id,
                 organizationId,
-                email: existing.value.email,
+                email: rotated.email,
               });
-              return existing.value;
+              return rotated;
             } else {
               return existing.value;
             }
           }
 
+          const minted = yield* mintInvitationToken;
           const record = yield* invitations.create({
             email: vetoed.email,
             inviterId: callerId,
@@ -2046,8 +2144,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             teamId: input.teamId,
             role: vetoed.role,
             expiresAt,
+            tokenHash: minted.tokenHash,
           });
-          yield* sendInvite(record);
+          yield* sendInvite(record, minted.token);
           yield* events.publish({
             _tag: "auth.organization.invitationCreated",
             invitationId: record.id,
@@ -2064,14 +2163,40 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         },
       );
 
-      const requirePendingInvitation = (invitationId: string) =>
-        invitations.findById(invitationId).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(new OrganizationApi.InvitationNotFound()),
-              onSome: Effect.succeed,
-            }),
-          ),
+      /** Hex SHA-256 of an invitation token — the only form of it ever stored. */
+      const hashInvitationToken = (token: string) =>
+        crypto
+          .digest("SHA-256", new TextEncoder().encode(token))
+          .pipe(Effect.map(hexOf), Effect.orDie);
+
+      const mintInvitationToken = Effect.gen(function* () {
+        const token = hexOf(yield* crypto.randomBytes(32).pipe(Effect.orDie));
+        return { token, tokenHash: yield* hashInvitationToken(token) };
+      });
+
+      /**
+       * MTI-010: proves the caller holds the emailed token for `invitationId`
+       * (constant-time hash comparison). An unknown id, a wrong token and a
+       * pre-column invitation with no stored hash all answer the same
+       * `InvitationNotFound`, so knowing an id reveals nothing.
+       */
+      const requireInvitationToken = (invitationId: string, token: string) =>
+        Effect.gen(function* () {
+          const found = yield* invitations.findById(invitationId);
+          const presented = yield* hashInvitationToken(token);
+          const stored = Option.flatMap(found, (record) => record.tokenHash);
+          const matches = constantTimeEqual(
+            presented,
+            Option.getOrElse(stored, () => NO_INVITATION_TOKEN_HASH),
+          );
+          if (Option.isNone(found) || Option.isNone(stored) || !matches) {
+            return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
+          }
+          return found.value;
+        });
+
+      const requirePendingInvitation = (invitationId: string, token: string) =>
+        requireInvitationToken(invitationId, token).pipe(
           Effect.flatMap((record) =>
             record.status === "pending"
               ? Effect.succeed(record)
@@ -2080,10 +2205,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         );
 
       const acceptInvitation: OrganizationShape["acceptInvitation"] = Effect.fnUntraced(
-        function* (caller, invitationId) {
+        function* (caller, invitationId, token) {
           yield* veto("organization.invitation.accept.before", beforeAccept.run({ invitationId }));
 
-          const record = yield* requirePendingInvitation(invitationId);
+          const record = yield* requirePendingInvitation(invitationId, token);
 
           const now = yield* DateTime.now;
           if (DateTime.isGreaterThan(now, record.expiresAt)) {
@@ -2093,7 +2218,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
           const callerId = Users.UserId(caller.ref.id);
           const user = yield* users.findById(callerId).pipe(Effect.orDie);
-          if (user.email !== record.email) {
+          if (user.email.toLowerCase() !== record.email) {
             return yield* Effect.fail(new OrganizationApi.InvitationEmailMismatch());
           }
           if (orgConfig.requireEmailVerificationOnInvitation && !user.emailVerified) {
@@ -2182,13 +2307,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       );
 
       const rejectInvitation: OrganizationShape["rejectInvitation"] = Effect.fnUntraced(
-        function* (caller, invitationId) {
+        function* (caller, invitationId, token) {
           yield* veto("organization.invitation.reject.before", beforeReject.run({ invitationId }));
 
-          const record = yield* requirePendingInvitation(invitationId);
+          const record = yield* requirePendingInvitation(invitationId, token);
           const callerId = Users.UserId(caller.ref.id);
           const user = yield* users.findById(callerId).pipe(Effect.orDie);
-          if (user.email !== record.email) {
+          if (user.email.toLowerCase() !== record.email) {
             return yield* Effect.fail(new OrganizationApi.InvitationEmailMismatch());
           }
           yield* invitations.updateStatus(invitationId, "rejected").pipe(Effect.orDie);
@@ -2205,12 +2330,31 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller, invitationId) {
           yield* veto("organization.invitation.cancel.before", beforeCancel.run({ invitationId }));
 
-          const record = yield* requirePendingInvitation(invitationId);
-          yield* requirePermission(
-            Users.UserId(caller.ref.id),
-            record.organizationId,
-            "invitation",
-            "cancel",
+          // MTI-009: a non-member must not be able to tell an existing invitation
+          // (or its status) from an unknown one, so membership is checked before
+          // the pending check and answers the unknown-invitation error.
+          const callerId = Users.UserId(caller.ref.id);
+          const found = yield* invitations.findById(invitationId).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.fail(new OrganizationApi.InvitationNotFound()),
+                onSome: Effect.succeed,
+              }),
+            ),
+          );
+          const callerMembership = yield* members.findByUserAndOrg(callerId, found.organizationId);
+          if (Option.isNone(callerMembership)) {
+            return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
+          }
+          const record = found;
+          if (record.status !== "pending") {
+            return yield* Effect.fail(new OrganizationApi.InvitationNotPending());
+          }
+          yield* requirePermission(callerId, record.organizationId, "invitation", "cancel").pipe(
+            // Membership was just proven; a racing removal reads as "no such invitation".
+            Effect.catchTag("OrganizationNotFound", () =>
+              Effect.fail(new OrganizationApi.InvitationNotFound()),
+            ),
           );
           yield* invitations.updateStatus(invitationId, "canceled").pipe(Effect.orDie);
           yield* events.publish({
@@ -2222,15 +2366,43 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         },
       );
 
-      const getInvitation: OrganizationShape["getInvitation"] = (invitationId) =>
-        invitations.findById(invitationId).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(new OrganizationApi.InvitationNotFound()),
-              onSome: Effect.succeed,
-            }),
-          ),
-        );
+      /** True iff `callerId` is the invitee (email match) or a member of the invitation's organization holding `invitation:create`. */
+      const mayReadInvitation = (callerId: Users.UserId, record: InvitationRecords.InvitationRecord) =>
+        Effect.gen(function* () {
+          const membership = yield* members.findByUserAndOrg(callerId, record.organizationId);
+          if (Option.isSome(membership)) {
+            const effective = yield* effectivePermissionsOf(record.organizationId, membership.value);
+            if (PermissionEngine.hasPermission(effective, "invitation", "create")) return true;
+          }
+          const user = yield* users
+            .findById(callerId)
+            .pipe(Effect.catchTag("UserNotFound", () => Effect.succeed(undefined)));
+          return user !== undefined && user.email.toLowerCase() === record.email;
+        });
+
+      const getInvitation: OrganizationShape["getInvitation"] = Effect.fnUntraced(
+        function* (caller, invitationId) {
+          const found = yield* invitations.findById(invitationId);
+          if (Option.isNone(found)) return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
+          const allowed = yield* mayReadInvitation(Users.UserId(caller.ref.id), found.value);
+          if (!allowed) return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
+          return found.value;
+        },
+      );
+
+      const getInvitationByToken: OrganizationShape["getInvitationByToken"] = Effect.fnUntraced(
+        function* (caller, token) {
+          const found = yield* invitations.findByTokenHash(yield* hashInvitationToken(token));
+          if (Option.isNone(found)) return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
+          const user = yield* users
+            .findById(Users.UserId(caller.ref.id))
+            .pipe(Effect.catchTag("UserNotFound", () => Effect.succeed(undefined)));
+          if (user === undefined || user.email.toLowerCase() !== found.value.email) {
+            return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
+          }
+          return found.value;
+        },
+      );
 
       const listInvitationsForOrganization: OrganizationShape["listInvitationsForOrganization"] = (
         caller,
@@ -2645,6 +2817,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         rejectInvitation,
         cancelInvitation,
         getInvitation,
+        getInvitationByToken,
         listInvitationsForOrganization,
         listInvitationsForUser,
         createRole,

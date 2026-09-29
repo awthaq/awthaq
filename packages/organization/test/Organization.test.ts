@@ -71,6 +71,27 @@ const asCaller = (id: string): Api.UserPrincipal =>
     sessionId: `${id}-session`,
   });
 
+/**
+ * MTI-010: the invitation capability only ever travels by email — read it back
+ * from the recording `Mailer`, exactly as an invitee would receive it.
+ */
+const mailedToken = (invitationId: string) =>
+  Effect.gen(function* () {
+    const mailer = yield* Mailer.Mailer;
+    const sent = yield* mailer.sent;
+    for (const message of sent.toReversed()) {
+      const data = message.data;
+      if (
+        data !== undefined &&
+        data["invitationId"] === invitationId &&
+        typeof data["token"] === "string"
+      ) {
+        return data["token"];
+      }
+    }
+    return yield* Effect.die(new Error(`no invitation mail was sent for ${invitationId}`));
+  });
+
 describe("Organization", () => {
   it.effect("create makes the creator the owner automatically", () =>
     Effect.gen(function* () {
@@ -159,10 +180,14 @@ describe("Organization", () => {
       const outsiderOrgs = yield* organization.list(outsider);
       assert.strictEqual(outsiderOrgs.length, 0);
 
-      const fetched = yield* organization.get(record.id);
+      const fetched = yield* organization.get(owner, record.id);
       assert.strictEqual(fetched.slug, "acme");
-      const notFound = yield* organization.get("does-not-exist").pipe(Effect.flip);
+      const notFound = yield* organization.get(owner, "does-not-exist").pipe(Effect.flip);
       assert.strictEqual(notFound._tag, "OrganizationNotFound");
+      // MTI-008: organization metadata is member-only; a non-member gets the
+      // same 404 an unknown id gets.
+      const outsiderGet = yield* organization.get(outsider, record.id).pipe(Effect.flip);
+      assert.strictEqual(outsiderGet._tag, "OrganizationNotFound");
 
       const full = yield* organization.getFull(owner, record.id);
       assert.strictEqual(full.organization.id, record.id);
@@ -177,16 +202,17 @@ describe("Organization", () => {
       const outsider = asCaller("outsider-1");
       const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
 
+      // MTI-009: a non-member cannot tell an existing organization from a missing one.
       const fullDenied = yield* organization.getFull(outsider, record.id).pipe(Effect.flip);
-      assert.strictEqual(fullDenied._tag, "OrganizationPermissionDenied");
+      assert.strictEqual(fullDenied._tag, "OrganizationNotFound");
 
       const membersDenied = yield* organization.listMembers(outsider, record.id).pipe(Effect.flip);
-      assert.strictEqual(membersDenied._tag, "OrganizationPermissionDenied");
+      assert.strictEqual(membersDenied._tag, "OrganizationNotFound");
 
       const invitationsDenied = yield* organization
         .listInvitationsForOrganization(outsider, record.id)
         .pipe(Effect.flip);
-      assert.strictEqual(invitationsDenied._tag, "OrganizationPermissionDenied");
+      assert.strictEqual(invitationsDenied._tag, "OrganizationNotFound");
 
       // A real member (not just owner/admin) may still read all three.
       yield* organization.addMember({
@@ -242,7 +268,7 @@ describe("Organization", () => {
       assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
 
       yield* organization.delete(owner, record.id);
-      const gone = yield* organization.get(record.id).pipe(Effect.flip);
+      const gone = yield* organization.get(owner, record.id).pipe(Effect.flip);
       assert.strictEqual(gone._tag, "OrganizationNotFound");
       const noMembers = yield* organization.listMembers(owner, record.id).pipe(Effect.flip);
       assert.strictEqual(noMembers._tag, "OrganizationNotFound");
@@ -482,11 +508,15 @@ describe("Organization", () => {
       });
 
       const inviteeCaller = asCaller(invitee.id);
-      const membership = yield* organization.acceptInvitation(inviteeCaller, invitation.id);
+      const membership = yield* organization.acceptInvitation(
+        inviteeCaller,
+        invitation.id,
+        yield* mailedToken(invitation.id),
+      );
       assert.strictEqual(membership.userId, invitee.id);
       assert.deepStrictEqual(membership.role, ["member"]);
 
-      const stored = yield* organization.getInvitation(invitation.id);
+      const stored = yield* organization.getInvitation(owner, invitation.id);
       assert.strictEqual(stored.status, "accepted");
     }).pipe(Effect.provide(buildLayer())),
   );
@@ -503,8 +533,12 @@ describe("Organization", () => {
         role: ["member"],
       });
 
-      yield* organization.rejectInvitation(asCaller(invitee.id), invitation.id);
-      const stored = yield* organization.getInvitation(invitation.id);
+      yield* organization.rejectInvitation(
+        asCaller(invitee.id),
+        invitation.id,
+        yield* mailedToken(invitation.id),
+      );
+      const stored = yield* organization.getInvitation(owner, invitation.id);
       assert.strictEqual(stored.status, "rejected");
 
       const members = yield* organization.listMembers(owner, org.id);
@@ -523,13 +557,14 @@ describe("Organization", () => {
         role: ["member"],
       });
 
+      // MTI-009: a non-member sees the same answer as for an unknown invitation.
       const denied = yield* organization
         .cancelInvitation(outsider, invitation.id)
         .pipe(Effect.flip);
-      assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
+      assert.strictEqual(denied._tag, "InvitationNotFound");
 
       yield* organization.cancelInvitation(owner, invitation.id);
-      const stored = yield* organization.getInvitation(invitation.id);
+      const stored = yield* organization.getInvitation(owner, invitation.id);
       assert.strictEqual(stored.status, "canceled");
     }).pipe(Effect.provide(buildLayer())),
   );
@@ -593,33 +628,39 @@ describe("Organization", () => {
       });
       assert.notStrictEqual(first.id, second.id);
 
-      const stale = yield* organization.getInvitation(first.id);
+      const stale = yield* organization.getInvitation(owner, first.id);
       assert.strictEqual(stale.status, "canceled");
     }).pipe(Effect.provide(buildLayer({ cancelPendingInvitationsOnReInvite: true }))),
   );
 
   // OHS-006: re-inviting a member is refused (it used to mint a second invitation).
-  it.effect("inviting an existing member fails AlreadyMember and keeps their accepted invitation", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const users = yield* Users.Users;
-      const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const invitee = yield* users.create({ email: "invitee@example.com", name: "Invitee" });
+  it.effect(
+    "inviting an existing member fails AlreadyMember and keeps their accepted invitation",
+    () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const users = yield* Users.Users;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const invitee = yield* users.create({ email: "invitee@example.com", name: "Invitee" });
 
-      const invitation = yield* organization.invite(owner, org.id, {
-        email: invitee.email,
-        role: ["member"],
-      });
-      yield* organization.acceptInvitation(asCaller(invitee.id), invitation.id);
+        const invitation = yield* organization.invite(owner, org.id, {
+          email: invitee.email,
+          role: ["member"],
+        });
+        yield* organization.acceptInvitation(
+          asCaller(invitee.id),
+          invitation.id,
+          yield* mailedToken(invitation.id),
+        );
 
-      const failure = yield* organization
-        .invite(owner, org.id, { email: invitee.email, role: ["member"] })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "AlreadyMember");
-      const stored = yield* organization.getInvitation(invitation.id);
-      assert.strictEqual(stored.status, "accepted");
-    }).pipe(Effect.provide(buildLayer())),
+        const failure = yield* organization
+          .invite(owner, org.id, { email: invitee.email, role: ["member"] })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "AlreadyMember");
+        const stored = yield* organization.getInvitation(owner, invitation.id);
+        assert.strictEqual(stored.status, "accepted");
+      }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect("accepting an expired invitation fails InvitationExpired", () =>
@@ -636,7 +677,7 @@ describe("Organization", () => {
 
       yield* TestClock.adjust(Duration.hours(49));
       const failure = yield* organization
-        .acceptInvitation(asCaller(invitee.id), invitation.id)
+        .acceptInvitation(asCaller(invitee.id), invitation.id, yield* mailedToken(invitation.id))
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "InvitationExpired");
     }).pipe(Effect.provide(buildLayer())),
@@ -655,7 +696,11 @@ describe("Organization", () => {
       const someoneElse = yield* users.create({ email: "someone-else@example.com", name: "X" });
 
       const failure = yield* organization
-        .acceptInvitation(asCaller(someoneElse.id), invitation.id)
+        .acceptInvitation(
+          asCaller(someoneElse.id),
+          invitation.id,
+          yield* mailedToken(invitation.id),
+        )
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "InvitationEmailMismatch");
     }).pipe(Effect.provide(buildLayer())),
@@ -1111,12 +1156,12 @@ describe("Organization", () => {
       const team = yield* organization.createTeam(owner, org.id, "Engineering");
 
       const teamsDenied = yield* organization.listTeams(outsider, org.id).pipe(Effect.flip);
-      assert.strictEqual(teamsDenied._tag, "OrganizationPermissionDenied");
+      assert.strictEqual(teamsDenied._tag, "OrganizationNotFound");
 
       const membersDenied = yield* organization
         .listTeamMembers(outsider, org.id, team.id)
         .pipe(Effect.flip);
-      assert.strictEqual(membersDenied._tag, "OrganizationPermissionDenied");
+      assert.strictEqual(membersDenied._tag, "OrganizationNotFound");
 
       // A real member (not just owner/admin) may still read both.
       yield* organization.addMember({
@@ -1211,7 +1256,11 @@ describe("Organization", () => {
         role: ["member"],
         teamId: team.id,
       });
-      yield* organization.acceptInvitation(asCaller(invitee.id), invitation.id);
+      yield* organization.acceptInvitation(
+        asCaller(invitee.id),
+        invitation.id,
+        yield* mailedToken(invitation.id),
+      );
 
       const members = yield* organization.listTeamMembers(owner, org.id, team.id);
       assert.strictEqual(members.length, 1);
@@ -1294,13 +1343,17 @@ describe("Organization", () => {
             role: ["member"],
           });
           const failure = yield* organization
-            .acceptInvitation(asCaller(invitee.id), invitation.id)
+            .acceptInvitation(
+              asCaller(invitee.id),
+              invitation.id,
+              yield* mailedToken(invitation.id),
+            )
             .pipe(Effect.flip);
           assert.strictEqual(failure._tag, "AlreadyMember");
           const attrs = yield* organization.attributesFor(org.id, invitee.id);
           assert.isTrue(Option.isSome(attrs));
           if (Option.isSome(attrs)) assert.deepStrictEqual(attrs.value.role, ["member"]);
-          const stale = yield* organization.getInvitation(invitation.id);
+          const stale = yield* organization.getInvitation(owner, invitation.id);
           assert.strictEqual(stale.status, "canceled");
         }).pipe(Effect.provide(buildLayer())),
     );
@@ -1343,19 +1396,21 @@ describe("Organization", () => {
       return { organization, owner, member, org, team };
     });
 
-    it.effect("removeMember clears the removed user's active organization, team and team memberships", () =>
-      Effect.gen(function* () {
-        const { organization, owner, member, org, team } = yield* setup;
-        yield* organization.removeMember(owner, org.id, Users.UserId("member-1"));
+    it.effect(
+      "removeMember clears the removed user's active organization, team and team memberships",
+      () =>
+        Effect.gen(function* () {
+          const { organization, owner, member, org, team } = yield* setup;
+          yield* organization.removeMember(owner, org.id, Users.UserId("member-1"));
 
-        const active = yield* organization.getActive(member);
-        assert.isTrue(Option.isNone(active.activeOrganizationId));
-        assert.isTrue(Option.isNone(active.activeTeamId));
-        const roster = yield* organization.listTeamMembers(owner, org.id, team.id);
-        assert.strictEqual(roster.length, 0);
-        const teams = yield* organization.listTeams(owner, org.id);
-        assert.strictEqual(teams.find((t) => t.id === team.id)?.memberCount, 0);
-      }).pipe(Effect.provide(withTeams())),
+          const active = yield* organization.getActive(member);
+          assert.isTrue(Option.isNone(active.activeOrganizationId));
+          assert.isTrue(Option.isNone(active.activeTeamId));
+          const roster = yield* organization.listTeamMembers(owner, org.id, team.id);
+          assert.strictEqual(roster.length, 0);
+          const teams = yield* organization.listTeams(owner, org.id);
+          assert.strictEqual(teams.find((t) => t.id === team.id)?.memberCount, 0);
+        }).pipe(Effect.provide(withTeams())),
     );
 
     it.effect("leave clears the caller's active organization, team and team memberships", () =>
@@ -1395,21 +1450,163 @@ describe("Organization", () => {
       }).pipe(Effect.provide(withTeams())),
     );
 
-    it.effect("getActive re-validates: a pointer at an organization the user is no longer in reads as cleared", () =>
-      Effect.gen(function* () {
-        const { organization, member, org } = yield* setup;
-        const members = yield* MembershipRecords.MembershipRecords;
-        const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
-        // Membership removed around the plugin (a stale pointer, or a row that
-        // predates the userId column): the read itself must not name the org.
-        yield* members.remove(Users.UserId("member-1"), org.id);
+    it.effect(
+      "getActive re-validates: a pointer at an organization the user is no longer in reads as cleared",
+      () =>
+        Effect.gen(function* () {
+          const { organization, member, org } = yield* setup;
+          const members = yield* MembershipRecords.MembershipRecords;
+          const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
+          // Membership removed around the plugin (a stale pointer, or a row that
+          // predates the userId column): the read itself must not name the org.
+          yield* members.remove(Users.UserId("member-1"), org.id);
 
-        const active = yield* organization.getActive(member);
-        assert.isTrue(Option.isNone(active.activeOrganizationId));
-        assert.isTrue(Option.isNone(active.activeTeamId));
-        const row = yield* activeContext.findBySessionId(member.sessionId);
-        assert.isTrue(Option.isSome(row) && Option.isNone(row.value.activeOrganizationId));
-      }).pipe(Effect.provide(withTeams())),
+          const active = yield* organization.getActive(member);
+          assert.isTrue(Option.isNone(active.activeOrganizationId));
+          assert.isTrue(Option.isNone(active.activeTeamId));
+          const row = yield* activeContext.findBySessionId(member.sessionId);
+          assert.isTrue(Option.isSome(row) && Option.isNone(row.value.activeOrganizationId));
+        }).pipe(Effect.provide(withTeams())),
+    );
+  });
+
+  // MTI-010: knowing an invitation's id grants nothing — reading it needs the
+  // invitee's identity (or invitation rights), accepting/rejecting needs the
+  // emailed secret as well, and the secret is not the REST id.
+  describe("invitation capability (MTI-010)", () => {
+    const setup = Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const users = yield* Users.Users;
+      const mailer = yield* Mailer.Mailer;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const invitee = yield* users.create({ email: "invitee@example.com", name: "Invitee" });
+      const stranger = yield* users.create({ email: "stranger@example.com", name: "Stranger" });
+      yield* organization.addMember({
+        organizationId: org.id,
+        userId: Users.UserId("plain-1"),
+        role: ["member"],
+      });
+      const invitation = yield* organization.invite(owner, org.id, {
+        email: invitee.email,
+        role: ["member"],
+      });
+      return {
+        organization,
+        mailer,
+        owner,
+        org,
+        invitation,
+        inviteeCaller: asCaller(invitee.id),
+        strangerCaller: asCaller(stranger.id),
+        plain: asCaller("plain-1"),
+      };
+    });
+
+    it.effect(
+      "a stranger cannot read an invitation by id (404); the invitee and an inviter can",
+      () =>
+        Effect.gen(function* () {
+          const { organization, owner, invitation, inviteeCaller, strangerCaller, plain } =
+            yield* setup;
+          const strangerFailure = yield* organization
+            .getInvitation(strangerCaller, invitation.id)
+            .pipe(Effect.flip);
+          assert.strictEqual(strangerFailure._tag, "InvitationNotFound");
+          const plainFailure = yield* organization
+            .getInvitation(plain, invitation.id)
+            .pipe(Effect.flip);
+          assert.strictEqual(plainFailure._tag, "InvitationNotFound");
+          const unknown = yield* organization
+            .getInvitation(strangerCaller, "no-such-invitation")
+            .pipe(Effect.flip);
+          assert.strictEqual(unknown._tag, "InvitationNotFound");
+
+          assert.strictEqual(
+            (yield* organization.getInvitation(inviteeCaller, invitation.id)).id,
+            invitation.id,
+          );
+          assert.strictEqual(
+            (yield* organization.getInvitation(owner, invitation.id)).id,
+            invitation.id,
+          );
+        }).pipe(Effect.provide(buildLayer())),
+    );
+
+    it.effect("accepting without the emailed token fails even with a matching email", () =>
+      Effect.gen(function* () {
+        const { organization, org, invitation, inviteeCaller, owner } = yield* setup;
+        const failure = yield* organization
+          .acceptInvitation(inviteeCaller, invitation.id, "not-the-token")
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "InvitationNotFound");
+        // The invitation's own id is not the secret either.
+        const withId = yield* organization
+          .acceptInvitation(inviteeCaller, invitation.id, invitation.id)
+          .pipe(Effect.flip);
+        assert.strictEqual(withId._tag, "InvitationNotFound");
+        const members = yield* organization.listMembers(owner, org.id);
+        assert.strictEqual(members.length, 2);
+      }).pipe(Effect.provide(buildLayer())),
+    );
+
+    it.effect("the invitee can read by token and accept with it; a stranger cannot", () =>
+      Effect.gen(function* () {
+        const { organization, org, invitation, inviteeCaller, strangerCaller } = yield* setup;
+        const token = yield* mailedToken(invitation.id);
+        assert.notStrictEqual(token, invitation.id);
+        const strangerFailure = yield* organization
+          .getInvitationByToken(strangerCaller, token)
+          .pipe(Effect.flip);
+        assert.strictEqual(strangerFailure._tag, "InvitationNotFound");
+        const landing = yield* organization.getInvitationByToken(inviteeCaller, token);
+        assert.strictEqual(landing.id, invitation.id);
+
+        const membership = yield* organization.acceptInvitation(
+          inviteeCaller,
+          invitation.id,
+          token,
+        );
+        assert.strictEqual(membership.organizationId, org.id);
+      }).pipe(Effect.provide(buildLayer())),
+    );
+
+    it.effect("reject also requires the token", () =>
+      Effect.gen(function* () {
+        const { organization, invitation, inviteeCaller } = yield* setup;
+        const failure = yield* organization
+          .rejectInvitation(inviteeCaller, invitation.id, "not-the-token")
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "InvitationNotFound");
+        yield* organization.rejectInvitation(
+          inviteeCaller,
+          invitation.id,
+          yield* mailedToken(invitation.id),
+        );
+      }).pipe(Effect.provide(buildLayer())),
+    );
+
+    it.effect("the mail names the organization; resend rotates the token", () =>
+      Effect.gen(function* () {
+        const { organization, mailer, owner, org, invitation, inviteeCaller } = yield* setup;
+        const first = yield* mailedToken(invitation.id);
+        const sentFirst = yield* mailer.sent;
+        assert.strictEqual(sentFirst[0]?.data?.["organizationName"], "Acme");
+
+        yield* organization.invite(owner, org.id, {
+          email: invitation.email,
+          role: ["member"],
+          resend: true,
+        });
+        const second = yield* mailedToken(invitation.id);
+        assert.notStrictEqual(first, second);
+
+        const stale = yield* organization
+          .acceptInvitation(inviteeCaller, invitation.id, first)
+          .pipe(Effect.flip);
+        assert.strictEqual(stale._tag, "InvitationNotFound");
+        yield* organization.acceptInvitation(inviteeCaller, invitation.id, second);
+      }).pipe(Effect.provide(buildLayer())),
     );
   });
 });

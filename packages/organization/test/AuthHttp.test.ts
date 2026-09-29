@@ -123,7 +123,21 @@ const buildHandler = (configOverrides: Partial<Organization.OrganizationConfigSh
       ),
     );
 
-  return { handler, issueSessionCookieHeader };
+  /** Runs `effect` against the same running records the handler uses (e.g. to seed a member the HTTP surface gives no direct route for). */
+  const withServices = <A, E>(
+    effect: Effect.Effect<A, E, MembershipRecords.MembershipRecords>,
+  ): Promise<A> =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
+          return yield* effect.pipe(Effect.provide(context));
+        }),
+      ),
+    );
+
+  return { handler, issueSessionCookieHeader, withServices };
 };
 
 const UNSAFE_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -203,7 +217,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
     assert.strictEqual(collision.status, 409);
   });
 
-  it("update answers 403 for a non-member without permission", async () => {
+  // MTI-009 (BEH-EA-147): a non-member's denial is a 404, never a 403 — it must
+  // not reveal that the organization exists.
+  it("update answers 404 for a non-member", async () => {
     const { handler, issueSessionCookieHeader } = buildHandler();
     const ownerCookie = await issueSessionCookieHeader("owner-1");
     const outsiderCookie = await issueSessionCookieHeader("outsider-1");
@@ -223,7 +239,123 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "x" },
       { cookie: outsiderCookie },
     );
+    assert.strictEqual(denied.status, 404);
+  });
+
+  // MTI-009: every /organization/:organizationId/* endpoint answers a
+  // non-member byte-identically for an existing and a non-existent id.
+  it("a non-member gets the same 404 for an existing organization as for a random id", async () => {
+    const { handler, issueSessionCookieHeader } = buildHandler({
+      teams: {
+        enabled: true,
+        maximumTeams: Number.POSITIVE_INFINITY,
+        maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+        allowRemovingAllTeams: false,
+      },
+    });
+    const ownerCookie = await issueSessionCookieHeader("owner-1");
+    const outsiderCookie = await issueSessionCookieHeader("outsider-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme" },
+      { cookie: ownerCookie },
+    );
+    const record = (await created.json()) as { id: string };
+
+    const probes: ReadonlyArray<{ method: string; path: (id: string) => string; body?: unknown }> = [
+      { method: "GET", path: (id) => `/organization/${id}` },
+      { method: "GET", path: (id) => `/organization/${id}/full` },
+      { method: "GET", path: (id) => `/organization/${id}/members` },
+      { method: "PATCH", path: (id) => `/organization/${id}`, body: { name: "x" } },
+      { method: "DELETE", path: (id) => `/organization/${id}` },
+      { method: "DELETE", path: (id) => `/organization/${id}/members/owner-1` },
+      { method: "GET", path: (id) => `/organization/${id}/invitations` },
+      {
+        method: "POST",
+        path: (id) => `/organization/${id}/invitations`,
+        body: { email: "x@example.com", role: ["member"] },
+      },
+      { method: "GET", path: (id) => `/organization/${id}/teams` },
+    ];
+    for (const probe of probes) {
+      const existing = await request(handler, probe.method, probe.path(record.id), probe.body, {
+        cookie: outsiderCookie,
+      });
+      const missing = await request(handler, probe.method, probe.path("no-such-org"), probe.body, {
+        cookie: outsiderCookie,
+      });
+      assert.strictEqual(existing.status, 404, `${probe.method} ${probe.path(record.id)}`);
+      assert.strictEqual(missing.status, 404);
+      assert.strictEqual(await existing.text(), await missing.text());
+    }
+  });
+
+  it("a member without the statement still gets 403, not 404", async () => {
+    const { handler, issueSessionCookieHeader, withServices } = buildHandler();
+    const ownerCookie = await issueSessionCookieHeader("owner-1");
+    const memberCookie = await issueSessionCookieHeader("member-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme" },
+      { cookie: ownerCookie },
+    );
+    const record = (await created.json()) as { id: string };
+    await withServices(
+      MembershipRecords.MembershipRecords.use((members) =>
+        members.create({
+          organizationId: record.id,
+          userId: Users.UserId("member-1"),
+          role: ["member"],
+        }),
+      ),
+    );
+
+    // Removing another (plain) member needs member:delete, which a member lacks.
+    await withServices(
+      MembershipRecords.MembershipRecords.use((members) =>
+        members.create({
+          organizationId: record.id,
+          userId: Users.UserId("member-2"),
+          role: ["member"],
+        }),
+      ),
+    );
+    const denied = await request(
+      handler,
+      "DELETE",
+      `/organization/${record.id}/members/member-2`,
+      undefined,
+      { cookie: memberCookie },
+    );
     assert.strictEqual(denied.status, 403);
+  });
+
+  // MTI-008: organization metadata is member-only.
+  it("GET /organization/:id answers a non-member 404 and a member the DTO", async () => {
+    const { handler, issueSessionCookieHeader } = buildHandler();
+    const ownerCookie = await issueSessionCookieHeader("owner-1");
+    const outsiderCookie = await issueSessionCookieHeader("outsider-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme", metadata: "{\"secret\":true}" },
+      { cookie: ownerCookie },
+    );
+    const record = (await created.json()) as { id: string };
+
+    const outsider = await handler(
+      new Request(`${ORIGIN}/organization/${record.id}`, { headers: { cookie: outsiderCookie } }),
+    );
+    assert.strictEqual(outsider.status, 404);
+    const member = await handler(
+      new Request(`${ORIGIN}/organization/${record.id}`, { headers: { cookie: ownerCookie } }),
+    );
+    assert.strictEqual(member.status, 200);
   });
 
   it("removeMember answers 409 (OwnerInvariantViolation) for the last owner", async () => {
@@ -327,6 +459,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
     );
     assert.strictEqual(inviteRes.status, 200);
     const invitation = (await inviteRes.json()) as { id: string };
+    // MTI-010: neither the emailed token nor its hash ever appears on the wire.
+    assert.notProperty(invitation, "tokenHash");
+    assert.notProperty(invitation, "token");
 
     const listRes = await handler(
       new Request(`${ORIGIN}/organization/${record.id}/invitations`, { headers: { cookie } }),

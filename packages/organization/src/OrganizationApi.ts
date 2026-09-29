@@ -301,6 +301,13 @@ export type InvitePayload = typeof InvitePayload.Type;
 export const InvitationIdParams = Schema.Struct({ invitationId: Schema.String });
 export type InvitationIdParams = typeof InvitationIdParams.Type;
 
+/** MTI-010: the emailed capability. The invitation id in the path is not the secret; accepting/rejecting needs this too. */
+export const InvitationTokenPayload = Schema.Struct({ token: Schema.String });
+export type InvitationTokenPayload = typeof InvitationTokenPayload.Type;
+
+export const InvitationTokenParams = Schema.Struct({ token: Schema.String });
+export type InvitationTokenParams = typeof InvitationTokenParams.Type;
+
 export class InvitationDto extends Schema.Class<InvitationDto>("InvitationDto")({
   id: Schema.String,
   email: Schema.String,
@@ -594,8 +601,16 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
     }),
   )
   .add(
+    HttpApiEndpoint.get("getInvitationByToken", "/organization/invitations/by-token/:token", {
+      params: InvitationTokenParams,
+      success: InvitationDto,
+      error: InvitationNotFound,
+    }),
+  )
+  .add(
     HttpApiEndpoint.post("acceptInvitation", "/organization/invitations/:invitationId/accept", {
       params: InvitationIdParams,
+      payload: InvitationTokenPayload,
       success: MembershipDto,
       error: [
         InvitationNotFound,
@@ -613,6 +628,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
   .add(
     HttpApiEndpoint.post("rejectInvitation", "/organization/invitations/:invitationId/reject", {
       params: InvitationIdParams,
+      payload: InvitationTokenPayload,
       success: HttpApiSchema.Empty(204),
       error: [InvitationNotFound, InvitationNotPending, InvitationEmailMismatch, HookPoint.HookAborted],
     }),
