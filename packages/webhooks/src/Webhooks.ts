@@ -311,7 +311,11 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           listEndpoints: Effect.fnUntraced(function* () {
             return yield* webhooks.listEndpoints(yield* currentUserPrincipal);
           }),
-          getEndpoint: Effect.fnUntraced(function* ({ params }: { params: WebhooksApi.EndpointIdParams }) {
+          getEndpoint: Effect.fnUntraced(function* ({
+            params,
+          }: {
+            params: WebhooksApi.EndpointIdParams;
+          }) {
             return yield* webhooks.getEndpoint(yield* currentUserPrincipal, params.endpointId);
           }),
           updateEndpoint: Effect.fnUntraced(function* ({
@@ -327,10 +331,18 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
               payload,
             );
           }),
-          deleteEndpoint: Effect.fnUntraced(function* ({ params }: { params: WebhooksApi.EndpointIdParams }) {
+          deleteEndpoint: Effect.fnUntraced(function* ({
+            params,
+          }: {
+            params: WebhooksApi.EndpointIdParams;
+          }) {
             yield* webhooks.deleteEndpoint(yield* currentUserPrincipal, params.endpointId);
           }),
-          rotateSecret: Effect.fnUntraced(function* ({ params }: { params: WebhooksApi.EndpointIdParams }) {
+          rotateSecret: Effect.fnUntraced(function* ({
+            params,
+          }: {
+            params: WebhooksApi.EndpointIdParams;
+          }) {
             return yield* webhooks.rotateSecret(yield* currentUserPrincipal, params.endpointId);
           }),
           listDeliveries: Effect.fnUntraced(function* ({
@@ -340,9 +352,17 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             params: WebhooksApi.EndpointIdParams;
             query: WebhooksApi.ListDeliveriesQuery;
           }) {
-            return yield* webhooks.listDeliveries(yield* currentUserPrincipal, params.endpointId, query);
+            return yield* webhooks.listDeliveries(
+              yield* currentUserPrincipal,
+              params.endpointId,
+              query,
+            );
           }),
-          retryDelivery: Effect.fnUntraced(function* ({ params }: { params: WebhooksApi.DeliveryIdParams }) {
+          retryDelivery: Effect.fnUntraced(function* ({
+            params,
+          }: {
+            params: WebhooksApi.DeliveryIdParams;
+          }) {
             return yield* webhooks.retryDelivery(yield* currentUserPrincipal, params.deliveryId);
           }),
         });
@@ -384,7 +404,12 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           key: `webhooks:admin:${caller.ref.id}`,
           limit: settings.adminRate.limit,
           window: settings.adminRate.window,
-          meta: { group: "webhooks.admin", endpoint: action, rule: "admin", dimension: "principal" },
+          meta: {
+            group: "webhooks.admin",
+            endpoint: action,
+            rule: "admin",
+            dimension: "principal",
+          },
         }).pipe(
           Effect.provideService(RateLimiter.RateLimiter, limiter),
           Effect.provideService(AuthEvents.AuthEvents, events),
@@ -411,9 +436,13 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
         url: string,
         settings: WebhooksConfig.WebhooksConfigShape,
       ) {
-        const syntactic = OutboundUrl.problem("url", url, { allowPrivate: settings.allowPrivateTargets });
+        const syntactic = OutboundUrl.problem("url", url, {
+          allowPrivate: settings.allowPrivateTargets,
+        });
         if (Option.isSome(syntactic)) {
-          return yield* Effect.fail(new WebhooksApi.InvalidWebhookEndpoint({ reason: syntactic.value }));
+          return yield* Effect.fail(
+            new WebhooksApi.InvalidWebhookEndpoint({ reason: syntactic.value }),
+          );
         }
         if (settings.allowPrivateTargets) return;
         const resolved = yield* HostResolver.refusal(url).pipe(
@@ -473,10 +502,12 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
         return (yield* records.listEndpoints).map(toEndpointDto);
       });
 
-      const getEndpoint: WebhooksShape["getEndpoint"] = Effect.fnUntraced(function* (caller, endpointId) {
-        yield* authorize(caller, "getEndpoint");
-        return toEndpointDto(yield* existing(endpointId));
-      });
+      const getEndpoint: WebhooksShape["getEndpoint"] = Effect.fnUntraced(
+        function* (caller, endpointId) {
+          yield* authorize(caller, "getEndpoint");
+          return toEndpointDto(yield* existing(endpointId));
+        },
+      );
 
       const updateEndpoint: WebhooksShape["updateEndpoint"] = Effect.fnUntraced(
         function* (caller, endpointId, input) {
@@ -579,7 +610,8 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
         function* (caller, deliveryId) {
           yield* authorize(caller, "retryDelivery");
           const found = yield* records.findDelivery(deliveryId);
-          if (Option.isNone(found)) return yield* Effect.fail(new WebhooksApi.WebhookDeliveryNotFound());
+          if (Option.isNone(found))
+            return yield* Effect.fail(new WebhooksApi.WebhookDeliveryNotFound());
           if (found.value.status !== "dead") {
             return yield* Effect.fail(new WebhooksApi.WebhookDeliveryNotRetryable());
           }

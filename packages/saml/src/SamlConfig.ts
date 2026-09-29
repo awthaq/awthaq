@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Defects } from "@awthaq/ports";
 
-export interface SamlRateLimit {
+interface SamlRateLimit {
   readonly limit: number;
   readonly window: Duration.Duration;
 }
@@ -39,9 +39,13 @@ export interface SamlConfigShape {
   readonly rateLimits: { readonly login: SamlRateLimit; readonly acs: SamlRateLimit };
 }
 
-export class SamlConfig extends Context.Service<SamlConfig, SamlConfigShape>()("awthaq/saml/Config") {}
+export class SamlConfig extends Context.Service<SamlConfig, SamlConfigShape>()(
+  "awthaq/saml/Config",
+) {}
 
-export type SamlConfigInput = { readonly baseUrl: string } & Partial<Omit<SamlConfigShape, "baseUrl">>;
+export type SamlConfigInput = { readonly baseUrl: string } & Partial<
+  Omit<SamlConfigShape, "baseUrl">
+>;
 
 const MAX_SKEW = Duration.seconds(300);
 
@@ -66,7 +70,10 @@ export const config = (input: SamlConfigInput) =>
         );
       }
       const clockSkew = input.clockSkew ?? Duration.seconds(60);
-      if (Duration.toMillis(clockSkew) > Duration.toMillis(MAX_SKEW) || Duration.toMillis(clockSkew) < 0) {
+      if (
+        Duration.toMillis(clockSkew) > Duration.toMillis(MAX_SKEW) ||
+        Duration.toMillis(clockSkew) < 0
+      ) {
         return yield* Defects.invalidConfiguration(
           "clockSkew",
           "awthaq/saml: clockSkew must be between 0 and 300 seconds (BEH-EA-243)",
@@ -77,7 +84,8 @@ export const config = (input: SamlConfigInput) =>
         baseUrl,
         defaultCallbackURL: input.defaultCallbackURL ?? "/",
         trustedOrigins: input.trustedOrigins ?? [],
-        spEntityId: input.spEntityId ?? ((connectionId) => `${baseUrl}/auth/saml/sp/${connectionId}`),
+        spEntityId:
+          input.spEntityId ?? ((connectionId) => `${baseUrl}/auth/saml/sp/${connectionId}`),
         clockSkew,
         requestTtl: input.requestTtl ?? Duration.minutes(10),
         maxResponseBytes: input.maxResponseBytes ?? 256 * 1024,

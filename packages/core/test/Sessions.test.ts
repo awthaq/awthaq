@@ -102,19 +102,30 @@ const ShortLivedSqlLayer = Sessions.layerSql.pipe(
 );
 
 /** EP-007: the application's own map, tenant id -> that tenant's `SessionConfig` layer. */
-class TenantSessionConfig extends LayerMap.Service<TenantSessionConfig>()("test/TenantSessionConfig", {
-  lookup: (tenantId: string) =>
-    Layer.merge(
-      Layer.succeed(
-        Sessions.SessionConfig,
-        tenantId === "strict"
-          ? { absolute: Duration.minutes(1), idle: Duration.seconds(30), touchEvery: Duration.seconds(5) }
-          : { absolute: Duration.hours(1), idle: Duration.minutes(30), touchEvery: Duration.minutes(1) },
+class TenantSessionConfig extends LayerMap.Service<TenantSessionConfig>()(
+  "test/TenantSessionConfig",
+  {
+    lookup: (tenantId: string) =>
+      Layer.merge(
+        Layer.succeed(
+          Sessions.SessionConfig,
+          tenantId === "strict"
+            ? {
+                absolute: Duration.minutes(1),
+                idle: Duration.seconds(30),
+                touchEvery: Duration.seconds(5),
+              }
+            : {
+                absolute: Duration.hours(1),
+                idle: Duration.minutes(30),
+                touchEvery: Duration.minutes(1),
+              },
+        ),
+        Tenant.configApplied(tenantId),
       ),
-      Tenant.configApplied(tenantId),
-    ),
-  idleTimeToLive: "1 minute",
-}) {}
+    idleTimeToLive: "1 minute",
+  },
+) {}
 
 const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
 
@@ -552,8 +563,12 @@ const suite = (
               ? issued
               : issued.pipe(Effect.provide(TenantSessionConfig.get(tenantId)));
             return {
-              absolute: DateTime.toEpochMillis(session.absoluteExpiresAt) - DateTime.toEpochMillis(session.createdAt),
-              idle: DateTime.toEpochMillis(session.idleExpiresAt) - DateTime.toEpochMillis(session.createdAt),
+              absolute:
+                DateTime.toEpochMillis(session.absoluteExpiresAt) -
+                DateTime.toEpochMillis(session.createdAt),
+              idle:
+                DateTime.toEpochMillis(session.idleExpiresAt) -
+                DateTime.toEpochMillis(session.createdAt),
             };
           });
         const strict = yield* lifetimes("strict");

@@ -80,9 +80,12 @@ export const readAssertion = Effect.fnUntraced(function* (signedXml: string) {
     Effect.mapError(() => new AssertionInvalid({ reason: "signedContentUnreadable" })),
   );
   const isResponse = SafeXml.isNamed(root, samlp("Response"));
-  const assertions = SafeXml.isNamed(root, saml("Assertion")) ? [root] : SafeXml.named(root, saml("Assertion"));
+  const assertions = SafeXml.isNamed(root, saml("Assertion"))
+    ? [root]
+    : SafeXml.named(root, saml("Assertion"));
   const assertion = assertions[0];
-  if (assertions.length !== 1 || assertion === undefined) return yield* reject("assertionCardinality");
+  if (assertions.length !== 1 || assertion === undefined)
+    return yield* reject("assertionCardinality");
 
   const times = (element: Element, names: ReadonlyArray<string>) => {
     const parsed: Array<DateTime.Utc | undefined> = [];
@@ -99,9 +102,16 @@ export const readAssertion = Effect.fnUntraced(function* (signedXml: string) {
   if (issuer === undefined || issuer === "") return yield* reject("noIssuer");
 
   const subject = SafeXml.childrenNamed(assertion, saml("Subject"))[0];
-  const nameIdElement = subject === undefined ? undefined : SafeXml.childrenNamed(subject, saml("NameID"))[0];
-  const nameIdValue = nameIdElement === undefined ? undefined : SafeXml.textOf(nameIdElement)?.trim();
-  if (subject === undefined || nameIdElement === undefined || nameIdValue === undefined || nameIdValue === "") {
+  const nameIdElement =
+    subject === undefined ? undefined : SafeXml.childrenNamed(subject, saml("NameID"))[0];
+  const nameIdValue =
+    nameIdElement === undefined ? undefined : SafeXml.textOf(nameIdElement)?.trim();
+  if (
+    subject === undefined ||
+    nameIdElement === undefined ||
+    nameIdValue === undefined ||
+    nameIdValue === ""
+  ) {
     return yield* reject("noNameId");
   }
 
@@ -131,9 +141,14 @@ export const readAssertion = Effect.fnUntraced(function* (signedXml: string) {
     for (const condition of SafeXml.childElements(conditions)) {
       if (SafeXml.isNamed(condition, saml("AudienceRestriction"))) {
         audienceRestrictions.push(
-          SafeXml.childrenNamed(condition, saml("Audience")).map((audience) => SafeXml.textOf(audience)?.trim() ?? ""),
+          SafeXml.childrenNamed(condition, saml("Audience")).map(
+            (audience) => SafeXml.textOf(audience)?.trim() ?? "",
+          ),
         );
-      } else if (!SafeXml.isNamed(condition, saml("OneTimeUse")) && !SafeXml.isNamed(condition, saml("ProxyRestriction"))) {
+      } else if (
+        !SafeXml.isNamed(condition, saml("OneTimeUse")) &&
+        !SafeXml.isNamed(condition, saml("ProxyRestriction"))
+      ) {
         // A condition this service provider does not understand invalidates the assertion (SAML core 2.5.1.1).
         return yield* reject("unknownCondition");
       }
@@ -166,7 +181,8 @@ export const readAssertion = Effect.fnUntraced(function* (signedXml: string) {
   if (isResponse) {
     responseDestination = SafeXml.attribute(root, "Destination");
     const status = SafeXml.childrenNamed(root, samlp("Status"))[0];
-    const code = status === undefined ? undefined : SafeXml.childrenNamed(status, samlp("StatusCode"))[0];
+    const code =
+      status === undefined ? undefined : SafeXml.childrenNamed(status, samlp("StatusCode"))[0];
     responseSucceeded = code !== undefined && SafeXml.attribute(code, "Value") === STATUS_SUCCESS;
   }
 
@@ -217,7 +233,10 @@ export const validateAssertion = Effect.fnUntraced(function* (
 
   if (assertion.responseSucceeded === false) return yield* reject("statusNotSuccess");
   // BEH-EA-242: a signed Response's Destination, when present, is this ACS.
-  if (assertion.responseDestination !== undefined && assertion.responseDestination !== expected.acsUrl) {
+  if (
+    assertion.responseDestination !== undefined &&
+    assertion.responseDestination !== expected.acsUrl
+  ) {
     return yield* reject("destinationMismatch");
   }
 
@@ -242,14 +261,19 @@ export const validateAssertion = Effect.fnUntraced(function* (
       confirmation.inResponseTo === expected.inResponseTo &&
       confirmation.notOnOrAfter !== undefined &&
       millis(expected.now) < millis(confirmation.notOnOrAfter) + skew &&
-      (confirmation.notBefore === undefined || millis(expected.now) >= millis(confirmation.notBefore) - skew),
+      (confirmation.notBefore === undefined ||
+        millis(expected.now) >= millis(confirmation.notBefore) - skew),
   );
   if (!confirmed) return yield* reject("confirmationMismatch");
 
   // BEH-EA-243: an assertion without an upper bound is a bearer credential that never expires.
   if (assertion.notOnOrAfter === undefined) return yield* reject("noNotOnOrAfter");
-  if (millis(expected.now) >= millis(assertion.notOnOrAfter) + skew) return yield* reject("expired");
-  if (assertion.notBefore !== undefined && millis(expected.now) < millis(assertion.notBefore) - skew) {
+  if (millis(expected.now) >= millis(assertion.notOnOrAfter) + skew)
+    return yield* reject("expired");
+  if (
+    assertion.notBefore !== undefined &&
+    millis(expected.now) < millis(assertion.notBefore) - skew
+  ) {
     return yield* reject("notYetValid");
   }
   return assertion;

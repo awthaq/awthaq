@@ -19,10 +19,15 @@ const run = <A, E>(effect: Effect.Effect<A, E, import("effect/Crypto").Crypto>) 
   effect.pipe(Effect.provide(NodeCrypto.layer));
 
 describe("WebhookSignature.sign", () => {
-  it.effect("matches an independent HMAC-SHA256 of `id.timestamp.body` under the decoded secret", () =>
-    Effect.gen(function* () {
-      assert.strictEqual(yield* WebhookSignature.sign(secret, message), oracle(secretBytes, message));
-    }).pipe(run),
+  it.effect(
+    "matches an independent HMAC-SHA256 of `id.timestamp.body` under the decoded secret",
+    () =>
+      Effect.gen(function* () {
+        assert.strictEqual(
+          yield* WebhookSignature.sign(secret, message),
+          oracle(secretBytes, message),
+        );
+      }).pipe(run),
   );
 
   it.effect("generated secrets are whsec_-prefixed, 32 random bytes, and distinct", () =>
@@ -69,9 +74,21 @@ describe("WebhookSignature.verify", () => {
       const headers = yield* headersOf();
       const attempts = [
         { body: '{"a":2}', secrets: [secret], headers },
-        { body: message.body, secrets: [Redacted.make("whsec_" + Buffer.alloc(32, 2).toString("base64"))], headers },
-        { body: message.body, secrets: [secret], headers: { ...headers, "webhook-signature": "v1,AAAA" } },
-        { body: message.body, secrets: [secret], headers: { ...headers, "webhook-id": "evt_other" } },
+        {
+          body: message.body,
+          secrets: [Redacted.make("whsec_" + Buffer.alloc(32, 2).toString("base64"))],
+          headers,
+        },
+        {
+          body: message.body,
+          secrets: [secret],
+          headers: { ...headers, "webhook-signature": "v1,AAAA" },
+        },
+        {
+          body: message.body,
+          secrets: [secret],
+          headers: { ...headers, "webhook-id": "evt_other" },
+        },
       ];
       for (const attempt of attempts) {
         const failure = yield* WebhookSignature.verify({
@@ -126,25 +143,30 @@ describe("WebhookSignature.verify", () => {
     }).pipe(run),
   );
 
-  it.effect("accepts a signature from either secret during a rotation, and ignores unknown versions", () =>
-    Effect.gen(function* () {
-      const old = Redacted.make(`whsec_${Buffer.alloc(32, 1).toString("base64")}`);
-      // The sender signed with old and new; a receiver that only knows `old` still verifies.
-      const both = yield* WebhookSignature.headersFor([secret, old], message);
-      yield* WebhookSignature.verify({
-        secrets: [old],
-        headers: { ...both },
-        body: message.body,
-        nowSeconds: message.timestamp,
-      });
-      // A `v2,` value is not a signature this scheme defines: it is ignored, not accepted.
-      const failure = yield* WebhookSignature.verify({
-        secrets: [secret],
-        headers: { ...both, "webhook-signature": both["webhook-signature"].replaceAll("v1,", "v2,") },
-        body: message.body,
-        nowSeconds: message.timestamp,
-      }).pipe(Effect.flip);
-      assert.strictEqual(failure.reason, "noMatchingSignature");
-    }).pipe(run),
+  it.effect(
+    "accepts a signature from either secret during a rotation, and ignores unknown versions",
+    () =>
+      Effect.gen(function* () {
+        const old = Redacted.make(`whsec_${Buffer.alloc(32, 1).toString("base64")}`);
+        // The sender signed with old and new; a receiver that only knows `old` still verifies.
+        const both = yield* WebhookSignature.headersFor([secret, old], message);
+        yield* WebhookSignature.verify({
+          secrets: [old],
+          headers: { ...both },
+          body: message.body,
+          nowSeconds: message.timestamp,
+        });
+        // A `v2,` value is not a signature this scheme defines: it is ignored, not accepted.
+        const failure = yield* WebhookSignature.verify({
+          secrets: [secret],
+          headers: {
+            ...both,
+            "webhook-signature": both["webhook-signature"].replaceAll("v1,", "v2,"),
+          },
+          body: message.body,
+          nowSeconds: message.timestamp,
+        }).pipe(Effect.flip);
+        assert.strictEqual(failure.reason, "noMatchingSignature");
+      }).pipe(run),
   );
 });

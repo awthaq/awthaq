@@ -1030,7 +1030,8 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 
       // TC-003: the browser's prompt must not outlive the challenge it answers.
       if (
-        Duration.toMillis(builtConfig.ceremonyTimeout) > Duration.toMillis(ChallengeStore.CHALLENGE_TTL)
+        Duration.toMillis(builtConfig.ceremonyTimeout) >
+        Duration.toMillis(ChallengeStore.CHALLENGE_TTL)
       ) {
         return yield* Defects.invalidConfiguration(
           "ceremonyTimeout",

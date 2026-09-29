@@ -3,7 +3,16 @@
 // same layer graph an application builds — plus helpers that play the two other parties: the IdP (a signed
 // response for a given AuthnRequest) and the browser (the state cookie).
 import { Api } from "@awthaq/api";
-import { Accounts, AuditLog, AuthEvents, Hooks, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  AuthEvents,
+  Hooks,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import {
   ActiveContextRecords,
   InvitationRecords,
@@ -27,12 +36,26 @@ import * as Saml from "../src/Saml.ts";
 import * as SamlConnections from "../src/SamlConnections.ts";
 import * as SamlRecords from "../src/SamlRecords.ts";
 import * as XmlSignatureNode from "../src/XmlSignatureNode.ts";
-import { ACS_URL, idp, NOW, responseXml, signedResponse, SP_ENTITY_ID_PREFIX, type ResponseOptions, type SignOptions } from "./samlFixtures.ts";
+import {
+  ACS_URL,
+  idp,
+  NOW,
+  responseXml,
+  signedResponse,
+  SP_ENTITY_ID_PREFIX,
+  type ResponseOptions,
+  type SignOptions,
+} from "./samlFixtures.ts";
 
 export const BASE_URL = "https://sp.example.com";
 export const IDP_ENTITY_ID = "https://idp.example.com/metadata";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory, Accounts.layerMemory, Verification.layerMemory).pipe(
+const CoreLive = Layer.mergeAll(
+  Sessions.layerMemory,
+  Users.layerMemory,
+  Accounts.layerMemory,
+  Verification.layerMemory,
+).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Hooks.HooksLive),

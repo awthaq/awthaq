@@ -37,7 +37,9 @@ export const ConnectionQuery = Schema.Struct({
   connection: Schema.String.pipe(
     Schema.check(
       Schema.makeFilter((value: string) =>
-        value.length > 0 && value.length <= 255 ? undefined : "a connection id of 1 to 255 characters",
+        value.length > 0 && value.length <= 255
+          ? undefined
+          : "a connection id of 1 to 255 characters",
       ),
     ),
   ),
@@ -62,7 +64,9 @@ export const SamlGroup = HttpApiGroup.make("saml")
   .add(
     HttpApiEndpoint.get("metadata", "/auth/saml/metadata", {
       query: ConnectionQuery,
-      success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "application/samlmetadata+xml" })),
+      success: Schema.String.pipe(
+        HttpApiSchema.asText({ contentType: "application/samlmetadata+xml" }),
+      ),
       error: SamlConnectionNotFound,
     }),
   )

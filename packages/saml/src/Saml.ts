@@ -59,7 +59,12 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SafeXml from "./SafeXml.ts";
 import * as SamlApi from "./SamlApi.ts";
-import { AssertionInvalid, readAssertion, validateAssertion, type SignedAssertion } from "./SamlAssertion.ts";
+import {
+  AssertionInvalid,
+  readAssertion,
+  validateAssertion,
+  type SignedAssertion,
+} from "./SamlAssertion.ts";
 import * as SamlConfig from "./SamlConfig.ts";
 import { trustSetOf } from "./SamlConnections.ts";
 import { authnRequestXml, redirectLocation, spMetadataXml } from "./SamlProtocol.ts";
@@ -88,7 +93,9 @@ type IssuedSession = Effect.Success<ReturnType<Sessions.SessionsShape["issue"]>>
 
 export interface SamlShape {
   /** BEH-EA-241: the SP metadata document for one connection. */
-  readonly metadata: (connectionId: string) => Effect.Effect<string, SamlApi.SamlConnectionNotFound>;
+  readonly metadata: (
+    connectionId: string,
+  ) => Effect.Effect<string, SamlApi.SamlConnectionNotFound>;
   /** SP-initiated login: reserves the AuthnRequest id and returns the IdP redirect and the state the browser cookie must carry. */
   readonly authnRequest: (
     connectionId: string,
@@ -155,8 +162,10 @@ const samlMigrations: Migrations.Migrations = [
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
-        pg: () => sql`ALTER TABLE saml_connection ADD COLUMN "trustsEmail" BOOLEAN NOT NULL DEFAULT FALSE`,
-        sqlite: () => sql`ALTER TABLE saml_connection ADD COLUMN "trustsEmail" INTEGER NOT NULL DEFAULT 0`,
+        pg: () =>
+          sql`ALTER TABLE saml_connection ADD COLUMN "trustsEmail" BOOLEAN NOT NULL DEFAULT FALSE`,
+        sqlite: () =>
+          sql`ALTER TABLE saml_connection ADD COLUMN "trustsEmail" INTEGER NOT NULL DEFAULT 0`,
         orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
@@ -182,7 +191,10 @@ const hexOf = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /** A `callbackURL` is a relative path or an origin the deployment trusts; anything else is the default (BEH-EA-128's rule, as OAuth applies it). */
-const resolveCallbackURL = (raw: string | undefined, settings: SamlConfig.SamlConfigShape): string => {
+const resolveCallbackURL = (
+  raw: string | undefined,
+  settings: SamlConfig.SamlConfigShape,
+): string => {
   if (raw === undefined) return settings.defaultCallbackURL;
   if (raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/\\")) return raw;
   const parsed = URL.parse(raw);
@@ -194,7 +206,10 @@ const resolveCallbackURL = (raw: string | undefined, settings: SamlConfig.SamlCo
 };
 
 /** First present attribute (by any of `names`, case-insensitively), first value. */
-const attributeOf = (assertion: SignedAssertion, names: ReadonlyArray<string>): string | undefined => {
+const attributeOf = (
+  assertion: SignedAssertion,
+  names: ReadonlyArray<string>,
+): string | undefined => {
   const wanted = names.map((name) => name.toLowerCase());
   for (const [name, values] of Object.entries(assertion.attributes)) {
     if (!wanted.includes(name.toLowerCase())) continue;
@@ -238,7 +253,9 @@ const requestCookieOptions = {
 } as const;
 
 const expireRequestCookie = HttpEffect.appendPreResponseHandler((_request, response) =>
-  HttpServerResponse.expireCookie(response, REQUEST_COOKIE, requestCookieOptions).pipe(Effect.orDie),
+  HttpServerResponse.expireCookie(response, REQUEST_COOKIE, requestCookieOptions).pipe(
+    Effect.orDie,
+  ),
 );
 
 const noReferrer = HttpEffect.appendPreResponseHandler((_request, response) =>
@@ -366,74 +383,84 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
             Option.match({
               onNone: () => Effect.succeedNone,
               onSome: (connection) =>
-                orgs.findById(connection.organizationId).pipe(
-                  Effect.map((organization) =>
-                    Option.isSome(organization) && Option.isNone(organization.value.suspendedAt)
-                      ? Option.some(connection)
-                      : Option.none<SamlRecords.ConnectionRecord>(),
+                orgs
+                  .findById(connection.organizationId)
+                  .pipe(
+                    Effect.map((organization) =>
+                      Option.isSome(organization) && Option.isNone(organization.value.suspendedAt)
+                        ? Option.some(connection)
+                        : Option.none<SamlRecords.ConnectionRecord>(),
+                    ),
                   ),
-                ),
             }),
           ),
         );
 
       const metadata: SamlShape["metadata"] = Effect.fnUntraced(function* (connectionId) {
         const connection = yield* usableConnection(connectionId);
-        if (Option.isNone(connection)) return yield* Effect.fail(new SamlApi.SamlConnectionNotFound());
+        if (Option.isNone(connection))
+          return yield* Effect.fail(new SamlApi.SamlConnectionNotFound());
         return spMetadataXml({ entityId: settings.spEntityId(connection.value.id), acsUrl });
       });
 
-      const authnRequest: SamlShape["authnRequest"] = Effect.fnUntraced(function* (connectionId, input) {
-        yield* rateLimit("login", input.ip);
-        const connection = yield* usableConnection(connectionId);
-        if (Option.isNone(connection)) return yield* Effect.fail(new SamlApi.SamlConnectionNotFound());
-        const uuid = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
-        // The AuthnRequest id is an NCName: a letter or underscore first.
-        const requestId = `_${uuid}`;
-        const identifier = `${REQUEST_PREFIX}${uuid}`;
-        const { value } = yield* verification.issue({
-          identifier,
-          ttl: settings.requestTtl,
-          payload: {
-            connectionId,
-            requestId,
-            callbackURL: resolveCallbackURL(input.callbackURL, settings),
-          },
-        });
-        const now = yield* DateTime.now;
-        const location = redirectLocation(
-          connection.value.ssoUrl,
-          authnRequestXml({
-            id: requestId,
-            issueInstant: now,
-            destination: connection.value.ssoUrl,
-            acsUrl,
-            issuer: settings.spEntityId(connectionId),
-          }),
-        );
-        // The cookie carries `<identifier>.<secret>`: the browser proves it is the one that started this login.
-        return { location, state: Redacted.make(`${identifier}.${Redacted.value(value)}`) };
-      });
+      const authnRequest: SamlShape["authnRequest"] = Effect.fnUntraced(
+        function* (connectionId, input) {
+          yield* rateLimit("login", input.ip);
+          const connection = yield* usableConnection(connectionId);
+          if (Option.isNone(connection))
+            return yield* Effect.fail(new SamlApi.SamlConnectionNotFound());
+          const uuid = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+          // The AuthnRequest id is an NCName: a letter or underscore first.
+          const requestId = `_${uuid}`;
+          const identifier = `${REQUEST_PREFIX}${uuid}`;
+          const { value } = yield* verification.issue({
+            identifier,
+            ttl: settings.requestTtl,
+            payload: {
+              connectionId,
+              requestId,
+              callbackURL: resolveCallbackURL(input.callbackURL, settings),
+            },
+          });
+          const now = yield* DateTime.now;
+          const location = redirectLocation(
+            connection.value.ssoUrl,
+            authnRequestXml({
+              id: requestId,
+              issueInstant: now,
+              destination: connection.value.ssoUrl,
+              acsUrl,
+              issuer: settings.spEntityId(connectionId),
+            }),
+          );
+          // The cookie carries `<identifier>.<secret>`: the browser proves it is the one that started this login.
+          return { location, state: Redacted.make(`${identifier}.${Redacted.value(value)}`) };
+        },
+      );
 
       // ---- the ACS chain -------------------------------------------------------------------------------
 
       /** Steps 1-3: the state cookie, the size cap, and the single-consume request. */
       const consumeRequest = Effect.fnUntraced(function* (cookieState: string | undefined) {
         // Unsolicited (IdP-initiated) responses, and any browser that did not start this login, stop here.
-        if (cookieState === undefined) return yield* Effect.fail(new AssertionInvalid({ reason: "noRequestState" }));
+        if (cookieState === undefined)
+          return yield* Effect.fail(new AssertionInvalid({ reason: "noRequestState" }));
         const dot = cookieState.indexOf(".");
         const identifier = dot < 0 ? "" : cookieState.slice(0, dot);
         const secret = dot < 0 ? "" : cookieState.slice(dot + 1);
         if (!identifier.startsWith(REQUEST_PREFIX) || secret === "") {
           return yield* Effect.fail(new AssertionInvalid({ reason: "requestStateMalformed" }));
         }
-        const consumed = yield* verification.consume(identifier, Redacted.make(secret)).pipe(
-          Effect.catchTag("Verification/TokenConsumed", () =>
-            Effect.fail(new AssertionInvalid({ reason: "requestUnknownOrConsumed" })),
-          ),
-        );
+        const consumed = yield* verification
+          .consume(identifier, Redacted.make(secret))
+          .pipe(
+            Effect.catchTag("Verification/TokenConsumed", () =>
+              Effect.fail(new AssertionInvalid({ reason: "requestUnknownOrConsumed" })),
+            ),
+          );
         const payload = decodeRequestPayload(consumed.payload);
-        if (Option.isNone(payload)) return yield* Effect.fail(new AssertionInvalid({ reason: "requestPayloadInvalid" }));
+        if (Option.isNone(payload))
+          return yield* Effect.fail(new AssertionInvalid({ reason: "requestPayloadInvalid" }));
         return payload.value;
       });
 
@@ -445,7 +472,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
           return yield* Effect.fail(new AssertionInvalid({ reason: "tooLarge" }));
         }
         const bytes = Encoding.decodeBase64(compact);
-        if (Result.isFailure(bytes)) return yield* Effect.fail(new AssertionInvalid({ reason: "notBase64" }));
+        if (Result.isFailure(bytes))
+          return yield* Effect.fail(new AssertionInvalid({ reason: "notBase64" }));
         if (bytes.success.length > settings.maxResponseBytes) {
           return yield* Effect.fail(new AssertionInvalid({ reason: "tooLarge" }));
         }
@@ -471,11 +499,22 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
                 { namespace: "urn:oasis:names:tc:SAML:2.0:assertion", localName: "Assertion" },
                 { namespace: "urn:oasis:names:tc:SAML:2.0:protocol", localName: "Response" },
               ],
-              exactlyOne: [{ namespace: "urn:oasis:names:tc:SAML:2.0:assertion", localName: "Assertion" }],
-              forbidden: [{ namespace: "urn:oasis:names:tc:SAML:2.0:assertion", localName: "EncryptedAssertion" }],
+              exactlyOne: [
+                { namespace: "urn:oasis:names:tc:SAML:2.0:assertion", localName: "Assertion" },
+              ],
+              forbidden: [
+                {
+                  namespace: "urn:oasis:names:tc:SAML:2.0:assertion",
+                  localName: "EncryptedAssertion",
+                },
+              ],
             },
           })
-          .pipe(Effect.mapError((error) => new AssertionInvalid({ reason: `signature:${error.reason}` })));
+          .pipe(
+            Effect.mapError(
+              (error) => new AssertionInvalid({ reason: `signature:${error.reason}` }),
+            ),
+          );
         const assertion = yield* readAssertion(verified.signedXml);
         const now = yield* DateTime.now;
         yield* validateAssertion(assertion, {
@@ -498,7 +537,12 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         }
         // One-time assertion id: kept until the assertion could no longer pass the time window anyway.
         const digest = hexOf(
-          yield* crypto.digest("SHA-256", new TextEncoder().encode(`${connection.idpEntityId}|${assertion.id}`)).pipe(Effect.orDie),
+          yield* crypto
+            .digest(
+              "SHA-256",
+              new TextEncoder().encode(`${connection.idpEntityId}|${assertion.id}`),
+            )
+            .pipe(Effect.orDie),
         );
         const remaining = Math.max(
           0,
@@ -508,7 +552,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
           identifier: `${ASSERTION_PREFIX}${digest}`,
           ttl: Duration.millis(remaining + Duration.toMillis(settings.clockSkew) + 60_000),
         });
-        if (!fresh || assertion.id === "") return yield* Effect.fail(new AssertionInvalid({ reason: "assertionReplayed" }));
+        if (!fresh || assertion.id === "")
+          return yield* Effect.fail(new AssertionInvalid({ reason: "assertionReplayed" }));
         return assertion;
       });
 
@@ -521,13 +566,18 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         const providerId = providerIdOf(connection.organizationId, connection.id);
         const subject = assertion.nameId.value;
         const email = emailOf(assertion);
-        const linked = yield* accounts.findByProviderSubject(providerId, subject, connection.idpEntityId);
+        const linked = yield* accounts.findByProviderSubject(
+          providerId,
+          subject,
+          connection.idpEntityId,
+        );
 
         const targetUserId: Users.UserId = yield* Option.match(linked, {
           onSome: (account) => Effect.succeed(account.userId),
           onNone: () =>
             Effect.gen(function* () {
-              const existing = email === undefined ? Option.none() : yield* users.findByEmail(email);
+              const existing =
+                email === undefined ? Option.none() : yield* users.findByEmail(email);
               if (Option.isSome(existing)) {
                 // BEH-EA-245: never linked by email alone. An explicitly trusted connection may link to a local
                 // account whose own address is already verified; every other case is the uniform rejection.
@@ -546,7 +596,11 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
               }
               const name = attributeOf(assertion, NAME_ATTRIBUTES) ?? email ?? subject;
               const vetoed = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
-                beforeSignUp.run({ ...(email === undefined ? {} : { email }), name, strategy: providerId }),
+                beforeSignUp.run({
+                  ...(email === undefined ? {} : { email }),
+                  name,
+                  strategy: providerId,
+                }),
               );
               const created = yield* sqlTransaction
                 .withTransaction(
@@ -566,7 +620,12 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
                         Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
                       );
                     yield* accounts
-                      .link({ userId: user.id, providerId, subject, issuer: connection.idpEntityId })
+                      .link({
+                        userId: user.id,
+                        providerId,
+                        subject,
+                        issuer: connection.idpEntityId,
+                      })
                       .pipe(Effect.catchTag("AccountAlreadyLinked", Effect.die));
                     return user;
                   }),
@@ -583,7 +642,9 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         });
 
         // SCP-001/BAM-005: THE shared sign-in gate — the IdP proved the identity; a suspended user still gets no session.
-        const user = yield* users.findById(targetUserId).pipe(Effect.orDie, Effect.tap(Users.assertCanSignIn));
+        const user = yield* users
+          .findById(targetUserId)
+          .pipe(Effect.orDie, Effect.tap(Users.assertCanSignIn));
         const userEmail = Users.emailOf(user);
         yield* HookPoint.aborted(Hooks.BeforeSignIn)(
           beforeSignIn.run({
@@ -602,7 +663,11 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
           },
           amr: ["fed"],
         });
-        yield* events.publish({ _tag: "auth.user.signedIn", userId: targetUserId, strategy: providerId });
+        yield* events.publish({
+          _tag: "auth.user.signedIn",
+          userId: targetUserId,
+          strategy: providerId,
+        });
         yield* afterSignIn.run({ userId: targetUserId, strategy: providerId });
         return issued;
       });
@@ -629,7 +694,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
           const request = yield* consumeRequest(input.cookieState);
           const xml = yield* decodeResponse(input.samlResponse);
           const connection = yield* usableConnection(request.connectionId);
-          if (Option.isNone(connection)) return yield* Effect.fail(new AssertionInvalid({ reason: "connectionUnavailable" }));
+          if (Option.isNone(connection))
+            return yield* Effect.fail(new AssertionInvalid({ reason: "connectionUnavailable" }));
           strategy = providerIdOf(connection.value.organizationId, connection.value.id);
           const assertion = yield* verifyResponse(xml, connection.value, request.requestId);
           const run = signIn(connection.value, assertion, input);

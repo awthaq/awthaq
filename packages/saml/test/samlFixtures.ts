@@ -40,9 +40,7 @@ export const NOW = DateTime.makeUnsafe(Date.UTC(2026, 8, 29, 12, 0, 0));
 export const NOT_BEFORE = DateTime.makeUnsafe(Date.UTC(2026, 0, 1));
 export const NOT_AFTER = DateTime.makeUnsafe(Date.UTC(2036, 0, 1));
 
-export const trustOf = (
-  ...identities: ReadonlyArray<Identity>
-): XmlSignature.TrustSet => ({
+export const trustOf = (...identities: ReadonlyArray<Identity>): XmlSignature.TrustSet => ({
   certificates: identities.map((entry) => ({
     fingerprint: entry.fingerprint,
     pem: entry.cert,
@@ -63,7 +61,7 @@ export const NS = {
 
 export const RESPONSE: XmlSignature.ElementName = { namespace: NS.samlp, localName: "Response" };
 export const ASSERTION: XmlSignature.ElementName = { namespace: NS.saml, localName: "Assertion" };
-export const ENCRYPTED_ASSERTION: XmlSignature.ElementName = {
+const ENCRYPTED_ASSERTION: XmlSignature.ElementName = {
   namespace: NS.saml,
   localName: "EncryptedAssertion",
 };
@@ -158,7 +156,9 @@ export const ALGORITHM = {
 const signElement = (
   xml: string,
   id: string,
-  options: Required<Pick<SignOptions, "who" | "signatureAlgorithm" | "digestAlgorithm" | "keyInfo">>,
+  options: Required<
+    Pick<SignOptions, "who" | "signatureAlgorithm" | "digestAlgorithm" | "keyInfo">
+  >,
 ): string => {
   const signer = new SignedXml({
     privateKey: options.who.key,
@@ -191,18 +191,24 @@ export const signedResponse = (xml: string, options: SignOptions = {}): string =
   const assertionId = options.assertionId ?? "_assert1";
   const responseId = options.responseId ?? "_resp1";
   let signed = xml;
-  if (target === "assertion" || target === "both") signed = signElement(signed, assertionId, resolved);
-  if (target === "response" || target === "both") signed = signElement(signed, responseId, resolved);
+  if (target === "assertion" || target === "both")
+    signed = signElement(signed, assertionId, resolved);
+  if (target === "response" || target === "both")
+    signed = signElement(signed, responseId, resolved);
   return signed;
 };
 
 // ---- DOM editing for the attack documents ---------------------------------------------------------
 
 export const parseDom = (xml: string): Document => new DOMParser().parseFromString(xml, "text/xml");
-export const serialize = (document: Document): string => new XMLSerializer().serializeToString(document);
+export const serialize = (document: Document): string =>
+  new XMLSerializer().serializeToString(document);
 
-export const elementsNamed = (document: Document, namespace: string, localName: string): Array<Element> =>
-  Array.from(document.getElementsByTagNameNS(namespace, localName));
+export const elementsNamed = (
+  document: Document,
+  namespace: string,
+  localName: string,
+): Array<Element> => Array.from(document.getElementsByTagNameNS(namespace, localName));
 
 export const first = <A>(items: ReadonlyArray<A>, what: string): A => {
   const found = items[0];
@@ -224,5 +230,8 @@ export const cloneOf = (element: Element): Element => {
 };
 
 /** Every fixture asserts what it expects of the library's own success path before attacking it. */
-export const verifyWith = (xml: string, trust: XmlSignature.TrustSet, policy: XmlSignature.VerifyPolicy = samlPolicy) =>
-  XmlSignatureNode.verifyAt({ xml, trust, policy }, NOW);
+export const verifyWith = (
+  xml: string,
+  trust: XmlSignature.TrustSet,
+  policy: XmlSignature.VerifyPolicy = samlPolicy,
+) => XmlSignatureNode.verifyAt({ xml, trust, policy }, NOW);

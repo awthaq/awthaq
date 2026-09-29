@@ -204,7 +204,10 @@ export const layerMemory = Layer.effect(
     const state = yield* Ref.make<State>({ endpoints: [], deliveries: [] });
 
     /** Applies `change` to one endpoint; `NotFound` when there is none. */
-    const modifyEndpoint = (id: string, change: (row: EndpointRecord, now: DateTime.Utc) => EndpointRecord) =>
+    const modifyEndpoint = (
+      id: string,
+      change: (row: EndpointRecord, now: DateTime.Utc) => EndpointRecord,
+    ) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
         const outcome = yield* Ref.modify(
@@ -258,10 +261,12 @@ export const layerMemory = Layer.effect(
           for (const row of rows) {
             const taken =
               s.deliveries.some(
-                (existing) => existing.endpointId === row.endpointId && existing.eventId === row.eventId,
+                (existing) =>
+                  existing.endpointId === row.endpointId && existing.eventId === row.eventId,
               ) ||
               added.some(
-                (existing) => existing.endpointId === row.endpointId && existing.eventId === row.eventId,
+                (existing) =>
+                  existing.endpointId === row.endpointId && existing.eventId === row.eventId,
               );
             if (taken) continue;
             added.push({
@@ -362,7 +367,9 @@ export const layerMemory = Layer.effect(
       clearDead: (id) =>
         Ref.update(state, (s) => ({
           ...s,
-          endpoints: s.endpoints.map((row) => (row.id === id ? { ...row, consecutiveDead: 0 } : row)),
+          endpoints: s.endpoints.map((row) =>
+            row.id === id ? { ...row, consecutiveDead: 0 } : row,
+          ),
         })),
       deleteEndpoint: (id) =>
         Effect.gen(function* () {
@@ -468,7 +475,9 @@ export const layerMemory = Layer.effect(
       listBySubject: (userId) =>
         Ref.get(state).pipe(
           Effect.map((s) =>
-            byCreation(s.deliveries.filter((row) => Option.getOrNull(row.subjectUserId) === userId)),
+            byCreation(
+              s.deliveries.filter((row) => Option.getOrNull(row.subjectUserId) === userId),
+            ),
           ),
         ),
     } satisfies WebhookRecordsShape;
@@ -689,7 +698,8 @@ export const layerSql = Layer.effect(
     });
 
     const sealed = <A, E>(effect: Effect.Effect<A, E>) => Effect.orDie(effect);
-    const requireRow = <A>(id: string) =>
+    const requireRow =
+      <A>(id: string) =>
       (row: Option.Option<A>): Effect.Effect<A, WebhookRecordNotFound> =>
         Option.isSome(row) ? Effect.succeed(row.value) : Effect.fail(notFound(id));
 
@@ -729,7 +739,8 @@ export const layerSql = Layer.effect(
             writeMutable({
               id,
               url: patch.url ?? current.url,
-              description: patch.description === undefined ? current.description : patch.description,
+              description:
+                patch.description === undefined ? current.description : patch.description,
               eventTags: patch.eventTags ?? current.eventTags,
               updatedAt: now,
             }),
@@ -826,7 +837,11 @@ export const layerSql = Layer.effect(
             "lastError" = ${outcome.error ?? null}, "completedAt" = ${wireDate(outcome.at)}
           WHERE id = ${id}`).pipe(Effect.asVoid),
       redrive: (id, now) =>
-        redriveOne({ id, now }).pipe(sealed, Effect.flatMap(requireRow(id)), Effect.map(toDelivery)),
+        redriveOne({ id, now }).pipe(
+          sealed,
+          Effect.flatMap(requireRow(id)),
+          Effect.map(toDelivery),
+        ),
       listDeliveries: ({ endpointId, status, before, limit }) =>
         listDeliveries({ endpointId, status: status ?? null, before: before ?? null, limit }).pipe(
           Effect.map((rows) => rows.map(toDelivery)),
@@ -842,7 +857,10 @@ export const layerSql = Layer.effect(
           Effect.asVoid,
         ),
       listBySubject: (userId) =>
-        bySubject(userId).pipe(Effect.map((rows) => rows.map(toDelivery)), sealed),
+        bySubject(userId).pipe(
+          Effect.map((rows) => rows.map(toDelivery)),
+          sealed,
+        ),
     } satisfies WebhookRecordsShape;
   }),
 );

@@ -52,7 +52,10 @@ export const redirectLocation = (
   relayState?: string,
 ): string => {
   const url = new URL(ssoUrl);
-  url.searchParams.set("SAMLRequest", deflateRawSync(Buffer.from(requestXml, "utf8")).toString("base64"));
+  url.searchParams.set(
+    "SAMLRequest",
+    deflateRawSync(Buffer.from(requestXml, "utf8")).toString("base64"),
+  );
   if (relayState !== undefined) url.searchParams.set("RelayState", relayState);
   return url.toString();
 };
@@ -62,7 +65,10 @@ export const redirectLocation = (
  * `AuthnRequestsSigned="false"`; bearer POST binding only. Give it to the IdP administrator (or an IdP that
  * imports metadata by URL).
  */
-export const spMetadataXml = (input: { readonly entityId: string; readonly acsUrl: string }): string =>
+export const spMetadataXml = (input: {
+  readonly entityId: string;
+  readonly acsUrl: string;
+}): string =>
   `<?xml version="1.0" encoding="UTF-8"?>` +
   `<md:EntityDescriptor xmlns:md="${NS_METADATA}" entityID="${escapeXml(input.entityId)}">` +
   `<md:SPSSODescriptor AuthnRequestsSigned="false" WantAssertionsSigned="true" protocolSupportEnumeration="${NS_SAMLP}">` +
@@ -119,7 +125,9 @@ export const parseIdpMetadata = Effect.fnUntraced(function* (xml: string) {
   );
   const ssoUrl = redirect === undefined ? undefined : SafeXml.attribute(redirect, "Location");
   if (ssoUrl === undefined) {
-    return yield* Effect.fail(invalid("the metadata offers no HTTP-Redirect single sign-on service"));
+    return yield* Effect.fail(
+      invalid("the metadata offers no HTTP-Redirect single sign-on service"),
+    );
   }
   const certificates: Array<string> = [];
   for (const key of SafeXml.childrenNamed(descriptor, md("KeyDescriptor"))) {
@@ -141,4 +149,3 @@ export const parseIdpMetadata = Effect.fnUntraced(function* (xml: string) {
   const result: IdpMetadata = { entityId, ssoUrl, certificates };
   return result;
 });
-

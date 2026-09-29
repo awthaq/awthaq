@@ -133,7 +133,10 @@ describe("EP-007: per-tenant OAuth.config in one composition", () => {
   it.effect("each tenant's trusted origins and default callback apply to its own flows", () =>
     Effect.gen(function* () {
       // Tenant "a" trusts its own origin; tenant "b" does not trust "a"'s and falls back to its default.
-      assert.strictEqual(yield* finishAt("https://a.example.com/dash", "a"), "https://a.example.com/dash");
+      assert.strictEqual(
+        yield* finishAt("https://a.example.com/dash", "a"),
+        "https://a.example.com/dash",
+      );
       assert.strictEqual(yield* finishAt("https://a.example.com/dash", "b"), "/b/home");
     }).pipe(Effect.provide(withTenants())),
   );

@@ -59,14 +59,16 @@ describe("EP-007: per-tenant Password.config in one composition", () => {
     }).pipe(Effect.provide(withTenants({ config: { minLength: 10 } }))),
   );
 
-  it.effect("the default configuration still refuses the same password when nothing is overridden", () =>
-    Effect.gen(function* () {
-      const password = yield* Password.Password;
-      const failure = yield* password
-        .signUp({ email: "a@example.com", password: tenCharacters })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "WeakPassword");
-    }).pipe(Effect.provide(withTenants())),
+  it.effect(
+    "the default configuration still refuses the same password when nothing is overridden",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const failure = yield* password
+          .signUp({ email: "a@example.com", password: tenCharacters })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "WeakPassword");
+      }).pipe(Effect.provide(withTenants())),
   );
 
   it.effect("a tenant override beats the build-time configuration", () =>

@@ -28,40 +28,51 @@ const tick = (by: Duration.Input) =>
   });
 
 describe("Webhooks.background: relay + worker", () => {
-  it.effect("delivers a published event, retries a failed attempt on backoff, and does not resend on a later tick", () =>
-    Effect.gen(function* () {
-      const events = yield* AuthEvents.AuthEvents;
-      const records = yield* WebhookRecords.WebhookRecords;
-      const { endpoint } = yield* seedEndpoint({ eventTags: ["auth.user.signedIn"] });
-      yield* tick(Duration.millis(1));
+  it.effect(
+    "delivers a published event, retries a failed attempt on backoff, and does not resend on a later tick",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const records = yield* WebhookRecords.WebhookRecords;
+        const { endpoint } = yield* seedEndpoint({ eventTags: ["auth.user.signedIn"] });
+        yield* tick(Duration.millis(1));
 
-      yield* Layer.build(
-        Webhooks.Webhooks.background({ settleDelay: Duration.seconds(1), pollInterval: Duration.seconds(1) }),
-      );
-      yield* events.publish(signedIn("live"));
-      yield* events.publish({ _tag: "auth.user.created", userId: Users.UserId("filtered-out") });
+        yield* Layer.build(
+          Webhooks.Webhooks.background({
+            settleDelay: Duration.seconds(1),
+            pollInterval: Duration.seconds(1),
+          }),
+        );
+        yield* events.publish(signedIn("live"));
+        yield* events.publish({ _tag: "auth.user.created", userId: Users.UserId("filtered-out") });
 
-      // Not yet settled: the relay holds the event back for `settleDelay`.
-      yield* tick(Duration.millis(500));
-      assert.strictEqual(flaky.sent.length, 0);
-      // Settled and relayed; the worker's first attempt fails (the fake answers 500 once) ...
-      yield* tick(Duration.seconds(3));
-      assert.strictEqual(flaky.sent.length, 1);
-      // ... and is retried once the 10s backoff has elapsed, then succeeds.
-      yield* tick(Duration.seconds(10));
-      assert.strictEqual(flaky.sent.length, 2);
-      const rows = yield* records.listDeliveries({ endpointId: endpoint.id, limit: 10 });
-      assert.deepStrictEqual(rows.map((row) => [row.eventTag, row.status, row.attempts]), [
-        ["auth.user.signedIn", "succeeded", 2],
-      ]);
-      // Nothing more is sent on later ticks: the cursor is past the event and the row is finished.
-      yield* tick(Duration.minutes(5));
-      assert.strictEqual(flaky.sent.length, 2);
-      assert.strictEqual(flaky.sent[0]?.headers["webhook-id"], flaky.sent[1]?.headers["webhook-id"]);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(Layer.merge(deliveryLayer({ receiver: flaky.layer }), EventRelay.layerCursorMemory)),
-    ),
+        // Not yet settled: the relay holds the event back for `settleDelay`.
+        yield* tick(Duration.millis(500));
+        assert.strictEqual(flaky.sent.length, 0);
+        // Settled and relayed; the worker's first attempt fails (the fake answers 500 once) ...
+        yield* tick(Duration.seconds(3));
+        assert.strictEqual(flaky.sent.length, 1);
+        // ... and is retried once the 10s backoff has elapsed, then succeeds.
+        yield* tick(Duration.seconds(10));
+        assert.strictEqual(flaky.sent.length, 2);
+        const rows = yield* records.listDeliveries({ endpointId: endpoint.id, limit: 10 });
+        assert.deepStrictEqual(
+          rows.map((row) => [row.eventTag, row.status, row.attempts]),
+          [["auth.user.signedIn", "succeeded", 2]],
+        );
+        // Nothing more is sent on later ticks: the cursor is past the event and the row is finished.
+        yield* tick(Duration.minutes(5));
+        assert.strictEqual(flaky.sent.length, 2);
+        assert.strictEqual(
+          flaky.sent[0]?.headers["webhook-id"],
+          flaky.sent[1]?.headers["webhook-id"],
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.merge(deliveryLayer({ receiver: flaky.layer }), EventRelay.layerCursorMemory),
+        ),
+      ),
   );
 });
 

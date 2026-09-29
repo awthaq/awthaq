@@ -28,7 +28,10 @@ const refuse = (reason: XmlSignature.XmlSignatureFailure, detail: string) =>
   Effect.fail(new XmlSignature.XmlSignatureError({ reason, detail }));
 
 /** Lexical refusals, in the order a cheap check should run. Pure: nothing here parses. */
-export const screen = Effect.fnUntraced(function* (xml: string, maxBytes: number = DEFAULT_MAX_BYTES) {
+export const screen = Effect.fnUntraced(function* (
+  xml: string,
+  maxBytes: number = DEFAULT_MAX_BYTES,
+) {
   if (new TextEncoder().encode(xml).length > maxBytes) {
     return yield* refuse("tooLarge", `the document is larger than ${maxBytes} bytes`);
   }
@@ -38,7 +41,8 @@ export const screen = Effect.fnUntraced(function* (xml: string, maxBytes: number
   }
   if (/<!--/.test(xml)) return yield* refuse("comment", "comments are not accepted");
   // `<!` may only open a CDATA section.
-  if (/<!(?!\[CDATA\[)/.test(xml)) return yield* refuse("malformed", "an unexpected markup declaration");
+  if (/<!(?!\[CDATA\[)/.test(xml))
+    return yield* refuse("malformed", "an unexpected markup declaration");
   // The XML declaration may open the document; any other processing instruction is refused.
   const instructions = xml.match(/<\?[A-Za-z_][\w.-]*/g) ?? [];
   const leading = /^\uFEFF?\s*<\?xml[\s?]/i.test(xml);
@@ -51,16 +55,25 @@ export const screen = Effect.fnUntraced(function* (xml: string, maxBytes: number
 });
 
 /** Screens then parses; every parser warning or error is a failure. */
-export const parse = Effect.fnUntraced(function* (xml: string, maxBytes: number = DEFAULT_MAX_BYTES) {
+export const parse = Effect.fnUntraced(function* (
+  xml: string,
+  maxBytes: number = DEFAULT_MAX_BYTES,
+) {
   yield* screen(xml, maxBytes);
   let problem: string | undefined;
   const collect = (message: unknown) => {
     problem ??= typeof message === "string" ? message : "parse error";
   };
-  const parser = new DOMParser({ errorHandler: { warning: collect, error: collect, fatalError: collect } });
+  const parser = new DOMParser({
+    errorHandler: { warning: collect, error: collect, fatalError: collect },
+  });
   const document = yield* Effect.try({
     try: () => parser.parseFromString(xml, "text/xml"),
-    catch: () => new XmlSignature.XmlSignatureError({ reason: "malformed", detail: "the document is not well-formed XML" }),
+    catch: () =>
+      new XmlSignature.XmlSignatureError({
+        reason: "malformed",
+        detail: "the document is not well-formed XML",
+      }),
   });
   if (problem !== undefined || document.documentElement === null) {
     return yield* refuse("malformed", "the document is not well-formed XML");
@@ -73,7 +86,8 @@ export const parse = Effect.fnUntraced(function* (xml: string, maxBytes: number 
 
 // ---- a small, allocation-light DOM vocabulary --------------------------------------------------
 
-export const isElement = (node: Node | null): node is Element => node !== null && node.nodeType === 1;
+export const isElement = (node: Node | null): node is Element =>
+  node !== null && node.nodeType === 1;
 
 /** Direct element children, in document order. */
 export const childElements = (parent: Node): ReadonlyArray<Element> => {
@@ -103,13 +117,16 @@ export const allElements = (root: Element): ReadonlyArray<Element> => {
 
 const depthOf = (root: Element): number => {
   let deepest = 0;
-  const stack: Array<{ readonly element: Element; readonly depth: number }> = [{ element: root, depth: 1 }];
+  const stack: Array<{ readonly element: Element; readonly depth: number }> = [
+    { element: root, depth: 1 },
+  ];
   while (stack.length > 0) {
     const top = stack.pop();
     if (top === undefined) break;
     deepest = Math.max(deepest, top.depth);
     if (deepest > MAX_DEPTH) return deepest;
-    for (const child of childElements(top.element)) stack.push({ element: child, depth: top.depth + 1 });
+    for (const child of childElements(top.element))
+      stack.push({ element: child, depth: top.depth + 1 });
   }
   return deepest;
 };
@@ -117,10 +134,8 @@ const depthOf = (root: Element): number => {
 export const isNamed = (element: Element, name: XmlSignature.ElementName): boolean =>
   element.localName === name.localName && element.namespaceURI === name.namespace;
 
-export const named = (
-  root: Element,
-  name: XmlSignature.ElementName,
-): ReadonlyArray<Element> => allElements(root).filter((element) => isNamed(element, name));
+export const named = (root: Element, name: XmlSignature.ElementName): ReadonlyArray<Element> =>
+  allElements(root).filter((element) => isNamed(element, name));
 
 /** Direct children of `parent` with this name. */
 export const childrenNamed = (

@@ -9,7 +9,6 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
@@ -20,7 +19,7 @@ import * as WebhookSecrets from "../src/WebhookSecrets.ts";
 import * as WebhookSignature from "../src/WebhookSignature.ts";
 import * as Webhooks from "../src/Webhooks.ts";
 
-export const EncryptionLive = Encryption.layer.pipe(
+const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
     KeyProvider.layerEnv.pipe(
       Layer.provide(
@@ -65,7 +64,8 @@ export const fakeReceiver = (reply: (request: SentRequest) => Reply = () => ({ s
     HttpClient.make((request, _url, _signal, fiber) =>
       Effect.gen(function* () {
         const init = Context.getOrUndefined(fiber.context, FetchHttpClient.RequestInit);
-        const body = request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
+        const body =
+          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
         const seen: SentRequest = {
           redirect: init?.redirect,
           url: request.url,
@@ -85,7 +85,10 @@ export const fakeReceiver = (reply: (request: SentRequest) => Reply = () => ({ s
         if ("never" in answer) return yield* Effect.never;
         return HttpClientResponse.fromWeb(
           request,
-          new Response(null, { status: answer.status, headers: { location: "http://169.254.169.254/" } }),
+          new Response(null, {
+            status: answer.status,
+            headers: { location: "http://169.254.169.254/" },
+          }),
         );
       }),
     ),
@@ -93,7 +96,7 @@ export const fakeReceiver = (reply: (request: SentRequest) => Reply = () => ({ s
   return { sent, layer };
 };
 
-export const PublicResolver = HostResolver.layerStatic({
+const PublicResolver = HostResolver.layerStatic({
   "hooks.example.com": ["93.184.216.34"],
   "other.example.com": ["93.184.216.35"],
   "rebind.example.com": ["10.0.0.5"],
@@ -175,5 +178,3 @@ export const enqueueAndDrain = (event: AuthEvents.Published) =>
     yield* WebhookDelivery.enqueue([event]);
     return yield* WebhookDelivery.drainDue;
   });
-
-export const asRedacted = Redacted.make;

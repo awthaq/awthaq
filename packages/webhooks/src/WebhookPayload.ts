@@ -63,10 +63,7 @@ export interface WebhookBody {
   readonly client?: { readonly ip?: string; readonly userAgent?: string };
 }
 
-export const toBody = (
-  event: AuthEvents.Published,
-  options: PayloadOptions,
-): WebhookBody => {
+export const toBody = (event: AuthEvents.Published, options: PayloadOptions): WebhookBody => {
   const scrubbed = new Set(AuthEvents.PII_FIELDS[event._tag] ?? []);
   const data: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(event)) {

@@ -70,7 +70,10 @@ export const sign = (secret: Redacted.Redacted<string>, message: SignedMessage) 
   });
 
 /** The three request headers, signed under every secret in `secrets` (the current one, and the previous one inside its grace window). */
-export const headersFor = (secrets: ReadonlyArray<Redacted.Redacted<string>>, message: SignedMessage) =>
+export const headersFor = (
+  secrets: ReadonlyArray<Redacted.Redacted<string>>,
+  message: SignedMessage,
+) =>
   Effect.gen(function* () {
     const signatures = yield* Effect.forEach(secrets, (secret) => sign(secret, message));
     return {

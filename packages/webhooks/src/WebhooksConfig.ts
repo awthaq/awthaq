@@ -11,7 +11,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-export interface RateBudget {
+interface RateBudget {
   readonly limit: number;
   readonly window: Duration.Duration;
 }
@@ -91,7 +91,10 @@ export const config = (partial: Partial<WebhooksConfigShape>) =>
   Layer.succeed(WebhooksConfig, { ...defaultWebhooksConfig, ...partial });
 
 /** The wait before attempt `attemptsMade + 1`, after `attemptsMade` failed attempts (1-based). */
-export const retryDelay = (settings: WebhooksConfigShape, attemptsMade: number): Duration.Duration =>
+export const retryDelay = (
+  settings: WebhooksConfigShape,
+  attemptsMade: number,
+): Duration.Duration =>
   Duration.min(
     Duration.times(settings.retryBase, settings.retryFactor ** Math.max(0, attemptsMade - 1)),
     settings.retryMax,

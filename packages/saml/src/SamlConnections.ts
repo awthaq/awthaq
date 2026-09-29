@@ -38,14 +38,16 @@ export class InvalidSamlConnection extends Data.TaggedError("InvalidSamlConnecti
   readonly reason: string;
 }> {}
 
-export class SamlConnectionNotFound extends Data.TaggedError("SamlConnectionNotFound")<{
+export class SamlConnectionNotFound extends Data.TaggedError("SamlConnections/NotFound")<{
   readonly id: string;
 }> {}
 
 const invalid = (reason: string) => new InvalidSamlConnection({ reason });
 
 /** A PEM certificate as a trust-set entry: fingerprint and validity read from the certificate itself. */
-export const certificateOf = (pem: string): Effect.Effect<SamlRecords.IdpCertificate, InvalidSamlConnection> =>
+export const certificateOf = (
+  pem: string,
+): Effect.Effect<SamlRecords.IdpCertificate, InvalidSamlConnection> =>
   Effect.try({
     try: () => {
       const certificate = new X509Certificate(pem);
@@ -62,7 +64,10 @@ export const certificateOf = (pem: string): Effect.Effect<SamlRecords.IdpCertifi
         notAfter: DateTime.makeUnsafe(certificate.validToDate),
       };
     },
-    catch: (cause) => (cause instanceof InvalidSamlConnection ? cause : invalid("a certificate is not a valid X.509 certificate")),
+    catch: (cause) =>
+      cause instanceof InvalidSamlConnection
+        ? cause
+        : invalid("a certificate is not a valid X.509 certificate"),
   });
 
 /** The record's certificates as the port's trust set. */
@@ -136,9 +141,10 @@ export interface SamlConnectionStoreShape {
   }) => Effect.Effect<Option.Option<string>>;
 }
 
-export class SamlConnectionStore extends Context.Service<SamlConnectionStore, SamlConnectionStoreShape>()(
-  "awthaq/saml/SamlConnectionStore",
-) {}
+export class SamlConnectionStore extends Context.Service<
+  SamlConnectionStore,
+  SamlConnectionStoreShape
+>()("awthaq/saml/SamlConnectionStore") {}
 
 /** Requires `SamlRecords`, `OrganizationRecords`, `Crypto` and `SamlConfig`. */
 export const layerStore = Layer.effect(
@@ -150,7 +156,9 @@ export const layerStore = Layer.effect(
     const settings = yield* SamlConfig.SamlConfig;
 
     const validatedSsoUrl = (ssoUrl: string) => {
-      const problem = OutboundUrl.problem("ssoUrl", ssoUrl, { allowPrivate: settings.allowPrivateTargets });
+      const problem = OutboundUrl.problem("ssoUrl", ssoUrl, {
+        allowPrivate: settings.allowPrivateTargets,
+      });
       return Option.isSome(problem) ? Effect.fail(invalid(problem.value)) : Effect.succeed(ssoUrl);
     };
 
@@ -159,28 +167,41 @@ export const layerStore = Layer.effect(
         ? Effect.fail(invalid("at least one IdP signing certificate is required"))
         : Effect.forEach(pems, certificateOf).pipe(
             // The same certificate listed twice is one trust entry.
-            Effect.map((all) => all.filter((entry, index) => all.findIndex((other) => other.fingerprint === entry.fingerprint) === index)),
+            Effect.map((all) =>
+              all.filter(
+                (entry, index) =>
+                  all.findIndex((other) => other.fingerprint === entry.fingerprint) === index,
+              ),
+            ),
           );
 
     const resolveIdp = Effect.fnUntraced(function* (idp: IdpSource) {
       if ("metadataXml" in idp) {
         const metadata = yield* parseIdpMetadata(idp.metadataXml).pipe(
           Effect.mapError((error) =>
-            invalid(error._tag === "InvalidMetadata" ? error.detail : "the metadata could not be read"),
+            invalid(
+              error._tag === "InvalidMetadata" ? error.detail : "the metadata could not be read",
+            ),
           ),
         );
-        return { entityId: metadata.entityId, ssoUrl: metadata.ssoUrl, certificates: metadata.certificates };
+        return {
+          entityId: metadata.entityId,
+          ssoUrl: metadata.ssoUrl,
+          certificates: metadata.certificates,
+        };
       }
       return { entityId: idp.entityId, ssoUrl: idp.ssoUrl, certificates: idp.certificates };
     });
 
     const create: SamlConnectionStoreShape["create"] = Effect.fnUntraced(function* (input) {
       const organization = yield* orgs.findById(input.organizationId);
-      if (Option.isNone(organization)) return yield* Effect.fail(invalid("the organization does not exist"));
+      if (Option.isNone(organization))
+        return yield* Effect.fail(invalid("the organization does not exist"));
       const name = input.name.trim();
       if (name === "") return yield* Effect.fail(invalid("a connection needs a name"));
       const idp = yield* resolveIdp(input.idp);
-      if (idp.entityId.trim() === "") return yield* Effect.fail(invalid("the IdP entity id is empty"));
+      if (idp.entityId.trim() === "")
+        return yield* Effect.fail(invalid("the IdP entity id is empty"));
       const ssoUrl = yield* validatedSsoUrl(idp.ssoUrl);
       const idpCertificates = yield* certificatesOf(idp.certificates);
       const emailDomains = yield* normalizeDomains(input.emailDomains ?? []);
@@ -210,8 +231,10 @@ export const layerStore = Layer.effect(
     const update: SamlConnectionStoreShape["update"] = Effect.fnUntraced(function* (id, patch) {
       yield* get(id);
       const ssoUrl = patch.ssoUrl === undefined ? undefined : yield* validatedSsoUrl(patch.ssoUrl);
-      const idpCertificates = patch.certificates === undefined ? undefined : yield* certificatesOf(patch.certificates);
-      const emailDomains = patch.emailDomains === undefined ? undefined : yield* normalizeDomains(patch.emailDomains);
+      const idpCertificates =
+        patch.certificates === undefined ? undefined : yield* certificatesOf(patch.certificates);
+      const emailDomains =
+        patch.emailDomains === undefined ? undefined : yield* normalizeDomains(patch.emailDomains);
       if (patch.entityId !== undefined && patch.entityId.trim() === "") {
         return yield* Effect.fail(invalid("the IdP entity id is empty"));
       }
@@ -224,7 +247,11 @@ export const layerStore = Layer.effect(
           emailDomains,
           trustsEmail: patch.trustsEmail,
         })
-        .pipe(Effect.catchTag("SamlRecordNotFound", () => Effect.fail(new SamlConnectionNotFound({ id }))));
+        .pipe(
+          Effect.catchTag("SamlRecordNotFound", () =>
+            Effect.fail(new SamlConnectionNotFound({ id })),
+          ),
+        );
     });
 
     const discover: SamlConnectionStoreShape["discover"] = Effect.fnUntraced(function* (hint) {
@@ -243,7 +270,13 @@ export const layerStore = Layer.effect(
       list: records.listByOrganization,
       update,
       remove: (id) =>
-        records.remove(id).pipe(Effect.catchTag("SamlRecordNotFound", () => Effect.fail(new SamlConnectionNotFound({ id })))),
+        records
+          .remove(id)
+          .pipe(
+            Effect.catchTag("SamlRecordNotFound", () =>
+              Effect.fail(new SamlConnectionNotFound({ id })),
+            ),
+          ),
       discover,
     });
   }),

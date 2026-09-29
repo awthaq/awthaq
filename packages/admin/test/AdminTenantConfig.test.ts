@@ -38,7 +38,9 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 const buildLayer = (config: Partial<Admin.AdminConfigShape>) =>
   Admin.Admin.layer.pipe(
     Layer.provide(Admin.config(config)),
-    Layer.provide(AuditChain.config({ key: Redacted.make("admin-tenant-config-chain-key-0123456789") })),
+    Layer.provide(
+      AuditChain.config({ key: Redacted.make("admin-tenant-config-chain-key-0123456789") }),
+    ),
     Layer.provide(AdminAuthenticationLive),
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),

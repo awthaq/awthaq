@@ -69,7 +69,8 @@ export const enqueue = (events: ReadonlyArray<Parameters<typeof WebhookPayload.t
       for (const endpoint of endpoints) {
         if (!WebhookPayload.matchesAny(endpoint.eventTags, event._tag)) continue;
         // An endpoint hears what happened after it was registered, not the log's history.
-        if (DateTime.toEpochMillis(event.occurredAt) < DateTime.toEpochMillis(endpoint.createdAt)) continue;
+        if (DateTime.toEpochMillis(event.occurredAt) < DateTime.toEpochMillis(endpoint.createdAt))
+          continue;
         rows.push({
           id: yield* crypto.randomUUIDv7.pipe(Effect.orDie),
           endpointId: endpoint.id,
@@ -115,10 +116,7 @@ export const relayLayer = (
 ): Layer.Layer<
   never,
   never,
-  | AuditLog.AuditLog
-  | EventRelay.RelayCursorStore
-  | WebhookRecords.WebhookRecords
-  | Crypto.Crypto
+  AuditLog.AuditLog | EventRelay.RelayCursorStore | WebhookRecords.WebhookRecords | Crypto.Crypto
 > => EventRelay.layer({ name: RELAY_NAME, ...options }).pipe(Layer.provide(transportLayer));
 
 // ---- one attempt -------------------------------------------------------------------------------
@@ -171,8 +169,13 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
         if (made >= settings.maxAttempts) {
           yield* records.markDead(delivery.id, { at: now, ...info });
           const consecutive = yield* records.bumpDead(endpoint.id);
-          if (settings.disableAfterConsecutiveDead > 0 && consecutive >= settings.disableAfterConsecutiveDead) {
-            yield* records.setDisabled(endpoint.id, { at: now, reason: "failing" }).pipe(Effect.ignore);
+          if (
+            settings.disableAfterConsecutiveDead > 0 &&
+            consecutive >= settings.disableAfterConsecutiveDead
+          ) {
+            yield* records
+              .setDisabled(endpoint.id, { at: now, reason: "failing" })
+              .pipe(Effect.ignore);
             yield* Effect.logWarning(
               `awthaq/webhooks: endpoint ${endpoint.id} disabled after ${consecutive} consecutive dead-lettered deliveries`,
             );
@@ -217,7 +220,9 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
       // A redirect is never followed (the fetch client would, by default); the 3xx is the outcome.
       Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
       Effect.map((response) => ({ _tag: "responded" as const, status: response.status })),
-      Effect.catch((error) => Effect.succeed({ _tag: "failed" as const, error: failureClass(error) })),
+      Effect.catch((error) =>
+        Effect.succeed({ _tag: "failed" as const, error: failureClass(error) }),
+      ),
     );
     if (sent._tag === "failed") return yield* failed({ error: sent.error });
     const status = sent.status;
@@ -232,9 +237,7 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
 /** Runs `attempt` and counts its outcome; a defect in one delivery is logged and never stops the batch. */
 const attemptCounted = (delivery: WebhookRecords.DeliveryRecord) =>
   attempt(delivery).pipe(
-    Effect.tap((outcome) =>
-      Metric.update(Metric.withAttributes(deliveries, { outcome }), 1),
-    ),
+    Effect.tap((outcome) => Metric.update(Metric.withAttributes(deliveries, { outcome }), 1)),
     Effect.catchCause((cause) =>
       Effect.logError("awthaq/webhooks: delivery attempt defect", Cause.pretty(cause)).pipe(
         Effect.as("retry" satisfies Outcome),
@@ -252,8 +255,15 @@ export const drainDue = Effect.gen(function* () {
   const records = yield* WebhookRecords.WebhookRecords;
   const settings = yield* WebhooksConfig.WebhooksConfig;
   const now = yield* DateTime.now;
-  const claimed = yield* records.claimDue({ now, limit: settings.batchSize, lease: settings.lease });
-  yield* Effect.forEach(claimed, attemptCounted, { concurrency: settings.concurrency, discard: true });
+  const claimed = yield* records.claimDue({
+    now,
+    limit: settings.batchSize,
+    lease: settings.lease,
+  });
+  yield* Effect.forEach(claimed, attemptCounted, {
+    concurrency: settings.concurrency,
+    discard: true,
+  });
   return claimed.length;
 });
 
@@ -292,7 +302,10 @@ export const workerLayer = Layer.effectDiscard(
         yield* Effect.sleep(
           failed === 0
             ? settings.pollInterval
-            : Duration.min(Duration.times(settings.pollInterval, 2 ** Math.min(failed, 6)), Duration.seconds(30)),
+            : Duration.min(
+                Duration.times(settings.pollInterval, 2 ** Math.min(failed, 6)),
+                Duration.seconds(30),
+              ),
         );
       }),
     );

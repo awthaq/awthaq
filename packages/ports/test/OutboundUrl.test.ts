@@ -26,7 +26,14 @@ describe("OutboundUrl.problem", () => {
   });
 
   it("refuses localhost and internal names, and single-label hosts", () => {
-    for (const host of ["localhost", "a.localhost", "db.internal", "printer.local", "x.home.arpa", "intranet"]) {
+    for (const host of [
+      "localhost",
+      "a.localhost",
+      "db.internal",
+      "printer.local",
+      "x.home.arpa",
+      "intranet",
+    ]) {
       assert.isTrue(refused(`https://${host}/`), host);
     }
   });

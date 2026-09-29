@@ -61,7 +61,9 @@ export class WebhookDeliveryNotRetryable extends Schema.TaggedError<WebhookDeliv
 const PathIdSchema = Schema.String.pipe(
   Schema.check(
     Schema.makeFilter((value: string) =>
-      value.length > 0 && value.length <= 255 ? undefined : "a non-empty id of at most 255 characters",
+      value.length > 0 && value.length <= 255
+        ? undefined
+        : "a non-empty id of at most 255 characters",
     ),
   ),
 );
@@ -92,7 +94,9 @@ const EventTagsSchema = Schema.Array(
   Schema.String.pipe(
     Schema.check(
       Schema.makeFilter((value: string) =>
-        value.length > 0 && value.length <= 100 ? undefined : "an event tag of at most 100 characters",
+        value.length > 0 && value.length <= 100
+          ? undefined
+          : "an event tag of at most 100 characters",
       ),
     ),
   ),

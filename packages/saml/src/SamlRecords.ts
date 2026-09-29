@@ -132,9 +132,15 @@ export const layerMemory = Layer.effect(
         const record: ConnectionRecord = { ...input, createdAt: now, updatedAt: now };
         const outcome = yield* Ref.modify(
           state,
-          (rows): readonly [Result.Result<ConnectionRecord, SamlDomainTaken>, ReadonlyArray<ConnectionRecord>] => {
+          (
+            rows,
+          ): readonly [
+            Result.Result<ConnectionRecord, SamlDomainTaken>,
+            ReadonlyArray<ConnectionRecord>,
+          ] => {
             const taken = takenDomain(rows, input.emailDomains, input.id);
-            if (taken !== undefined) return [Result.fail(new SamlDomainTaken({ domain: taken })), rows] as const;
+            if (taken !== undefined)
+              return [Result.fail(new SamlDomainTaken({ domain: taken })), rows] as const;
             return [Result.succeed(record), [...rows, record]] as const;
           },
         );
@@ -155,13 +161,16 @@ export const layerMemory = Layer.effect(
             const existing = rows.find((row) => row.id === id);
             if (existing === undefined) return [Result.fail(notFound(id)), rows] as const;
             const taken = takenDomain(rows, patch.emailDomains ?? [], id);
-            if (taken !== undefined) return [Result.fail(new SamlDomainTaken({ domain: taken })), rows] as const;
+            if (taken !== undefined)
+              return [Result.fail(new SamlDomainTaken({ domain: taken })), rows] as const;
             const updated: ConnectionRecord = {
               ...existing,
               ...(patch.name === undefined ? {} : { name: patch.name }),
               ...(patch.idpEntityId === undefined ? {} : { idpEntityId: patch.idpEntityId }),
               ...(patch.ssoUrl === undefined ? {} : { ssoUrl: patch.ssoUrl }),
-              ...(patch.idpCertificates === undefined ? {} : { idpCertificates: patch.idpCertificates }),
+              ...(patch.idpCertificates === undefined
+                ? {}
+                : { idpCertificates: patch.idpCertificates }),
               ...(patch.emailDomains === undefined ? {} : { emailDomains: patch.emailDomains }),
               ...(patch.trustsEmail === undefined ? {} : { trustsEmail: patch.trustsEmail }),
               updatedAt: now,
@@ -178,14 +187,20 @@ export const layerMemory = Layer.effect(
     return {
       create,
       findById: (id) =>
-        Ref.get(state).pipe(Effect.map((rows) => Option.fromNullishOr(rows.find((row) => row.id === id)))),
+        Ref.get(state).pipe(
+          Effect.map((rows) => Option.fromNullishOr(rows.find((row) => row.id === id))),
+        ),
       listByOrganization: (organizationId) =>
         Ref.get(state).pipe(
-          Effect.map((rows) => byCreation(rows.filter((row) => row.organizationId === organizationId))),
+          Effect.map((rows) =>
+            byCreation(rows.filter((row) => row.organizationId === organizationId)),
+          ),
         ),
       findByDomain: (domain) =>
         Ref.get(state).pipe(
-          Effect.map((rows) => Option.fromNullishOr(rows.find((row) => row.emailDomains.includes(domain)))),
+          Effect.map((rows) =>
+            Option.fromNullishOr(rows.find((row) => row.emailDomains.includes(domain))),
+          ),
         ),
       update,
       remove: (id) =>
@@ -301,7 +316,12 @@ export const layerSql = Layer.effect(
 
     const withDomains = (row: typeof ConnectionRow.Type) =>
       domainsOf(row.id).pipe(
-        Effect.map((rows) => toRecord(row, rows.map((entry) => entry.domain))),
+        Effect.map((rows) =>
+          toRecord(
+            row,
+            rows.map((entry) => entry.domain),
+          ),
+        ),
         Effect.orDie,
       );
 
@@ -340,7 +360,9 @@ export const layerSql = Layer.effect(
         yield* claimDomains(input.id, input.emailDomains).pipe(
           Effect.tapError(() =>
             sql`DELETE FROM saml_connection WHERE id = ${input.id}`.pipe(
-              Effect.andThen(sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${input.id}`),
+              Effect.andThen(
+                sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${input.id}`,
+              ),
               Effect.orDie,
             ),
           ),
@@ -355,7 +377,9 @@ export const layerSql = Layer.effect(
         const now = yield* DateTime.now;
         if (patch.emailDomains !== undefined) {
           const before = (yield* domainsOf(id).pipe(Effect.orDie)).map((entry) => entry.domain);
-          yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`.pipe(Effect.orDie);
+          yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`.pipe(
+            Effect.orDie,
+          );
           yield* claimDomains(id, patch.emailDomains).pipe(
             // Put the previous set back if a new domain is taken.
             Effect.tapError(() =>
@@ -409,9 +433,14 @@ export const layerSql = Layer.effect(
       update,
       remove: (id) =>
         Effect.gen(function* () {
-          const removed = yield* sql`DELETE FROM saml_connection WHERE id = ${id} RETURNING id`.pipe(Effect.orDie);
+          const removed =
+            yield* sql`DELETE FROM saml_connection WHERE id = ${id} RETURNING id`.pipe(
+              Effect.orDie,
+            );
           if (removed.length === 0) return yield* Effect.fail(notFound(id));
-          yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`.pipe(Effect.orDie);
+          yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`.pipe(
+            Effect.orDie,
+          );
         }),
     } satisfies SamlRecordsShape;
   }),

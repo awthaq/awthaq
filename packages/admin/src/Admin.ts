@@ -1185,7 +1185,9 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           adminConfig
             .canAdministerTenants({ admin: subjectOf(caller), organizationId: Option.none() })
             .pipe(
-              Effect.map((crossTenant): ImpersonationRecords.TenantScope => ({ anyTenant: crossTenant })),
+              Effect.map((crossTenant): ImpersonationRecords.TenantScope => ({
+                anyTenant: crossTenant,
+              })),
             ),
         );
 

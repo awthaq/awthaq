@@ -45,7 +45,10 @@ const ALGORITHMS = {
   sha512: "http://www.w3.org/2001/04/xmlenc#sha512",
 } as const;
 
-const SIGNATURE_ALGORITHMS: ReadonlySet<string> = new Set([ALGORITHMS.rsaSha256, ALGORITHMS.rsaSha512]);
+const SIGNATURE_ALGORITHMS: ReadonlySet<string> = new Set([
+  ALGORITHMS.rsaSha256,
+  ALGORITHMS.rsaSha512,
+]);
 const DIGEST_ALGORITHMS: ReadonlySet<string> = new Set([ALGORITHMS.sha256, ALGORITHMS.sha512]);
 
 /** Named so a log line says what was refused: the algorithms a wrapping or downgrade attempt reaches for. */
@@ -57,7 +60,8 @@ const REFUSED_ALGORITHMS: Readonly<Record<string, string>> = {
   "http://www.w3.org/2000/09/xmldsig#sha1": "SHA-1 digest",
   "http://www.w3.org/2001/04/xmldsig-more#md5": "MD5",
   "http://www.w3.org/TR/2001/REC-xml-c14n-20010315": "inclusive canonicalization",
-  "http://www.w3.org/TR/2001/REC-xml-c14n-20010315#WithComments": "inclusive canonicalization with comments",
+  "http://www.w3.org/TR/2001/REC-xml-c14n-20010315#WithComments":
+    "inclusive canonicalization with comments",
   "http://www.w3.org/2001/10/xml-exc-c14n#WithComments": "exclusive canonicalization with comments",
   "http://www.w3.org/TR/1999/REC-xslt-19991116": "XSLT transform",
   "http://www.w3.org/TR/1999/REC-xpath-19991116": "XPath transform",
@@ -126,7 +130,8 @@ const checkStructure = Effect.fnUntraced(function* (
   const signedInfo = yield* single(signature, SIGNED_INFO, "exactly one SignedInfo is required");
   yield* single(signature, SIGNATURE_VALUE, "exactly one SignatureValue is required");
   const keyInfos = SafeXml.childrenNamed(signature, KEY_INFO);
-  if (keyInfos.length > 1) return yield* fail("signatureStructure", "at most one KeyInfo is allowed");
+  if (keyInfos.length > 1)
+    return yield* fail("signatureStructure", "at most one KeyInfo is allowed");
 
   const canonicalization = yield* single(
     signedInfo,
@@ -145,7 +150,11 @@ const checkStructure = Effect.fnUntraced(function* (
     );
   }
 
-  const method = yield* single(signedInfo, SIGNATURE_METHOD, "exactly one SignatureMethod is required");
+  const method = yield* single(
+    signedInfo,
+    SIGNATURE_METHOD,
+    "exactly one SignatureMethod is required",
+  );
   const signatureAlgorithm = yield* allowedAlgorithm(
     SafeXml.attribute(method, "Algorithm"),
     SIGNATURE_ALGORITHMS,
@@ -177,8 +186,13 @@ const checkStructure = Effect.fnUntraced(function* (
     if (seen.has(algorithm)) return yield* fail("unsupportedTransform", "a transform is repeated");
     seen.add(algorithm);
     // An exclusive-C14N prefix list is the one child a transform may carry; anything else (an XPath expression) is refused.
-    if (SafeXml.childElements(transform).some((child) => child.localName !== "InclusiveNamespaces")) {
-      return yield* fail("unsupportedTransform", "a transform carries content this adapter does not accept");
+    if (
+      SafeXml.childElements(transform).some((child) => child.localName !== "InclusiveNamespaces")
+    ) {
+      return yield* fail(
+        "unsupportedTransform",
+        "a transform carries content this adapter does not accept",
+      );
     }
   }
   if (!seen.has(ALGORITHMS.enveloped) || !seen.has(ALGORITHMS.exclusiveC14n)) {
@@ -209,10 +223,16 @@ const checkStructure = Effect.fnUntraced(function* (
     return yield* fail("unsignedElement", "the Reference does not resolve to exactly one element");
   }
   if (!policy.signedElements.some((allowed) => SafeXml.isNamed(target, allowed))) {
-    return yield* fail("unsignedElement", "the signature covers an element this consumer does not accept");
+    return yield* fail(
+      "unsignedElement",
+      "the signature covers an element this consumer does not accept",
+    );
   }
   if (signature.parentNode !== target) {
-    return yield* fail("signatureNotEnveloped", "the Signature is not a child of the element it signs");
+    return yield* fail(
+      "signatureNotEnveloped",
+      "the Signature is not a child of the element it signs",
+    );
   }
 
   const namedCertificates: Array<string> = [];
@@ -253,7 +273,10 @@ const indexIds = Effect.fnUntraced(function* (root: Element) {
 /** The library, restricted: only the allow-listed algorithms exist inside it, and KeyInfo is never a key source. */
 const verifierFor = (pem: string) => {
   const signed = new SignedXml({ publicCert: pem, getCertFromKeyInfo: () => null });
-  const keep = <T>(registry: Record<string, T>, allowed: ReadonlyArray<string>): Record<string, T> =>
+  const keep = <T>(
+    registry: Record<string, T>,
+    allowed: ReadonlyArray<string>,
+  ): Record<string, T> =>
     Object.fromEntries(Object.entries(registry).filter(([key]) => allowed.includes(key)));
   signed.SignatureAlgorithms = keep(signed.SignatureAlgorithms, [...SIGNATURE_ALGORITHMS]);
   signed.HashAlgorithms = keep(signed.HashAlgorithms, [...DIGEST_ALGORITHMS]);
@@ -292,7 +315,9 @@ const verifySignature = Effect.fnUntraced(function* (
     const outcome = yield* Effect.try({
       try: () => {
         verifier.loadSignature(checked.element);
-        return verifier.checkSignature(document) === true ? verifier.getSignedReferences() : undefined;
+        return verifier.checkSignature(document) === true
+          ? verifier.getSignedReferences()
+          : undefined;
       },
       // The library throws on a signature it cannot process; that certificate did not verify it.
       catch: () => undefined,
@@ -300,7 +325,10 @@ const verifySignature = Effect.fnUntraced(function* (
     if (outcome === undefined) continue;
     const [signedXml] = outcome;
     if (outcome.length !== 1 || signedXml === undefined) {
-      return yield* fail("signatureStructure", "the signature did not yield exactly one signed element");
+      return yield* fail(
+        "signatureStructure",
+        "the signature did not yield exactly one signed element",
+      );
     }
     const verified: Verified = { checked, signedXml, fingerprint: certificate.fingerprint };
     return verified;
@@ -327,7 +355,10 @@ export const verifyAt = Effect.fnUntraced(function* (
   }
   for (const required of policy.exactlyOne ?? []) {
     if (SafeXml.named(root, required).length !== 1) {
-      return yield* fail("cardinality", `the document must contain exactly one ${required.localName}`);
+      return yield* fail(
+        "cardinality",
+        `the document must contain exactly one ${required.localName}`,
+      );
     }
   }
 
@@ -351,9 +382,14 @@ export const verifyAt = Effect.fnUntraced(function* (
     // Pinning: EVERY certificate the document names must be one we hold (a list with the IdP's certificate
     // second and the attacker's first is the classic way to make a library that reads the first one verify
     // with the wrong key); then only OUR copy verifies.
-    const heldFingerprints = new Set(pinned.map((certificate) => certificate.fingerprint.toLowerCase()));
+    const heldFingerprints = new Set(
+      pinned.map((certificate) => certificate.fingerprint.toLowerCase()),
+    );
     if (checked.namedCertificates.some((fingerprint) => !heldFingerprints.has(fingerprint))) {
-      return yield* fail("untrustedKey", "the document names a signing certificate that is not pinned");
+      return yield* fail(
+        "untrustedKey",
+        "the document names a signing certificate that is not pinned",
+      );
     }
     const pool =
       checked.namedCertificates.length === 0
@@ -387,7 +423,10 @@ export const verifyAt = Effect.fnUntraced(function* (
     };
     return result;
   }
-  return yield* fail("unsignedElement", "no verified signature covers an element this consumer accepts");
+  return yield* fail(
+    "unsignedElement",
+    "no verified signature covers an element this consumer accepts",
+  );
 });
 
 /** The port over `xml-crypto`. */

@@ -50,42 +50,46 @@ describe("WebhookPayload.toBody: identifiers only", () => {
     }),
   );
 
-  it.effect("drops declared free text about a person (PII_FIELDS): the impersonation justification", () =>
-    Effect.gen(function* () {
-      const started = yield* published({
-        _tag: "auth.admin.impersonationStarted",
-        adminUserId: Users.UserId("admin-1"),
-        targetUserId: Users.UserId("user-2"),
-        reason: "Customer jane.doe@example.com reported fraud",
-        sessionId: Sessions.SessionId("s-1"),
-      });
-      const text = JSON.stringify(WebhookPayload.toBody(started, withContext));
-      assert.notInclude(text, "jane.doe@example.com");
-      assert.notInclude(text, "fraud");
-      assert.include(text, "user-2");
-    }),
+  it.effect(
+    "drops declared free text about a person (PII_FIELDS): the impersonation justification",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* published({
+          _tag: "auth.admin.impersonationStarted",
+          adminUserId: Users.UserId("admin-1"),
+          targetUserId: Users.UserId("user-2"),
+          reason: "Customer jane.doe@example.com reported fraud",
+          sessionId: Sessions.SessionId("s-1"),
+        });
+        const text = JSON.stringify(WebhookPayload.toBody(started, withContext));
+        assert.notInclude(text, "jane.doe@example.com");
+        assert.notInclude(text, "fraud");
+        assert.include(text, "user-2");
+      }),
   );
 
-  it.effect("drops any field named like a credential or contact detail, whatever an event schema says", () =>
-    Effect.gen(function* () {
-      const base = yield* published(signedIn());
-      // A future event with a careless field: the guard removes it before it reaches a third party.
-      const careless = {
-        ...base,
-        email: "ada@example.com",
-        Password: "hunter2",
-        accessToken: "at-1",
-        token: "t-1",
-        phone: "+15551234567",
-        note: "kept",
-      };
-      const body = WebhookPayload.toBody(careless, withContext);
-      const text = JSON.stringify(body);
-      for (const leaked of ["ada@example.com", "hunter2", "t-1", "+15551234567"]) {
-        assert.notInclude(text, leaked);
-      }
-      assert.strictEqual(body.data["note"], "kept");
-    }),
+  it.effect(
+    "drops any field named like a credential or contact detail, whatever an event schema says",
+    () =>
+      Effect.gen(function* () {
+        const base = yield* published(signedIn());
+        // A future event with a careless field: the guard removes it before it reaches a third party.
+        const careless = {
+          ...base,
+          email: "ada@example.com",
+          Password: "hunter2",
+          accessToken: "at-1",
+          token: "t-1",
+          phone: "+15551234567",
+          note: "kept",
+        };
+        const body = WebhookPayload.toBody(careless, withContext);
+        const text = JSON.stringify(body);
+        for (const leaked of ["ada@example.com", "hunter2", "t-1", "+15551234567"]) {
+          assert.notInclude(text, leaked);
+        }
+        assert.strictEqual(body.data["note"], "kept");
+      }),
   );
 
   it.effect("names the user an event is about, for erasure and export", () =>
@@ -105,10 +109,16 @@ describe("WebhookPayload filters", () => {
     assert.isTrue(WebhookPayload.patternMatches("*", "auth.user.signedIn"));
     assert.isTrue(WebhookPayload.patternMatches("auth.user.signedIn", "auth.user.signedIn"));
     assert.isFalse(WebhookPayload.patternMatches("auth.user.signedIn", "auth.user.created"));
-    assert.isTrue(WebhookPayload.patternMatches("auth.organization.*", "auth.organization.created"));
-    assert.isFalse(WebhookPayload.patternMatches("auth.organization.*", "auth.organizationX.created"));
+    assert.isTrue(
+      WebhookPayload.patternMatches("auth.organization.*", "auth.organization.created"),
+    );
+    assert.isFalse(
+      WebhookPayload.patternMatches("auth.organization.*", "auth.organizationX.created"),
+    );
     assert.isFalse(WebhookPayload.patternMatches("auth.user.*", "auth.session.issued"));
-    assert.isTrue(WebhookPayload.matchesAny(["auth.user.created", "auth.session.*"], "auth.session.revoked"));
+    assert.isTrue(
+      WebhookPayload.matchesAny(["auth.user.created", "auth.session.*"], "auth.session.revoked"),
+    );
     assert.isFalse(WebhookPayload.matchesAny([], "auth.session.revoked"));
   });
 
@@ -117,7 +127,10 @@ describe("WebhookPayload filters", () => {
     assert.include(WebhookPayload.knownEventTags, "auth.organization.memberAdded");
     assert.isAbove(WebhookPayload.knownEventTags.length, 50);
     assert.isUndefined(WebhookPayload.unknownPattern(["*", "auth.user.*", "auth.session.revoked"]));
-    assert.strictEqual(WebhookPayload.unknownPattern(["auth.user.signedIn", "auth.user.signedInn"]), "auth.user.signedInn");
+    assert.strictEqual(
+      WebhookPayload.unknownPattern(["auth.user.signedIn", "auth.user.signedInn"]),
+      "auth.user.signedInn",
+    );
     assert.strictEqual(WebhookPayload.unknownPattern(["nothing.*"]), "nothing.*");
     // Every tag really is matched by its own family pattern.
     const tags: ReadonlyArray<AuthEvents.AuthEventTag> = ["auth.user.created"];
