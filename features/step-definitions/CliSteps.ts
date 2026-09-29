@@ -150,6 +150,7 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
       ],
       hooks: {},
       config: [],
+      userFields: [],
     };
     yield* updateConfig({ auth: { ...passwordAndRoles, manifest }, config: goodConfig });
   });

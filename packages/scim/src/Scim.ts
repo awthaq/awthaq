@@ -145,7 +145,11 @@ export interface ScimShape {
     input: ScimApi.GroupInput,
   ) => Effect.Effect<
     ScimApi.GroupResource,
-    ScimApi.ScimBadRequest | ScimApi.ScimNotFound | ScimApi.ScimConflict | ScimApi.ScimForbidden | StoreUnavailable
+    | ScimApi.ScimBadRequest
+    | ScimApi.ScimNotFound
+    | ScimApi.ScimConflict
+    | ScimApi.ScimForbidden
+    | StoreUnavailable
   >;
   readonly patchGroup: (
     connection: Connection,
@@ -153,7 +157,11 @@ export interface ScimShape {
     patch: ScimApi.PatchRequest,
   ) => Effect.Effect<
     ScimApi.GroupResource,
-    ScimApi.ScimBadRequest | ScimApi.ScimNotFound | ScimApi.ScimConflict | ScimApi.ScimForbidden | StoreUnavailable
+    | ScimApi.ScimBadRequest
+    | ScimApi.ScimNotFound
+    | ScimApi.ScimConflict
+    | ScimApi.ScimForbidden
+    | StoreUnavailable
   >;
   readonly deleteGroup: (
     connection: Connection,
@@ -187,7 +195,10 @@ const stringOf = (value: unknown): Option.Option<string> =>
 const parseEqFilter = (
   filter: string | undefined,
   attributes: ReadonlyArray<string>,
-): Effect.Effect<Option.Option<{ readonly attribute: string; readonly value: string }>, ScimApi.ScimBadRequest> => {
+): Effect.Effect<
+  Option.Option<{ readonly attribute: string; readonly value: string }>,
+  ScimApi.ScimBadRequest
+> => {
   if (filter === undefined || filter.trim() === "") return Effect.succeed(Option.none());
   const match = /^\s*([A-Za-z][A-Za-z0-9.]*)\s+eq\s+"((?:[^"\\]|\\.)*)"\s*$/i.exec(filter);
   const attribute = attributes.find((name) => name.toLowerCase() === match?.[1]?.toLowerCase());
@@ -216,18 +227,20 @@ const splitName = (name: string): { readonly given: string; readonly family: str
     : { given: name.slice(0, at), family: name.slice(at + 1) };
 };
 
-const joinName = (given: string, family: string): string => [given, family].filter((part) => part !== "").join(" ");
+const joinName = (given: string, family: string): string =>
+  [given, family].filter((part) => part !== "").join(" ");
 
 /** The user's display name from a resource body: `displayName`, else `name.formatted`, else given + family, else `userName`. */
 const nameFromInput = (input: ScimApi.UserInput): string =>
   Option.getOrElse(
-    Option.orElse(
-      stringOf(input.displayName),
-      () =>
-        Option.orElse(stringOf(input.name?.formatted), () => {
-          const joined = joinName(input.name?.givenName?.trim() ?? "", input.name?.familyName?.trim() ?? "");
-          return joined === "" ? Option.none() : Option.some(joined);
-        }),
+    Option.orElse(stringOf(input.displayName), () =>
+      Option.orElse(stringOf(input.name?.formatted), () => {
+        const joined = joinName(
+          input.name?.givenName?.trim() ?? "",
+          input.name?.familyName?.trim() ?? "",
+        );
+        return joined === "" ? Option.none() : Option.some(joined);
+      }),
     ),
     () => input.userName.trim(),
   );
@@ -282,7 +295,11 @@ const assign = (changes: UserChanges, attribute: string, value: unknown): UserCh
     case "name":
       return isRecord(value)
         ? assign(
-            assign(assign(changes, "name.givenName", value["givenName"]), "name.familyName", value["familyName"]),
+            assign(
+              assign(changes, "name.givenName", value["givenName"]),
+              "name.familyName",
+              value["familyName"],
+            ),
             "name.formatted",
             value["formatted"],
           )
@@ -418,13 +435,19 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
           resourceTypes: () => Effect.succeed(resourceTypes),
           schemas: () => Effect.succeed(schemaDescriptions),
           listUsers: Effect.fnUntraced(function* ({ query }: { query: ScimApi.ListQuery }) {
-            return yield* scim.listUsers(yield* ScimApi.CurrentScimConnection, query).pipe(Effect.catchTag("StoreUnavailable", outage));
+            return yield* scim
+              .listUsers(yield* ScimApi.CurrentScimConnection, query)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           createUser: Effect.fnUntraced(function* ({ payload }: { payload: ScimApi.UserInput }) {
-            return yield* scim.createUser(yield* ScimApi.CurrentScimConnection, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
+            return yield* scim
+              .createUser(yield* ScimApi.CurrentScimConnection, payload)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           getUser: Effect.fnUntraced(function* ({ params }: { params: ScimApi.IdParams }) {
-            return yield* scim.getUser(yield* ScimApi.CurrentScimConnection, params.id).pipe(Effect.catchTag("StoreUnavailable", outage));
+            return yield* scim
+              .getUser(yield* ScimApi.CurrentScimConnection, params.id)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           replaceUser: Effect.fnUntraced(function* ({
             params,
@@ -433,7 +456,9 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             params: ScimApi.IdParams;
             payload: ScimApi.UserInput;
           }) {
-            return yield* scim.replaceUser(yield* ScimApi.CurrentScimConnection, params.id, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
+            return yield* scim
+              .replaceUser(yield* ScimApi.CurrentScimConnection, params.id, payload)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           patchUser: Effect.fnUntraced(function* ({
             params,
@@ -442,19 +467,29 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             params: ScimApi.IdParams;
             payload: ScimApi.PatchRequest;
           }) {
-            return yield* scim.patchUser(yield* ScimApi.CurrentScimConnection, params.id, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
+            return yield* scim
+              .patchUser(yield* ScimApi.CurrentScimConnection, params.id, payload)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           deleteUser: Effect.fnUntraced(function* ({ params }: { params: ScimApi.IdParams }) {
-            yield* scim.deleteUser(yield* ScimApi.CurrentScimConnection, params.id).pipe(Effect.catchTag("StoreUnavailable", outage));
+            yield* scim
+              .deleteUser(yield* ScimApi.CurrentScimConnection, params.id)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           listGroups: Effect.fnUntraced(function* ({ query }: { query: ScimApi.ListQuery }) {
-            return yield* scim.listGroups(yield* ScimApi.CurrentScimConnection, query).pipe(Effect.catchTag("StoreUnavailable", outage));
+            return yield* scim
+              .listGroups(yield* ScimApi.CurrentScimConnection, query)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           createGroup: Effect.fnUntraced(function* ({ payload }: { payload: ScimApi.GroupInput }) {
-            return yield* scim.createGroup(yield* ScimApi.CurrentScimConnection, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
+            return yield* scim
+              .createGroup(yield* ScimApi.CurrentScimConnection, payload)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           getGroup: Effect.fnUntraced(function* ({ params }: { params: ScimApi.IdParams }) {
-            return yield* scim.getGroup(yield* ScimApi.CurrentScimConnection, params.id).pipe(Effect.catchTag("StoreUnavailable", outage));
+            return yield* scim
+              .getGroup(yield* ScimApi.CurrentScimConnection, params.id)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           replaceGroup: Effect.fnUntraced(function* ({
             params,
@@ -463,7 +498,9 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             params: ScimApi.IdParams;
             payload: ScimApi.GroupInput;
           }) {
-            return yield* scim.replaceGroup(yield* ScimApi.CurrentScimConnection, params.id, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
+            return yield* scim
+              .replaceGroup(yield* ScimApi.CurrentScimConnection, params.id, payload)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           patchGroup: Effect.fnUntraced(function* ({
             params,
@@ -472,10 +509,14 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             params: ScimApi.IdParams;
             payload: ScimApi.PatchRequest;
           }) {
-            return yield* scim.patchGroup(yield* ScimApi.CurrentScimConnection, params.id, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
+            return yield* scim
+              .patchGroup(yield* ScimApi.CurrentScimConnection, params.id, payload)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           deleteGroup: Effect.fnUntraced(function* ({ params }: { params: ScimApi.IdParams }) {
-            yield* scim.deleteGroup(yield* ScimApi.CurrentScimConnection, params.id).pipe(Effect.catchTag("StoreUnavailable", outage));
+            yield* scim
+              .deleteGroup(yield* ScimApi.CurrentScimConnection, params.id)
+              .pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
         });
       }),
@@ -529,16 +570,14 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       const ownedUser = Effect.fnUntraced(function* (connection: Connection, id: string) {
         const link = yield* records.find(connection.id, "User", id);
         if (Option.isNone(link)) return yield* ScimApi.notFound(`User ${id} not found`);
-        const user = yield* users
-          .findById(Users.UserId(id))
-          .pipe(
-            Effect.catchTag("UserNotFound", () =>
-              // The user was erased elsewhere: the mapping is stale, so drop it and report not found.
-              records
-                .unlink(connection.id, "User", id)
-                .pipe(Effect.andThen(Effect.fail(ScimApi.notFound(`User ${id} not found`)))),
-            ),
-          );
+        const user = yield* users.findById(Users.UserId(id)).pipe(
+          Effect.catchTag("UserNotFound", () =>
+            // The user was erased elsewhere: the mapping is stale, so drop it and report not found.
+            records
+              .unlink(connection.id, "User", id)
+              .pipe(Effect.andThen(Effect.fail(ScimApi.notFound(`User ${id} not found`)))),
+          ),
+        );
         return { link: link.value, user };
       });
 
@@ -559,7 +598,10 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
 
       /** A user this code just read or wrote is gone: nothing a directory can cause, so a defect rather than a 404. */
       const userVanished = () =>
-        Defects.invariantViolation("scim.userVanished", "awthaq: a provisioned user vanished mid-request");
+        Defects.invariantViolation(
+          "scim.userVanished",
+          "awthaq: a provisioned user vanished mid-request",
+        );
 
       /**
        * BEH-EA-250: `active` is suspension. Deactivating suspends and ends every session; reactivating
@@ -652,7 +694,9 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         if (Option.isSome(existingByExternal)) {
           const owned = yield* ownedUser(connection, existingByExternal.value.resourceId).pipe(
             Effect.catchTag("ScimNotFound", () =>
-              Effect.fail(ScimApi.conflict(`externalId ${input.externalId ?? ""} is already provisioned`)),
+              Effect.fail(
+                ScimApi.conflict(`externalId ${input.externalId ?? ""} is already provisioned`),
+              ),
             ),
           );
           const settled = yield* applyActive(connection, owned.user, wantActive);
@@ -678,20 +722,25 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
           .pipe(
             Effect.catchTags({
               "Users/EmailAlreadyExists": () =>
-                Effect.fail(ScimApi.conflict(`An account for ${Option.getOrElse(email, () => userName)} already exists`)),
+                Effect.fail(
+                  ScimApi.conflict(
+                    `An account for ${Option.getOrElse(email, () => userName)} already exists`,
+                  ),
+                ),
               // An `Email` or `Anonymous` identity never carries a phone.
               "Users/PhoneAlreadyExists": () =>
-                Defects.invariantViolation("scim.phoneConflict", "awthaq: a SCIM user was created with a phone"),
+                Defects.invariantViolation(
+                  "scim.phoneConflict",
+                  "awthaq: a SCIM user was created with a phone",
+                ),
             }),
           );
 
         /** The user exists but is not (fully) provisioned: remove it so a failed POST leaves nothing behind. */
-        const rollBack = records
-          .unlink(connection.id, "User", created.id)
-          .pipe(
-            Effect.andThen(users.delete(created.id)),
-            Effect.catch(() => Effect.void),
-          );
+        const rollBack = records.unlink(connection.id, "User", created.id).pipe(
+          Effect.andThen(users.delete(created.id)),
+          Effect.catch(() => Effect.void),
+        );
 
         const link = yield* records
           .link({
@@ -720,14 +769,22 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
           Effect.catchTags({
             MembershipLimitReached: () =>
               rollBack.pipe(
-                Effect.andThen(Effect.fail(ScimApi.forbidden("The organization's membership limit is reached"))),
+                Effect.andThen(
+                  Effect.fail(ScimApi.forbidden("The organization's membership limit is reached")),
+                ),
               ),
             HookAborted: (aborted) =>
               rollBack.pipe(Effect.andThen(Effect.fail(ScimApi.forbidden(aborted.message)))),
             OrganizationNotFound: () =>
-              rollBack.pipe(Effect.andThen(Effect.fail(ScimApi.forbidden("The organization is not available")))),
+              rollBack.pipe(
+                Effect.andThen(Effect.fail(ScimApi.forbidden("The organization is not available"))),
+              ),
             UnknownOrgRole: () =>
-              rollBack.pipe(Effect.andThen(Effect.fail(ScimApi.forbidden("The configured member role is unknown")))),
+              rollBack.pipe(
+                Effect.andThen(
+                  Effect.fail(ScimApi.forbidden("The configured member role is unknown")),
+                ),
+              ),
           }),
         );
         const settled = wantActive ? created : yield* applyActive(connection, created, false);
@@ -755,7 +812,10 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
           changes.userName.value.toLowerCase() !==
             Option.getOrElse(owned.link.name, () => "").toLowerCase()
         ) {
-          return yield* ScimApi.badRequest("userName cannot be changed after creation", "mutability");
+          return yield* ScimApi.badRequest(
+            "userName cannot be changed after creation",
+            "mutability",
+          );
         }
         let link = owned.link;
         if (Option.isSome(changes.externalId)) {
@@ -795,27 +855,31 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         return { user, link };
       });
 
-      const replaceUser: ScimShape["replaceUser"] = Effect.fnUntraced(function* (connection, id, input) {
-        const owned = yield* ownedUser(connection, id);
-        // PUT replaces the writable attributes: an absent `externalId` clears it.
-        const externalId = stringOf(input.externalId);
-        const changes: UserChanges = {
-          ...noChanges,
-          userName: Option.some(input.userName),
-          displayName: Option.some(nameFromInput(input)),
-          externalId: Option.some(externalId),
-          active: Option.fromNullishOr(input.active),
-        };
-        const { user, link } = yield* applyUserChanges(connection, owned, changes);
-        return userResource(user, link);
-      });
+      const replaceUser: ScimShape["replaceUser"] = Effect.fnUntraced(
+        function* (connection, id, input) {
+          const owned = yield* ownedUser(connection, id);
+          // PUT replaces the writable attributes: an absent `externalId` clears it.
+          const externalId = stringOf(input.externalId);
+          const changes: UserChanges = {
+            ...noChanges,
+            userName: Option.some(input.userName),
+            displayName: Option.some(nameFromInput(input)),
+            externalId: Option.some(externalId),
+            active: Option.fromNullishOr(input.active),
+          };
+          const { user, link } = yield* applyUserChanges(connection, owned, changes);
+          return userResource(user, link);
+        },
+      );
 
-      const patchUser: ScimShape["patchUser"] = Effect.fnUntraced(function* (connection, id, patch) {
-        const owned = yield* ownedUser(connection, id);
-        const changes = yield* interpretUserPatch(patch);
-        const { user, link } = yield* applyUserChanges(connection, owned, changes);
-        return userResource(user, link);
-      });
+      const patchUser: ScimShape["patchUser"] = Effect.fnUntraced(
+        function* (connection, id, patch) {
+          const owned = yield* ownedUser(connection, id);
+          const changes = yield* interpretUserPatch(patch);
+          const { user, link } = yield* applyUserChanges(connection, owned, changes);
+          return userResource(user, link);
+        },
+      );
 
       const deleteUser: ScimShape["deleteUser"] = Effect.fnUntraced(function* (connection, id) {
         const owned = yield* ownedUser(connection, id);
@@ -858,12 +922,15 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       });
 
       /** The team members this connection provisioned — the only ones a directory can see or change. */
-      const provisionedMembers = Effect.fnUntraced(function* (connection: Connection, teamId: string) {
+      const provisionedMembers = Effect.fnUntraced(function* (
+        connection: Connection,
+        teamId: string,
+      ) {
         const rows = yield* teams.listTeamMembers(teamId);
         const owned = yield* Effect.filter(rows, (row) =>
           Effect.map(records.find(connection.id, "User", row.userId), Option.isSome),
         );
-        return owned.map((row) => row.userId as string);
+        return owned.map((row): string => row.userId);
       });
 
       const groupResource = Effect.fnUntraced(function* (
@@ -967,65 +1034,81 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         };
       });
 
-      const createGroup: ScimShape["createGroup"] = Effect.fnUntraced(function* (connection, input) {
-        const displayName = input.displayName.trim();
-        if (displayName === "" || displayName.length > 255) {
-          return yield* ScimApi.badRequest("displayName is required (at most 255 characters)");
-        }
-        const externalId = stringOf(input.externalId);
-        if (Option.isSome(externalId)) {
-          const existing = yield* records.findByExternalId(connection.id, "Group", externalId.value);
-          if (Option.isSome(existing)) {
-            // A repeat POST converges on the group it already made.
-            const owned = yield* ownedGroup(connection, existing.value.resourceId).pipe(
-              Effect.catchTag("ScimNotFound", () =>
-                Effect.fail(ScimApi.conflict(`externalId ${externalId.value} is already provisioned`)),
+      const createGroup: ScimShape["createGroup"] = Effect.fnUntraced(
+        function* (connection, input) {
+          const displayName = input.displayName.trim();
+          if (displayName === "" || displayName.length > 255) {
+            return yield* ScimApi.badRequest("displayName is required (at most 255 characters)");
+          }
+          const externalId = stringOf(input.externalId);
+          if (Option.isSome(externalId)) {
+            const existing = yield* records.findByExternalId(
+              connection.id,
+              "Group",
+              externalId.value,
+            );
+            if (Option.isSome(existing)) {
+              // A repeat POST converges on the group it already made.
+              const owned = yield* ownedGroup(connection, existing.value.resourceId).pipe(
+                Effect.catchTag("ScimNotFound", () =>
+                  Effect.fail(
+                    ScimApi.conflict(`externalId ${externalId.value} is already provisioned`),
+                  ),
+                ),
+              );
+              return yield* groupResource(connection, owned);
+            }
+          }
+          const memberIds = (input.members ?? []).map((member) => member.value);
+          yield* requireMembers(connection, memberIds);
+          const team = yield* teams
+            .createTeam({ organizationId: connection.organizationId, name: displayName })
+            .pipe(Effect.catchTag("TeamRecordNotFound", (error) => Effect.die(error)));
+          const link = yield* records
+            .link({
+              connectionId: connection.id,
+              kind: "Group",
+              resourceId: team.id,
+              externalId: Option.getOrUndefined(externalId),
+            })
+            .pipe(
+              Effect.catchTag("ScimLinkConflict", () =>
+                teams.removeTeam(connection.organizationId, team.id).pipe(
+                  Effect.catch(() => Effect.void),
+                  Effect.andThen(
+                    Effect.fail(ScimApi.conflict("externalId is already provisioned")),
+                  ),
+                ),
               ),
             );
-            return yield* groupResource(connection, owned);
-          }
-        }
-        const memberIds = (input.members ?? []).map((member) => member.value);
-        yield* requireMembers(connection, memberIds);
-        const team = yield* teams
-          .createTeam({ organizationId: connection.organizationId, name: displayName })
-          .pipe(Effect.catchTag("TeamRecordNotFound", (error) => Effect.die(error)));
-        const link = yield* records
-          .link({
+          yield* Effect.forEach(memberIds, (userId) => addToTeam(team.id, userId), {
+            discard: true,
+          });
+          yield* events.publish({
+            _tag: "auth.scim.groupChanged",
             connectionId: connection.id,
-            kind: "Group",
-            resourceId: team.id,
-            externalId: Option.getOrUndefined(externalId),
-          })
-          .pipe(
-            Effect.catchTag("ScimLinkConflict", () =>
-              teams
-                .removeTeam(connection.organizationId, team.id)
-                .pipe(
-                  Effect.catch(() => Effect.void),
-                  Effect.andThen(Effect.fail(ScimApi.conflict("externalId is already provisioned"))),
-                ),
-            ),
-          );
-        yield* Effect.forEach(memberIds, (userId) => addToTeam(team.id, userId), { discard: true });
-        yield* events.publish({
-          _tag: "auth.scim.groupChanged",
-          connectionId: connection.id,
-          organizationId: connection.organizationId,
-          teamId: team.id,
-          change: "created",
-        });
-        const fresh = yield* teams.findTeamById(connection.organizationId, team.id);
-        return yield* groupResource(connection, {
-          link,
-          team: Option.getOrElse(fresh, () => team),
-        });
-      });
+            organizationId: connection.organizationId,
+            teamId: team.id,
+            change: "created",
+          });
+          const fresh = yield* teams.findTeamById(connection.organizationId, team.id);
+          return yield* groupResource(connection, {
+            link,
+            team: Option.getOrElse(fresh, () => team),
+          });
+        },
+      );
 
       const getGroup: ScimShape["getGroup"] = (connection, id) =>
-        ownedGroup(connection, id).pipe(Effect.flatMap((owned) => groupResource(connection, owned)));
+        ownedGroup(connection, id).pipe(
+          Effect.flatMap((owned) => groupResource(connection, owned)),
+        );
 
-      const groupChanged = (connection: Connection, teamId: string, change: "updated" | "deleted") =>
+      const groupChanged = (
+        connection: Connection,
+        teamId: string,
+        change: "updated" | "deleted",
+      ) =>
         events.publish({
           _tag: "auth.scim.groupChanged",
           connectionId: connection.id,
@@ -1034,37 +1117,47 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
           change,
         });
 
-      const renameGroup = (connection: Connection, team: TeamRecords.TeamRecord, displayName: string) =>
+      const renameGroup = (
+        connection: Connection,
+        team: TeamRecords.TeamRecord,
+        displayName: string,
+      ) =>
         displayName === team.name
           ? Effect.succeed(team)
           : teams
               .updateTeam(connection.organizationId, team.id, displayName)
               .pipe(Effect.catchTag("TeamRecordNotFound", () => Effect.fail(ScimApi.notFound())));
 
-      const replaceGroup: ScimShape["replaceGroup"] = Effect.fnUntraced(function* (connection, id, input) {
-        const owned = yield* ownedGroup(connection, id);
-        const displayName = input.displayName.trim();
-        if (displayName === "" || displayName.length > 255) {
-          return yield* ScimApi.badRequest("displayName is required (at most 255 characters)");
-        }
-        const memberIds = (input.members ?? []).map((member) => member.value);
-        yield* requireMembers(connection, memberIds);
-        const link = yield* records
-          .setExternalId(connection.id, "Group", id, Option.getOrNull(stringOf(input.externalId)))
-          .pipe(
-            Effect.catchTags({
-              ScimLinkConflict: () => Effect.fail(ScimApi.conflict("externalId is already provisioned")),
-              ScimRecordNotFound: () => Effect.fail(ScimApi.notFound()),
-            }),
-          );
-        const team = yield* renameGroup(connection, owned.team, displayName);
-        yield* replaceProvisioned(connection, id, memberIds);
-        yield* groupChanged(connection, id, "updated");
-        return yield* groupResource(connection, { link, team });
-      });
+      const replaceGroup: ScimShape["replaceGroup"] = Effect.fnUntraced(
+        function* (connection, id, input) {
+          const owned = yield* ownedGroup(connection, id);
+          const displayName = input.displayName.trim();
+          if (displayName === "" || displayName.length > 255) {
+            return yield* ScimApi.badRequest("displayName is required (at most 255 characters)");
+          }
+          const memberIds = (input.members ?? []).map((member) => member.value);
+          yield* requireMembers(connection, memberIds);
+          const link = yield* records
+            .setExternalId(connection.id, "Group", id, Option.getOrNull(stringOf(input.externalId)))
+            .pipe(
+              Effect.catchTags({
+                ScimLinkConflict: () =>
+                  Effect.fail(ScimApi.conflict("externalId is already provisioned")),
+                ScimRecordNotFound: () => Effect.fail(ScimApi.notFound()),
+              }),
+            );
+          const team = yield* renameGroup(connection, owned.team, displayName);
+          yield* replaceProvisioned(connection, id, memberIds);
+          yield* groupChanged(connection, id, "updated");
+          return yield* groupResource(connection, { link, team });
+        },
+      );
 
       /** Member ids named by a PATCH operation's `value` (`[{ value }]`, `{ value }`) or by a `members[value eq "id"]` path. */
-      const memberIdsOf = (operation: { readonly path?: string | undefined; readonly value?: unknown }): ReadonlyArray<string> => {
+      const memberIdsOf = (operation: {
+        readonly path?: string | undefined;
+        readonly value?: unknown;
+      }): ReadonlyArray<string> => {
         const fromPath = /members\[\s*value\s+eq\s+"([^"]+)"\s*\]/i.exec(operation.path ?? "")?.[1];
         if (fromPath !== undefined) return [fromPath];
         const values = Array.isArray(operation.value) ? operation.value : [operation.value];
@@ -1073,55 +1166,81 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         );
       };
 
-      const patchGroup: ScimShape["patchGroup"] = Effect.fnUntraced(function* (connection, id, patch) {
-        const owned = yield* ownedGroup(connection, id);
-        let team = owned.team;
-        let link = owned.link;
-        for (const operation of patch.Operations) {
-          const op = operation.op.trim().toLowerCase();
-          if (op !== "add" && op !== "replace" && op !== "remove") {
-            return yield* ScimApi.badRequest(`Unknown patch op "${operation.op}"`, "invalidSyntax");
-          }
-          const path = (operation.path ?? "").trim();
-          const attribute = path.toLowerCase();
-          if (attribute === "displayname" || (path === "" && isRecord(operation.value) && "displayName" in operation.value)) {
-            const name = stringOf(isRecord(operation.value) && path === "" ? operation.value["displayName"] : operation.value);
-            if (Option.isNone(name) || op === "remove") {
-              return yield* ScimApi.badRequest("displayName cannot be empty");
-            }
-            team = yield* renameGroup(connection, team, name.value);
-          } else if (attribute === "externalid") {
-            link = yield* records
-              .setExternalId(connection.id, "Group", id, op === "remove" ? null : Option.getOrNull(stringOf(operation.value)))
-              .pipe(
-                Effect.catchTags({
-                  ScimLinkConflict: () => Effect.fail(ScimApi.conflict("externalId is already provisioned")),
-                  ScimRecordNotFound: () => Effect.fail(ScimApi.notFound()),
-                }),
+      const patchGroup: ScimShape["patchGroup"] = Effect.fnUntraced(
+        function* (connection, id, patch) {
+          const owned = yield* ownedGroup(connection, id);
+          let team = owned.team;
+          let link = owned.link;
+          for (const operation of patch.Operations) {
+            const op = operation.op.trim().toLowerCase();
+            if (op !== "add" && op !== "replace" && op !== "remove") {
+              return yield* ScimApi.badRequest(
+                `Unknown patch op "${operation.op}"`,
+                "invalidSyntax",
               );
-          } else if (attribute.startsWith("members") || (path === "" && isRecord(operation.value) && "members" in operation.value)) {
-            const target =
-              path === "" && isRecord(operation.value)
-                ? { path: "members", value: operation.value["members"] }
-                : { path, value: operation.value };
-            const ids = memberIdsOf(target);
-            if (op === "replace" && !/members\[/i.test(path)) {
-              yield* requireMembers(connection, ids);
-              yield* replaceProvisioned(connection, id, ids);
-            } else if (op === "add") {
-              yield* requireMembers(connection, ids);
-              yield* Effect.forEach(ids, (userId) => addToTeam(id, userId), { discard: true });
-            } else if (op === "remove") {
-              // `remove` with no value and a bare `members` path clears the provisioned members.
-              const provisioned = yield* provisionedMembers(connection, id);
-              const toRemove = ids.length === 0 && !/members\[/i.test(path) ? provisioned : ids.filter((userId) => provisioned.includes(userId));
-              yield* Effect.forEach(toRemove, (userId) => removeFromTeam(id, userId), { discard: true });
+            }
+            const path = (operation.path ?? "").trim();
+            const attribute = path.toLowerCase();
+            if (
+              attribute === "displayname" ||
+              (path === "" && isRecord(operation.value) && "displayName" in operation.value)
+            ) {
+              const name = stringOf(
+                isRecord(operation.value) && path === ""
+                  ? operation.value["displayName"]
+                  : operation.value,
+              );
+              if (Option.isNone(name) || op === "remove") {
+                return yield* ScimApi.badRequest("displayName cannot be empty");
+              }
+              team = yield* renameGroup(connection, team, name.value);
+            } else if (attribute === "externalid") {
+              link = yield* records
+                .setExternalId(
+                  connection.id,
+                  "Group",
+                  id,
+                  op === "remove" ? null : Option.getOrNull(stringOf(operation.value)),
+                )
+                .pipe(
+                  Effect.catchTags({
+                    ScimLinkConflict: () =>
+                      Effect.fail(ScimApi.conflict("externalId is already provisioned")),
+                    ScimRecordNotFound: () => Effect.fail(ScimApi.notFound()),
+                  }),
+                );
+            } else if (
+              attribute.startsWith("members") ||
+              (path === "" && isRecord(operation.value) && "members" in operation.value)
+            ) {
+              const target =
+                path === "" && isRecord(operation.value)
+                  ? { path: "members", value: operation.value["members"] }
+                  : { path, value: operation.value };
+              const ids = memberIdsOf(target);
+              if (op === "replace" && !/members\[/i.test(path)) {
+                yield* requireMembers(connection, ids);
+                yield* replaceProvisioned(connection, id, ids);
+              } else if (op === "add") {
+                yield* requireMembers(connection, ids);
+                yield* Effect.forEach(ids, (userId) => addToTeam(id, userId), { discard: true });
+              } else if (op === "remove") {
+                // `remove` with no value and a bare `members` path clears the provisioned members.
+                const provisioned = yield* provisionedMembers(connection, id);
+                const toRemove =
+                  ids.length === 0 && !/members\[/i.test(path)
+                    ? provisioned
+                    : ids.filter((userId) => provisioned.includes(userId));
+                yield* Effect.forEach(toRemove, (userId) => removeFromTeam(id, userId), {
+                  discard: true,
+                });
+              }
             }
           }
-        }
-        yield* groupChanged(connection, id, "updated");
-        return yield* groupResource(connection, { link, team });
-      });
+          yield* groupChanged(connection, id, "updated");
+          return yield* groupResource(connection, { link, team });
+        },
+      );
 
       const deleteGroup: ScimShape["deleteGroup"] = Effect.fnUntraced(function* (connection, id) {
         yield* ownedGroup(connection, id);
@@ -1129,7 +1248,9 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
           Effect.catchTags({
             TeamRecordNotFound: () => Effect.void,
             "TeamRecords/HasChildren": () =>
-              Effect.fail(ScimApi.conflict("The group still has child teams; remove or move them first")),
+              Effect.fail(
+                ScimApi.conflict("The group still has child teams; remove or move them first"),
+              ),
           }),
         );
         // No session may keep a removed team active (CWM-003/OHS-007).
@@ -1198,12 +1319,14 @@ const schemaDescriptions: ReadonlyArray<typeof ScimApi.SchemaDescription.Type> =
     schemas: [ScimApi.SCHEMA_SCHEMA],
     id: ScimApi.USER_SCHEMA,
     name: "User",
-    description: "A user this connection provisioned: userName (immutable), name, displayName, emails, active, externalId.",
+    description:
+      "A user this connection provisioned: userName (immutable), name, displayName, emails, active, externalId.",
   },
   {
     schemas: [ScimApi.SCHEMA_SCHEMA],
     id: ScimApi.GROUP_SCHEMA,
     name: "Group",
-    description: "An organization team: displayName, members (the users this connection provisioned), externalId.",
+    description:
+      "An organization team: displayName, members (the users this connection provisioned), externalId.",
   },
 ];

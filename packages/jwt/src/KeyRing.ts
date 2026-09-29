@@ -187,7 +187,10 @@ const settleCurrent = Effect.fnUntraced(function* (options: {
     const winner = yield* records.findCurrent();
     if (Option.isSome(winner) && options.force) return winner.value;
   }
-  return yield* Defects.invariantViolation("SigningKeyUnsettled", "awthaq/jwt: could not settle a single current signing key after 5 attempts");
+  return yield* Defects.invariantViolation(
+    "SigningKeyUnsettled",
+    "awthaq/jwt: could not settle a single current signing key after 5 attempts",
+  );
 });
 
 /**

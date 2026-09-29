@@ -276,6 +276,8 @@ export function layer(
     Layer.provideMerge(MemoryPorts),
     Layer.provideMerge(HttpServer.layerServices),
     Layer.provideMerge(HttpRouter.layer),
+    // SAM-004: the composition's declared user fields, last so `Users` and the account handler both see it.
+    Layer.provideMerge(built.userFieldsLayer),
   );
 }
 

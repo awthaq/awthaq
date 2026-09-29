@@ -25,12 +25,25 @@ export const IdentityDto = Schema.Union([
 ]);
 export type IdentityDto = typeof IdentityDto.Type;
 
-/** The wire shape of `@awthaq/core`'s `UserRecord`, minus internal ids/timestamps a caller has no use for. */
+/**
+ * SAM-004/BEH-EA-040/048: the scalar a plugin-declared user field carries on the wire — the
+ * encoded side of every declared field is a string, a number or a boolean (`null` clears one).
+ */
+export const UserFieldValue = Schema.Union([Schema.String, Schema.Number, Schema.Boolean]);
+export type UserFieldValue = typeof UserFieldValue.Type;
+
+/**
+ * SAM-004/BEH-EA-040: the wire shape of `@awthaq/core`'s `UserRecord`, minus internal ids/timestamps a
+ * caller has no use for. `fields` is the bag of plugin-declared user fields the user holds a value for,
+ * keyed `<plugin id>_<field>`; a composition that declares none answers `{}`. The keys and value types a
+ * composition offers are `Auth.UserFieldsOf<typeof auth>`.
+ */
 export class AccountDto extends Schema.Class<AccountDto>("AccountDto")({
   id: Schema.String,
   identity: IdentityDto,
   name: Schema.String,
   image: Schema.NullOr(Schema.String),
+  fields: Schema.Record(Schema.String, UserFieldValue),
 }) {}
 
 /**
@@ -89,9 +102,39 @@ export const ImageUrl = Schema.String.check(
   Schema.isPattern(/^https?:\/\//i),
 );
 
+/** SAM-004/BEH-EA-048: naming a field no plugin declared. */
+export class UnknownUserField extends Schema.TaggedError<UnknownUserField>()(
+  "UnknownUserField",
+  { field: Schema.String },
+  { httpApiStatus: 422 },
+) {}
+
+/**
+ * SAM-004/BEH-EA-048: the field is declared `clientWritable: false` by its plugin (a plan tier, an
+ * elevation flag): only trusted server code may write it, never a request payload.
+ */
+export class UserFieldNotWritable extends Schema.TaggedError<UserFieldNotWritable>()(
+  "UserFieldNotWritable",
+  { field: Schema.String },
+  { httpApiStatus: 403 },
+) {}
+
+/** SAM-004: the value does not satisfy the field's own schema. */
+export class InvalidUserField extends Schema.TaggedError<InvalidUserField>()(
+  "InvalidUserField",
+  { field: Schema.String },
+  { httpApiStatus: 422 },
+) {}
+
 export const UpdateProfilePayload = Schema.Struct({
   name: Schema.String,
   image: Schema.optional(Schema.NullOr(ImageUrl)),
+  /**
+   * SAM-004/BEH-EA-048: values for plugin-declared user fields (`null` clears one). Only fields
+   * their plugin left `clientWritable` (the default) are accepted; a server-only field is
+   * `UserFieldNotWritable`, an undeclared one `UnknownUserField`.
+   */
+  fields: Schema.optional(Schema.Record(Schema.String, Schema.NullOr(UserFieldValue))),
 });
 export type UpdateProfilePayload = typeof UpdateProfilePayload.Type;
 
@@ -100,6 +143,7 @@ export const AccountGroup = HttpApiGroup.make("account")
     HttpApiEndpoint.patch("updateProfile", "/user", {
       payload: UpdateProfilePayload,
       success: AccountDto,
+      error: [UnknownUserField, UserFieldNotWritable, InvalidUserField],
     }),
   )
   .add(HttpApiEndpoint.delete("deleteUser", "/user"))

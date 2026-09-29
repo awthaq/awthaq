@@ -6,7 +6,8 @@
   "workspaces": {
     ".": {
       "entry": [
-        "scripts/*.mjs"
+        "scripts/*.mjs",
+        "spec/scripts/*.mjs"
       ],
       "ignoreDependencies": [
         "@arethetypeswrong/cli"

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-011 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
-> | Status | Accepted — design; implementation deferred |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Sharpened the Negative consequence to name the `@experimental` Context.Reference risk explicitly, contrasted with ADR-EA-007 (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Sharpened the Negative consequence to name the `@experimental` Context.Reference risk explicitly, contrasted with ADR-EA-007 (CCR-EA-002) <br> 1.2 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
 
 ---
 
@@ -33,5 +33,3 @@ Every plugin option surface is a `Context.Reference<Shape>` declared with a `def
 **Negative**: `Context.Reference` is not a settled, stable primitive that ADR-EA-011 merely happens to use — it is marked `@experimental` as of the v3 line (`research/01-effect-ecosystem.md` Q11), and awthaq's entire configuration mechanism, for every plugin, official and third-party alike, is built directly on it. This is a materially sharper risk than "one more concept to learn": if `Context.Reference`'s shape or default-resolution semantics change before v4 stabilizes, every plugin's `.config` sugar function and every `defaultValue` declaration is affected simultaneously, because there is no plugin that configures itself any other way (ADR-EA-006 rules out constructor-argument options as the fallback). This is unlike ADR-EA-007's stance on Effect v4 as a whole, where the project explicitly and knowingly accepts rc-line risk as "the project owner's own risk to carry" for the *entire* dependency, stated without hedging precisely because ADR-EA-007 treats that risk as a single, named, top-level decision the project owns. ADR-EA-011 does not carry the same explicit acknowledgment for the specific primitive it leans on hardest for the configuration surface — `Context.Reference` is used here as though its `@experimental` marking were already resolved, without ADR-EA-007's discipline of stating that risk as a decision in its own right for this one API.
 
 **Trade-off accepted**: The project accepts that `Context.Reference`'s pre-stable status is effectively re-incurred, unacknowledged, at the level of every single plugin's configuration surface — not just once, at the foundation, the way ADR-EA-007 accepts it for Effect v4 generally — in exchange for one uniform configuration mechanism across every plugin rather than a bespoke, per-plugin options-merging scheme. Should `Context.Reference`'s semantics shift before v4 stabilizes, the blast radius is every plugin's configuration surface at once, a cost this ADR accepts under the same umbrella ADR-EA-007 already carries for v4 generally, but one this document had not, until now, named as its own specific instance of that risk.
-
-Not yet implemented — see spec/roadmap.md for milestone.

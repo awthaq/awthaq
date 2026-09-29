@@ -76,6 +76,12 @@ export const eventsDropped = Metric.counter("awthaq_event_dropped_total", {
   incremental: true,
 });
 
+/** MA-004/ADR-EA-028: `AuthEvents.publish` could not write the durable audit row (the store was unavailable). */
+export const auditWriteFailures = Metric.counter("awthaq_audit_write_failed_total", {
+  description: "AuthEvents publishes whose durable AuditLog row could not be written",
+  incremental: true,
+});
+
 /** ECF-010: how many `AuthEvents.on`/`onBatch` subscriptions currently have a live drain fiber. */
 export const eventSubscriptionsActive = Metric.gauge("awthaq_event_subscriptions_active", {
   description: "Live AuthEvents subscription drain fibers",
@@ -129,10 +135,8 @@ export const securityIncidents = Metric.counter("awthaq_security_incident_total"
  * object does not type-check as an attribute, so a secret cannot reach a span
  * through this helper by accident (BEH-EA-199).
  */
-export const authSpan = (
-  name: string,
-  attributes: Readonly<Record<string, string | number | boolean>>,
-) =>
+export const authSpan =
+  (name: string, attributes: Readonly<Record<string, string | number | boolean>>) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.withSpan(name, { attributes }));
 

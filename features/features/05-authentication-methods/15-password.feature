@@ -1,3 +1,8 @@
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
+
 @authentication-methods @password
 Feature: Password Authentication
 
@@ -12,7 +17,7 @@ Feature: Password Authentication
       Then the User row and the initial session are both created under one transaction
 
     # TIR-005: the atomicity half of the claim above, observable only over a real transaction (SQLite).
-    @REQ-EA-690
+    @REQ-EA-692
     Scenario: A failure while issuing the initial session leaves no User row behind
       Given no user exists with email "alice@example.com"
       And the initial session cannot be issued
@@ -151,7 +156,7 @@ Feature: Password Authentication
 
     # TIR-005: the atomicity half of REQ-EA-317, over a real SQLite transaction with a fault injected
     # after the credential hash update.
-    @REQ-EA-691
+    @REQ-EA-693
     Scenario: A failure after the credential hash update rolls back the token, the new password and the session revocation together
       Given a live password-reset token for "alice" and an existing session "s1" for "alice"
       And the reset fails after the credential hash update
@@ -217,7 +222,7 @@ Feature: Password Authentication
 
     # CSD-009: under the default posture "unavailable" and "not breached" both let sign-up through,
     # so REQ-EA-324 cannot tell them apart; fail-closed can.
-    @REQ-EA-692
+    @REQ-EA-694
     Scenario Outline: Every failure mode of the breach-check provider is rejected under the fail-closed configuration
       Given "password({ breachCheck: { onUnavailable: \"reject\" } })"
       And the breach-database provider fails by <failure>

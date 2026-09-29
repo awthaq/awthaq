@@ -142,27 +142,29 @@ describe("AuthEvents", () => {
       }).pipe(Effect.provide(AuthEventsLive)),
   );
 
-  it.effect("ESS-007: on([a, b], h) delivers both tags through one subscription and nothing else", () =>
-    Effect.gen(function* () {
-      const seen = yield* Queue.unbounded<string>();
-      const events = yield* AuthEvents.AuthEvents;
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          yield* Layer.build(
-            AuthEvents.on(["auth.user.created", "auth.token.replay"], (event) =>
-              Queue.offer(seen, event._tag),
-            ),
-          );
-          yield* events.publish({ _tag: "auth.user.created", userId });
-          yield* events.publish({ _tag: "auth.user.signedIn", userId, strategy: "password" });
-          yield* events.publish({ _tag: "auth.token.replay", identifier: "x" });
-          assert.strictEqual(yield* Queue.take(seen), "auth.user.created");
-          assert.strictEqual(yield* Queue.take(seen), "auth.token.replay");
-          yield* Effect.yieldNow;
-          assert.strictEqual(yield* Queue.size(seen), 0);
-        }),
-      );
-    }).pipe(Effect.provide(AuthEventsLive)),
+  it.effect(
+    "ESS-007: on([a, b], h) delivers both tags through one subscription and nothing else",
+    () =>
+      Effect.gen(function* () {
+        const seen = yield* Queue.unbounded<string>();
+        const events = yield* AuthEvents.AuthEvents;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Layer.build(
+              AuthEvents.on(["auth.user.created", "auth.token.replay"], (event) =>
+                Queue.offer(seen, event._tag),
+              ),
+            );
+            yield* events.publish({ _tag: "auth.user.created", userId });
+            yield* events.publish({ _tag: "auth.user.signedIn", userId, strategy: "password" });
+            yield* events.publish({ _tag: "auth.token.replay", identifier: "x" });
+            assert.strictEqual(yield* Queue.take(seen), "auth.user.created");
+            assert.strictEqual(yield* Queue.take(seen), "auth.token.replay");
+            yield* Effect.yieldNow;
+            assert.strictEqual(yield* Queue.size(seen), 0);
+          }),
+        );
+      }).pipe(Effect.provide(AuthEventsLive)),
   );
 
   it.effect("ESS-004: onBatch groups up to `size` events, or flushes after `within`", () =>
@@ -172,14 +174,11 @@ describe("AuthEvents", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Layer.build(
-            AuthEvents.onBatch(
-              "auth.token.replay",
-              { size: 3, within: "5 seconds" },
-              (batch) =>
-                Queue.offer(
-                  batches,
-                  batch.map((event) => event.identifier),
-                ),
+            AuthEvents.onBatch("auth.token.replay", { size: 3, within: "5 seconds" }, (batch) =>
+              Queue.offer(
+                batches,
+                batch.map((event) => event.identifier),
+              ),
             ),
           );
           for (const id of ["a", "b", "c", "d"]) {
@@ -213,7 +212,9 @@ describe("AuthEvents", () => {
             publish: () => Effect.void,
             stream: Stream.empty,
             subscribe: Ref.updateAndGet(subscriptions, (n) => n + 1).pipe(
-              Effect.map((n) => (n === 1 ? Stream.die(new Error("drain defect")) : Stream.make(good))),
+              Effect.map((n) =>
+                n === 1 ? Stream.die(new Error("drain defect")) : Stream.make(good),
+              ),
             ),
             droppedCount: Effect.succeed(0),
           }),
@@ -292,7 +293,9 @@ describe("AuthEvents", () => {
       const records = Ref.makeUnsafe<ReadonlyArray<string>>([]);
       const Capture = Logger.layer([
         Logger.make((options) => {
-          Effect.runSync(Ref.update(records, (r) => [...r, JSON.stringify(options.message, replacer)]));
+          Effect.runSync(
+            Ref.update(records, (r) => [...r, JSON.stringify(options.message, replacer)]),
+          );
         }),
       ]);
       return Effect.gen(function* () {
@@ -302,7 +305,9 @@ describe("AuthEvents", () => {
           Effect.gen(function* () {
             yield* Layer.build(
               AuthEvents.on(["auth.token.replay", "auth.user.created"], () =>
-                Effect.die(new Error("boom")).pipe(Effect.ensuring(Deferred.succeed(done, undefined))),
+                Effect.die(new Error("boom")).pipe(
+                  Effect.ensuring(Deferred.succeed(done, undefined)),
+                ),
               ),
             );
             yield* events.publish({ _tag: "auth.token.replay", identifier: "x" });
@@ -310,112 +315,127 @@ describe("AuthEvents", () => {
             yield* Effect.yieldNow;
           }),
         );
-        const entry = (yield* Ref.get(records)).find((text) => text.includes("auth.event.observer.error"));
+        const entry = (yield* Ref.get(records)).find((text) =>
+          text.includes("auth.event.observer.error"),
+        );
         assert.include(entry ?? "", "auth.token.replay");
         assert.include(entry ?? "", "auth.token.replay,auth.user.created");
       }).pipe(Effect.provide(Layer.merge(AuthEventsLive, Capture)));
     },
   );
 
-  it.effect("EOTS-005/JH-002: subscriber failures are counted in awthaq_event_observer_error_total", () => {
-    const counter = Metric.withAttributes(Observability.eventObserverErrors, {
-      tag: "auth.token.replay",
-    });
-    return Effect.gen(function* () {
-      const before = (yield* Metric.value(counter)).count;
-      const done = yield* Deferred.make<void>();
-      const events = yield* AuthEvents.AuthEvents;
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          yield* Layer.build(
-            AuthEvents.on("auth.token.replay", () =>
-              Effect.die(new Error("boom")).pipe(Effect.ensuring(Deferred.succeed(done, undefined))),
-            ),
-          );
-          yield* events.publish({ _tag: "auth.token.replay", identifier: "x" });
-          yield* Deferred.await(done);
-          yield* Effect.yieldNow;
-        }),
-      );
-      assert.strictEqual((yield* Metric.value(counter)).count - before, 1);
-    }).pipe(Effect.provide(AuthEventsLive));
-  });
-
-  it.effect("ESA-002: every delivered event carries eventId and occurredAt equal to its AuditLog row", () =>
-    Effect.gen(function* () {
-      const events = yield* AuthEvents.AuthEvents;
-      const auditLog = yield* AuditLog.AuditLog;
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const stream = yield* events.subscribe;
-          const collected = yield* Effect.forkChild(
-            stream.pipe(Stream.take(1), Stream.runCollect),
-            { startImmediately: true },
-          );
-          yield* TestClock.adjust("42 millis");
-          yield* events.publish({ _tag: "auth.user.created", userId });
-          const [delivered] = yield* Fiber.join(collected);
-          const [row] = yield* auditLog.list();
-          assert.isDefined(delivered);
-          assert.isDefined(row);
-          assert.strictEqual(delivered?.eventId, row?.id);
-          assert.strictEqual(delivered?.occurredAt.epochMilliseconds, 42);
-          assert.deepStrictEqual(delivered?.occurredAt, row?.occurredAt);
-        }),
-      );
-    }).pipe(Effect.provide(AuthEventsLive)),
+  it.effect(
+    "EOTS-005/JH-002: subscriber failures are counted in awthaq_event_observer_error_total",
+    () => {
+      const counter = Metric.withAttributes(Observability.eventObserverErrors, {
+        tag: "auth.token.replay",
+      });
+      return Effect.gen(function* () {
+        const before = (yield* Metric.value(counter)).count;
+        const done = yield* Deferred.make<void>();
+        const events = yield* AuthEvents.AuthEvents;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Layer.build(
+              AuthEvents.on("auth.token.replay", () =>
+                Effect.die(new Error("boom")).pipe(
+                  Effect.ensuring(Deferred.succeed(done, undefined)),
+                ),
+              ),
+            );
+            yield* events.publish({ _tag: "auth.token.replay", identifier: "x" });
+            yield* Deferred.await(done);
+            yield* Effect.yieldNow;
+          }),
+        );
+        assert.strictEqual((yield* Metric.value(counter)).count - before, 1);
+      }).pipe(Effect.provide(AuthEventsLive));
+    },
   );
 
-  it.effect("ESA-002: event ids are time-ordered, so they sort in publish order even within one millisecond", () =>
-    Effect.gen(function* () {
-      const events = yield* AuthEvents.AuthEvents;
-      const auditLog = yield* AuditLog.AuditLog;
-      for (let i = 0; i < 25; i++) {
-        yield* events.publish({ _tag: "auth.token.replay", identifier: `n${i}` });
-      }
-      const replayed = Array.from(
-        yield* auditLog.replay().pipe(Stream.runCollect),
-        (record) => (record.payload._tag === "auth.token.replay" ? record.payload.identifier : ""),
-      );
-      assert.deepStrictEqual(
-        replayed,
-        Array.from({ length: 25 }, (_, i) => `n${i}`),
-      );
-      const [row] = yield* auditLog.list();
-      assert.match(row?.id ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    }).pipe(Effect.provide(AuthEventsLive)),
+  it.effect(
+    "ESA-002: every delivered event carries eventId and occurredAt equal to its AuditLog row",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const stream = yield* events.subscribe;
+            const collected = yield* Effect.forkChild(
+              stream.pipe(Stream.take(1), Stream.runCollect),
+              { startImmediately: true },
+            );
+            yield* TestClock.adjust("42 millis");
+            yield* events.publish({ _tag: "auth.user.created", userId });
+            const [delivered] = yield* Fiber.join(collected);
+            const [row] = yield* auditLog.list();
+            assert.isDefined(delivered);
+            assert.isDefined(row);
+            assert.strictEqual(delivered?.eventId, row?.id);
+            assert.strictEqual(delivered?.occurredAt.epochMilliseconds, 42);
+            assert.deepStrictEqual(delivered?.occurredAt, row?.occurredAt);
+          }),
+        );
+      }).pipe(Effect.provide(AuthEventsLive)),
   );
 
-  it.effect("ALF-006: publish stamps correlationId, ip and userAgent from AuthRequestContext, on the bus and in the audit row", () =>
-    Effect.gen(function* () {
-      const events = yield* AuthEvents.AuthEvents;
-      const auditLog = yield* AuditLog.AuditLog;
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const stream = yield* events.subscribe;
-          const collected = yield* Effect.forkChild(
-            stream.pipe(Stream.take(2), Stream.runCollect),
-            { startImmediately: true },
-          );
-          yield* events.publish({ _tag: "auth.user.created", userId }).pipe(
-            Effect.provideService(AuthRequestContext.AuthRequestContext, {
-              correlationId: Option.some("req-1"),
-              ip: Option.some("203.0.113.9"),
-              userAgent: Option.some("vitest"),
-            }),
-          );
-          yield* events.publish({ _tag: "auth.token.replay", identifier: "outside-a-request" });
-          const delivered = yield* Fiber.join(collected);
-          assert.deepStrictEqual(delivered[0]?.correlationId, Option.some("req-1"));
-          assert.deepStrictEqual(delivered[0]?.ip, Option.some("203.0.113.9"));
-          assert.deepStrictEqual(delivered[1]?.correlationId, Option.none());
-          const rows = yield* auditLog.list({ eventTag: "auth.user.created" });
-          assert.deepStrictEqual(rows[0]?.correlationId, Option.some("req-1"));
-          assert.deepStrictEqual(rows[0]?.ip, Option.some("203.0.113.9"));
-          assert.deepStrictEqual(rows[0]?.userAgent, Option.some("vitest"));
-        }),
-      );
-    }).pipe(Effect.provide(AuthEventsLive)),
+  it.effect(
+    "ESA-002: event ids are time-ordered, so they sort in publish order even within one millisecond",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const auditLog = yield* AuditLog.AuditLog;
+        for (let i = 0; i < 25; i++) {
+          yield* events.publish({ _tag: "auth.token.replay", identifier: `n${i}` });
+        }
+        const replayed = Array.from(yield* auditLog.replay().pipe(Stream.runCollect), (record) =>
+          record.payload._tag === "auth.token.replay" ? record.payload.identifier : "",
+        );
+        assert.deepStrictEqual(
+          replayed,
+          Array.from({ length: 25 }, (_, i) => `n${i}`),
+        );
+        const [row] = yield* auditLog.list();
+        assert.match(
+          row?.id ?? "",
+          /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        );
+      }).pipe(Effect.provide(AuthEventsLive)),
+  );
+
+  it.effect(
+    "ALF-006: publish stamps correlationId, ip and userAgent from AuthRequestContext, on the bus and in the audit row",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const stream = yield* events.subscribe;
+            const collected = yield* Effect.forkChild(
+              stream.pipe(Stream.take(2), Stream.runCollect),
+              { startImmediately: true },
+            );
+            yield* events.publish({ _tag: "auth.user.created", userId }).pipe(
+              Effect.provideService(AuthRequestContext.AuthRequestContext, {
+                correlationId: Option.some("req-1"),
+                ip: Option.some("203.0.113.9"),
+                userAgent: Option.some("vitest"),
+              }),
+            );
+            yield* events.publish({ _tag: "auth.token.replay", identifier: "outside-a-request" });
+            const delivered = yield* Fiber.join(collected);
+            assert.deepStrictEqual(delivered[0]?.correlationId, Option.some("req-1"));
+            assert.deepStrictEqual(delivered[0]?.ip, Option.some("203.0.113.9"));
+            assert.deepStrictEqual(delivered[1]?.correlationId, Option.none());
+            const rows = yield* auditLog.list({ eventTag: "auth.user.created" });
+            assert.deepStrictEqual(rows[0]?.correlationId, Option.some("req-1"));
+            assert.deepStrictEqual(rows[0]?.ip, Option.some("203.0.113.9"));
+            assert.deepStrictEqual(rows[0]?.userAgent, Option.some("vitest"));
+          }),
+        );
+      }).pipe(Effect.provide(AuthEventsLive)),
   );
 
   it.effect("ALF-006: the envelope names the span that was current at the publish site", () =>

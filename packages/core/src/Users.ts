@@ -21,12 +21,14 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import * as HookPoint from "./HookPoint.ts";
 import * as Hooks from "./Hooks.ts";
 import type * as Phone from "./Phone.ts";
 import * as Tenant from "./Tenant.ts";
+import * as UserFields from "./UserFields.ts";
 
 /**
  * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s own
@@ -290,11 +292,7 @@ export interface UsersShape {
     identity: PromotedIdentity,
   ) => Effect.Effect<
     UserRecord,
-    | UserNotFound
-    | IdentityMismatch
-    | EmailAlreadyExists
-    | PhoneAlreadyExists
-    | StoreUnavailable
+    UserNotFound | IdentityMismatch | EmailAlreadyExists | PhoneAlreadyExists | StoreUnavailable
   >;
   /**
    * BAM-009: replaces the email of an Email-identity user and resets
@@ -343,6 +341,39 @@ export interface UsersShape {
     readonly cursor?: UserCursor | undefined;
     readonly limit?: number | undefined;
   }) => Effect.Effect<UsersPage, StoreUnavailable>;
+  /**
+   * SAM-004 (BEH-EA-040): the plugin-declared fields (`UserFields`) this user holds a value for, keyed
+   * `<plugin id>_<field>`, as their columns store them (encoded scalars); an unset field is absent. `keys`
+   * narrows the read (default: every field of the composition's `UserFieldRegistry`). A key nobody declared
+   * is `UnknownUserField`. Prefer `typedFields`, which decodes.
+   */
+  readonly getFields: (
+    id: UserId,
+    keys?: ReadonlyArray<string>,
+  ) => Effect.Effect<
+    UserFields.Values,
+    UserNotFound | UserFields.UnknownUserField | StoreUnavailable
+  >;
+  /**
+   * SAM-004/BEH-EA-048: writes declared fields (`null` clears one) and resolves to the user's fields after
+   * the write. The write is validated as a whole before anything is stored: every key declared, every value
+   * accepted by its field's schema, and — for `source: "client"` (the HTTP profile path) — every field
+   * `clientWritable` (the default), else `UserFieldNotWritable`. The default `source: "server"` is trusted
+   * code (a billing webhook writing a plan tier) and may write any declared field. Announces the changed
+   * keys on `Hooks.AfterUserAttributesChanged`, so a policy reading them is refreshed (AAPS-005).
+   */
+  readonly setFields: (
+    id: UserId,
+    patch: UserFields.Patch,
+    options?: { readonly source?: UserFields.Source },
+  ) => Effect.Effect<
+    UserFields.Values,
+    | UserNotFound
+    | UserFields.UnknownUserField
+    | UserFields.UserFieldNotWritable
+    | UserFields.InvalidUserFieldValue
+    | StoreUnavailable
+  >;
 }
 
 /** BAM-005/BEH-EA-036: the keyset position of `Users.list`. */
@@ -360,6 +391,16 @@ export interface UsersPage {
 const DEFAULT_LIST_LIMIT = 50;
 
 export class Users extends Context.Service<Users, UsersShape>()("awthaq/core/Users") {}
+
+/** SAM-004: the held values among `keys` (an unset field is absent). */
+const pickFields = (held: UserFields.Values, keys: ReadonlyArray<string>): UserFields.Values => {
+  const picked: Record<string, UserFields.Scalar> = {};
+  for (const key of keys) {
+    const value = held[key];
+    if (value !== undefined) picked[key] = value;
+  }
+  return picked;
+};
 
 /** BEH-EA-041: the lower-cased form is the stored (and compared) form. */
 const normalizePromoted = (identity: PromotedIdentity): PromotedIdentity =>
@@ -390,8 +431,7 @@ const identityAlreadyExists = (
       )
     : Effect.fail(alreadyExists(identity));
 
-const userNotFound = (id: UserId) =>
-  new UserNotFound({ message: "awthaq: no such user", id });
+const userNotFound = (id: UserId) => new UserNotFound({ message: "awthaq: no such user", id });
 
 const identityMismatch = (
   id: UserId,
@@ -509,6 +549,9 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
       const crypto = yield* Crypto.Crypto;
       const beforeDelete = yield* Hooks.BeforeUserDelete;
       const announce = yield* attributesChangedAnnouncer;
+      // SAM-004: the declared fields, beside (not inside) the user record.
+      const registry = yield* UserFields.UserFieldRegistry;
+      const heldFields = yield* Ref.make(HashMap.empty<UserId, UserFields.Values>());
 
       const findById: UsersShape["findById"] = (id) =>
         Ref.get(state).pipe(
@@ -752,7 +795,45 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
           const existing = yield* findById(id);
           yield* beforeUserDeleteVeto(beforeDelete.run(deleteHookInput(existing)));
           yield* Ref.update(state, (s) => unindexRecord(s, existing));
+          yield* Ref.update(heldFields, HashMap.remove(id));
         });
+
+      const getFields: UsersShape["getFields"] = Effect.fnUntraced(function* (id, keys) {
+        yield* findById(id);
+        const wanted = yield* UserFields.resolve(registry, keys);
+        const held = yield* Ref.get(heldFields).pipe(
+          Effect.map((all) => Option.getOrElse(HashMap.get(all, id), () => ({}))),
+        );
+        return pickFields(
+          held,
+          wanted.map((descriptor) => descriptor.key),
+        );
+      });
+
+      const setFields: UsersShape["setFields"] = Effect.fnUntraced(function* (id, patch, options) {
+        yield* findById(id);
+        const checked = yield* UserFields.check(registry, patch, options?.source ?? "server");
+        const next = yield* Ref.modify(
+          heldFields,
+          (all): readonly [UserFields.Values, HashMap.HashMap<UserId, UserFields.Values>] => {
+            const merged: Record<string, UserFields.Scalar> = {
+              ...Option.getOrElse(HashMap.get(all, id), () => ({})),
+            };
+            for (const [descriptor, value] of checked) {
+              if (value === null) delete merged[descriptor.key];
+              else merged[descriptor.key] = value;
+            }
+            return [merged, HashMap.set(all, id, merged)];
+          },
+        );
+        if (checked.length > 0) {
+          yield* announce(
+            id,
+            checked.map(([descriptor]) => descriptor.key),
+          );
+        }
+        return pickFields(next, [...registry.keys()]);
+      });
 
       const list: UsersShape["list"] = (input) =>
         Ref.get(state).pipe(
@@ -800,6 +881,8 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
         setStatus,
         delete: delete_,
         list,
+        getFields,
+        setFields,
       };
     }),
   );
@@ -870,6 +953,40 @@ export const layerSql: Layer.Layer<
     const repo = yield* SqlRepositories.UsersRepository;
     const beforeDelete = yield* Hooks.BeforeUserDelete;
     const announce = yield* attributesChangedAnnouncer;
+    // SAM-004: the composition's declared fields; their columns exist because `Auth.make`'s generated migrations added them.
+    const registry = yield* UserFields.UserFieldRegistry;
+
+    /** The declared fields of `descriptors` that `id` holds a value for, or `UserNotFound`. */
+    const readDeclared = (
+      operation: string,
+      id: UserId,
+      descriptors: ReadonlyArray<UserFields.Descriptor>,
+    ) =>
+      repo
+        .readFields(
+          id,
+          descriptors.map((descriptor) => ({ name: descriptor.column, kind: descriptor.kind })),
+        )
+        .pipe(
+          orStoreUnavailable(operation),
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.fail(userNotFound(id)),
+              onSome: (byColumn) =>
+                Effect.succeed(
+                  pickFields(
+                    Object.fromEntries(
+                      descriptors.flatMap((descriptor) => {
+                        const value = byColumn[descriptor.column];
+                        return value === undefined ? [] : [[descriptor.key, value]];
+                      }),
+                    ),
+                    descriptors.map((descriptor) => descriptor.key),
+                  ),
+                ),
+            }),
+          ),
+        );
 
     const buildInsert = (input: CreateInput, identity: IdentityInput) =>
       repo.models.User.insert
@@ -933,7 +1050,9 @@ export const layerSql: Layer.Layer<
     const createOrGet: UsersShape["createOrGet"] = Effect.fnUntraced(function* (input) {
       const identity = normalizeIdentity(input.identity);
       const insert = yield* buildInsert(input, identity);
-      const inserted = yield* repo.insertIfAbsent(insert).pipe(orStoreUnavailable("Users.createOrGet"));
+      const inserted = yield* repo
+        .insertIfAbsent(insert)
+        .pipe(orStoreUnavailable("Users.createOrGet"));
       if (Option.isSome(inserted)) {
         return { user: yield* toUserRecord(inserted.value), created: true };
       }
@@ -1084,6 +1203,34 @@ export const layerSql: Layer.Layer<
         ),
       );
 
+    const getFields: UsersShape["getFields"] = Effect.fnUntraced(function* (id, keys) {
+      const wanted = yield* UserFields.resolve(registry, keys);
+      return yield* readDeclared("Users.getFields", id, wanted);
+    });
+
+    const setFields: UsersShape["setFields"] = Effect.fnUntraced(function* (id, patch, options) {
+      const checked = yield* UserFields.check(registry, patch, options?.source ?? "server");
+      if (checked.length > 0) {
+        const written = yield* repo
+          .writeFields(
+            id,
+            Object.fromEntries(
+              checked.map(([descriptor, value]): [string, UserFields.Scalar | null] => [
+                descriptor.column,
+                value,
+              ]),
+            ),
+          )
+          .pipe(orStoreUnavailable("Users.setFields"));
+        if (!written) return yield* Effect.fail(userNotFound(id));
+        yield* announce(
+          id,
+          checked.map(([descriptor]) => descriptor.key),
+        );
+      }
+      return yield* readDeclared("Users.setFields", id, [...registry.values()]);
+    });
+
     return {
       create,
       createOrGet,
@@ -1098,6 +1245,51 @@ export const layerSql: Layer.Layer<
       setStatus,
       delete: delete_,
       list,
+      getFields,
+      setFields,
     };
   }),
 );
+
+/**
+ * SAM-004: typed access to declared user fields. Pass the record of declarations — a composition's
+ * `auth.userFields` (keys `<plugin id>_<field>`) or one plugin's own — and read and write exactly those
+ * fields with their decoded types: `get` decodes what `getFields` returns (a stored value that no longer
+ * decodes is a defect, the schema drifted from the data), `set` encodes the patch (`null` clears a field)
+ * before `setFields` validates and gates it. `source` defaults to `"server"`.
+ *
+ * ```ts
+ * const billing = Users.typedFields(auth.userFields);
+ * yield* billing.set(userId, { billing_plan: "pro" });           // typed, server-trusted
+ * const { billing_plan } = yield* billing.get(userId);            // "free" | "pro" | undefined
+ * ```
+ */
+export const typedFields = <const F extends UserFields.Declarations>(declarations: F) => {
+  const partial = Schema.Struct(declarations).mapFields(Struct.map(Schema.optionalKey));
+  const decode = Schema.decodeUnknownEffect(partial);
+  const encode = Schema.encodeUnknownEffect(partial);
+  const keys = Object.keys(declarations);
+  return {
+    get: Effect.fnUntraced(function* (id: UserId) {
+      const users = yield* Users;
+      const values = yield* users.getFields(id, keys);
+      return yield* decode(values).pipe(Effect.orDie);
+    }),
+    set: Effect.fnUntraced(function* (
+      id: UserId,
+      patch: { readonly [K in keyof F]?: F[K]["Type"] | null },
+      options?: { readonly source?: UserFields.Source },
+    ) {
+      const users = yield* Users;
+      const cleared: Record<string, null> = {};
+      const written: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) cleared[key] = null;
+        else if (value !== undefined) written[key] = value;
+      }
+      const encoded = yield* encode(written).pipe(Effect.orDie);
+      const values = yield* users.setFields(id, { ...encoded, ...cleared }, options);
+      return yield* decode(pickFields(values, keys)).pipe(Effect.orDie);
+    }),
+  };
+};

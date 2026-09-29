@@ -1,3 +1,8 @@
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
+
 @authentication-methods @oauth
 Feature: OAuth and OIDC
 
@@ -35,7 +40,7 @@ Feature: OAuth and OIDC
       Then "state", "codeVerifier", and "nonce" are stored server-side under core Verification with purpose "oauth.flow"
       And the stored entry is single-use and TTL-bounded
 
-    @REQ-EA-693
+    @REQ-EA-695
     Scenario: Initiating an OIDC flow also stores the nonce server-side, encrypted at rest
       Given an OIDC flow configured for provider "okta"
       When an authorization request is built for "okta"
@@ -55,7 +60,7 @@ Feature: OAuth and OIDC
       When the same callback is replayed with the same "state" value
       Then the replayed callback fails, rather than re-running the token exchange
 
-    @REQ-EA-694
+    @REQ-EA-684
     Scenario: A user denying consent at the provider gets the typed denial outcome
       Given an OAuth flow initiated for provider "google"
       When the provider redirects back with the authorization error "access_denied"
@@ -109,7 +114,7 @@ Feature: OAuth and OIDC
       When the callback is handled
       Then the "google" Account is automatically linked to the existing account
 
-    @REQ-EA-695
+    @REQ-EA-685
     Scenario: A trusted provider never auto-links into a local account whose email is unverified
       Given "oauth({ providers: [google()], linking: { trustedProviders: [\"google\"] } })"
       And a "google" callback whose verified email matches an existing, unlinked account whose own email is unverified

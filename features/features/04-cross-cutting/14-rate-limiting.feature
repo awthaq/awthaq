@@ -1,3 +1,8 @@
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
+
 @cross-cutting @rate-limiting
 Feature: Rate Limiting
 
@@ -84,7 +89,7 @@ Feature: Rate Limiting
       Then the failure is not a generic or untyped error
       And a client can render a "try again in n seconds" message from "retryAfterMillis" alone, without parsing any message string
 
-    @REQ-EA-689
+    @REQ-EA-691
     Scenario: An HTTP client receives a 429 RateLimited body carrying retryAfterMillis
       Given the password plugin's sign-in rule enforced by a real limiter over the memory store
       When "alice" attempts to sign in with a wrong password more often than the rule allows

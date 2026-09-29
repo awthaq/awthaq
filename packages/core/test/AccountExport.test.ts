@@ -44,7 +44,10 @@ const seed = Effect.gen(function* () {
   const users = yield* Users.Users;
   const accounts = yield* Accounts.Accounts;
   const sessions = yield* Sessions.Sessions;
-  const user = yield* users.create({ identity: { _tag: "Email", email: "Export@Example.com" }, name: "Exporter" });
+  const user = yield* users.create({
+    identity: { _tag: "Email", email: "Export@Example.com" },
+    name: "Exporter",
+  });
   yield* accounts.link({
     userId: user.id,
     providerId: "google",

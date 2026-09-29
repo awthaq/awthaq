@@ -21,9 +21,9 @@ Every scenario is exactly one of:
 | ----------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Wired**   | no `@skip`                                                                       | A step definition runs it against real code; it passes or fails CI.                                                                                                                                                         |
 | **Pruned**  | scenario-level `@skip`, with a `# @skip: <reason>` comment directly above        | Wired in spirit but not observable _yet_. The reason is concrete: the unit test that covers it, or the issue that blocks it. A skipped scenario is a visible, non-blocking node in the report, never a silently absent one. |
-| **Unwired** | Feature-level `@skip @unwired` **and** an opening comment stating what blocks it | The behavior has no shipped implementation to run against (today only `28-device-authorization.feature`). Its `*.steps.test.ts` registers zero steps.                                                                       |
+| **Unwired** | Feature-level `@skip @unwired` **and** a note stating what blocks it | The behavior has no shipped implementation to run against (today only `28-device-authorization.feature`). Its `*.steps.test.ts` registers zero steps.                                                                       |
 
-`@unwired` is a grep-able marker separating "never wired" from an ordinary pruned scenario; an `@unwired` Feature opens with a comment saying what blocks it (the pre-implementation banner, or a more specific note), and `spec:verify` fails if the banner is left on a Feature that is not `@unwired`. Wiring a Feature removes the tag and the comment. Each file's wiring status is tracked in [`spec/traceability.md`](../spec/traceability.md) §6, and the requirement id of every scenario in [`traceability.md`](traceability.md).
+`@unwired` is a grep-able marker separating "never wired" from an ordinary pruned scenario; an `@unwired` Feature carries a note under the standard header saying what blocks it. Wiring a Feature removes the tag and the note. Each file's wiring status is tracked in [`spec/traceability.md`](../spec/traceability.md) §6, and the requirement id of every scenario in [`traceability.md`](traceability.md).
 
 `REQ-EA-NNN` tags are **allocator-owned**: write new scenarios untagged, then run `python3 features/scripts/allocate-req-ea.py` (idempotent; existing ids are never renumbered; it also regenerates `traceability.md`). `pnpm run spec:verify:strict` fails if a tag is duplicated, missing from the manifest, or a manifest row has no tag.
 
@@ -43,8 +43,8 @@ One `.feature` file per `spec/behaviors/NN-*.md` file that has been scenario-ise
 | `07-client-integration/`             | client-effect, react, nextjs-ssr                                                           | 169–192          |
 | `08-tooling/`                        | testing-harness, cli                                                                       | 193–208          |
 | `09-admin-and-impersonation/`        | admin-impersonation                                                                        | 209–220          |
-| `10-organization/`                   | organization                                                                               | 255–262          |
-| `11-jwt/`                            | jwt                                                                                        | 263–270          |
+| `10-organization/`                   | organization                                                                               | 258–265          |
+| `11-jwt/`                            | jwt                                                                                        | 266–273          |
 | `12-multi-tenancy/`                  | tenancy                                                                                    | 230–237          |
 | `13-enterprise-federation/`          | saml-sp (unwired), scim                                                                    | 238–245, 246–253 |
 

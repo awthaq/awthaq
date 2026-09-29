@@ -22,6 +22,7 @@
 //   - `auth_time` / `max_age` (authentication freshness, step-up) are
 //     unsupported here; they belong to wayfinder ticket 15 (step-up).
 
+import type { webcrypto } from "node:crypto";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -80,7 +81,13 @@ export type Jwk = typeof JwkSchema.Type;
  * here is a claim that it is verified against a real signature in `test/Jwt.test.ts`.
  */
 export type SigningAlg = "RS256" | "PS256" | "ES256" | "ES384" | "EdDSA";
-export const SIGNING_ALGS: ReadonlyArray<SigningAlg> = ["RS256", "PS256", "ES256", "ES384", "EdDSA"];
+export const SIGNING_ALGS: ReadonlyArray<SigningAlg> = [
+  "RS256",
+  "PS256",
+  "ES256",
+  "ES384",
+  "EdDSA",
+];
 export const isSigningAlg = (value: unknown): value is SigningAlg =>
   SIGNING_ALGS.some((alg) => alg === value);
 
@@ -182,7 +189,7 @@ const usableFor = (alg: SigningAlg, jwk: Jwk): boolean => {
 };
 
 /** Only the public-key members: `kid`/`alg`/`use` were already checked by `findKey` and mean nothing to WebCrypto's import. */
-const publicMembers = (jwk: Jwk): JsonWebKey => {
+const publicMembers = (jwk: Jwk): webcrypto.JsonWebKey => {
   switch (jwk.kty) {
     case "RSA":
       return { kty: jwk.kty, n: jwk.n, e: jwk.e };
@@ -197,8 +204,14 @@ const publicMembers = (jwk: Jwk): JsonWebKey => {
 const parameters = (
   alg: SigningAlg,
 ): {
-  readonly importAlgorithm: AlgorithmIdentifier | RsaHashedImportParams | EcKeyImportParams;
-  readonly verifyAlgorithm: AlgorithmIdentifier | RsaPssParams | EcdsaParams;
+  readonly importAlgorithm:
+    | webcrypto.AlgorithmIdentifier
+    | webcrypto.RsaHashedImportParams
+    | webcrypto.EcKeyImportParams;
+  readonly verifyAlgorithm:
+    | webcrypto.AlgorithmIdentifier
+    | webcrypto.RsaPssParams
+    | webcrypto.EcdsaParams;
 } => {
   switch (alg) {
     case "RS256":

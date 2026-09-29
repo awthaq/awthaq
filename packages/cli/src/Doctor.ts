@@ -235,7 +235,8 @@ export const diagnose = (config: CliConfig, options: Options) =>
     return reportOf(options, all);
   });
 
-const label = (found: Finding) => `${found.severity.padEnd(7)} [${found.code}] (${found.owner}) ${found.message}`;
+const label = (found: Finding) =>
+  `${found.severity.padEnd(7)} [${found.code}] (${found.owner}) ${found.message}`;
 
 export const renderText = (report: Report) => [
   `awthaq doctor (${report.environment}${report.build ? ", --build" : ""})`,

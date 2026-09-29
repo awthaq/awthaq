@@ -42,7 +42,7 @@ import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./Cs
 import { makeCapturingMailer, makeNamedRegistry, TestServices } from "./shared/Harness.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
 
-// `Accounts`/`Verification` are here only because `Erasure.layer` (BEH-EA-262's erasure
+// `Accounts`/`Verification` are here only because `Erasure.layer` (BEH-EA-265's erasure
 // clause) sweeps them too; the organization group itself never touches them.
 const CoreLive = Layer.mergeAll(
   Sessions.layerMemory,

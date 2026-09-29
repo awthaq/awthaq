@@ -168,6 +168,9 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
       "manifest",
       "migrations",
       "publicApi",
+      // SAM-004: the typed user-field schema and the layer that registers it.
+      "userFields",
+      "userFieldsLayer",
     ]);
   });
 

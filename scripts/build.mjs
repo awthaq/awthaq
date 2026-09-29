@@ -1,18 +1,14 @@
-// `tsc -b tsconfig.packages.json` errors (TS18002, "the 'files' list is
-// empty") when tsconfig.packages.json's `references` array is empty, which
-// it is until M1 Core adds real packages (spec/roadmap.md). Same class of
-// "no packages yet" problem as scripts/circular.mjs guards against, solved
-// the same way: check first, skip the real build cleanly when there is
-// nothing yet to build, and run+propagate the real `tsc -b` exit code once
-// there is.
+// Builds every package with `tsc -b tsconfig.packages.json`. Anchored at the repo
+// root, and an empty roster is a hard failure (MTS-009): the old "no packages yet,
+// skipping" branch turned a wrong-directory run into a silent success.
 import { globSync } from "glob";
-import { spawnSync } from "node:child_process";
+import { rootDir, runTsc } from "./_root.mjs";
 
-const packages = globSync(["packages/*/package.json"]);
+const packages = globSync(["packages/*/package.json"], { cwd: rootDir });
 
 if (packages.length === 0) {
-  console.log("build: no packages/* yet, skipping");
-} else {
-  const result = spawnSync("tsc", ["-b", "tsconfig.packages.json"], { stdio: "inherit" });
-  process.exit(result.status ?? 1);
+  console.error(`build: no packages/*/package.json found under ${rootDir}`);
+  process.exit(1);
 }
+
+process.exit(runTsc(["-b", "tsconfig.packages.json"]));

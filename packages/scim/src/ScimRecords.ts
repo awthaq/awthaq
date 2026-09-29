@@ -138,7 +138,8 @@ export class ScimRecords extends Context.Service<ScimRecords, ScimRecordsShape>(
 ) {}
 
 const notFound = (id: string): ScimRecordNotFound => new ScimRecordNotFound({ id });
-const conflict = (field: "name" | "externalId"): ScimLinkConflict => new ScimLinkConflict({ field });
+const conflict = (field: "name" | "externalId"): ScimLinkConflict =>
+  new ScimLinkConflict({ field });
 
 const byCreation = <A extends { readonly createdAt: DateTime.Utc }>(
   rows: ReadonlyArray<A>,
@@ -349,8 +350,13 @@ export const layerMemory = Layer.effect(
           state,
           (
             s,
-          ): readonly [Result.Result<ResourceLink, ScimRecordNotFound | ScimLinkConflict>, State] => {
-            const existing = s.links.find((row) => sameResource(row, connectionId, kind, resourceId));
+          ): readonly [
+            Result.Result<ResourceLink, ScimRecordNotFound | ScimLinkConflict>,
+            State,
+          ] => {
+            const existing = s.links.find((row) =>
+              sameResource(row, connectionId, kind, resourceId),
+            );
             if (existing === undefined) return [Result.fail(notFound(resourceId)), s] as const;
             const updated: ResourceLink = {
               ...existing,

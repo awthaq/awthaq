@@ -1,3 +1,8 @@
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
+
 # BDD-005/P20a: authored against the shipped `@awthaq/scim` (ADR-EA-023), like
 # 27-admin-impersonation.feature and 31-organization.feature. Every scenario drives the plugin's
 # `/scim/v2` group over real HTTP the way a directory service (Okta, Entra ID) would: as the

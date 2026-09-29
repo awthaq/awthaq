@@ -26,24 +26,28 @@ describe("Defects", () => {
     }),
   );
 
-  it.effect("invalidConfiguration and invariantViolation carry their field beside the sentence", () =>
-    Effect.gen(function* () {
-      const config = yield* defectOf(Defects.invalidConfiguration("ttl", "awthaq: ttl must be positive"));
-      assert.instanceOf(config, Defects.InvalidConfiguration);
-      if (config instanceof Defects.InvalidConfiguration) {
-        assert.strictEqual(config.setting, "ttl");
-        assert.strictEqual(config.message, "awthaq: ttl must be positive");
-      }
-      const invariant = yield* defectOf(
-        Defects.invariantViolation(
-          "MembershipVanished",
-          "awthaq: membership vanished between check and write",
-        ),
-      );
-      assert.instanceOf(invariant, Defects.InvariantViolation);
-      if (invariant instanceof Defects.InvariantViolation) {
-        assert.strictEqual(invariant.invariant, "MembershipVanished");
-      }
-    }),
+  it.effect(
+    "invalidConfiguration and invariantViolation carry their field beside the sentence",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* defectOf(
+          Defects.invalidConfiguration("ttl", "awthaq: ttl must be positive"),
+        );
+        assert.instanceOf(config, Defects.InvalidConfiguration);
+        if (config instanceof Defects.InvalidConfiguration) {
+          assert.strictEqual(config.setting, "ttl");
+          assert.strictEqual(config.message, "awthaq: ttl must be positive");
+        }
+        const invariant = yield* defectOf(
+          Defects.invariantViolation(
+            "MembershipVanished",
+            "awthaq: membership vanished between check and write",
+          ),
+        );
+        assert.instanceOf(invariant, Defects.InvariantViolation);
+        if (invariant instanceof Defects.InvariantViolation) {
+          assert.strictEqual(invariant.invariant, "MembershipVanished");
+        }
+      }),
   );
 });

@@ -1,3 +1,8 @@
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
+
 @foundations @persistence
 Feature: The Persistence Stratum
 

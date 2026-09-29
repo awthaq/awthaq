@@ -181,7 +181,8 @@ describe("native callbackURL allowlist (MNA-004, BEH-EA-128)", () => {
       const capture = Logger.make((entry) => {
         // `RateLimiter.layerPermissive` warns once on its first rule; that is not what is counted here.
         const line = JSON.stringify(entry.message);
-        if (entry.logLevel === "Warn" && line.includes("callbackURL discarded")) warnings.push(line);
+        if (entry.logLevel === "Warn" && line.includes("callbackURL discarded"))
+          warnings.push(line);
       });
       yield* Effect.gen(function* () {
         const oauth = yield* OAuth.OAuth;

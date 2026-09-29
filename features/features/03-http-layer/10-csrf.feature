@@ -1,3 +1,8 @@
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
+
 @http-layer @csrf
 Feature: CSRF Protection
 
@@ -168,7 +173,7 @@ Feature: CSRF Protection
 
     # MNA-008/decision 24 §2: what shipped for native clients — a request carrying an
     # Authorization header is exempt from CSRF minting and enforcement alike.
-    @REQ-EA-687
+    @REQ-EA-689
     Scenario: An unsafe request carrying an Authorization header needs no CSRF pair
       Given a native client with a bearer token and no cookie jar
       When it sends an unsafe "POST" request carrying an "Authorization" header and no CSRF header or double-submit cookie

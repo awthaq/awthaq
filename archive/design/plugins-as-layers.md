@@ -139,7 +139,7 @@ export namespace AuthPlugin {
 }
 ```
 
-Everything after `Service` is plain `Layer` algebra. `AuthPlugin.layer` only does three things: `Layer.effect(plugin, make)`, `Layer.provideMerge` of the handlers so they see the plugin service, and `Layer.mergeAll` of the taps.
+Everything after `Service` is plain `Layer` algebra. `AuthPlugin.layer` only does three things: `Layer.effect(plugin, make)`, `Layer.provideMerge` of the handlers so they see the plugin service, and `Layer.mergeAll` of the taps. *[Correction, ELC-005: superseded. The shipped `AuthPlugin.layer` merges handlers, `contributes` registry layers and the plugin's declared `taps` (which install as the plugin and whose hook points join `RIn`); see ADR-EA-008 and ADR-EA-033. This document is kept as the historical design record.]*
 
 ---
 

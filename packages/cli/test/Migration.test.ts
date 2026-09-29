@@ -67,10 +67,7 @@ describe("Migration.status", () => {
         const { exit, stdout } = yield* run(Migration.status(passwordAndRoles));
         assert.isTrue(Exit.isSuccess(exit));
         const core = yield* coreCount;
-        assert.strictEqual(
-          stdout[0],
-          `core (effect_sql_migrations): 0 applied, ${core} pending`,
-        );
+        assert.strictEqual(stdout[0], `core (effect_sql_migrations): 0 applied, ${core} pending`);
         assert.isTrue(
           stdout.some((line) =>
             /plugins \(awthaq_plugin_migrations\): 0 applied, 2 pending/.test(line),

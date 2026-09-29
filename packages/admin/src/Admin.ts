@@ -105,6 +105,35 @@ export interface AdminConfigShape {
    * `{ admin, target }` shape as `canManageUsers`.
    */
   readonly canBanUsers: (input: UserAdminGateInput) => Effect.Effect<boolean>;
+  /**
+   * BAM-005: the fail-closed predicate behind `AdminAccounts.deleteUser` — erasing an account
+   * is irreversible, so it is its own capability, apart from editing or banning. Same
+   * `{ admin, target }` shape as `canManageUsers`.
+   */
+  readonly canDeleteUsers: (input: UserAdminGateInput) => Effect.Effect<boolean>;
+  /**
+   * BAM-005/BAM-009: the fail-closed predicate behind `AdminAccounts.setUserEmail` and
+   * `setUserPassword` — the two acts that change *how a user proves who they are*, so a host
+   * that lets support staff edit profiles need not let them do this. Same shape as
+   * `canManageUsers`.
+   */
+  readonly canManageCredentials: (input: UserAdminGateInput) => Effect.Effect<boolean>;
+  /**
+   * BAM-005: the strength policy for an administrator-set password: the hints it violates
+   * (empty = acceptable), the same contract `@awthaq/password`'s own policy has. `Admin` cannot
+   * depend on the password plugin, so this is its own knob; the default is the password
+   * plugin's default floor (12 to 1024 characters), and a host that screens against a breach
+   * corpus, or wants the same policy as its `Password.config`, supplies it here.
+   */
+  readonly passwordPolicy: (
+    password: Redacted.Redacted<string>,
+  ) => Effect.Effect<ReadonlyArray<string>>;
+  /**
+   * BAM-009: builds the link mailed to the *new* address of an administrator-requested email
+   * change (the same `data.url` `@awthaq/password`'s `links.changeEmail` builds for a user's
+   * own request). Point both at the page that posts the token to `POST /change-email/confirm`.
+   */
+  readonly links: { readonly changeEmail?: (token: string) => string };
 }
 
 /** BAM-005: what `canManageUsers` is asked — see there. */
@@ -134,12 +163,24 @@ const episodeGateFrom =
       tenantId: episode.tenantId,
     });
 
+/** The password plugin's default floor and ceiling (`Password.config`'s `minLength` 12, `MAX_PASSWORD_LENGTH` 1024). */
+const defaultPasswordHints = (password: string): ReadonlyArray<string> =>
+  password.length < 12
+    ? ["must be at least 12 characters"]
+    : password.length > 1024
+      ? ["must be at most 1024 characters"]
+      : [];
+
 const defaultAdminConfig: AdminConfigShape = {
   maxDuration: Duration.hours(1),
   canImpersonate: () => Effect.succeed(false),
   canManageEpisode: episodeGateFrom(() => Effect.succeed(false)),
   canManageUsers: () => Effect.succeed(false),
   canBanUsers: () => Effect.succeed(false),
+  canDeleteUsers: () => Effect.succeed(false),
+  canManageCredentials: () => Effect.succeed(false),
+  passwordPolicy: (password) => Effect.succeed(defaultPasswordHints(Redacted.value(password))),
+  links: {},
   canAdministerTenants: () => Effect.succeed(false),
 };
 
@@ -190,7 +231,8 @@ export interface AdminShape {
     | AdminApi.AdminImpersonationDenied
     | AdminApi.AdminSelfImpersonationRefused
     | AdminApi.AdminAlreadyImpersonating
-    | AdminApi.AdminTargetNotFound | Errors.StoreUnavailable
+    | AdminApi.AdminTargetNotFound
+    | Errors.StoreUnavailable
   >;
   /** BEH-EA-216: `caller`'s own session must itself carry `actingAs`, or there is nothing to stop. */
   readonly stopImpersonating: (
@@ -202,7 +244,9 @@ export interface AdminShape {
     sessionId: string,
   ) => Effect.Effect<
     void,
-    AdminApi.AdminImpersonationDenied | AdminApi.AdminImpersonationNotFound | Errors.StoreUnavailable
+    | AdminApi.AdminImpersonationDenied
+    | AdminApi.AdminImpersonationNotFound
+    | Errors.StoreUnavailable
   >;
   /** BEH-EA-219: rows are filtered through `canManageEpisode` (IDS-001); full history by default, `active` narrows to unended episodes. */
   readonly list: (
@@ -249,7 +293,10 @@ export interface AdminShape {
   readonly getUser: (
     caller: Api.UserPrincipal,
     userId: Users.UserId,
-  ) => Effect.Effect<Users.UserRecord, AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound | Errors.StoreUnavailable>;
+  ) => Effect.Effect<
+    Users.UserRecord,
+    AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound | Errors.StoreUnavailable
+  >;
   /** `metadata` left out leaves it untouched; `null` clears it (`Users.updateProfile`'s own rule). */
   readonly updateUser: (
     caller: Api.UserPrincipal,
@@ -383,7 +430,10 @@ const toRecordDto = (
 const currentUserPrincipal = Effect.gen(function* () {
   const principal = yield* Api.CurrentPrincipal;
   if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: admin group reached with a non-User principal: ${principal._tag}`);
+    return yield* Defects.invariantViolation(
+      "NonUserPrincipal",
+      `awthaq: admin group reached with a non-User principal: ${principal._tag}`,
+    );
   }
   return principal;
 });
@@ -806,7 +856,11 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       // EP-009: captured at build, like every other configuration read — a request-time read would
       // see only the router's own context, not the overrides the composed layer was built under.
       const builtIn = yield* Effect.context<never>();
-      const catalog = Context.getOrElse(builtIn, EffectiveConfig.Catalog, () => EffectiveConfig.core);
+      const catalog = Context.getOrElse(
+        builtIn,
+        EffectiveConfig.Catalog,
+        () => EffectiveConfig.core,
+      );
 
       // IDS-006: the denied event names the refused call and, when the call named one,
       // the attempted target/session, so a SIEM need not join `ImpersonationRecords`.
@@ -1122,7 +1176,11 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       const tenantScopeFor = (caller: Api.UserPrincipal) =>
         adminConfig
           .canAdministerTenants({ admin: subjectOf(caller), organizationId: Option.none() })
-          .pipe(Effect.map((crossTenant): ImpersonationRecords.TenantScope => ({ anyTenant: crossTenant })));
+          .pipe(
+            Effect.map((crossTenant): ImpersonationRecords.TenantScope => ({
+              anyTenant: crossTenant,
+            })),
+          );
 
       const forceStop: AdminShape["forceStop"] = Effect.fnUntraced(function* (caller, sessionId) {
         yield* sweepExpired;
@@ -1149,11 +1207,13 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         // impersonation session, so it is safe to revoke even if the row is already
         // ended (which is then reported as not-found below).
         yield* revokeQuietly(sessionId);
-        const ended = yield* records.endEpisode(sessionId, "forcedByAdmin", scope).pipe(
-          Effect.catchTag("ImpersonationRecordNotFound", () =>
-            Effect.fail(new AdminApi.AdminImpersonationNotFound()),
-          ),
-        );
+        const ended = yield* records
+          .endEpisode(sessionId, "forcedByAdmin", scope)
+          .pipe(
+            Effect.catchTag("ImpersonationRecordNotFound", () =>
+              Effect.fail(new AdminApi.AdminImpersonationNotFound()),
+            ),
+          );
         yield* events.publish({
           _tag: "auth.admin.impersonationStopped",
           sessionId: Sessions.SessionId(sessionId),

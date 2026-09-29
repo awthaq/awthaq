@@ -3,6 +3,8 @@
   "include": ["step-definitions/**/*.ts"],
   "compilerOptions": {
     "composite": true,
+    // The scenarios speak to the app through `fetch`/`Response`; the base config carries no DOM lib (AH-009).
+    "lib": ["ESNext", "DOM"],
     "noEmit": false,
     "emitDeclarationOnly": true,
     "outDir": "./lib",

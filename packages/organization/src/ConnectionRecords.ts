@@ -124,7 +124,8 @@ export class ConnectionRecords extends Context.Service<ConnectionRecords, Connec
 ) {}
 
 const notFound = (id: string): ConnectionRecordNotFound => new ConnectionRecordNotFound({ id });
-const domainTaken = (domain: string): ConnectionDomainTaken => new ConnectionDomainTaken({ domain });
+const domainTaken = (domain: string): ConnectionDomainTaken =>
+  new ConnectionDomainTaken({ domain });
 
 /** `patch` applied over `record`; `updatedAt` is stamped by the caller. */
 const applyPatch = (
@@ -275,9 +276,7 @@ export const layerMemory = Layer.effect(
     const removeAllForOrganization: ConnectionRecordsShape["removeAllForOrganization"] = (
       organizationId,
     ) =>
-      Ref.update(state, (s) =>
-        HashMap.filter(s, (row) => row.organizationId !== organizationId),
-      );
+      Ref.update(state, (s) => HashMap.filter(s, (row) => row.organizationId !== organizationId));
 
     return {
       create,
@@ -413,7 +412,9 @@ export const layerSql = Layer.effect(
 
     const withDomains = (rows: ReadonlyArray<ConnectionRow>) =>
       domainsOf(rows.map((row) => row.id)).pipe(
-        Effect.map((byConnection) => rows.map((row) => toRecord(row, byConnection.get(row.id) ?? []))),
+        Effect.map((byConnection) =>
+          rows.map((row) => toRecord(row, byConnection.get(row.id) ?? [])),
+        ),
       );
 
     /** Replaces a connection's domain set inside the caller's transaction; a taken domain is a `ConnectionDomainTaken`. */
@@ -490,7 +491,8 @@ export const layerSql = Layer.effect(
         Effect.flatMap(
           Option.match({
             onNone: () => Effect.succeedNone,
-            onSome: (row) => Effect.map(withDomains([row]), (records) => Option.fromNullishOr(records[0])),
+            onSome: (row) =>
+              Effect.map(withDomains([row]), (records) => Option.fromNullishOr(records[0])),
           }),
         ),
       );
@@ -501,7 +503,8 @@ export const layerSql = Layer.effect(
         Effect.flatMap(
           Option.match({
             onNone: () => Effect.succeedNone,
-            onSome: (row) => Effect.map(withDomains([row]), (records) => Option.fromNullishOr(records[0])),
+            onSome: (row) =>
+              Effect.map(withDomains([row]), (records) => Option.fromNullishOr(records[0])),
           }),
         ),
       );

@@ -23,7 +23,13 @@ import { CoreMigrations } from "@awthaq/sql";
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { ConfirmationRequired, DatabaseUnavailable, LedgerDrift, MigrationFailed, NothingToApply } from "./CliErrors.ts";
+import {
+  ConfirmationRequired,
+  DatabaseUnavailable,
+  LedgerDrift,
+  MigrationFailed,
+  NothingToApply,
+} from "./CliErrors.ts";
 import type { LoadedAuth } from "./Config.ts";
 import * as Output from "./Output.ts";
 
@@ -76,7 +82,8 @@ export const diff = (
   };
 };
 
-const hasDrift = (report: LedgerReport) => report.unknown.length > 0 || report.outOfOrder.length > 0;
+const hasDrift = (report: LedgerReport) =>
+  report.unknown.length > 0 || report.outOfOrder.length > 0;
 
 const sqlFailure = () =>
   new DatabaseUnavailable({ message: "the database did not answer a ledger query" });
@@ -126,7 +133,12 @@ export const pluginKnown = (auth: LoadedAuth): ReadonlyArray<Entry> =>
 /** Reads both ledgers and diffs each against the linker's record. Read-only. */
 export const inspect = (auth: LoadedAuth) =>
   Effect.gen(function* () {
-    const core = diff("core", coreLedgerTable, yield* coreKnown, yield* readLedger(coreLedgerTable));
+    const core = diff(
+      "core",
+      coreLedgerTable,
+      yield* coreKnown,
+      yield* readLedger(coreLedgerTable),
+    );
     const plugins = diff(
       "plugins",
       pluginLedgerTable,
@@ -143,20 +155,27 @@ const label = (entry: Entry) => `${String(entry.id).padStart(4, "0")}  ${entry.n
 const renderLedger = (report: LedgerReport) => [
   `${report.ledger} (${report.table}): ${report.applied.length} applied, ${report.pending.length} pending`,
   ...report.pending.map((entry) => `  pending  ${label(entry)}`),
-  ...report.unknown.map((entry) => `  DRIFT    applied ${label(entry)} is not in the linker's record`),
+  ...report.unknown.map(
+    (entry) => `  DRIFT    applied ${label(entry)} is not in the linker's record`,
+  ),
   ...report.outOfOrder.map(
-    (entry) => `  DRIFT    pending ${label(entry)} sorts before an applied migration and would be skipped`,
+    (entry) =>
+      `  DRIFT    pending ${label(entry)} sorts before an applied migration and would be skipped`,
   ),
 ];
 
 export const renderStatus = (report: StatusReport) => [
   ...report.ledgers.flatMap(renderLedger),
-  ...(report.drift ? ["drift: the ledger and the linker's record disagree; resolve it before applying"] : []),
+  ...(report.drift
+    ? ["drift: the ledger and the linker's record disagree; resolve it before applying"]
+    : []),
 ];
 
 const driftMessage = (report: StatusReport) => {
   const found = report.ledgers.flatMap((ledger) => [
-    ...ledger.unknown.map((entry) => `${ledger.ledger} ledger holds ${label(entry)}, unknown to the linker`),
+    ...ledger.unknown.map(
+      (entry) => `${ledger.ledger} ledger holds ${label(entry)}, unknown to the linker`,
+    ),
     ...ledger.outOfOrder.map(
       (entry) => `${ledger.ledger} migration ${label(entry)} sorts before an applied one`,
     ),
@@ -213,7 +232,10 @@ export const apply = (auth: LoadedAuth, options: ApplyOptions) =>
     }
     yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations }).pipe(
       Effect.mapError(
-        () => new MigrationFailed({ message: "a core migration failed; none of that batch was applied" }),
+        () =>
+          new MigrationFailed({
+            message: "a core migration failed; none of that batch was applied",
+          }),
       ),
     );
     yield* Migrations.run(auth.migrations).pipe(

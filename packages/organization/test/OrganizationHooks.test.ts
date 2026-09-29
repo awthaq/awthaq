@@ -52,7 +52,11 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 );
 
 const buildLayer = (
-  extraHooks: Layer.Layer<never, never, Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>>,
+  extraHooks: Layer.Layer<
+    never,
+    never,
+    Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
+  >,
 ) =>
   Organization.Organization.layer.pipe(
     Layer.provide(

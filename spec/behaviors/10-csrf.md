@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-10 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a paragraph on the double-submit-cookie vs. synchronizer-token tradeoff (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a paragraph on the double-submit-cookie vs. synchronizer-token tradeoff (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 
 ---
 
-> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §14 and §18 — not code that has shipped.
+> Implemented in `@awthaq/server` (`packages/server/src/Csrf.ts`) and `@awthaq/client`; tests `packages/server/test/Csrf.test.ts`, `packages/client/test/Csrf.test.ts`; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/PRD.md` §14 and §18.
 
 ## BEH-EA-073: `Sec-Fetch-Site` is the primary CSRF signal
 

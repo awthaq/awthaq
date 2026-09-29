@@ -13,12 +13,12 @@ import * as ChallengeStore from "../src/ChallengeStore.ts";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
-import { ORIGIN, RP_ID, registrationPayload, extractChallenge } from "./passkeyTestFixtures.ts";
+import { ORIGIN, RP_ID, registrationPayload } from "./passkeyTestFixtures.ts";
 
 /** A limiter that never rejects (the default), or a real one over the in-memory store for a rate-limit test. */
 export const realRateLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
 
-export const makeCoreLive = (
+const makeCoreLive = (
   rateLimiter: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
 ) =>
   Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
@@ -30,15 +30,13 @@ export const makeCoreLive = (
     Layer.provideMerge(NodeCrypto.layer),
   );
 
-export const CoreLive = makeCoreLive();
-
 /**
  * The `passkey`/`passkey.credentials` groups declare `.middleware(Api.Authentication)`
  * (`PasskeyApi.ts`) — merged into `Passkey.Passkey.layer` regardless of
  * whether a test ever dispatches real HTTP, so this domain-level suite
  * still has to satisfy it, the same way `AuthHttp.test.ts` would.
  */
-export const AuthenticationLive = Authentication.AuthenticationLive.pipe(
+const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
@@ -47,7 +45,7 @@ export const AuthenticationLive = Authentication.AuthenticationLive.pipe(
  * carry `.middleware(Api.CsrfProtection)` — merged into `Passkey.Passkey.layer`
  * regardless of whether a test ever dispatches real HTTP.
  */
-export const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
     Layer.succeed(Csrf.CsrfConfig, {
       secret: Redacted.make("passkey-domain-test-csrf-secret-padded-to-thirty-two-bytes"),
@@ -57,7 +55,7 @@ export const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-export const PortsLive = (
+const PortsLive = (
   webAuthn: Layer.Layer<WebAuthn.WebAuthn>,
   challengeStore: Layer.Layer<
     ChallengeStore.ChallengeStore,
@@ -105,5 +103,3 @@ export const registerNewUser = (email: string, credentialId = "cred-mock-1") =>
     );
     return { userId: user.id, sessionId: issued.session.id };
   });
-
-export { extractChallenge };

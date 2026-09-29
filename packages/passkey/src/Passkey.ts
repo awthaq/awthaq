@@ -567,7 +567,12 @@ export interface PasskeyShape {
   readonly removeCredential: (
     userId: Users.UserId,
     id: string,
-  ) => Effect.Effect<void, PasskeyApi.PasskeyCredentialNotFound | PasskeyApi.PasskeyLastCredential | Errors.StoreUnavailable>;
+  ) => Effect.Effect<
+    void,
+    | PasskeyApi.PasskeyCredentialNotFound
+    | PasskeyApi.PasskeyLastCredential
+    | Errors.StoreUnavailable
+  >;
 }
 
 /** Same forward-reference pattern `@awthaq/password`'s own `PasswordHandlers` documents. */
@@ -575,7 +580,10 @@ const currentUserPrincipal: Effect.Effect<Api.UserPrincipal, never, Api.CurrentP
   Effect.gen(function* () {
     const principal = yield* Api.CurrentPrincipal;
     if (principal._tag !== "User") {
-      return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: passkey group reached with a non-User principal: ${principal._tag}`);
+      return yield* Defects.invariantViolation(
+        "NonUserPrincipal",
+        `awthaq: passkey group reached with a non-User principal: ${principal._tag}`,
+      );
     }
     return principal;
   });
@@ -656,7 +664,10 @@ export const PasskeyHandlers = Layer.mergeAll(
             Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
           );
           // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-          const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+          const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
+            delivery,
+            issued,
+          );
           return response;
         }),
       });
@@ -999,7 +1010,10 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       if (
         Duration.toMillis(config.ceremonyTimeout) > Duration.toMillis(ChallengeStore.CHALLENGE_TTL)
       ) {
-        return yield* Defects.invalidConfiguration("ceremonyTimeout", "awthaq: PasskeyConfig.ceremonyTimeout must not exceed the challenge TTL (five minutes, BEH-EA-132)");
+        return yield* Defects.invalidConfiguration(
+          "ceremonyTimeout",
+          "awthaq: PasskeyConfig.ceremonyTimeout must not exceed the challenge TTL (five minutes, BEH-EA-132)",
+        );
       }
       // HSK-002: conveyance is a request, not a verification.
       if (config.attestation !== "none" && config.attestationPolicy === undefined) {
@@ -1183,7 +1197,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           ) {
             return yield* Effect.fail(new PasskeyApi.PasskeyConditionalCreateDisabled());
           }
-          // BEH-EA-relaxed: Chrome's Conditional Create flow produces
+          // BEH-EA-256: Chrome's Conditional Create flow produces
           // UP=0/UV=0 — a `residentKey: "required"` discoverable
           // credential is also what makes autofill possible at all.
           return yield* creationOptions(userId, conditionalScope(sessionId), {
@@ -1735,7 +1749,10 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
                 // `passkey.reauthenticate`'s own `Authentication` middleware
                 // already proved this exact session live moments ago — see
                 // `Password.ts`'s own identical `reauthenticate` comment.
-                Defects.invariantViolation("RowVanished", "awthaq: reauthenticate's own current session vanished"),
+                Defects.invariantViolation(
+                  "RowVanished",
+                  "awthaq: reauthenticate's own current session vanished",
+                ),
               ),
             );
         },

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-007 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
-> | Status | Accepted — design; implementation deferred |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
 
 ---
 
@@ -35,5 +35,3 @@ awthaq targets **Effect v4** as its foundation, starting from the rc line, not s
 **Negative**: awthaq ships depending on a release candidate with "no more broad breaking changes planned" but not yet a stable release; users of awthaq inherit that same risk one level removed — an awthaq v1 release built on `effect@rc` cannot itself claim the stability guarantees a library built on a stable dependency would carry, and any late-breaking change in the v4 rc→stable transition becomes awthaq's problem to absorb.
 
 **Trade-off accepted**: The project knowingly accepts pre-1.0 dependency risk on its single most foundational dependency, in exchange for a plugin architecture that is simpler and more correct than anything achievable on stable v3 today. This is not a hedge or a placeholder decision — it is the deliberate, accepted cost of building the design the project actually wants rather than an interim design that would need to be discarded when v4 ships.
-
-Not yet implemented — see spec/roadmap.md for milestone.

@@ -3,7 +3,7 @@ ID: "AOMS-011"
 Title: "Adoption matrix still claims 'no code exists anywhere' while seven packages are implemented"
 Level: info
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/00-adoption-matrix.md:17"
 Auditor: "auth0-okta-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `docs` · `—` · reported by **Auth0/Okta Migration Specialist** (`auth0-okta-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ Cut a matrix rev 1.2 mirroring roadmap 1.2's correction: mark Password/OAuth-OID
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-status-banner-sweep`. Evidence at HEAD ec065a7: `spec/models/00-adoption-matrix.md:17`. Fix: Cut adoption-matrix Revision 1.2: add a 'Shipped (unpublished)' status, flip the six implemented rows, rewrite §0/§1/§5 prose, keep the unimplemented rows Planned. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/models/00-adoption-matrix.md rev 1.2: Shipped-Unpublished status added and eight rows flipped (Password, OAuth, Passkey, API Keys, JWT with the Bearer seam, Organization, Admin, SCIM), each naming its package and test directory; Magic Link, Email OTP and Two-Factor stay Planned-Phase2, SSO, OIDC Provider and Device Authorization Planned-Phase3, SAML Scheduled; the preamble, section 1 and section 5 are rewritten. The per-model files 01, 02, 03, 14 and 15 were reconciled in the same pass. Gates: pnpm run typecheck clean, pnpm run spec:verify:strict 28/28, pnpm run check:readmes green.

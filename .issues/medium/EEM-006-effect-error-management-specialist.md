@@ -55,3 +55,5 @@ Draw the platform boundary once inside each core Layer (orDie at the seam, as la
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `core-error-taxonomy`. Duplicate of `MA-004` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/Users.ts:88`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `MA-004-michael-arnaldi` — closed by its fix (see that issue's Resolved comment).

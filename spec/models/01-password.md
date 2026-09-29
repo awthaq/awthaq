@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-01 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Status flipped to Shipped-Unpublished; "What is missing" and "Verification" rewritten against `packages/password` (AOMS-011, CCR-EA-006) |
 ---
 
 ## What it is
-Password is the credential-based sign-up/sign-in method: an email (or username) plus a secret the user chose, hashed at rest, with reset and email-verification flows layered on top of the shared verification-token infrastructure. It is planned as the first plugin in the MVP tuple and the one every other MVP plugin (`OAuth`, `Passkey`, `Roles`) is written against as a peer.
+Password is the credential-based sign-up/sign-in method: an email (or username) plus a secret the user chose, hashed at rest, with reset and email-verification flows layered on top of the shared verification-token infrastructure. It is the first plugin in the MVP tuple and the one every other MVP plugin (`OAuth`, `Passkey`, `Roles`) is written against as a peer. It ships as `@awthaq/password`.
 
 ## Who asks for it
 Every application class that isn't exclusively social- or passwordless-first still asks for password sign-in as a fallback, and it is the credential-recovery path for other methods (an account with only a passkey still needs a way back in if the authenticator is lost). `research/07-passwords-2fa.md` Q52 treats NIST SP 800-63B-4 and the OWASP Password Storage Cheat Sheet as the normative baseline this plugin would be judged against — no composition rules, no forced periodic rotation, mandatory breach blocklist checking, argon2id at rest.
@@ -22,12 +22,12 @@ Every application class that isn't exclusively social- or passwordless-first sti
 ## Status
 | Property | Value |
 |---|---|
-| Status | Planned-MVP |
+| Status | Shipped-Unpublished (`packages/password`) |
 | Priority | P0 |
 | Enabler(s) | E1 — Verification-token infrastructure |
 | Breaking? | Purely additive — as the first plugin in the MVP tuple there is nothing earlier for it to break; it is the plugin later MVP/Phase-2 plugins (two-factor, magic link, email OTP) are themselves written not to break. |
 
-## How it would be expressed
+## How it is expressed
 ```ts
 export class Password extends AuthPlugin.Service<Password, PasswordShape>()("password", {
   apiVersion: 1,
@@ -49,7 +49,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
   static readonly config = (c: Partial<PasswordConfigShape>) => Layer.succeed(PasswordConfig, { ...defaults, ...c })
 }
 ```
-This is the plugin class reproduced from `archive/PRD.md` §9.1 verbatim, fence changed to `ts`. Its `PasswordHasher` port is where `research/07-passwords-2fa.md` Q52's recommendation would land: a `Layer` per algorithm (`Argon2IdHasher` default, `ScryptHasher`, `BcryptHasher`, `Pbkdf2Hasher`), all consuming and emitting PHC strings, with a `needsRehash(phc)` capability the plugin would call after every successful sign-in.
+This is the plugin class reproduced from `archive/PRD.md` §9.1 verbatim, fence changed to `ts`; the shipped class differs in detail (options are set with `Password.config({...})`, and the class is in `packages/password/src/Password.ts`). Its `PasswordHasher` port is where `research/07-passwords-2fa.md` Q52's recommendation landed: a `Layer` per algorithm (`layerArgon2id` default, `layerScrypt`, plus worker-pool variants), consuming and emitting PHC strings, with a rehash check the plugin runs after every successful sign-in; foreign hashes (bcrypt, Firebase scrypt, better-auth scrypt) are verify-only through `LegacyPasswordVerifiers`.
 
 ## Worked example
 ```ts
@@ -71,9 +71,9 @@ password({ breachCheck: true, minLength: 12 })
 Reproduced from `archive/design/usage-examples-v4.md` §6.1–6.3, fences changed to `ts`.
 
 ## What is missing
-Everything: no `Password` class exists, no `PasswordHasher` port has an implementation, no `password_account` table or migration has been written, no `PasswordApi` contract exists, and no handler has ever run. The one-sentence gap for an MVP method is that literally nothing beyond this document's sketch has been built — the sketch itself is drawn faithfully from `archive/PRD.md` and `archive/design/usage-examples-v4.md`, but neither of those is code.
+The plugin, its `PasswordApi` contract, the `PasswordHasher` port with two production hashers, the reset and verification flows, the breach check and the rate-limit rules are built. The requirement texts are in [`behaviors/15-password.md`](../behaviors/15-password.md) (BEH-EA-113 through 120); the package README documents what the sketch predates, notably the native-client path (`X-Awthaq-Token-Delivery: bearer`). There is no bcrypt or PBKDF2 hasher for *new* hashes, by design: those are verify-only legacy recipes.
 
 ## Verification
-None yet — no test exists.
+`packages/password/test/*` (sign-up and sign-in, policy, recovery, mail, hooks, rate limits, the real HTTP surface in `AuthHttp.test.ts`, `Auth.make` composition), `packages/ports/test/PasswordHasher.test.ts`, and the wired `15-password.feature` scenarios (`features/`); see [`spec/traceability.md`](../traceability.md) §5 for the per-file map.
 
 _Related: [00 — Adoption Matrix](00-adoption-matrix.md)_

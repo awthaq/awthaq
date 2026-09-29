@@ -67,6 +67,10 @@ const ErrorsApi = HttpApi.make("auth").add(
     HttpApiEndpoint.get("csrfRejected", "/errors/csrf-rejected", { error: [Api.CsrfRejected] }),
     HttpApiEndpoint.get("teapot", "/errors/teapot", { error: [Teapot] }),
     HttpApiEndpoint.get("rateLimited", "/errors/rate-limited", { error: [Api.RateLimited] }),
+    // MA-004/ADR-EA-028: an unavailable backing store answers 503, never a 401 or a 500.
+    HttpApiEndpoint.get("storeUnavailable", "/errors/store-unavailable", {
+      error: [Api.StoreUnavailable],
+    }),
   ),
 );
 const ErrorsHandlers = HttpApiBuilder.group(ErrorsApi, "errors", (handlers) =>
@@ -75,7 +79,10 @@ const ErrorsHandlers = HttpApiBuilder.group(ErrorsApi, "errors", (handlers) =>
     .handle("invalidCredentials", () => Effect.fail(new Api.InvalidCredentials()))
     .handle("csrfRejected", () => Effect.fail(new Api.CsrfRejected()))
     .handle("teapot", () => Effect.fail(new Teapot()))
-    .handle("rateLimited", () => Effect.fail(new Api.RateLimited({ retryAfterMillis: 1000 }))),
+    .handle("rateLimited", () => Effect.fail(new Api.RateLimited({ retryAfterMillis: 1000 })))
+    .handle("storeUnavailable", () =>
+      Effect.fail(new Api.StoreUnavailable({ operation: "sessions.verify" })),
+    ),
 );
 export class ErrorsPlugin extends AuthPlugin.Service<ErrorsPlugin, Record<string, never>>()(
   "errors",

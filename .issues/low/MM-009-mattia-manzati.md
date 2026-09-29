@@ -3,7 +3,7 @@ ID: "MM-009"
 Title: "Dev scripts are POSIX/tsc-on-PATH only; Windows contributors break"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "scripts/build.mjs:16"
 Auditor: "mattia-manzati"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Mattia Manzati — Effect Developer Tooling** (`mattia-manzati`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Use `spawnSync("tsc", args, { shell: process.platform === "win32" })` or invoke 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `dev-scripts-tooling`. Evidence at HEAD ec065a7: `scripts/build.mjs:16`. Fix: Make build/clean cross-platform using Node APIs instead of PATH lookups and POSIX shell. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** build.mjs runs tsc through node on the workspace typescript (`node_modules/typescript/bin/tsc`), no PATH lookup or POSIX shell; new scripts/clean.mjs (fs.rmSync over lib/, tsbuildinfo) replaces `rm -rf`; release-dry-run spawns with a shell on win32. A windows CI smoke job was not added (optional in the dossier).

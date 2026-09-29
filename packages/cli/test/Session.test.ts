@@ -18,8 +18,10 @@ import { serveAuth } from "./support/TestServer.ts";
 const withEnv = (env: Record<string, string>) =>
   Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })));
 
-const everything = (result: { readonly stdout: ReadonlyArray<string>; readonly stderr: ReadonlyArray<string> }) =>
-  [...result.stdout, ...result.stderr].join("\n");
+const everything = (result: {
+  readonly stdout: ReadonlyArray<string>;
+  readonly stderr: ReadonlyArray<string>;
+}) => [...result.stdout, ...result.stderr].join("\n");
 
 describe("login --token", () => {
   it.effect("validates the token against the server, stores it, and prints no secret", () =>
@@ -113,24 +115,29 @@ describe("login --token", () => {
 });
 
 describe("whoami", () => {
-  it.effect("prints the stored credential's session (and never the token); --json is one document", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const server = yield* serveAuth;
-        const { token, sessionId } = yield* server.issue("ada@example.com");
-        const creds = yield* memoryCredentials({ baseUrl: server.baseUrl, token: Redacted.make(token) });
-        const text = yield* runCli(["whoami"], undefined, { credentials: creds.layer });
-        assert.strictEqual(text.code, 0);
-        assert.include(everything(text), sessionId);
-        assert.notInclude(everything(text), token);
-        const json = yield* runCli(["whoami", "--json"], undefined, { credentials: creds.layer });
-        assert.strictEqual(json.code, 0);
-        const doc = JSON.parse(json.stdout.join("\n"));
-        assert.strictEqual(doc.sessionId, sessionId);
-        assert.strictEqual(doc.baseUrl, server.baseUrl);
-        assert.notInclude(json.stdout.join("\n"), token);
-      }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  it.effect(
+    "prints the stored credential's session (and never the token); --json is one document",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* serveAuth;
+          const { token, sessionId } = yield* server.issue("ada@example.com");
+          const creds = yield* memoryCredentials({
+            baseUrl: server.baseUrl,
+            token: Redacted.make(token),
+          });
+          const text = yield* runCli(["whoami"], undefined, { credentials: creds.layer });
+          assert.strictEqual(text.code, 0);
+          assert.include(everything(text), sessionId);
+          assert.notInclude(everything(text), token);
+          const json = yield* runCli(["whoami", "--json"], undefined, { credentials: creds.layer });
+          assert.strictEqual(json.code, 0);
+          const doc = JSON.parse(json.stdout.join("\n"));
+          assert.strictEqual(doc.sessionId, sessionId);
+          assert.strictEqual(doc.baseUrl, server.baseUrl);
+          assert.notInclude(json.stdout.join("\n"), token);
+        }),
+      ).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("exits 8 when not logged in", () =>
@@ -147,7 +154,10 @@ describe("whoami", () => {
         const server = yield* serveAuth;
         const { token, userId } = yield* server.issue("ada@example.com");
         yield* server.revokeAll(userId);
-        const creds = yield* memoryCredentials({ baseUrl: server.baseUrl, token: Redacted.make(token) });
+        const creds = yield* memoryCredentials({
+          baseUrl: server.baseUrl,
+          token: Redacted.make(token),
+        });
         const result = yield* runCli(["whoami"], undefined, { credentials: creds.layer });
         assert.strictEqual(result.code, 8);
         assert.include(everything(result), "rejected the token");
@@ -217,7 +227,10 @@ describe("whoami", () => {
         const result = yield* runCli(["whoami"], undefined, { credentials: creds.layer });
         assert.strictEqual(result.code, 0);
         const stored = yield* Ref.get(creds.ref);
-        assert.strictEqual(Option.isSome(stored) ? Redacted.value(stored.value.token) : "", rotated);
+        assert.strictEqual(
+          Option.isSome(stored) ? Redacted.value(stored.value.token) : "",
+          rotated,
+        );
       }),
     ),
   );
@@ -229,13 +242,19 @@ describe("logout", () => {
       Effect.gen(function* () {
         const server = yield* serveAuth;
         const { token } = yield* server.issue("ada@example.com");
-        const creds = yield* memoryCredentials({ baseUrl: server.baseUrl, token: Redacted.make(token) });
+        const creds = yield* memoryCredentials({
+          baseUrl: server.baseUrl,
+          token: Redacted.make(token),
+        });
         const result = yield* runCli(["logout"], undefined, { credentials: creds.layer });
         assert.strictEqual(result.code, 0);
         assert.isTrue(Option.isNone(yield* Ref.get(creds.ref)));
         // The token is dead server-side too: presenting it again is rejected.
         const again = yield* runCli(["whoami"], undefined, {
-          credentials: (yield* memoryCredentials({ baseUrl: server.baseUrl, token: Redacted.make(token) })).layer,
+          credentials: (yield* memoryCredentials({
+            baseUrl: server.baseUrl,
+            token: Redacted.make(token),
+          })).layer,
         });
         assert.strictEqual(again.code, 8);
       }),

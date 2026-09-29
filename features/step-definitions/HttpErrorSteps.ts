@@ -84,12 +84,14 @@ const ErrorEndpoints: Readonly<Record<string, string>> = {
   CsrfRejected: "/errors/csrf-rejected",
   Teapot: "/errors/teapot",
   RateLimited: "/errors/rate-limited",
+  StoreUnavailable: "/errors/store-unavailable",
 };
 
 type ErrorClass =
   | typeof Api.Unauthenticated
   | typeof Api.InvalidCredentials
   | typeof Api.CsrfRejected
+  | typeof Api.StoreUnavailable
   | typeof Teapot;
 
 const errorClass = (tag: string): ErrorClass => {
@@ -100,6 +102,8 @@ const errorClass = (tag: string): ErrorClass => {
       return Api.InvalidCredentials;
     case "CsrfRejected":
       return Api.CsrfRejected;
+    case "StoreUnavailable":
+      return Api.StoreUnavailable;
     case "Teapot":
       return Teapot;
     default:
@@ -848,7 +852,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     const tag = String(yield* getOutcome("errorTag"));
     assert.equal(served.tag, tag);
     assert.equal(
-      `${served.status} ${{ 401: "Unauthorized", 403: "Forbidden" }[served.status] ?? "?"}`,
+      `${served.status} ${{ 401: "Unauthorized", 403: "Forbidden", 503: "Service Unavailable" }[served.status] ?? "?"}`,
       expected,
     );
     // The status is the one the error's own `httpApiStatus` annotation declares.

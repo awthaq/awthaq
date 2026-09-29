@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `session-docs-accuracy`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:76`. Fix: Document the embedded-SQLite write ceiling and the move-to-Postgres signal; the retry/typed-error half rides on MA-004's decision. (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
 
 **Resolved (2026-09-29):** Doc: new spec/appendices/04-sqlite-embedded-deployment.md (EFAUTH-APP-04, index.yaml entry): single serialized connection, writes serialize, node:sqlite blocks the event loop, 5s busyTimeout then SqlError -> defect, what writes awthaq generates, sizing guidance, when to move to Postgres. Deferred: the bounded busy-retry (Schedule) around issue/touch is gated on MA-004's typed environmental-error channel (noted in the appendix).
+
+**Resolved (2026-09-29):** P21a: the deferred busy-retry half landed with MA-004: Errors.retryTransient around Sessions.issue and the verify touch (see MA-004).

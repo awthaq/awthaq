@@ -78,6 +78,8 @@ const DyingUsers = Layer.succeed(Users.Users, {
   setStatus: () => Effect.die("setStatus is not used"),
   delete: () => Effect.die("delete is not used"),
   list: () => Effect.die("list is not used"),
+  getFields: () => Effect.die("getFields is not used"),
+  setFields: () => Effect.die("setFields is not used"),
 });
 
 const askResolver = (subjectId: string, attribute: string) =>

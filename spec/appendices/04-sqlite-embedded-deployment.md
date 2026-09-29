@@ -18,7 +18,7 @@ This appendix is for an operator running awthaq's `layerSql` compositions over a
 
 `@effect/sql-sqlite-node` opens **one serialized connection**: every statement, and every explicit transaction for its whole duration, takes a single permit, so **writes serialize** (a transaction also holds the write lock when it only reads). WAL mode is enabled, which lets the file be read while it is being written, but a single connection means one statement runs at a time within the process regardless. `node:sqlite` is synchronous, so each statement **blocks the Node event loop** for its duration — a slow statement is a stall for every in-flight request, not just its own.
 
-When the database file is locked by *another* connection or process, SQLite waits up to `busyTimeout` (default **5 seconds**), then fails the statement. awthaq's `layerSql` maps that `SqlError` to a defect today (MA-004 tracks giving environmental failures a typed channel), so a busy timeout on a hot path surfaces as a `500`, not a retry.
+When the database file is locked by *another* connection or process, SQLite waits up to `busyTimeout` (default **5 seconds**), then fails the statement. awthaq's `layerSql` retries the two hot session writes (`Sessions.issue` and the idle-refresh touch in `Sessions.verify`) a bounded number of times first (`Errors.retryTransient`, SEA-002: three retries, jittered exponential backoff from 25 ms, only for a retryable `SqlError` such as `SQLITE_BUSY`), and a write that is still failing after that is the typed `StoreUnavailable` ([ADR-EA-028](../decisions/028-infrastructure-error-policy.md)), which the HTTP edge answers `503`, not a defect and not a `500`.
 
 ## What writes awthaq generates
 
@@ -43,6 +43,6 @@ Move when any of these holds:
 
 The move is a composition change, not a code change: swap `SqliteClient.layer(...)` for `PgClient.layer(...)` and run the same `CoreMigrations.coreMigrations` (dialect-branched internally). The README's "Swapping in Postgres for real" section is the recipe.
 
-## Not yet covered
+## Retry policy
 
-A bounded retry (a `Schedule`) around session issue and touch for a transient busy condition depends on MA-004 giving environmental SQL failures a typed error channel; until then a busy timeout is a defect, and this appendix's guidance is to size and monitor so it never occurs.
+The retry covers the whole unit of work, so a transaction that lost a lock race is rolled back and re-run from its first statement rather than resumed. It is not applied to other writes; a host with its own hot writes can wrap them in the same `Errors.retryTransient()`. The retries add at most about 175 ms before the outage becomes visible, far below `busyTimeout`, so the guidance stays the same: size and monitor so a busy database is the exception (`SqlError` reasons of busy or locked, and `StoreUnavailable` in the logs, are the signals to move to Postgres).

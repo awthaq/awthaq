@@ -22,43 +22,42 @@ const SqlLayer = ScimRecords.layerSql.pipe(
   Layer.provideMerge(Migrated),
 );
 
-const suite = (
-  name: string,
-  layer: Layer.Layer<ScimRecords.ScimRecords, unknown, never>,
-): void => {
+const suite = (name: string, layer: Layer.Layer<ScimRecords.ScimRecords, unknown, never>): void => {
   describe(name, () => {
-    it.effect("a connection is found by its token hash, listed per organization, and revocable once", () =>
-      Effect.gen(function* () {
-        const records = yield* ScimRecords.ScimRecords;
-        const created = yield* records.createConnection({
-          id: "c1",
-          organizationId: "org-1",
-          name: "Okta",
-          tokenHash: "hash-1",
-        });
-        assert.isTrue(Option.isNone(created.revokedAt));
-        const found = yield* records.findConnectionByTokenHash("hash-1");
-        assert.isTrue(Option.isSome(found) && found.value.id === "c1");
-        assert.isTrue(Option.isNone(yield* records.findConnectionByTokenHash("hash-2")));
-        yield* records.createConnection({
-          id: "c2",
-          organizationId: "org-2",
-          name: "Entra",
-          tokenHash: "hash-2",
-        });
-        assert.deepStrictEqual(
-          (yield* records.listConnections("org-1")).map((row) => row.id),
-          ["c1"],
-        );
-        const revoked = yield* records.revokeConnection("org-1", "c1");
-        assert.isTrue(Option.isSome(revoked.revokedAt));
-        // Idempotent: revoking again keeps the first time.
-        const again = yield* records.revokeConnection("org-1", "c1");
-        assert.deepStrictEqual(again.revokedAt, revoked.revokedAt);
-        // Another organization cannot revoke it.
-        const foreign = yield* records.revokeConnection("org-2", "c1").pipe(Effect.flip);
-        assert.strictEqual(foreign._tag, "ScimRecordNotFound");
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "a connection is found by its token hash, listed per organization, and revocable once",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* ScimRecords.ScimRecords;
+          const created = yield* records.createConnection({
+            id: "c1",
+            organizationId: "org-1",
+            name: "Okta",
+            tokenHash: "hash-1",
+          });
+          assert.isTrue(Option.isNone(created.revokedAt));
+          const found = yield* records.findConnectionByTokenHash("hash-1");
+          assert.isTrue(Option.isSome(found) && found.value.id === "c1");
+          assert.isTrue(Option.isNone(yield* records.findConnectionByTokenHash("hash-2")));
+          yield* records.createConnection({
+            id: "c2",
+            organizationId: "org-2",
+            name: "Entra",
+            tokenHash: "hash-2",
+          });
+          assert.deepStrictEqual(
+            (yield* records.listConnections("org-1")).map((row) => row.id),
+            ["c1"],
+          );
+          const revoked = yield* records.revokeConnection("org-1", "c1");
+          assert.isTrue(Option.isSome(revoked.revokedAt));
+          // Idempotent: revoking again keeps the first time.
+          const again = yield* records.revokeConnection("org-1", "c1");
+          assert.deepStrictEqual(again.revokedAt, revoked.revokedAt);
+          // Another organization cannot revoke it.
+          const foreign = yield* records.revokeConnection("org-2", "c1").pipe(Effect.flip);
+          assert.strictEqual(foreign._tag, "ScimRecordNotFound");
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("links round-trip and are found by id, userName and externalId", () =>
@@ -102,7 +101,13 @@ const suite = (
         assert.strictEqual(sameName._tag, "ScimLinkConflict");
         assert.strictEqual(sameName.field, "name");
         const sameExternal = yield* records
-          .link({ connectionId: "c1", kind: "User", resourceId: "u2", name: "bo@acme.example", externalId: "dir-1" })
+          .link({
+            connectionId: "c1",
+            kind: "User",
+            resourceId: "u2",
+            name: "bo@acme.example",
+            externalId: "dir-1",
+          })
           .pipe(Effect.flip);
         assert.strictEqual(sameExternal._tag, "ScimLinkConflict");
         assert.strictEqual(sameExternal.field, "externalId");
@@ -114,7 +119,12 @@ const suite = (
           name: "ada@acme.example",
           externalId: "dir-1",
         });
-        yield* records.link({ connectionId: "c1", kind: "Group", resourceId: "g1", externalId: "dir-1" });
+        yield* records.link({
+          connectionId: "c1",
+          kind: "Group",
+          resourceId: "g1",
+          externalId: "dir-1",
+        });
         // Rows with no name/externalId never collide with each other.
         yield* records.link({ connectionId: "c1", kind: "Group", resourceId: "g2" });
         yield* records.link({ connectionId: "c1", kind: "Group", resourceId: "g3" });
@@ -126,7 +136,13 @@ const suite = (
     it.effect("setExternalId sets, clears and refuses a taken id; unlink frees the keys", () =>
       Effect.gen(function* () {
         const records = yield* ScimRecords.ScimRecords;
-        yield* records.link({ connectionId: "c1", kind: "User", resourceId: "u1", name: "a", externalId: "e1" });
+        yield* records.link({
+          connectionId: "c1",
+          kind: "User",
+          resourceId: "u1",
+          name: "a",
+          externalId: "e1",
+        });
         yield* records.link({ connectionId: "c1", kind: "User", resourceId: "u2", name: "b" });
         const taken = yield* records.setExternalId("c1", "User", "u2", "e1").pipe(Effect.flip);
         assert.strictEqual(taken._tag, "ScimLinkConflict");
@@ -138,7 +154,13 @@ const suite = (
         assert.strictEqual(missing._tag, "ScimRecordNotFound");
         yield* records.unlink("c1", "User", "u1");
         assert.isTrue(Option.isNone(yield* records.find("c1", "User", "u1")));
-        yield* records.link({ connectionId: "c1", kind: "User", resourceId: "u9", name: "a", externalId: "e1" });
+        yield* records.link({
+          connectionId: "c1",
+          kind: "User",
+          resourceId: "u9",
+          name: "a",
+          externalId: "e1",
+        });
       }).pipe(Effect.provide(layer)),
     );
 
@@ -146,7 +168,12 @@ const suite = (
       Effect.gen(function* () {
         const records = yield* ScimRecords.ScimRecords;
         for (const n of [1, 2, 3, 4]) {
-          yield* records.link({ connectionId: "c1", kind: "User", resourceId: `u${n}`, name: `n${n}` });
+          yield* records.link({
+            connectionId: "c1",
+            kind: "User",
+            resourceId: `u${n}`,
+            name: `n${n}`,
+          });
         }
         yield* records.link({ connectionId: "c1", kind: "Group", resourceId: "g1" });
         yield* records.link({ connectionId: "c2", kind: "User", resourceId: "x1", name: "x" });

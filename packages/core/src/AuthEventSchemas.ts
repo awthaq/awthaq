@@ -92,6 +92,15 @@ export const UserEmailVerifiedEvent = Schema.TaggedStruct("auth.user.emailVerifi
 export type UserEmailVerifiedEvent = typeof UserEmailVerifiedEvent.Type;
 
 /**
+ * BAM-009/BAM-005: published by `@awthaq/password`'s change-email confirmation after the address
+ * was replaced and marked verified. No address, old or new (ADR-EA-029): identifiers only.
+ */
+export const UserEmailChangedEvent = Schema.TaggedStruct("auth.user.emailChanged", {
+  userId: UserIdSchema,
+});
+export type UserEmailChangedEvent = typeof UserEmailChangedEvent.Type;
+
+/**
  * SCP-006: published once a user's deletion has committed (`@awthaq/server`'s
  * account deletion). Deliberately no email: the row is being erased (ESA-005),
  * and the audit rows that outlive it are pseudonymized, not deleted.
@@ -338,6 +347,41 @@ export const AdminUserUnbannedEvent = Schema.TaggedStruct("auth.admin.userUnbann
   userId: UserIdSchema,
 });
 export type AdminUserUnbannedEvent = typeof AdminUserUnbannedEvent.Type;
+
+/**
+ * BAM-005: published by `@awthaq/admin`'s `AdminAccounts.deleteUser` after the erasure cascade
+ * committed. The erasure itself is announced by `auth.user.deleted` (`deletedBy: "admin"`); this
+ * one names *which administrator* did it.
+ */
+export const AdminUserDeletedEvent = Schema.TaggedStruct("auth.admin.userDeleted", {
+  adminUserId: UserIdSchema,
+  userId: UserIdSchema,
+});
+export type AdminUserDeletedEvent = typeof AdminUserDeletedEvent.Type;
+
+/**
+ * BAM-005/BAM-009: published by `AdminAccounts.setUserEmail` once the confirmation mail to the new
+ * address went out. The address is not changed yet: its owner completes the change from the mail.
+ * No address in the payload (ADR-EA-029).
+ */
+export const AdminUserEmailChangeRequestedEvent = Schema.TaggedStruct(
+  "auth.admin.userEmailChangeRequested",
+  {
+    adminUserId: UserIdSchema,
+    userId: UserIdSchema,
+  },
+);
+export type AdminUserEmailChangeRequestedEvent = typeof AdminUserEmailChangeRequestedEvent.Type;
+
+/**
+ * BAM-005: published by `AdminAccounts.setUserPassword` after the credential hash was replaced and
+ * every session of the user was revoked (reason `admin`).
+ */
+export const AdminUserPasswordSetEvent = Schema.TaggedStruct("auth.admin.userPasswordSet", {
+  adminUserId: UserIdSchema,
+  userId: UserIdSchema,
+});
+export type AdminUserPasswordSetEvent = typeof AdminUserPasswordSetEvent.Type;
 
 /**
  * EP-003 (ADR-EA-018): published by `@awthaq/admin`'s `AdminTenants.suspendOrganization`,
@@ -755,6 +799,7 @@ export const AuthEventSchema = Schema.Union([
   UserSignedInEvent,
   UserSignInFailedEvent,
   UserEmailVerifiedEvent,
+  UserEmailChangedEvent,
   UserDeletedEvent,
   UserDataExportedEvent,
   SessionReuseEvent,
@@ -774,6 +819,9 @@ export const AuthEventSchema = Schema.Union([
   AdminUserUpdatedEvent,
   AdminUserBannedEvent,
   AdminUserUnbannedEvent,
+  AdminUserDeletedEvent,
+  AdminUserEmailChangeRequestedEvent,
+  AdminUserPasswordSetEvent,
   AdminSessionRevokedEvent,
   AdminOrganizationSuspendedEvent,
   AdminOrganizationUnsuspendedEvent,

@@ -87,25 +87,31 @@ describe("RequestContext (ALF-006)", () => {
     );
   });
 
-  it.effect("every event one request raised shares one correlation id, even with no caller id", () =>
-    Effect.gen(function* () {
-      const auditLog = yield* serve;
-      yield* HttpClient.execute(HttpClientRequest.post("/ping"));
-      const rows = yield* auditLog.list();
-      const ids = rows.map((row) => Option.getOrElse(row.correlationId, () => ""));
-      assert.strictEqual(ids.length, 2);
-      assert.notStrictEqual(ids[0], "");
-      assert.strictEqual(ids[0], ids[1]);
-    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  it.effect(
+    "every event one request raised shares one correlation id, even with no caller id",
+    () =>
+      Effect.gen(function* () {
+        const auditLog = yield* serve;
+        yield* HttpClient.execute(HttpClientRequest.post("/ping"));
+        const rows = yield* auditLog.list();
+        const ids = rows.map((row) => Option.getOrElse(row.correlationId, () => ""));
+        assert.strictEqual(ids.length, 2);
+        assert.notStrictEqual(ids[0], "");
+        assert.strictEqual(ids[0], ids[1]);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it("an unusable x-request-id is ignored, never stored", () => {
-    const header = (value: string) => (name: string) => (name === "x-request-id" ? value : undefined);
+    const header = (value: string) => (name: string) =>
+      name === "x-request-id" ? value : undefined;
     assert.deepStrictEqual(RequestContext.correlationIdFrom(header("has spaces")), Option.none());
     assert.deepStrictEqual(
       RequestContext.correlationIdFrom(header("x".repeat(129))),
       Option.none(),
     );
-    assert.deepStrictEqual(RequestContext.correlationIdFrom(header("ok-1.2:3")), Option.some("ok-1.2:3"));
+    assert.deepStrictEqual(
+      RequestContext.correlationIdFrom(header("ok-1.2:3")),
+      Option.some("ok-1.2:3"),
+    );
   });
 });

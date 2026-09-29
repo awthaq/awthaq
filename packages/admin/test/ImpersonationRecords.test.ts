@@ -271,37 +271,42 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("IDS-002: list, findBySessionId and endEpisode only see the ambient tenant's episodes", () =>
-      Effect.gen(function* () {
-        const records = yield* ImpersonationRecords.ImpersonationRecords;
-        yield* seed(records, "s-a").pipe(Tenant.withTenant("org-a"));
-        yield* TestClock.adjust(Duration.millis(1));
-        yield* seed(records, "s-b").pipe(Tenant.withTenant("org-b"));
-        yield* TestClock.adjust(Duration.millis(1));
-        yield* seed(records, "s-plain");
+    it.effect(
+      "IDS-002: list, findBySessionId and endEpisode only see the ambient tenant's episodes",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* ImpersonationRecords.ImpersonationRecords;
+          yield* seed(records, "s-a").pipe(Tenant.withTenant("org-a"));
+          yield* TestClock.adjust(Duration.millis(1));
+          yield* seed(records, "s-b").pipe(Tenant.withTenant("org-b"));
+          yield* TestClock.adjust(Duration.millis(1));
+          yield* seed(records, "s-plain");
 
-        const sessionsOf = (tenant: string | undefined) =>
-          (tenant === undefined ? records.list() : records.list().pipe(Tenant.withTenant(tenant))).pipe(
-            Effect.map((page) => page.items.map((row) => row.sessionId)),
+          const sessionsOf = (tenant: string | undefined) =>
+            (tenant === undefined
+              ? records.list()
+              : records.list().pipe(Tenant.withTenant(tenant))
+            ).pipe(Effect.map((page) => page.items.map((row) => row.sessionId)));
+          assert.deepStrictEqual(yield* sessionsOf("org-a"), ["s-a"]);
+          assert.deepStrictEqual(yield* sessionsOf("org-b"), ["s-b"]);
+          assert.deepStrictEqual(yield* sessionsOf(undefined), ["s-plain"]);
+
+          // Another tenant's episode is not found, so it cannot be probed or ended from there.
+          assert.isTrue(
+            Option.isNone(yield* records.findBySessionId("s-a").pipe(Tenant.withTenant("org-b"))),
           );
-        assert.deepStrictEqual(yield* sessionsOf("org-a"), ["s-a"]);
-        assert.deepStrictEqual(yield* sessionsOf("org-b"), ["s-b"]);
-        assert.deepStrictEqual(yield* sessionsOf(undefined), ["s-plain"]);
-
-        // Another tenant's episode is not found, so it cannot be probed or ended from there.
-        assert.isTrue(
-          Option.isNone(yield* records.findBySessionId("s-a").pipe(Tenant.withTenant("org-b"))),
-        );
-        const crossEnd = yield* records
-          .endEpisode("s-a", "forcedByAdmin")
-          .pipe(Tenant.withTenant("org-b"), Effect.flip);
-        assert.strictEqual(crossEnd._tag, "ImpersonationRecordNotFound");
-        assert.isTrue(Option.isNone(yield* records.findBySessionId("s-a")));
-        // The owning tenant can, and the tenant-blind path (maintenance) still closes expired ones.
-        const ended = yield* records.endEpisode("s-a", "forcedByAdmin").pipe(Tenant.withTenant("org-a"));
-        assert.deepStrictEqual(ended.endedBy, Option.some("forcedByAdmin"));
-        assert.isTrue(Option.isNone(yield* records.verifyChain));
-      }).pipe(Effect.provide(layer)),
+          const crossEnd = yield* records
+            .endEpisode("s-a", "forcedByAdmin")
+            .pipe(Tenant.withTenant("org-b"), Effect.flip);
+          assert.strictEqual(crossEnd._tag, "ImpersonationRecordNotFound");
+          assert.isTrue(Option.isNone(yield* records.findBySessionId("s-a")));
+          // The owning tenant can, and the tenant-blind path (maintenance) still closes expired ones.
+          const ended = yield* records
+            .endEpisode("s-a", "forcedByAdmin")
+            .pipe(Tenant.withTenant("org-a"));
+          assert.deepStrictEqual(ended.endedBy, Option.some("forcedByAdmin"));
+          assert.isTrue(Option.isNone(yield* records.verifyChain));
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("IDS-002: closeExpired is maintenance over every tenant", () =>
@@ -320,7 +325,9 @@ const suite = (
             .pipe(Tenant.withTenant(tenant));
         }
         yield* TestClock.adjust(Duration.minutes(2));
-        const closed = yield* records.closeExpired(yield* DateTime.now).pipe(Tenant.withTenant("org-a"));
+        const closed = yield* records
+          .closeExpired(yield* DateTime.now)
+          .pipe(Tenant.withTenant("org-a"));
         assert.strictEqual(closed.length, 2);
         assert.isTrue(Option.isNone(yield* records.verifyChain));
       }).pipe(Effect.provide(layer)),

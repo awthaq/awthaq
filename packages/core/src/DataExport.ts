@@ -124,7 +124,9 @@ export const layer = Layer.effect(
         const linked = yield* accounts.listByUser(userId);
         const live = yield* sessions.list(userId);
         // Newest first, as `AuditLog.list` orders; the person's own trail, no one else's.
-        const trail = yield* auditLog.list({ actorUserId: userId }).pipe(Effect.orDie);
+        const trail = yield* auditLog
+          .list({ actorUserId: userId })
+          .pipe(Effect.catchTag("AuditLogDecodeError", Effect.die));
         const sections: Record<string, ExportSection> = {};
         for (const contribution of yield* registry.contributions) {
           sections[contribution.id] = yield* contribution.collect(subject);

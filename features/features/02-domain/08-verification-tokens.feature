@@ -1,3 +1,8 @@
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
+
 @domain @verification-tokens
 Feature: Verification Tokens
 
@@ -90,7 +95,7 @@ Feature: Verification Tokens
     # @skip: PV-220 — the replayed consume fails inside the endpoint's SqlTransaction, so the
     # audit row `AuthEvents.publish` wrote inline rolls back with it; only the bus copy survives.
     @skip
-    @REQ-EA-686
+    @REQ-EA-688
     Scenario: A replay through a transactional endpoint leaves a durable audit row
       Given a VerificationToken that has already been consumed
       When the same token is presented for consumption again

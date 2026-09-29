@@ -1,3 +1,8 @@
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
+
 @http-layer @http-error-mapping
 Feature: HTTP Serving and Error Mapping
 
@@ -39,7 +44,7 @@ Feature: HTTP Serving and Error Mapping
       When "Password" is composed alongside newly-added plugins "TwoFactor" and "OAuth"
       Then "Password"'s handler Layer continues to satisfy its own group's requirement unchanged
 
-    @REQ-EA-688
+    @REQ-EA-690
     Scenario: A plugin's group service is unchanged when another plugin is composed alongside it
       Given a plugin "Password" whose handlers were authored before any other plugin was chosen
       When "Password" is composed alongside a newly-added plugin "Invite"
@@ -164,6 +169,8 @@ Feature: HTTP Serving and Error Mapping
         | Unauthenticated    | 401 Unauthorized |
         | InvalidCredentials | 401 Unauthorized |
         | CsrfRejected       | 403 Forbidden    |
+        # MA-004/ADR-EA-028: an unavailable backing store is a typed, retryable outage, not a 401 or a 500.
+        | StoreUnavailable   | 503 Service Unavailable |
 
     @REQ-EA-241
     Scenario: No separate, out-of-band status-mapping table is maintained anywhere in the HTTP stratum

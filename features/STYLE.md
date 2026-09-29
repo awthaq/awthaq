@@ -6,7 +6,7 @@ This is the contract every `.feature` file in `features/features/` follows. It e
 
 Every scenario here is a Gherkin restatement of a requirement already specified in `spec/behaviors/NN-*.md`. This suite does not invent requirements — it makes the existing `BEH-EA-NNN` catalog executable-shaped. If a scenario needs a fact the source `.md` doesn't state, that's a signal to re-read the source (and its cross-referenced `ADR-EA`/`INV-EA`/`MOD-EA` entries), not to invent one.
 
-The suite is executable. A Feature whose behavior is implemented is wired to real step definitions (see [`README.md`](README.md)); only a Feature with no shipped implementation yet is `@unwired`, and only that Feature carries the pre-implementation banner (see "Banner" below).
+The suite is executable. A Feature whose behavior is implemented is wired to real step definitions (see [`README.md`](README.md)); only a Feature with no shipped implementation yet is `@unwired`, and only that Feature carries a blocked-by note (see "Header" below).
 
 ## File structure
 
@@ -36,16 +36,18 @@ Do not merge two `BEH-EA` ids into one `Rule`, and do not split one `BEH-EA` id 
 - **`@skip`, `@only`, `@unwired`.** `@skip` on a `Scenario:` marks a _pruned_ scenario, and a comment directly above it must state the concrete reason — `# @skip: <why it is not observable>; covered by <test file/name>` or `# @skip: blocked by <issue id>`. Never a bare `@skip`, never a pointer to a ticket that is not in the repository. `@skip @unwired` on the `Feature:` marks a Feature with no implementation to run against; it is removed the moment the Feature is wired. `@only` is for local debugging and must not be committed.
 - A `Rule` whose source heading cites an `ADR-EA` or `INV-EA` gets a one-line comment directly above it: `# BEH-EA-NNN — spec/behaviors/NN-*.md; see also ADR-EA-xxx, INV-EA-xxx`. Copy the citations straight from the source heading's `> **See:**` / `> **Invariant:**` line — don't re-derive them.
 
-## Banner (top of an `@unwired` `.feature` file only)
+## Header (top of every `.feature` file)
 
-A Feature that is `@unwired` opens with this banner; **wiring the Feature removes it** (`27-admin-impersonation.feature` is the model of a wired file — it has no banner). The banner may appear only on an `@unwired` Feature (`spec/scripts/verify-traceability.sh` fails otherwise); an `@unwired` Feature may instead open with a more specific note saying what blocks it, as `28-device-authorization.feature` does.
+Every `.feature` file opens with the same short comment saying what the file is and that only a wired file is runtime evidence:
 
 ```gherkin
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 ```
+
+A Feature that is `@unwired` adds a note directly under it saying what blocks it and what wiring it will involve (`28-device-authorization.feature` and `29-saml-sp.feature` are the models); wiring the Feature removes the `@skip @unwired` tags and that note.
 
 ## How many scenarios, and where edge cases come from
 

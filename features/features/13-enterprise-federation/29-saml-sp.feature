@@ -1,3 +1,8 @@
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
+
 # @unwired: `@awthaq/saml` (the SAML service provider) is not built — there is no package and
 # no `SamlSigner` port implementation, so these scenarios are specification only and every one
 # is reported as a skipped vitest node (see features/README.md, "Wired versus unwired"). They

@@ -1,15 +1,20 @@
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
+
 # MTI-011 (multi-tenant-isolation-specialist) / CWM-006: authored against the
 # real, implemented `@awthaq/organization` plugin, like 27-admin-impersonation.feature.
 # Every scenario drives the plugin's HTTP group as a real signed-in caller (a real user with a
-# verified address and a real session cookie). The isolation Rule (BEH-EA-256) is adversarial
+# verified address and a real session cookie). The isolation Rule (BEH-EA-259) is adversarial
 # by construction: an authenticated caller from one tenant aims at another tenant's identifiers.
 # Not yet covered here, tracked in the Rule that owns each: see the @skip rationales.
 
 @organization @multi-tenancy
 Feature: Organization
 
-  # BEH-EA-255 — spec/behaviors/31-organization.md; see also ADR-EA-018
-  @BEH-EA-255
+  # BEH-EA-258 — spec/behaviors/31-organization.md; see also ADR-EA-018
+  @BEH-EA-258
   Rule: An organization has a unique slug, its creator becomes its first member, and creating one is bounded by policy and quota
 
     @REQ-EA-708
@@ -71,8 +76,8 @@ Feature: Organization
       Then "alice" belongs to exactly the organizations "acme"
       And "bob" belongs to exactly the organizations "beta"
 
-  # BEH-EA-256 — spec/behaviors/31-organization.md; see also ADR-EA-018
-  @BEH-EA-256
+  # BEH-EA-259 — spec/behaviors/31-organization.md; see also ADR-EA-018
+  @BEH-EA-259
   Rule: Organization data is member-only, and a non-member cannot tell an organization that exists from one that does not
 
     @REQ-EA-715
@@ -213,8 +218,8 @@ Feature: Organization
       When the admin lists organizations
       Then only the organizations "bob" belongs to are listed
 
-  # BEH-EA-257 — spec/behaviors/31-organization.md; see also ADR-EA-018
-  @BEH-EA-257
+  # BEH-EA-260 — spec/behaviors/31-organization.md; see also ADR-EA-018
+  @BEH-EA-260
   Rule: An organization always keeps an owner, and only an owner may delete it
 
     @REQ-EA-724
@@ -292,8 +297,8 @@ Feature: Organization
       Then the response is 403
       And as seen by "alice", the organization "acme" has exactly the members "alice:owner"
 
-  # BEH-EA-258 — spec/behaviors/31-organization.md; see also BEH-EA-060
-  @BEH-EA-258
+  # BEH-EA-261 — spec/behaviors/31-organization.md; see also BEH-EA-060
+  @BEH-EA-261
   Rule: An invitation is an emailed capability for one address, with its own lifecycle
 
     @REQ-EA-731
@@ -448,8 +453,8 @@ Feature: Organization
       When "carol" accepts the invitation to the organization "acme" with the latest token mailed to "carol@example.com"
       Then the response is 200
 
-  # BEH-EA-259 — spec/behaviors/31-organization.md; see also ADR-EA-018
-  @BEH-EA-259
+  # BEH-EA-262 — spec/behaviors/31-organization.md; see also ADR-EA-018
+  @BEH-EA-262
   Rule: Membership, invitation and team quotas are enforced per organization
 
     @REQ-EA-744
@@ -521,8 +526,8 @@ Feature: Organization
       When "carol" accepts the invitation to the organization "beta" with the latest token mailed to "carol@example.com"
       Then the response is 200
 
-  # BEH-EA-260 — spec/behaviors/31-organization.md; see also ADR-EA-025
-  @BEH-EA-260
+  # BEH-EA-263 — spec/behaviors/31-organization.md; see also ADR-EA-025
+  @BEH-EA-263
   Rule: A role can only be conferred by someone who holds everything it grants
 
     Background:
@@ -594,8 +599,8 @@ Feature: Organization
         | admin  |
         | member |
 
-  # BEH-EA-261 — spec/behaviors/31-organization.md
-  @BEH-EA-261
+  # BEH-EA-264 — spec/behaviors/31-organization.md
+  @BEH-EA-264
   Rule: The active organization is per session, requires membership, and never outlives it
 
     Background:
@@ -652,8 +657,8 @@ Feature: Organization
       When "bob" asks for her active organization
       Then the active organization is none
 
-  # BEH-EA-262 — spec/behaviors/31-organization.md; see also BEH-EA-090, BEH-EA-092
-  @BEH-EA-262
+  # BEH-EA-265 — spec/behaviors/31-organization.md; see also BEH-EA-090, BEH-EA-092
+  @BEH-EA-265
   Rule: Organization changes are published as events, and a hook can veto them
 
     @REQ-EA-764
