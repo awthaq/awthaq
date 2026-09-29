@@ -13,6 +13,7 @@
 import * as PgClient from "@effect/sql-pg/PgClient";
 import * as PgTypes from "@effect/sql-pg/PgTypes";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -50,6 +51,9 @@ const postgres = (url: string, suite: string) => {
     // Every statement resolves unqualified names in this suite's own schema.
     startupParameters: { search_path: schema },
     maxConnections: 4,
+    // The pool reclaims idle connections on the `Clock` every `idleTimeout` (default 10 s), so a test that
+    // advances `TestClock` by days replays millions of ticks and times out. An hour keeps that bounded.
+    idleTimeout: Duration.hours(1),
     types: regclassTypes(),
   });
   const reset = Layer.effectDiscard(

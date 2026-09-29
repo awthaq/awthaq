@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # TS-001/ESR-009/PV-010: run the real-Postgres suites against a throwaway
-# postgres:16 container. This repo has no git remote, so the CI Postgres service
-# in `.github/workflows/check.yml` has never run these; this is the local
-# equivalent.
+# postgres:16 container. The CI Postgres service in `.github/workflows/check.yml` runs
+# these too; this is the local equivalent.
 #
 #   pnpm run test:pg                                       # starts a container, runs, removes it
 #   AWTHAQ_POSTGRES_URL=postgres://... pnpm run test:pg    # use an existing server
@@ -22,6 +21,7 @@ suites=(
   packages/sql/test/Repositories.postgres.test.ts
   packages/sql/test/RateLimiterStoreSql.postgres.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
+  packages/api-key/test/ApiKey.test.ts
   packages/core/test/Users.test.ts
   packages/core/test/UserFields.test.ts
   packages/core/test/UserImport.test.ts
