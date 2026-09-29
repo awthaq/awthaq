@@ -27,6 +27,7 @@ suites=(
   packages/jwt/test/RevocationStore.test.ts
   packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts
   packages/organization/test/ActiveContextRecords.test.ts
+  packages/organization/test/ConnectionRecords.test.ts
   packages/organization/test/InvitationRecords.test.ts
   packages/organization/test/MembershipRecords.test.ts
   packages/organization/test/OrgRoleRecords.test.ts

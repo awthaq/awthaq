@@ -1587,6 +1587,64 @@ const organizationMigrations: Migrations.Migrations = [
       yield* sql`ALTER TABLE organization_org ADD COLUMN "homeRegion" TEXT`;
     }),
   },
+  // EP-004 (ADR-EA-018): an organization's own OIDC/OAuth2 identity provider. No
+  // foreign keys, like every table here; the client secret is an `Encryption`
+  // envelope. Email domains get their own table so a domain routes to exactly one
+  // connection across all organizations (`domain` is `UNIQUE`, not the primary key:
+  // SQLite reports a primary-key clash as a generic constraint error, not a unique violation).
+  {
+    name: "organization_oauth_connection",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE organization_oauth_connection (
+            id TEXT PRIMARY KEY,
+            "organizationId" TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            issuer TEXT,
+            "discoveryUrl" TEXT,
+            "authorizationEndpoint" TEXT,
+            "tokenEndpoint" TEXT,
+            "jwksUri" TEXT,
+            "userinfoEndpoint" TEXT,
+            "clientId" TEXT NOT NULL,
+            "clientSecret" TEXT,
+            scopes TEXT NOT NULL,
+            "createdAt" TIMESTAMPTZ NOT NULL,
+            "updatedAt" TIMESTAMPTZ NOT NULL
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE organization_oauth_connection (
+            id TEXT PRIMARY KEY,
+            "organizationId" TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            issuer TEXT,
+            "discoveryUrl" TEXT,
+            "authorizationEndpoint" TEXT,
+            "tokenEndpoint" TEXT,
+            "jwksUri" TEXT,
+            "userinfoEndpoint" TEXT,
+            "clientId" TEXT NOT NULL,
+            "clientSecret" TEXT,
+            scopes TEXT NOT NULL,
+            "createdAt" TEXT NOT NULL,
+            "updatedAt" TEXT NOT NULL
+          )`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+      yield* sql`CREATE INDEX organization_oauth_connection_organization_id ON organization_oauth_connection("organizationId")`;
+      yield* sql`
+        CREATE TABLE organization_oauth_connection_domain (
+          domain TEXT NOT NULL UNIQUE,
+          "connectionId" TEXT NOT NULL,
+          "organizationId" TEXT NOT NULL
+        )`;
+      yield* sql`CREATE INDEX organization_oauth_connection_domain_connection_id ON organization_oauth_connection_domain("connectionId")`;
+    }),
+  },
   // EP-003: platform suspension. `NULL` = active; a timestamp = suspended since.
   {
     name: "organization_org_suspended_at",
@@ -1624,6 +1682,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       "organization_team_closure",
       "organization_role",
       "organization_active_context",
+      "organization_oauth_connection",
+      "organization_oauth_connection_domain",
     ],
   },
 ) {

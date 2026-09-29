@@ -15,6 +15,7 @@
 // sign-in would be worse than none. (`quirks.skipPkce` exists for it — see
 // BEH-EA-121 — once a POST callback does.)
 
+export * as Claims from "./Claims.ts";
 export type { PresetInput } from "./Claims.ts";
 export { discord } from "./discord.ts";
 export { github } from "./github.ts";

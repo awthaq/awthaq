@@ -15,5 +15,6 @@
 
 export * as OAuth from "./OAuth.ts";
 export * as OAuthApi from "./OAuthApi.ts";
+export * as OAuthConnections from "./OAuthConnections.ts";
 export * as OAuthProvider from "./OAuthProvider.ts";
 export * as OAuthTokenAccess from "./OAuthTokenAccess.ts";

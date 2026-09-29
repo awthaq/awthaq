@@ -3,7 +3,7 @@ ID: "EP-004"
 Title: "Connection model absent: OAuth providers are a static per-composition array"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:47"
 Auditor: "eugenio-pace"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `oauth` · reported by **Co-founder/former CEO of Auth0** (`eugenio-pace`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -60,3 +60,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [Multi-tenant composition model, per-org OAuth connections & tenant/shard key schema](../../.scratch/resolve-ready-for-human-findings/issues/18-multi-tenant-composition-oauth-connections.md) — Resolved via the same per-organization `OrganizationConnections`/`LayerMap` design described in the ticket, landing the connection model as data rather than another composition-time array. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `multi-tenant-oauth-connections`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:56`. Fix: Implement ticket 18's connection model: an org-owned connection table plus a LayerMap-backed resolver, consulted after the static registry. (effort XL). Full dossier: `.plan/slices/03-oauth-flow.md`.
+
+**Resolved (2026-09-29):** Per-organization OAuth connections landed (ADR-EA-018, BEH-EA-230). @awthaq/oauth: OAuthConnections.ts (Context.Reference resolver port, default none; the resolver returns a provider CONFIG plus a revision so discovery, deadlines, retries and the issuer-mismatch defect stay oauth-owned), OAuthProviders consults it after the static registry (static ids always win; connection discovery resolved lazily, cached per revision for an hour, never cached on failure; an invalid or unreachable connection answers ProviderUnavailable, never a runtime defect); OAuthProviders.has is now an Effect. @awthaq/organization: organization plugin migration for organization_oauth_connection and organization_oauth_connection_domain (domain UNIQUE, so one email domain routes to one connection across organizations), ConnectionRecords (memory + SQL), OrganizationConnections LayerMap.Service keyed by organization id (decrypts secrets, idle TTL, invalidated on every write) with oauthConnections installing the resolver, OrganizationConnectionStore (create/update/remove/list + discover for home-realm routing by organization id or email domain; secret sealed with Encryption AAD organization-oauth-connection:<id>:clientSecret and never returned; https-only, no credentials, no private/loopback hosts as an SSRF floor), cleanupOnOrganizationDelete opt-in layer. The provider id is org:<organizationId>:<connectionId>. Tests: oauth "EP-004" suite (a connection id completes a full callback, static wins over a same-id connection, unknown id, no resolver installed, discovery cached per revision and refetched on change, unreachable discovery is 503 and retried, issuer mismatch refused), ConnectionRecords contract (memory, SQL, Postgres), OrganizationConnections (ciphertext at rest, SSRF validation, domain uniqueness, discover, LayerMap cache and invalidation, undecryptable secret drops only that connection, cleanup hook) and an end-to-end organization -> oauth sign-in. Deferred (own follow-ups, not blockers): HTTP CRUD for connections (belongs to ticket 19 admin surface; needs a connection statement in PermissionEngine), DNS-proof verification of email domains, SAML kind (reserved by the ADR).

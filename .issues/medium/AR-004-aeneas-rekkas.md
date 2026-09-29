@@ -55,3 +55,5 @@ Decide and document the tenancy line: either declare orgs-as-membership (single-
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `org-config-and-tenancy`. Duplicate of `EP-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `.scratch/resolve-ready-for-human-findings/issues/18-multi-tenant-composition-oauth-connections.md:60`. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `EP-001-eugenio-pace` — closed by its fix (see that issue's Resolved comment).

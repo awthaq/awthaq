@@ -34,6 +34,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as OAuth from "../src/OAuth.ts";
+import * as OAuthConnections from "../src/OAuthConnections.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
 import * as OAuthTokenAccess from "../src/OAuthTokenAccess.ts";
 import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
@@ -125,8 +126,15 @@ const buildLayer = (options: {
   readonly retry?: OAuth.OAuthConfigInput["retry"];
   /** Extra `OAuth.config` fields (clock skew, id_token age, ...). */
   readonly config?: Partial<OAuth.OAuthConfigInput>;
+  /** EP-004: per-organization connections, consulted after the static registry. */
+  readonly connections?: OAuthConnections.OAuthConnectionResolverShape;
 }) =>
   OAuth.OAuth.layer.pipe(
+    Layer.provide(
+      options.connections === undefined
+        ? Layer.empty
+        : OAuthConnections.layer(options.connections),
+    ),
     // `OAuthApi.OAuthGroup`'s own `.middleware(Api.OptionalAuthentication)`
     // is part of what `OAuth.layer` merges its handlers with — required
     // even for these domain-level tests, which never issue an HTTP
@@ -3286,6 +3294,175 @@ describe("OAuth", () => {
             }),
           ),
         ),
+    );
+  });
+});
+
+describe("EP-004: per-organization connections (BEH-EA-230)", () => {
+  const connectionId = "org:org-1:conn-1";
+  const userinfoRoutes = {
+    "/token": { access_token: "at-1" },
+    "/userinfo": { id: "acme-user-1", email: "ada@example.com" },
+  };
+
+  /** A resolver over a fixed table; `calls` counts lookups, `revision` is mutable per test. */
+  const resolverOver = (table: Record<string, () => OAuthProvider.OAuthProviderConfig>) => {
+    const calls: Array<string> = [];
+    const state = { revision: "r1" };
+    const resolver: OAuthConnections.OAuthConnectionResolverShape = {
+      find: (providerId) =>
+        Effect.sync(() => {
+          calls.push(providerId);
+          const build = table[providerId];
+          return build === undefined
+            ? Option.none()
+            : Option.some({ config: build(), revision: state.revision });
+        }),
+    };
+    return { resolver, calls, state };
+  };
+
+  it.effect("a connection id that is not in the static registry completes a full callback", () => {
+    const { resolver } = resolverOver({ [connectionId]: () => acme({ id: connectionId }) });
+    return Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const accounts = yield* Accounts.Accounts;
+      const { location, state } = yield* oauth.authorize(connectionId, {
+        callbackURL: undefined,
+        link: undefined,
+      });
+      assert.strictEqual(
+        new URL(location).searchParams.get("redirect_uri"),
+        `${baseUrl}/oauth/${connectionId}/callback`,
+      );
+      const outcome = yield* oauth.callback(connectionId, {
+        code: "auth-code",
+        state,
+        iss: undefined,
+        cookieState: state,
+      });
+      assert.isDefined(outcome.session);
+      // The account is linked under the namespaced connection id, never a static provider's.
+      const linked = yield* accounts.findByProviderSubject(connectionId, "acme-user-1", "");
+      assert.isTrue(Option.isSome(linked));
+    }).pipe(
+      Effect.provide(
+        buildLayer({ providers: [], httpRoutes: userinfoRoutes, connections: resolver }),
+      ),
+    );
+  });
+
+  it.effect("a static provider id still wins over a connection with the same id", () => {
+    const { resolver, calls } = resolverOver({
+      acme: () => acme({ id: "acme", clientId: Config.succeed("hijacked-client") }),
+    });
+    return Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const { location } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+      assert.strictEqual(new URL(location).searchParams.get("client_id"), "acme-client-id");
+      assert.deepStrictEqual(calls, []);
+    }).pipe(
+      Effect.provide(buildLayer({ providers: [acme()], connections: resolver })),
+    );
+  });
+
+  it.effect("an id that is neither static nor a known connection is ProviderNotFound", () => {
+    const { resolver } = resolverOver({});
+    return Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const failure = yield* oauth
+        .authorize("org:org-1:missing", { callbackURL: undefined, link: undefined })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "ProviderNotFound");
+    }).pipe(Effect.provide(buildLayer({ providers: [], connections: resolver })));
+  });
+
+  it.effect("with no resolver installed, connection ids are unknown (single-tenant unchanged)", () =>
+    Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const failure = yield* oauth
+        .authorize(connectionId, { callbackURL: undefined, link: undefined })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "ProviderNotFound");
+    }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+  );
+
+  it.effect("a connection's discovery is fetched once per revision and refetched when it changes", () => {
+    let discoveries = 0;
+    const oidcConnection = () =>
+      okta({ id: connectionId });
+    const { resolver, state } = resolverOver({ [connectionId]: oidcConnection });
+    return Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const authorize = () =>
+        oauth.authorize(connectionId, { callbackURL: undefined, link: undefined });
+      yield* authorize();
+      yield* authorize();
+      assert.strictEqual(discoveries, 1);
+      state.revision = "r2";
+      yield* authorize();
+      assert.strictEqual(discoveries, 2);
+    }).pipe(
+      Effect.provide(
+        buildLayer({
+          providers: [],
+          connections: resolver,
+          httpRoutes: {
+            ".well-known/openid-configuration": () => {
+              discoveries += 1;
+              return oktaDiscovery;
+            },
+          },
+        }),
+      ),
+    );
+  });
+
+  it.effect("a connection whose discovery is unreachable answers ProviderUnavailable and is retried", () => {
+    let reachable = false;
+    const { resolver } = resolverOver({ [connectionId]: () => okta({ id: connectionId }) });
+    return Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const down = yield* oauth
+        .authorize(connectionId, { callbackURL: undefined, link: undefined })
+        .pipe(Effect.flip);
+      assert.strictEqual(down._tag, "ProviderUnavailable");
+      reachable = true;
+      const up = yield* oauth.authorize(connectionId, { callbackURL: undefined, link: undefined });
+      assert.isString(up.location);
+    }).pipe(
+      Effect.provide(
+        buildLayer({
+          providers: [],
+          connections: resolver,
+          retry: { times: 0 },
+          httpRoutes: {
+            ".well-known/openid-configuration": () =>
+              reachable ? oktaDiscovery : new FakeReply(503),
+          },
+        }),
+      ),
+    );
+  });
+
+  it.effect("a connection whose discovery issuer mismatches is refused, never a defect of the runtime", () => {
+    const { resolver } = resolverOver({
+      [connectionId]: () => okta({ id: connectionId, issuer: Config.succeed("https://evil.example.com") }),
+    });
+    return Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const failure = yield* oauth
+        .authorize(connectionId, { callbackURL: undefined, link: undefined })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "ProviderUnavailable");
+    }).pipe(
+      Effect.provide(
+        buildLayer({
+          providers: [],
+          connections: resolver,
+          httpRoutes: { ".well-known/openid-configuration": oktaDiscovery },
+        }),
+      ),
     );
   });
 });

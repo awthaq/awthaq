@@ -3,7 +3,7 @@ ID: "EP-001"
 Title: "No tenant model exists; one static composition per process is the only deployment shape"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/decisions/005-static-composition.md:23"
 Auditor: "eugenio-pace"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `—` · reported by **Co-founder/former CEO of Auth0** (`eugenio-pace`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [Multi-tenant composition model, per-org OAuth connections & tenant/shard key schema](../../.scratch/resolve-ready-for-human-findings/issues/18-multi-tenant-composition-oauth-connections.md) — Resolved: tenant = an `Organization` row, per `ADR-EA-005`'s own already-written `Context.Reference`/`LayerMap.Service` prescription for per-tenant resources — not a new plugin or a host-per-tenant deployment shape. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `multi-tenant-composition`. Evidence at HEAD ec065a7: `spec/decisions/005-static-composition.md:23`. Fix: Implement decision ticket 18: tenant = Organization row; ambient `TenantContext` in core; nullable indexed `tenant_id` on the five core tables stamped on every write; `TenantResolver` port + opt-in `Organization.tenantMiddleware`; Postgres RLS; per-org OAuth connections via a LayerMap-backed `OrganizationConnections`. Record it as an ADR first. (effort XL). Full dossier: `.plan/slices/12-spec.md`.
+
+**Resolved (2026-09-29):** Decision ticket 18 implemented across DRS-001 (tenant column, ambient TenantContext, stamping, opt-in Postgres RLS), EP-004 (per-organization connections) and this issue: ADR-EA-018 recorded (spec/decisions/018-tenancy-is-an-organization.md, index.yaml, ADR-005 now points at it), TenantResolver port and Organization.tenantMiddleware / tenantMiddlewareWithRls (BEH-EA-229; an id naming no organization is 404, never untenanted; tests over a real Node server), spec/models/14-organization.md Tenancy section. Deviation from the dossier, per the adopted DRS-005 option A: finders do NOT filter users/accounts by tenant (the identity directory is global, one person in many organizations), so the dossier test findByEmail-does-not-see-another-tenants-user is replaced by its opposite; isolation is attribution on every row plus RLS on the partitioned tables. Not done: the @skip-until-wired BDD scenario two tenants may register the same email is dropped (contradicts option A); examples/memory-server two-tenant demo not added.
