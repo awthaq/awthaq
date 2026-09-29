@@ -2079,6 +2079,8 @@ export interface AuditLogRow {
   readonly actorUserId: string | null;
   readonly occurredAt: DateTime.Utc;
   readonly correlationId: string | null;
+  /** BEH-EA-231: the stamp the row was inserted with. */
+  readonly tenantId: string | null;
   readonly payload: unknown;
 }
 
@@ -2089,6 +2091,8 @@ export interface AuditLogRepositoryShape {
     readonly actorUserId: string | null;
     readonly occurredAt: DateTime.Utc;
     readonly correlationId: string | null;
+    /** An explicit non-null value wins over the ambient `TenantContext` (BEH-EA-231). */
+    readonly tenantId?: string | null;
     readonly payload: unknown;
   }) => Effect.Effect<AuditLogRow, Cause.NoSuchElementError | RepositoryError>;
   /** RRC-001: a history listing — `"eventual"` (replica-eligible) unless `options.consistency` says otherwise. */
@@ -2267,7 +2271,9 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
 
       const insert: AuditLogRepositoryShape["insert"] = (input) =>
         Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
-          Effect.flatMap((tenantId) => insertQuery({ ...input, tenantId })),
+          Effect.flatMap((ambient) =>
+            insertQuery({ ...input, tenantId: input.tenantId ?? ambient }),
+          ),
           traced("AuditLog.insert", { id: input.id, eventTag: input.eventTag }),
         );
 

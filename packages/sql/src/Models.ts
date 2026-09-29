@@ -457,6 +457,7 @@ const auditLogRow = <C extends Schema.Top>(occurredAt: C) =>
     actorUserId: Schema.NullOr(Schema.String),
     occurredAt,
     correlationId: Schema.NullOr(Schema.String),
+    tenantId: Schema.NullOr(Schema.String),
     payload: Schema.fromJsonString(Schema.Unknown),
   });
 

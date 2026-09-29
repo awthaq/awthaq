@@ -46,6 +46,7 @@ import * as Redacted from "effect/Redacted";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as WebhookDelivery from "./WebhookDelivery.ts";
+import * as WebhookHeaders from "./WebhookHeaders.ts";
 import * as WebhookPayload from "./WebhookPayload.ts";
 import * as WebhookRecords from "./WebhookRecords.ts";
 import * as WebhookSecrets from "./WebhookSecrets.ts";
@@ -110,6 +111,17 @@ export interface WebhooksShape {
     WebhooksApi.DeliveryDto,
     Gate | WebhooksApi.WebhookDeliveryNotFound | WebhooksApi.WebhookDeliveryNotRetryable
   >;
+  /**
+   * BEH-EA-301: queues a signed synthetic `webhook.test` event for the endpoint and returns its (pending) delivery
+   * row; the worker sends it like any other delivery, once, and the outcome is read from the delivery log.
+   */
+  readonly testEndpoint: (
+    caller: Api.UserPrincipal,
+    endpointId: string,
+  ) => Effect.Effect<
+    WebhooksApi.DeliveryDto,
+    Gate | WebhooksApi.WebhookEndpointNotFound | WebhooksApi.InvalidWebhookEndpoint
+  >;
 }
 
 const iso = (instant: DateTime.Utc): string => DateTime.formatIso(instant);
@@ -125,6 +137,8 @@ export const toEndpointDto = (record: WebhookRecords.EndpointRecord) =>
     enabled: Option.isNone(record.disabledAt),
     disabledReason: Option.getOrNull(record.disabledReason),
     consecutiveDead: record.consecutiveDead,
+    headerNames: [...record.headerNames],
+    tenantId: Option.getOrNull(record.tenantId),
     previousSecretExpiresAt: isoOrNull(record.previousSecretExpiresAt),
     createdAt: iso(record.createdAt),
     updatedAt: iso(record.updatedAt),
@@ -147,6 +161,15 @@ export const toDeliveryDto = (record: WebhookRecords.DeliveryRecord) =>
   });
 
 const DEFAULT_PAGE = 50;
+
+/** The fields an update can change, in the order the audit event names them. */
+const UPDATE_FIELDS: ReadonlyArray<keyof WebhooksApi.UpdateEndpointPayload> = [
+  "url",
+  "description",
+  "eventTags",
+  "headers",
+  "enabled",
+];
 
 // ---- migrations --------------------------------------------------------------------------------
 
@@ -237,6 +260,25 @@ const webhooksMigrations: Migrations.Migrations = [
       yield* sql`CREATE UNIQUE INDEX webhooks_delivery_event_unique ON webhooks_delivery("endpointId", "eventId")`;
       yield* sql`CREATE INDEX webhooks_delivery_due ON webhooks_delivery(status, "nextAttemptAt")`;
       yield* sql`CREATE INDEX webhooks_delivery_subject ON webhooks_delivery("subjectUserId")`;
+    }),
+  },
+  {
+    // BEH-EA-300: an endpoint belongs to a tenant (the organization the ambient `TenantContext` named when it was
+    // registered); NULL is the platform's own. Existing rows are platform endpoints, which is what they always were.
+    name: "add_webhooks_endpoint_tenant",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`ALTER TABLE webhooks_endpoint ADD COLUMN "tenantId" TEXT`;
+      yield* sql`CREATE INDEX webhooks_endpoint_tenant ON webhooks_endpoint("tenantId")`;
+    }),
+  },
+  {
+    // BEH-EA-304: the sealed custom-header object, and its (not secret) names for the API to show.
+    name: "add_webhooks_endpoint_headers",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`ALTER TABLE webhooks_endpoint ADD COLUMN headers TEXT`;
+      yield* sql`ALTER TABLE webhooks_endpoint ADD COLUMN "headerNames" TEXT NOT NULL DEFAULT '[]'`;
     }),
   },
 ];
@@ -365,6 +407,13 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           }) {
             return yield* webhooks.retryDelivery(yield* currentUserPrincipal, params.deliveryId);
           }),
+          testEndpoint: Effect.fnUntraced(function* ({
+            params,
+          }: {
+            params: WebhooksApi.EndpointIdParams;
+          }) {
+            return yield* webhooks.testEndpoint(yield* currentUserPrincipal, params.endpointId);
+          }),
         });
       }),
     ),
@@ -421,15 +470,39 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
         return settings;
       });
 
+      /**
+       * BEH-EA-300: administration is scoped to the ambient tenant. An endpoint of another tenant (or of the
+       * platform, from inside a tenant, and the reverse) is answered exactly like an id that does not exist.
+       */
+      const inScope = (record: WebhookRecords.EndpointRecord) =>
+        Effect.map(
+          Tenant.TenantContext,
+          (tenant) => Option.getOrNull(record.tenantId) === Option.getOrNull(tenant),
+        );
+
       const existing = (endpointId: string) =>
         records.findEndpoint(endpointId).pipe(
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.fail(new WebhooksApi.WebhookEndpointNotFound()),
-              onSome: Effect.succeed,
+              onSome: (record) =>
+                Effect.flatMap(inScope(record), (visible) =>
+                  visible
+                    ? Effect.succeed(record)
+                    : Effect.fail(new WebhooksApi.WebhookEndpointNotFound()),
+                ),
             }),
           ),
         );
+
+      /** The endpoints the ambient tenant may administer. */
+      const scopedEndpoints = Effect.gen(function* () {
+        const tenant = yield* Tenant.TenantContext;
+        const all = yield* records.listEndpoints;
+        return all.filter((row) => Option.getOrNull(row.tenantId) === Option.getOrNull(tenant));
+      });
+
+      const adminId = (caller: Api.UserPrincipal) => Users.UserId(caller.ref.id);
 
       /** The SSRF floor and the filter check: `InvalidWebhookEndpoint` with the rule that failed. */
       const validateTarget = Effect.fnUntraced(function* (
@@ -454,6 +527,23 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           );
         }
       });
+      /** BEH-EA-304: the rules for custom headers, answered like the URL's. */
+      const validateHeaders = (headers: Readonly<Record<string, string>>) => {
+        const refused = WebhookHeaders.problem(headers);
+        return Option.isSome(refused)
+          ? Effect.fail(new WebhooksApi.InvalidWebhookEndpoint({ reason: refused.value }))
+          : Effect.void;
+      };
+      const sealedHeaders = Effect.fnUntraced(function* (
+        endpointId: string,
+        headers: Readonly<Record<string, string>>,
+      ) {
+        const normalized = WebhookHeaders.normalize(headers);
+        return {
+          sealed: yield* WebhookSecrets.sealHeaders(encryption, endpointId, normalized),
+          names: WebhookHeaders.namesOf(normalized),
+        };
+      });
       const validateTags = (tags: ReadonlyArray<string>) => {
         const unknown = WebhookPayload.unknownPattern(tags);
         return unknown === undefined
@@ -468,7 +558,8 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
       const createEndpoint: WebhooksShape["createEndpoint"] = Effect.fnUntraced(
         function* (caller, input) {
           const settings = yield* authorize(caller, "createEndpoint");
-          const current = yield* records.listEndpoints;
+          const tenant = yield* Tenant.TenantContext;
+          const current = yield* scopedEndpoints;
           if (current.length >= settings.maxEndpoints) {
             return yield* Effect.fail(
               new WebhooksApi.WebhookEndpointLimitReached({ limit: settings.maxEndpoints }),
@@ -476,6 +567,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           }
           yield* validateTarget(input.url, settings);
           yield* validateTags(input.eventTags);
+          if (input.headers !== undefined) yield* validateHeaders(input.headers);
           const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
           const secret = yield* WebhookSignature.generateSecret.pipe(
             Effect.provideService(Crypto.Crypto, crypto),
@@ -488,8 +580,18 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             eventTags: input.eventTags,
             secret: sealed,
             createdBy: caller.ref.id,
+            tenantId: Option.getOrUndefined(tenant),
+            headers:
+              input.headers === undefined || Object.keys(input.headers).length === 0
+                ? undefined
+                : yield* sealedHeaders(id, input.headers),
           });
           yield* Effect.logInfo("awthaq/webhooks: endpoint created", { endpointId: id });
+          yield* events.publish({
+            _tag: "auth.webhooks.endpointCreated",
+            adminUserId: adminId(caller),
+            endpointId: id,
+          });
           return new WebhooksApi.EndpointWithSecretDto({
             endpoint: toEndpointDto(record),
             secret: Redacted.value(secret),
@@ -499,7 +601,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
 
       const listEndpoints: WebhooksShape["listEndpoints"] = Effect.fnUntraced(function* (caller) {
         yield* authorize(caller, "listEndpoints");
-        return (yield* records.listEndpoints).map(toEndpointDto);
+        return (yield* scopedEndpoints).map(toEndpointDto);
       });
 
       const getEndpoint: WebhooksShape["getEndpoint"] = Effect.fnUntraced(
@@ -515,6 +617,9 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           yield* existing(endpointId);
           if (input.url !== undefined) yield* validateTarget(input.url, settings);
           if (input.eventTags !== undefined) yield* validateTags(input.eventTags);
+          if (input.headers !== undefined && input.headers !== null) {
+            yield* validateHeaders(input.headers);
+          }
           const notFound = <A>(effect: Effect.Effect<A, WebhookRecords.WebhookRecordNotFound>) =>
             effect.pipe(
               Effect.catchTag("WebhookRecordNotFound", () =>
@@ -527,6 +632,12 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
               description:
                 input.description === undefined ? undefined : (input.description?.trim() ?? null),
               eventTags: input.eventTags,
+              headers:
+                input.headers === undefined
+                  ? undefined
+                  : input.headers === null || Object.keys(input.headers).length === 0
+                    ? null
+                    : yield* sealedHeaders(endpointId, input.headers),
             }),
           );
           if (input.enabled !== undefined) {
@@ -535,6 +646,13 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
               records.setDisabled(endpointId, input.enabled ? null : { at: now, reason: "manual" }),
             );
           }
+          yield* events.publish({
+            _tag: "auth.webhooks.endpointUpdated",
+            adminUserId: adminId(caller),
+            endpointId,
+            // Names only: a URL or a description never enters the audit trail.
+            fields: UPDATE_FIELDS.filter((field) => input[field] !== undefined),
+          });
           return toEndpointDto(record);
         },
       );
@@ -542,6 +660,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
       const deleteEndpoint: WebhooksShape["deleteEndpoint"] = Effect.fnUntraced(
         function* (caller, endpointId) {
           yield* authorize(caller, "deleteEndpoint");
+          yield* existing(endpointId);
           yield* records
             .deleteEndpoint(endpointId)
             .pipe(
@@ -550,6 +669,11 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
               ),
             );
           yield* Effect.logInfo("awthaq/webhooks: endpoint deleted", { endpointId });
+          yield* events.publish({
+            _tag: "auth.webhooks.endpointDeleted",
+            adminUserId: adminId(caller),
+            endpointId,
+          });
         },
       );
 
@@ -585,6 +709,11 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
               ),
             );
           yield* Effect.logInfo("awthaq/webhooks: endpoint secret rotated", { endpointId });
+          yield* events.publish({
+            _tag: "auth.webhooks.secretRotated",
+            adminUserId: adminId(caller),
+            endpointId,
+          });
           return new WebhooksApi.EndpointWithSecretDto({
             endpoint: toEndpointDto(record),
             secret: Redacted.value(secret),
@@ -612,6 +741,12 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           const found = yield* records.findDelivery(deliveryId);
           if (Option.isNone(found))
             return yield* Effect.fail(new WebhooksApi.WebhookDeliveryNotFound());
+          // BEH-EA-300: a delivery is visible through its endpoint's tenant only.
+          yield* existing(found.value.endpointId).pipe(
+            Effect.catchTag("WebhookEndpointNotFound", () =>
+              Effect.fail(new WebhooksApi.WebhookDeliveryNotFound()),
+            ),
+          );
           if (found.value.status !== "dead") {
             return yield* Effect.fail(new WebhooksApi.WebhookDeliveryNotRetryable());
           }
@@ -627,6 +762,53 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
         },
       );
 
+      const testEndpoint: WebhooksShape["testEndpoint"] = Effect.fnUntraced(
+        function* (caller, endpointId) {
+          yield* authorize(caller, "testEndpoint");
+          const endpoint = yield* existing(endpointId);
+          if (Option.isSome(endpoint.disabledAt)) {
+            return yield* Effect.fail(
+              new WebhooksApi.InvalidWebhookEndpoint({
+                reason: "the endpoint is disabled: enable it before sending a test",
+              }),
+            );
+          }
+          const now = yield* DateTime.now;
+          const eventId = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+          const deliveryId = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
+          yield* records.enqueue([
+            {
+              id: deliveryId,
+              endpointId,
+              eventId,
+              eventTag: WebhookPayload.TEST_EVENT_TAG,
+              body: JSON.stringify(
+                WebhookPayload.testBody({
+                  eventId,
+                  at: now,
+                  endpointId,
+                  tenantId: endpoint.tenantId,
+                }),
+              ),
+              nextAttemptAt: now,
+            },
+          ]);
+          yield* events.publish({
+            _tag: "auth.webhooks.testQueued",
+            adminUserId: adminId(caller),
+            endpointId,
+          });
+          const queued = yield* records.findDelivery(deliveryId);
+          if (Option.isNone(queued)) {
+            return yield* Defects.invariantViolation(
+              "RowVanished",
+              "awthaq: the test delivery vanished right after it was queued",
+            );
+          }
+          return toDeliveryDto(queued.value);
+        },
+      );
+
       return Webhooks.of({
         createEndpoint,
         listEndpoints,
@@ -636,6 +818,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
         rotateSecret,
         listDeliveries,
         retryDelivery,
+        testEndpoint,
       });
     }),
   });
@@ -643,7 +826,9 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
   /**
    * Opt-in delivery machinery: the relay that tails the audit log into the delivery queue, and the worker
    * that sends what is queued. Requires `AuditLog`, a `RelayCursorStore`, the records, `Encryption`,
-   * `RateLimiter`, `HostResolver`, an `HttpClient` and `Crypto`; run one per deployment.
+   * `RateLimiter`, `HostResolver`, a `WebhookTransport` (`WebhookTransport.layerNodePinned` connects to the
+   * address the host was pinned to; `layerHttpClient` wraps any `HttpClient` and cannot pin) and `Crypto`;
+   * run one per deployment.
    */
   static readonly background = WebhookDelivery.backgroundLayer;
 }

@@ -14,8 +14,12 @@
 //
 // What an attempt never does: follow a redirect (a 3xx is a failed attempt — a redirect is the classic
 // way past an SSRF check), read or store the receiver's response body (untrusted text), or send to an
-// address the URL check refuses. The URL is re-checked at every attempt, resolution included, so a
-// name that starts pointing at a private address is refused when it matters.
+// address the URL check refuses. The URL is re-checked at every attempt: the host is resolved ONCE
+// (`HostResolver.pin`), every address it answered must be public, and the request connects to that
+// address with the original Host/SNI (`WebhookTransport`, BEH-EA-303), so a name that flips between
+// the check and the connect has nothing to flip: DNS is not asked again.
+//
+// Routing is per tenant (BEH-EA-300): an event reaches only the endpoints of the tenant it happened in.
 //
 // Delivery is at-least-once: a worker that dies between the POST and the row update leaves the lease
 // to lapse and the delivery is sent again, with the same `webhook-id`. Receivers deduplicate on it.
@@ -32,13 +36,12 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import * as Result from "effect/Result";
 import * as WebhookPayload from "./WebhookPayload.ts";
 import * as WebhookRecords from "./WebhookRecords.ts";
 import * as WebhookSecrets from "./WebhookSecrets.ts";
 import * as WebhookSignature from "./WebhookSignature.ts";
+import * as WebhookTransport from "./WebhookTransport.ts";
 import * as WebhooksConfig from "./WebhooksConfig.ts";
 
 export const RELAY_NAME = "webhooks";
@@ -68,6 +71,16 @@ export const enqueue = (events: ReadonlyArray<Parameters<typeof WebhookPayload.t
       const subjectUserId = WebhookPayload.subjectUserId(event);
       for (const endpoint of endpoints) {
         if (!WebhookPayload.matchesAny(endpoint.eventTags, event._tag)) continue;
+        // BEH-EA-300: a tenant's events reach that tenant's endpoints only.
+        if (
+          !WebhookPayload.tenantRoutes(
+            endpoint.tenantId,
+            event.tenantId,
+            settings.platformEndpointsHearAllTenants,
+          )
+        ) {
+          continue;
+        }
         // An endpoint hears what happened after it was registered, not the log's history.
         if (DateTime.toEpochMillis(event.occurredAt) < DateTime.toEpochMillis(endpoint.createdAt))
           continue;
@@ -125,7 +138,7 @@ type Outcome = "succeeded" | "retry" | "dead" | "deferred";
 
 const failureClass = (error: unknown): string => {
   if (Cause.isTimeoutError(error)) return "timeout";
-  return "connect";
+  return error instanceof WebhookTransport.WebhookTransportError ? error.failure : "connect";
 };
 
 /** Sends one claimed delivery and records what happened. Never fails: every problem is an outcome. */
@@ -134,7 +147,7 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
     const records = yield* WebhookRecords.WebhookRecords;
     const encryption = yield* Encryption.Encryption;
     const limiter = yield* RateLimiter.RateLimiter;
-    const client = yield* HttpClient.HttpClient;
+    const transport = yield* WebhookTransport.WebhookTransport;
     const settings = yield* WebhooksConfig.WebhooksConfig;
     const now = yield* DateTime.now;
 
@@ -166,6 +179,11 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
     const failed = (info: { readonly statusCode?: number; readonly error: string }) =>
       Effect.gen(function* () {
         const made = delivery.attempts + 1;
+        // BEH-EA-301: a test ping is one attempt, and a receiver that is down is not evidence against the endpoint.
+        if (delivery.eventTag === WebhookPayload.TEST_EVENT_TAG) {
+          yield* records.markDead(delivery.id, { at: now, ...info });
+          return "dead" satisfies Outcome;
+        }
         if (made >= settings.maxAttempts) {
           yield* records.markDead(delivery.id, { at: now, ...info });
           const consecutive = yield* records.bumpDead(endpoint.id);
@@ -190,20 +208,22 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
         return "retry" satisfies Outcome;
       });
 
-    // The URL is judged again at every attempt: registration was a point in time.
-    const refusal = yield* settings.allowPrivateTargets
-      ? Effect.succeed(OutboundUrl.problem("url", endpoint.url, { allowPrivate: true }))
-      : Effect.succeed(OutboundUrl.problem("url", endpoint.url)).pipe(
-          Effect.flatMap((syntactic) =>
-            Option.isSome(syntactic)
-              ? Effect.succeed(syntactic)
-              : HostResolver.refusal(endpoint.url),
-          ),
-        );
-    if (Option.isSome(refusal)) return yield* failed({ error: "blocked" });
+    // The URL is judged again at every attempt: registration was a point in time. The host is resolved ONCE here
+    // and the attempt connects to that address (BEH-EA-303); development mode (`allowPrivateTargets`) has no pin.
+    const syntactic = OutboundUrl.problem("url", endpoint.url, {
+      allowPrivate: settings.allowPrivateTargets,
+    });
+    if (Option.isSome(syntactic)) return yield* failed({ error: "blocked" });
+    const pin = settings.allowPrivateTargets
+      ? Result.succeed(Option.none<HostResolver.PinnedTarget>())
+      : Result.map(yield* HostResolver.pin(endpoint.url), Option.some);
+    if (Result.isFailure(pin)) return yield* failed({ error: "blocked" });
 
     const secrets = yield* WebhookSecrets.open(encryption, endpoint, now);
     if (Option.isNone(secrets)) return yield* failed({ error: "secret" });
+    // BEH-EA-304: the endpoint's custom headers, opened like the secret (a value that does not open fails as `secret`).
+    const custom = yield* WebhookSecrets.openHeaders(encryption, endpoint);
+    if (Option.isNone(custom)) return yield* failed({ error: "secret" });
 
     const timestamp = Math.floor(DateTime.toEpochMillis(now) / 1000);
     const headers = yield* WebhookSignature.headersFor(secrets.value, {
@@ -211,19 +231,27 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
       timestamp,
       body: delivery.body,
     });
-    const request = HttpClientRequest.post(endpoint.url).pipe(
-      HttpClientRequest.setHeaders({ ...headers, "user-agent": settings.userAgent }),
-      HttpClientRequest.bodyText(delivery.body, "application/json"),
-    );
-    const sent = yield* client.execute(request).pipe(
-      Effect.timeout(settings.requestTimeout),
-      // A redirect is never followed (the fetch client would, by default); the 3xx is the outcome.
-      Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
-      Effect.map((response) => ({ _tag: "responded" as const, status: response.status })),
-      Effect.catch((error) =>
-        Effect.succeed({ _tag: "failed" as const, error: failureClass(error) }),
-      ),
-    );
+    const sent = yield* transport
+      .send({
+        url: endpoint.url,
+        headers: {
+          ...custom.value,
+          ...headers,
+          "content-type": "application/json",
+          "user-agent": settings.userAgent,
+        },
+        body: delivery.body,
+        pin: pin.success,
+        allowPrivate: settings.allowPrivateTargets,
+        timeout: settings.requestTimeout,
+      })
+      .pipe(
+        Effect.timeout(settings.requestTimeout),
+        Effect.map((response) => ({ _tag: "responded" as const, status: response.status })),
+        Effect.catch((error) =>
+          Effect.succeed({ _tag: "failed" as const, error: failureClass(error) }),
+        ),
+      );
     if (sent._tag === "failed") return yield* failed({ error: sent.error });
     const status = sent.status;
     if (status >= 200 && status < 300) {
@@ -321,6 +349,6 @@ export const workerLayer = Layer.effectDiscard(
   }),
 );
 
-/** Relay plus worker: everything `Webhooks.background` installs. */
+/** Relay plus worker: everything `Webhooks.background` installs. Requires a `WebhookTransport` (`layerNodePinned` in Node). */
 export const backgroundLayer = (options?: Partial<Omit<EventRelay.EventRelayOptions, "name">>) =>
   Layer.merge(relayLayer(options), workerLayer);

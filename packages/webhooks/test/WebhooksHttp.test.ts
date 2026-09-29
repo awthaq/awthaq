@@ -194,6 +194,37 @@ describe("webhooks admin over HTTP", () => {
       }),
   );
 
+  // BEH-EA-301: the test ping is a state-changing admin call: 401/403/CSRF like the rest, 404 for an unknown id.
+  it.effect(
+    "the test ping queues a delivery over HTTP, and an unknown endpoint is a typed 404",
+    () =>
+      Effect.gen(function* () {
+        const { handler, sessionCookie } = build({ canManageWebhooks: () => Effect.succeed(true) });
+        const cookie = yield* Effect.promise(sessionCookie);
+        const created = yield* Effect.promise(() =>
+          call(handler, "POST", "/admin/webhooks/endpoints", { cookie, body: newEndpoint }),
+        );
+        const registered = yield* Effect.promise(() => json(created));
+        const id = String(Reflect.get(Object(registered["endpoint"]), "id"));
+        assert.notStrictEqual(id, "undefined");
+        const ping = yield* Effect.promise(() =>
+          call(handler, "POST", `/admin/webhooks/endpoints/${id}/test`, { cookie }),
+        );
+        assert.strictEqual(ping.status, 200);
+        const delivery = yield* Effect.promise(() => json(ping));
+        assert.strictEqual(delivery["eventTag"], "webhook.test");
+        assert.strictEqual(delivery["status"], "pending");
+        const missing = yield* Effect.promise(() =>
+          call(handler, "POST", "/admin/webhooks/endpoints/nope/test", { cookie }),
+        );
+        assert.strictEqual(missing.status, 404);
+        const anonymous = yield* Effect.promise(() =>
+          call(handler, "POST", `/admin/webhooks/endpoints/${id}/test`),
+        );
+        assert.strictEqual(anonymous.status, 401);
+      }),
+  );
+
   it.effect("a state-changing request without the CSRF token is refused before the gate", () =>
     Effect.gen(function* () {
       const { handler, sessionCookie } = build({ canManageWebhooks: () => Effect.succeed(true) });

@@ -18,6 +18,7 @@ import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as AuthRequestContext from "../src/AuthRequestContext.ts";
 import * as Observability from "../src/Observability.ts";
+import * as Tenant from "../src/Tenant.ts";
 import * as Users from "../src/Users.ts";
 
 const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
@@ -438,6 +439,33 @@ describe("AuthEvents", () => {
       }).pipe(Effect.provide(AuthEventsLive)),
   );
 
+  it.effect(
+    "BEH-EA-299: publish stamps the ambient tenant on the envelope and the audit row, and none outside a tenant",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const stream = yield* events.subscribe;
+            const collected = yield* Effect.forkChild(
+              stream.pipe(Stream.take(2), Stream.runCollect),
+              { startImmediately: true },
+            );
+            yield* events
+              .publish({ _tag: "auth.user.created", userId })
+              .pipe(Tenant.withTenant("org-7"));
+            yield* events.publish({ _tag: "auth.token.replay", identifier: "no-tenant" });
+            const delivered = yield* Fiber.join(collected);
+            assert.deepStrictEqual(delivered[0]?.tenantId, Option.some("org-7"));
+            assert.deepStrictEqual(delivered[1]?.tenantId, Option.none());
+            const rows = yield* auditLog.list({ eventTag: "auth.user.created" });
+            assert.deepStrictEqual(rows[0]?.tenantId, Option.some("org-7"));
+          }),
+        );
+      }).pipe(Effect.provide(AuthEventsLive)),
+  );
+
   it.effect("ALF-006: the envelope names the span that was current at the publish site", () =>
     Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
@@ -504,6 +532,7 @@ function eventFixture(
     spanId: Option.none(),
     ip: Option.none(),
     userAgent: Option.none(),
+    tenantId: Option.none(),
   };
 }
 

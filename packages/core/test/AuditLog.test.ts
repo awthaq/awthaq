@@ -65,6 +65,7 @@ const stamped = (event: AuthEvents.AuthEvent, n: number, ms = 1_700_000_000_000 
     spanId: Option.none(),
     ip: Option.none(),
     userAgent: Option.none(),
+    tenantId: Option.none(),
   };
   return published;
 };
@@ -357,6 +358,32 @@ const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.EventOf<T
     teamId: "team-1",
     change: "created",
   },
+  "auth.webhooks.endpointCreated": {
+    _tag: "auth.webhooks.endpointCreated",
+    adminUserId: userId,
+    endpointId: "ep-1",
+  },
+  "auth.webhooks.endpointUpdated": {
+    _tag: "auth.webhooks.endpointUpdated",
+    adminUserId: userId,
+    endpointId: "ep-1",
+    fields: ["url"],
+  },
+  "auth.webhooks.secretRotated": {
+    _tag: "auth.webhooks.secretRotated",
+    adminUserId: userId,
+    endpointId: "ep-1",
+  },
+  "auth.webhooks.endpointDeleted": {
+    _tag: "auth.webhooks.endpointDeleted",
+    adminUserId: userId,
+    endpointId: "ep-1",
+  },
+  "auth.webhooks.testQueued": {
+    _tag: "auth.webhooks.testQueued",
+    adminUserId: userId,
+    endpointId: "ep-1",
+  },
   "auth.admin.seeded": {
     _tag: "auth.admin.seeded",
     targetUserId: userId,
@@ -460,6 +487,28 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
           assert.deepStrictEqual(byId.get(id), event, event._tag);
         }
       }).pipe(Effect.provide(layer)),
+    );
+
+    // BEH-EA-231/BEH-EA-299: the tenant stamp is part of the record and of the delivered-event view, so a
+    // tenant-aware consumer (per-tenant webhook endpoints) can route on it.
+    it.effect(
+      "carries the tenant the row was stamped with into the record and the delivered event",
+      () =>
+        Effect.gen(function* () {
+          const auditLog = yield* AuditLog.AuditLog;
+          yield* auditLog.record({
+            ...stamped(samples["auth.user.created"], 1),
+            tenantId: Option.some("org-1"),
+          });
+          yield* auditLog.record(stamped(samples["auth.token.replay"], 2));
+          const recorded = yield* auditLog.list();
+          const created = recorded.find((r) => r.eventTag === "auth.user.created");
+          const replay = recorded.find((r) => r.eventTag === "auth.token.replay");
+          assert.deepStrictEqual(created?.tenantId, Option.some("org-1"));
+          assert.deepStrictEqual(replay?.tenantId, Option.none());
+          if (created === undefined) return assert.fail("no record");
+          assert.deepStrictEqual(AuditLog.toPublished(created).tenantId, Option.some("org-1"));
+        }).pipe(Effect.provide(layer)),
     );
 
     // PERS-005: an organization PermissionEngine denial is durably recorded with who/what/why.

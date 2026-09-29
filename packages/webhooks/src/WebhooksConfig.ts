@@ -53,6 +53,12 @@ export interface WebhooksConfigShape {
   readonly includeClientContext: boolean;
   /** Development and test only: allow `http:` and private/loopback endpoint URLs. Never in production. */
   readonly allowPrivateTargets: boolean;
+  /**
+   * BEH-EA-300: an endpoint registered outside any tenant scope (the platform's own) also hears every tenant's
+   * events. Off by default: a tenant's events reach that tenant's endpoints, and the platform's endpoints hear only
+   * the events that belong to no tenant. Turn it on for an operator-level SIEM or audit feed.
+   */
+  readonly platformEndpointsHearAllTenants: boolean;
   /** Outbound budget per endpoint: over it, deliveries wait (they are not failed). */
   readonly deliveryRate: RateBudget;
   /** Administrative calls per administrator. */
@@ -77,6 +83,7 @@ const defaultWebhooksConfig: WebhooksConfigShape = {
   deliveryRetention: Duration.days(30),
   includeClientContext: false,
   allowPrivateTargets: false,
+  platformEndpointsHearAllTenants: false,
   deliveryRate: { limit: 300, window: Duration.minutes(1) },
   adminRate: { limit: 60, window: Duration.minutes(1) },
   userAgent: "awthaq-webhooks/1",

@@ -39,6 +39,7 @@ const ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
   "spanId",
   "ip",
   "userAgent",
+  "tenantId",
 ]);
 
 export interface PayloadOptions {
@@ -57,6 +58,8 @@ export interface WebhookBody {
   readonly timestamp: string;
   readonly correlationId?: string;
   readonly traceId?: string;
+  /** BEH-EA-300: the tenant (organization id) the event happened in; absent outside a tenant scope. An identifier, never a name. */
+  readonly tenantId?: string;
   /** The event's own fields, minus what the rules above remove. */
   readonly data: Readonly<Record<string, unknown>>;
   /** Present only with `includeClientContext`. */
@@ -73,6 +76,7 @@ export const toBody = (event: AuthEvents.Published, options: PayloadOptions): We
   }
   const correlationId = Option.getOrUndefined(event.correlationId);
   const traceId = Option.getOrUndefined(event.traceId);
+  const tenantId = Option.getOrUndefined(event.tenantId);
   const ip = Option.getOrUndefined(event.ip);
   const userAgent = Option.getOrUndefined(event.userAgent);
   return {
@@ -82,6 +86,7 @@ export const toBody = (event: AuthEvents.Published, options: PayloadOptions): We
     timestamp: DateTime.formatIso(event.occurredAt),
     ...(correlationId === undefined ? {} : { correlationId }),
     ...(traceId === undefined ? {} : { traceId }),
+    ...(tenantId === undefined ? {} : { tenantId }),
     data,
     ...(options.includeClientContext && (ip !== undefined || userAgent !== undefined)
       ? {
@@ -102,6 +107,43 @@ export const subjectUserId = (event: AuthEvents.Published): string | undefined =
   }
   return undefined;
 };
+
+// ---- tenants ---------------------------------------------------------------------------------
+
+/**
+ * BEH-EA-300: whether an endpoint of `endpointTenant` hears an event that happened in `eventTenant`. A tenant's
+ * endpoint hears only its own tenant's events. The platform's own endpoint (no tenant) hears the events that
+ * belong to no tenant, and every tenant's only when `hearAllTenants` is set: an operator's SIEM feed is a
+ * deliberate choice, never a default.
+ */
+export const tenantRoutes = (
+  endpointTenant: Option.Option<string>,
+  eventTenant: Option.Option<string>,
+  hearAllTenants: boolean,
+): boolean =>
+  Option.isSome(endpointTenant)
+    ? Option.isSome(eventTenant) && eventTenant.value === endpointTenant.value
+    : hearAllTenants || Option.isNone(eventTenant);
+
+// ---- the test ping ---------------------------------------------------------------------------
+
+/** The `type` of the synthetic event a test ping sends. No subscription filter can name it: it is sent to one endpoint on request. */
+export const TEST_EVENT_TAG = "webhook.test";
+
+/** BEH-EA-301: the synthetic document a test ping delivers: identifiers only, signed like any other delivery. */
+export const testBody = (input: {
+  readonly eventId: string;
+  readonly at: DateTime.Utc;
+  readonly endpointId: string;
+  readonly tenantId: Option.Option<string>;
+}): WebhookBody => ({
+  version: 1,
+  type: TEST_EVENT_TAG,
+  id: input.eventId,
+  timestamp: DateTime.formatIso(input.at),
+  ...(Option.isSome(input.tenantId) ? { tenantId: input.tenantId.value } : {}),
+  data: { endpointId: input.endpointId },
+});
 
 // ---- filters ---------------------------------------------------------------------------------
 

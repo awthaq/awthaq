@@ -454,6 +454,43 @@ export const ScimGroupChangedEvent = Schema.TaggedStruct("auth.scim.groupChanged
 export type ScimGroupChangedEvent = typeof ScimGroupChangedEvent.Type;
 
 /**
+ * Published by `@awthaq/webhooks`' administrative operations after each SUCCESSFUL mutation
+ * (identifiers only: the administrator, the endpoint, and for an update the names of the fields
+ * changed, never their values, so a URL or a description never enters the audit trail).
+ */
+export const WebhookEndpointCreatedEvent = Schema.TaggedStruct("auth.webhooks.endpointCreated", {
+  adminUserId: UserIdSchema,
+  endpointId: Schema.String,
+});
+export type WebhookEndpointCreatedEvent = typeof WebhookEndpointCreatedEvent.Type;
+
+export const WebhookEndpointUpdatedEvent = Schema.TaggedStruct("auth.webhooks.endpointUpdated", {
+  adminUserId: UserIdSchema,
+  endpointId: Schema.String,
+  fields: Schema.Array(Schema.String),
+});
+export type WebhookEndpointUpdatedEvent = typeof WebhookEndpointUpdatedEvent.Type;
+
+export const WebhookSecretRotatedEvent = Schema.TaggedStruct("auth.webhooks.secretRotated", {
+  adminUserId: UserIdSchema,
+  endpointId: Schema.String,
+});
+export type WebhookSecretRotatedEvent = typeof WebhookSecretRotatedEvent.Type;
+
+export const WebhookEndpointDeletedEvent = Schema.TaggedStruct("auth.webhooks.endpointDeleted", {
+  adminUserId: UserIdSchema,
+  endpointId: Schema.String,
+});
+export type WebhookEndpointDeletedEvent = typeof WebhookEndpointDeletedEvent.Type;
+
+/** A test ping was queued for an endpoint (`@awthaq/webhooks`): the administrator caused an outbound call. */
+export const WebhookTestQueuedEvent = Schema.TaggedStruct("auth.webhooks.testQueued", {
+  adminUserId: UserIdSchema,
+  endpointId: Schema.String,
+});
+export type WebhookTestQueuedEvent = typeof WebhookTestQueuedEvent.Type;
+
+/**
  * ECS-006: published by `awthaq seed admin` after it grants the administrative role
  * (BEH-EA-206). `outcome` says whether the account was created or an existing one
  * promoted; `forced` that the grant went past an existing administrator. Carries the
@@ -900,6 +937,11 @@ export const AuthEventSchema = Schema.Union([
   ScimUserReactivatedEvent,
   ScimUserDeletedEvent,
   ScimGroupChangedEvent,
+  WebhookEndpointCreatedEvent,
+  WebhookEndpointUpdatedEvent,
+  WebhookSecretRotatedEvent,
+  WebhookEndpointDeletedEvent,
+  WebhookTestQueuedEvent,
   AdminSeededEvent,
   AdminSeedRefusedEvent,
   ImportCompletedEvent,
@@ -962,6 +1004,9 @@ export type EventOf<Tag extends AuthEventTag> = Extract<AuthEvent, { readonly _t
  * ALF-006: `correlationId`/`ip`/`userAgent` come from `AuthRequestContext` (all
  * `None` outside an HTTP request); `traceId`/`spanId` identify the span that
  * was current at the publish site, so a subscriber can link back to it.
+ * `tenantId` is the ambient `TenantContext` at the publish site (ADR-EA-018): the same value the audit row's
+ * `"tenantId"` column stores (BEH-EA-231), carried on the envelope so a tenant-aware consumer
+ * (`@awthaq/webhooks`' per-tenant endpoints) routes without a second lookup. `None` outside a tenant scope.
  */
 export interface EventMetadata {
   readonly eventId: string;
@@ -971,6 +1016,7 @@ export interface EventMetadata {
   readonly spanId: Option.Option<string>;
   readonly ip: Option.Option<string>;
   readonly userAgent: Option.Option<string>;
+  readonly tenantId: Option.Option<string>;
 }
 
 /** A delivered event: the payload plus its envelope. An intersection distributes over the union, so `_tag` narrowing still works. */

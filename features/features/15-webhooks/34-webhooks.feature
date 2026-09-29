@@ -529,7 +529,7 @@ Feature: Outbound Webhooks
     Scenario: With no gate configured every operation is denied, audited, and touches nothing
       Given no administrator gate is configured
       When the administrator attempts every webhooks operation
-      Then all 8 are refused as WebhooksActionDenied
+      Then all 9 are refused as WebhooksActionDenied
       And each refusal published auth.admin.actionDenied naming "webhooks.<action>"
       And no endpoint exists
 
@@ -662,3 +662,259 @@ Feature: Outbound Webhooks
       Given an endpoint "billing" registered for "auth.user.deleted"
       When the account "me" is deleted and the relay runs
       Then a delivery naming "me" is queued after the erasure committed
+
+  # BEH-EA-299 — spec/behaviors/34-webhooks.md; see also BEH-EA-230, BEH-EA-231, BEH-EA-100
+  @BEH-EA-299
+  Rule: An event carries the tenant it happened in, through the audit log and onto the wire
+
+    @REQ-EA-1187
+    Scenario: A tenant's event carries its tenant through the audit log to the delivered document
+      Given an endpoint "acme" of tenant "org-a" registered for "auth.user.signedIn"
+      When a "auth.user.signedIn" event for user "user-1" is published inside tenant "org-a" and relayed from the audit log
+      Then the audit row of that event names tenant "org-a"
+      And the body sent to "acme" carries tenantId "org-a"
+      And the body sent to "acme" has no "tenantId" among its data fields
+
+    @REQ-EA-1188
+    Scenario: An event outside any tenant carries none
+      Given an endpoint "billing" registered for "auth.user.signedIn"
+      When a "auth.user.signedIn" event for user "user-1" is published outside a tenant and relayed from the audit log
+      Then the audit row of that event names no tenant
+      And the body sent to "billing" has no tenantId
+
+  # BEH-EA-300 — spec/behaviors/34-webhooks.md; see also BEH-EA-230, BEH-EA-281
+  @BEH-EA-300
+  Rule: An endpoint belongs to a tenant and hears only that tenant's events, and administration is scoped to it
+
+    @REQ-EA-1189
+    Scenario Outline: An event is queued only for the endpoints of its own tenant
+      Given an endpoint "platform" registered for "*"
+      And an endpoint "acme" of tenant "org-a" registered for "*"
+      And an endpoint "globex" of tenant "org-b" registered for "*"
+      And a "auth.user.signedIn" event "e1" for user "user-1" in scope "<scope>"
+      When event "e1" is queued
+      Then event "e1" is queued only for "<hears>"
+
+      Examples:
+        | scope | hears    |
+        | org-a | acme     |
+        | org-b | globex   |
+        | none  | platform |
+
+    @REQ-EA-1190
+    Scenario: The platform's endpoint hears every tenant only when it is configured to, and a tenant's endpoint never hears another
+      Given the plugin is configured to let platform endpoints hear every tenant
+      And an endpoint "platform" registered for "*"
+      And an endpoint "acme" of tenant "org-a" registered for "*"
+      And an endpoint "globex" of tenant "org-b" registered for "*"
+      And a "auth.user.signedIn" event "e1" for user "user-1" in scope "org-a"
+      When event "e1" is queued
+      Then event "e1" is queued for "platform"
+      And event "e1" is queued for "acme"
+      And event "e1" is not queued for "globex"
+
+    @REQ-EA-1191
+    Scenario: An endpoint registered inside a tenant is stamped with it and invisible from another scope
+      Given the administrator gate allows every action
+      When the administrator in scope "org-a" registers "https://hooks.example.com/acme" for "*" as "acme"
+      Then endpoint "acme" belongs to tenant "org-a"
+      And the administrator in scope "org-a" lists 1 endpoint
+      And the administrator in scope "org-b" lists 0 endpoints
+      And the administrator in scope "none" lists 0 endpoints
+
+    @REQ-EA-1192
+    Scenario Outline: Another scope's endpoint is answered exactly like one that does not exist
+      Given the administrator gate allows every action
+      And the administrator in scope "org-a" registers "https://hooks.example.com/acme" for "*" as "acme"
+      When the administrator in scope "<scope>" tries every operation on endpoint "acme"
+      Then every operation is answered exactly as for an endpoint that does not exist
+      And endpoint "acme" is untouched and enabled
+
+      Examples:
+        | scope |
+        | org-b |
+        | none  |
+
+    @REQ-EA-1193
+    Scenario: The endpoint limit is a per-tenant budget
+      Given the administrator gate allows every action
+      And no more than 1 endpoints may be registered
+      When the administrator in scope "org-a" registers 2 endpoints, one at a time
+      Then the first succeeds and the second is refused as WebhookEndpointLimitReached
+      And the administrator in scope "org-b" lists 0 endpoints
+
+  # BEH-EA-301 — spec/behaviors/34-webhooks.md; see also BEH-EA-275, BEH-EA-281
+  @BEH-EA-301
+  Rule: A test ping sends one signed synthetic event through the same delivery path
+
+    @REQ-EA-1194
+    Scenario: A ping is queued without any network call, then delivered signed and logged
+      Given the administrator gate allows every action
+      And an endpoint "billing" registered for "auth.user.signedIn"
+      When the administrator sends a test ping to "billing"
+      Then the ping is queued as pending and nothing has been sent
+      When the delivery worker runs
+      Then endpoint "billing" was sent 1 request
+      And that request is a POST of a JSON body
+      And the body sent to "billing" is the test event naming endpoint "billing"
+      And that request verifies under the secret of "billing"
+      And the delivery log of "billing" shows the test delivery as succeeded
+
+    @REQ-EA-1195
+    Scenario: A failed ping is a single attempt and does not count against the endpoint
+      Given the administrator gate allows every action
+      And endpoints are switched off after 1 consecutive dead-lettered deliveries
+      And an endpoint "billing" registered for "auth.user.signedIn"
+      And the receiver answers 503
+      When the administrator sends a test ping to "billing"
+      And the delivery worker runs
+      Then the test delivery of "billing" is dead after 1 attempt
+      And endpoint "billing" has 0 consecutive dead-letters and is still enabled
+
+    @REQ-EA-1196
+    Scenario: A disabled endpoint refuses a ping
+      Given the administrator gate allows every action
+      And an endpoint "billing" registered for "auth.user.signedIn"
+      And endpoint "billing" is switched off
+      When the administrator sends a test ping to "billing"
+      Then the ping is refused as InvalidWebhookEndpoint
+
+    @REQ-EA-1197
+    Scenario: A ping is behind the gate by its own action name
+      Given the administrator gate allows only actions starting with "list"
+      And an endpoint "billing" registered for "auth.user.signedIn"
+      When the administrator sends a test ping to "billing"
+      Then the ping is refused as WebhooksActionDenied
+
+  # BEH-EA-302 — spec/behaviors/34-webhooks.md; see also BEH-EA-224, BEH-EA-281
+  @BEH-EA-302
+  Rule: Every successful administrative mutation is audited, by identifiers only
+
+    @REQ-EA-1198
+    Scenario: Registering an endpoint publishes an audit event naming the administrator
+      Given the administrator gate allows every action
+      When the administrator registers "https://hooks.example.com/billing" for "*" as "billing"
+      Then the audit log holds an "auth.webhooks.endpointCreated" event for "billing" naming administrator "admin-1"
+
+    @REQ-EA-1199
+    Scenario Outline: Each later mutation publishes one audit event naming the administrator
+      Given the administrator gate allows every action
+      And the administrator registers "https://hooks.example.com/billing" for "*" as "billing"
+      When the administrator <mutation> "billing"
+      Then the audit log holds an "<event>" event for "billing" naming administrator "admin-1"
+
+      Examples:
+        | mutation                       | event                          |
+        | updates the description of     | auth.webhooks.endpointUpdated  |
+        | rotates the secret of          | auth.webhooks.secretRotated    |
+        | sends a test ping to           | auth.webhooks.testQueued       |
+        | deletes                        | auth.webhooks.endpointDeleted  |
+
+    @REQ-EA-1200
+    Scenario: An update's audit event names the fields it changed, never their values
+      Given the administrator gate allows every action
+      And the administrator registers "https://hooks.example.com/billing" for "*" as "billing"
+      When the administrator updates "billing" to the URL "https://other.example.com/private-path-token" and the description "sensitive free text"
+      Then the audit log holds an "auth.webhooks.endpointUpdated" event for "billing" naming the fields "url" and "description"
+      And no audit event mentions "private-path-token" or "sensitive free text"
+
+    @REQ-EA-1201
+    Scenario: A refused operation publishes no mutation event
+      Given the administrator gate allows every action
+      When the administrator tries to register "http://insecure.example.com/x" for "*"
+      And the administrator tries to delete an unknown endpoint "fake"
+      Then the audit log holds no webhooks mutation event
+
+  # BEH-EA-303 — spec/behaviors/34-webhooks.md; see also BEH-EA-280, ADR-EA-030
+  @BEH-EA-303
+  Rule: An attempt connects to the address it checked, so a name that flips between check and connect has nothing to flip
+
+    @REQ-EA-1202
+    Scenario: An attempt resolves once and connects to that address, keeping the registered name
+      Given an endpoint "billing" registered for "auth.user.signedIn" at "https://hooks.example.com:8443/awthaq"
+      And a "auth.user.signedIn" event "e1" for user "user-1"
+      When event "e1" is queued and delivered
+      Then the transport was asked to connect to "93.184.216.34" for the host "hooks.example.com"
+      And the name "hooks.example.com" was resolved 1 time
+
+    @REQ-EA-1203
+    Scenario: A name that flips to a private address after the first attempt is refused on the second and never contacted
+      Given the name "flip.example.com" resolves to "93.184.216.34" and then to "169.254.169.254"
+      And an endpoint "flipper" registered for "auth.user.signedIn" at "https://flip.example.com/hook"
+      And the receiver answers 503
+      And a "auth.user.signedIn" event "e1" for user "user-1"
+      When event "e1" is queued and delivered
+      And the clock advances 10 seconds
+      And the delivery worker runs
+      Then the transport was asked to connect exactly 1 time
+      And the transport was asked to connect to "93.184.216.34" for the host "flip.example.com"
+      And the delivery of event "e1" to "flipper" failed as "blocked"
+      And the name "flip.example.com" was resolved 2 times
+
+    @REQ-EA-1204
+    Scenario: One private answer among several public ones refuses the attempt before any connection
+      Given an endpoint "mixed" registered for "auth.user.signedIn" at "https://mixed.example.com/hook"
+      And a "auth.user.signedIn" event "e1" for user "user-1"
+      When event "e1" is queued and delivered
+      Then the transport was never asked to connect
+      And the delivery of event "e1" to "mixed" failed as "blocked"
+
+    @REQ-EA-1205
+    Scenario Outline: The transport judges the address it is handed, whatever the caller checked
+      When a transport request for "https://hooks.example.com/x" is pinned to "<address>"
+      Then the connection is refused as blocked
+
+      Examples:
+        | address         |
+        | 169.254.169.254 |
+        | 10.0.0.5        |
+        | 127.0.0.1       |
+        | ::1             |
+        | fd00::1         |
+
+    @REQ-EA-1206
+    Scenario: The pinned transport reaches a real receiver by the pin, with the registered name as Host
+      When a delivery for "hooks.example.com" is sent through the pinned transport to loopback
+      Then the receiver was reached and saw the Host "hooks.example.com" with its port
+
+  # BEH-EA-304 — spec/behaviors/34-webhooks.md; see also BEH-EA-276, BEH-EA-281
+  @BEH-EA-304
+  Rule: An endpoint can carry custom request headers, sealed at rest and never returned
+
+    @REQ-EA-1207
+    Scenario: The values are sealed at rest and the API returns names only
+      Given the administrator gate allows every action
+      When the administrator registers "https://hooks.example.com/billing" for "auth.user.signedIn" with the headers "Authorization" holding "Bearer very-secret-token" as "billing"
+      Then the stored headers of "billing" do not contain "very-secret-token"
+      And reading endpoint "billing" shows the header name "authorization" and never "very-secret-token"
+
+    @REQ-EA-1208
+    Scenario: The headers are sent with every delivery beneath the delivery's own
+      Given the administrator gate allows every action
+      And the administrator registers "https://hooks.example.com/billing" for "auth.user.signedIn" with the headers "Authorization" holding "Bearer very-secret-token" as "billing"
+      And a "auth.user.signedIn" event "e1" for user "user-1"
+      When event "e1" is queued and delivered
+      Then the request to "billing" carries the header "authorization" holding "Bearer very-secret-token"
+      And the request to "billing" carries 1 signature
+
+    @REQ-EA-1209
+    Scenario Outline: A header the delivery sets itself, or that could change the request, is refused
+      Given the administrator gate allows every action
+      When the administrator tries to register "https://hooks.example.com/billing" for "*" with the header "<name>" holding "x"
+      Then registration is refused as InvalidWebhookEndpoint naming "cannot be customised"
+      And no endpoint exists
+
+      Examples:
+        | name              |
+        | Host              |
+        | Content-Type      |
+        | Transfer-Encoding |
+        | webhook-signature |
+        | Cookie            |
+
+    @REQ-EA-1210
+    Scenario: A header value that could split the request is refused
+      Given the administrator gate allows every action
+      When the administrator tries to register "https://hooks.example.com/billing" for "*" with the header "x-team" holding a value split across two lines
+      Then registration is refused as InvalidWebhookEndpoint naming "printable ASCII"
+      And no endpoint exists

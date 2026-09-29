@@ -19,7 +19,13 @@ import {
 } from "@awthaq/core";
 import { Encryption, HostResolver, KeyProvider, RateLimiter } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import { WebhookDelivery, WebhookRecords, Webhooks, WebhooksApi } from "@awthaq/webhooks";
+import {
+  WebhookDelivery,
+  WebhookRecords,
+  WebhookTransport,
+  Webhooks,
+  WebhooksApi,
+} from "@awthaq/webhooks";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { createHmac, randomBytes } from "node:crypto";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -67,6 +73,9 @@ export type ReplyFn = (request: SentRequest) => Reply;
 const makeReceiver = () => {
   const sent = Effect.runSync(Ref.make<ReadonlyArray<SentRequest>>([]));
   const reply = Effect.runSync(Ref.make<ReplyFn>(() => ({ status: 200 })));
+  const transportRequests = Effect.runSync(
+    Ref.make<ReadonlyArray<WebhookTransport.TransportRequest>>([]),
+  );
   const layer = Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request, _url, _signal, fiber) =>
@@ -102,7 +111,71 @@ const makeReceiver = () => {
       }),
     ),
   );
-  return { layer, sent: Ref.get(sent), setReply: (next: ReplyFn) => Ref.set(reply, next) };
+  // BEH-EA-303: the transport is the seam the pin crosses, so the World records what it was asked to connect to
+  // and then sends over the fake `HttpClient` like every other scenario.
+  const transportLayer = Layer.effect(
+    WebhookTransport.WebhookTransport,
+    Effect.gen(function* () {
+      const inner = yield* WebhookTransport.WebhookTransport;
+      return WebhookTransport.WebhookTransport.of({
+        send: (request) =>
+          Ref.update(transportRequests, (all) => [...all, request]).pipe(
+            Effect.andThen(inner.send(request)),
+          ),
+      });
+    }),
+  ).pipe(Layer.provide(WebhookTransport.layerHttpClient.pipe(Layer.provide(layer))));
+  return {
+    layer,
+    transportLayer,
+    sent: Ref.get(sent),
+    transportRequests: Ref.get(transportRequests),
+    setReply: (next: ReplyFn) => Ref.set(reply, next),
+  };
+};
+
+/**
+ * Names the fake resolver knows. `rebind` answers with a private address (DNS rebinding), `mixed` with one public and one
+ * private, anything else does not resolve unless a scenario scripted it: a script answers one entry per lookup (the
+ * last repeats), which is how a name flips between two attempts.
+ */
+const makeResolver = () => {
+  const table: Readonly<Record<string, ReadonlyArray<string>>> = {
+    "hooks.example.com": ["93.184.216.34"],
+    "other.example.com": ["93.184.216.35"],
+    "rebind.example.com": ["10.0.0.5"],
+    "mixed.example.com": ["93.184.216.34", "10.0.0.7"],
+  };
+  const scripts = Effect.runSync(
+    Ref.make<Readonly<Record<string, ReadonlyArray<ReadonlyArray<string>>>>>({}),
+  );
+  const lookups = Effect.runSync(Ref.make<Readonly<Record<string, number>>>({}));
+  const layer = Layer.succeed(
+    HostResolver.HostResolver,
+    HostResolver.HostResolver.of({
+      resolve: (hostname) =>
+        Effect.gen(function* () {
+          const name = hostname.toLowerCase();
+          const count = (yield* Ref.get(lookups))[name] ?? 0;
+          yield* Ref.update(lookups, (all) => ({ ...all, [name]: count + 1 }));
+          const script = (yield* Ref.get(scripts))[name];
+          const answer =
+            script === undefined ? table[name] : script[Math.min(count, script.length - 1)];
+          return (
+            answer ??
+            (yield* Effect.fail(
+              new HostResolver.HostResolutionFailed({ hostname, reason: "not in the table" }),
+            ))
+          );
+        }),
+    }),
+  );
+  return {
+    layer,
+    script: (host: string, answers: ReadonlyArray<ReadonlyArray<string>>) =>
+      Ref.update(scripts, (all) => ({ ...all, [host.toLowerCase()]: answers })),
+    lookups: (host: string) => Effect.map(Ref.get(lookups), (all) => all[host.toLowerCase()] ?? 0),
+  };
 };
 
 // ---- the composition ---------------------------------------------------------------------
@@ -125,13 +198,6 @@ const EncryptionLive = Encryption.layer.pipe(
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   Layer.provideMerge(TestAuth.memoryFoundation),
 );
-
-/** Names the fake resolver knows; "rebind" answers with a private address (DNS rebinding), anything else does not resolve. */
-const PublicResolver = HostResolver.layerStatic({
-  "hooks.example.com": ["93.184.216.34"],
-  "other.example.com": ["93.184.216.35"],
-  "rebind.example.com": ["10.0.0.5"],
-});
 
 const CSRF_SECRET = "webhooks-bdd-csrf-secret-padded-to-thirty-two-bytes";
 
@@ -170,13 +236,18 @@ const gateFor = (gate: Gate): Webhooks.WebhooksConfigShape["canManageWebhooks"] 
   }
 };
 
-const baseLayer = (options: Options, receiver: ReturnType<typeof makeReceiver>) =>
+const baseLayer = (
+  options: Options,
+  receiver: ReturnType<typeof makeReceiver>,
+  resolver: ReturnType<typeof makeResolver>,
+) =>
   Layer.mergeAll(
     WebhookRecords.layerMemory,
     EncryptionLive,
     receiver.layer,
+    receiver.transportLayer,
     options.limiter === "memory" ? RateLimiter.layerMemory : RateLimiter.layerPermissive,
-    PublicResolver,
+    resolver.layer,
     Webhooks.config({ canManageWebhooks: gateFor(options.gate), ...options.config }),
     EventRelay.layerCursorMemory,
   ).pipe(Layer.provideMerge(CoreLive));
@@ -194,23 +265,26 @@ export type AppServices =
   | DataExport.DataExportRegistry
   | RateLimiter.RateLimiter
   | HttpClient.HttpClient
+  | WebhookTransport.WebhookTransport
   | HostResolver.HostResolver;
 
 export interface App {
   readonly run: <A, E>(effect: Effect.Effect<A, E, AppServices>) => Effect.Effect<A, E>;
   readonly receiver: ReturnType<typeof makeReceiver>;
+  readonly resolver: ReturnType<typeof makeResolver>;
 }
 
 const buildApp = (options: Options, scope: Scope.Scope) =>
   Effect.gen(function* () {
     const receiver = makeReceiver();
+    const resolver = makeResolver();
     const layer = Webhooks.Webhooks.layer.pipe(
       Layer.provide(AdminAuthenticationLive),
       Layer.provide(CsrfProtectionLive),
-      Layer.provideMerge(baseLayer(options, receiver)),
+      Layer.provideMerge(baseLayer(options, receiver, resolver)),
     );
     const context = yield* Layer.buildWithScope(layer, scope);
-    const app: App = { run: (effect) => Effect.provide(effect, context), receiver };
+    const app: App = { run: (effect) => Effect.provide(effect, context), receiver, resolver };
     return app;
   });
 
@@ -243,7 +317,7 @@ const buildHttpApp = (options: Options): HttpApp => {
     Layer.provide(Webhooks.Webhooks.layer),
     Layer.provide(AdminAuthenticationLive),
     Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(baseLayer(options, receiver)),
+    Layer.provideMerge(baseLayer(options, receiver, makeResolver())),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
   );
@@ -436,6 +510,7 @@ export const publishedEvent = (
       spanId: Option.none<string>(),
       ip: Option.none<string>(),
       userAgent: Option.none<string>(),
+      tenantId: Option.none<string>(),
       ...extra,
     };
     return published;

@@ -47,6 +47,7 @@ import {
 } from "./AuthEventSchemas.ts";
 import { AuthRequestContext } from "./AuthRequestContext.ts";
 import * as Observability from "./Observability.ts";
+import { TenantContext } from "./Tenant.ts";
 
 export * from "./AuthEventSchemas.ts";
 
@@ -208,6 +209,7 @@ export const layer = Layer.effect(
     const deliver = (event: AuthEvent, parent: Option.Option<Tracer.Span>) =>
       Effect.gen(function* () {
         const request = yield* AuthRequestContext;
+        const tenantId = yield* TenantContext;
         const eventId = yield* nextEventId;
         const occurredAt = yield* DateTime.now;
         const published: Published = {
@@ -219,6 +221,7 @@ export const layer = Layer.effect(
           spanId: Option.map(parent, (span) => span.spanId),
           ip: request.ip,
           userAgent: request.userAgent,
+          tenantId,
         };
         yield* auditLog
           .record(published)

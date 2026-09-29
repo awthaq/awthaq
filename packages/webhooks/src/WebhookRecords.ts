@@ -52,6 +52,15 @@ export interface EndpointRecord {
   readonly consecutiveDead: number;
   /** The administrator's user id. */
   readonly createdBy: string;
+  /**
+   * BEH-EA-300: the tenant (organization id) the endpoint belongs to, stamped from the ambient `TenantContext`
+   * when it is registered. `None` is the platform's own endpoint. An endpoint hears only its own tenant's events.
+   */
+  readonly tenantId: Option.Option<string>;
+  /** BEH-EA-304: the sealed (`Encryption`) JSON object of custom request headers; `None` when there are none. */
+  readonly headers: Option.Option<string>;
+  /** The names in `headers` (not secret): what the API shows. */
+  readonly headerNames: ReadonlyArray<string>;
   readonly createdAt: DateTime.Utc;
   readonly updatedAt: DateTime.Utc;
 }
@@ -106,6 +115,10 @@ export interface WebhookRecordsShape {
     readonly eventTags: ReadonlyArray<string>;
     readonly secret: string;
     readonly createdBy: string;
+    readonly tenantId?: string | undefined;
+    readonly headers?:
+      | { readonly sealed: string; readonly names: ReadonlyArray<string> }
+      | undefined;
   }) => Effect.Effect<EndpointRecord>;
   readonly findEndpoint: (id: string) => Effect.Effect<Option.Option<EndpointRecord>>;
   /** Oldest first. The set is bounded by `WebhooksConfig.maxEndpoints`. */
@@ -117,6 +130,11 @@ export interface WebhookRecordsShape {
       /** `null` clears it. */
       readonly description?: string | null | undefined;
       readonly eventTags?: ReadonlyArray<string> | undefined;
+      /** `null` clears the custom headers; a value replaces them. */
+      readonly headers?:
+        | { readonly sealed: string; readonly names: ReadonlyArray<string> }
+        | null
+        | undefined;
     },
   ) => Effect.Effect<EndpointRecord, WebhookRecordNotFound>;
   readonly setSecrets: (
@@ -246,6 +264,9 @@ export const layerMemory = Layer.effect(
           disabledReason: Option.none(),
           consecutiveDead: 0,
           createdBy: input.createdBy,
+          tenantId: Option.fromNullishOr(input.tenantId),
+          headers: Option.fromNullishOr(input.headers?.sealed),
+          headerNames: input.headers?.names ?? [],
           createdAt: now,
           updatedAt: now,
         };
@@ -334,6 +355,12 @@ export const layerMemory = Layer.effect(
             ? {}
             : { description: Option.fromNullOr(patch.description) }),
           ...(patch.eventTags === undefined ? {} : { eventTags: patch.eventTags }),
+          ...(patch.headers === undefined
+            ? {}
+            : {
+                headers: Option.fromNullOr(patch.headers?.sealed ?? null),
+                headerNames: patch.headers?.names ?? [],
+              }),
         })),
       setSecrets: (id, secrets) =>
         modifyEndpoint(id, (row) => ({
@@ -499,6 +526,9 @@ const makeEndpointRow = (wire: SqlModels.DialectWire) =>
     disabledReason: Schema.NullOr(Schema.Literals(["manual", "failing"])),
     consecutiveDead: Schema.Number,
     createdBy: Schema.String,
+    tenantId: Schema.NullOr(Schema.String),
+    headers: Schema.NullOr(Schema.String),
+    headerNames: Schema.fromJsonString(Schema.Array(Schema.String)),
     createdAt: wire.dateTime,
     updatedAt: wire.dateTime,
   });
@@ -546,6 +576,9 @@ export const layerSql = Layer.effect(
       disabledReason: Option.fromNullOr(row.disabledReason),
       consecutiveDead: row.consecutiveDead,
       createdBy: row.createdBy,
+      tenantId: Option.fromNullOr(row.tenantId),
+      headers: Option.fromNullOr(row.headers),
+      headerNames: row.headerNames,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     });
@@ -572,9 +605,9 @@ export const layerSql = Layer.effect(
       Result: EndpointRow,
       execute: (r) => sql`
         INSERT INTO webhooks_endpoint (id, url, description, "eventTags", secret, "previousSecret",
-          "previousSecretExpiresAt", "disabledAt", "disabledReason", "consecutiveDead", "createdBy", "createdAt", "updatedAt")
+          "previousSecretExpiresAt", "disabledAt", "disabledReason", "consecutiveDead", "createdBy", "tenantId", headers, "headerNames", "createdAt", "updatedAt")
         VALUES (${r.id}, ${r.url}, ${r.description}, ${r.eventTags}, ${r.secret}, NULL, NULL, NULL, NULL, 0,
-          ${r.createdBy}, ${r.createdAt}, ${r.updatedAt})
+          ${r.createdBy}, ${r.tenantId}, ${r.headers}, ${r.headerNames}, ${r.createdAt}, ${r.updatedAt})
         RETURNING *`,
     });
     const endpointById = SqlSchema.findOneOption({
@@ -594,12 +627,15 @@ export const layerSql = Layer.effect(
         url: Schema.String,
         description: Schema.NullOr(Schema.String),
         eventTags: Schema.fromJsonString(Schema.Array(Schema.String)),
+        headers: Schema.NullOr(Schema.String),
+        headerNames: Schema.fromJsonString(Schema.Array(Schema.String)),
         updatedAt: wire.dateTime,
       }),
       Result: EndpointRow,
       execute: (r) => sql`
         UPDATE webhooks_endpoint SET url = ${r.url}, description = ${r.description},
-          "eventTags" = ${r.eventTags}, "updatedAt" = ${r.updatedAt}
+          "eventTags" = ${r.eventTags}, headers = ${r.headers}, "headerNames" = ${r.headerNames},
+          "updatedAt" = ${r.updatedAt}
         WHERE id = ${r.id}
         RETURNING *`,
     });
@@ -719,6 +755,9 @@ export const layerSql = Layer.effect(
               disabledReason: null,
               consecutiveDead: 0,
               createdBy: input.createdBy,
+              tenantId: input.tenantId ?? null,
+              headers: input.headers?.sealed ?? null,
+              headerNames: input.headers?.names ?? [],
               createdAt: now,
               updatedAt: now,
             }),
@@ -742,6 +781,10 @@ export const layerSql = Layer.effect(
               description:
                 patch.description === undefined ? current.description : patch.description,
               eventTags: patch.eventTags ?? current.eventTags,
+              headers:
+                patch.headers === undefined ? current.headers : (patch.headers?.sealed ?? null),
+              headerNames:
+                patch.headers === undefined ? current.headerNames : (patch.headers?.names ?? []),
               updatedAt: now,
             }),
           ).pipe(Effect.flatMap(requireRow(id)));

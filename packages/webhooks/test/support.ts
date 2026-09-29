@@ -1,7 +1,9 @@
 // Shared composition for the webhooks plugin's tests: the real in-memory core, a real `Encryption`
 // over a fixed test key, and a programmable `HttpClient` that records every request it is asked to send.
+import { Api } from "@awthaq/api";
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Encryption, HostResolver, KeyProvider, RateLimiter } from "@awthaq/ports";
+import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
@@ -9,6 +11,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
@@ -17,6 +20,7 @@ import * as WebhookDelivery from "../src/WebhookDelivery.ts";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as WebhookSecrets from "../src/WebhookSecrets.ts";
 import * as WebhookSignature from "../src/WebhookSignature.ts";
+import * as WebhookTransport from "../src/WebhookTransport.ts";
 import * as Webhooks from "../src/Webhooks.ts";
 import { TestAuth } from "@awthaq/test";
 
@@ -102,21 +106,26 @@ const PublicResolver = HostResolver.layerStatic({
 
 export interface DeliveryOptions {
   readonly receiver?: Layer.Layer<HttpClient.HttpClient>;
+  /** Replaces the transport built over `receiver` (the pinning tests capture what the transport is asked to do). */
+  readonly transport?: Layer.Layer<WebhookTransport.WebhookTransport>;
   readonly config?: Partial<Webhooks.WebhooksConfigShape>;
   readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
   readonly resolver?: Layer.Layer<HostResolver.HostResolver>;
 }
 
 /** Everything the delivery worker requires, over memory records. */
-export const deliveryLayer = (options: DeliveryOptions = {}) =>
-  Layer.mergeAll(
+export const deliveryLayer = (options: DeliveryOptions = {}) => {
+  const receiver = options.receiver ?? fakeReceiver().layer;
+  return Layer.mergeAll(
     WebhookRecords.layerMemory,
     EncryptionLive,
-    options.receiver ?? fakeReceiver().layer,
+    receiver,
+    options.transport ?? WebhookTransport.layerHttpClient.pipe(Layer.provide(receiver)),
     options.limiter ?? RateLimiter.layerPermissive,
     options.resolver ?? PublicResolver,
     Webhooks.config(options.config ?? {}),
   ).pipe(Layer.provideMerge(CoreLive));
+};
 
 /** Registers an endpoint the way the service does (sealed secret) and returns it with its plaintext secret. */
 export const seedEndpoint = (
@@ -124,6 +133,7 @@ export const seedEndpoint = (
     readonly url?: string;
     readonly eventTags?: ReadonlyArray<string>;
     readonly id?: string;
+    readonly tenantId?: string;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -137,9 +147,65 @@ export const seedEndpoint = (
       eventTags: input.eventTags ?? ["*"],
       secret: yield* WebhookSecrets.seal(encryption, id, "secret", secret),
       createdBy: "admin-1",
+      tenantId: input.tenantId,
     });
     return { endpoint, secret };
   });
+
+/** The API a real deployment mounts the admin group behind, for tests that call the service as an administrator. */
+const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
+  Layer.provide(
+    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
+  ),
+);
+const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
+  Layer.provide(
+    Layer.succeed(Csrf.CsrfConfig, {
+      secret: Redacted.make("webhooks-admin-test-csrf-secret-padded-to-32-bytes"),
+      allowedOrigins: [] as ReadonlyArray<string>,
+    }),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
+/** The plugin (service and handlers) over `deliveryLayer`, with a gate that lets every call through unless `config` says otherwise. */
+export const adminLayer = (options: DeliveryOptions = {}) =>
+  Webhooks.Webhooks.layer.pipe(
+    Layer.provide(AdminAuthenticationLive),
+    Layer.provide(CsrfProtectionLive),
+    Layer.provideMerge(
+      deliveryLayer({
+        ...options,
+        config: { canManageWebhooks: () => Effect.succeed(true), ...options.config },
+      }),
+    ),
+  );
+
+export const adminPrincipal = (id = "admin-1") =>
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id }),
+    sessionId: `${id}-session`,
+  });
+
+/** A transport that records what it is asked to send and answers by `reply` (default 200): what the pinning tests inspect. */
+export const fakeTransport = (
+  reply: (
+    request: WebhookTransport.TransportRequest,
+  ) => Effect.Effect<{ readonly status: number }, WebhookTransport.WebhookTransportError> = () =>
+    Effect.succeed({ status: 200 }),
+) => {
+  const sent: Array<WebhookTransport.TransportRequest> = [];
+  const layer = Layer.succeed(
+    WebhookTransport.WebhookTransport,
+    WebhookTransport.WebhookTransport.of({
+      send: (request) => {
+        sent.push(request);
+        return reply(request);
+      },
+    }),
+  );
+  return { sent, layer };
+};
 
 let counter = 0;
 
@@ -160,6 +226,7 @@ export const published = <E extends AuthEvents.AuthEvent>(
       spanId: Option.none<string>(),
       ip: Option.none<string>(),
       userAgent: Option.none<string>(),
+      tenantId: Option.none<string>(),
       ...extra,
     } satisfies AuthEvents.Published<E>;
   });

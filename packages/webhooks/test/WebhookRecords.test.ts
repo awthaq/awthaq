@@ -87,6 +87,58 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
+    // BEH-EA-300: the tenant is stored once, at registration, and survives every later write.
+    it.effect(
+      "an endpoint keeps the tenant it was registered under, and none means the platform's",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* WebhookRecords.WebhookRecords;
+          yield* records.createEndpoint({ ...endpointInput("t"), tenantId: "org-a" });
+          yield* records.createEndpoint(endpointInput("p"));
+          const tenantOf = (id: string) =>
+            records.findEndpoint(id).pipe(Effect.map((row) => Option.getOrThrow(row).tenantId));
+          assert.deepStrictEqual(yield* tenantOf("t"), Option.some("org-a"));
+          assert.deepStrictEqual(yield* tenantOf("p"), Option.none());
+          yield* records.updateEndpoint("t", { url: "https://moved.example.com/hook" });
+          yield* records.setDisabled("t", { at: at(1), reason: "manual" });
+          assert.deepStrictEqual(yield* tenantOf("t"), Option.some("org-a"));
+          assert.deepStrictEqual(
+            (yield* records.listEndpoints).map((row) => Option.getOrNull(row.tenantId)).sort(),
+            [null, "org-a"],
+          );
+        }).pipe(Effect.provide(layer)),
+    );
+
+    // BEH-EA-304: the sealed header object and its names are stored with the endpoint and replaced or cleared whole.
+    it.effect(
+      "custom headers round-trip, are replaced whole, cleared with null, and left alone when omitted",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* WebhookRecords.WebhookRecords;
+          const created = yield* records.createEndpoint({
+            ...endpointInput("h"),
+            headers: { sealed: "sealed-headers-1", names: ["authorization"] },
+          });
+          assert.deepStrictEqual(created.headers, Option.some("sealed-headers-1"));
+          assert.deepStrictEqual(created.headerNames, ["authorization"]);
+          const plain = yield* records.createEndpoint(endpointInput("n"));
+          assert.deepStrictEqual(plain.headers, Option.none());
+          assert.deepStrictEqual(plain.headerNames, []);
+          const replaced = yield* records.updateEndpoint("h", {
+            headers: { sealed: "sealed-headers-2", names: ["x-a", "x-b"] },
+          });
+          assert.deepStrictEqual(replaced.headers, Option.some("sealed-headers-2"));
+          assert.deepStrictEqual(replaced.headerNames, ["x-a", "x-b"]);
+          const untouched = yield* records.updateEndpoint("h", {
+            url: "https://moved.example.com/x",
+          });
+          assert.deepStrictEqual(untouched.headers, Option.some("sealed-headers-2"));
+          const cleared = yield* records.updateEndpoint("h", { headers: null });
+          assert.deepStrictEqual(cleared.headers, Option.none());
+          assert.deepStrictEqual(cleared.headerNames, []);
+        }).pipe(Effect.provide(layer)),
+    );
+
     it.effect(
       "secrets and the disabled flag are written whole; re-enabling resets the failure count",
       () =>

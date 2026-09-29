@@ -66,17 +66,17 @@ const isSentRequest = (value: unknown): value is SentRequest =>
   typeof value["body"] === "string" &&
   isRecord(value["headers"]);
 
-const endpointNamed = Effect.fn("features.webhooks.endpointNamed")(function* (name: string) {
+export const endpointNamed = Effect.fn("features.webhooks.endpointNamed")(function* (name: string) {
   const world = yield* World;
   return yield* world.endpoints.get(name);
 });
 
-const eventNamed = Effect.fn("features.webhooks.eventNamed")(function* (name: string) {
+export const eventNamed = Effect.fn("features.webhooks.eventNamed")(function* (name: string) {
   const world = yield* World;
   return yield* world.events.get(name);
 });
 
-const lastRequestTo = Effect.fn("features.webhooks.lastRequestTo")(function* (name: string) {
+export const lastRequestTo = Effect.fn("features.webhooks.lastRequestTo")(function* (name: string) {
   const endpoint = yield* endpointNamed(name);
   const request = (yield* requestsTo(endpoint)).at(-1);
   if (request === undefined) return yield* Effect.die(new Error(`nothing was sent to "${name}"`));
@@ -85,22 +85,23 @@ const lastRequestTo = Effect.fn("features.webhooks.lastRequestTo")(function* (na
   return request;
 });
 
-const thatRequest = Effect.fn("features.webhooks.thatRequest")(function* () {
+export const thatRequest = Effect.fn("features.webhooks.thatRequest")(function* () {
   const world = yield* World;
   return yield* world.out.getAs("request", isSentRequest);
 });
 
-const bodyOf = (request: SentRequest) => {
+export const bodyOf = (request: SentRequest) => {
   const parsed = parseJson(request.body);
   if (!isRecord(parsed)) throw new Error(`the body is not a JSON object: ${request.body}`);
   return parsed;
 };
 
 /** Seeds an endpoint into the records with a real sealed secret, bypassing the administrator gate. */
-const seedEndpoint = Effect.fn("features.webhooks.seedEndpoint")(function* (
+export const seedEndpoint = Effect.fn("features.webhooks.seedEndpoint")(function* (
   name: string,
   filter: string,
   url: string,
+  tenantId?: string,
 ) {
   const world = yield* World;
   const secret = yield* run(WebhookSignature.generateSecret);
@@ -114,13 +115,14 @@ const seedEndpoint = Effect.fn("features.webhooks.seedEndpoint")(function* (
         eventTags: [filter],
         secret: yield* encryption.encrypt(secret, aad(name, "secret")),
         createdBy: "admin-1",
+        tenantId,
       });
     }),
   );
   yield* world.endpoints.set(name, { id: name, url, secret: Redacted.value(secret) });
 });
 
-const urlFor = (name: string) => `https://hooks.example.com/${name}`;
+export const urlFor = (name: string) => `https://hooks.example.com/${name}`;
 
 const endpointRow = Effect.fn("features.webhooks.endpointRow")(function* (name: string) {
   const row = yield* run(
@@ -142,10 +144,10 @@ const deliveryOf = Effect.fn("features.webhooks.deliveryOf")(function* (
   return row;
 });
 
-const service = <A, E>(use: (webhooks: Webhooks.WebhooksShape) => Effect.Effect<A, E>) =>
+export const service = <A, E>(use: (webhooks: Webhooks.WebhooksShape) => Effect.Effect<A, E>) =>
   run(Effect.flatMap(Webhooks.Webhooks, use));
 
-const failureTag = (result: Result.Result<unknown, { readonly _tag: string }>) =>
+export const failureTag = (result: Result.Result<unknown, { readonly _tag: string }>) =>
   Result.isFailure(result) ? result.failure._tag : "succeeded";
 
 /** `verify` under one secret, with the request's headers and body unless a scenario tampered with them. */
@@ -256,6 +258,7 @@ const OPERATIONS = [
   "rotateSecret",
   "listDeliveries",
   "retryDelivery",
+  "testEndpoint",
 ] as const;
 
 const expectQueued = (
@@ -1145,6 +1148,7 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* service((webhooks) => Effect.result(webhooks.rotateSecret(ADMIN, "any"))),
       yield* service((webhooks) => Effect.result(webhooks.listDeliveries(ADMIN, "any", {}))),
       yield* service((webhooks) => Effect.result(webhooks.retryDelivery(ADMIN, "any"))),
+      yield* service((webhooks) => Effect.result(webhooks.testEndpoint(ADMIN, "any"))),
     ];
     yield* advance(Duration.millis(10));
     yield* world.out.set(

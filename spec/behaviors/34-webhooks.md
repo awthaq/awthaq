@@ -9,7 +9,7 @@
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release, the first-party opt-in `@awthaq/webhooks` plugin over the event relay (CWM-004, MAPS-010; [ADR-EA-030](../decisions/030-event-delivery-outbox-relay.md) Decision 7) |
+> | Change History | 1.0 (2026-09-29): Initial release, the first-party opt-in `@awthaq/webhooks` plugin over the event relay (CWM-004, MAPS-010; [ADR-EA-030](../decisions/030-event-delivery-outbox-relay.md) Decision 7) <br> 1.1 (2026-09-29): per-tenant endpoints and the tenant on the event envelope (BEH-EA-299, 300), the test ping (301), audit events for administrative mutations (302) connection pinning against DNS rebinding (303) and per-endpoint custom headers (304) |
 ---
 
 > `@awthaq/webhooks` composes as `Auth.make([..., Webhooks])` for the administrator's API and `Webhooks.background()` for the delivery machinery. It is a consumer of the event relay ([BEH-EA-100](13-events.md)): it never widens the in-process bus, and it puts no network call on any operation's path. Everything below is what a receiver (a billing service, a CRM sync, a migrated Clerk webhook handler) relies on, and the safety rules that keep an administrator-supplied URL from becoming a way into the network.
@@ -131,7 +131,7 @@ REQUIREMENT: An endpoint URL MUST be an absolute `https:` URL without
              scheme and host rules, never the credentials rule.
 ```
 
-The checks are `OutboundUrl.problem` and `HostResolver.refusal` in `@awthaq/ports`. They narrow DNS rebinding (a name that flips between the check and the connect) but cannot close it, because the HTTP client resolves the name again; egress filtering at the network layer stays the deployer's control. Redirects are refused because a redirect is the classic way from a checked URL to an unchecked one.
+The checks are `OutboundUrl.problem` and `HostResolver.refusal` in `@awthaq/ports`. Alone they narrow DNS rebinding (a name that flips between the check and the connect); [BEH-EA-303](34-webhooks.md#beh-ea-303-an-attempt-connects-to-the-address-it-checked-so-a-name-that-flips-between-check-and-connect-has-nothing-to-flip) closes it by connecting to the address that was checked. Egress filtering at the network layer stays the deployer's control. Redirects are refused because a redirect is the classic way from a checked URL to an unchecked one.
 
 _Previous: [BEH-EA-279](34-webhooks.md#beh-ea-279-deliveries-are-queued-idempotently-from-the-relay-and-sent-at-least-once-with-retry-backoff-and-dead-letter) | Next: [BEH-EA-281](34-webhooks.md#beh-ea-281-administration-is-fail-closed-on-the-admin-tier-and-rate-limited)_
 
@@ -171,4 +171,134 @@ REQUIREMENT: The plugin MUST contribute to account erasure (BEH-EA-095): the
 
 The `auth.user.deleted` event itself is queued after the erasure commits and names the erased id: that is the consumer's cue to erase its own copy ([ADR-EA-030](../decisions/030-event-delivery-outbox-relay.md) Decision 6).
 
-_Previous: [BEH-EA-281](34-webhooks.md#beh-ea-281-administration-is-fail-closed-on-the-admin-tier-and-rate-limited)_
+_Previous: [BEH-EA-281](34-webhooks.md#beh-ea-281-administration-is-fail-closed-on-the-admin-tier-and-rate-limited) | Next: [BEH-EA-299](34-webhooks.md#beh-ea-299-an-event-carries-the-tenant-it-happened-in-through-the-audit-log-and-onto-the-wire)_
+
+## BEH-EA-299: An event carries the tenant it happened in, through the audit log and onto the wire
+
+```text
+REQUIREMENT: The event envelope (`EventMetadata`) MUST carry `tenantId`: the
+             ambient `TenantContext` at the publish site (BEH-EA-230), `None`
+             outside a tenant scope. It MUST be the value the audit row's
+             `"tenantId"` column stores (BEH-EA-231): `AuditLogRecord.tenantId`
+             exposes it, the delivered-event view (`AuditLog.toPublished`,
+             so the relay and every consumer of it) carries it, and both
+             `AuditLog` layers agree. The webhook body MUST name it as a
+             top-level `tenantId` (an identifier) and MUST NOT repeat it in `data`.
+```
+
+The tenant was already stamped on every audit row; what was missing was reading it back. Carrying it on the envelope lets a tenant-aware consumer route without a second lookup, and lets a receiver tell which of a platform's tenants an event belongs to.
+
+_Previous: [BEH-EA-282](34-webhooks.md#beh-ea-282-the-delivery-log-takes-part-in-erasure-and-export-and-is-pruned) | Next: [BEH-EA-300](34-webhooks.md#beh-ea-300-an-endpoint-belongs-to-a-tenant-and-hears-only-that-tenants-events-and-administration-is-scoped-to-it)_
+
+## BEH-EA-300: An endpoint belongs to a tenant and hears only that tenant's events, and administration is scoped to it
+
+```text
+REQUIREMENT: An endpoint MUST be stamped, when it is registered, with the
+             ambient `TenantContext` (`None` is the platform's own endpoint)
+             and the stamp MUST NOT change. An event MUST be queued for an
+             endpoint only when the endpoint's tenant is the event's tenant.
+             The platform's own endpoint MUST hear only the events that belong
+             to no tenant, unless `platformEndpointsHearAllTenants` is set
+             (default off), which lets it hear every tenant's; a tenant's
+             endpoint MUST never hear another tenant's, whatever that
+             setting. Every administrative operation MUST be scoped to the
+             ambient tenant: listing returns only its endpoints,
+             `maxEndpoints` counts only its endpoints, and an endpoint or
+             delivery of another tenant (or of the platform, from inside a
+             tenant, or the reverse) MUST be answered exactly like an id that
+             does not exist.
+```
+
+The scope is the same `TenantContext` `Organization.tenantMiddleware` provides per request, so a tenant administrator's registrations, list and log are their own without a tenant parameter anywhere in the API. A platform operator who needs a cross-tenant feed opts in deliberately; a platform administrator who needs to administer a tenant's endpoints acts inside that tenant's scope.
+
+_Previous: [BEH-EA-299](34-webhooks.md#beh-ea-299-an-event-carries-the-tenant-it-happened-in-through-the-audit-log-and-onto-the-wire) | Next: [BEH-EA-301](34-webhooks.md#beh-ea-301-a-test-ping-sends-one-signed-synthetic-event-through-the-same-delivery-path)_
+
+## BEH-EA-301: A test ping sends one signed synthetic event through the same delivery path
+
+```text
+REQUIREMENT: `POST /admin/webhooks/endpoints/:endpointId/test` MUST be gated
+             like every operation (action `testEndpoint`, BEH-EA-281) and
+             scoped to the ambient tenant (BEH-EA-300), MUST refuse a
+             disabled endpoint (`422`), and MUST queue one `webhook.test`
+             delivery whose body is `{ version, type: "webhook.test", id,
+             timestamp, tenantId?, data: { endpointId } }`. The worker MUST send
+             it exactly as any other delivery (signed under the current
+             secret, URL re-checked, pinned, rate limited, logged) but it MUST be
+             a single attempt: a failure is `dead` at once and MUST NOT count
+             toward `disableAfterConsecutiveDead`. The request itself MUST make
+             no network call: the result is read from the delivery log.
+```
+
+A ping tells an administrator whether a receiver verifies the signature and answers, using the real path so a green ping means a real event will arrive. A receiver that is down when someone tests it says nothing about whether it should be switched off.
+
+_Previous: [BEH-EA-300](34-webhooks.md#beh-ea-300-an-endpoint-belongs-to-a-tenant-and-hears-only-that-tenants-events-and-administration-is-scoped-to-it) | Next: [BEH-EA-302](34-webhooks.md#beh-ea-302-every-successful-administrative-mutation-is-audited-by-identifiers-only)_
+
+## BEH-EA-302: Every successful administrative mutation is audited, by identifiers only
+
+```text
+REQUIREMENT: Creating, updating, rotating the secret of, deleting an endpoint
+             and queuing a test ping MUST each publish one audit event after the
+             mutation succeeded (`auth.webhooks.endpointCreated`,
+             `endpointUpdated`, `secretRotated`, `endpointDeleted`,
+             `testQueued`) naming the administrator and the endpoint, and, for an
+             update, the NAMES of the fields changed. No event MAY carry a URL, a
+             description, a filter or a secret. A refused or failed operation
+             MUST publish none (a denial publishes `auth.admin.actionDenied`
+             only, BEH-EA-281). The events are stamped with the tenant the
+             administrator acted in (BEH-EA-299).
+```
+
+The events flow through the audit log like every other, so a tenant can subscribe its own endpoint to `auth.webhooks.*` and hear who reconfigured it.
+
+_Previous: [BEH-EA-301](34-webhooks.md#beh-ea-301-a-test-ping-sends-one-signed-synthetic-event-through-the-same-delivery-path) | Next: [BEH-EA-303](34-webhooks.md#beh-ea-303-an-attempt-connects-to-the-address-it-checked-so-a-name-that-flips-between-check-and-connect-has-nothing-to-flip)_
+
+## BEH-EA-303: An attempt connects to the address it checked, so a name that flips between check and connect has nothing to flip
+
+```text
+REQUIREMENT: Every attempt MUST resolve the endpoint's host once through the
+             `HostResolver` port (`HostResolver.pin`), MUST refuse the attempt
+             (`blocked`, no connection) unless EVERY address the name resolved
+             to is a globally routable unicast address (BEH-EA-280), and MUST
+             hand the transport the first address as the one to connect to.
+             The transport MUST connect to that address (never resolving the
+             name again), keep the URL's own host name as the `Host` header and
+             as the TLS server name (SNI, and the name the certificate is
+             verified against), MUST judge the address it is handed against
+             `OutboundUrl.isPublicAddress` once more before it connects, MUST NOT
+             follow a redirect and MUST NOT read the response body. The name is
+             re-resolved on every attempt. `allowPrivateTargets` (development
+             and test only) lifts the address rules and the pin. A transport
+             over a generic `HttpClient` cannot pin and MUST say so: DNS
+             rebinding is then narrowed, not closed.
+```
+
+`WebhookTransport.layerNodePinned` connects to the checked IP literal with `node:http(s)`, so no lookup happens after the check. Egress filtering at the network layer stays a sensible second line, but the application no longer depends on it for this attack.
+
+_Previous: [BEH-EA-302](34-webhooks.md#beh-ea-302-every-successful-administrative-mutation-is-audited-by-identifiers-only) | Next: [BEH-EA-304](34-webhooks.md#beh-ea-304-an-endpoint-can-carry-custom-request-headers-sealed-at-rest-and-never-returned)_
+
+## BEH-EA-304: An endpoint can carry custom request headers, sealed at rest and never returned
+
+```text
+REQUIREMENT: An endpoint MAY carry custom request headers (creation and update
+             accept `headers`, a name-to-value object; on update it replaces the
+             set as a whole and `null` clears it). At most 10 headers; a name is 1
+             to 64 characters of `a-z`, `0-9` and `-` (case-insensitive, and one
+             name given twice is refused); a value is 1 to 1024 printable ASCII
+             characters, so no control character can split the request. A name that
+             the delivery sets itself or that changes the request's meaning
+             (`host`, `content-type`, `content-length`, `content-encoding`,
+             `user-agent`, `connection`, `keep-alive`, `transfer-encoding`,
+             `upgrade`, `te`, `trailer`, `expect`, `cookie`, `set-cookie`, and
+             anything starting `webhook-`, `proxy-` or `sec-`) MUST be refused; every
+             refusal is the typed `InvalidWebhookEndpoint` (422) naming the rule.
+             The values MUST be stored only as an `Encryption` envelope whose
+             additional authenticated data names the endpoint and the field (a
+             sealed set copied into another endpoint's row does not decrypt, and the
+             attempt fails as `secret` without being sent), MUST never be returned
+             (the API returns the names), and MUST be sent with every delivery
+             beneath the delivery's own headers.
+```
+
+`Authorization` is deliberately settable: the reason to want a custom header at all is a receiver that authenticates its callers with a token in addition to (or instead of) the signature. Treating the values as credentials is what makes that safe to store.
+
+_Previous: [BEH-EA-303](34-webhooks.md#beh-ea-303-an-attempt-connects-to-the-address-it-checked-so-a-name-that-flips-between-check-and-connect-has-nothing-to-flip)_

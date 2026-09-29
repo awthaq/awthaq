@@ -11,9 +11,11 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
+import type * as WebhookHeaders from "./WebhookHeaders.ts";
 import type { EndpointRecord } from "./WebhookRecords.ts";
 
-export type SecretField = "secret" | "previousSecret";
+export type SecretField = "secret" | "previousSecret" | "headers";
 
 export const aad = (endpointId: string, field: SecretField): string =>
   `webhooks-endpoint:${endpointId}:${field}`;
@@ -24,6 +26,32 @@ export const seal = (
   field: SecretField,
   plaintext: Redacted.Redacted<string>,
 ) => encryption.encrypt(plaintext, aad(endpointId, field));
+
+/** BEH-EA-304: the custom headers as one sealed JSON object (their values are credentials). */
+export const sealHeaders = (
+  encryption: Encryption.EncryptionShape,
+  endpointId: string,
+  headers: WebhookHeaders.CustomHeaders,
+) => seal(encryption, endpointId, "headers", Redacted.make(JSON.stringify(headers)));
+
+const HeadersJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
+const decodeHeaders = Schema.decodeUnknownOption(HeadersJson);
+
+/**
+ * The custom headers an attempt adds. No headers stored is an empty set; a sealed value that does not decrypt (a retired
+ * key, a row copied from another endpoint) or does not decode is `None`: the attempt then fails as `secret` and is not sent.
+ */
+export const openHeaders = (encryption: Encryption.EncryptionShape, endpoint: EndpointRecord) =>
+  Effect.gen(function* () {
+    if (Option.isNone(endpoint.headers)) {
+      return Option.some<WebhookHeaders.CustomHeaders>({});
+    }
+    const opened = yield* encryption
+      .decrypt(endpoint.headers.value, aad(endpoint.id, "headers"))
+      .pipe(Effect.option);
+    if (Option.isNone(opened)) return Option.none<WebhookHeaders.CustomHeaders>();
+    return decodeHeaders(Redacted.value(opened.value.plaintext));
+  });
 
 /**
  * The secrets an attempt signs with: the current one, and the previous one while its grace window is

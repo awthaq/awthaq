@@ -108,11 +108,16 @@ const EventTagsSchema = Schema.Array(
   ),
 );
 
+/** BEH-EA-304: name to value; the rules (reserved names, count, characters) are `WebhookHeaders.problem`'s, answered as `InvalidWebhookEndpoint`. */
+const HeadersSchema = Schema.Record(Schema.String, Schema.String);
+
 /** `eventTags` is required: an endpoint says what it wants (`["*"]` for everything). */
 export const CreateEndpointPayload = Schema.Struct({
   url: UrlSchema,
   description: Schema.optional(DescriptionSchema),
   eventTags: EventTagsSchema,
+  /** Extra request headers sent with every delivery (an `Authorization` token, an API key). Their values are sealed and never returned. */
+  headers: Schema.optional(HeadersSchema),
 });
 export type CreateEndpointPayload = typeof CreateEndpointPayload.Type;
 
@@ -121,6 +126,8 @@ export const UpdateEndpointPayload = Schema.Struct({
   /** `null` clears it. */
   description: Schema.optional(Schema.NullOr(DescriptionSchema)),
   eventTags: Schema.optional(EventTagsSchema),
+  /** Replaces the custom headers as a whole; `null` clears them. */
+  headers: Schema.optional(Schema.NullOr(HeadersSchema)),
   /** `false` switches the endpoint off (pending deliveries wait), `true` switches it back on. */
   enabled: Schema.optional(Schema.Boolean),
 });
@@ -152,6 +159,10 @@ export class EndpointDto extends Schema.Class<EndpointDto>("WebhookEndpointDto")
   /** `manual` (an administrator) or `failing` (the consecutive-failure threshold); null while enabled. */
   disabledReason: Schema.NullOr(Schema.String),
   consecutiveDead: Schema.Number,
+  /** BEH-EA-304: the names of the custom headers sent with every delivery; their values are never returned. */
+  headerNames: Schema.Array(Schema.String),
+  /** BEH-EA-300: the tenant (organization id) the endpoint belongs to; null for the platform's own. */
+  tenantId: Schema.NullOr(Schema.String),
   /** ISO instant the previous secret stops being accepted; null when no rotation is in its grace window. */
   previousSecretExpiresAt: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
@@ -242,6 +253,14 @@ export const WebhooksAdminGroup = HttpApiGroup.make("webhooks.admin")
       params: DeliveryIdParams,
       success: DeliveryDto,
       error: [...gate, WebhookDeliveryNotFound, WebhookDeliveryNotRetryable],
+    }),
+  )
+  .add(
+    // BEH-EA-301: queues a signed synthetic `webhook.test` event for the endpoint; the outcome is read from the delivery log.
+    HttpApiEndpoint.post("testEndpoint", "/admin/webhooks/endpoints/:endpointId/test", {
+      params: EndpointIdParams,
+      success: DeliveryDto,
+      error: [...gate, WebhookEndpointNotFound, InvalidWebhookEndpoint],
     }),
   )
   // Same tier and CSRF posture as the rest of the admin surface: `CsrfProtection` declared last so it runs first.

@@ -80,6 +80,8 @@ export interface AuditLogRecord {
   readonly spanId: Option.Option<string>;
   readonly ip: Option.Option<string>;
   readonly userAgent: Option.Option<string>;
+  /** The tenant the row was stamped with (BEH-EA-231); `None` for a single-tenant deployment or a historic row. */
+  readonly tenantId: Option.Option<string>;
   /** The decoded event (ESA-007). */
   readonly payload: AuthEvent;
 }
@@ -94,6 +96,7 @@ export const toPublished = (record: AuditLogRecord): Published => ({
   spanId: record.spanId,
   ip: record.ip,
   userAgent: record.userAgent,
+  tenantId: record.tenantId,
 });
 
 export interface AuditLogListInput {
@@ -210,6 +213,11 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.admin.sessionRevoked":
     case "auth.admin.organizationSuspended":
     case "auth.admin.organizationUnsuspended":
+    case "auth.webhooks.endpointCreated":
+    case "auth.webhooks.endpointUpdated":
+    case "auth.webhooks.secretRotated":
+    case "auth.webhooks.endpointDeleted":
+    case "auth.webhooks.testQueued":
       return Option.some(UserId(event.adminUserId));
     case "auth.mail.failed":
       return Option.fromNullishOr(event.userId).pipe(Option.map(UserId));
@@ -268,6 +276,8 @@ interface StoredRow {
   readonly actorUserId: string | null;
   readonly occurredAt: DateTime.Utc;
   readonly correlationId: string | null;
+  /** BEH-EA-231: the row's tenant stamp. */
+  readonly tenantId: string | null;
   readonly payload: unknown;
 }
 
@@ -293,6 +303,7 @@ const toStoredRow = (published: Published): Effect.Effect<StoredRow> =>
     actorUserId: Option.getOrNull(actorOf(published)),
     occurredAt: published.occurredAt,
     correlationId: Option.getOrNull(published.correlationId),
+    tenantId: Option.getOrNull(published.tenantId),
     payload: {
       ...encoded,
       version: EVENT_VERSION,
@@ -333,6 +344,7 @@ const decodeRow = (row: StoredRow): Effect.Effect<AuditLogRecord, AuditLogDecode
       spanId: Option.fromNullishOr(stored.meta?.spanId),
       ip: Option.fromNullishOr(stored.meta?.ip),
       userAgent: Option.fromNullishOr(stored.meta?.userAgent),
+      tenantId: Option.fromNullishOr(row.tenantId),
       payload,
     };
   });
