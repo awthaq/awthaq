@@ -5,11 +5,18 @@
 // declares `.middleware(Api.CsrfProtection)` yet, so there is no real,
 // generated client to exercise it against. `readCookie`'s own logic (what
 // `CsrfClientLive` actually reads) is tested directly below instead.
-import { SessionContract } from "@awthaq/api";
+import { Api, SessionContract } from "@awthaq/api";
 import { afterEach, assert, describe, it } from "@effect/vitest";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 import * as AuthClient from "../src/AuthClient.ts";
 
@@ -136,4 +143,83 @@ describe("toPromiseFacade (BEH-EA-176)", () => {
       (error) => assert.instanceOf(error, BoomFailure),
     );
   });
+});
+
+// MNA-005/PIL-005: a bearer client survives unlimited server-side rotations
+// with no code of its own beyond wiring the shipped transform.
+describe("bearerTransformClient (MNA-005)", () => {
+  const BearerApi = HttpApi.make("bearer").add(
+    HttpApiGroup.make("g").add(HttpApiEndpoint.get("ping", "/ping", { success: Schema.String })),
+  );
+
+  // A fake transport: records the Authorization header it was sent and
+  // answers with the queued response headers.
+  const fakeTransport = (
+    seen: Array<string | undefined>,
+    responseHeaders: ReadonlyArray<Record<string, string>>,
+  ) => {
+    let call = 0;
+    return HttpClient.make((request) => {
+      seen.push(request.headers["authorization"]);
+      const headers = { "content-type": "application/json", ...responseHeaders[call++] };
+      return Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          new Response(JSON.stringify("pong"), { status: 200, headers }),
+        ),
+      );
+    });
+  };
+
+  const run = (
+    store: AuthClient.BearerTokenStoreShape,
+    transport: HttpClient.HttpClient,
+    calls: number,
+  ) =>
+    Effect.gen(function* () {
+      const client = yield* AuthClient.make(BearerApi, {
+        baseUrl: "http://localhost",
+        transformClient: AuthClient.bearerTransformClient(store),
+      });
+      for (let i = 0; i < calls; i++) yield* client.g.ping();
+    }).pipe(Effect.provideService(HttpClient.HttpClient, transport));
+
+  it.effect("persists set-auth-token from a response and sends it on the next request", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      yield* store.set(Redacted.make("token-0"));
+      const seen: Array<string | undefined> = [];
+      yield* run(
+        store,
+        fakeTransport(seen, [
+          { [Api.ROTATED_TOKEN_HEADER]: "token-1" },
+          { [Api.ROTATED_TOKEN_HEADER]: "token-2" },
+          {},
+        ]),
+        3,
+      );
+      assert.deepStrictEqual(seen, ["Bearer token-0", "Bearer token-1", "Bearer token-2"]);
+      assert.strictEqual(Option.getOrThrow(yield* store.get).pipe(Redacted.value), "token-2");
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  it.effect("a response without the header leaves the stored token unchanged", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      yield* store.set(Redacted.make("token-0"));
+      const seen: Array<string | undefined> = [];
+      yield* run(store, fakeTransport(seen, [{}, {}]), 2);
+      assert.deepStrictEqual(seen, ["Bearer token-0", "Bearer token-0"]);
+      assert.strictEqual(Option.getOrThrow(yield* store.get).pipe(Redacted.value), "token-0");
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  it.effect("sends no Authorization header while the store is empty", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      const seen: Array<string | undefined> = [];
+      yield* run(store, fakeTransport(seen, [{ [Api.ROTATED_TOKEN_HEADER]: "fresh" }, {}]), 2);
+      assert.deepStrictEqual(seen, [undefined, "Bearer fresh"]);
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
 });

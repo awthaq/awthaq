@@ -7,3 +7,19 @@ Client. AtomHttpApi client and session atom — the isomorphic Effect client der
 **Planned first module:** AuthClient.ts (spec/behaviors/22-client-effect.md, BEH-EA-169–176)
 
 See [`spec/overview.md`](../../spec/overview.md) for the full package map this fits into.
+
+## Bearer (native, CLI, server-to-server) clients
+
+The session token rotates on the server's throttled touch (there is no grace window), so a bearer client must capture the rotated token from every response:
+
+```ts
+const store = yield* AuthClient.BearerTokenStore; // AuthClient.BearerTokenStoreMemory, or your own (Keychain/Keystore)
+yield* store.set(Redacted.make(tokenFromSignIn));
+const client = yield* AuthClient.make(api, {
+  baseUrl,
+  transformClient: AuthClient.bearerTransformClient(store),
+});
+```
+
+`bearerTransformClient` attaches `Authorization: Bearer <token>` and stores the `set-auth-token` header (`Api.ROTATED_TOKEN_HEADER`) whenever a response carries it. On the typed `Unauthenticated` error, re-authenticate and `store.set` a fresh token. Keep `set-auth-token` intact through proxies, expose it via CORS if cross-origin, and never log it.
+
