@@ -3,17 +3,13 @@
 # does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
 # so only its passing scenarios are runtime evidence.
 
-# @unwired: `@awthaq/saml` (the SAML service provider) is not built — there is no package and
-# no `SamlSigner` port implementation, so these scenarios are specification only and every one
-# is reported as a skipped vitest node (see features/README.md, "Wired versus unwired"). They
-# restate spec/behaviors/29-saml-sp.md, which was written first on purpose: SAML's failure modes
-# are silent signature bypasses, so the checks and their order are fixed before an implementation
-# can drift. Blocked by: AOMS-009 (plan P18, enterprise-federation-saml-scim: packages/saml,
-# SP-only) and SFS-003 (the fused parse-and-verify `SamlSigner` port in @awthaq/ports). Wiring
-# them belongs to the milestone that builds the plugin; it removes `@skip @unwired` from the
-# Feature line below and gives each scenario real steps against the ACS endpoint.
+# Wired against the real `@awthaq/saml` plugin: SP-initiated login, then the ACS chain against responses the fixtures'
+# IdP signs (features/step-definitions/SamlWorld.ts). The wire only ever shows the uniform SamlAssertionRejected, so a
+# rejection scenario also checks the REASON the ACS logged, to tell "rejected by the rule under test" from "rejected
+# for some other reason". IdP-initiated login is not built (packages/saml README, "Not built"): that one scenario is
+# pruned with its own note.
 
-@enterprise-federation @saml @skip @unwired
+@enterprise-federation @saml
 Feature: SAML Service Provider
 
   # BEH-EA-238 — spec/behaviors/29-saml-sp.md; see also ADR-EA-023
@@ -323,6 +319,10 @@ Feature: SAML Service Provider
       When the ACS receives a response with no InResponseTo
       Then the response is rejected with the uniform "SamlAssertionRejected" failure
 
+    # @skip: IdP-initiated login is not built - the plugin refuses every unsolicited response and has no
+    # per-connection opt-in (packages/saml/src/Saml.ts header and README "Not built"; PV-370). The refusal half
+    # is wired above.
+    @skip
     @REQ-EA-904
     Scenario: An unsolicited response is accepted only when the connection explicitly opts in
       Given a SAML connection that explicitly opts in to IdP-initiated login
@@ -355,7 +355,7 @@ Feature: SAML Service Provider
 
     @REQ-EA-908
     Scenario: A deployment's explicit linking policy that trusts the connection may link by email
-      Given an existing local account "ada@acme.example"
+      Given an existing local account "ada@acme.example" whose address is verified
       And a linking policy that trusts the connection
       When a fully validated response whose email attribute is "ada@acme.example" is resolved
       Then the account is linked under the connection's provider id

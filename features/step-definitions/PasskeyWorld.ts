@@ -25,6 +25,7 @@ import {
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
@@ -72,7 +73,15 @@ export interface MockWebAuthnOverrides {
  * two — rebuilding the whole app to change this would discard the session
  * and challenge the shared Given already issued.
  */
-const mockWebAuthn = (behavior: Ref.Ref<MockWebAuthnOverrides>): Layer.Layer<WebAuthn.WebAuthn> =>
+/** BEH-EA-256: what `verifyRegistration` was asked, so a scenario can prove the plugin — not the mock — decided whether user presence was required. */
+export interface VerifyRegistrationCall {
+  readonly requireUserPresence: boolean | undefined;
+}
+
+const mockWebAuthn = (
+  behavior: Ref.Ref<MockWebAuthnOverrides>,
+  calls: Ref.Ref<ReadonlyArray<VerifyRegistrationCall>>,
+): Layer.Layer<WebAuthn.WebAuthn> =>
   Layer.mock(WebAuthn.WebAuthn, {
     registrationOptions: (input) =>
       Effect.succeed({
@@ -84,6 +93,10 @@ const mockWebAuthn = (behavior: Ref.Ref<MockWebAuthnOverrides>): Layer.Layer<Web
       }),
     verifyRegistration: (input) =>
       Effect.gen(function* () {
+        yield* Ref.update(calls, (seen) => [
+          ...seen,
+          { requireUserPresence: input.requireUserPresence },
+        ]);
         const overrides = yield* Ref.get(behavior);
         if (overrides.failVerifyRegistration === true) {
           return yield* Effect.fail(
@@ -156,12 +169,18 @@ export interface AppOptions {
   readonly conditionalCreate?: boolean;
   readonly authenticatorSelection?: WebAuthn.AuthenticatorSelection;
   readonly counterAnomalyPolicy?: "flag" | "reject";
+  /** BEH-EA-255: the freshness window enrolment requires of the calling session (`PasskeyConfig.reauthMaxAgeSeconds`; the default is five minutes). */
+  readonly reauthMaxAgeMillis?: number;
   readonly webAuthn?: MockWebAuthnOverrides;
   /** REQ-EA-355/356/357: which `WebAuthn` port implementation the app is composed against — the mock (default) or the real `WebAuthn.layerSimpleWebAuthn`. Nothing else in the composition changes. */
   readonly webAuthnPort?: "mock" | "simplewebauthn";
 }
 
-const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAuthnOverrides>) =>
+const buildAppLayer = (
+  options: AppOptions,
+  webAuthnBehavior: Ref.Ref<MockWebAuthnOverrides>,
+  verifyCalls: Ref.Ref<ReadonlyArray<VerifyRegistrationCall>>,
+) =>
   Layer.mergeAll(
     AuthHttp.routes(PasskeyApi.PasskeyApi, { openapiPath: "/openapi.json" }).pipe(
       Layer.provide(Passkey.Passkey.layer),
@@ -179,6 +198,9 @@ const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAut
           ...(options.counterAnomalyPolicy === undefined
             ? {}
             : { counterAnomalyPolicy: options.counterAnomalyPolicy }),
+          ...(options.reauthMaxAgeMillis === undefined
+            ? {}
+            : { reauthMaxAgeSeconds: Duration.millis(options.reauthMaxAgeMillis) }),
         }),
       ),
       Layer.provide(AuthenticationLive),
@@ -191,7 +213,7 @@ const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAut
       Layer.mergeAll(
         options.webAuthnPort === "simplewebauthn"
           ? WebAuthn.layerSimpleWebAuthn
-          : mockWebAuthn(webAuthnBehavior),
+          : mockWebAuthn(webAuthnBehavior, verifyCalls),
         ChallengeStore.layerMemory,
         PasskeyCredentials.layerMemory,
         PasskeyUserHandles.layerMemory,
@@ -207,6 +229,7 @@ export interface AppHandle {
   readonly memoMap: Layer.MemoMap;
   readonly appLayer: ReturnType<typeof buildAppLayer>;
   readonly webAuthnBehavior: Ref.Ref<MockWebAuthnOverrides>;
+  readonly verifyCalls: Ref.Ref<ReadonlyArray<VerifyRegistrationCall>>;
 }
 
 export interface WorldShape {
@@ -240,10 +263,11 @@ export const configureApp = Effect.fn("features.passkey.configureApp")(function*
   const merged = { ...(mode === "merge" ? yield* Ref.get(world.appOptions) : {}), ...options };
   yield* Ref.set(world.appOptions, merged);
   const webAuthnBehavior = Ref.makeUnsafe<MockWebAuthnOverrides>(merged.webAuthn ?? {});
-  const appLayer = buildAppLayer(merged, webAuthnBehavior);
+  const verifyCalls = Ref.makeUnsafe<ReadonlyArray<VerifyRegistrationCall>>([]);
+  const appLayer = buildAppLayer(merged, webAuthnBehavior, verifyCalls);
   const memoMap = Layer.makeMemoMapUnsafe();
   const { handler } = HttpRouter.toWebHandler(appLayer, { memoMap });
-  yield* Ref.set(world.app, { handler, memoMap, appLayer, webAuthnBehavior });
+  yield* Ref.set(world.app, { handler, memoMap, appLayer, webAuthnBehavior, verifyCalls });
 });
 
 /**
@@ -425,6 +449,38 @@ export const linkOtherAccount = Effect.fn("features.passkey.linkOtherAccount")(f
     ),
   );
 });
+
+/** What the running app's services can be asked for by a step that needs the rows, not the wire. */
+export type AppServices = Layer.Success<ReturnType<typeof buildAppLayer>>;
+
+/**
+ * Runs `effect` against the running app's own services (same `MemoMap`, real-clock `runPromise`
+ * boundary as `signIn` — see its comment) — for a claim about what is stored or erased, which the
+ * wire never shows.
+ */
+export const inApp = <A, E>(effect: Effect.Effect<A, E, AppServices>) =>
+  Effect.gen(function* () {
+    const { appLayer, memoMap } = yield* appHandle();
+    return yield* Effect.promise(() =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const scope = yield* Effect.scope;
+            const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
+            return yield* Effect.provide(effect, context);
+          }),
+        ),
+      ),
+    );
+  });
+
+/** The `verifyRegistration` calls the plugin has made to the (mocked) `WebAuthn` port so far. */
+export const verifyRegistrationCalls = Effect.fn("features.passkey.verifyRegistrationCalls")(
+  function* () {
+    const { verifyCalls } = yield* appHandle();
+    return yield* Ref.get(verifyCalls);
+  },
+);
 
 export const setOutcome = Effect.fn("features.passkey.setOutcome")(function* (
   key: string,

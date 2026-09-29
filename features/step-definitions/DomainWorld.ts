@@ -15,9 +15,12 @@ import {
   Accounts,
   AuditLog,
   AuthEvents,
+  Auth,
   DataExport,
   Erasure,
+  Errors,
   Hooks,
+  Migrations,
   RateLimits,
   Sessions,
   Users,
@@ -52,6 +55,7 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
+import { Profile } from "./UserFieldsFixture.ts";
 import {
   cheapArgon2id,
   makeCapturingMailer,
@@ -75,6 +79,10 @@ export interface TransactionSighting {
 export interface Faults {
   /** BEH-EA-058: makes `Accounts.updateCredentialHash` crash mid-`confirmReset`, after the token was consumed inside the same transaction. */
   failCredentialUpdate: boolean;
+  /** BEH-EA-254: makes the `profile` plugin's export section fail as a store outage would. */
+  failExportContribution: boolean;
+  /** BEH-EA-254: switches every rate-limit rule from permissive to the real in-memory limiter (off by default: this composition is about identity rows). */
+  enforceRateLimits: boolean;
 }
 
 export interface Probes {
@@ -98,9 +106,16 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
+// BEH-EA-048/254: the composition carries one plugin, `profile`, that declares user fields and
+// contributes an export section — the linker's generated migrations add its columns after core's.
+const auth = Auth.make([Profile]);
+
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 const Migrated = Layer.effectDiscard(
-  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
+  Effect.gen(function* () {
+    yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+    yield* Migrations.run(auth.migrations);
+  }),
 ).pipe(Layer.provide(SqlLive));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
@@ -119,6 +134,25 @@ const NoBreachHttpClient = Layer.succeed(
     Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
   ),
 );
+
+/**
+ * The permissive limiter until a scenario turns enforcement on, then the real in-memory limiter — so
+ * the rate-limit claim of BEH-EA-254 runs against real accounting without every other scenario in
+ * the feature paying for (or tripping over) it.
+ */
+const switchableLimiter = (probes: Probes) =>
+  Layer.effect(
+    RateLimiter.RateLimiter,
+    Effect.gen(function* () {
+      const real = yield* RateLimiter.RateLimiter;
+      const enforcing = Effect.map(Ref.get(probes.faults), (faults) => faults.enforceRateLimits);
+      return RateLimiter.RateLimiter.of({
+        consume: (input) =>
+          Effect.flatMap(enforcing, (on) => (on ? real.consume(input) : Effect.void)),
+        check: (input) => Effect.flatMap(enforcing, (on) => (on ? real.check(input) : Effect.void)),
+      });
+    }),
+  ).pipe(Layer.provide(RateLimiter.layerMemory));
 
 const sighting = (probes: Probes, operation: string) =>
   Effect.gen(function* () {
@@ -203,7 +237,11 @@ const eventsLayer = (probes: Probes) =>
   );
 
 const makeProbes = () => ({
-  faults: Ref.makeUnsafe<Faults>({ failCredentialUpdate: false }),
+  faults: Ref.makeUnsafe<Faults>({
+    failCredentialUpdate: false,
+    failExportContribution: false,
+    enforceRateLimits: false,
+  }),
   sightings: Ref.makeUnsafe<ReadonlyArray<TransactionSighting>>([]),
   events: Ref.makeUnsafe<ReadonlyArray<AuthEvents.Published>>([]),
 });
@@ -231,13 +269,32 @@ const buildStack = (probes: Probes) => {
   // The probes wrap the real services under the same tags (provide, never merge, so the
   // probed instance is the only one anything above sees).
   const Stores = Layer.merge(
-    Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
+    Users.layerSql.pipe(
+      Layer.provide(Repositories.UsersRepositoryLive),
+      Layer.provide(auth.userFieldsLayer),
+    ),
     Layer.mergeAll(AccountsProbe, VerificationProbe, SessionsProbe, TransactionProbe).pipe(
       Layer.provide(RealStores),
     ),
   );
 
-  const CoreLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
+  // The plugin's own export section (BEH-EA-254): the user fields it holds, under its own id.
+  const ProfileExport = DataExport.contribute({
+    id: "profile",
+    make: Effect.gen(function* () {
+      const users = yield* Users.Users;
+      return (subject) =>
+        Effect.gen(function* () {
+          if ((yield* Ref.get(probes.faults)).failExportContribution) {
+            return yield* Effect.fail(new Errors.StoreUnavailable({ operation: "profile.export" }));
+          }
+          const fields = yield* users.getFields(subject.userId).pipe(Effect.orDie);
+          return { fields };
+        });
+    }),
+  });
+
+  const CoreLive = Layer.mergeAll(Erasure.layer, DataExport.layer, ProfileExport).pipe(
     Layer.provideMerge(Stores),
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
@@ -259,9 +316,10 @@ const buildStack = (probes: Probes) => {
     Layer.provideMerge(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(eventsLayer(probes)),
+    Layer.provideMerge(auth.userFieldsLayer),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
-      Layer.mergeAll(cheapArgon2id, mailer.layer, RateLimiter.layerPermissive).pipe(
+      Layer.mergeAll(cheapArgon2id, mailer.layer, switchableLimiter(probes)).pipe(
         Layer.provideMerge(NodeCrypto.layer),
       ),
     ),
@@ -374,3 +432,6 @@ export const directExit = <A, E>(effect: Effect.Effect<A, E, DomainServices>) =>
     const { ctx } = yield* World;
     return yield* Effect.exit(Effect.provide(effect, ctx));
   });
+
+/** The composition's own `Auth.make` result: what the manifest and the user-field registry say the `profile` plugin declared. */
+export const profileAuth = auth;

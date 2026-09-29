@@ -246,3 +246,146 @@ Feature: Passkey and WebAuthn
         | policy | outcome               |
         | reject | PasskeyCounterAnomaly |
         | flag   | a session is issued   |
+
+  # BEH-EA-255 — spec/behaviors/17-passkey.md; see also BEH-EA-165
+  # Over the wire the authentication middleware refuses a revoked or expired session before any
+  # passkey handler runs, so the plugin's own "not live for its owner" branch (a session belonging to
+  # another user) is not reachable through HTTP; the scenarios below observe what a caller sees.
+  @BEH-EA-255
+  Rule: Passkey registration requires a fresh session
+
+    @REQ-EA-1007
+    Scenario: A session authenticated within the window may start a registration
+      Given a user "fresh@example.com" whose session is inside the passkey reauthentication window
+      When the session requests registration options
+      Then the options are issued
+
+    @REQ-EA-1008
+    Scenario: A stale session is refused registration options, and the refusal names the window
+      Given a deployment with a 600 millisecond passkey reauthentication window
+      And a user "stale-options@example.com" whose session has outlived that window
+      When the session requests registration options
+      Then the request fails with "PasskeyReauthRequired" naming a window of 600 milliseconds
+
+    @REQ-EA-1009
+    Scenario: A stale session is refused Conditional Create options too
+      Given a deployment with a 600 millisecond passkey reauthentication window
+      And a user "stale-conditional@example.com" whose session has outlived that window
+      When the session requests Conditional Create options
+      Then the request fails with "PasskeyReauthRequired" naming a window of 600 milliseconds
+
+    @REQ-EA-1010
+    Scenario: A challenge obtained while fresh cannot be redeemed after the session has gone stale
+      Given a deployment with a 600 millisecond passkey reauthentication window
+      And a user "late@example.com" whose session is inside the passkey reauthentication window
+      And the session obtained registration options while fresh
+      When the session has outlived that window and presents the completed registration
+      Then the request fails with "PasskeyReauthRequired" naming a window of 600 milliseconds
+      And no credential is stored for "late@example.com"
+
+    @REQ-EA-1011
+    Scenario: A session that is no longer live cannot register a passkey
+      Given a user "gone@example.com" whose session is inside the passkey reauthentication window
+      And that session has been revoked
+      When the session requests registration options
+      Then the request is refused as unauthenticated and no options are issued
+
+  # BEH-EA-256 — spec/behaviors/17-passkey.md; see also BEH-EA-130, BEH-EA-132
+  # The WebAuthn port is mocked everywhere except the one scenario that reads the options the real
+  # library builds; user presence is observed as what the plugin asks the port to require.
+  @BEH-EA-256
+  Rule: Conditional Create is a separate, config-gated ceremony with its own challenge scope
+
+    @REQ-EA-1012
+    Scenario: With Conditional Create on, its options force a discoverable credential and discouraged user verification
+      Given a deployment composed against the real "WebAuthn.layerSimpleWebAuthn" port
+      And a user "cc-on@example.com" whose session is inside the passkey reauthentication window
+      When the session requests Conditional Create options
+      Then the options are issued
+      And the options require a resident key and discourage user verification
+
+    @REQ-EA-1013
+    Scenario: With Conditional Create configured off, the endpoint is reported as absent
+      Given a deployment with Conditional Create switched off
+      And a user "cc-off@example.com" whose session is inside the passkey reauthentication window
+      When the session requests Conditional Create options
+      Then the request fails with "PasskeyConditionalCreateDisabled"
+
+    @REQ-EA-1014
+    Scenario: A deployment that requires user verification cannot offer Conditional Create
+      Given a deployment that requires user verification
+      And a user "cc-uv@example.com" whose session is inside the passkey reauthentication window
+      When the session requests Conditional Create options
+      Then the request fails with "PasskeyConditionalCreateDisabled"
+
+    @REQ-EA-1015
+    Scenario: A Conditional Create challenge cannot be redeemed as an ordinary registration
+      Given a user "cc-scope-a@example.com" whose session is inside the passkey reauthentication window
+      And the session obtained Conditional Create options
+      When the session presents that challenge as an ordinary registration
+      Then the request fails with "PasskeyChallengeInvalid"
+
+    @REQ-EA-1016
+    Scenario: An ordinary registration challenge cannot be redeemed as a Conditional Create registration
+      Given a user "cc-scope-b@example.com" whose session is inside the passkey reauthentication window
+      And the session obtained registration options while fresh
+      When the session presents that challenge as a Conditional Create registration
+      Then the request fails with "PasskeyChallengeInvalid"
+
+    @REQ-EA-1017
+    Scenario: Completing one ceremony does not consume the other's challenge
+      Given a user "cc-both@example.com" whose session is inside the passkey reauthentication window
+      And the session obtained registration options while fresh
+      And the session obtained Conditional Create options
+      When the session completes the ordinary registration and then the Conditional Create registration
+      Then both registrations succeed and "cc-both@example.com" holds two credentials
+
+    @REQ-EA-1018
+    Scenario: Only Conditional Create relaxes the user-presence requirement
+      Given a user "cc-up@example.com" whose session is inside the passkey reauthentication window
+      And the session obtained registration options while fresh
+      And the session obtained Conditional Create options
+      When the session completes the ordinary registration and then the Conditional Create registration
+      Then the ordinary registration required user presence and the Conditional Create one did not
+
+  # BEH-EA-257 — spec/behaviors/17-passkey.md; see also BEH-EA-130, BEH-EA-132
+  @BEH-EA-257
+  Rule: A user has one stable, random WebAuthn user handle
+
+    @REQ-EA-1019
+    Scenario: Every registration's creation options carry the same handle for one user
+      Given a user "handle-stable@example.com" whose session is inside the passkey reauthentication window
+      When the session requests registration options twice
+      Then both creation options carry the same "user.id"
+
+    @REQ-EA-1020
+    Scenario: The handle is 32 random bytes and names no one
+      Given a user "handle-a@example.com" whose session is inside the passkey reauthentication window
+      When the session requests registration options
+      Then the "user.id" is 32 random bytes that contain neither the user's id nor the user's address
+      And a second user "handle-b@example.com" is given a different "user.id"
+
+    @REQ-EA-1021
+    Scenario: The handle stored with each credential is the one the options carried
+      Given a user "handle-stored@example.com" whose session is inside the passkey reauthentication window
+      When the session registers two credentials
+      Then both credentials are stored under the "user.id" the options carried
+
+    @REQ-EA-1022
+    Scenario: An assertion carrying a different user handle fails like any other bad assertion
+      Given a user "handle-assert@example.com" who has registered a credential
+      When that credential asserts with a "userHandle" that is not the one stored with it
+      Then the assertion fails with "InvalidCredentials"
+
+    @REQ-EA-1023
+    Scenario: An assertion carrying the stored user handle succeeds
+      Given a user "handle-assert-ok@example.com" who has registered a credential
+      When that credential asserts with the "userHandle" stored with it
+      Then the assertion succeeds
+
+    @REQ-EA-1024
+    Scenario: The handle is erased with the user
+      Given a user "handle-erase@example.com" who has registered a credential
+      When the plugin's erasure contribution runs for that user
+      Then no credential remains for "handle-erase@example.com"
+      And the next "user.id" minted for that user is a different value

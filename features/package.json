@@ -40,9 +40,11 @@
     "@qadi/core": "^0.7.0",
     "@qadi/http": "^0.7.0",
     "@types/node": "catalog:",
+    "@xmldom/xmldom": "0.8.15",
     "effect": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "xml-crypto": "6.3.2"
   },
   "engines": {
     "node": ">=22.12.0"

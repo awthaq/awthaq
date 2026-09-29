@@ -247,6 +247,10 @@ export interface WorldShape {
   readonly statuses: Ref.Ref<ReadonlyArray<number>>;
   /** Requests started but not yet awaited (REQ-EA-152/153). */
   readonly inflight: ReturnType<typeof makeNamedRegistry<Fiber.Fiber<Response>>>;
+  /** BEH-EA-258: sessions issued directly with a chosen `amr`, the principals resolved from them, and text a step carries to the next. */
+  readonly views: ReturnType<typeof makeNamedRegistry<Sessions.SessionView>>;
+  readonly principals: ReturnType<typeof makeNamedRegistry<Api.UserPrincipal>>;
+  readonly texts: ReturnType<typeof makeNamedRegistry<string>>;
 }
 
 export class World extends Context.Service<World, WorldShape>()("features/SessionWorld") {}
@@ -262,6 +266,9 @@ export const WorldLive = Layer.effect(
       snapshots: makeNamedRegistry<SessionRow>("row snapshot"),
       statuses: yield* Ref.make<ReadonlyArray<number>>([]),
       inflight: makeNamedRegistry<Fiber.Fiber<Response>>("in-flight request"),
+      views: makeNamedRegistry<Sessions.SessionView>("session view"),
+      principals: makeNamedRegistry<Api.UserPrincipal>("principal"),
+      texts: makeNamedRegistry<string>("text"),
     });
   }),
 );

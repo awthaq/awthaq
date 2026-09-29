@@ -1,5 +1,6 @@
 import { describeFeature, loadFeature } from "@effect-cucumber/vitest";
 import { fileURLToPath } from "node:url";
+import { passkeyRegistrationSteps } from "../../step-definitions/PasskeyRegistrationSteps.ts";
 import { passkeyParameterTypes, passkeySteps } from "../../step-definitions/PasskeySteps.ts";
 import { WorldLive } from "../../step-definitions/PasskeyWorld.ts";
 
@@ -10,4 +11,5 @@ const feature = await loadFeature(
 
 describeFeature(feature, WorldLive, ({ use }) => {
   use(passkeySteps);
+  use(passkeyRegistrationSteps);
 });

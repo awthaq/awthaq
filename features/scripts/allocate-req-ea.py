@@ -118,7 +118,7 @@ SOURCE_MODEL = {
 RULE_RE = re.compile(r'^\s*Rule:')
 BEH_TAG_RE = re.compile(r'@(?:BEH|MOD)-EA-(\d{3})')
 RULE_KIND_RE = re.compile(r'@(BEH|MOD)-EA-\d{3}')
-REQ_TAG_RE = re.compile(r'@REQ-EA-(\d{3})')
+REQ_TAG_RE = re.compile(r'@REQ-EA-(\d{3,})')
 SCEN_RE = re.compile(r'^(\s*)(Scenario( Outline)?):\s*(.*)$')
 HEADING_RE = re.compile(r'^##\s+(BEH-EA-\d{3}:.*)$')
 

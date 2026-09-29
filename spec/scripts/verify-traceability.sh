@@ -180,7 +180,7 @@ fi
 # ---------------------------------------------------------------------------
 if [[ -d "$ROOT_DIR/features/features" && -f "$SPEC_DIR/traceability.md" ]]; then
   undefined=""
-  tags=$(grep -rhoE '@REQ-EA-[0-9]{3}' "$ROOT_DIR/features/features" 2>/dev/null | sort -u)
+  tags=$(grep -rhoE '@REQ-EA-[0-9]{3,}' "$ROOT_DIR/features/features" 2>/dev/null | sort -u)
   if [[ -z "$tags" ]]; then
     report SKIP "features -> traceability" "no .feature tags yet"
   else
@@ -215,10 +215,10 @@ fi
 if [[ -d "$ROOT_DIR/features/features" && -f "$ROOT_DIR/features/traceability.md" ]]; then
   # Tag occurrences on non-comment lines (a comment may mention a tag id).
   tag_lines=$(grep -rhE '^[[:space:]]*@' "$ROOT_DIR/features/features" --include='*.feature' 2>/dev/null \
-    | grep -oE '@REQ-EA-[0-9]{3}' | sed -E 's/^@//' | sort)
+    | grep -oE '@REQ-EA-[0-9]{3,}' | sed -E 's/^@//' | sort)
   tag_set=$(printf '%s\n' "$tag_lines" | sed '/^$/d' | sort -u)
   dup_tags=$(printf '%s\n' "$tag_lines" | sed '/^$/d' | uniq -d | tr '\n' ' ')
-  row_ids=$(grep -oE '^\| REQ-EA-[0-9]{3} ' "$ROOT_DIR/features/traceability.md" | sed -E 's/^\| //; s/ $//' | sort)
+  row_ids=$(grep -oE '^\| REQ-EA-[0-9]{3,} ' "$ROOT_DIR/features/traceability.md" | sed -E 's/^\| //; s/ $//' | sort)
   row_set=$(printf '%s\n' "$row_ids" | sed '/^$/d' | sort -u)
   dup_rows=$(printf '%s\n' "$row_ids" | sed '/^$/d' | uniq -d | tr '\n' ' ')
   tags_only=$(comm -23 <(printf '%s\n' "$tag_set") <(printf '%s\n' "$row_set") | tr '\n' ' ')

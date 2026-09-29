@@ -245,3 +245,60 @@ Feature: Sessions
       Given two sessions whose secrets differ in length and content
       When each token is presented for verification
       Then the comparison is performed over the fixed-length "SHA-256" digests of both operands, never over the variable-length secrets themselves
+
+  # BEH-EA-258 — spec/behaviors/07-sessions.md; see also ADR-EA-021, ADR-EA-012
+  @BEH-EA-258
+  Rule: A session's authentication facts reach the policy layer as attributes
+
+    @REQ-EA-995
+    Scenario Outline: The assurance level is derived from the recorded methods and never guessed stronger
+      When the assurance of a session that recorded "<methods>" is derived
+      Then its level is "<level>" and its restricted-factor flag is "<restricted>"
+
+      Examples:
+        | methods     | level | restricted |
+        | none        | aal1  | false      |
+        | pwd         | aal1  | false      |
+        | fed         | aal1  | false      |
+        | otp,email   | aal1  | false      |
+        | hwk         | aal1  | false      |
+        | sms         | aal1  | true       |
+        | pwd,otp,mfa | aal2  | false      |
+        | pwd,sms     | aal2  | true       |
+        | hwk,user    | aal3  | false      |
+
+    @REQ-EA-996
+    Scenario: A restricted factor is left out of a level check unless the caller opts in
+      When the assurance of a session that recorded "pwd,sms" is derived
+      Then it satisfies "aal2" only when restricted factors are allowed
+
+    @REQ-EA-997
+    Scenario: The resolved principal carries the session's amr and authenticatedAt
+      Given a signed-in user "alice"
+      And a session is issued for "alice" that recorded "pwd,otp,mfa"
+      When the principal of that session is resolved
+      Then the principal carries the methods "pwd,otp,mfa" and the session's authentication time in epoch seconds
+
+    @REQ-EA-998
+    Scenario: The default subject places amr, authenticatedAt, aal and restrictedFactor on its attributes
+      Given a signed-in user "alice"
+      And a session is issued for "alice" that recorded "pwd,otp,mfa"
+      When the principal of that session is resolved
+      Then the default subject holds the methods "pwd,otp,mfa", the authentication time, the level "aal2" and the restricted-factor flag "false"
+
+    @REQ-EA-999
+    Scenario: A session that recorded no methods carries an empty amr and the aal1 floor
+      Given a signed-in user "alice"
+      And a session is issued for "alice" that recorded "none"
+      When the principal of that session is resolved
+      Then the default subject holds the methods "none", the authentication time, the level "aal1" and the restricted-factor flag "false"
+
+    # @skip: minting a principal JWT is the jwt plugin's behavior, outside this World's composition;
+    # covered by packages/jwt/test/Jwt.test.ts "carries amr and auth_time for a User principal that
+    # has them" and "omits amr and auth_time when the session recorded none"
+    @skip
+    @REQ-EA-1000
+    Scenario: A principal JWT carries amr and auth_time when the session recorded them
+      Given a session that recorded "pwd,otp,mfa"
+      When a principal token is minted for it
+      Then the token carries "amr" and "auth_time"

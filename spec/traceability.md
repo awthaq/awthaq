@@ -286,21 +286,21 @@ One test file is still planned: no test asserts that a plugin's migration DDL st
 
 ## 6. Acceptance scenarios (REQ-EA)
 
-The Gherkin acceptance suite at [`features/features/`](../features/features/) is executable: `pnpm run test:bdd` runs it through `@effect-cucumber/vitest` against real code (see [`features/README.md`](../features/README.md) for the operating model and [`features/STYLE.md`](../features/STYLE.md) for the authoring conventions). `REQ-EA-001` through `REQ-EA-983` are allocated from it — one id per `Scenario:`/`Scenario Outline:`, tagged directly on the scenario by [`features/scripts/allocate-req-ea.py`](../features/scripts/allocate-req-ea.py). Every scenario also carries its `BEH-EA-NNN` `Rule:` tag, so a scenario traces to its normative requirement and back without leaving this repository.
+The Gherkin acceptance suite at [`features/features/`](../features/features/) is executable: `pnpm run test:bdd` runs it through `@effect-cucumber/vitest` against real code (see [`features/README.md`](../features/README.md) for the operating model and [`features/STYLE.md`](../features/STYLE.md) for the authoring conventions). `REQ-EA-001` through `REQ-EA-1186` are allocated from it — one id per `Scenario:`/`Scenario Outline:`, tagged directly on the scenario by [`features/scripts/allocate-req-ea.py`](../features/scripts/allocate-req-ea.py). Every scenario also carries its `BEH-EA-NNN` `Rule:` tag, so a scenario traces to its normative requirement and back without leaving this repository.
 
 **What "wired" means here.** A scenario that is not `@skip` is executed by a step definition against the real services or HTTP groups (memory or in-memory SQLite ports) and passes or fails CI. A pruned scenario carries a scenario-level `@skip` and a `# @skip:` comment naming the covering test or the blocking issue; a Feature tagged `@skip @unwired` has no implementation to run against yet (today only device authorization). Wiring order followed `.scratch/resolve-ready-for-human-findings/issues/36-bdd-feature-wiring-prioritization.md`: request-admission and credential-security boundary first (Tier 1), the qadi bridge (Tier 2), cross-cutting infrastructure (Tier 3), the compiler-enforced foundational strata (Tier 4; compile-time Rules are proven by type-gate modules under `features/step-definitions/` that the typecheck compiles), client and tooling ergonomics (Tier 5).
 
-The table below is the per-file wiring status. The counts are executed nodes (a `Scenario Outline` counts once per `Examples` row): **938 of 1123** scenario nodes run today; the rest are pruned or unwired. The full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, 983 rows) lives in [`features/traceability.md`](../features/traceability.md); `pnpm run spec:verify:strict` fails if a tag and a manifest row disagree.
+The table below is the per-file wiring status. The counts are executed nodes (a `Scenario Outline` counts once per `Examples` row): **1270 of 1408** scenario nodes run today; the rest are pruned or unwired. The full per-scenario manifest (`REQ-EA-NNN` → `BEH-EA-NNN` → feature file → scenario title, 1186 rows) lives in [`features/traceability.md`](../features/traceability.md); `pnpm run spec:verify:strict` fails if a tag and a manifest row disagree.
 
 | Feature file | `BEH-EA` range | `REQ-EA` ids | Tier (decision 36) | Wiring status | Running / total nodes |
 |---|---|---|---|---|---|
-| [00-foundations/01-plugin-contract.feature](../features/features/00-foundations/01-plugin-contract.feature) | 001–008 | 001–017 | 4 | full | 17 / 17 |
+| [00-foundations/01-plugin-contract.feature](../features/features/00-foundations/01-plugin-contract.feature) | 001–008 | 001–017, 984 | 4 | full | 18 / 18 |
 | [00-foundations/02-plugin-composition-validate.feature](../features/features/00-foundations/02-plugin-composition-validate.feature) | 009–016 | 018–035, 682–683 | 4 | full | 20 / 20 |
 | [00-foundations/03-ports-slots-hooks-registries.feature](../features/features/00-foundations/03-ports-slots-hooks-registries.feature) | 017–024 | 036–058 | 4 | full | 23 / 23 |
 | [01-contract-and-persistence/04-contract-stratum.feature](../features/features/01-contract-and-persistence/04-contract-stratum.feature) | 025–032 | 059–083, 681 | 4 | wired, 4 pruned | 30 / 34 |
-| [01-contract-and-persistence/05-persistence-stratum.feature](../features/features/01-contract-and-persistence/05-persistence-stratum.feature) | 033–040 | 084–108 | 4 | wired, 5 pruned | 23 / 28 |
-| [02-domain/06-users-accounts.feature](../features/features/02-domain/06-users-accounts.feature) | 041–048 | 109–135 | 1 | wired, 4 pruned | 23 / 27 |
-| [02-domain/07-sessions.feature](../features/features/02-domain/07-sessions.feature) | 049–056 | 136–159, 686–687 | wired before decision 36 | wired, 5 pruned | 21 / 26 |
+| [01-contract-and-persistence/05-persistence-stratum.feature](../features/features/01-contract-and-persistence/05-persistence-stratum.feature) | 033–040 | 084–108 | 4 | wired, 4 pruned | 24 / 28 |
+| [02-domain/06-users-accounts.feature](../features/features/02-domain/06-users-accounts.feature) | 041–048, 254 | 109–135, 985–994 | 1 | wired, 1 pruned | 36 / 37 |
+| [02-domain/07-sessions.feature](../features/features/02-domain/07-sessions.feature) | 049–056, 258 | 136–159, 686–687, 995–1000 | wired before decision 36 | wired, 6 pruned | 34 / 40 |
 | [02-domain/08-verification-tokens.feature](../features/features/02-domain/08-verification-tokens.feature) | 057–064 | 160–184, 688 | 1 | wired, 1 pruned | 28 / 29 |
 | [03-http-layer/09-authentication-middleware.feature](../features/features/03-http-layer/09-authentication-middleware.feature) | 065–072 | 185–203 | 1 | full | 19 / 19 |
 | [03-http-layer/10-csrf.feature](../features/features/03-http-layer/10-csrf.feature) | 073–080 | 204–222, 689 | 1 | wired, 2 pruned | 25 / 27 |
@@ -308,9 +308,9 @@ The table below is the per-file wiring status. The counts are executed nodes (a 
 | [04-cross-cutting/12-hooks.feature](../features/features/04-cross-cutting/12-hooks.feature) | 089–096 | 242–258 | 3 | wired, 4 pruned | 13 / 17 |
 | [04-cross-cutting/13-events.feature](../features/features/04-cross-cutting/13-events.feature) | 097–104 | 259–277 | 3 | full | 19 / 19 |
 | [04-cross-cutting/14-rate-limiting.feature](../features/features/04-cross-cutting/14-rate-limiting.feature) | 105–112 | 278–303, 691 | 3 | wired, 5 pruned | 23 / 28 |
-| [05-authentication-methods/15-password.feature](../features/features/05-authentication-methods/15-password.feature) | 113–120 | 304–327, 692–694 | wired before decision 36 | wired, 4 pruned | 27 / 31 |
+| [05-authentication-methods/15-password.feature](../features/features/05-authentication-methods/15-password.feature) | 113–120, 259 | 304–327, 692–694, 1001–1006 | wired before decision 36 | wired, 4 pruned | 33 / 37 |
 | [05-authentication-methods/16-oauth.feature](../features/features/05-authentication-methods/16-oauth.feature) | 121–128 | 328–354, 633, 684–685, 695 | wired before decision 36 | wired, 1 pruned | 30 / 31 |
-| [05-authentication-methods/17-passkey.feature](../features/features/05-authentication-methods/17-passkey.feature) | 129–136 | 355–381, 696 | wired before decision 36 | full | 36 / 36 |
+| [05-authentication-methods/17-passkey.feature](../features/features/05-authentication-methods/17-passkey.feature) | 129–136, 255–257 | 355–381, 696, 1007–1024 | wired before decision 36 | full | 54 / 54 |
 | [06-roles-and-authorization-bridge/18-roles-subject-resolver.feature](../features/features/06-roles-and-authorization-bridge/18-roles-subject-resolver.feature) | 137–144 | 382–404 | 2 | full | 23 / 23 |
 | [06-roles-and-authorization-bridge/19-qadi-bridge-path-a.feature](../features/features/06-roles-and-authorization-bridge/19-qadi-bridge-path-a.feature) | 145–152 | 405–427 | 2 | wired, 14 pruned | 17 / 31 |
 | [06-roles-and-authorization-bridge/20-qadi-bridge-path-b.feature](../features/features/06-roles-and-authorization-bridge/20-qadi-bridge-path-b.feature) | 153–160 | 428–450 | 2 | wired, 3 pruned | 23 / 26 |
@@ -325,7 +325,11 @@ The table below is the per-file wiring status. The counts are executed nodes (a 
 | [11-jwt/36-jwt.feature](../features/features/11-jwt/36-jwt.feature) | 291–298 | 770–813 | new (BDD-005) | full | 50 / 50 |
 | [12-multi-tenancy/28-tenancy.feature](../features/features/12-multi-tenancy/28-tenancy.feature) | 230–237 | 814–860 | new (P18 behavior) | wired, 3 pruned | 54 / 57 |
 | [13-enterprise-federation/30-scim.feature](../features/features/13-enterprise-federation/30-scim.feature) | 246–253 | 911–983 | new (P18 behavior) | full | 101 / 101 |
-| [13-enterprise-federation/29-saml-sp.feature](../features/features/13-enterprise-federation/29-saml-sp.feature) | 238–245 | 861–910 | unwired (no plugin) | unwired | 0 / 52 |
+| [13-enterprise-federation/29-saml-sp.feature](../features/features/13-enterprise-federation/29-saml-sp.feature) | 238–245 | 861–910 | new (P21b behavior) | wired, 1 pruned | 51 / 52 |
+| [14-mfa-passwordless/31-two-factor.feature](../features/features/14-mfa-passwordless/31-two-factor.feature) | 260–266 | 1025–1074 | new (BCR-010) | wired, 2 pruned | 83 / 85 |
+| [14-mfa-passwordless/32-magic-link.feature](../features/features/14-mfa-passwordless/32-magic-link.feature) | 267–270 | 1075–1098 | new (BCR-010) | full | 26 / 26 |
+| [14-mfa-passwordless/33-email-otp.feature](../features/features/14-mfa-passwordless/33-email-otp.feature) | 271–274 | 1099–1126 | new (BCR-010) | wired, 2 pruned | 33 / 35 |
+| [15-webhooks/34-webhooks.feature](../features/features/15-webhooks/34-webhooks.feature) | 275–282 | 1127–1186 | new (P21b behavior) | wired, 3 pruned | 87 / 90 |
 | [05-authentication-methods/28-device-authorization.feature](../features/features/05-authentication-methods/28-device-authorization.feature) | none yet — traces to [MOD-EA-013](models/13-device-authorization.md) | 634–646 | unwired (no plugin) | unwired | 0 / 13 |
 
 Authorization-decision content is deliberately out of scope for this suite: scenarios touching an authorization outcome (chiefly `06-roles-and-authorization-bridge/`) treat qadi's own policy evaluation as a black box and assert only on awthaq's own bridge responsibilities, per `ADR-EA-009`. qadi's own `features/features/*.feature` (in the sibling `qadi` repository) is the suite that covers role/permission/policy-combination behavior; this suite does not duplicate it.

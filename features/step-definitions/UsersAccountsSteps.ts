@@ -3,9 +3,10 @@
 // these Rules are about (case-insensitive email, `(providerId, subject)`) only exist in a
 // database, and the cascade Rule is exercised through the real `DELETE /user`.
 //
-// BEH-EA-048 (plugin-contributed fields), and the zero-credential *policy* exception of
-// BEH-EA-045, describe capabilities the shipped code does not have; their scenarios stay
-// `@skip` with the reason in the .feature file rather than being wired against a stand-in.
+// The zero-credential *policy* exception of BEH-EA-045 describes a capability the shipped code
+// does not have (PV-221); its scenario stays `@skip` with the reason in the .feature file rather
+// than being wired against a stand-in. BEH-EA-048 (plugin user fields) and BEH-EA-254 (the data
+// export) are in `UserFieldsSteps.ts`.
 import { Accounts, Sessions, Users } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
 import { defineSteps } from "@effect-cucumber/vitest";

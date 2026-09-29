@@ -265,3 +265,58 @@ Feature: Password Authentication
       When a user signs up with a password that appears in a known breach
       Then sign-up fails with "422 WeakPassword"
       And the failure carries hints including "appears in known breaches"
+
+  # BEH-EA-259 — spec/behaviors/15-password.md; see also BEH-EA-093, BEH-EA-261
+  # Wired over the two-factor composition (TwoFactorWorld): `credentialResetGate` is the tap.
+  @BEH-EA-259
+  Rule: A credential reset consults BeforeCredentialReset before anything is rewritten
+
+    @REQ-EA-1001
+    Scenario: Mailbox possession alone cannot reset an account with a confirmed second factor
+      Given a reset-flow user "alice" with a confirmed second factor
+      And "alice" holds a live password-reset token
+      When the reset of "alice" is confirmed with a new password and no second-factor code
+      Then the reset fails with "SecondFactorRequired"
+      And the old password of "alice" still signs in as far as the second-factor divert
+
+    @REQ-EA-1002
+    Scenario: A wrong second-factor code aborts the reset with the typed HookAborted
+      Given a reset-flow user "alice" with a confirmed second factor
+      And "alice" holds a live password-reset token
+      When the reset of "alice" is confirmed with a new password and the second-factor code "000000"
+      Then the reset fails with "HookAborted" carrying the code "SECOND_FACTOR_INVALID"
+
+    @REQ-EA-1003
+    Scenario: A valid TOTP carries the reset
+      Given a reset-flow user "alice" with a confirmed second factor
+      And "alice" holds a live password-reset token
+      And a new time step begins
+      When the reset of "alice" is confirmed with a new password and her current authenticator code
+      Then the reset succeeds
+      And the new password of "alice" signs in as far as the second-factor divert
+
+    @REQ-EA-1004
+    Scenario: A recovery code carries a reset exactly once
+      Given a reset-flow user "alice" with a confirmed second factor
+      And "alice" holds a live password-reset token
+      When the reset of "alice" is confirmed with a new password and her first recovery code
+      Then the reset succeeds
+      When "alice" holds a live password-reset token
+      And the reset of "alice" is confirmed with a new password and her first recovery code
+      Then the reset fails with "HookAborted" carrying the code "SECOND_FACTOR_INVALID"
+
+    @REQ-EA-1005
+    Scenario: A refused reset revokes no session and rewrites no credential
+      Given a reset-flow user "alice" with a confirmed second factor
+      And "alice" holds a live password-reset token
+      When the reset of "alice" is confirmed with a new password and no second-factor code
+      Then the reset fails with "SecondFactorRequired"
+      And the session "alice" signed up with is still live
+
+    @REQ-EA-1006
+    Scenario: An account without a second factor resets exactly as before
+      Given a reset-flow user "bob" without a second factor
+      And "bob" holds a live password-reset token
+      When the reset of "bob" is confirmed with a new password and no second-factor code
+      Then the reset succeeds
+      And the new password of "bob" signs in with a session

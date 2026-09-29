@@ -231,7 +231,7 @@ const block = (file, name) => {
   const owners = new Map();
   for (const file of walk(join(root, "features", "features"), (p) => p.endsWith(".feature"))) {
     lines(file).forEach((text, i) => {
-      const m = text.match(/^\s*@(REQ-EA-\d{3})\b/);
+      const m = text.match(/^\s*@(REQ-EA-\d{3,})\b/);
       if (!m) return;
       const at = `${relative(join(root, "features", "features"), file)}:${i + 1}`;
       owners.set(m[1], [...(owners.get(m[1]) ?? []), at]);
