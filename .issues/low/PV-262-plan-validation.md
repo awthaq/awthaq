@@ -3,7 +3,7 @@ ID: "PV-262"
 Title: "BEH-EA-171/172/173/176 and 22-client-effect.feature describe a client that differs from the shipped one ({ csrf: false } variant, Partial catalog, redirect query, makeQadi facade)"
 Level: low
 Category: "docs"
-Status: open
+Status: resolved
 Package: "client"
 Source: "spec/behaviors/22-client-effect.md:78"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `LOW` · `docs` · `client` · found while wiring `features/features/07-client-integration/22-client-effect.feature` (P20a)
 
-Status: **open**
+Status: **resolved**
 
 ## Summary
 
@@ -34,3 +34,5 @@ Amend `spec/behaviors/22-client-effect.md` and `25-testing-harness.md` to match,
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted retiring the { csrf: false } variant in favour of the shipped bearer exemption (decision 24 / MNA-008), per the issue's own alternative and the existing AuthClient.ts header; user may revisit. Spec prose amended: 22-client-effect.md BEH-EA-171 (requirement now the exemption; superseded-in-part note), BEH-EA-172 (total Record), BEH-EA-173 (callbackURL), BEH-EA-174 (hydrate takes a Session), BEH-EA-176 (AuthClient.toPromiseFacade); 10-csrf.md BEH-EA-079 (same supersession, REQ-EA-689 is the shipped behavior); 25-testing-harness.md BEH-EA-194 (no cookie seam on HttpApiTest.groups). Scenarios REQ-EA-219/220 and 482..484 stay skipped, their comments now say superseded (spec never deletes an id). Headings keep their text so anchors stay valid. spec:verify:strict green.

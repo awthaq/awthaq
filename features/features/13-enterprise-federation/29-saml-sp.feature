@@ -319,15 +319,13 @@ Feature: SAML Service Provider
       When the ACS receives a response with no InResponseTo
       Then the response is rejected with the uniform "SamlAssertionRejected" failure
 
-    # @skip: IdP-initiated login is not built - the plugin refuses every unsolicited response and has no
-    # per-connection opt-in (packages/saml/src/Saml.ts header and README "Not built"; PV-370). The refusal half
-    # is wired above.
-    @skip
+    # PV-370: IdP-initiated login is not offered (packages/saml/src/Saml.ts header and README "Not built"), so
+    # there is no per-connection opt-in to enable: no configuration of a connection admits an unsolicited response.
     @REQ-EA-904
-    Scenario: An unsolicited response is accepted only when the connection explicitly opts in
-      Given a SAML connection that explicitly opts in to IdP-initiated login
-      When the ACS receives an otherwise valid response with no InResponseTo
-      Then the InResponseTo check passes
+    Scenario: No configuration of a connection admits an unsolicited response
+      Given a fully configured SAML connection, with every setting the plugin offers
+      When the ACS receives a response with no InResponseTo
+      Then the response is rejected with the uniform "SamlAssertionRejected" failure
 
   # BEH-EA-245 — spec/behaviors/29-saml-sp.md; see also INV-EA-015, BEH-EA-123
   @BEH-EA-245

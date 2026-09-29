@@ -884,6 +884,12 @@ export const samlSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* ensureConnection("acme");
   });
 
+  // PV-370: there is no IdP-initiated opt-in setting, so a connection with everything the plugin offers is
+  // still one that refuses an unsolicited response.
+  Given("a fully configured SAML connection, with every setting the plugin offers", function* () {
+    yield* ensureConnection("acme");
+  });
+
   When("the ACS receives a response with no InResponseTo", function* () {
     // No login was started: the browser holds no state, and the IdP answers no request.
     yield* patchSpec((spec) => ({ ...spec, response: { ...spec.response, inResponseTo: null } }));

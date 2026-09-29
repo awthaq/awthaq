@@ -131,7 +131,7 @@ REQUIREMENT: SP-initiated login MUST reserve the AuthnRequest id in
              response, or a login-CSRF attempt that posts an attacker's own
              valid response into another browser), an unknown, expired,
              already-consumed or other-connection id MUST be rejected.
-             Unsolicited responses are refused in this build. An assertion's own
+             Unsolicited responses are refused in this build, and no connection setting admits one (PV-370: IdP-initiated login is not offered; a per-connection opt-in would need a replay-protected assertion id and a `RelayState` allow-list first, and is not built). An assertion's own
              `ID` MUST also be accepted once (reserved in `Verification` until it
              could no longer pass the time window): a replay under a fresh
              request id fails.
