@@ -104,10 +104,13 @@ export interface Class<
   readonly "~userFields"?: Fields;
 }
 
-/** PERS-003: a statically declared tap, as far as `Auth.make`'s manifest needs it. */
-export interface DeclaredTap {
-  readonly point: string;
-  readonly order: number;
+/**
+ * PERS-003/PV-260: a statically declared tap — the manifest reads `point`/`order`; a contract test
+ * reads the rest: which plugin owns it (`owner`, the plugin id), its point's `kind`, the `handler`
+ * itself (identity), and `exercise`/`install` to run it against a point of that kind.
+ */
+export interface DeclaredTap extends HookPoint.TapDeclaration<unknown> {
+  readonly owner: string;
 }
 
 /**
@@ -409,7 +412,7 @@ export function layer<
   const taps = options.taps ?? [];
   tapsByPlugin.set(
     plugin,
-    taps.map((declaration) => ({ point: declaration.point, order: declaration.order })),
+    taps.map((declaration) => ({ ...declaration, owner: plugin.id })),
   );
   const own = Layer.effect<Self, Shape, E, R>(plugin, options.make);
   const withHandlers = options.handlers ? Layer.provideMerge(options.handlers, own) : own;

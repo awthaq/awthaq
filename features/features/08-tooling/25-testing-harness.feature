@@ -135,19 +135,14 @@ Feature: Testing Harness
       When the test establishes its calling identity
       Then it uses "TestAuth.signInAs" rather than calling a handler function directly with a fabricated principal
 
-    # @skip: composition guidance (PV-261; @qadi/http is a features dependency now, but no harness World
-    # composes RequirePermission). The real pipeline is exercised by 19-qadi-bridge-path-a.feature,
-    # 20-qadi-bridge-path-b.feature and packages/qadi/test/AuthorizedSubject.test.ts
-    @skip
+    # PV-261: the shipped names for the "AuthzLive/QadiLive" pipeline are qadi's RequirePermissionLive over
+    # awthaq's SubjectExtractorLive (+ the Roles resolver and qadi's real evaluator).
     @REQ-EA-557
-    Scenario: An HTTP-level authorization test runs against the whole AuthzLive/QadiLive pipeline
+    Scenario: An HTTP-level authorization test runs against the real RequirePermission pipeline
       Given a test asserting that "RequirePermission" correctly blocks or allows a request
-      When the test is composed
-      Then it merges "AuthzLive" and "QadiLive" alongside "TestAuth.layer" rather than substituting a stub for either
+      When the test is composed with "TestAuth.layer" over the real "RequirePermissionLive" and "SubjectExtractorLive"
+      Then a caller holding the admin role is allowed and a caller without it is blocked, decided by the real evaluator and no stub
 
-    # @skip: needs a harness World composing @qadi/http's RequirePermission with TestAuth.signInAs (PV-261);
-    # Forbidden-on-Deny is covered by 20-qadi-bridge-path-b.feature and packages/qadi/test/AuthorizedSubject.test.ts
-    @skip
     @REQ-EA-558
     Scenario: A signed-in caller lacking the required role is blocked by the real RequirePermission middleware
       Given a caller signed in via "TestAuth.signInAs" with roles ["member"] only
@@ -228,38 +223,29 @@ Feature: Testing Harness
   @BEH-EA-200
   Rule: Veto only in veto points, and observer isolation
 
-    # @skip: blocked by PV-260: runPluginContractTests registers no hook-kind check; the property
-    # itself (an observe tap cannot abort) is covered by packages/core/test/HookPoint.test.ts
-    @skip
+    # PV-260: a plugin's declared taps expose their handler (AuthPlugin.taps), so the suite runs the
+    # plugin's own handler against a stub input on a point of the tap's kind (the opt-in `hooks` option).
     @REQ-EA-569
     Scenario: runPluginContractTests asserts an observe-point tap cannot abort the operation it observes
-      Given a "kind: \"observe\"" hook point "AfterSignUp" tapped by "Welcome"
-      When "runPluginContractTests" exercises "Welcome"'s tap attempting to abort the sign-up operation
-      Then it asserts the sign-up operation is not aborted
+      Given a plugin "Welcome" declaring a tap on the observe point "AfterSignUp" that completes normally
+      When "runPluginContractTests" exercises the declared tap with a stub input for its point
+      Then it asserts the sign-up operation is not aborted by the tap
 
-    # @skip: blocked by PV-260: runPluginContractTests registers no observer-isolation check; the
-    # property itself is covered by packages/core/test/HookPoint.test.ts (observe-isolation)
-    @skip
     @REQ-EA-570
     Scenario: runPluginContractTests asserts a throwing observer's failure does not propagate to the operation it observes
-      Given the "Welcome" tap on "AfterSignUp" fails because its "Mailer" is unavailable
-      When "runPluginContractTests" runs against that plugin
+      Given a plugin "Welcome" declaring a tap on the observe point "AfterSignUp" that fails because its "Mailer" is unavailable
+      When "runPluginContractTests" exercises the declared tap with a stub input for its point
       Then it asserts the sign-up operation still succeeds despite "Welcome"'s failure
 
-    # @skip: blocked by PV-260: runPluginContractTests registers no veto-point check; the property
-    # itself is covered by packages/core/test/HookPoint.test.ts (veto-abort)
-    @skip
     @REQ-EA-571
     Scenario: runPluginContractTests asserts only a veto-point tap may abort or amend an operation
-      Given a "kind: \"veto\"" hook point "BeforeSignUp" tapped by "CompanyEmail"
-      When "runPluginContractTests" exercises "CompanyEmail"'s tap aborting the operation
+      Given a plugin "CompanyEmail" declaring a tap on the veto point "BeforeSignUp" that aborts with code "EMAIL_DOMAIN"
+      When "runPluginContractTests" exercises the declared tap with a stub input for its point
       Then it asserts the abort is accepted, because "BeforeSignUp" is a veto point
 
-    # @skip: blocked by PV-260: runPluginContractTests has no observe-tap-aborts check to fail;
-    # covered at the HookPoint level by packages/core/test/HookPoint.test.ts
-    @skip
     @REQ-EA-572
     Scenario: A plugin whose observe-point tap aborts its operation fails the contract test
-      Given a plugin whose "kind: \"observe\"" hook tap attempts to abort the operation it observes
-      When "runPluginContractTests" runs against that plugin
+      Given a plugin "Welcome" declaring a tap on the observe point "AfterSignUp" that attempts to abort with code "NOPE"
+      When "runPluginContractTests" exercises the declared tap with a stub input for its point
       Then the contract test fails
+      And the failure names "AfterSignUp" as an observe point whose tap tried to abort

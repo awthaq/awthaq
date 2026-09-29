@@ -1,5 +1,5 @@
 // BEH-EA-193..200 (25-testing-harness.feature). See TestingHarnessWorld.ts for the seam.
-import { Sessions, Users, Verification } from "@awthaq/core";
+import { HookPoint, Hooks, Sessions, Users, Verification } from "@awthaq/core";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { TestAuth } from "@awthaq/test";
@@ -21,12 +21,14 @@ import {
   composable,
   contractSetup,
   dispatch,
+  gatedApp,
   isContractRun,
   passwordApp,
   passwordTuple,
   provides,
   Recorder,
   recordingFramework,
+  requestAdminOnlyAs,
   runContractSuite,
   whoamiApp,
   whoamiFor,
@@ -533,6 +535,78 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
+  // PV-261: RequirePermission composed over TestAuth.layer, callers minted by signInAs.
+  Given(
+    "a test asserting that {string} correctly blocks or allows a request",
+    function* (_permission: string) {
+      const { outcomes } = yield* World;
+      yield* outcomes.set("endpoint", "GET /admin-only (behind RequirePermission, project:admin)");
+    },
+  );
+
+  When(
+    "the test is composed with {string} over the real {string} and {string}",
+    function* (_layer: string, _guard: string, _extractor: string) {
+      const { outcomes } = yield* World;
+      const [admin, member] = yield* Effect.gen(function* () {
+        const admin = yield* requestAdminOnlyAs("admin@example.com", ["admin"]);
+        const member = yield* requestAdminOnlyAs("member@example.com", ["member"]);
+        return [admin, member] as const;
+      }).pipe(Effect.provide(gatedApp));
+      yield* outcomes.set("adminStatus", admin.status);
+      yield* outcomes.set("adminBody", admin.body);
+      yield* outcomes.set("memberStatus", member.status);
+    },
+  );
+
+  Then(
+    "a caller holding the admin role is allowed and a caller without it is blocked, decided by the real evaluator and no stub",
+    function* () {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("adminStatus", isNumber), 200);
+      assert.equal(yield* outcomes.getAs("adminBody", isString), '"admin data"');
+      assert.equal(yield* outcomes.getAs("memberStatus", isNumber), 403);
+    },
+  );
+
+  Given(
+    'a caller signed in via {string} with roles ["member"] only',
+    function* (_signInAs: string) {
+      const { outcomes } = yield* World;
+      yield* outcomes.set("callerRoles", ["member"]);
+    },
+  );
+
+  Given(
+    "qadi's evaluator would return a Deny decision for that caller against the admin-only endpoint's policy",
+    function* () {
+      // Arranged, never stubbed: the catalog gives `member` no `project:admin`, so the real evaluator denies.
+      const { outcomes } = yield* World;
+      assert.deepEqual(yield* outcomes.getAs("callerRoles", isStringArray), ["member"]);
+    },
+  );
+
+  When(
+    "the caller requests an endpoint gated by {string} for the admin role",
+    function* (_guard: string) {
+      const { outcomes } = yield* World;
+      const roles = yield* outcomes.getAs("callerRoles", isStringArray);
+      const result = yield* requestAdminOnlyAs("member-only@example.com", roles).pipe(
+        Effect.provide(gatedApp),
+      );
+      yield* outcomes.set("gatedStatus", result.status);
+      yield* outcomes.set("gatedBody", result.body);
+    },
+  );
+
+  Then("the request fails with {string}", function* (tag: string) {
+    const { outcomes } = yield* World;
+    assert.equal(tag, "Forbidden");
+    assert.equal(yield* outcomes.getAs("gatedStatus", isNumber), 403);
+    // qadi maps a Deny to an empty 403 body (BEH-EA-157): nothing about the policy leaks.
+    assert.equal(yield* outcomes.getAs("gatedBody", isString), "");
+  });
+
   Given(
     "a test that calls a handler function directly with a fabricated principal instead of using {string}",
     function* (_signInAs: string) {
@@ -838,4 +912,143 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
       run.passed.some((name) => name.includes("does not change the plugin's own contract")),
     );
   });
+
+  // ---- BEH-EA-200 (PV-260) ------------------------------------------------------------------
+  // The plugin under test declares a tap the way `AuthPlugin.layer`'s `taps` option does (its
+  // `plugin.taps` entry then carries the handler and owner); the suite runs that handler.
+
+  const declaring = (id: string, tap: HookPoint.TapDeclaration<unknown>) =>
+    composable(id, { taps: [{ ...tap, owner: id }] });
+
+  const observeStub = (name: string) => {
+    assert.equal(name, "AfterSignUp", "this World stubs the AfterSignUp observe point");
+    return { point: Hooks.AfterSignUp, input: { userId: "u1", strategy: "password" } };
+  };
+
+  const vetoStub = (name: string) => {
+    assert.equal(name, "BeforeSignUp", "this World stubs the BeforeSignUp veto point");
+    return {
+      point: Hooks.BeforeSignUp,
+      input: { name: "Ada", email: "ada@example.com", strategy: "password" },
+    };
+  };
+
+  Given(
+    "a plugin {string} declaring a tap on the observe point {string} that completes normally",
+    function* (id: string, point: string) {
+      yield* setUp({
+        make: () =>
+          declaring(
+            id,
+            Hooks.AfterSignUp.declareTap(() => Effect.void),
+          ),
+        options: [{}],
+        host: [],
+        hooks: [observeStub(point)],
+      });
+    },
+  );
+
+  Given(
+    "a plugin {string} declaring a tap on the observe point {string} that fails because its {string} is unavailable",
+    function* (id: string, point: string, dependency: string) {
+      yield* setUp({
+        make: () =>
+          declaring(
+            id,
+            Hooks.AfterSignUp.declareTap(() => Effect.fail(`${dependency} unavailable`)),
+          ),
+        options: [{}],
+        host: [],
+        hooks: [observeStub(point)],
+      });
+    },
+  );
+
+  Given(
+    "a plugin {string} declaring a tap on the veto point {string} that aborts with code {string}",
+    function* (id: string, point: string, code: string) {
+      yield* setUp({
+        make: () =>
+          declaring(
+            id,
+            Hooks.BeforeSignUp.declareTap(() => Effect.fail(new HookPoint.HookAbort({ code }))),
+          ),
+        options: [{}],
+        host: [],
+        hooks: [vetoStub(point)],
+      });
+    },
+  );
+
+  Given(
+    "a plugin {string} declaring a tap on the observe point {string} that attempts to abort with code {string}",
+    function* (id: string, point: string, code: string) {
+      yield* setUp({
+        make: () =>
+          declaring(
+            id,
+            Hooks.AfterSignUp.declareTap(() => Effect.fail(new HookPoint.HookAbort({ code }))),
+          ),
+        options: [{}],
+        host: [],
+        hooks: [observeStub(point)],
+      });
+    },
+  );
+
+  When(
+    "{string} exercises the declared tap with a stub input for its point",
+    function* (_runner: string) {
+      const { outcomes } = yield* World;
+      yield* outcomes.set("run", yield* runContractSuite(yield* contractSetup));
+    },
+  );
+
+  /** The suite ran the plugin's own handler on a point of its kind, and every check passed. */
+  const kindCheckPassed = Effect.gen(function* () {
+    const { outcomes } = yield* World;
+    const run = yield* outcomes.getAs("run", isContractRun);
+    assert.deepEqual(run.failed, []);
+    assert.ok(
+      run.passed.some((name) => name.includes("obeys its point's kind")),
+      `the hook-kind check did not run: ${run.passed.join(" | ")}`,
+    );
+    assert.ok(run.passed.some((name) => name.includes("registers this plugin's handler")));
+  });
+
+  Then("it asserts the sign-up operation is not aborted by the tap", function* () {
+    yield* kindCheckPassed;
+  });
+
+  Then(
+    "it asserts the sign-up operation still succeeds despite {string}'s failure",
+    function* (_plugin: string) {
+      yield* kindCheckPassed;
+    },
+  );
+
+  Then(
+    "it asserts the abort is accepted, because {string} is a veto point",
+    function* (_point: string) {
+      yield* kindCheckPassed;
+    },
+  );
+
+  Then(
+    "the failure names {string} as an observe point whose tap tried to abort",
+    function* (_point: string) {
+      const { outcomes } = yield* World;
+      const run = yield* outcomes.getAs("run", isContractRun);
+      assert.ok(
+        run.failed.some(
+          (message) =>
+            message.includes("tried to abort") &&
+            message.includes("observe point") &&
+            message.includes("auth.user.signedUp"),
+        ),
+        run.failed.join(" | "),
+      );
+    },
+  );
 });

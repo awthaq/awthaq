@@ -111,6 +111,8 @@ REQUIREMENT: A test asserting that `RequirePermission` or `AuthorizedSubject`
              fabricated principal.
 ```
 
+**As shipped (PV-261):** `AuthzLive`/`QadiLive` are the illustrative names; the pipeline a suite merges next to `TestAuth.layer` is qadi's `RequirePermissionLive` over awthaq's `SubjectExtractor.SubjectExtractorLive` (+ the `Roles` resolver and qadi's real evaluator, e.g. `EvaluationServicesNone`), and `signInAs` takes an `onSignedUp` callback (`roles.assign(userId, "member")`) instead of a `roles` list, because `@awthaq/test` does not depend on `@awthaq/roles`. `features/step-definitions/TestingHarnessWorld.ts` composes exactly that (a `RequirePermission`-gated admin-only endpoint, callers minted by `signInAs`): an admin is allowed (200), a member is refused by the real evaluator (403, empty body) — REQ-EA-557/558.
+
 `usage-qadi.md` §15 shows exactly this composition, testing the bridge itself (a member without the admin role gets `Forbidden` from the real `RequirePermission` middleware), which a direct handler call would bypass entirely. This is the test-level expression of `usage-qadi.md` §16's "one evaluation path": the test must exercise the same middleware chain a real request goes through, or it is not actually testing the bridge.
 
 _Previous: [BEH-EA-196](25-testing-harness.md#beh-ea-196-qaditestlayer-and-subjectwith-for-authorization-unit-tests) | Next: [BEH-EA-198](25-testing-harness.md#beh-ea-198-runplugincontracttests-checks-manifest-legality-and-migrations)_
@@ -161,5 +163,12 @@ REQUIREMENT: `runPluginContractTests` MUST assert that a hook tap on an
 ```
 
 PRD §19 and PRD §9.3's hook-point taxonomy ("veto (abort or amend), observe (fail-isolated)") together define the property this check enforces: `AfterSignUp` is an observe point, so a subscriber that throws while sending a welcome email must not cause sign-up itself to fail — `usage-examples-v4.md` §14's `Welcome` tap is documented as unable to "fail sign-in even if it throws." The contract test exists so a plugin author gets this guarantee checked automatically rather than having to reason about it by hand every time a new hook tap is added.
+
+**As shipped (PV-260):** a plugin's declared taps (`AuthPlugin.layer`'s `taps`) are readable off `plugin.taps` with their owner (`plugin.id`), point key, kind, order and the **handler itself** (`DeclaredTap.handler`, the author's own function, so its identity is checkable) plus `exercise(input)` (the handler run against a stub, validated against the point's input schema, to an `Exit` — unfiltered by any point's failure semantics) and `install(owner)`. `runPluginContractTests` uses them:
+
+- always, for every declared tap: a fresh point of the tap's kind is built, the plugin's own tap installed, and the point's resolved chain must contain a `{ owner: plugin.id, order }` entry (the tap really registers at the point it declares);
+- opt-in, `hooks: [{ point: Hooks.AfterSignUp, input: stub }]`: the plugin's *actual handler* is run with the stub. An **observe** tap must not fail with `HookAbort` (an observe tap cannot abort the operation it observes; REQ-EA-569/572) and a failure of any other kind must not reach the operation it observes — the point's `run` still succeeds (REQ-EA-570); a **veto** tap may succeed or abort with `HookAbort` and nothing else (REQ-EA-571); a **divert** tap must not fail. A stub that does not match the point's input, or a stub for a point the plugin does not tap, fails the run so a typo cannot skip a check.
+
+The check is not tautological because it runs the plugin's handlers rather than the core registry alone: the registry's isolation (`packages/core/test/HookPoint.test.ts`) guarantees that an observer's failure is contained, but only the handler tells whether it *tried* to abort.
 
 _Previous: [BEH-EA-199](25-testing-harness.md#beh-ea-199-redaction-and-contract-hash-stability) | Next: [BEH-EA-201](26-cli.md#beh-ea-201-doctor-checks-link-config-and-insecure-defaults)_

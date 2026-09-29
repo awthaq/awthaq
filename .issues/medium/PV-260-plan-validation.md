@@ -3,7 +3,7 @@ ID: "PV-260"
 Title: "runPluginContractTests registers no hook-kind check although BEH-EA-200 requires one (observe taps cannot abort; observers are fail-isolated; only veto points abort)"
 Level: medium
 Category: "testing"
-Status: open
+Status: resolved
 Package: "test"
 Source: "packages/test/src/TestAuth.ts:1"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `MEDIUM` · `testing` · `test` · found while wiring `features/features/08-tooling/25-testing-harness.feature` (P20a)
 
-Status: **open**
+Status: **resolved**
 
 ## Summary
 
@@ -33,3 +33,5 @@ Add an opt-in `hooks` option to `runPluginContractTests` (a plugin's taps are re
 _Triage notes and discussion append here._
 
 **Plan note (2026-09-29, P22):** Left open with a design call. The three properties BEH-EA-200 names are already true structurally and covered at their own level: ObserveTap returns Effect<void, unknown> and the observe registry isolates every tap failure (HookPoint.observe's catchCause), a veto tap can only fail with the typed HookAbort, and only veto/divert points return an amended value (packages/core/test/HookPoint.test.ts). A runPluginContractTests hooks option that runs a supplied tap against a stub input would therefore be tautological for observe points (it can only assert what the type and registry guarantee), and the harness cannot reach a plugin's own handlers at all: AuthPlugin.taps keeps only { point, order } (the handler lives behind declareTap's install layer). Options: (a) an opt-in 'hooks' list of { point, tapLayer, input } cases the author passes explicitly, asserting observe-run succeeds and veto failures are HookAbort (cheap, low signal), (b) expose the declared handlers on AuthPlugin.taps so the suite can exercise them without author wiring (a core API change, and the recommended path if the check is wanted), (c) retire REQ-EA-569..572 as structural. Decision needed from the maintainer; nothing changed.
+
+**Resolved (2026-09-29):** runPluginContractTests now checks hook kinds: AuthPlugin.taps exposes owner/kind/handler/exercise/install (HookPoint.TapDeclaration); the suite registers each declared tap on a fresh point of its kind (its resolved chain must hold {owner: plugin id, order}) and, with the opt-in hooks: [{point, input}] option, runs the plugin's own handlers (observe: HookAbort forbidden and failure isolated; veto: only HookAbort; divert: no failure). REQ-EA-569..572 rewritten and un-skipped (TestingHarnessSteps); tests in packages/test/test/runPluginContractTests.test.ts and packages/core/test/AuthHookManifest.test.ts; BEH-EA-200 as-shipped paragraph; changeset contract-test-hook-kinds. Decision (2026-09-29): adopted option (b) from the plan note (expose the handlers on AuthPlugin.taps); the user may revisit.

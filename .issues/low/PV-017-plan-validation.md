@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `LOW` · `architecture` · `core` · found during the 2026-09-29 plan validation (not in the original audit)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -33,3 +33,5 @@ Planned under: tooling-typecheck-lint (P20), data-retention-sweep (P11).
 _Triage notes and discussion append here._
 
 **Resolved (2026-09-29):** Cycle half: fixed and now guarded. AuditLog<->AuthEvents was already gone (the P10 schema split); scripts/circular.mjs's new type-inclusive pass (which also scans .tsx) found and fixed three other type-level cycles: Users<->Hooks<->{Erasure,DataExport}Registry and OAuthConfig<->OAuthProvider<->ProviderHttp. Retention half (nothing retains or erases audit_log rows) is covered by P11's Retention sweep (Retention.layerScheduled) and AuditLog.pseudonymizeActor / the ErasureRegistry (ADR-EA-029/031).
+
+**Resolved (2026-09-29):** Status line brought in line with the frontmatter (already resolved above): both halves were closed by the type-inclusive circular pass and P11's retention sweep.
