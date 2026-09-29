@@ -293,12 +293,10 @@ Feature: Sessions
       When the principal of that session is resolved
       Then the default subject holds the methods "none", the authentication time, the level "aal1" and the restricted-factor flag "false"
 
-    # @skip: minting a principal JWT is the jwt plugin's behavior, outside this World's composition;
-    # covered by packages/jwt/test/Jwt.test.ts "carries amr and auth_time for a User principal that
-    # has them" and "omits amr and auth_time when the session recorded none"
-    @skip
+    # The principal comes from a real session that recorded the methods; the token is minted by the real @awthaq/jwt (JwtSigner in SessionAssuranceSteps).
     @REQ-EA-1000
     Scenario: A principal JWT carries amr and auth_time when the session recorded them
-      Given a session that recorded "pwd,otp,mfa"
-      When a principal token is minted for it
-      Then the token carries "amr" and "auth_time"
+      Given a signed-in user "alice"
+      And a session is issued for "alice" that recorded "pwd,otp,mfa"
+      When a principal token is minted for that session
+      Then the token carries "amr" and "auth_time" of that session
