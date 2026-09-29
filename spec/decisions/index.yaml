@@ -113,7 +113,7 @@ entries:
   - id: "ADR-EA-030"
     file: "030-event-delivery-outbox-relay.md"
     title: "Events Cross Process Boundaries by Tailing the Audit Log, Not by Widening the Bus"
-    status: "Accepted — relay implemented; first-party webhooks plugin not yet built"
+    status: "Accepted — relay and the first-party webhooks plugin implemented"
   - id: "ADR-EA-031"
     file: "031-erasure-registry-and-retention.md"
     title: "Erasure Is a Core Domain Service over an Aggregating Registry, and Retention Is a Separate, Opt-In Sweep"
