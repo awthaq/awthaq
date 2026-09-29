@@ -49,3 +49,5 @@ Extend both cascades to clear matching organization_active_context rows (or null
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `org-active-context-lifecycle`. Duplicate of `CWM-003` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1507`. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `CWM-003-clerk-workos-migration-specialist` — closed by its fix (see that issue's Resolved comment).
