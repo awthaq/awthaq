@@ -3,7 +3,7 @@ ID: "ACS-006"
 Title: "Embedded KDF parameters honored without a ceiling when verifying scrypt hashes"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/PasswordHasher.ts:194"
 Auditor: "applied-cryptography-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `ports` · reported by **Applied Cryptography Specialist** (`applied-cryptography-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Clamp parsed parameters to the layer's configured maxima (or reject-and-rehash-n
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-hasher-verify-hardening`. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:229`. Fix: Clamp stored-hash KDF parameters to configurable ceilings before any recomputation. (effort S). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Ceilings on stored-hash KDF params, both layers, no KDF run on violation: AUTH_ARGON2_MAX_MEMORY_KIB=262144, _MAX_ITERATIONS=16, _MAX_PARALLELISM=8, AUTH_SCRYPT_MAX_COST_LOG2=20, _MAX_BLOCK_SIZE=32, _MAX_PARALLELISM=16 (Config.Int with defaults); each must be >= the layer's own target or the layer build dies (Effect.die). Parsers require integer params in [1, ceiling] (ln checked before 2**ln); addition beyond the dossier: scrypt N*r is bounded by 2^maxCostLog2 * max(target r, 8) so independent per-axis ceilings cannot combine into a multi-GiB allocation (defaults alone would allow 4 GiB). verify returns false and needsRehash true for violating hashes. verify now uses Effect.tryPromise (a hash-wasm throw is false, not a defect) in both layers. Tests (2s timeout): argon2 m=4194304 and scrypt ln=25 -> false without KDF (scrypt one red: old code threw RangeError), layer build dies below-target ceilings. Gates as PHS-001.

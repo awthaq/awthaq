@@ -3,7 +3,7 @@ ID: "RBS-004"
 Title: "Store contract cannot express an outage: no error channel, no fail-open path, no distributed store exists"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/RateLimiter.ts:72"
 Auditor: "rate-limiting-brute-force-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `ports` · reported by **Rate Limiting & Brute-Force Defense Specialist** (`rate-limiting-brute-force-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Widen increment to Effect<Bucket, StoreError> now while there is exactly one sto
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `ratelimit-distributed-store`. Evidence at HEAD ec065a7: `packages/ports/src/RateLimiter.ts:72`. Fix: Give the store an error channel, implement BEH-EA-105's fail-open default, and ship a SQL-backed store. (effort L). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/ports/src/RateLimiter.ts: RateLimiterStoreUnavailable error on RateLimiterStore.increment's channel; RateLimiterConfig Context.Reference {onStoreUnavailable: allow|reject (default allow), unavailableRetryAfter} + RateLimiter.config(); RateLimiter.layer catches store outages -> allow: logWarning (cause only, no key) + succeed; reject: RateLimitExceeded(retryAfter). New packages/sql/src/RateLimiterStoreSql.ts (layerStoreSql/layerStoreSqlWith: single atomic INSERT..ON CONFLICT DO UPDATE..RETURNING on rate_limit_buckets with epoch-ms numeric columns so pg+sqlite share one shape; SqlError/decode -> RateLimiterStoreUnavailable; scoped expired-row sweeper; migrations + migrate under its own tracking table awthaq_rate_limiter_migrations to avoid the N11 id-skip trap). Exported from packages/sql/src/index.ts. Tests: ports RateLimiter.test.ts (fail-open+log, reject policy; red first), sql RateLimiterStoreSql.test.ts (20 concurrent -> 1..20, rollover, end-to-end, sweeper, missing table -> Unavailable), RateLimiterStoreSql.postgres.test.ts (skipped without AWTHAQ_POSTGRES_URL; not run locally). Spec BEH-EA-105/109 updated. Deferred: Redis store (not planned per dossier), BDD scenarios for the new store. Gates: typecheck clean except pre-existing react TS2883, test 835 pass, bdd 104, spec:verify 19/19.

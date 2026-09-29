@@ -23,7 +23,7 @@ import {
 import { Password } from "@awthaq/password";
 import { AuditLog, Auth, AuthEvents, Verification } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
-import { Authentication, Csrf } from "@awthaq/server";
+import { Authentication, BodyLimit, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -99,7 +99,9 @@ const AppLayer = TestAuth.layer(
 // 4. A real listening server — the same `HttpRouter.serve` +
 //    `NodeHttpServer.layer` pair the README's own quickstart uses, not an
 //    in-process test client.
-const ServerLive = HttpRouter.serve(AppLayer).pipe(
+//    `BodyLimit.layer` bounds every request body (256 KiB by default, 413
+//    beyond it) — without it Effect's server reads bodies with no cap.
+const ServerLive = HttpRouter.serve(BodyLimit.layer.pipe(Layer.provideMerge(AppLayer))).pipe(
   Layer.provide(NodeHttpServer.layer(createServer, { port: 3001 })),
 );
 

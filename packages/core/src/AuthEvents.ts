@@ -276,6 +276,21 @@ export interface OrganizationTeamMemberRemovedEvent {
   readonly userId: UserId;
 }
 
+/**
+ * EOTS-007: published by `RateLimits.enforce` on every rate-limit breach.
+ * Deliberately carries no bucket key, email or IP (BEH-EA-108): it names the
+ * rule that fired, so a defender can see which throttle is being hit and how
+ * often without the event stream itself becoming an identifier oracle.
+ */
+export interface RateLimitExceededEvent {
+  readonly _tag: "auth.rateLimit.exceeded";
+  readonly group: string;
+  readonly endpoint: string;
+  readonly rule: string;
+  readonly dimension: "identity" | "ip" | "principal" | "custom";
+  readonly retryAfterMillis: number;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
@@ -308,7 +323,8 @@ export type AuthEvent =
   | OrganizationTeamUpdatedEvent
   | OrganizationTeamDeletedEvent
   | OrganizationTeamMemberAddedEvent
-  | OrganizationTeamMemberRemovedEvent;
+  | OrganizationTeamMemberRemovedEvent
+  | RateLimitExceededEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */

@@ -38,6 +38,8 @@ REQUIREMENT: When a request carries no `Sec-Fetch-Site` header,
 
 `archive/PRD.md` §14 lists "Origin fallback" as the second layer of the same check, covering older or non-browser clients that do not send `Sec-Fetch-Site` at all. The two checks are designed to compose, not substitute for each other: `Sec-Fetch-Site` is preferred when available, and `Origin` is the documented fallback rather than an alternative a deployment must choose between.
 
+**CORS posture (AGA-002).** awthaq ships **no CORS by default**: without `AuthHttp.cors` no response carries `Access-Control-Allow-Origin`, so a browser refuses to let any other origin read a response (same-origin, default-deny). `AuthHttp.cors()` (`@awthaq/server`) is the only supported way to open cross-origin access to a separate SPA origin, and its origin allowlist *is* `CsrfConfig.allowedOrigins`, the same value this behavior's `Origin` fallback compares against, so the edge policy and the CSRF policy cannot drift. It allows credentials, the methods `GET`/`POST`/`PATCH`/`DELETE`, the request headers `content-type`, the CSRF header and `authorization`, and exposes the rotated-token response header; an empty allowlist opens nothing. Opening CORS never relaxes `CsrfProtection`: a cross-site mutation still needs the double-submit pair.
+
 ## BEH-EA-075: A signed double-submit `__Host-csrf` cookie backs the header-based check
 
 ```

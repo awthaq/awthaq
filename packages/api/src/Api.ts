@@ -82,7 +82,7 @@ export class InvalidCredentials extends Schema.TaggedError<InvalidCredentials>()
 
 /**
  * Shipping-gap map (.scratch/shipping-gaps), ticket 12. BEH-EA-106: the
- * wire counterpart of `@awthaq/ports`' `RateLimiter.RateLimited` —
+ * wire counterpart of `@awthaq/ports`' `RateLimiter.RateLimitExceeded` —
  * `retryAfterMillis` carried as a typed field (not folded into a message
  * string) so a client can render "try again in n seconds" without parsing
  * text. Declared here, not per-plugin, since every rate-limited endpoint

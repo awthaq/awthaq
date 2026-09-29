@@ -24,6 +24,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Model from "effect/unstable/schema/Model";
 import * as AuthEvents from "./AuthEvents.ts";
+import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
 /** BEH-EA-049: the public half of a session's `id.secret` token. */
@@ -389,7 +390,14 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           supersededAt: Option.none(),
           reusedAt: Option.none(),
         };
-        yield* Ref.update(state, (s) => HashMap.set(s, id, row));
+        // TMS-004: rows are otherwise removed only on revoke; prune expired ones once the map is large.
+        yield* Ref.update(state, (s) =>
+          HashMap.set(
+            pruneExpiredAbove(s, now, (r) => r.absoluteExpiresAt),
+            id,
+            row,
+          ),
+        );
         return { session: toView(row), token: Redacted.make(`${id}.${secret}`) };
       });
 

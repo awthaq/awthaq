@@ -45,6 +45,8 @@ REQUIREMENT: `password.signIn` MUST fail with the same `InvalidCredentials`
 
 PRD §10 states this directly: "`InvalidCredentials` is uniform to prevent enumeration." An attacker probing `signIn` cannot use a different error, status, or timing to learn which emails have accounts — the constant-time hash comparison and the single error shape together remove the oracle. `usage-examples-v4.md` §1.2 shows the wire shape: `401 {"_tag":"InvalidCredentials"}`, regardless of which of the three underlying reasons applied.
 
+**Timing floor (TSS-006).** A verify runs at the *stored* hash's cost, so a row still on a cheaper legacy hash (bcrypt awaiting rehash) would answer faster than the dummy-hash path an unknown email takes. `PasswordConfig.signInTimingFloor` closes that: by default (`"calibrated"`) the layer times a verify of its boot-time dummy hash and holds `signIn`'s credential check (lookup plus verify, success and failure alike) to at least 1.25 times that; a `Duration` fixes the floor and `"off"` disables it. `changePassword` and `reauthenticate` hold their verify to the same floor. The residual: a hash *costlier* than the floor (a high-cost legacy bcrypt) still takes longer than the floor and stays distinguishable until it has been rehashed.
+
 _Previous: [BEH-EA-113](15-password.md#beh-ea-113-sign-up-issues-a-pending-user-and-a-verification-mail) | Next: [BEH-EA-115](15-password.md#beh-ea-115-passwordhasher-is-a-port-the-plugin-never-provides)_
 
 ## BEH-EA-115: PasswordHasher is a port the plugin never provides
@@ -69,11 +71,17 @@ _Previous: [BEH-EA-114](15-password.md#beh-ea-114-uniform-invalidcredentials-on-
 ## BEH-EA-116: Rehash on login
 
 ```text
-REQUIREMENT: On a successful sign-in, if the stored hash's parameters differ
-             from the currently configured `PasswordHasher` parameters, the
+REQUIREMENT: On a successful sign-in, if the stored hash's parameters are
+             below the currently configured `PasswordHasher` floor (or the
+             hash is in a foreign, unparseable or over-ceiling format), the
              password MUST be rehashed with current parameters in the same
-             request and the stored hash MUST be replaced.
+             request and the stored hash MUST be replaced. A stored hash
+             stronger than the configured target MUST NOT be rewritten
+             unless the deployment opts into `exact` semantics.
 ```
+
+PHS-002: the default `AUTH_PASSWORD_REHASH_POLICY=floor` rewrites only a hash weaker than the target (argon2: `m` or `t` below it; scrypt: `N` or `r` below it; `p` alone never triggers), so lowering the configured cost can never silently downgrade existing hashes. `AUTH_PASSWORD_REHASH_POLICY=exact` restores the earlier "any difference" behavior for an operator who deliberately lowers cost. Both layers also refuse, without running the KDF, any stored hash claiming a cost above a configurable ceiling (ACS-006), and `layerArgon2id` compares digests itself in constant time rather than through hash-wasm's `argon2Verify` (PHS-001).
+
 
 Argon2id parameters (memory cost, iterations, parallelism) are expected to be raised over the life of an application as hardware improves; without rehash-on-login, every account hashed under the old parameters stays weaker than a newly created one indefinitely, since a stored hash is never touched again after creation. Rehashing opportunistically at the one moment the plaintext password is available — sign-in — closes that gap without a bulk migration, mirroring the "hashed at rest" security posture PRD §18 requires generally.
 

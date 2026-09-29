@@ -39,6 +39,16 @@ export interface PasswordConfigShape {
   readonly breachCheck: boolean | { readonly onUnavailable: "allow" | "reject" };
   readonly resetTtl: Duration.Duration;
   readonly rehashOnLogin: boolean;
+  /**
+   * TSS-006: the minimum time `signIn`'s credential check (lookup plus
+   * verify) takes, so an account whose stored hash is cheaper than the
+   * configured cost (a legacy bcrypt row awaiting rehash) cannot be told
+   * apart from an unknown email by latency. `"calibrated"` (the default)
+   * times the boot-time dummy verify and pads to 1.25 times that; a
+   * `Duration` fixes the floor; `"off"` disables it. A hash costlier than
+   * the floor still takes longer, and stays distinguishable until rehashed.
+   */
+  readonly signInTimingFloor: "calibrated" | "off" | Duration.Duration;
 }
 
 const defaultPasswordConfig: PasswordConfigShape = {
@@ -46,6 +56,7 @@ const defaultPasswordConfig: PasswordConfigShape = {
   breachCheck: false,
   resetTtl: Duration.hours(1),
   rehashOnLogin: true,
+  signInTimingFloor: "calibrated",
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -258,6 +269,24 @@ const RATE_LIMITS = {
   // guesses across many distinct, unrelated tokens/accounts.
   verifyEmailByIp: { limit: 30, window: Duration.minutes(15) },
 } as const satisfies Record<string, { readonly limit: number; readonly window: Duration.Duration }>;
+
+/**
+ * EOTS-007: the fixed labels a breach of `rule` is reported under — the
+ * `RATE_LIMITS` entry's name, never the (email/IP-bearing) bucket key.
+ */
+const ruleMeta = (rule: {
+  readonly limit: number;
+  readonly window: Duration.Duration;
+}): RateLimits.EnforceMeta => {
+  const name =
+    Object.entries(RATE_LIMITS).find(([, candidate]) => candidate === rule)?.[0] ?? "unknown";
+  return {
+    group: "password",
+    endpoint: name.replace(/ByIp$/, ""),
+    rule: name,
+    dimension: name.endsWith("ByIp") ? "ip" : "identity",
+  };
+};
 
 /**
  * The mailed reset/verification link's token embeds `Verification`'s own
@@ -662,12 +691,43 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // hasher produced, so `hasher.verify` always does the same real
       // work whether or not a matching account/credential actually
       // exists.
-      const dummyHash = Redacted.make(yield* hasher.hash(Redacted.make("awthaq/password/dummy")));
+      const dummyPassword = Redacted.make("awthaq/password/dummy");
+      const dummyHash = Redacted.make(yield* hasher.hash(dummyPassword));
+
+      // TSS-006: `hasher.hash` above has already warmed the KDF (WASM
+      // instantiation), so this timing is the steady-state verify cost.
+      const timingFloorMillis = yield* Effect.gen(function* () {
+        if (config.signInTimingFloor === "off") return 0;
+        if (Duration.isDuration(config.signInTimingFloor)) {
+          return Duration.toMillis(config.signInTimingFloor);
+        }
+        const start = DateTime.toEpochMillis(yield* DateTime.now);
+        yield* hasher.verify(dummyPassword, Redacted.value(dummyHash));
+        return 1.25 * (DateTime.toEpochMillis(yield* DateTime.now) - start);
+      });
+
+      /**
+       * TSS-006: runs `effect` (success or failure alike) and holds its
+       * result back until at least `timingFloorMillis` has elapsed, so a
+       * cheap-hash path is not faster than the dummy-hash path.
+       */
+      const withTimingFloor = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        timingFloorMillis <= 0
+          ? effect
+          : Effect.gen(function* () {
+              const start = DateTime.toEpochMillis(yield* DateTime.now);
+              const exit = yield* Effect.exit(effect);
+              const elapsed = DateTime.toEpochMillis(yield* DateTime.now) - start;
+              if (elapsed < timingFloorMillis) {
+                yield* Effect.sleep(Duration.millis(timingFloorMillis - elapsed));
+              }
+              return yield* exit;
+            });
 
       /**
        * Ticket 12: every call site below passes its own `key`/`limit`/
        * `window` from `RATE_LIMITS`, and maps the port's own domain
-       * `RateLimited` (`@awthaq/ports`) onto the wire-level
+       * `RateLimitExceeded` (`@awthaq/ports`) onto the wire-level
        * `Api.RateLimited` — the same class `PasswordShape`'s own error
        * unions declare and `PasswordApi`'s endpoints carry, so no separate
        * mapping is needed again at the HTTP handler layer.
@@ -676,14 +736,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         key: string,
         rule: { readonly limit: number; readonly window: Duration.Duration },
       ): Effect.Effect<void, Api.RateLimited> =>
-        limiter
-          .consume({ key, limit: rule.limit, window: rule.window })
-          .pipe(
-            Effect.catchTag(
-              "RateLimited",
-              (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-            ),
-          );
+        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
+        RateLimits.enforce({ key, limit: rule.limit, window: rule.window, meta: ruleMeta(rule) }).pipe(
+          Effect.provideService(RateLimiter.RateLimiter, limiter),
+          Effect.provideService(AuthEvents.AuthEvents, events),
+          Effect.catchTag(
+            "RateLimitExceeded",
+            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
+          ),
+        );
 
       /**
        * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s
@@ -798,20 +859,27 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // sees them.
         yield* rateLimit(`password:signin:ip:${input.ip ?? "unknown"}`, RATE_LIMITS.signInByIp);
         yield* rateLimit(`password:signin:${input.email.toLowerCase()}`, RATE_LIMITS.signIn);
-        const userOpt = yield* users.findByEmail(input.email);
-        const accountOpt = yield* Option.match(userOpt, {
-          onNone: () => Effect.succeed(Option.none<Accounts.AccountRecord>()),
-          onSome: (user) => accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
-        });
-        const hashOpt = yield* Option.match(accountOpt, {
-          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
-          onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
-        });
-        // BEH-EA-114: this call happens on every attempt, real or not —
-        // see `dummyHash`'s own comment.
-        const verified = yield* hasher.verify(
-          input.password,
-          Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+        // TSS-006: the whole credential check is held to `timingFloorMillis`.
+        const { userOpt, accountOpt, hashOpt, verified } = yield* withTimingFloor(
+          Effect.gen(function* () {
+            const userOpt = yield* users.findByEmail(input.email);
+            const accountOpt = yield* Option.match(userOpt, {
+              onNone: () => Effect.succeed(Option.none<Accounts.AccountRecord>()),
+              onSome: (user) =>
+                accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
+            });
+            const hashOpt = yield* Option.match(accountOpt, {
+              onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
+              onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
+            });
+            // BEH-EA-114: this call happens on every attempt, real or not —
+            // see `dummyHash`'s own comment.
+            const verified = yield* hasher.verify(
+              input.password,
+              Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+            );
+            return { userOpt, accountOpt, hashOpt, verified };
+          }),
         );
         if (
           Option.isNone(userOpt) ||
@@ -1110,10 +1178,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // this endpoint is authenticated (no enumeration concern), but
         // there is no reason to let a caller with no password credential
         // at all distinguish "wrong password" from "no password set" by
-        // timing, so the real hasher call always runs regardless.
-        const verified = yield* hasher.verify(
-          input.currentPassword,
-          Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+        // timing, so the real hasher call always runs regardless (TSS-006:
+        // held to the same timing floor as `signIn`).
+        const verified = yield* withTimingFloor(
+          hasher.verify(
+            input.currentPassword,
+            Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+          ),
         );
         if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
           return yield* Effect.fail(new PasswordApi.WrongPassword());
@@ -1167,10 +1238,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // check — this endpoint is authenticated (no enumeration
         // concern), but there is no reason to let a caller with no
         // password credential at all distinguish "wrong password" from
-        // "no password set" by timing.
-        const verified = yield* hasher.verify(
-          input.currentPassword,
-          Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+        // "no password set" by timing (TSS-006: same timing floor).
+        const verified = yield* withTimingFloor(
+          hasher.verify(
+            input.currentPassword,
+            Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+          ),
         );
         if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
           return yield* Effect.fail(new PasswordApi.WrongPassword());
