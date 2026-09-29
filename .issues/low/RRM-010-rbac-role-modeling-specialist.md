@@ -3,7 +3,7 @@ ID: "RRM-010"
 Title: "Empty default catalog silently disables the roles plugin"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "roles"
 Source: "packages/roles/src/Roles.ts:47"
 Auditor: "rbac-role-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `roles` · reported by **RBAC Role Modeling Specialist** (`rbac-role-modeling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Keep the type-legal default but log a warning (or fail) at layer build when the 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `roles-catalog-validation`. Evidence at HEAD ec065a7: `packages/roles/src/Roles.ts:51`. Fix: Keep the fail-closed default but make the misconfiguration loud. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Building Roles.layer/layerSql with an empty catalog logs awthaq.roles.emptyCatalog once at build (fail-closed default unchanged); RolesConfig doc comment says Roles.config([...]) is required for any effect. Tests: Roles.test.ts 'building Roles.layer without any catalog logs awthaq.roles.emptyCatalog' and 'a configured catalog does not log ...'. README content is part of the authz-docs-truthfulness rewrite. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 923 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.
