@@ -32,7 +32,7 @@ import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 // computed independently of `Csrf.ts`'s own implementation (Node's
 // `node:crypto`), so a passing run exercises RFC 2104 compatibility, not
 // just self-consistency with the code under test.
-const CSRF_TEST_SECRET = "admin-authhttp-test-csrf-secret";
+const CSRF_TEST_SECRET = "admin-authhttp-test-csrf-secret-padded-to-thirty-two-bytes";
 
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
@@ -45,9 +45,10 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 );
 
 const CSRF_TEST_COOKIE_VALUE: string = (() => {
-  const token = randomBytes(32).toString("hex");
-  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(token).digest("hex");
-  return `${token}.${signature}`;
+  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The handler under test runs on the real clock here (a web handler).
+  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
+  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(signed).digest("hex");
+  return `${signed}.${signature}`;
 })();
 
 const withCsrfCookie = (cookie?: string): string =>

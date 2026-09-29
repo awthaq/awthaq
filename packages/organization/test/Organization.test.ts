@@ -41,7 +41,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
     Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("organization-test-csrf-secret"),
+      secret: Redacted.make("organization-test-csrf-secret-padded-to-thirty-two-bytes"),
       allowedOrigins: [] as ReadonlyArray<string>,
     }),
   ),
@@ -792,24 +792,23 @@ describe("Organization", () => {
           userId: Users.UserId("plain-1"),
           role: ["member"],
         });
-        const updated = yield* organization.updateMemberRole(
-          hr,
-          org.id,
-          Users.UserId("plain-1"),
-          ["hr"],
-        );
+        const updated = yield* organization.updateMemberRole(hr, org.id, Users.UserId("plain-1"), [
+          "hr",
+        ]);
         assert.deepStrictEqual(updated.role, ["hr"]);
       }).pipe(Effect.provide(buildLayer(hrConfig))),
     );
 
-    it.effect("an inviter holding invitation:create but not owner statements cannot invite an owner", () =>
-      Effect.gen(function* () {
-        const { organization, hr, org } = yield* setup;
-        const failure = yield* organization
-          .invite(hr, org.id, { email: "new@example.com", role: ["owner"] })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "RolePermissionEscalation");
-      }).pipe(Effect.provide(buildLayer(hrConfig))),
+    it.effect(
+      "an inviter holding invitation:create but not owner statements cannot invite an owner",
+      () =>
+        Effect.gen(function* () {
+          const { organization, hr, org } = yield* setup;
+          const failure = yield* organization
+            .invite(hr, org.id, { email: "new@example.com", role: ["owner"] })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "RolePermissionEscalation");
+        }).pipe(Effect.provide(buildLayer(hrConfig))),
     );
 
     it.effect("an inviter can invite at or below its own privilege", () =>

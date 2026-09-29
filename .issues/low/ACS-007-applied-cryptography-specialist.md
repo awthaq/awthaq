@@ -3,7 +3,7 @@ ID: "ACS-007"
 Title: "No minimum length enforced on HMAC signing secrets"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Csrf.ts:26"
 Auditor: "applied-cryptography-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `server` · reported by **Applied Cryptography Specialist** (`applied-cryptography-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `hmac-secret-hygiene`. Evidence at HEAD ec065a7: `packages/server/src/Csrf.ts:24`. Fix: Enforce a 32-byte minimum on HMAC signing secrets at layer construction, dying loudly like KeyProvider.layerEnv. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
 
 **Plan note (2026-09-29):** Hmac.requireMinSecretBytes/WeakSigningSecret are implemented (packages/ports/src/Hmac.ts) and enforced by Csrf.layerConfig, but NOT yet wired into CsrfProtectionLive / ChallengeStore.layerCookie construction: doing so makes ~20 existing test fixtures (secrets of 29-31 bytes across admin/jwt/organization/passkey/password/server tests and features/step-definitions) die at build, and other in-flight branches add new short-secret fixtures, so it is landed as its own separable commit at the end of this program run.
+
+**Resolved (2026-09-29):** CsrfProtectionLive now runs Hmac.requireMinSecretBytes on CsrfConfig.secret at construction (dies WeakSigningSecret under 32 UTF-8 bytes); ChallengeStore.layerCookie already did (ACS-005 commit); Csrf.layerConfig too. Tests: server/test/Csrf.test.ts 'building CsrfProtectionLive with a 16-byte secret dies with WeakSigningSecret' and 'a 32-byte secret builds'. Test fixtures with 29-31 byte secrets across admin/jwt/organization/passkey/password/server tests and features CsrfTestSupport were padded to >= 32 bytes. CROSS-BRANCH HAZARD (as noted in the earlier Plan note): another branch's new short-secret CSRF fixture will die at layer build after merge; landed in the same separable commit as CDS-006.

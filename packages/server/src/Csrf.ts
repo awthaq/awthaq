@@ -5,6 +5,11 @@
 // `Origin` fallback, backed by a signed double-submit `__Host-csrf` cookie —
 // all three compose (BEH-EA-075 "backs", not replaces, the site check).
 //
+// CDS-006: the token is `<iatSeconds>.<random>.<hmac(iat.random)>`, time-bound
+// by `CsrfConfig.maxAge` and re-minted at half-life. It is deliberately NOT
+// bound to the session: the session secret rotates every `touchEvery`, so a
+// binding would 403 every user hourly.
+//
 // MNA-008 (decision 24 §2): a request carrying a non-empty `Authorization`
 // header is exempt from minting and enforcement alike. The double-submit and
 // site checks defend against a browser *automatically* attaching an ambient
@@ -20,6 +25,8 @@ import { Hmac } from "@awthaq/ports";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -38,6 +45,14 @@ export interface CsrfConfigShape {
   readonly secret: Redacted.Redacted<string>;
   /** BEH-EA-074: compared against `Origin` when `Sec-Fetch-Site` is absent. */
   readonly allowedOrigins: ReadonlyArray<string>;
+  /**
+   * CDS-006: how long a minted double-submit token stays valid (default 24
+   * hours). A token is re-minted on any request once it is older than half of
+   * this, so an active user always holds a fresh one and never meets the
+   * expiry mid-session; a token past it is invalid (`403` on an unsafe
+   * request, with a fresh cookie on that response).
+   */
+  readonly maxAge?: Duration.Input;
 }
 
 export class CsrfConfig extends Context.Service<CsrfConfig, CsrfConfigShape>()(
@@ -74,27 +89,52 @@ const sign = (crypto: Crypto.Crypto, secret: Redacted.Redacted<string>, token: s
     new TextEncoder().encode(token),
   ).pipe(Effect.map(Hmac.toHex));
 
-/** BEH-EA-075: `<token>.<hmac-signature>` — the whole string is both the cookie value and the required header echo. */
+/** How far a token's `iat` may sit in the future (clock skew between instances) before it is rejected. */
+const FUTURE_SKEW_SECONDS = 60;
+const DEFAULT_MAX_AGE = Duration.hours(24);
+
+/** BEH-EA-075/CDS-006: `<iatSeconds>.<random>.<hmac>` — the whole string is both the cookie value and the required header echo. */
 const mint = Effect.fnUntraced(function* (
   crypto: Crypto.Crypto,
   secret: Redacted.Redacted<string>,
+  nowSeconds: number,
 ) {
-  const token = Hmac.toHex(yield* crypto.randomBytes(32));
-  const signature = yield* sign(crypto, secret, token);
-  return `${token}.${signature}`;
+  const random = Hmac.toHex(yield* crypto.randomBytes(32));
+  const signed = `${nowSeconds}.${random}`;
+  const signature = yield* sign(crypto, secret, signed);
+  return `${signed}.${signature}`;
 });
 
-const isValid = Effect.fnUntraced(function* (
+/**
+ * `Some(ageSeconds)` for a token whose signature verifies (constant time) and
+ * whose age is within `[-skew, maxAgeSeconds]`; `None` for anything else —
+ * malformed, forged, tampered `iat` (the HMAC covers it), or expired.
+ */
+const tokenAge = Effect.fnUntraced(function* (
   crypto: Crypto.Crypto,
   secret: Redacted.Redacted<string>,
   cookieValue: string,
+  nowSeconds: number,
+  maxAgeSeconds: number,
 ) {
-  const separator = cookieValue.indexOf(".");
-  if (separator < 0) return false;
-  const token = cookieValue.slice(0, separator);
-  const signature = cookieValue.slice(separator + 1);
-  const expected = yield* sign(crypto, secret, token);
-  return Hmac.constantTimeEqualString(signature, expected);
+  const parts = cookieValue.split(".");
+  const [iatText, random, signature] = parts;
+  if (
+    parts.length !== 3 ||
+    iatText === undefined ||
+    random === undefined ||
+    signature === undefined
+  ) {
+    return Option.none<number>();
+  }
+  const iat = Number(iatText);
+  if (!Number.isSafeInteger(iat)) return Option.none<number>();
+  const expected = yield* sign(crypto, secret, `${iatText}.${random}`);
+  if (!Hmac.constantTimeEqualString(signature, expected)) return Option.none<number>();
+  const age = nowSeconds - iat;
+  return age < -FUTURE_SKEW_SECONDS || age > maxAgeSeconds
+    ? Option.none<number>()
+    : Option.some(age);
 });
 
 /**
@@ -128,6 +168,9 @@ export const CsrfProtectionLive: Layer.Layer<
   Effect.gen(function* () {
     const config = yield* CsrfConfig;
     const crypto = yield* Crypto.Crypto;
+    // ACS-007: no composition may sign CSRF tokens with a guessable key.
+    yield* Hmac.requireMinSecretBytes(config.secret);
+    const maxAgeSeconds = Duration.toSeconds(config.maxAge ?? DEFAULT_MAX_AGE);
 
     const middleware: HttpApiMiddleware.HttpApiMiddleware<never, typeof Api.CsrfRejected, never> =
       Effect.fnUntraced(function* (httpEffect) {
@@ -137,12 +180,23 @@ export const CsrfProtectionLive: Layer.Layer<
           return yield* httpEffect;
         }
         const existingCookie = request.cookies[Api.CSRF_COOKIE_NAME];
-        const cookieIsValid =
-          existingCookie !== undefined &&
-          (yield* isValid(crypto, config.secret, existingCookie).pipe(Effect.orDie));
+        const nowSeconds = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
+        const age =
+          existingCookie === undefined
+            ? Option.none<number>()
+            : yield* tokenAge(
+                crypto,
+                config.secret,
+                existingCookie,
+                nowSeconds,
+                maxAgeSeconds,
+              ).pipe(Effect.orDie);
+        const cookieIsValid = Option.isSome(age);
 
-        if (!cookieIsValid) {
-          const fresh = yield* mint(crypto, config.secret).pipe(Effect.orDie);
+        // CDS-006: mint when there is no valid token, and proactively once a
+        // valid one passes half its life, on safe and unsafe requests alike.
+        if (Option.isNone(age) || age.value > maxAgeSeconds / 2) {
+          const fresh = yield* mint(crypto, config.secret, nowSeconds).pipe(Effect.orDie);
           // AGA-004: an embedded (`SameSite=None; Partitioned`) session cookie
           // needs its double-submit companion to travel in the same context.
           const cookieMode = SessionCookie.csrfCookieOptions(

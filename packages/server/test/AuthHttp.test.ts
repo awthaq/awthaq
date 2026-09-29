@@ -61,9 +61,10 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 );
 
 const CSRF_TEST_COOKIE_VALUE: string = (() => {
-  const token = randomBytes(32).toString("hex");
-  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(token).digest("hex");
-  return `${token}.${signature}`;
+  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The router runs under `it.effect`'s TestClock, which starts at 0.
+  const signed = `0.${randomBytes(32).toString("hex")}`;
+  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(signed).digest("hex");
+  return `${signed}.${signature}`;
 })();
 
 const withCsrfCookie = (cookie?: string): string =>
