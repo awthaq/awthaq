@@ -145,7 +145,7 @@ REQUIREMENT: `confirm` MUST mint ten recovery codes of ten characters from a
              set MUST stop working. The remaining count MUST be readable.
 ```
 
-Codes are shown grouped (`ABCDE-FGHJK`) and normalised (upper-cased, separators stripped) before hashing or comparing; a string that cannot be a code is refused without running a password hash. A code is accepted wherever a TOTP is (sign-in, credential reset, disable, regenerate), and never both a success and a silent replay: a spent code fails the ordinary way.
+Codes are shown grouped (`ABCDE-FGHJK`) and normalised (upper-cased, separators stripped) before hashing or comparing; a string that cannot be a code is refused without running a password hash. A code is accepted wherever a TOTP is (sign-in, credential reset, disable, regenerate), and never both a success and a silent replay: a spent code fails the ordinary way. Codes never expire — the table has no `expiresAt` (they live in `two_factor_recovery_code`, not in `Verification`'s TTL-bound tokens, BCR-009) — and the set is shown exactly once; the reference design's server-only `viewBackupCodes` (plaintext read-back) is deliberately **not** implemented, since only an irreversible hash is kept (BCR-007). What a client can surface instead is the remaining count.
 
 _Previous: [BEH-EA-263](31-two-factor.md#beh-ea-263-enrolling-disabling-and-regenerating-need-a-fresh-session-and-the-secret-is-encrypted-at-rest) | Next: [BEH-EA-265](31-two-factor.md#beh-ea-265-a-totp-step-is-accepted-at-most-once-even-concurrently)_
 

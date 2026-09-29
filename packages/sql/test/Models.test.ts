@@ -120,6 +120,8 @@ describe("Models.makeModels (TS-001)", () => {
         reusedAt: date,
         amr: "[]",
         tenantId: null,
+        previousSecretHash: null,
+        previousSecretExpiresAt: null,
       });
       assert.strictEqual(session.supersededAt, null);
       assert.isNotNull(session.reusedAt);

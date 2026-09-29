@@ -229,8 +229,9 @@ describe("getSession (BEH-EA-185)", () => {
       if (rotated === undefined) return;
       assert.isDefined(rotated.rotated);
 
-      // The old cookie's own secret no longer verifies — matching
-      // `Sessions.ts`'s own "stops verifying immediately, no grace window."
+      // The old cookie's own secret stops verifying once `SessionConfig.rotationGrace`
+      // (default 30s, RRS-005) has passed.
+      await rotationRuntime.runPromise(TestClock.adjust(Duration.seconds(31)));
       const staleSession = await getSession(
         headersWithCookie(cookieHeaderFor(token)),
         rotationRuntime,

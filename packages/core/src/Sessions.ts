@@ -77,6 +77,29 @@ const UNKNOWN_SESSION_HASH = SecretHash.NEVER_MATCHES;
 const secretMatches = SecretHash.equals;
 
 /**
+ * RRS-005: which of a session's accepted secrets the presented hash is. Both comparisons always run
+ * (the previous one against `NEVER_MATCHES` when there is none), so the work done does not reveal
+ * whether the row has a live grace window. A previous secret only counts before its own expiry.
+ */
+const matchedSecret = (
+  now: DateTime.Utc,
+  presentedHash: string,
+  currentHash: string,
+  previousHash: string | undefined,
+  previousExpiresAt: DateTime.Utc | undefined,
+): "current" | "previous" | "none" => {
+  const current = secretMatches(presentedHash, currentHash);
+  const previous = secretMatches(presentedHash, previousHash ?? UNKNOWN_SESSION_HASH);
+  if (current) return "current";
+  return previous &&
+    previousHash !== undefined &&
+    previousExpiresAt !== undefined &&
+    DateTime.toEpochMillis(now) < DateTime.toEpochMillis(previousExpiresAt)
+    ? "previous"
+    : "none";
+};
+
+/**
  * SMS-003: an opt-in cap on one user's simultaneously live sessions. Absent by
  * default — BEH-EA-047 forbids an implied base-model limit; this is a
  * deployment policy. `evictOldest` ends the least-recently-active surplus
@@ -97,9 +120,25 @@ export interface SessionConfig {
   readonly absolute: Duration.Duration;
   readonly idle: Duration.Duration;
   readonly touchEvery: Duration.Duration;
+  /**
+   * RRS-005/RRC-006: how long the secret a throttled touch just replaced keeps verifying, so a
+   * rotation whose response never reached the client (a dropped `set-auth-token` header, a lost
+   * `Set-Cookie`, a request already in flight) does not strand the legitimate holder. Presenting the
+   * previous secret inside the window is accepted for *that session only*, hands back a fresh secret
+   * (`rotated`), publishes `auth.session.rotated` with `viaGrace`, and never counts as reuse (RRS-003's
+   * tombstone family revocation is a separate path this does not touch). `Duration.zero` restores
+   * immediate invalidation; absent = `DEFAULT_ROTATION_GRACE`.
+   */
+  readonly rotationGrace?: Duration.Duration;
   /** SMS-003: opt-in concurrent-session cap; absent = uncapped (the default). */
   readonly maxConcurrent?: ConcurrentSessionPolicy;
 }
+
+/** RRS-005: the bounded window `SessionConfig.rotationGrace` defaults to. */
+export const DEFAULT_ROTATION_GRACE = Duration.seconds(30);
+
+const graceOf = (config: SessionConfig): Duration.Duration =>
+  config.rotationGrace ?? DEFAULT_ROTATION_GRACE;
 
 /**
  * `archive/PRD.md`'s own 30-day-absolute/7-day-idle defaults
@@ -114,6 +153,7 @@ export const SessionConfig: Context.Reference<SessionConfig> = Context.Reference
       absolute: Duration.days(30),
       idle: Duration.days(7),
       touchEvery: Duration.hours(1),
+      rotationGrace: DEFAULT_ROTATION_GRACE,
     }),
   },
 );
@@ -347,8 +387,12 @@ export interface SessionsShape {
    * `rotated` carries the freshly-minted full token exactly when this call
    * performed that rotation, `Option.none()` otherwise (including every
    * `actingAs` session, which never touches this path at all). The old
-   * secret's hash is overwritten in the same atomic write, so it stops
-   * verifying immediately — no grace window. A concurrent second `verify`
+   * secret's hash is overwritten in the same atomic write and kept aside
+   * as the *previous* secret for `SessionConfig.rotationGrace` (RRS-005):
+   * inside that window it still verifies for this session, and presenting
+   * it re-rotates and delivers a fresh secret in `rotated` — the recovery
+   * path for a rotation whose response the client never saw; afterwards it
+   * stops verifying. A concurrent second `verify`
    * racing the same throttled write never corrupts state (a compare-and-
    * swap in both `Layer`s' own implementation lets only one winner rotate;
    * the loser reports `rotated: Option.none()` over the winner's write),
@@ -616,6 +660,9 @@ interface SessionRow {
   readonly actingAs: Option.Option<ActingAs>;
   readonly amr: ReadonlyArray<AuthMethod>;
   readonly tenantId: Option.Option<string>;
+  /** RRS-005: the hash the last rotation replaced, accepted until `previousSecretExpiresAt` (see `SessionConfig.rotationGrace`). */
+  readonly previousSecretHash: Option.Option<string>;
+  readonly previousSecretExpiresAt: Option.Option<DateTime.Utc>;
   /**
    * RRS-003: this row's founding session id — its own `id` when it has no
    * ancestor, inherited from the superseded row's own `familyId`
@@ -736,6 +783,8 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
                 actingAs: Option.fromNullishOr(input.actingAs),
                 amr: input.amr ?? [],
                 tenantId,
+                previousSecretHash: Option.none(),
+                previousSecretExpiresAt: Option.none(),
                 familyId: Option.match(ancestor, {
                   onNone: () => id,
                   onSome: (r) => r.familyId,
@@ -855,12 +904,19 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
               new SessionNotFound({ message: "awthaq: no such session", id }),
             );
           }
-          if (!secretMatches(presentedHash, row.value.secretHash)) {
+          const now = yield* DateTime.now;
+          const matched = matchedSecret(
+            now,
+            presentedHash,
+            row.value.secretHash,
+            Option.getOrUndefined(row.value.previousSecretHash),
+            Option.getOrUndefined(row.value.previousSecretExpiresAt),
+          );
+          if (matched === "none") {
             return yield* Effect.fail(
               new SessionNotFound({ message: "awthaq: no such session", id }),
             );
           }
-          const now = yield* DateTime.now;
           // RRS-003: a tombstoned row is a presented-already-rotated token —
           // reuse. Reached only with the correct (old) secret (PIL-007).
           // Checked before expiry: a rotated-away row's own expiry
@@ -870,7 +926,9 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           // row — no distinguishable signal leaked, matching `Verification.ts`'s
           // own posture.
           if (Option.isSome(row.value.supersededAt)) {
-            if (Option.isNone(row.value.reusedAt)) {
+            // RRS-005: only the row's *current* secret can be reuse — a previous secret inside its
+            // grace window is a stale-but-legitimate holder, never a family-revoking signal.
+            if (matched === "current" && Option.isNone(row.value.reusedAt)) {
               const familyId = row.value.familyId;
               yield* Ref.update(state, (s) => {
                 const marked = HashMap.modify(s, id, (r) => ({ ...r, reusedAt: Option.some(now) }));
@@ -928,9 +986,13 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           const dueForTouch =
             DateTime.toEpochMillis(now) >=
             DateTime.toEpochMillis(DateTime.addDuration(row.value.lastActiveAt, config.touchEvery));
-          if (!dueForTouch) {
+          // RRS-005: a previous secret presented in its grace window always re-rotates, so the
+          // holder that missed the last delivery is handed a durable credential.
+          if (!dueForTouch && matched === "current") {
             return { session: toView(row.value), rotated: Option.none() };
           }
+          const grace = graceOf(config);
+          const keepPrevious = Duration.toMillis(grace) > 0;
           // Ticket 01: the same throttled write also rotates the secret — via
           // `Ref.modify`'s own atomicity, compare-and-swapped against
           // `row.value.secretHash` (the value this call just read) so a losing
@@ -951,6 +1013,10 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
               const refreshed: SessionRow = {
                 ...current.value,
                 secretHash: newSecretHash,
+                previousSecretHash: keepPrevious ? Option.some(expectedSecretHash) : Option.none(),
+                previousSecretExpiresAt: keepPrevious
+                  ? Option.some(DateTime.addDuration(now, grace))
+                  : Option.none(),
                 lastActiveAt: now,
                 idleExpiresAt: DateTime.min(
                   DateTime.addDuration(now, config.idle),
@@ -976,6 +1042,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             sessionId: id,
             familyId: touched.value.familyId,
             userId: touched.value.userId,
+            ...(matched === "previous" ? { viaGrace: true } : {}),
           });
           return {
             session: toView(touched.value),
@@ -1369,12 +1436,19 @@ export const layerSql: Layer.Layer<
           );
         }
         const row = found.value;
-        if (!secretMatches(presentedHash, row.secretHash)) {
+        const now = yield* DateTime.now;
+        const matched = matchedSecret(
+          now,
+          presentedHash,
+          row.secretHash,
+          row.previousSecretHash ?? undefined,
+          row.previousSecretExpiresAt ?? undefined,
+        );
+        if (matched === "none") {
           return yield* Effect.fail(
             new SessionNotFound({ message: "awthaq: no such session", id }),
           );
         }
-        const now = yield* DateTime.now;
         // RRS-003: a tombstoned row is a presented-already-rotated token —
         // reuse. Reached only with the correct (old) secret (PIL-007), and
         // checked before expiry: a rotated-away row's own expiry timestamps
@@ -1382,7 +1456,8 @@ export const layerSql: Layer.Layer<
         // uniform `SessionNotFound` whether this is the first reuse or a
         // later presentation of an already-flagged row.
         if (row.supersededAt !== null) {
-          if (row.reusedAt === null) {
+          // RRS-005: see `layerMemory.verify` — a previous secret is never reuse.
+          if (matched === "current" && row.reusedAt === null) {
             const familyId = SessionId(row.familyId);
             yield* repo.markReused(id, now);
             yield* repo.revokeFamily(familyId);
@@ -1432,9 +1507,12 @@ export const layerSql: Layer.Layer<
         const dueForTouch =
           DateTime.toEpochMillis(now) >=
           DateTime.toEpochMillis(DateTime.addDuration(row.lastActiveAt, config.touchEvery));
-        if (!dueForTouch) {
+        // RRS-005: a previous secret in its grace window always re-rotates (see `layerMemory.verify`).
+        if (!dueForTouch && matched === "current") {
           return { session: toSessionView(row), rotated: Option.none() };
         }
+        const grace = graceOf(config);
+        const keepPrevious = Duration.toMillis(grace) > 0;
         // Ticket 01: the same throttled write also rotates the secret.
         // `repo.touch`'s own compare-and-swap (guarded on `row.secretHash`,
         // the value this call just read) means a losing concurrent request
@@ -1449,6 +1527,8 @@ export const layerSql: Layer.Layer<
             id: row.id,
             expectedSecretHash: row.secretHash,
             secretHash: newSecretHash,
+            previousSecretHash: keepPrevious ? row.secretHash : null,
+            previousSecretExpiresAt: keepPrevious ? DateTime.addDuration(now, grace) : null,
             lastActiveAt: now,
             idleExpiresAt: DateTime.min(
               DateTime.addDuration(now, config.idle),
@@ -1471,6 +1551,7 @@ export const layerSql: Layer.Layer<
           sessionId: id,
           familyId: touched.value.familyId,
           userId: UserId(touched.value.userId),
+          ...(matched === "previous" ? { viaGrace: true } : {}),
         });
         return {
           session: toSessionView(touched.value),

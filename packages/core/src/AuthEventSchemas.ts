@@ -152,11 +152,13 @@ export const SessionIssuedEvent = Schema.TaggedStruct("auth.session.issued", {
 });
 export type SessionIssuedEvent = typeof SessionIssuedEvent.Type;
 
-/** RRS-008: published by `Sessions.verify` on the winning in-place secret rotation only (the concurrent loser reports `rotated: none` and publishes nothing). */
+/** RRS-008: published by `Sessions.verify` on the winning in-place secret rotation only (the concurrent loser reports `rotated: none` and publishes nothing), and by a grace-window recovery rotation (RRS-005). */
 export const SessionRotatedEvent = Schema.TaggedStruct("auth.session.rotated", {
   sessionId: SessionIdSchema,
   familyId: Schema.String,
   userId: UserIdSchema,
+  /** RRS-005: set when the rotation was triggered by the *previous* secret inside `SessionConfig.rotationGrace` — a client that missed the last delivery recovering, worth a detector's attention if frequent. */
+  viaGrace: Schema.optional(Schema.Boolean),
 });
 export type SessionRotatedEvent = typeof SessionRotatedEvent.Type;
 
