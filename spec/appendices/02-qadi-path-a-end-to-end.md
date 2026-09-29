@@ -281,6 +281,23 @@ The organization plugin ships its own relationship resolver
 (`Organization.relationships`) so that an application installs membership-aware
 policies with one line rather than writing a resolver from scratch.
 
+**Platform authority versus tenant authority
+([ADR-EA-017](../decisions/017-global-roles-vs-organization-roles.md)).**
+`hasPermission`/`hasRole` read the *global* `Roles` assignment — authority that
+does not depend on which tenant a request touches (a platform support agent).
+"Is this user an admin of *this* organization" is a `hasRelationship`, answered
+per organization from the membership row. The two are never merged; a request
+that may be satisfied by either says so explicitly, and global role names are
+prefixed (`platform:support`) so they cannot be mistaken for an organization's
+`owner`/`admin`:
+
+```ts
+export const canManageMembers = anyOf([
+  hasRole("platform:support"),          // global: Roles.assign(user, "platform:support")
+  hasRelationship("member:update")      // tenant: this organization's own statements
+])
+```
+
 ## 5. An obligation: step-up authentication
 
 Not every `Allow` is unconditional. A sensitive operation like changing the

@@ -12,6 +12,14 @@
 // on `ApiKeyPrincipal`/`ServicePrincipal` — is documented once, in
 // `@awthaq/qadi`'s `SubjectResolver.ts`, not repeated here).
 //
+// **Global, not tenant-scoped (ADR-EA-017, MTI-007).** `Roles` answers "is
+// this user a *platform* admin/support/operator" — `AuthSubject.roles`/
+// `permissions`, `hasRole`/`hasPermission`. "Is this user an admin of *this
+// organization*" is `@awthaq/organization`'s `OrganizationQadi.relationships`
+// (`hasRelationship("has-role:admin")`, `hasRelationship("member:update")`).
+// The two are never merged; prefix global role names (`platform:support`) so
+// they cannot be mistaken for an organization's `owner`/`admin`.
+//
 // BAM-006 (.issues/high): `layerSql` closes the persistence gap this
 // header used to document as deferred — a `role_assignments` table,
 // `UNIQUE(userId, role)` making `assign` idempotent at the database layer

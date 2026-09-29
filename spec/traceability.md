@@ -146,6 +146,7 @@ One row per `spec/decisions/ADR-EA-NNN` file (`archive/PRD.md` §22).
 | [ADR-EA-014](decisions/014-session-storage-backend-neutrality.md) | Session Storage Is Backend-Neutral | [BEH-EA-049 through 056](behaviors/07-sessions.md) |
 | [ADR-EA-015](decisions/015-qadi-bridge-path-selection.md) | Qadi Bridge Path Selection | [BEH-EA-145 through 152](behaviors/19-qadi-bridge-path-a.md), [BEH-EA-153 through 160](behaviors/20-qadi-bridge-path-b.md) |
 | [ADR-EA-016](decisions/016-verification-sql-claiming.md) | Verification Reservations Are a Dedicated Table, Claimed by a Conditional Upsert | [BEH-EA-057 through 064](behaviors/08-verification-tokens.md) |
+| [ADR-EA-017](decisions/017-global-roles-vs-organization-roles.md) | Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority | [BEH-EA-139](behaviors/18-roles-subject-resolver.md#beh-ea-139-roles-flatten-through-the-dag-once-per-resolution), [BEH-EA-162](behaviors/21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership) |
 
 ---
 

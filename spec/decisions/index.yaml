@@ -66,3 +66,7 @@ entries:
     file: "016-verification-sql-claiming.md"
     title: "Verification Reservations Are a Dedicated Table, Claimed by a Conditional Upsert"
     status: "Accepted — design; implementation deferred"
+  - id: "ADR-EA-017"
+    file: "017-global-roles-vs-organization-roles.md"
+    title: "Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority"
+    status: "Accepted — implemented (documentation and guidance)"
