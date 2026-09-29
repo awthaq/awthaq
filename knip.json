@@ -50,9 +50,6 @@
         "@effect/vitest",
         "effect"
       ]
-    },
-    "packages/next": {
-      "ignoreDependencies": ["@awthaq/react"]
     }
   }
 }

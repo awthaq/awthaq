@@ -11,7 +11,6 @@
       "@/*": ["./src/*"],
       "@awthaq/api": ["../api/src/index.ts"],
       "@awthaq/core": ["../core/src/index.ts"],
-      "@awthaq/react": ["../react/src/index.ts"],
       "@awthaq/server": ["../server/src/index.ts"]
     }
   },
@@ -21,9 +20,6 @@
     },
     {
       "path": "../core/tsconfig.src.json"
-    },
-    {
-      "path": "../react/tsconfig.src.json"
     },
     {
       "path": "../server/tsconfig.src.json"

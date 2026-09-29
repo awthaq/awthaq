@@ -490,9 +490,6 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
-      '@awthaq/react':
-        specifier: workspace:*
-        version: link:../react
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server

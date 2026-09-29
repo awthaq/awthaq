@@ -2,7 +2,7 @@
   "name": "@awthaq/next",
   "version": "0.1.0",
   "private": true,
-  "description": "Next.js adapter: server/client boundary, cookie forwarding, SSR decision hydration.",
+  "description": "Next.js adapter: database-verified getSession, optimistic proxy.ts cookie check, Set-Cookie bridging for server actions.",
   "license": "MIT",
   "files": [
     "lib",
@@ -27,7 +27,6 @@
   "dependencies": {
     "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
-    "@awthaq/react": "workspace:*",
     "@awthaq/server": "workspace:*",
     "effect": "catalog:"
   },

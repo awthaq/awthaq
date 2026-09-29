@@ -9,7 +9,7 @@
 // what changes between tests.
 import { vi } from "vitest";
 
-export interface RecordedRequest {
+interface RecordedRequest {
   readonly method: string;
   readonly pathname: string;
   readonly url: string;

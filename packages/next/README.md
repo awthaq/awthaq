@@ -64,6 +64,10 @@ export function proxy(request: NextRequest) {
 }
 ```
 
+This file is `proxy.ts` on Next 16.3+; on older versions put the same
+function in `middleware.ts` and export it as `middleware`. The recipes in this
+README assume Next.js 15 or newer (`headers()`/`cookies()` are async there).
+
 `hasSessionCookie` checks presence only — a forged or expired cookie passes.
 This exists purely to skip rendering a page the real boundary below would
 reject anyway; it is never itself the boundary.
