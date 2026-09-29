@@ -72,7 +72,8 @@ const Migrated = Layer.effectDiscard(
         familyId TEXT NOT NULL,
         supersededBy TEXT,
         supersededAt TEXT,
-        reusedAt TEXT
+        reusedAt TEXT,
+        amr TEXT NOT NULL DEFAULT '[]'
       )
     `;
   }),
@@ -141,6 +142,7 @@ const suite = (
           "ipAddress",
           "userAgent",
           "actingAs",
+          "amr",
         ].sort();
         assert.deepStrictEqual(Object.keys(session).sort(), expectedKeys);
         assert.notProperty(session, "secretHash");
@@ -501,6 +503,38 @@ const suite = (
         assert.instanceOf(Cause.squash(exit.cause), Sessions.InvalidActingAs);
         // A different actor is still fine.
         yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-1" } });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // THS-003/APS-007: RFC 8176 `amr` — recorded at issue, monotone within a session.
+    it.effect("THS-003: issue records amr and verify, list and findOwned return it", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session, token } = yield* sessions.issue({ userId, amr: ["hwk", "user"] });
+        assert.deepStrictEqual(session.amr, ["hwk", "user"]);
+        assert.deepStrictEqual((yield* sessions.verify(token)).session.amr, ["hwk", "user"]);
+        assert.deepStrictEqual((yield* sessions.list(userId))[0]?.amr, ["hwk", "user"]);
+        const owned = yield* sessions.findOwned(userId, session.id);
+        assert.deepStrictEqual(Option.getOrThrow(owned).amr, ["hwk", "user"]);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("THS-003: a session issued without amr records none", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId });
+        assert.deepStrictEqual(session.amr, []);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("THS-003: reauthenticate unions amr in — order-preserving, no duplicates, never removed", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId, amr: ["pwd"] });
+        const stepped = yield* sessions.reauthenticate(session.id, ["otp", "pwd", "mfa"]);
+        assert.deepStrictEqual(stepped.amr, ["pwd", "otp", "mfa"]);
+        const plain = yield* sessions.reauthenticate(session.id);
+        assert.deepStrictEqual(plain.amr, ["pwd", "otp", "mfa"]);
       }).pipe(Effect.provide(layer)),
     );
 

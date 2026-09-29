@@ -9,6 +9,7 @@
 // this is the standalone contract, wired to real handlers in
 // `@awthaq/server/src/Session.ts`.
 
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
@@ -21,6 +22,15 @@ export class SessionDto extends Schema.Class<SessionDto>("SessionDto")({
   lastActiveAt: Schema.String,
   expiresAt: Schema.String,
   userAgent: Schema.NullOr(Schema.String),
+  /**
+   * THS-003: RFC 8176 `amr` — how this session was authenticated (`pwd`,
+   * `hwk`, `fed`, ...). Defaults to none — at construction, and when decoding a
+   * payload from a server that predates it — the shipped handlers always set it.
+   */
+  amr: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed<ReadonlyArray<string>>([])),
+    Schema.withConstructorDefault(Effect.succeed<ReadonlyArray<string>>([])),
+  ),
   current: Schema.Boolean,
 }) {}
 

@@ -285,6 +285,25 @@ describe("Password", () => {
       }).pipe(Effect.provide(TestLayer)),
   );
 
+  // THS-003: how the session was authenticated.
+  it.effect("THS-003: signUp, signIn and changePassword sessions carry amr [pwd]", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const mailer = yield* Mailer.Mailer;
+      const signedUp = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+      assert.deepStrictEqual(signedUp.session.amr, ["pwd"]);
+      const signedIn = yield* password.signIn({ email, password: strongPassword });
+      assert.deepStrictEqual(signedIn.session.amr, ["pwd"]);
+      const changed = yield* password.changePassword({
+        userId: signedUp.session.userId,
+        currentSessionId: signedIn.session.id,
+        currentPassword: strongPassword,
+        newPassword: Redacted.make("another strong passphrase"),
+      });
+      assert.deepStrictEqual(changed.session.amr, ["pwd"]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   // CSD-003: request context recorded on every session-minting path.
   it.effect("CSD-003: signUp, signIn and changePassword record ip and userAgent on the session", () =>
     Effect.gen(function* () {

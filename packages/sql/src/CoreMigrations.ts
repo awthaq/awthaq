@@ -411,4 +411,15 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // THS-003/APS-007: RFC 8176 `amr` — the authentication methods that proved a
+  // session, a JSON array of strings. NOT NULL with a `'[]'` default so every
+  // pre-existing row reads as "no recorded methods" rather than needing a
+  // backfill.
+  migration(19, "add_sessions_amr_column", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`ALTER TABLE sessions ADD COLUMN amr TEXT NOT NULL DEFAULT '[]'`,
+      sqlite: () => sql`ALTER TABLE sessions ADD COLUMN amr TEXT NOT NULL DEFAULT '[]'`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);

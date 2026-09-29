@@ -4,7 +4,7 @@
 // Implements the `Authentication`/`OptionalAuthentication` declarations from
 // `@awthaq/api`'s `Api.ts` against `@awthaq/core`'s `Sessions`.
 
-import { SessionCookie, Sessions } from "@awthaq/core";
+import { SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -41,27 +41,53 @@ export class PrincipalResolver extends Context.Service<PrincipalResolver, Princi
  * resolved `UserPrincipal` unconditionally, closing the loop BEH-EA-142
  * (`@awthaq/qadi`'s `SubjectResolver`) already anticipates — omitted
  * entirely, not `undefined`, when the session carries none
- * (`exactOptionalPropertyTypes`).
+ * (`exactOptionalPropertyTypes`). The one mapping both resolvers share.
  */
+const userPrincipalOf = (session: Sessions.SessionView): Api.UserPrincipal =>
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: session.userId }),
+    sessionId: session.id,
+    ...(Option.isSome(session.actingAs)
+      ? {
+          actingAs: new Api.PrincipalRef({
+            type: session.actingAs.value.type,
+            id: session.actingAs.value.id,
+          }),
+        }
+      : {}),
+    // APS-007/THS-003: how the session was authenticated (empty when the
+    // issuing path recorded none), never a guess.
+    amr: session.amr,
+  });
+
 export const PrincipalResolverLive: Layer.Layer<PrincipalResolver> = Layer.succeed(
   PrincipalResolver,
-  {
-    resolve: (session) =>
-      Effect.succeed(
-        new Api.UserPrincipal({
-          ref: new Api.PrincipalRef({ type: "user", id: session.userId }),
-          sessionId: session.id,
-          ...(Option.isSome(session.actingAs)
-            ? {
-                actingAs: new Api.PrincipalRef({
-                  type: session.actingAs.value.type,
-                  id: session.actingAs.value.id,
-                }),
-              }
-            : {}),
-        }),
-      ),
-  },
+  { resolve: (session) => Effect.succeed(userPrincipalOf(session)) },
+);
+
+/**
+ * APS-007: opt-in resolver that also exposes `emailVerified` on the principal,
+ * at the cost of one `Users.findById` per request (hence not the default). A
+ * missing user (deleted between verify and here) resolves as unverified —
+ * fail-closed, never a defect. Everything else is `PrincipalResolverLive`'s
+ * mapping.
+ */
+export const PrincipalResolverWithUserFactsLive = Layer.effect(
+  PrincipalResolver,
+  Effect.gen(function* () {
+    const users = yield* Users.Users;
+    return {
+      resolve: (session: Sessions.SessionView) =>
+        users.findById(session.userId).pipe(
+          Effect.map((user) => user.emailVerified),
+          Effect.catchTag("UserNotFound", () => Effect.succeed(false)),
+          Effect.map(
+            (emailVerified) =>
+              new Api.UserPrincipal({ ...userPrincipalOf(session), emailVerified }),
+          ),
+        ),
+    };
+  }),
 );
 
 /**

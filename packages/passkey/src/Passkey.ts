@@ -218,6 +218,7 @@ const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto
     lastActiveAt: DateTime.formatIso(session.lastActiveAt),
     expiresAt: DateTime.formatIso(session.absoluteExpiresAt),
     userAgent: Option.getOrNull(session.userAgent),
+    amr: session.amr,
     current: true,
   });
 
@@ -854,6 +855,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
                 ...(context?.ip !== undefined ? { ip: context.ip } : {}),
                 ...(context?.userAgent !== undefined ? { userAgent: context.userAgent } : {}),
               },
+              // THS-003: a hardware-bound key, plus user verification when the
+              // authenticator performed it.
+              amr: verified.userVerified ? ["hwk", "user"] : ["hwk"],
             })
             .pipe(Effect.orDie);
           yield* events.publish({
@@ -1001,7 +1005,12 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
             .pipe(Effect.orDie);
 
-          yield* sessions.reauthenticate(Sessions.SessionId(sessionId)).pipe(
+          yield* sessions
+            .reauthenticate(
+              Sessions.SessionId(sessionId),
+              verified.userVerified ? ["hwk", "user"] : ["hwk"],
+            )
+            .pipe(
             Effect.catchTag("SessionNotFound", () =>
               // `passkey.reauthenticate`'s own `Authentication` middleware
               // already proved this exact session live moments ago — see

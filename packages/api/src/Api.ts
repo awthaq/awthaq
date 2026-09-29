@@ -22,6 +22,15 @@ export class UserPrincipal extends Schema.TaggedClass<UserPrincipal>()("User", {
   ref: PrincipalRef,
   sessionId: Schema.String,
   actingAs: Schema.optional(PrincipalRef),
+  /**
+   * APS-007/THS-003: how the session was authenticated (RFC 8176 `amr`),
+   * copied from the session. A host MUST gate trust on this and
+   * `emailVerified`, not on "has a session" — a fresh password sign-up holds a
+   * session before its mailbox is verified.
+   */
+  amr: Schema.optional(Schema.Array(Schema.String)),
+  /** APS-007: present only under the opt-in `PrincipalResolverWithUserFactsLive` (it costs one user lookup per request). */
+  emailVerified: Schema.optional(Schema.Boolean),
 }) {}
 
 export class ApiKeyPrincipal extends Schema.TaggedClass<ApiKeyPrincipal>()("ApiKey", {

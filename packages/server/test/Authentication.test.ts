@@ -1,5 +1,5 @@
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-065 through BEH-EA-072.
-import { AuditLog, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -736,5 +736,63 @@ describe("Authentication challenges (JR-007)", () => {
         assert.isUndefined(response.headers["www-authenticate"]);
       }),
     ).pipe(Effect.provide(RotationLayer)),
+  );
+});
+
+// APS-007/THS-003: the principal carries how the session was authenticated;
+// the opt-in resolver adds emailVerified.
+describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
+  const factsLayer = Layer.mergeAll(
+    Authentication.PrincipalResolverLive,
+    Sessions.layerMemory,
+    Users.layerMemory,
+  ).pipe(
+    Layer.provideMerge(Hooks.HooksLive),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provide(NodeCrypto.layer),
+  );
+
+  it.effect("the default resolver copies amr from the session and leaves emailVerified absent", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const resolver = yield* Authentication.PrincipalResolver;
+      const { session } = yield* sessions.issue({ userId, amr: ["pwd", "otp"] });
+      const principal = yield* resolver.resolve(session);
+      assert.strictEqual(principal._tag, "User");
+      if (principal._tag !== "User") return;
+      assert.deepStrictEqual(principal.amr, ["pwd", "otp"]);
+      assert.isUndefined(principal.emailVerified);
+    }).pipe(Effect.provide(factsLayer)),
+  );
+
+  it.effect("layerWithUserFacts sets emailVerified=false for a fresh, unverified user", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const sessions = yield* Sessions.Sessions;
+      const resolver = yield* Authentication.PrincipalResolver;
+      const user = yield* users.create({ email: "facts@example.com", name: "Facts" });
+      const { session } = yield* sessions.issue({ userId: user.id, amr: ["pwd"] });
+      const principal = yield* resolver.resolve(session);
+      assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
+    }).pipe(
+      Effect.provide(
+        Authentication.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
+      ),
+    ),
+  );
+
+  it.effect("layerWithUserFacts resolves a session whose user vanished as unverified, never a defect", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const resolver = yield* Authentication.PrincipalResolver;
+      const { session } = yield* sessions.issue({ userId: Users.UserId("99999999-9999-9999-9999-999999999999") });
+      const principal = yield* resolver.resolve(session);
+      assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
+    }).pipe(
+      Effect.provide(
+        Authentication.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
+      ),
+    ),
   );
 });

@@ -114,6 +114,7 @@ const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto
     lastActiveAt: DateTime.formatIso(session.lastActiveAt),
     expiresAt: DateTime.formatIso(session.absoluteExpiresAt),
     userAgent: Option.getOrNull(session.userAgent),
+    amr: session.amr,
     current: true,
   });
 

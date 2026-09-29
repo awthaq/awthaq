@@ -904,6 +904,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
               ...(input.ip !== undefined ? { ip: input.ip } : {}),
               ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
             },
+            amr: ["fed"],
           })
           .pipe(Effect.orDie);
         yield* events.publish({

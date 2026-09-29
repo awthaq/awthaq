@@ -118,6 +118,49 @@ export interface ActingAs {
   readonly id: string;
 }
 
+/**
+ * THS-003/APS-007: RFC 8176 authentication method references — how a session
+ * was authenticated, not merely how recently (`authenticatedAt`). A closed set,
+ * so a typo cannot silently fail a policy check: `pwd` password, `hwk`
+ * hardware-bound key (passkey), `swk` software key, `user` user verification,
+ * `otp` one-time password, `mfa` multiple factors, `fed` federated identity
+ * (OAuth), `email` proof of mailbox control.
+ */
+export type AuthMethod = "pwd" | "hwk" | "swk" | "user" | "otp" | "mfa" | "fed" | "email";
+
+const AUTH_METHODS: ReadonlySet<string> = new Set([
+  "pwd",
+  "hwk",
+  "swk",
+  "user",
+  "otp",
+  "mfa",
+  "fed",
+  "email",
+]);
+
+const isAuthMethod = (value: unknown): value is AuthMethod =>
+  typeof value === "string" && AUTH_METHODS.has(value);
+
+/** Order-preserving union — `amr` only ever grows within a session. */
+export const unionAmr = (
+  existing: ReadonlyArray<AuthMethod>,
+  additions: ReadonlyArray<AuthMethod>,
+): ReadonlyArray<AuthMethod> => [
+  ...existing,
+  ...additions.filter((method, index) => !existing.includes(method) && additions.indexOf(method) === index),
+];
+
+/** Decodes the stored JSON text, dropping anything that is not a known method. */
+const parseAmr = (text: string): ReadonlyArray<AuthMethod> => {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed.filter(isAuthMethod) : [];
+  } catch {
+    return [];
+  }
+};
+
 /** What `Sessions.verify`/`issue` return — never the secret, never the stored hash. */
 export interface SessionView {
   readonly id: SessionId;
@@ -141,6 +184,8 @@ export interface SessionView {
   readonly userAgent: Option.Option<string>;
   /** BEH-EA-209/210: present only for a session minted with `actingAs`; such a session never idle-refreshes. */
   readonly actingAs: Option.Option<ActingAs>;
+  /** THS-003: the authentication methods recorded at issue (and unioned in by `reauthenticate`); empty when the issuing path recorded none. */
+  readonly amr: ReadonlyArray<AuthMethod>;
 }
 
 /** BEH-EA-054: one row of `Sessions.list`. */
@@ -152,6 +197,8 @@ export interface SessionListItem {
   readonly lastActiveAt: DateTime.Utc;
   readonly expiresAt: DateTime.Utc;
   readonly userAgent: Option.Option<string>;
+  /** THS-003: see `SessionView.amr`. */
+  readonly amr: ReadonlyArray<AuthMethod>;
   readonly current: boolean;
 }
 
@@ -237,6 +284,13 @@ export interface SessionsShape {
      * IDS-008: naming the session's own `userId` dies with `InvalidActingAs`. A producer MUST also refuse a caller whose own session already carries `actingAs` (BEH-EA-214) — `issue` cannot see the caller's session; `Admin.impersonate` is the reference implementation.
      */
     readonly actingAs?: ActingAs;
+    /**
+     * THS-003/APS-007: how the caller just authenticated, set by the
+     * authenticating plugin (password `["pwd"]`, OAuth `["fed"]`, passkey
+     * `["hwk", "user"]` under user verification). Defaults to none (a legacy
+     * bridge, an impersonation session).
+     */
+    readonly amr?: ReadonlyArray<AuthMethod>;
     /** BEH-EA-212: overrides `SessionConfig.absolute` for this one call — e.g. `@awthaq/admin`'s own `AdminConfig.maxDuration`, generally shorter than an ordinary session's absolute lifetime. */
     readonly absoluteDuration?: Duration.Duration;
   }) => Effect.Effect<
@@ -379,7 +433,11 @@ export interface SessionsShape {
    * `@awthaq/password`/`@awthaq/passkey`'s own `reauthenticate` endpoints),
    * not a passive idle refresh, so it gets its own always-available method.
    */
-  readonly reauthenticate: (id: SessionId) => Effect.Effect<SessionView, SessionNotFound>;
+  readonly reauthenticate: (
+    id: SessionId,
+    /** THS-003: methods this step-up just proved; unioned into the session's `amr` (monotone — never removed). */
+    amr?: ReadonlyArray<AuthMethod>,
+  ) => Effect.Effect<SessionView, SessionNotFound>;
 }
 
 export class Sessions extends Context.Service<Sessions, SessionsShape>()("awthaq/core/Sessions") {}
@@ -467,6 +525,7 @@ interface SessionRow {
   readonly ipAddress: Option.Option<string>;
   readonly userAgent: Option.Option<string>;
   readonly actingAs: Option.Option<ActingAs>;
+  readonly amr: ReadonlyArray<AuthMethod>;
   /**
    * RRS-003: this row's founding session id — its own `id` when it has no
    * ancestor, inherited from the superseded row's own `familyId`
@@ -500,6 +559,7 @@ const toView = (row: SessionRow): SessionView => ({
   ipAddress: row.ipAddress,
   userAgent: row.userAgent,
   actingAs: row.actingAs,
+  amr: row.amr,
 });
 
 /**
@@ -570,6 +630,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
               ipAddress: Option.fromNullishOr(input.request?.ip),
               userAgent: Option.fromNullishOr(cappedUserAgent(input.request?.userAgent)),
               actingAs: Option.fromNullishOr(input.actingAs),
+              amr: input.amr ?? [],
               familyId: Option.match(ancestor, {
                 onNone: () => id,
                 onSome: (r) => r.familyId,
@@ -881,6 +942,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         lastActiveAt: row.lastActiveAt,
         expiresAt: row.absoluteExpiresAt,
         userAgent: row.userAgent,
+        amr: row.amr,
         current: row.id === current,
       });
 
@@ -911,14 +973,21 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
       const isLive: SessionsShape["isLive"] = (userId, id) =>
         findOwned(userId, id).pipe(Effect.map(Option.isSome));
 
-      const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id) {
+      const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (
+        id,
+        amr,
+      ) {
         const now = yield* DateTime.now;
         const updated = yield* Ref.modify(
           state,
           (s): readonly [Option.Option<SessionRow>, HashMap.HashMap<SessionId, SessionRow>] => {
             const current = HashMap.get(s, id);
             if (Option.isNone(current)) return [Option.none(), s] as const;
-            const refreshed: SessionRow = { ...current.value, authenticatedAt: now };
+            const refreshed: SessionRow = {
+              ...current.value,
+              authenticatedAt: now,
+              amr: unionAmr(current.value.amr, amr ?? []),
+            };
             return [Option.some(refreshed), HashMap.set(s, id, refreshed)] as const;
           },
         );
@@ -959,6 +1028,7 @@ const toSessionView = (row: SqlModels.Session): SessionView => ({
     row.actingAsType === null || row.actingAsId === null
       ? Option.none()
       : Option.some({ type: row.actingAsType, id: row.actingAsId }),
+  amr: parseAmr(row.amr),
 });
 
 export const layerSql: Layer.Layer<
@@ -1029,6 +1099,7 @@ export const layerSql: Layer.Layer<
             idleExpiresAt: Model.Override(idleExpiresAt),
             actingAsType: input.actingAs?.type ?? null,
             actingAsId: input.actingAs?.id ?? null,
+            amr: JSON.stringify(input.amr ?? []),
             familyId,
             supersededBy: null,
             supersededAt: null,
@@ -1309,6 +1380,7 @@ export const layerSql: Layer.Layer<
       lastActiveAt: row.lastActiveAt,
       expiresAt: row.absoluteExpiresAt,
       userAgent: Option.fromNullishOr(row.userAgent),
+      amr: parseAmr(row.amr),
       current: row.id === current,
     });
 
@@ -1365,12 +1437,25 @@ export const layerSql: Layer.Layer<
     const isLive: SessionsShape["isLive"] = (userId, id) =>
       findOwned(userId, id).pipe(Effect.map(Option.isSome));
 
-    const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id) {
+    const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id, amr) {
       const now = yield* DateTime.now;
-      const row = yield* repo.reauthenticate(id, now).pipe(
+      const notFound = () =>
+        Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` }));
+      // THS-003: union the newly proven methods into the stored `amr` (monotone).
+      const unioned =
+        amr === undefined || amr.length === 0
+          ? undefined
+          : yield* repo.findById(id).pipe(
+              Effect.map((current) => JSON.stringify(unionAmr(parseAmr(current.amr), amr))),
+              Effect.catchTags({
+                NoSuchElementError: notFound,
+                SchemaError: Effect.die,
+                SqlError: Effect.die,
+              }),
+            );
+      const row = yield* repo.reauthenticate(id, now, unioned).pipe(
         Effect.catchTags({
-          NoSuchElementError: () =>
-            Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+          NoSuchElementError: notFound,
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),

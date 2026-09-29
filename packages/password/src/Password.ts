@@ -371,6 +371,7 @@ const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto
     lastActiveAt: DateTime.formatIso(session.lastActiveAt),
     expiresAt: DateTime.formatIso(session.absoluteExpiresAt),
     userAgent: Option.getOrNull(session.userAgent),
+    amr: session.amr,
     current: true,
   });
 
@@ -774,7 +775,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 })
                 .pipe(Effect.orDie);
               const issued = yield* sessions
-                .issue({ userId: user.id, request: sessionRequest(input) })
+                .issue({ userId: user.id, request: sessionRequest(input), amr: ["pwd"] })
                 .pipe(Effect.orDie);
               return { user, issued };
             }),
@@ -878,7 +879,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           return yield* Effect.fail(point.value);
         }
         const issued = yield* sessions
-          .issue({ userId: user.id, request: sessionRequest(input) })
+          .issue({ userId: user.id, request: sessionRequest(input), amr: ["pwd"] })
           .pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.user.signedIn",
@@ -1149,6 +1150,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             userId: input.userId,
             supersedes: input.currentSessionId,
             request: sessionRequest(input),
+            amr: ["pwd"],
           })
           .pipe(Effect.orDie);
         return issued;
@@ -1178,7 +1180,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
           return yield* Effect.fail(new PasswordApi.WrongPassword());
         }
-        yield* sessions.reauthenticate(input.currentSessionId).pipe(
+        yield* sessions.reauthenticate(input.currentSessionId, ["pwd"]).pipe(
           Effect.catchTag("SessionNotFound", () =>
             // `changePassword`'s own `Authentication` middleware already
             // proved this exact session live moments ago — a

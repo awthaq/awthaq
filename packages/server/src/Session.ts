@@ -21,6 +21,7 @@ const toDto = (item: Sessions.SessionListItem): SessionContract.SessionDto =>
     lastActiveAt: DateTime.formatIso(item.lastActiveAt),
     expiresAt: DateTime.formatIso(item.expiresAt),
     userAgent: Option.getOrNull(item.userAgent),
+    amr: item.amr,
     current: item.current,
   });
 

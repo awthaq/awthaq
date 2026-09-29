@@ -35,6 +35,8 @@ REQUIREMENT: `Sessions.issue` MUST mint a token composed of a public `id`
 
 `archive/PRD.md` §13 fixes this two-part shape so that a lookup does not require scanning every session for a matching hash: the `id` half indexes the row directly, and only the `secret` half needs the cryptographic comparison described in BEH-EA-056. `archive/design/usage-examples-v4.md` §5.2 shows the intended return type directly as `Redacted<"<id>.<secret>">`, underscoring that the raw value is meant to never appear in a log or span unredacted.
 
+**Authentication methods are recorded per session (THS-003, APS-007).** A session carries `amr` — RFC 8176 authentication method references, a closed set (`pwd`, `hwk`, `swk`, `user`, `otp`, `mfa`, `fed`, `email`) — answering "with which factors", where `authenticatedAt` answers only "how recently". The authenticating plugin sets it at `issue` (password `["pwd"]`, OAuth `["fed"]`, passkey `["hwk"]`, plus `"user"` when the authenticator performed user verification; a legacy-bridge or impersonation session records none); `reauthenticate` unions newly proven methods in — order-preserving, without duplicates, and never removing one (monotone within a session). It is exposed on `SessionView`, `SessionListItem`, `SessionDto` and the resolved `UserPrincipal`, so a host or a qadi obligation (e.g. "requires `mfa`") can gate on how the session was proven rather than on "has a session"; SQL stores it as a JSON-array text column (migration 19).
+
 ## BEH-EA-050: Only `SHA-256(secret)` is persisted; the plaintext secret is never stored
 
 > **Invariant:** [INV-EA-007](../invariants.md#inv-ea-007-a-session-secret-is-never-stored-in-plaintext-only-its-sha-256-hash)

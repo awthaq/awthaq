@@ -440,6 +440,8 @@ export interface SessionsRepositoryShape {
   readonly reauthenticate: (
     id: SessionId,
     authenticatedAt: DateTime.Utc,
+    /** THS-003: the already-unioned `amr` JSON to store; `undefined` leaves it untouched. */
+    amr?: string,
   ) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
 }
 
@@ -605,18 +607,20 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         Request: Schema.Struct({
           id: SessionId,
           authenticatedAt: Schema.DateTimeUtcFromString,
+          amr: Schema.NullOr(Schema.String),
         }),
         Result: Session,
         execute: (request) => sql`
           UPDATE sessions
-          SET "authenticatedAt" = ${request.authenticatedAt}
+          SET "authenticatedAt" = ${request.authenticatedAt},
+              "amr" = COALESCE(${request.amr}, "amr")
           WHERE "id" = ${request.id}
           RETURNING *
         `,
       });
 
-      const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (id, authenticatedAt) =>
-        reauthenticateQuery({ id, authenticatedAt });
+      const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (id, authenticatedAt, amr) =>
+        reauthenticateQuery({ id, authenticatedAt, amr: amr ?? null });
 
       return {
         insert: repo.insert,

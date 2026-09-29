@@ -438,6 +438,7 @@ describe("OAuth", () => {
           userAgent: "OAuthBrowser/1.0",
         });
         assert.isDefined(outcome.session);
+        assert.deepStrictEqual(outcome.session?.session.amr, ["fed"]);
         assert.deepStrictEqual(outcome.session?.session.ipAddress, Option.some("203.0.113.20"));
         assert.deepStrictEqual(
           outcome.session?.session.userAgent,

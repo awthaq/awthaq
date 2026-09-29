@@ -243,6 +243,8 @@ describe("Passkey", () => {
         },
         { ip: "198.51.100.44", userAgent: "PasskeyBrowser/1.0" },
       );
+      // THS-003: a hardware-bound key, with user verification (the mock reports it).
+      assert.deepStrictEqual(issued.session.amr, ["hwk", "user"]);
       assert.deepStrictEqual(issued.session.ipAddress, Option.some("198.51.100.44"));
       assert.deepStrictEqual(issued.session.userAgent, Option.some("PasskeyBrowser/1.0"));
     }).pipe(Effect.provide(TestLayer)),

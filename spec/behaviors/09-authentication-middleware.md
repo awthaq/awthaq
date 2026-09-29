@@ -105,6 +105,8 @@ REQUIREMENT: `PrincipalResolver` MUST derive a `Principal` (BEH-EA-025)
 
 `archive/PRD.md` §7 separates these two resolution steps by design: `Principal` answers who is asking, and `AuthSubject` (via qadi's `SubjectResolver` slot) separately answers what they may do. `PrincipalResolver` is the middleware-internal service that performs the first step only, so that `Authentication`'s implementation has no dependency on qadi at all — the authorization stratum is a separate, later composition step (`archive/PRD.md` §15).
 
+**Trust is gated on assurance, not on "has a session" (APS-007).** The resolved `UserPrincipal` carries the session's `amr` ([BEH-EA-049](07-sessions.md)). A fresh password sign-up holds a live session before its mailbox is verified, so a host that needs a verified email MUST also read `emailVerified`, which the default resolver leaves absent (it costs a lookup); the opt-in `PrincipalResolverWithUserFactsLive` loads the user once per request and sets it (a missing user resolves as unverified, never a defect).
+
 ## BEH-EA-070: `CurrentPrincipal` is provided by `Authentication`/`OptionalAuthentication` and consumed by handlers as an ordinary service
 
 ```ts
