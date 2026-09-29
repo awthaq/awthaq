@@ -227,4 +227,34 @@ describe("OrganizationQadi", () => {
         assert.isUndefined(nonUserSubject);
       }).pipe(Effect.provide(QadiLive)),
   );
+
+  // CWM-003/N9: removing a member also removes their team memberships, so qadi
+  // stops answering `team-member` for them.
+  it.effect("a removed member is no longer team-member of that organization's teams", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      yield* organization.addMember({
+        organizationId: record.id,
+        userId: Users.UserId("member-1"),
+        role: ["member"],
+      });
+      const team = yield* organization.createTeam(owner, record.id, "Engineering");
+      yield* organization.addTeamMember(owner, record.id, team.id, Users.UserId("member-1"));
+      const resolver = yield* RelationshipResolver;
+      const check = () =>
+        resolver.check({
+          subjectId: makeSubjectId("user:member-1"),
+          relation: "team-member",
+          resourceId: makeResourceId(team.id),
+          depth: undefined,
+        });
+      assert.strictEqual(yield* check(), "Related");
+
+      yield* organization.removeMember(owner, record.id, Users.UserId("member-1"));
+
+      assert.strictEqual(yield* check(), "Unrelated");
+    }).pipe(Effect.provide(QadiLive)),
+  );
 });

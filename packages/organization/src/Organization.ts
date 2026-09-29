@@ -1264,6 +1264,17 @@ const organizationMigrations: Migrations.Migrations = [
       yield* sql`CREATE UNIQUE INDEX organization_membership_user_org ON organization_membership(userId, organizationId)`;
     }),
   },
+  // DRS-008: the active-context row is keyed by session but must be findable by
+  // user (erasure, membership revocation). Nullable: rows that predate it stay
+  // valid and are re-validated on read.
+  {
+    name: "organization_active_context_user_id",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`ALTER TABLE organization_active_context ADD COLUMN userId TEXT`;
+      yield* sql`CREATE INDEX organization_active_context_user_id ON organization_active_context(userId)`;
+    }),
+  },
   // OHS-003: one membership per (team, user), and `memberCount` recomputed from
   // the surviving rows so a previously over-counted team is repaired.
   {
@@ -1618,6 +1629,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 yield* invitations.removeAllForOrganization(organizationId);
                 yield* teams.removeAllTeamsForOrganization(organizationId);
                 yield* orgRoles.removeAllForOrganization(organizationId);
+                // CWM-003: no session may keep pointing at the deleted organization.
+                yield* activeContext.clearOrganization(organizationId);
                 yield* orgs
                   .delete(organizationId)
                   .pipe(
@@ -1653,6 +1666,50 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           ? members.countOwners(organizationId).pipe(Effect.map((count) => count <= 1))
           : Effect.succeed(false);
 
+      /**
+       * CWM-003/N9: removing a membership (`removeMember` and `leave` alike) also
+       * drops everything that hangs off it — the user's team memberships in this
+       * organization and any session's active organization/team pointing at it —
+       * in one transaction, so a removed member can no longer answer `team-member`
+       * in qadi or keep the organization "active". Returns the teams the user was
+       * on so the caller can announce each departure once the transaction commits.
+       */
+      const dropMembership = (organizationId: string, userId: Users.UserId) =>
+        sqlTransaction
+          .withTransaction(
+            Effect.gen(function* () {
+              yield* members
+                .remove(userId, organizationId)
+                .pipe(
+                  Effect.catchTag("MembershipRecordNotFound", () =>
+                    Effect.die(new Error("awthaq: membership vanished between check and write")),
+                  ),
+                );
+              yield* activeContext.clearOrganizationForUser(userId, organizationId);
+              return yield* teams.removeUserFromOrganizationTeams(organizationId, userId);
+            }),
+          )
+          .pipe(Effect.catchTag("SqlError", Effect.die));
+
+      const announceTeamDepartures = (
+        organizationId: string,
+        userId: Users.UserId,
+        teamIds: ReadonlyArray<string>,
+      ) =>
+        Effect.forEach(
+          teamIds,
+          (teamId) =>
+            events
+              .publish({
+                _tag: "auth.organization.teamMemberRemoved",
+                organizationId,
+                teamId,
+                userId,
+              })
+              .pipe(Effect.andThen(afterRemoveTeamMember.run({ organizationId, teamId, userId }))),
+          { discard: true },
+        );
+
       const removeMember: OrganizationShape["removeMember"] = Effect.fnUntraced(
         function* (caller, organizationId, targetUserId) {
           yield* requireOrganization(organizationId);
@@ -1676,18 +1733,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "organization.member.remove.before",
             beforeRemove.run({ organizationId, userId: targetUserId }),
           );
-          yield* members
-            .remove(targetUserId, organizationId)
-            .pipe(
-              Effect.catchTag("MembershipRecordNotFound", () =>
-                Effect.die(new Error("awthaq: membership vanished between check and write")),
-              ),
-            );
+          const leftTeams = yield* dropMembership(organizationId, targetUserId);
           yield* events.publish({
             _tag: "auth.organization.memberRemoved",
             organizationId,
             userId: targetUserId,
           });
+          yield* announceTeamDepartures(organizationId, targetUserId, leftTeams);
           yield* afterRemove.run({ organizationId, userId: targetUserId });
         },
       );
@@ -1769,18 +1821,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "organization.member.remove.before",
             beforeRemove.run({ organizationId, userId: callerId }),
           );
-          yield* members
-            .remove(callerId, organizationId)
-            .pipe(
-              Effect.catchTag("MembershipRecordNotFound", () =>
-                Effect.die(new Error("awthaq: membership vanished between check and write")),
-              ),
-            );
+          const leftTeams = yield* dropMembership(organizationId, callerId);
           yield* events.publish({
             _tag: "auth.organization.memberRemoved",
             organizationId,
             userId: callerId,
           });
+          yield* announceTeamDepartures(organizationId, callerId, leftTeams);
           yield* afterRemove.run({ organizationId, userId: callerId });
         },
       );
@@ -1853,24 +1900,60 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const setActive: OrganizationShape["setActive"] = Effect.fnUntraced(
         function* (caller, organizationId) {
-          if (organizationId !== null) {
-            const membership = yield* members.findByUserAndOrg(
-              Users.UserId(caller.ref.id),
-              organizationId,
-            );
-            if (Option.isNone(membership))
-              return yield* Effect.fail(new OrganizationApi.MembershipNotFound());
+          const callerId = Users.UserId(caller.ref.id);
+          if (organizationId === null) {
+            return yield* activeContext.unsetOrganization(caller.sessionId, callerId);
           }
-          return yield* activeContext.setOrganization(caller.sessionId, organizationId);
+          const membership = yield* members.findByUserAndOrg(callerId, organizationId);
+          if (Option.isNone(membership))
+            return yield* Effect.fail(new OrganizationApi.MembershipNotFound());
+          // MTI-001: the membership record is the witness the setter requires.
+          return yield* activeContext.setOrganization(caller.sessionId, membership.value);
         },
       );
 
+      /**
+       * CWM-003: the stored pointers are re-validated on read — a row whose
+       * organization/team the user no longer belongs to (a membership removed
+       * around this plugin, or a row that predates the `userId` column, which
+       * the cascade could not find) reads as cleared, and is cleared for real.
+       */
+      const revalidateActive = Effect.fnUntraced(function* (
+        caller: Api.UserPrincipal,
+        row: ActiveContextRecords.ActiveContextRecord,
+      ) {
+        const callerId = Users.UserId(caller.ref.id);
+        let stale = false;
+        if (Option.isSome(row.activeOrganizationId)) {
+          const membership = yield* members.findByUserAndOrg(
+            callerId,
+            row.activeOrganizationId.value,
+          );
+          if (Option.isNone(membership)) {
+            yield* activeContext.unsetOrganization(caller.sessionId, callerId);
+            yield* activeContext.unsetTeam(caller.sessionId, callerId);
+            stale = true;
+          }
+        }
+        if (!stale && Option.isSome(row.activeTeamId)) {
+          const onTeam = yield* teams.findTeamMembership(row.activeTeamId.value, callerId);
+          if (Option.isNone(onTeam)) {
+            yield* activeContext.unsetTeam(caller.sessionId, callerId);
+            stale = true;
+          }
+        }
+        if (!stale) return row;
+        const refreshed = yield* activeContext.findBySessionId(caller.sessionId);
+        return Option.getOrElse(refreshed, () => row);
+      });
+
       const getActive: OrganizationShape["getActive"] = Effect.fnUntraced(function* (caller) {
         const existing = yield* activeContext.findBySessionId(caller.sessionId);
-        if (Option.isSome(existing)) return existing.value;
+        if (Option.isSome(existing)) return yield* revalidateActive(caller, existing.value);
         const now = yield* DateTime.now;
         const empty: ActiveContextRecords.ActiveContextRecord = {
           sessionId: caller.sessionId,
+          userId: Option.some(caller.ref.id),
           activeOrganizationId: Option.none(),
           activeTeamId: Option.none(),
           updatedAt: now,
@@ -2412,13 +2495,17 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           );
           yield* sqlTransaction
             .withTransaction(
-              teams
-                .removeTeam(organizationId, teamId)
-                .pipe(
-                  Effect.catchTag("TeamRecordNotFound", () =>
-                    Effect.die(new Error("awthaq: team vanished between check and write")),
-                  ),
-                ),
+              Effect.gen(function* () {
+                yield* teams
+                  .removeTeam(organizationId, teamId)
+                  .pipe(
+                    Effect.catchTag("TeamRecordNotFound", () =>
+                      Effect.die(new Error("awthaq: team vanished between check and write")),
+                    ),
+                  );
+                // CWM-003/OHS-007: no session may keep the deleted team active.
+                yield* activeContext.clearTeam(teamId);
+              }),
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));
           yield* events.publish({ _tag: "auth.organization.teamDeleted", organizationId, teamId });
@@ -2508,13 +2595,16 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const setActiveTeam: OrganizationShape["setActiveTeam"] = Effect.fnUntraced(
         function* (caller, teamId) {
-          if (teamId !== null) {
-            const membership = yield* teams.findTeamMembership(teamId, Users.UserId(caller.ref.id));
-            if (Option.isNone(membership)) {
-              return yield* Effect.fail(new OrganizationApi.TeamMembershipNotFound());
-            }
+          const callerId = Users.UserId(caller.ref.id);
+          if (teamId === null) {
+            return yield* activeContext.unsetTeam(caller.sessionId, callerId);
           }
-          return yield* activeContext.setTeam(caller.sessionId, teamId);
+          const membership = yield* teams.findTeamMembership(teamId, callerId);
+          if (Option.isNone(membership)) {
+            return yield* Effect.fail(new OrganizationApi.TeamMembershipNotFound());
+          }
+          // MTI-001: the team-membership record is the witness the setter requires.
+          return yield* activeContext.setTeam(caller.sessionId, membership.value);
         },
       );
 
@@ -2596,7 +2686,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
  * `Organization.beforeUserDeleteErasure` once, application-wide — the
  * same opt-in posture `RateLimits.layer`/`Slots.layer` already use.
  *
- * Deliberately scoped to membership only in this pass —
+ * Deliberately scoped to membership (plus, since DRS-008, the user's
+ * `organization_active_context` rows) in this pass —
  * `organization_team_membership` and `organization_invitation` (the
  * latter matched by both `inviterId` and the deleted user's own email)
  * are real, still-open gaps this same mechanism can close, tracked as
@@ -2606,12 +2697,19 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 export const beforeUserDeleteErasure: Layer.Layer<
   never,
   never,
-  MembershipRecords.MembershipRecords
+  MembershipRecords.MembershipRecords | ActiveContextRecords.ActiveContextRecords
 > = Layer.unwrap(
   Effect.gen(function* () {
     const membershipRecords = yield* MembershipRecords.MembershipRecords;
-    return Hooks.BeforeUserDelete.tap((input) =>
-      membershipRecords.deleteAllByUser(Users.UserId(input.id)).pipe(Effect.as(input)),
-    );
+    const activeContextRecords = yield* ActiveContextRecords.ActiveContextRecords;
+    return Hooks.BeforeUserDelete.tap((input) => {
+      const userId = Users.UserId(input.id);
+      // DRS-008: the active-context rows are keyed by session but indexed by
+      // user, so erasure reaches them too.
+      return membershipRecords.deleteAllByUser(userId).pipe(
+        Effect.andThen(activeContextRecords.deleteAllByUser(userId)),
+        Effect.as(input),
+      );
+    });
   }),
 );

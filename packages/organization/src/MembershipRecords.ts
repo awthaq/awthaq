@@ -6,6 +6,7 @@
 // JSON-serialized `TEXT` column under `layerSql`, a plain array in memory.
 
 import { Users } from "@awthaq/core";
+import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -20,13 +21,23 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
-export interface MembershipRecord {
+interface MembershipFields {
   readonly id: string;
   readonly userId: Users.UserId;
   readonly organizationId: string;
   readonly role: ReadonlyArray<string>;
   readonly createdAt: DateTime.Utc;
 }
+
+/**
+ * MTI-001: branded, and the constructor below is module-private, so the only
+ * way to hold a `MembershipRecord` is to have read it from (or created it in)
+ * this records layer. `ActiveContextRecords.setOrganization` takes one as its
+ * witness that the caller really is a member — an active-organization write
+ * for a non-member is unrepresentable, not merely unchecked.
+ */
+export type MembershipRecord = Brand.Branded<MembershipFields, "MembershipRecord">;
+const brandMembership = Brand.nominal<MembershipRecord>();
 
 export class MembershipRecordNotFound extends Data.TaggedError("MembershipRecordNotFound")<{
   readonly userId: string;
@@ -123,13 +134,13 @@ export const layerMemory = Layer.effect(
     const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
       const now = yield* DateTime.now;
-      const record: MembershipRecord = {
+      const record = brandMembership({
         id,
         userId: input.userId,
         organizationId: input.organizationId,
         role: input.role,
         createdAt: now,
-      };
+      });
       const key = keyOf(input.userId, input.organizationId);
       return yield* Ref.modify(
         state,
@@ -254,13 +265,14 @@ const MembershipRow = Schema.Struct({
 
 const parseRoleArray = (json: string): ReadonlyArray<string> => JSON.parse(json);
 
-const toRecord = (row: typeof MembershipRow.Type): MembershipRecord => ({
-  id: row.id,
-  userId: Users.UserId(row.userId),
-  organizationId: row.organizationId,
-  role: parseRoleArray(row.role),
-  createdAt: row.createdAt,
-});
+const toRecord = (row: typeof MembershipRow.Type): MembershipRecord =>
+  brandMembership({
+    id: row.id,
+    userId: Users.UserId(row.userId),
+    organizationId: row.organizationId,
+    role: parseRoleArray(row.role),
+    createdAt: row.createdAt,
+  });
 
 export const layerSql = Layer.effect(
   MembershipRecords,

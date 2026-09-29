@@ -1321,4 +1321,95 @@ describe("Organization", () => {
       }).pipe(Effect.provide(withTeams())),
     );
   });
+
+  // CWM-003/N9/OHS-007: the active-context pointers (and team memberships) never
+  // outlive the membership/team/organization they point at.
+  describe("active context lifecycle (CWM-003)", () => {
+    const setup = Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const member = asCaller("member-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      yield* organization.addMember({
+        organizationId: org.id,
+        userId: Users.UserId("member-1"),
+        role: ["member"],
+      });
+      const team = yield* organization.createTeam(owner, org.id, "Engineering");
+      yield* organization.createTeam(owner, org.id, "Design");
+      yield* organization.addTeamMember(owner, org.id, team.id, Users.UserId("member-1"));
+      yield* organization.setActive(member, org.id);
+      yield* organization.setActiveTeam(member, team.id);
+      return { organization, owner, member, org, team };
+    });
+
+    it.effect("removeMember clears the removed user's active organization, team and team memberships", () =>
+      Effect.gen(function* () {
+        const { organization, owner, member, org, team } = yield* setup;
+        yield* organization.removeMember(owner, org.id, Users.UserId("member-1"));
+
+        const active = yield* organization.getActive(member);
+        assert.isTrue(Option.isNone(active.activeOrganizationId));
+        assert.isTrue(Option.isNone(active.activeTeamId));
+        const roster = yield* organization.listTeamMembers(owner, org.id, team.id);
+        assert.strictEqual(roster.length, 0);
+        const teams = yield* organization.listTeams(owner, org.id);
+        assert.strictEqual(teams.find((t) => t.id === team.id)?.memberCount, 0);
+      }).pipe(Effect.provide(withTeams())),
+    );
+
+    it.effect("leave clears the caller's active organization, team and team memberships", () =>
+      Effect.gen(function* () {
+        const { organization, owner, member, org, team } = yield* setup;
+        yield* organization.leave(member, org.id);
+
+        const active = yield* organization.getActive(member);
+        assert.isTrue(Option.isNone(active.activeOrganizationId));
+        assert.isTrue(Option.isNone(active.activeTeamId));
+        assert.strictEqual((yield* organization.listTeamMembers(owner, org.id, team.id)).length, 0);
+      }).pipe(Effect.provide(withTeams())),
+    );
+
+    it.effect("delete clears every session's active organization", () =>
+      Effect.gen(function* () {
+        const { organization, owner, member, org } = yield* setup;
+        yield* organization.setActive(owner, org.id);
+        yield* organization.delete(owner, org.id);
+
+        for (const caller of [owner, member]) {
+          const active = yield* organization.getActive(caller);
+          assert.isTrue(Option.isNone(active.activeOrganizationId));
+          assert.isTrue(Option.isNone(active.activeTeamId));
+        }
+      }).pipe(Effect.provide(withTeams({ allowRemovingAllTeams: true }))),
+    );
+
+    it.effect("removeTeam clears activeTeamId but keeps the active organization", () =>
+      Effect.gen(function* () {
+        const { organization, owner, member, org, team } = yield* setup;
+        yield* organization.removeTeam(owner, org.id, team.id);
+
+        const active = yield* organization.getActive(member);
+        assert.isTrue(Option.isNone(active.activeTeamId));
+        assert.deepStrictEqual(active.activeOrganizationId, Option.some(org.id));
+      }).pipe(Effect.provide(withTeams())),
+    );
+
+    it.effect("getActive re-validates: a pointer at an organization the user is no longer in reads as cleared", () =>
+      Effect.gen(function* () {
+        const { organization, member, org } = yield* setup;
+        const members = yield* MembershipRecords.MembershipRecords;
+        const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
+        // Membership removed around the plugin (a stale pointer, or a row that
+        // predates the userId column): the read itself must not name the org.
+        yield* members.remove(Users.UserId("member-1"), org.id);
+
+        const active = yield* organization.getActive(member);
+        assert.isTrue(Option.isNone(active.activeOrganizationId));
+        assert.isTrue(Option.isNone(active.activeTeamId));
+        const row = yield* activeContext.findBySessionId(member.sessionId);
+        assert.isTrue(Option.isSome(row) && Option.isNone(row.value.activeOrganizationId));
+      }).pipe(Effect.provide(withTeams())),
+    );
+  });
 });

@@ -17,6 +17,7 @@
 // service — composing *two* records calls stays the domain service's job.
 
 import { Users } from "@awthaq/core";
+import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -40,12 +41,16 @@ export interface TeamRecord {
   readonly updatedAt: DateTime.Utc;
 }
 
-export interface TeamMembershipRecord {
+interface TeamMembershipFields {
   readonly id: string;
   readonly teamId: string;
   readonly userId: Users.UserId;
   readonly createdAt: DateTime.Utc;
 }
+
+/** MTI-001: branded like `MembershipRecords.MembershipRecord` — the witness `ActiveContextRecords.setTeam` requires. */
+export type TeamMembershipRecord = Brand.Branded<TeamMembershipFields, "TeamMembershipRecord">;
+const brandTeamMembership = Brand.nominal<TeamMembershipRecord>();
 
 export class TeamRecordNotFound extends Data.TaggedError("TeamRecordNotFound")<{
   readonly id: string;
@@ -250,12 +255,12 @@ export const layerMemory = Layer.effect(
     const addTeamMember: TeamRecordsShape["addTeamMember"] = Effect.fnUntraced(function* (input) {
       const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
       const now = yield* DateTime.now;
-      const record: TeamMembershipRecord = {
+      const record = brandTeamMembership({
         id,
         teamId: input.teamId,
         userId: input.userId,
         createdAt: now,
-      };
+      });
       const key = membershipKeyOf(input.teamId, input.userId);
       return yield* Ref.modify(
         state,
@@ -411,12 +416,13 @@ const TeamMembershipRow = Schema.Struct({
   createdAt: Schema.DateTimeUtcFromString,
 });
 
-const toTeamMembershipRecord = (row: typeof TeamMembershipRow.Type): TeamMembershipRecord => ({
-  id: row.id,
-  teamId: row.teamId,
-  userId: Users.UserId(row.userId),
-  createdAt: row.createdAt,
-});
+const toTeamMembershipRecord = (row: typeof TeamMembershipRow.Type): TeamMembershipRecord =>
+  brandTeamMembership({
+    id: row.id,
+    teamId: row.teamId,
+    userId: Users.UserId(row.userId),
+    createdAt: row.createdAt,
+  });
 
 export const layerSql = Layer.effect(
   TeamRecords,
