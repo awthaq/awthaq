@@ -3,7 +3,7 @@ ID: "RRC-007"
 Title: "Verification write path is replica-friendly by construction: single-statement issue/consume with RETURNING carrying all needed state"
 Level: info
 Category: "architecture"
-Status: needs-triage
+Status: wontfix
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:570"
 Auditor: "read-replica-consistency-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `sql` · reported by **Read Replica Consistency Specialist** (`read-replica-consistency-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Preserve and codify this pattern: new flows should return post-write state via R
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `read-replica-routing`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:684`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/05-sql.md`.
+
+**Wontfix (2026-09-29):** Positive observation, no defect. Nothing to change.

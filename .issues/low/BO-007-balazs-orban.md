@@ -3,7 +3,7 @@ ID: "BO-007"
 Title: "Wildcard re-export of @qadi/react leaks upstream renames into the public API"
 Level: low
 Category: "api"
-Status: needs-triage
+Status: resolved
 Package: "react"
 Source: "packages/react/src/index.ts:19"
 Auditor: "balazs-orban"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `react` · reported by **Balázs Orbán — Lead Maintainer, Auth.js** (`balazs-orban`)
 
-Status: **needs-triage**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Replace the star export with explicit named re-exports of the qadi hooks actuall
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence medium); workstream `react-package-deps`. Evidence at HEAD ec065a7: `packages/react/src/index.ts:10`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/11-frontend-next-react-client.md`.
+
+**Resolved (2026-09-29):** Replaced `export * from "@qadi/react"` in packages/react/src/index.ts with an explicit named list (values and `export type` list), so an upstream rename/addition fails typecheck here. qadi's gate-instrumentation registry (GateRegistry: gateInstances/subscribeGates/registerGate/updateGateState/clearGatesUnsafe and its types) is deliberately withheld (devtools surface; import from @qadi/react, already a peer). packages/react/test/QadiReexports.test.ts asserts every upstream runtime export is re-exported as the same binding unless listed as withheld, so a new upstream export forces a decision. Changeset .changeset/react-explicit-qadi-reexports.md with a Migration note.

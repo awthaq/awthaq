@@ -3,7 +3,7 @@ ID: "BO-010"
 Title: "CookieJarLike does not structurally satisfy SvelteKit's Cookies.set (path required) — second-adapter fit untested"
 Level: info
 Category: "api"
-Status: needs-triage
+Status: resolved
 Package: "next"
 Source: "packages/next/src/WithNextCookies.ts:44"
 Auditor: "balazs-orban"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `api` · `next` · reported by **Balázs Orbán — Lead Maintainer, Auth.js** (`balazs-orban`)
 
-Status: **needs-triage**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ When hoisting the adapter core (BO-004), add a compatibility table or test per t
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence medium); workstream `next-edge-stateless-tier`. Evidence at HEAD ec065a7: `packages/next/src/WithNextCookies.ts:44`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/11-frontend-next-react-client.md`.
+
+**Resolved (2026-09-29):** Folded into BO-004: `CookieJarLike.set` now takes `options: CookieWriteOptions` (`CookieSetOptions & { readonly path: string }`), and every write goes through `setCookie`, which defaults a missing `Set-Cookie` Path to `/`. A jar that requires `path` (SvelteKit's `Cookies.set`) therefore satisfies the interface structurally, while jars treating it as optional (Next, Astro) still do. Compile-time proof plus runtime default in packages/web/test/CookieJar.test.ts ('CookieJarLike — second-adapter fit (BO-010)'), with SvelteKit- and Astro-shaped stubs declared as function-typed properties (strict contravariance).

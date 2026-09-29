@@ -3,7 +3,7 @@
   "include": ["src/**/*.ts"],
   "compilerOptions": {
     "composite": true,
-    // Browser-facing: the base config carries no DOM lib (AH-009).
+    // Web-platform types (`Request`/`Response`/`Headers`): the base config carries no DOM lib (AH-009).
     "lib": ["ESNext", "DOM"],
     "noEmit": false,
     "outDir": "./lib",
@@ -12,11 +12,9 @@
     "paths": {
       "@/*": ["./src/*"],
       "@awthaq/api": ["../api/src/index.ts"],
-      "@awthaq/jwt/verify": ["../jwt/src/verify.ts"],
-      "@awthaq/server": ["../server/src/index.ts"],
-      "@awthaq/jwt": ["../jwt/src/index.ts"],
-      "@awthaq/web": ["../web/src/index.ts"],
-      "@awthaq/web/cookies": ["../web/src/cookies.ts"]
+      "@awthaq/client": ["../client/src/index.ts"],
+      "@awthaq/core": ["../core/src/index.ts"],
+      "@awthaq/server": ["../server/src/index.ts"]
     }
   },
   "references": [
@@ -24,13 +22,13 @@
       "path": "../api/tsconfig.src.json"
     },
     {
-      "path": "../jwt/tsconfig.src.json"
+      "path": "../client/tsconfig.src.json"
+    },
+    {
+      "path": "../core/tsconfig.src.json"
     },
     {
       "path": "../server/tsconfig.src.json"
-    },
-    {
-      "path": "../web/tsconfig.src.json"
     }
   ]
 }
