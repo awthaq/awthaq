@@ -259,11 +259,12 @@ export const layerSql = Layer.effect(
       execute: (email) => sql`SELECT * FROM organization_invitation WHERE email = ${email}`,
     });
 
-    const countPendingByInviterQuery = SqlSchema.findAll({
+    // MTI-005: a COUNT(*), never a full-row materialization.
+    const countPendingByInviterQuery = SqlSchema.findOne({
       Request: Schema.String,
-      Result: InvitationRow,
+      Result: Schema.Struct({ count: Schema.Number }),
       execute: (inviterId) =>
-        sql`SELECT * FROM organization_invitation WHERE inviterId = ${inviterId} AND status = 'pending'`,
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_invitation WHERE inviterId = ${inviterId} AND status = 'pending'`,
     });
 
     const updateStatusQuery = SqlSchema.findOneOption({
@@ -319,7 +320,7 @@ export const layerSql = Layer.effect(
 
     const countPendingByInviter: InvitationRecordsShape["countPendingByInviter"] = (inviterId) =>
       countPendingByInviterQuery(inviterId).pipe(
-        Effect.map((rows) => rows.length),
+        Effect.map((row) => row.count),
         Effect.orDie,
       );
 

@@ -238,6 +238,14 @@ export const layerSql = Layer.effect(
         sql`SELECT * FROM organization_role WHERE organizationId = ${organizationId}`,
     });
 
+    // MTI-005: a COUNT(*), never a full-row materialization.
+    const countByOrganizationQuery = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: Schema.Struct({ count: Schema.Number }),
+      execute: (organizationId) =>
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_role WHERE organizationId = ${organizationId}`,
+    });
+
     const updateQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         organizationId: Schema.String,
@@ -292,8 +300,8 @@ export const layerSql = Layer.effect(
       );
 
     const countByOrganization: OrgRoleRecordsShape["countByOrganization"] = (organizationId) =>
-      listByOrganizationQuery(organizationId).pipe(
-        Effect.map((rows) => rows.length),
+      countByOrganizationQuery(organizationId).pipe(
+        Effect.map((row) => row.count),
         Effect.orDie,
       );
 
