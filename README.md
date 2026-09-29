@@ -23,7 +23,7 @@ No package is published to npm yet (`packages/*/package.json` are all still `"pr
 
 | Path | What it is |
 |---|---|
-| [`packages/`](packages) | The implementation, 25 packages: the core strata — `core` (domain services), `api` and `server` (the HTTP contract and its handlers), `sql` (persistence), `ports` (adapters: password hashing, mail, encryption, rate limiting, WebAuthn, key management), `qadi` (the authorization bridge); the plugins — `password`, `oauth`, `passkey`, `jwt`, `api-key`, `organization`, `roles`, `admin`, `scim` (placeholders, no exports yet: `two-factor`, `magic-link`); the client and framework packages — `client`, `react`, `next`; tooling — `test` (the `TestAuth` harness), `cli`; and three migration packages — `migrate-auth0`, `migrate-firebase`, `migrate-better-auth`. Each package's own README says what it ships. |
+| [`packages/`](packages) | The implementation, one package per `@awthaq/*` name. Foundations: `@awthaq/core` (domain services), `@awthaq/api` and `@awthaq/server` (the HTTP contract stratum), `@awthaq/sql` (persistence), `@awthaq/ports` (adapters — password hashing, mail, encryption, rate limiting, WebAuthn, key management), `@awthaq/qadi` (authorization over qadi) and `@awthaq/test` (the memory backend and test harness). Plugins: `@awthaq/password`, `@awthaq/oauth`, `@awthaq/organization`, `@awthaq/roles`, `@awthaq/admin`, `@awthaq/passkey`, `@awthaq/jwt`, `@awthaq/api-key`, `@awthaq/scim`, plus `@awthaq/magic-link` and `@awthaq/two-factor` (placeholders not yet built out). Clients: `@awthaq/client`, `@awthaq/react`, `@awthaq/next`. Tooling: `@awthaq/cli` and the migration importers `@awthaq/migrate-auth0`, `@awthaq/migrate-better-auth`, `@awthaq/migrate-firebase`. Each package's own README says what it ships. `pnpm workspace:check` fails when this list falls behind `packages/`. |
 | [`examples/`](examples) | Runnable compositions: [`memory-server`](examples/memory-server/README.md) (Password + Organization + Roles over the memory backend, no database) and [`plugin-template`](examples/plugin-template) (the plugin [`docs/plugin-authoring.md`](docs/plugin-authoring.md) walks through). |
 | [`docs/`](docs) | Guides: [plugin authoring](docs/plugin-authoring.md) and [migrations](docs/migrations). |
 | [`features/`](features) | The Gherkin/BDD acceptance suite (`spec/behaviors/` scenarios, executed for real against each plugin's HTTP surface). |
@@ -34,7 +34,7 @@ No package is published to npm yet (`packages/*/package.json` are all still `"pr
 
 ## Quickstart
 
-> **No database handy?** [`examples/memory-server`](examples/memory-server/README.md) runs Password, Organization and Roles over the memory backend with no `DATABASE_URL`, no migration and no keys (`pnpm install`, then `node --experimental-strip-types index.ts` inside it; it listens on `:3001`). Its memory mailer drops the verification mail, so it cannot complete a sign-in; this quickstart's development mailer prints the token instead.
+> **No database handy?** [`examples/memory-server`](examples/memory-server/README.md) runs Password, Organization and Roles over the memory backend with no `DATABASE_URL`, no migration and no keys (`pnpm install`, then `node --experimental-strip-types index.ts` inside it; it listens on `:3001`). Its walkthrough completes a sign-in the same way this one does, with the development mailer.
 
 This is a single, complete, copy-pasteable server — no separate example app. The code block below is compiled by `pnpm typecheck` (`packages/sql/test/fixtures/readme-quickstart.ts`, kept identical to it by `packages/sql/test/ReadmeQuickstart.test.ts`), so it cannot drift from the API. It composes:
 
@@ -82,7 +82,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
@@ -157,30 +156,14 @@ const RateLimiterLive = RateLimiter.layer.pipe(
 );
 
 //    Swap the remaining ports for your own: a real mailer
-//    (SMTP/SES/Resend/...) in place of this development stand-in, and — if you
-//    want to tune the password policy — `Password.config(...)`. Breach
-//    screening (HIBP, k-anonymity) is on by default and fails open;
-//    `Password.config({ breachCheck: false })` turns it off.
-const consoleMailer = Layer.succeed(
-  Mailer.Mailer,
-  Mailer.Mailer.of({
-    // A real adapter maps a provider error to `Mailer.MailDeliveryFailed`
-    // (`Effect.mapError`/`Effect.tryPromise` -> `new Mailer.MailDeliveryFailed({
-    // template: message.template, reason, retryable })`) instead of dying, and
-    // never logs `to` or `data`: they carry the recipient and the verification
-    // or reset token. This development stand-in prints the token so the walkthrough
-    // below can verify an address without a mail server.
-    send: (message) =>
-      Effect.sync(() => {
-        const token = message.data?.token;
-        console.log(
-          `[mail] template=${message.template}`,
-          Redacted.isRedacted(token) ? `token=${Redacted.value(token)}` : "",
-        );
-      }),
-    sent: Effect.succeed([]),
-  }),
-);
+//    (SMTP/SES/Resend/...) in place of `Mailer.layerConsole` — which logs every
+//    message with its token so a local run needs no inbox, and must never reach
+//    production — and, if you want to tune the password policy,
+//    `Password.config(...)`. Breach screening (HIBP, k-anonymity) is on by
+//    default and fails open; `Password.config({ breachCheck: false })` turns it off.
+//    A real adapter maps a provider error to `Mailer.MailDeliveryFailed` and never
+//    logs `to` or `data`: they carry the recipient and the verification or reset token.
+const consoleMailer = Mailer.layerConsole;
 
 // 6. Cross-cutting services every core flow needs: the hook points (and the
 //    erasure/export registries plugins contribute to), account erasure and
@@ -266,7 +249,7 @@ node --experimental-strip-types server.ts
 
 ## Running it
 
-Every unsafe request (`POST`, `PATCH`, `DELETE`) is CSRF-protected: it must echo the `__Host-csrf` cookie in an `x-csrf-token` header (a request carrying an `Authorization` header is exempt). Any response from a protected group sets that cookie, so fetch one first. The development mailer in the quickstart prints the verification token to the server's stdout as `[mail] template=verify-email token=...`; `sign-in` refuses (`403 EmailNotVerified`) until that token is posted to `/verify-email`.
+Every unsafe request (`POST`, `PATCH`, `DELETE`) is CSRF-protected: it must echo the `__Host-csrf` cookie in an `x-csrf-token` header (a request carrying an `Authorization` header is exempt). Any response from a protected group sets that cookie, so fetch one first. The development mailer in the quickstart (`Mailer.layerConsole`) logs each message, including the verification token (`token=verify-email:...`), to the server's stdout; `sign-in` refuses (`403 EmailNotVerified`) until that token is posted to `/verify-email`.
 
 ```sh
 BASE=http://localhost:3000
@@ -280,7 +263,7 @@ curl -i -X POST $BASE/password/sign-up \
 # set-cookie: __Host-session=...; Max-Age=2591999; Path=/; HttpOnly; Secure; SameSite=Strict
 # {"id":"...","createdAt":"...","lastActiveAt":"...","expiresAt":"...","userAgent":"curl/...","amr":["pwd"],"current":true}
 
-# the server log now shows: [mail] template=verify-email token=verify-email:...
+# the server log now shows an 'awthaq mail' line with template=verify-email and the token
 curl -i -X POST $BASE/verify-email \
   -H 'content-type: application/json' -H "x-csrf-token: $CSRF" -H "cookie: __Host-csrf=$CSRF" \
   -d '{"token":"<token from the server log>"}'
@@ -319,7 +302,7 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 | Port | Real layer used above | Other options |
 |---|---|---|
 | `PasswordHasher` | `layerArgon2id` | `layerScrypt`; `PasswordHasherWorkerPool.layerArgon2id`/`layerScrypt` run the KDF in worker threads (Node), see [Password hashing](#password-hashing) |
-| `Mailer` | a development stand-in that prints the verification token (never do this in production: the token is a credential) | bring your own (`Mailer.Mailer.of({ send, sent })`, any provider); `Mailer.layerMemory` records mail for tests |
+| `Mailer` | `Mailer.layerConsole`, a development mailer that logs the verification token (never in production: the token is a credential) | bring your own (`Mailer.Mailer.of({ send, sent })`, any provider); `Mailer.layerMemory` records mail for tests |
 | `RateLimiter` | `layer` over `RateLimiterStoreSql.layerStoreSql` (shared across replicas) | `RateLimiter.layerMemory` (the bounded, single-process store in one line — the default when you have one instance), or `layer` over your own `RateLimiterStore`; `layerPermissive` disables limiting and logs a warning when a rule runs against it (tests only) |
 | `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS` + `AWTHAQ_ENCRYPTION_KEY_ID`) | a KMS-backed `KeyProvider` (implement the port directly; keeps raw key bytes out of the process) |
 | `Csrf.CsrfConfig` | `Csrf.layerConfig` (`AWTHAQ_CSRF_SECRET`, at least 32 bytes; optional `AWTHAQ_CSRF_ALLOWED_ORIGINS`, comma-separated) | `Layer.succeed(Csrf.CsrfConfig, { secret, allowedOrigins })` with a secret loaded from your own secret store |

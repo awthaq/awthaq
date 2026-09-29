@@ -3,7 +3,16 @@
 // endpoints over a real `HttpRouter` handler with a real session cookie, and aborts an
 // operation with a veto tap.
 import { Api } from "@awthaq/api";
-import { Auth, AuditLog, AuthEvents, Hooks, HookPoint, Migrations, Sessions, Users } from "@awthaq/core";
+import {
+  Auth,
+  AuditLog,
+  AuthEvents,
+  Hooks,
+  HookPoint,
+  Migrations,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -148,7 +157,10 @@ describe("plugin-template", () => {
     const listed = await handler(new Request(`${ORIGIN}/notes`, { headers: { cookie } }));
     assert.strictEqual(listed.status, 200);
     const notes = (await listed.json()) as ReadonlyArray<{ text: string }>;
-    assert.deepStrictEqual(notes.map((note) => note.text), ["remember the milk"]);
+    assert.deepStrictEqual(
+      notes.map((note) => note.text),
+      ["remember the milk"],
+    );
 
     const other = await issueSessionCookie("user-2");
     const theirs = await handler(new Request(`${ORIGIN}/notes`, { headers: { cookie: other } }));

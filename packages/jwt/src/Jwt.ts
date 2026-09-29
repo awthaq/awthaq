@@ -168,7 +168,9 @@ export interface JwtShape {
    * introspect `active: false` over HTTP at once; bare `verify` (and any
    * bearer re-entry built on it) lags by at most `JwtConfig.ttl`.
    */
-  readonly introspectComposed: (token: string) => Effect.Effect<IntrospectionResult, Errors.StoreUnavailable>;
+  readonly introspectComposed: (
+    token: string,
+  ) => Effect.Effect<IntrospectionResult, Errors.StoreUnavailable>;
 }
 
 /**
@@ -609,7 +611,10 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
                 Option.match(remoteSigner, {
                   onSome: Effect.succeed,
                   onNone: () =>
-                    Defects.invalidConfiguration("remoteSigner", `awthaq/jwt: signing key "${key.kid}" has no local private key material and no RemoteSigner is configured`),
+                    Defects.invalidConfiguration(
+                      "remoteSigner",
+                      `awthaq/jwt: signing key "${key.kid}" has no local private key material and no RemoteSigner is configured`,
+                    ),
                 }),
             });
             return yield* JwtCodec.sign({

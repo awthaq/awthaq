@@ -561,15 +561,17 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("THS-003: reauthenticate unions amr in — order-preserving, no duplicates, never removed", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { session } = yield* sessions.issue({ userId, amr: ["pwd"] });
-        const stepped = yield* sessions.reauthenticate(session.id, ["otp", "pwd", "mfa"]);
-        assert.deepStrictEqual(stepped.amr, ["pwd", "otp", "mfa"]);
-        const plain = yield* sessions.reauthenticate(session.id);
-        assert.deepStrictEqual(plain.amr, ["pwd", "otp", "mfa"]);
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "THS-003: reauthenticate unions amr in — order-preserving, no duplicates, never removed",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { session } = yield* sessions.issue({ userId, amr: ["pwd"] });
+          const stepped = yield* sessions.reauthenticate(session.id, ["otp", "pwd", "mfa"]);
+          assert.deepStrictEqual(stepped.amr, ["pwd", "otp", "mfa"]);
+          const plain = yield* sessions.reauthenticate(session.id);
+          assert.deepStrictEqual(plain.amr, ["pwd", "otp", "mfa"]);
+        }).pipe(Effect.provide(layer)),
     );
 
     // ESS-005/SMS-002: `list` is exactly the live sessions, newest activity
@@ -660,15 +662,19 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("GC-005: revokeOwned on another user's session fails SessionNotFound and leaves it live", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const otherUser = Users.UserId("22222222-2222-2222-2222-222222222222");
-        const theirs = yield* sessions.issue({ userId: otherUser });
-        const failure = yield* sessions.revokeOwned(userId, theirs.session.id, "userRevoked").pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "Sessions/NotFound");
-        yield* sessions.verify(theirs.token);
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "GC-005: revokeOwned on another user's session fails SessionNotFound and leaves it live",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const otherUser = Users.UserId("22222222-2222-2222-2222-222222222222");
+          const theirs = yield* sessions.issue({ userId: otherUser });
+          const failure = yield* sessions
+            .revokeOwned(userId, theirs.session.id, "userRevoked")
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
+          yield* sessions.verify(theirs.token);
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("GC-005: revokeOwned on an unknown id fails SessionNotFound", () =>
@@ -815,17 +821,19 @@ const reuseSuite = (
         }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("PIL-007: replaying the full pre-supersede token still triggers reuse detection", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const a = yield* sessions.issue({ userId });
-        const b = yield* sessions.issue({ userId, supersedes: a.session.id });
+    it.effect(
+      "PIL-007: replaying the full pre-supersede token still triggers reuse detection",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
 
-        const replay = yield* sessions.verify(a.token).pipe(Effect.flip);
-        assert.strictEqual(replay._tag, "Sessions/NotFound");
-        const successor = yield* sessions.verify(b.token).pipe(Effect.flip);
-        assert.strictEqual(successor._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(layer)),
+          const replay = yield* sessions.verify(a.token).pipe(Effect.flip);
+          assert.strictEqual(replay._tag, "Sessions/NotFound");
+          const successor = yield* sessions.verify(b.token).pipe(Effect.flip);
+          assert.strictEqual(successor._tag, "Sessions/NotFound");
+        }).pipe(Effect.provide(layer)),
     );
 
     // ESR-002: the supersede is one atomic step, and only a still-live row can
@@ -917,26 +925,28 @@ const eventsSuite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("ESA-006: an actingAs session's issued event carries actingAs; a rotation keeps the family", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const a = yield* sessions.issue({ userId });
-        const seen = yield* collecting(
-          Effect.gen(function* () {
-            yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-1" } });
-            yield* sessions.issue({ userId, supersedes: a.session.id });
-          }),
-        );
-        const issued = seen.filter((e) => e._tag === "auth.session.issued");
-        assert.strictEqual(issued.length, 2);
-        const [acting, rotated] = issued;
-        if (acting?._tag === "auth.session.issued") {
-          assert.deepStrictEqual(acting.actingAs, { type: "user", id: "admin-1" });
-        }
-        if (rotated?._tag === "auth.session.issued") {
-          assert.strictEqual(rotated.familyId, a.session.id);
-        }
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "ESA-006: an actingAs session's issued event carries actingAs; a rotation keeps the family",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          const seen = yield* collecting(
+            Effect.gen(function* () {
+              yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-1" } });
+              yield* sessions.issue({ userId, supersedes: a.session.id });
+            }),
+          );
+          const issued = seen.filter((e) => e._tag === "auth.session.issued");
+          assert.strictEqual(issued.length, 2);
+          const [acting, rotated] = issued;
+          if (acting?._tag === "auth.session.issued") {
+            assert.deepStrictEqual(acting.actingAs, { type: "user", id: "admin-1" });
+          }
+          if (rotated?._tag === "auth.session.issued") {
+            assert.strictEqual(rotated.familyId, a.session.id);
+          }
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("TIR-008: revoke publishes one auth.session.revoked with sessionId and reason", () =>
@@ -956,64 +966,76 @@ const eventsSuite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("RRS-008: issue({ supersedes }) publishes auth.session.superseded, then the successor's issued", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const a = yield* sessions.issue({ userId });
-        let successorId = "";
-        const seen = yield* collecting(
-          sessions.issue({ userId, supersedes: a.session.id }).pipe(
-            Effect.tap((issued) =>
-              Effect.sync(() => {
-                successorId = issued.session.id;
-              }),
+    it.effect(
+      "RRS-008: issue({ supersedes }) publishes auth.session.superseded, then the successor's issued",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          let successorId = "";
+          const seen = yield* collecting(
+            sessions.issue({ userId, supersedes: a.session.id }).pipe(
+              Effect.tap((issued) =>
+                Effect.sync(() => {
+                  successorId = issued.session.id;
+                }),
+              ),
             ),
-          ),
-        );
-        assert.deepStrictEqual(
-          seen.map((event) => event._tag),
-          ["auth.session.superseded", "auth.session.issued"],
-        );
-        const [superseded] = seen;
-        if (superseded?._tag === "auth.session.superseded") {
-          assert.strictEqual(superseded.sessionId, a.session.id);
-          assert.strictEqual(superseded.supersededBy, successorId);
-          assert.strictEqual(superseded.familyId, a.session.id);
-        }
-      }).pipe(Effect.provide(layer)),
+          );
+          assert.deepStrictEqual(
+            seen.map((event) => event._tag),
+            ["auth.session.superseded", "auth.session.issued"],
+          );
+          const [superseded] = seen;
+          if (superseded?._tag === "auth.session.superseded") {
+            assert.strictEqual(superseded.sessionId, a.session.id);
+            assert.strictEqual(superseded.supersededBy, successorId);
+            assert.strictEqual(superseded.familyId, a.session.id);
+          }
+        }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("RRS-008: a superseding issue whose ancestor is not live publishes no superseded event", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const seen = yield* collecting(
-          sessions.issue({ userId, supersedes: Sessions.SessionId("gone") }),
-        );
-        assert.deepStrictEqual(
-          seen.map((event) => event._tag),
-          ["auth.session.issued"],
-        );
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "RRS-008: a superseding issue whose ancestor is not live publishes no superseded event",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const seen = yield* collecting(
+            sessions.issue({ userId, supersedes: Sessions.SessionId("gone") }),
+          );
+          assert.deepStrictEqual(
+            seen.map((event) => event._tag),
+            ["auth.session.issued"],
+          );
+        }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("RRS-008: two concurrent verifies of a stale session publish exactly one auth.session.rotated", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const a = yield* sessions.issue({ userId });
-        // Past the throttled-touch interval, so a verify both refreshes and rotates.
-        yield* TestClock.adjust(Duration.hours(1));
-        const seen = yield* collecting(
-          Effect.all([Effect.exit(sessions.verify(a.token)), Effect.exit(sessions.verify(a.token))], {
-            concurrency: 2,
-          }),
-        );
-        assert.strictEqual(seen.filter((event) => event._tag === "auth.session.rotated").length, 1);
-        const rotated = seen.find((event) => event._tag === "auth.session.rotated");
-        if (rotated?._tag === "auth.session.rotated") {
-          assert.strictEqual(rotated.sessionId, a.session.id);
-          assert.strictEqual(rotated.familyId, a.session.id);
-        }
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "RRS-008: two concurrent verifies of a stale session publish exactly one auth.session.rotated",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          // Past the throttled-touch interval, so a verify both refreshes and rotates.
+          yield* TestClock.adjust(Duration.hours(1));
+          const seen = yield* collecting(
+            Effect.all(
+              [Effect.exit(sessions.verify(a.token)), Effect.exit(sessions.verify(a.token))],
+              {
+                concurrency: 2,
+              },
+            ),
+          );
+          assert.strictEqual(
+            seen.filter((event) => event._tag === "auth.session.rotated").length,
+            1,
+          );
+          const rotated = seen.find((event) => event._tag === "auth.session.rotated");
+          if (rotated?._tag === "auth.session.rotated") {
+            assert.strictEqual(rotated.sessionId, a.session.id);
+            assert.strictEqual(rotated.familyId, a.session.id);
+          }
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("TIR-008: a failed revoke (unknown id) publishes nothing", () =>
@@ -1026,68 +1048,74 @@ const eventsSuite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("TIR-008: revokeOwned, revokeOthers and revokeAll each publish one event with their scope", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const a = yield* sessions.issue({ userId });
-        const b = yield* sessions.issue({ userId });
-        yield* sessions.issue({ userId });
-        const seen = yield* collecting(
-          Effect.gen(function* () {
-            yield* sessions.revokeOwned(userId, b.session.id, "userRevoked");
-            yield* sessions.revokeOthers(userId, a.session.id, "passwordChanged");
-            yield* sessions.revokeAll(userId, "userDeleted");
-          }),
-        );
-        assert.deepStrictEqual(
-          seen.map((event) =>
-            event._tag === "auth.session.revoked"
-              ? [event.scope, event.sessionId, event.reason]
-              : [event._tag],
-          ),
-          [
-            ["one", b.session.id, "userRevoked"],
-            ["others", null, "passwordChanged"],
-            ["all", null, "userDeleted"],
-          ],
-        );
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "TIR-008: revokeOwned, revokeOthers and revokeAll each publish one event with their scope",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          const b = yield* sessions.issue({ userId });
+          yield* sessions.issue({ userId });
+          const seen = yield* collecting(
+            Effect.gen(function* () {
+              yield* sessions.revokeOwned(userId, b.session.id, "userRevoked");
+              yield* sessions.revokeOthers(userId, a.session.id, "passwordChanged");
+              yield* sessions.revokeAll(userId, "userDeleted");
+            }),
+          );
+          assert.deepStrictEqual(
+            seen.map((event) =>
+              event._tag === "auth.session.revoked"
+                ? [event.scope, event.sessionId, event.reason]
+                : [event._tag],
+            ),
+            [
+              ["one", b.session.id, "userRevoked"],
+              ["others", null, "passwordChanged"],
+              ["all", null, "userDeleted"],
+            ],
+          );
+        }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("TIR-008: reuse detection also publishes a family auth.session.revoked (reuseDetected)", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const a = yield* sessions.issue({ userId });
-        yield* sessions.issue({ userId, supersedes: a.session.id });
-        const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.ignore));
-        assert.deepStrictEqual(
-          seen.map((event) => event._tag),
-          ["auth.session.reuse", "auth.session.revoked"],
-        );
-        const revoked = seen[1];
-        if (revoked?._tag === "auth.session.revoked") {
-          assert.strictEqual(revoked.scope, "family");
-          assert.strictEqual(revoked.reason, "reuseDetected");
-          assert.isNull(revoked.sessionId);
-        }
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "TIR-008: reuse detection also publishes a family auth.session.revoked (reuseDetected)",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          yield* sessions.issue({ userId, supersedes: a.session.id });
+          const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.ignore));
+          assert.deepStrictEqual(
+            seen.map((event) => event._tag),
+            ["auth.session.reuse", "auth.session.revoked"],
+          );
+          const revoked = seen[1];
+          if (revoked?._tag === "auth.session.revoked") {
+            assert.strictEqual(revoked.scope, "family");
+            assert.strictEqual(revoked.reason, "reuseDetected");
+            assert.isNull(revoked.sessionId);
+          }
+        }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("ESA-006: verify publishes auth.session.expired when an expired session is presented", () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const a = yield* sessions.issue({ userId });
-        // Default idle is 7 days.
-        yield* TestClock.adjust(Duration.days(8));
-        const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.ignore));
-        assert.strictEqual(seen.length, 1);
-        const [event] = seen;
-        assert.strictEqual(event?._tag, "auth.session.expired");
-        if (event?._tag === "auth.session.expired") {
-          assert.strictEqual(event.sessionId, a.session.id);
-          assert.strictEqual(event.kind, "idle");
-        }
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "ESA-006: verify publishes auth.session.expired when an expired session is presented",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          // Default idle is 7 days.
+          yield* TestClock.adjust(Duration.days(8));
+          const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.ignore));
+          assert.strictEqual(seen.length, 1);
+          const [event] = seen;
+          assert.strictEqual(event?._tag, "auth.session.expired");
+          if (event?._tag === "auth.session.expired") {
+            assert.strictEqual(event.sessionId, a.session.id);
+            assert.strictEqual(event.kind, "idle");
+          }
+        }).pipe(Effect.provide(layer)),
     );
   });
 };
@@ -1268,17 +1296,19 @@ const FlakySqlLayer = Sessions.layerSql.pipe(
 // MA-004: an infrastructure failure is one typed, retryable `StoreUnavailable` in the Shape's `E`,
 // for both layers — never a defect and never the raw `SqlError`/`PlatformError`.
 describe("Sessions infrastructure failures (MA-004)", () => {
-  it.effect("layerSql: a SqlError from the repository surfaces as StoreUnavailable, not a defect", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Sessions.Sessions;
-      yield* Ref.set(failNextInsert, true);
-      const failure = yield* sessions.issue({ userId }).pipe(Effect.flip);
-      yield* Ref.set(failNextInsert, false);
-      assert.strictEqual(failure._tag, "StoreUnavailable");
-      assert.strictEqual(failure.operation, "Sessions.issue");
-      // The cause is logged where it happened; it is not a field a response could carry.
-      assert.notProperty(failure, "cause");
-    }).pipe(Effect.provide(FlakySqlLayer)),
+  it.effect(
+    "layerSql: a SqlError from the repository surfaces as StoreUnavailable, not a defect",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        yield* Ref.set(failNextInsert, true);
+        const failure = yield* sessions.issue({ userId }).pipe(Effect.flip);
+        yield* Ref.set(failNextInsert, false);
+        assert.strictEqual(failure._tag, "StoreUnavailable");
+        assert.strictEqual(failure.operation, "Sessions.issue");
+        // The cause is logged where it happened; it is not a field a response could carry.
+        assert.notProperty(failure, "cause");
+      }).pipe(Effect.provide(FlakySqlLayer)),
   );
 
   const BrokenCrypto = Layer.succeed(

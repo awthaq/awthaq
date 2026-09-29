@@ -468,22 +468,24 @@ export const observe =
             Effect.forEach(
               registry.resolve(),
               (registration) =>
-                registration.handler(value).pipe(
-                  Effect.catchCause((cause: Cause.Cause<unknown>) =>
-                    Observability.logObserverFailure(
-                      "auth.hook.observer.error",
-                      { hook: key, owner: ownerName(registration) },
-                      cause,
-                    ).pipe(
-                      Effect.andThen(
-                        Metric.update(
-                          Metric.withAttributes(Observability.hookObserverErrors, { hook: key }),
-                          1,
+                registration
+                  .handler(value)
+                  .pipe(
+                    Effect.catchCause((cause: Cause.Cause<unknown>) =>
+                      Observability.logObserverFailure(
+                        "auth.hook.observer.error",
+                        { hook: key, owner: ownerName(registration) },
+                        cause,
+                      ).pipe(
+                        Effect.andThen(
+                          Metric.update(
+                            Metric.withAttributes(Observability.hookObserverErrors, { hook: key }),
+                            1,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
               { discard: true },
             ),
           );

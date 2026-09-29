@@ -86,7 +86,9 @@ const call = (
 
 const json = async (response: Response): Promise<Record<string, unknown>> => {
   const value: unknown = await response.json();
-  return typeof value === "object" && value !== null ? Object.fromEntries(Object.entries(value)) : {};
+  return typeof value === "object" && value !== null
+    ? Object.fromEntries(Object.entries(value))
+    : {};
 };
 
 describe("SCIM over HTTP: authentication (BEH-EA-246)", () => {
@@ -172,53 +174,60 @@ describe("SCIM over HTTP: what the token is checked against (BEH-EA-246)", () =>
     }),
   );
 
-  it.effect("a suspended organization's connection is refused like an unknown token, and works again once reinstated", () =>
-    Effect.gen(function* () {
-      const { handler, inside } = buildApp();
-      const seeded = yield* Effect.promise(() => inside(seedConnection()));
-      const setSuspended = (suspended: boolean) =>
-        Effect.promise(() =>
-          inside(
-            Effect.gen(function* () {
-              const orgs = yield* OrganizationRecords.OrganizationRecords;
-              const now = yield* DateTime.now;
-              yield* orgs.setSuspended(seeded.organizationId, suspended ? Option.some(now) : Option.none());
-            }),
-          ),
-        );
-      const status = () =>
-        Effect.promise(() => call(handler, "GET", "/scim/v2/Users", { token: seeded.token })).pipe(
-          Effect.map((response) => response.status),
-        );
-      assert.strictEqual(yield* status(), 200);
-      yield* setSuspended(true);
-      assert.strictEqual(yield* status(), 401);
-      yield* setSuspended(false);
-      assert.strictEqual(yield* status(), 200);
-    }),
+  it.effect(
+    "a suspended organization's connection is refused like an unknown token, and works again once reinstated",
+    () =>
+      Effect.gen(function* () {
+        const { handler, inside } = buildApp();
+        const seeded = yield* Effect.promise(() => inside(seedConnection()));
+        const setSuspended = (suspended: boolean) =>
+          Effect.promise(() =>
+            inside(
+              Effect.gen(function* () {
+                const orgs = yield* OrganizationRecords.OrganizationRecords;
+                const now = yield* DateTime.now;
+                yield* orgs.setSuspended(
+                  seeded.organizationId,
+                  suspended ? Option.some(now) : Option.none(),
+                );
+              }),
+            ),
+          );
+        const status = () =>
+          Effect.promise(() =>
+            call(handler, "GET", "/scim/v2/Users", { token: seeded.token }),
+          ).pipe(Effect.map((response) => response.status));
+        assert.strictEqual(yield* status(), 200);
+        yield* setSuspended(true);
+        assert.strictEqual(yield* status(), 401);
+        yield* setSuspended(false);
+        assert.strictEqual(yield* status(), 200);
+      }),
   );
 });
 
 describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
-  it.effect("responses are application/scim+json; bodies are accepted as scim+json or plain json", () =>
-    Effect.gen(function* () {
-      const { handler, inside } = buildApp();
-      const { token } = yield* Effect.promise(() => inside(seedConnection()));
-      for (const [contentType, name] of [
-        ["application/scim+json", "scim"],
-        ["application/json", "plain"],
-      ] as const) {
-        const response = yield* Effect.promise(() =>
-          call(handler, "POST", "/scim/v2/Users", {
-            token,
-            contentType,
-            body: { userName: `${name}@acme.example`, active: true },
-          }),
-        );
-        assert.strictEqual(response.status, 201);
-        assert.include(response.headers.get("content-type") ?? "", "application/scim+json");
-      }
-    }),
+  it.effect(
+    "responses are application/scim+json; bodies are accepted as scim+json or plain json",
+    () =>
+      Effect.gen(function* () {
+        const { handler, inside } = buildApp();
+        const { token } = yield* Effect.promise(() => inside(seedConnection()));
+        for (const [contentType, name] of [
+          ["application/scim+json", "scim"],
+          ["application/json", "plain"],
+        ] as const) {
+          const response = yield* Effect.promise(() =>
+            call(handler, "POST", "/scim/v2/Users", {
+              token,
+              contentType,
+              body: { userName: `${name}@acme.example`, active: true },
+            }),
+          );
+          assert.strictEqual(response.status, 201);
+          assert.include(response.headers.get("content-type") ?? "", "application/scim+json");
+        }
+      }),
   );
 
   it.effect("PATCH and DELETE work over HTTP: Okta's active:false, then 204", () =>
@@ -248,54 +257,68 @@ describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
     }),
   );
 
-  it.effect("a list is a ListResponse; a filter names the resource; an unsupported filter is 400 invalidFilter", () =>
-    Effect.gen(function* () {
-      const { handler, inside } = buildApp();
-      const { token } = yield* Effect.promise(() => inside(seedConnection()));
-      yield* Effect.promise(() =>
-        call(handler, "POST", "/scim/v2/Users", {
-          token,
-          body: { userName: "ada@acme.example", externalId: "dir-1" },
-        }),
-      );
-      const listed = yield* Effect.promise(() =>
-        call(handler, "GET", `/scim/v2/Users?filter=${encodeURIComponent('userName eq "ada@acme.example"')}&startIndex=1&count=10`, { token }),
-      );
-      assert.strictEqual(listed.status, 200);
-      const body = yield* Effect.promise(() => json(listed));
-      assert.deepStrictEqual(body["schemas"], [ScimApi.LIST_SCHEMA]);
-      assert.strictEqual(body["totalResults"], 1);
-      assert.strictEqual(body["startIndex"], 1);
-      assert.isArray(body["Resources"]);
-      const bad = yield* Effect.promise(() =>
-        call(handler, "GET", `/scim/v2/Users?filter=${encodeURIComponent('name.familyName co "L"')}`, { token }),
-      );
-      assert.strictEqual(bad.status, 400);
-      const error = yield* Effect.promise(() => json(bad));
-      assert.strictEqual(error["scimType"], "invalidFilter");
-      assert.strictEqual(error["status"], "400");
-    }),
+  it.effect(
+    "a list is a ListResponse; a filter names the resource; an unsupported filter is 400 invalidFilter",
+    () =>
+      Effect.gen(function* () {
+        const { handler, inside } = buildApp();
+        const { token } = yield* Effect.promise(() => inside(seedConnection()));
+        yield* Effect.promise(() =>
+          call(handler, "POST", "/scim/v2/Users", {
+            token,
+            body: { userName: "ada@acme.example", externalId: "dir-1" },
+          }),
+        );
+        const listed = yield* Effect.promise(() =>
+          call(
+            handler,
+            "GET",
+            `/scim/v2/Users?filter=${encodeURIComponent('userName eq "ada@acme.example"')}&startIndex=1&count=10`,
+            { token },
+          ),
+        );
+        assert.strictEqual(listed.status, 200);
+        const body = yield* Effect.promise(() => json(listed));
+        assert.deepStrictEqual(body["schemas"], [ScimApi.LIST_SCHEMA]);
+        assert.strictEqual(body["totalResults"], 1);
+        assert.strictEqual(body["startIndex"], 1);
+        assert.isArray(body["Resources"]);
+        const bad = yield* Effect.promise(() =>
+          call(
+            handler,
+            "GET",
+            `/scim/v2/Users?filter=${encodeURIComponent('name.familyName co "L"')}`,
+            { token },
+          ),
+        );
+        assert.strictEqual(bad.status, 400);
+        const error = yield* Effect.promise(() => json(bad));
+        assert.strictEqual(error["scimType"], "invalidFilter");
+        assert.strictEqual(error["status"], "400");
+      }),
   );
 
-  it.effect("conflicts are 409 with scimType uniqueness; unknown ids are 404 in the RFC error shape", () =>
-    Effect.gen(function* () {
-      const { handler, inside } = buildApp();
-      const { token } = yield* Effect.promise(() => inside(seedConnection()));
-      const body = { userName: "ada@acme.example" };
-      yield* Effect.promise(() => call(handler, "POST", "/scim/v2/Users", { token, body }));
-      const conflict = yield* Effect.promise(() =>
-        call(handler, "POST", "/scim/v2/Users", { token, body }),
-      );
-      assert.strictEqual(conflict.status, 409);
-      assert.strictEqual((yield* Effect.promise(() => json(conflict)))["scimType"], "uniqueness");
-      const missing = yield* Effect.promise(() =>
-        call(handler, "GET", "/scim/v2/Users/no-such-user", { token }),
-      );
-      assert.strictEqual(missing.status, 404);
-      const error = yield* Effect.promise(() => json(missing));
-      assert.deepStrictEqual(error["schemas"], [ScimApi.ERROR_SCHEMA]);
-      assert.strictEqual(error["status"], "404");
-    }),
+  it.effect(
+    "conflicts are 409 with scimType uniqueness; unknown ids are 404 in the RFC error shape",
+    () =>
+      Effect.gen(function* () {
+        const { handler, inside } = buildApp();
+        const { token } = yield* Effect.promise(() => inside(seedConnection()));
+        const body = { userName: "ada@acme.example" };
+        yield* Effect.promise(() => call(handler, "POST", "/scim/v2/Users", { token, body }));
+        const conflict = yield* Effect.promise(() =>
+          call(handler, "POST", "/scim/v2/Users", { token, body }),
+        );
+        assert.strictEqual(conflict.status, 409);
+        assert.strictEqual((yield* Effect.promise(() => json(conflict)))["scimType"], "uniqueness");
+        const missing = yield* Effect.promise(() =>
+          call(handler, "GET", "/scim/v2/Users/no-such-user", { token }),
+        );
+        assert.strictEqual(missing.status, 404);
+        const error = yield* Effect.promise(() => json(missing));
+        assert.deepStrictEqual(error["schemas"], [ScimApi.ERROR_SCHEMA]);
+        assert.strictEqual(error["status"], "404");
+      }),
   );
 
   it.effect("the discovery documents are served behind the token", () =>
@@ -309,9 +332,13 @@ describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
       const body = yield* Effect.promise(() => json(config));
       assert.deepStrictEqual(body["schemas"], [ScimApi.SERVICE_PROVIDER_CONFIG_SCHEMA]);
       assert.deepStrictEqual(body["patch"], { supported: true });
-      const types = yield* Effect.promise(() => call(handler, "GET", "/scim/v2/ResourceTypes", { token }));
+      const types = yield* Effect.promise(() =>
+        call(handler, "GET", "/scim/v2/ResourceTypes", { token }),
+      );
       assert.strictEqual(types.status, 200);
-      const schemas = yield* Effect.promise(() => call(handler, "GET", "/scim/v2/Schemas", { token }));
+      const schemas = yield* Effect.promise(() =>
+        call(handler, "GET", "/scim/v2/Schemas", { token }),
+      );
       assert.strictEqual(schemas.status, 200);
       const anonymous = yield* Effect.promise(() =>
         call(handler, "GET", "/scim/v2/ServiceProviderConfig"),
@@ -348,7 +375,8 @@ const UsersDownOnLookup: typeof Users.layerMemory = Layer.effect(
     const real = yield* Users.Users;
     return Users.Users.of({
       ...real,
-      findByEmail: () => Effect.fail(new Errors.StoreUnavailable({ operation: "Users.findByEmail" })),
+      findByEmail: () =>
+        Effect.fail(new Errors.StoreUnavailable({ operation: "Users.findByEmail" })),
     });
   }),
 ).pipe(Layer.provide(Users.layerMemory));
@@ -361,7 +389,10 @@ describe("SCIM over HTTP: a store outage (ADR-EA-028)", () => {
       const response = yield* Effect.promise(() =>
         call(handler, "POST", "/scim/v2/Users", {
           token: seeded.token,
-          body: { userName: "ada@acme.example", emails: [{ value: "ada@acme.example", primary: true }] },
+          body: {
+            userName: "ada@acme.example",
+            emails: [{ value: "ada@acme.example", primary: true }],
+          },
         }),
       );
       assert.strictEqual(response.status, 503);

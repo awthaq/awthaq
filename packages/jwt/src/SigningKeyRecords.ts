@@ -238,7 +238,10 @@ export const layerSql = Layer.effect(
     // or retired encryption key, tampered or swapped row), not something a
     // caller can recover from, so it dies with a clear message.
     const unreadable = (kid: string) => () =>
-      Defects.invariantViolation("SigningKeyUndecodable", `awthaq/jwt: signing key "${kid}" could not be decoded or decrypted`);
+      Defects.invariantViolation(
+        "SigningKeyUndecodable",
+        `awthaq/jwt: signing key "${kid}" could not be decoded or decrypted`,
+      );
 
     const decodeRow = Effect.fnUntraced(function* (row: SigningKeyRow) {
       const publicKeyJwk = yield* Schema.decodeUnknownEffect(JwkJson)(row.publicKeyJwk).pipe(

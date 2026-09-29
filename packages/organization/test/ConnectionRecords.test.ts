@@ -59,7 +59,10 @@ const suite = (
           assert.deepStrictEqual(found.value.scopes, ["openid", "email"]);
           assert.deepStrictEqual(found.value.emailDomains, ["acme.example"]);
           assert.isTrue(Option.isNone(found.value.userinfoEndpoint));
-          assert.strictEqual(DateTime.toEpochMillis(found.value.createdAt), DateTime.toEpochMillis(created.createdAt));
+          assert.strictEqual(
+            DateTime.toEpochMillis(found.value.createdAt),
+            DateTime.toEpochMillis(created.createdAt),
+          );
         }
         // Another organization cannot read it by id.
         assert.isTrue(Option.isNone(yield* records.findById("org-2", "c1")));
@@ -71,7 +74,9 @@ const suite = (
         const records = yield* ConnectionRecords.ConnectionRecords;
         yield* records.create(input("c1", "org-1"));
         const clash = yield* records
-          .create(input("c2", "org-2", { emailDomains: ["ACME.example".toLowerCase(), "other.example"] }))
+          .create(
+            input("c2", "org-2", { emailDomains: ["ACME.example".toLowerCase(), "other.example"] }),
+          )
           .pipe(Effect.flip);
         assert.strictEqual(clash._tag, "ConnectionDomainTaken");
         // The failed create left nothing behind — not the row, not the second domain.
@@ -95,9 +100,14 @@ const suite = (
         });
         assert.strictEqual(patched.name, "Renamed");
         assert.isTrue(Option.isNone(patched.clientSecret));
-        assert.deepStrictEqual(patched.userinfoEndpoint, Option.some("https://idp.acme.example/userinfo"));
+        assert.deepStrictEqual(
+          patched.userinfoEndpoint,
+          Option.some("https://idp.acme.example/userinfo"),
+        );
         assert.sameMembers([...patched.emailDomains], ["acme.example", "acme.test"]);
-        assert.isTrue(DateTime.toEpochMillis(patched.updatedAt) >= DateTime.toEpochMillis(patched.createdAt));
+        assert.isTrue(
+          DateTime.toEpochMillis(patched.updatedAt) >= DateTime.toEpochMillis(patched.createdAt),
+        );
         // A domain another connection holds is refused, and the connection keeps its old set.
         const clash = yield* records
           .update("org-1", "c1", { emailDomains: ["second.example"] })
@@ -132,17 +142,19 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("removeAllForOrganization sweeps only that organization's connections and domains", () =>
-      Effect.gen(function* () {
-        const records = yield* ConnectionRecords.ConnectionRecords;
-        yield* records.create(input("c1", "org-1"));
-        yield* records.create(input("c2", "org-2", { emailDomains: ["other.example"] }));
-        yield* records.removeAllForOrganization("org-1");
-        assert.strictEqual((yield* records.listByOrganization("org-1")).length, 0);
-        assert.isTrue(Option.isNone(yield* records.findByEmailDomain("acme.example")));
-        assert.strictEqual((yield* records.listByOrganization("org-2")).length, 1);
-        assert.isTrue(Option.isSome(yield* records.findByEmailDomain("other.example")));
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "removeAllForOrganization sweeps only that organization's connections and domains",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* ConnectionRecords.ConnectionRecords;
+          yield* records.create(input("c1", "org-1"));
+          yield* records.create(input("c2", "org-2", { emailDomains: ["other.example"] }));
+          yield* records.removeAllForOrganization("org-1");
+          assert.strictEqual((yield* records.listByOrganization("org-1")).length, 0);
+          assert.isTrue(Option.isNone(yield* records.findByEmailDomain("acme.example")));
+          assert.strictEqual((yield* records.listByOrganization("org-2")).length, 1);
+          assert.isTrue(Option.isSome(yield* records.findByEmailDomain("other.example")));
+        }).pipe(Effect.provide(layer)),
     );
   });
 };

@@ -12,14 +12,14 @@ import type * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as ContributionRegistry from "./internal/contributionRegistry.ts";
 import type { StoreUnavailable } from "./Errors.ts";
-import type { UserId } from "./Users.ts";
+import type { Models as SqlModels } from "@awthaq/sql";
 
 /** A section is JSON-safe by construction: it is written straight into the export document. */
 export type ExportSection = typeof Schema.Json.Type;
 
 /** Who the export is for. The email (absent for a phone or anonymous identity) is carried so a plugin can find rows keyed by address (an invitation addressed to the user). */
 export interface DataExportSubject {
-  readonly userId: UserId;
+  readonly userId: SqlModels.UserId;
   readonly email?: string | undefined;
 }
 

@@ -9,16 +9,12 @@
     "tsBuildInfoFile": "./.tsbuildinfo",
     "paths": {
       "@/*": ["./src/*"],
-      "@awthaq/ports": ["../ports/src/index.ts"],
-      "@awthaq/api": ["../api/src/index.ts"]
+      "@awthaq/ports": ["../ports/src/index.ts"]
     }
   },
   "references": [
     {
       "path": "../ports/tsconfig.src.json"
-    },
-    {
-      "path": "../api/tsconfig.src.json"
     }
   ]
 }

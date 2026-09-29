@@ -14,13 +14,7 @@ import {
   Verification,
 } from "@awthaq/core";
 import { OAuth, OAuthConnections } from "@awthaq/oauth";
-import {
-  ClientAddress,
-  Encryption,
-  KeyProvider,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
+import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -126,7 +120,10 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
       );
       assert.strictEqual(yield* reject(discovery("https://localhost/x")), "InvalidConnection");
       assert.strictEqual(yield* reject(discovery("https://10.0.0.5/x")), "InvalidConnection");
-      assert.strictEqual(yield* reject(discovery("https://169.254.169.254/x")), "InvalidConnection");
+      assert.strictEqual(
+        yield* reject(discovery("https://169.254.169.254/x")),
+        "InvalidConnection",
+      );
       assert.strictEqual(yield* reject(discovery("https://[::1]/x")), "InvalidConnection");
       assert.strictEqual(yield* reject(discovery("https://idp.internal/x")), "InvalidConnection");
       assert.strictEqual(
@@ -147,7 +144,9 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
   it.effect("normalizes email domains and refuses one another connection already routes", () =>
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
-      const first = yield* store.create(oidcInput("org-1", { emailDomains: [" Acme.Example ", "acme.example"] }));
+      const first = yield* store.create(
+        oidcInput("org-1", { emailDomains: [" Acme.Example ", "acme.example"] }),
+      );
       assert.deepStrictEqual(first.emailDomains, ["acme.example"]);
       const clash = yield* store
         .create(oidcInput("org-2", { emailDomains: ["acme.example"] }))
@@ -176,33 +175,32 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
 });
 
 describe("oauthConnections resolver (BEH-EA-235)", () => {
-  it.effect("resolves a stored connection to a provider config, cached per organization, revisioned by edits", () =>
-    Effect.gen(function* () {
-      const store = yield* OrganizationConnections.OrganizationConnectionStore;
-      const resolver = Option.getOrThrow(yield* OAuthConnections.OAuthConnectionResolver);
-      const view = yield* store.create(oidcInput("org-1"));
-      const found = yield* resolver.find(view.providerId);
-      assert.isTrue(Option.isSome(found));
-      if (Option.isSome(found)) {
-        assert.strictEqual(found.value.config.id, view.providerId);
-        assert.strictEqual(found.value.config.kind, "oidc");
-        assert.strictEqual(found.value.config.clientId, "client-1");
-      }
-      // A second lookup is served from the LayerMap entry (same revision).
-      const again = yield* resolver.find(view.providerId);
-      assert.strictEqual(
-        Option.getOrThrow(again).revision,
-        Option.getOrThrow(found).revision,
-      );
-      // An edit invalidates the entry: the new revision and the new client id show up at once.
-      yield* store.update("org-1", view.id, { clientId: "client-2" });
-      const edited = Option.getOrThrow(yield* resolver.find(view.providerId));
-      assert.strictEqual(edited.config.clientId, "client-2");
-      assert.notStrictEqual(edited.revision, Option.getOrThrow(found).revision);
-      // Removing it makes the id unknown again.
-      yield* store.remove("org-1", view.id);
-      assert.isTrue(Option.isNone(yield* resolver.find(view.providerId)));
-    }).pipe(Effect.provide(ConnectionsLive)),
+  it.effect(
+    "resolves a stored connection to a provider config, cached per organization, revisioned by edits",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* OrganizationConnections.OrganizationConnectionStore;
+        const resolver = Option.getOrThrow(yield* OAuthConnections.OAuthConnectionResolver);
+        const view = yield* store.create(oidcInput("org-1"));
+        const found = yield* resolver.find(view.providerId);
+        assert.isTrue(Option.isSome(found));
+        if (Option.isSome(found)) {
+          assert.strictEqual(found.value.config.id, view.providerId);
+          assert.strictEqual(found.value.config.kind, "oidc");
+          assert.strictEqual(found.value.config.clientId, "client-1");
+        }
+        // A second lookup is served from the LayerMap entry (same revision).
+        const again = yield* resolver.find(view.providerId);
+        assert.strictEqual(Option.getOrThrow(again).revision, Option.getOrThrow(found).revision);
+        // An edit invalidates the entry: the new revision and the new client id show up at once.
+        yield* store.update("org-1", view.id, { clientId: "client-2" });
+        const edited = Option.getOrThrow(yield* resolver.find(view.providerId));
+        assert.strictEqual(edited.config.clientId, "client-2");
+        assert.notStrictEqual(edited.revision, Option.getOrThrow(found).revision);
+        // Removing it makes the id unknown again.
+        yield* store.remove("org-1", view.id);
+        assert.isTrue(Option.isNone(yield* resolver.find(view.providerId)));
+      }).pipe(Effect.provide(ConnectionsLive)),
   );
 
   it.effect("static ids, other organizations' ids and malformed ids resolve to nothing", () =>
@@ -286,9 +284,7 @@ const OAuthLive = OAuth.OAuth.layer.pipe(
       "/userinfo": { id: "acme-user-1", email: "ada@acme.example", email_verified: true },
     }),
   ),
-  Layer.provide(
-    OAuth.config({ providers: [], baseUrl, retry: { base: Duration.zero, times: 0 } }),
-  ),
+  Layer.provide(OAuth.config({ providers: [], baseUrl, retry: { base: Duration.zero, times: 0 } })),
   Layer.provideMerge(ConnectionsLive),
 );
 
@@ -307,9 +303,7 @@ describe("a stored connection completes a full OAuth flow (EP-004)", () => {
       assert.strictEqual(unknown._tag, "ProviderNotFound");
 
       // Home-realm discovery: the email domain names the connection to redirect to.
-      const view = yield* store.create(
-        { ...oauth2Input("org-1"), emailDomains: ["acme.example"] },
-      );
+      const view = yield* store.create({ ...oauth2Input("org-1"), emailDomains: ["acme.example"] });
       const routed = yield* store.discover({ email: "ada@acme.example" });
       assert.deepStrictEqual(routed, Option.some(view.providerId));
 

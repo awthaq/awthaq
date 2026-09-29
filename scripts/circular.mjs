@@ -1,33 +1,58 @@
-// Mirrors effect's own scripts/circular.mjs: glob.globSync returns an empty
-// array (not an ENOENT) when packages/*/src doesn't exist yet, so this stays
-// a harmless no-op until M1 Core adds real packages — unlike a raw
-// `madge --circular packages/*/src` CLI invocation, which fails hard on an
-// unmatched shell glob.
+// Cycle guard over every package's `src`. Two passes, because a cycle that only
+// exists through `import type` is still a cycle for the compiler and for anyone
+// reading the graph, and madge's default (`skipTypeImports: true`) cannot see it
+// (ELC-003: AuditLog <-> AuthEvents was exactly that, and slipped through):
+//
+//   1. value cycles — type-only imports skipped, i.e. real runtime import cycles;
+//   2. type-inclusive cycles — every import counted, `import type` too.
+//
+// Pass 2 is a superset of pass 1, so it is the one that has to stay empty; pass 1
+// only labels the failure ("runtime" vs "type-level") so the message says which
+// kind of break is needed. Anchored at the repo root, not the cwd (MTS-009): a run
+// from the wrong directory must fail loudly rather than scan nothing and pass.
 import * as glob from "glob";
 import madge from "madge";
+import { rootDir } from "./_root.mjs";
 
-const files = glob.globSync(["packages/*/src/**/*.ts"]);
+const files = glob.globSync(["packages/*/src/**/*.{ts,tsx}"], { cwd: rootDir, absolute: true });
 
-// madge's programmatic API assumes at least one file (its internal
-// `commondir` call crashes on an empty array) — packages/* is empty until
-// M1 Core, so skip the call entirely rather than let glob's harmless empty
-// match turn into a hard failure the way a raw CLI glob would (see the
-// comment above the `import`s).
 if (files.length === 0) {
-  console.log("circular: no packages/*/src files yet, skipping");
-} else {
-  madge(files, {
+  console.error("circular: no packages/*/src files found under " + rootDir);
+  process.exit(1);
+}
+
+const cyclesOf = async (skipTypeImports) => {
+  const res = await madge(files, {
+    baseDir: rootDir,
     detectiveOptions: {
-      ts: {
-        skipTypeImports: true,
-      },
+      ts: { skipTypeImports },
+      tsx: { skipTypeImports },
     },
-  }).then((res) => {
-    const circular = res.circular();
-    if (circular.length) {
-      console.error("Circular dependencies found");
-      console.error(circular);
-      process.exit(1);
-    }
   });
+  return res.circular();
+};
+
+try {
+  const runtime = await cyclesOf(true);
+  const typeInclusive = await cyclesOf(false);
+  const typeOnly = typeInclusive.filter(
+    (cycle) =>
+      !runtime.some(
+        (known) => known.length === cycle.length && known.every((f) => cycle.includes(f)),
+      ),
+  );
+  if (runtime.length > 0) {
+    console.error("Circular dependencies found (runtime import cycles)");
+    console.error(runtime);
+  }
+  if (typeOnly.length > 0) {
+    console.error(
+      "Circular dependencies found (type-level cycles: only `import type` closes them)",
+    );
+    console.error(typeOnly);
+  }
+  if (runtime.length > 0 || typeOnly.length > 0) process.exit(1);
+} catch (error) {
+  console.error(error);
+  process.exit(1);
 }

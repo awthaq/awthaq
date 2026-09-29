@@ -488,8 +488,14 @@ describe("GET /user/export (CSG-005)", () => {
           const accounts = yield* Accounts.Accounts;
           const sessions = yield* Sessions.Sessions;
           const audit = yield* AuditLog.AuditLog;
-          const user = yield* users.create({ identity: { _tag: "Email", email: "export-me@example.com" }, name: "Exp" });
-          const other = yield* users.create({ identity: { _tag: "Email", email: "not-me@example.com" }, name: "Other" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "export-me@example.com" },
+            name: "Exp",
+          });
+          const other = yield* users.create({
+            identity: { _tag: "Email", email: "not-me@example.com" },
+            name: "Other",
+          });
           yield* accounts.link({ userId: user.id, providerId: "google", subject: "sub-exp" });
           yield* accounts.link({ userId: other.id, providerId: "google", subject: "sub-other" });
           const { token } = yield* sessions.issue({ userId: user.id });
@@ -566,7 +572,10 @@ describe("GET /user/export (CSG-005)", () => {
       Effect.gen(function* () {
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ identity: { _tag: "Email", email: "hammer@example.com" }, name: "H" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "hammer@example.com" },
+          name: "H",
+        });
         const { token } = yield* sessions.issue({ userId: user.id });
         for (let i = 0; i < 5; i += 1) {
           const ok = yield* sendHandled("/user/export", { method: "GET", token });
@@ -611,7 +620,10 @@ describe("server handler invariants (GC-003/GC-008)", () => {
         const exit = yield* currentUser.pipe(
           Effect.provideService(
             Api.CurrentPrincipal,
-            new Api.ApiKeyPrincipal({ ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }), scopes: [] }),
+            new Api.ApiKeyPrincipal({
+              ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }),
+              scopes: [],
+            }),
           ),
           Effect.exit,
         );

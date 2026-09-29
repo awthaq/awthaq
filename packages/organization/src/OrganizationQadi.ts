@@ -189,7 +189,9 @@ export const relationships = Layer.effect(
             orgs
               .findById(organizationId)
               .pipe(
-                Effect.map((found) => Option.isSome(found) && Option.isSome(found.value.suspendedAt)),
+                Effect.map(
+                  (found) => Option.isSome(found) && Option.isSome(found.value.suspendedAt),
+                ),
               );
 
           if (parsed._tag === "team") {

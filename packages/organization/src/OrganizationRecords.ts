@@ -356,8 +356,7 @@ export const layerSql = Layer.effect(
       const nextSlug = input.slug ?? current.slug;
       const nextLogo = input.logo === undefined ? current.logo : input.logo;
       const nextMetadata = input.metadata === undefined ? current.metadata : input.metadata;
-      const nextHomeRegion =
-        input.homeRegion === undefined ? current.homeRegion : input.homeRegion;
+      const nextHomeRegion = input.homeRegion === undefined ? current.homeRegion : input.homeRegion;
       const updateQuery = SqlSchema.findOneOption({
         Request: Schema.Struct({
           id: Schema.String,

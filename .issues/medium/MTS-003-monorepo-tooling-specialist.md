@@ -45,3 +45,5 @@ Reduce stub package.json files to deps their placeholder actually needs (none or
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `workspace-roster-sync`. Evidence at HEAD ec065a7: `knip.json:9`. Fix: Trim the four stub manifests to what their `export {}` needs, drop next's unused @awthaq/react (or make it a peer if intentionally forwarded), and delete every per-package ignore block from knip.json. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29):** Mostly done by earlier programs: api-key, cli and next are real packages now and their knip.json ignore blocks are gone (next no longer declares @awthaq/react). Left open: packages/magic-link and packages/two-factor are still `export {}` stubs with blanket knip ignoreDependencies and full runtime dependency lists, and both belong to P15, which is building them right now. Once P15 lands real modules, delete their two knip.json blocks and let `pnpm workspace:sync` regenerate their tsconfig paths/references (the drift guard already prunes the stale edges).

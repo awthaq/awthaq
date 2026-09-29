@@ -33,7 +33,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | [spec/traceability.md](traceability.md) | EFAUTH-RTM | The requirements traceability matrix: every `URS`/`NFR`/`MOD` row mapped to the `BEH`/`ADR`/`INV` rows that satisfy it. |
 | [spec/roadmap.md](roadmap.md) | EFAUTH-RMP | The delivery roadmap (milestones M0–M8), derived from `archive/PRD.md` §23, restated against this tree's IDs, with what has shipped against each milestone. |
 | [spec/models/](models/) | `MOD-EA-001`–`015` | Sixteen files. `00-adoption-matrix.md` is an index with no `MOD` id of its own; `01`–`15` each specify one authentication-method or core-plugin domain model (see table below). |
-| [spec/decisions/](decisions/) | `ADR-EA-001`–`033` | Thirty-one architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
+| [spec/decisions/](decisions/) | `ADR-EA-001`–`034` | Thirty-two architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
 | [spec/behaviors/](behaviors/) | `BEH-EA-001`–`257` | Thirty files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
 | [spec/process/](process/) | EFAUTH-PROC-01/02 | Two files: the requirement-ID scheme in full, and the definitions of done applied at each stage of work. |
 | [spec/appendices/](appendices/) | — | Five files of supporting reference material, authored alongside the rest of the tree and cross-referenced from it rather than summarized here. |
@@ -94,6 +94,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `031-*.md` | ADR-EA-031 | Erasure Is a Core Domain Service over an Aggregating Registry, and Retention Is a Separate, Opt-In Sweep |
 | `032-*.md` | ADR-EA-032 | Observability Reuses Effect's HTTP Middleware, Adds Business-Logic Spans and a Fixed Field Vocabulary, and Ships Metric Definitions Without a Backend |
 | `033-*.md` | ADR-EA-033 | Hook Registries Belong to the Composition, and a Tap Requires Its Point |
+| `034-*.md` | ADR-EA-034 | Before 1.0 Breaking Changes Are Allowed, Each With a Changeset That Carries a Migration Note |
 
 ### `spec/behaviors/` — thirty files, grouped by subsystem
 

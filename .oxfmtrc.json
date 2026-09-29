@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": [
+    ".agents",
+    ".claude",
+    ".issues",
+    ".plan",
+    ".reports",
+    ".scratch",
+    "archive",
+    "better-auth",
+    "docs",
+    "research",
+    "spec",
+    "tools",
+    "**/*.md",
+    "**/*.html",
+    "**/*.feature",
+    "pnpm-lock.yaml",
+    "**/lib",
+    "**/node_modules"
+  ]
+}

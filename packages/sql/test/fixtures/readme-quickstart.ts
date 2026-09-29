@@ -33,7 +33,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
@@ -108,30 +107,14 @@ const RateLimiterLive = RateLimiter.layer.pipe(
 );
 
 //    Swap the remaining ports for your own: a real mailer
-//    (SMTP/SES/Resend/...) in place of this development stand-in, and — if you
-//    want to tune the password policy — `Password.config(...)`. Breach
-//    screening (HIBP, k-anonymity) is on by default and fails open;
-//    `Password.config({ breachCheck: false })` turns it off.
-const consoleMailer = Layer.succeed(
-  Mailer.Mailer,
-  Mailer.Mailer.of({
-    // A real adapter maps a provider error to `Mailer.MailDeliveryFailed`
-    // (`Effect.mapError`/`Effect.tryPromise` -> `new Mailer.MailDeliveryFailed({
-    // template: message.template, reason, retryable })`) instead of dying, and
-    // never logs `to` or `data`: they carry the recipient and the verification
-    // or reset token. This development stand-in prints the token so the walkthrough
-    // below can verify an address without a mail server.
-    send: (message) =>
-      Effect.sync(() => {
-        const token = message.data?.token;
-        console.log(
-          `[mail] template=${message.template}`,
-          Redacted.isRedacted(token) ? `token=${Redacted.value(token)}` : "",
-        );
-      }),
-    sent: Effect.succeed([]),
-  }),
-);
+//    (SMTP/SES/Resend/...) in place of `Mailer.layerConsole` — which logs every
+//    message with its token so a local run needs no inbox, and must never reach
+//    production — and, if you want to tune the password policy,
+//    `Password.config(...)`. Breach screening (HIBP, k-anonymity) is on by
+//    default and fails open; `Password.config({ breachCheck: false })` turns it off.
+//    A real adapter maps a provider error to `Mailer.MailDeliveryFailed` and never
+//    logs `to` or `data`: they carry the recipient and the verification or reset token.
+const consoleMailer = Mailer.layerConsole;
 
 // 6. Cross-cutting services every core flow needs: the hook points (and the
 //    erasure/export registries plugins contribute to), account erasure and

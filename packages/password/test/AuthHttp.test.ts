@@ -602,28 +602,34 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   // TMS-005 (ADR-EA-026): `conceal` answers a fresh and an already-registered
   // address identically, and issues no session for either.
-  it.effect("TMS-005: with signUpEnumeration conceal, a duplicate and a fresh sign-up look identical", () => {
-    const mailer = capturingMailer();
-    return Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(
-        buildAppLayer(mailer.layer, { signUpEnumeration: "conceal" }),
-      );
-      const signUp = () =>
-        post(handler, "/password/sign-up", { email: "dupe@example.com", password: strongPassword });
-      const fresh = yield* Effect.promise(signUp);
-      const duplicate = yield* Effect.promise(signUp);
-      assert.strictEqual(fresh.status, 202);
-      assert.strictEqual(duplicate.status, 202);
-      assert.strictEqual(yield* Effect.promise(() => fresh.text()), "");
-      assert.strictEqual(yield* Effect.promise(() => duplicate.text()), "");
-      assert.isNull(fresh.headers.get("set-cookie"));
-      assert.isNull(duplicate.headers.get("set-cookie"));
+  it.effect(
+    "TMS-005: with signUpEnumeration conceal, a duplicate and a fresh sign-up look identical",
+    () => {
+      const mailer = capturingMailer();
+      return Effect.gen(function* () {
+        const { handler } = HttpRouter.toWebHandler(
+          buildAppLayer(mailer.layer, { signUpEnumeration: "conceal" }),
+        );
+        const signUp = () =>
+          post(handler, "/password/sign-up", {
+            email: "dupe@example.com",
+            password: strongPassword,
+          });
+        const fresh = yield* Effect.promise(signUp);
+        const duplicate = yield* Effect.promise(signUp);
+        assert.strictEqual(fresh.status, 202);
+        assert.strictEqual(duplicate.status, 202);
+        assert.strictEqual(yield* Effect.promise(() => fresh.text()), "");
+        assert.strictEqual(yield* Effect.promise(() => duplicate.text()), "");
+        assert.isNull(fresh.headers.get("set-cookie"));
+        assert.isNull(duplicate.headers.get("set-cookie"));
 
-      yield* letForkedFibersRun;
-      const templates = (yield* mailer.sent).map((m) => m.template);
-      assert.deepStrictEqual(templates, ["verify-email", "account-exists"]);
-    });
-  });
+        yield* letForkedFibersRun;
+        const templates = (yield* mailer.sent).map((m) => m.template);
+        assert.deepStrictEqual(templates, ["verify-email", "account-exists"]);
+      });
+    },
+  );
 
   it.effect("TMS-005: conceal still reports a weak password, and reveal stays the default", () =>
     Effect.gen(function* () {
@@ -642,7 +648,12 @@ describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("ESS-006: a malformed email answers 400 and creates no user", () =>
     Effect.gen(function* () {
       const { handler } = HttpRouter.toWebHandler(AppLayer);
-      for (const path of ["/password/sign-up", "/password/sign-in", "/password/request-reset", "/resend-verification"]) {
+      for (const path of [
+        "/password/sign-up",
+        "/password/sign-in",
+        "/password/request-reset",
+        "/resend-verification",
+      ]) {
         const response = yield* Effect.promise(() =>
           post(handler, path, { email: "junk", password: strongPassword }),
         );
@@ -674,7 +685,8 @@ describe("AuthHttp + Password (real HTTP)", () => {
       "changePassword",
       "reauthenticate",
     ]);
-    for (const endpoint of account) assert.isTrue(requiresAuthentication(endpoint), endpoint.identifier);
+    for (const endpoint of account)
+      assert.isTrue(requiresAuthentication(endpoint), endpoint.identifier);
     for (const endpoint of Object.values(groups["password"].endpoints)) {
       assert.isFalse(requiresAuthentication(endpoint), endpoint.identifier);
     }
@@ -751,11 +763,17 @@ describe("AuthHttp + Password (real HTTP)", () => {
       const mailer = capturingMailer();
       const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
       yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", { email: "cookie@example.com", password: strongPassword }),
+        post(handler, "/password/sign-up", {
+          email: "cookie@example.com",
+          password: strongPassword,
+        }),
       );
       yield* verifyLatestSignUp(handler, mailer);
       const response = yield* Effect.promise(() =>
-        post(handler, "/password/sign-in", { email: "cookie@example.com", password: strongPassword }),
+        post(handler, "/password/sign-in", {
+          email: "cookie@example.com",
+          password: strongPassword,
+        }),
       );
       assert.strictEqual(response.status, 200);
       assert.match(cookieFrom(response), /^__Host-session=/);
@@ -769,7 +787,10 @@ describe("AuthHttp + Password (real HTTP)", () => {
       const mailer = capturingMailer();
       const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
       yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", { email: "device@example.com", password: strongPassword }),
+        post(handler, "/password/sign-up", {
+          email: "device@example.com",
+          password: strongPassword,
+        }),
       );
       yield* verifyLatestSignUp(handler, mailer);
       const response = yield* Effect.promise(() =>

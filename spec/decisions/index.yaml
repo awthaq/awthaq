@@ -126,3 +126,7 @@ entries:
     file: "033-hook-registries-per-composition.md"
     title: "Hook Registries Belong to the Composition, and a Tap Requires Its Point"
     status: "Accepted — implemented"
+  - id: "ADR-EA-034"
+    file: "034-versioning-and-deprecation-policy.md"
+    title: "Before 1.0 Breaking Changes Are Allowed, Each With a Changeset That Carries a Migration Note"
+    status: "Accepted — implemented (policy in CONTRIBUTING.md; changeset gate in check.yml)"

@@ -114,7 +114,7 @@ Gates do not attach one-per-milestone: they cluster at four checkpoints (gates 1
 | Milestone | Implementation | Gates that attach here | Gate status |
 |---|---|---|---|
 | M0 Architecture | Implemented | 1-3 | 1 Active; 2 Active; 3 Active-partial (`check:error-tags`, `check:readmes`) |
-| M1 Core | Implemented | 4-6 | 4 Active; 5 Active-partial (`@ts-expect-error` cases inside `pnpm typecheck`, no type-testing tool); 6 Active-partial (coverage reported, no threshold) |
+| M1 Core | Implemented | 4-6 | 4 Active; 5 Active-partial (`@ts-expect-error` cases inside `pnpm typecheck`, no type-testing tool); 6 Active (coverage thresholds enforced) |
 | M2 Password | Implemented | none directly — certified via M6's gates | Covered by gates 6 and 9; does not yet run `runPluginContractTests` (gate 7) |
 | M3 qadi bridge | Implemented | none directly — certified via M6's gates | Covered by gates 6 and 9 |
 | M4 OAuth and Passkey | Implemented | none directly — certified via M6's gates | Covered by gates 6 and 9; neither runs `runPluginContractTests` |

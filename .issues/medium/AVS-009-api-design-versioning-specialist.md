@@ -3,7 +3,7 @@ ID: "AVS-009"
 Title: "No deprecation/breaking-change policy; versioning tooling wired but never exercised"
 Level: medium
 Category: "dx"
-Status: ready-for-human
+Status: resolved
 Package: "—"
 Source: "CONTRIBUTING.md:50"
 Auditor: "api-design-versioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `—` · reported by **API Design & Versioning Specialist** (`api-design-versioning-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Write the policy down now, while it costs nothing: additive vs compatible vs bre
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `ci-release-hardening`. Evidence at HEAD ec065a7: `CONTRIBUTING.md:48`. Fix: Write a versioning & deprecation policy (pre-1.0 and post-1.0 rules) into CONTRIBUTING.md plus a short ADR, and make changesets mandatory for package-affecting PRs. (effort S). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option A per plan; user may revisit. ADR-EA-034 (spec/decisions/034-versioning-and-deprecation-policy.md, registered in index.yaml, spec/README.md, traceability.md) plus a CONTRIBUTING.md section: breaking changes allowed before 1.0, each with a changeset carrying a `Migration:` section naming the ADR/BEH ids; from 1.0 a deprecation window with @deprecated and a one-time logWarning; an effect rc bump that changes a public type is breaking. Enforced: check.yml has a PR-only `changeset status` job. spec:verify:strict passes.

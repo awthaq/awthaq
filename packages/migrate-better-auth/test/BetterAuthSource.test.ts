@@ -71,37 +71,41 @@ describe("BetterAuthSource.read", () => {
 });
 
 describe("BetterAuthSource.mapUser", () => {
-  it.effect("maps a password user: verbatim scrypt hash under the `password` provider, unmapped columns reported", () =>
-    Effect.gen(function* () {
-      const ada = byEmail(yield* mapAll(), "ada@example.com");
-      assert.strictEqual(ada.user.name, "Ada Lovelace");
-      assert.isTrue(ada.user.verified);
-      assert.strictEqual((ada.user.credentials ?? []).length, 1);
-      const [account] = ada.user.credentials ?? [];
-      assert.strictEqual(account?.providerId, "password");
-      // `undefined` subject = the new user's own id (`Password.signUp`'s convention).
-      assert.isUndefined(account?.subject);
-      assert.match(
-        account?.credentialHash === undefined ? "" : Redacted.value(account.credentialHash),
-        /^[0-9a-f]{32}:[0-9a-f]{128}$/,
-      );
-      // A plugin-style column with data, and the bookkeeping columns, have no destination: reported.
-      assert.deepStrictEqual(ada.unmapped, [
-        "account.createdAt",
-        "account.updatedAt",
-        "user.createdAt",
-        "user.plan",
-        "user.updatedAt",
-      ]);
-    }),
+  it.effect(
+    "maps a password user: verbatim scrypt hash under the `password` provider, unmapped columns reported",
+    () =>
+      Effect.gen(function* () {
+        const ada = byEmail(yield* mapAll(), "ada@example.com");
+        assert.strictEqual(ada.user.name, "Ada Lovelace");
+        assert.isTrue(ada.user.verified);
+        assert.strictEqual((ada.user.credentials ?? []).length, 1);
+        const [account] = ada.user.credentials ?? [];
+        assert.strictEqual(account?.providerId, "password");
+        // `undefined` subject = the new user's own id (`Password.signUp`'s convention).
+        assert.isUndefined(account?.subject);
+        assert.match(
+          account?.credentialHash === undefined ? "" : Redacted.value(account.credentialHash),
+          /^[0-9a-f]{32}:[0-9a-f]{128}$/,
+        );
+        // A plugin-style column with data, and the bookkeeping columns, have no destination: reported.
+        assert.deepStrictEqual(ada.unmapped, [
+          "account.createdAt",
+          "account.updatedAt",
+          "user.createdAt",
+          "user.plan",
+          "user.updatedAt",
+        ]);
+      }),
   );
 
-  it.effect("keeps an unverified address unverified and reports no plugin column that is empty", () =>
-    Effect.gen(function* () {
-      const alan = byEmail(yield* mapAll(), "alan@example.com");
-      assert.isFalse(alan.user.verified);
-      assert.notInclude(alan.unmapped, "user.plan");
-    }),
+  it.effect(
+    "keeps an unverified address unverified and reports no plugin column that is empty",
+    () =>
+      Effect.gen(function* () {
+        const alan = byEmail(yield* mapAll(), "alan@example.com");
+        assert.isFalse(alan.user.verified);
+        assert.notInclude(alan.unmapped, "user.plan");
+      }),
   );
 
   it.effect("maps a social user: provider id, subject and tokens carried, image reported", () =>
@@ -128,11 +132,13 @@ describe("BetterAuthSource.mapUser", () => {
     }),
   );
 
-  it.effect("carries no issuer unless the caller names one (a plain OAuth2 provider has none)", () =>
-    Effect.gen(function* () {
-      const grace = byEmail(yield* mapAll(), "grace@example.com");
-      assert.isUndefined(grace.user.credentials?.[0]?.issuer);
-    }),
+  it.effect(
+    "carries no issuer unless the caller names one (a plain OAuth2 provider has none)",
+    () =>
+      Effect.gen(function* () {
+        const grace = byEmail(yield* mapAll(), "grace@example.com");
+        assert.isUndefined(grace.user.credentials?.[0]?.issuer);
+      }),
   );
 
   it.effect("refuses a credential account whose password is not a better-auth scrypt hash", () =>

@@ -108,15 +108,20 @@ const isRecord = (u: unknown): u is Readonly<Record<string, unknown>> =>
 
 /** `google.com` -> `google`: the convention for the awthaq provider id (documented in the README). */
 export const providerIdFor = (firebaseProviderId: string) =>
-  firebaseProviderId.endsWith(".com") ? firebaseProviderId.slice(0, -".com".length) : firebaseProviderId;
+  firebaseProviderId.endsWith(".com")
+    ? firebaseProviderId.slice(0, -".com".length)
+    : firebaseProviderId;
 
-const readFailure = (what: string) => () => new SourceReadError({ message: `could not read ${what}` });
+const readFailure = (what: string) => () =>
+  new SourceReadError({ message: `could not read ${what}` });
 
 /** The project's `hash_config` (Firebase console -> "Password hash parameters"), from a JSON file. */
 export const readHashConfig = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const text = yield* fs.readFileString(path).pipe(Effect.mapError(readFailure("the hash config file")));
+    const text = yield* fs
+      .readFileString(path)
+      .pipe(Effect.mapError(readFailure("the hash config file")));
     const json = yield* decodeConfig(text).pipe(
       Effect.mapError(
         () =>
@@ -140,9 +145,16 @@ export const readUsers = (path: string) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const text = yield* fs.readFileString(path).pipe(Effect.mapError(readFailure("the users file")));
+      const text = yield* fs
+        .readFileString(path)
+        .pipe(Effect.mapError(readFailure("the users file")));
       const file = yield* decodeUsersFile(text).pipe(
-        Effect.mapError(() => new SourceReadError({ message: 'the users file is not JSON of the form {"users": [...]}' })),
+        Effect.mapError(
+          () =>
+            new SourceReadError({
+              message: 'the users file is not JSON of the form {"users": [...]}',
+            }),
+        ),
       );
       return Stream.fromIterable(file.users);
     }),
@@ -160,9 +172,16 @@ export const mapUser = (
   },
 ) =>
   Effect.gen(function* () {
-    const sourceRowId = isRecord(raw) && typeof raw["localId"] === "string" ? raw["localId"] : "(no localId)";
+    const sourceRowId =
+      isRecord(raw) && typeof raw["localId"] === "string" ? raw["localId"] : "(no localId)";
     const user = yield* decodeUser(raw).pipe(
-      Effect.mapError(() => new UnmappableRow({ sourceRowId, reason: "not a Firebase export user record (no localId)" })),
+      Effect.mapError(
+        () =>
+          new UnmappableRow({
+            sourceRowId,
+            reason: "not a Firebase export user record (no localId)",
+          }),
+      ),
     );
     if (user.disabled === true) {
       return yield* new UnmappableRow({
@@ -174,7 +193,8 @@ export const mapUser = (
     if (user.email === undefined || user.email.trim() === "") {
       return yield* new UnmappableRow({
         sourceRowId,
-        reason: "the user has no email address; awthaq identifies accounts by email until email-less import lands (FAMS-002)",
+        reason:
+          "the user has no email address; awthaq identifies accounts by email until email-less import lands (FAMS-002)",
       });
     }
 
@@ -211,7 +231,10 @@ export const mapUser = (
       if (info.providerId === "password") continue;
       const subject = info.rawId ?? info.federatedId;
       const providerId = providerIdFor(info.providerId);
-      const federated = info.providerId.endsWith(".com") || info.providerId.startsWith("oidc.") || info.providerId.startsWith("saml.");
+      const federated =
+        info.providerId.endsWith(".com") ||
+        info.providerId.startsWith("oidc.") ||
+        info.providerId.startsWith("saml.");
       if (!federated || subject === undefined) {
         unmapped.add(`providerUserInfo.${info.providerId}`);
         continue;
@@ -224,7 +247,10 @@ export const mapUser = (
       sourceRowId: user.localId,
       user: {
         identity: { _tag: "Email", email: user.email },
-        name: user.displayName !== undefined && user.displayName !== "" ? user.displayName : (user.email.split("@")[0] ?? user.email),
+        name:
+          user.displayName !== undefined && user.displayName !== ""
+            ? user.displayName
+            : (user.email.split("@")[0] ?? user.email),
         verified: user.emailVerified === true,
         ...(user.photoUrl !== undefined && user.photoUrl !== "" ? { image: user.photoUrl } : {}),
         credentials,

@@ -120,7 +120,7 @@ const STALE = [
   for (const row of rows) {
     const cells = row.split("|").map((c) => c.trim());
     const [, num, , , status, wired] = cells;
-    if (!/^Active/.test(status ?? "")) continue;
+    if (!(status ?? "").startsWith("Active")) continue;
     active += 1;
     const commands = [...(wired ?? "").matchAll(/`pnpm ([\w:-]+)`/g)].map((m) => m[1]);
     const paths = [...(wired ?? "").matchAll(/`((?:\.github|scripts|spec|packages|examples|features|tools)\/[^`\s]+)`/g)].map((m) => m[1]);

@@ -126,7 +126,11 @@ const suite = (
     it.effect("DRS-007: homeRegion round-trips through create, update and clearing", () =>
       Effect.gen(function* () {
         const records = yield* OrganizationRecords.OrganizationRecords;
-        const created = yield* records.create({ name: "Acme", slug: "acme", homeRegion: "eu-west" });
+        const created = yield* records.create({
+          name: "Acme",
+          slug: "acme",
+          homeRegion: "eu-west",
+        });
         assert.deepStrictEqual(created.homeRegion, Option.some("eu-west"));
         const moved = yield* records.update(created.id, { homeRegion: "us-east" });
         assert.deepStrictEqual(moved.homeRegion, Option.some("us-east"));
@@ -169,7 +173,10 @@ const suite = (
         const last = first[first.length - 1];
         assert.isDefined(last);
         const second = yield* records.listPage({
-          after: Option.some({ createdAt: last?.createdAt ?? (yield* DateTime.now), id: last?.id ?? "" }),
+          after: Option.some({
+            createdAt: last?.createdAt ?? (yield* DateTime.now),
+            id: last?.id ?? "",
+          }),
           limit: 10,
         });
         assert.strictEqual(second.length, 3);

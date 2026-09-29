@@ -3,7 +3,7 @@ ID: "AH-004"
 Title: "Declared no-as-in-library-source invariant is unenforced and already violated"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: ".oxlintrc.json:5"
 Auditor: "anders-hejlsberg"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `—` · reported by **Anders Hejlsberg — Creator/Lead Architect of TypeScript** (`anders-hejlsberg`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Add an oxlint JS-plugin rule (the tools/oxc plugin mechanism already exists) ban
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `tooling-typecheck-lint`. Evidence at HEAD ec065a7: `.oxlintrc.json:5`. Fix: Make the no-type-assertion rule a checked property: enable oxlint's built-in `typescript/consistent-type-assertions` with `assertionStyle: "never"` (still permits `as const`) scoped to library source, and remove the 11 remaining src assertion sites. (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Enabled oxlint `typescript/consistent-type-assertions` (assertionStyle never) for packages/*/src (.oxlintrc.json overrides); `as const` stays allowed, tests keep narrow casts. The oauth/password casts the dossier lists were already gone (P02/P07); the two that remained (Roles.ts `[] as ReadonlyArray<Role>`, Scim.ts `row.userId as string`) are removed without assertions. `pnpm lint` fails on any new `x as T` in library source. Gates: pnpm typecheck (clean build, 0 errors), oxlint clean, knip clean, format:check clean, circular, package:smoke, coverage thresholds, test:bdd, spec:verify:strict.

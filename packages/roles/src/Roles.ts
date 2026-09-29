@@ -130,7 +130,10 @@ const validatedCatalog = Effect.gen(function* () {
   const names = rolesConfig.catalog.map((role) => role.name);
   const duplicates = Array.from(new Set(names.filter((name, i) => names.indexOf(name) !== i)));
   if (duplicates.length > 0) {
-    return yield* Defects.invalidConfiguration("catalog", `awthaq: the Roles catalog defines duplicate role name(s): ${duplicates.join(", ")}`);
+    return yield* Defects.invalidConfiguration(
+      "catalog",
+      `awthaq: the Roles catalog defines duplicate role name(s): ${duplicates.join(", ")}`,
+    );
   }
   return new Map(rolesConfig.catalog.map((role) => [role.name, role] as const));
 });
@@ -385,6 +388,7 @@ const subjectResolverMake = Effect.gen(function* () {
       return Effect.gen(function* () {
         const userId = Users.UserId(principal.ref.id);
         const names = yield* roles.listRoleNames(userId);
+        const noRoles: ReadonlyArray<Role> = [];
         const matched = yield* Effect.forEach(names, (name) => {
           const found = catalog.get(name);
           // RRM-003: still dropped (fail closed) but no longer silent — drift
@@ -393,7 +397,7 @@ const subjectResolverMake = Effect.gen(function* () {
             ? Effect.logWarning("awthaq.roles.unknownAssignedRole", {
                 userId,
                 roleName: name,
-              }).pipe(Effect.as([] as ReadonlyArray<Role>))
+              }).pipe(Effect.as(noRoles))
             : Effect.succeed([found]);
         }).pipe(Effect.map((groups) => groups.flat()));
         const subject = fromRoles({ id: `user:${userId}`, roles: matched });
@@ -495,7 +499,12 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
     QadiSubjectResolver.SubjectResolver,
     subjectResolverMake,
   ).pipe(
-    Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMake, contributes: Layer.mergeAll(rolesErasure, rolesExport) })),
+    Layer.provideMerge(
+      AuthPlugin.layer(Roles, {
+        make: rolesMake,
+        contributes: Layer.mergeAll(rolesErasure, rolesExport),
+      }),
+    ),
   );
 
   /** BAM-006: the same composition as `layer`, over `rolesMakeSql` instead of the in-memory `rolesMake`. */
@@ -504,6 +513,11 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
     QadiSubjectResolver.SubjectResolver,
     subjectResolverMake,
   ).pipe(
-    Layer.provideMerge(AuthPlugin.layer(Roles, { make: rolesMakeSql, contributes: Layer.mergeAll(rolesErasure, rolesExport) })),
+    Layer.provideMerge(
+      AuthPlugin.layer(Roles, {
+        make: rolesMakeSql,
+        contributes: Layer.mergeAll(rolesErasure, rolesExport),
+      }),
+    ),
   );
 }
