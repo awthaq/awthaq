@@ -22,6 +22,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as Roles from "../src/Roles.ts";
+import * as RolesAdmin from "../src/RolesAdmin.ts";
 
 const PingApi = HttpApi.make("auth").add(
   HttpApiGroup.make("ping").add(HttpApiEndpoint.get("get", "/ping", { success: Schema.Void })),
@@ -43,6 +44,14 @@ class Ping extends AuthPlugin.Service<Ping, Record<string, never>>()("ping", {
 describe("Auth.make([Roles])", () => {
   it("a Roles-only tuple fails — it contributes zero HTTP groups", () => {
     assert.throws(() => Auth.make([Roles.Roles]), /Auth.make requires at least one plugin/);
+  });
+
+  it("Roles + RolesAdmin compose: the admin plugin depends on Roles and contributes the one group (YL-009)", () => {
+    const auth = Auth.make([Roles.Roles, RolesAdmin.RolesAdmin]);
+    assert.deepStrictEqual(auth.manifest.plugins, [
+      { id: "roles", apiVersion: 1, tables: ["role_assignments"], dependsOn: [] },
+      { id: "rolesAdmin", apiVersion: 1, tables: [], dependsOn: ["roles"] },
+    ]);
   });
 
   it("composes alongside another plugin, contributing no groups but a real table", () => {

@@ -382,7 +382,8 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   apiVersion: 1,
   // BEH-EA-018/roadmap M3: no HTTP contract of its own — this plugin's whole
   // job is the `SubjectResolver` override, per this module's own header
-  // comment. `HttpApi.make("auth")` with no `.add()` call is a real,
+  // comment. Role administration over HTTP is the separate, opt-in `RolesAdmin`
+  // plugin (YL-009), so `Auth.make([Roles])` stays contract-less. `HttpApi.make("auth")` with no `.add()` call is a real,
   // zero-group `HttpApi<"auth", never>`, which contributes nothing to
   // `Auth.make`'s composed `api` (`never extends GroupsFor<"roles">` holds
   // trivially, the same bottom-type reasoning `Auth.ts`'s own comments use
