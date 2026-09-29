@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-004 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Accepted — design; implementation deferred |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): Consequences record the per-dialect wire codecs (TS-001) and the opaque-JSON-is-TEXT decision (PPS-009) |
 
 ---
 
@@ -33,6 +33,10 @@ Persistence is expressed with v4's `Model.Class` per entity (`Model.Sensitive` f
 **Positive**: Persistence code is dialect-neutral by construction (`Model.Class` + `SqlClient`, not hand-written per-dialect DDL); entity definitions are single-sourced between validation and persistence, eliminating an entire class of drift between "the schema the app validates against" and "the schema the database enforces"; the v1 runtime is materially smaller because it does not have to ship or maintain a bespoke IR-and-planner subsystem.
 
 **Negative**: The stronger migration-safety guarantees `research/10-schema-migrations.md` called for (checksummed ledgers, drift detection, destructive-op guardrails) are not available at v1 runtime boot — an application composing `Auth.make`'s migrations gets ordering and determinism (via the `dependsOn`-derived topological sort) but not the full review/dry-run workflow until the CLI feature ships.
+
+**Per-dialect wire codecs (TS-001, revision 1.1)**: "dialect-neutral" holds for the *entity description* and every JSON variant, not for the database variants' encoding of booleans and timestamps: `node:sqlite` binds and returns `0 | 1` and ISO strings while `@effect/sql-pg` returns a JS `boolean`/`Date`. `Models.makeModels(dialect)` therefore selects the wire codec of just those columns (one declaration of every other field), resolved once per repository layer from the ambient `SqlClient`; the pg client's codecs are never overridden globally because that client is shared with the host application's tables (wayfinder ticket 29).
+
+**Opaque JSON is TEXT on every dialect (PPS-009, revision 1.1)**: app-validated, never-queried JSON columns (`verification_tokens.payload`, `auth_audit_log.payload`, `users.metadata`, `organization` metadata) are `TEXT` on both dialects, encoded with `Schema.fromJsonString`, so one definition and one migration serve all dialects and no dialect-specific operators leak into repositories. A Postgres-only `JSONB` (+ GIN) branch is added only when a feature must query payload contents server-side; until then its absence is a decision, not an oversight.
 
 **Trade-off accepted**: The project defers a materially safer migration-review workflow to a future milestone in exchange for landing v1 on Effect's own `Model`/`SqlModel`/`Migrator` primitives rather than a bespoke IR that would need independent validation, dialect-rendering correctness, and long-term maintenance parallel to Effect's own evolving `Model` module.
 

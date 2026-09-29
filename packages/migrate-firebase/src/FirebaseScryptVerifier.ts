@@ -31,7 +31,7 @@
 // `memCost` at most 17 (N = 131072, ~128 MiB at r = 8) and `rounds` at most 16.
 // Firebase's own defaults are `memCost` 14 and `rounds` 8.
 
-import { ConstantTime, PasswordHasher } from "@awthaq/ports";
+import { Hmac, PasswordHasher } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
@@ -150,7 +150,7 @@ export const firebaseScryptVerifier: PasswordHasher.LegacyPasswordVerifierShape 
         key,
         Uint8Array.from(parsed.signerKey),
       );
-      return ConstantTime.equalBytes(new Uint8Array(encrypted), parsed.hash);
+      return Hmac.constantTimeEqualBytes(new Uint8Array(encrypted), parsed.hash);
     }).pipe(Effect.orElseSucceed(() => false));
   },
 };

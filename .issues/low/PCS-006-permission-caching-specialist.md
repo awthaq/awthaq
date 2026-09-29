@@ -3,7 +3,7 @@ ID: "PCS-006"
 Title: "Per-request session memoization extends a verify outcome across the request's lifetime"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Authentication.ts:170"
 Auditor: "permission-caching-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `server` · reported by **Permission Caching Specialist** (`permission-caching-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Document the mid-request revocation window in resolveSession's doc comment as a 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `per-request-session-cache`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:184`. Fix: Document the bounded mid-request revocation window as a deliberate staleness budget. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Doc-only: resolveSession doc comment and spec/behaviors/09-authentication-middleware.md (BEH-EA-070) state the bounded mid-request revocation staleness budget.

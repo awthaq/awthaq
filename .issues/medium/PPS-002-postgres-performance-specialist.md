@@ -3,7 +3,7 @@ ID: "PPS-002"
 Title: "Sessions keyset pagination is not index-aligned: single-column userId index forces sort of the user's full row set"
 Level: medium
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/CoreMigrations.ts:233"
 Auditor: "postgres-performance-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `performance` · `sql` · reported by **Postgres Performance Specialist** (`postgres-performance-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Add a composite index ("userId", "createdAt", id) on sessions — created CONCUR
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-list-liveness-and-pagination`. Evidence at HEAD ec065a7: `packages/sql/src/CoreMigrations.ts:231`. Fix: Add a partial composite index that matches the page query's filter and order, and rewrite the cursor as a row-value comparison. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/sql: migration 18 create_sessions_user_created_live_index (partial composite index on (userId, createdAt, id) WHERE supersededAt IS NULL, same DDL both dialects, IF NOT EXISTS) and the cursor rewritten as the row-value comparison (createdAt, id) > (?, ?). Test packages/sql/test/Repositories.test.ts 'PPS-002: the page query is served by sessions_user_created_live, with no sort' (EXPLAIN QUERY PLAN; proven red with the migration disabled: planner used sessions_user_id + temp b-tree). Existing BEH-EA-036 keyset test stays green. Spec BEH-EA-036 paragraph. Postgres EXPLAIN assertion not added.

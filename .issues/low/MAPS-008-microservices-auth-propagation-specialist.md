@@ -3,7 +3,7 @@ ID: "MAPS-008"
 Title: "Bearer rotation delivers the raw long-lived session secret via a response header"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Authentication.ts:223"
 Auditor: "microservices-auth-propagation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `server` · reported by **Microservices Auth Propagation Specialist** (`microservices-auth-propagation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,7 @@ Document the header-logging hazard prominently, and consider bounding the exposu
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-rotation-delivery`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:233`. Fix: Reduce the exposure of the rotated long-lived secret in transit and in logs. Header delivery itself stays, as ticket 01 decided. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29):** Partially done under PIL-005: every rotation response (Set-Cookie and set-auth-token) now carries `Cache-Control: no-store` (tests in packages/server/test/Authentication.test.ts). Left open: step 2 (provide `Headers.CurrentRedactedNames` with `set-auth-token`/`x-jwt-token` via `AuthHttp.requestLogger`/`tracer`) is blocked on MW-001 (observability substrate, slice 02), which does not exist yet, and the README hazard note.
+
+**Resolved (2026-09-29):** Closed after the earlier partial (Cache-Control: no-store on every rotation response, PIL-005 commit). New AuthHttp.layerRedactedHeaders (packages/server/src/AuthHttp.ts): Effect's default Headers.CurrentRedactedNames plus Api.ROTATED_TOKEN_HEADER and x-jwt-token -- standalone, so it does not wait for MW-001's requestLogger/tracer re-exports (which can simply provide it). Test (server/test/AuthHttp.test.ts): with the layer, Headers.redact hides set-auth-token/x-jwt-token/authorization and leaves x-request-id; without it set-auth-token would be logged verbatim. Docs: packages/server/README.md hazard section and BEH-EA-052 paragraph. Note: header delivery itself stays (ticket 01 decision).

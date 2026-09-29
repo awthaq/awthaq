@@ -3,7 +3,7 @@ ID: "CB-009"
 Title: "Conditional-create UV exemption is keyed by challenge scope, not by ceremony eligibility"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:461"
 Auditor: "christiaan-brand"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `passkey` · reported by **Christiaan Brand — W3C WebAuthn Specification Co-editor** (`christiaan-brand`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Encode the conditional exemption in the config-driven policy (e.g. a single `exp
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `passkey-ceremony-policy`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:662`. Fix: Make the conditional exemption policy-driven: conditional create is unavailable when the RP requires UV. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Conditional-create UV exemption is policy-driven: registerOptionsConditional answers PasskeyConditionalCreateDisabled when userVerification is 'required', and registerVerify enforces required UV for both ceremonies. Test: PasskeyCeremony.test.ts 'registerOptionsConditional answers PasskeyConditionalCreateDisabled' (red before: options issued). Documented on PasskeyConfig.conditionalCreate and README. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

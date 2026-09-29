@@ -63,7 +63,11 @@ REQUIREMENT: `Organization.relationships` MUST resolve a `"member"` relation
              `RelationshipResolveError`, never to `"Unrelated"`.
 ```
 
+**Shipped shape (RZS-001/RZS-005/RZS-006/RZS-004).** The walk needs domain knowledge only the application has ("this resource id is a project, and `Projects.organizationOf(id)` is its organization"), so `OrganizationQadi.relationships` *requires* an application-provided `ResourceOrganizationLookup` port (`organizationOf: (resourceId) => Effect<Option<organizationId>, unknown>`; `ResourceOrganizationLookup.layerNone` is the explicit "no walking configured" choice, ADR-EA-010). `"member"` at `depth >= 1` consults it; `depth` undefined/0 treats `resourceId` as the organization itself; `Option.none()` or a failed lookup is a `RelationshipResolveError`, never `"Unrelated"`. The relation grammar is `member`, `has-role:<name>` (any built-in, static-custom or dynamic role; `admin`/`owner` are aliases), `<resource>:<action>` (answered from the very effective statements the plugin's own `requirePermission` gates with, so a qadi policy and the plugin can never disagree) and `team-member`. Anything else — and an organization-scoped relation naming no organization, or `team-member` naming no team — is qadi's `"Unknown"`, distinguishable from a genuine `"Unrelated"` in traces. `member` and `has-role:*` are one indexed membership lookup; only `<resource>:<action>` computes statements.
+
 `usage-qadi.md` §6.2 documents the depth-2 walk ("`\"member\"` of a project = member of the project's organization; depth 2 walks project → org") and ships it as `Organization.relationships` specifically so an application installing the `Organization` plugin gets `hasRelationship("member", { depth: 2 })` working "with one line instead of writing it" (§7) — the resolver is part of what the plugin contributes, not something every application authors from scratch. `relationshipResolverFromEdges` remains available for fixed, small graphs (tests, or deployments with no organization plugin at all).
+
+**Consistency (non-normative).** Delegation to qadi is deliberate (ADR-EA-009): awthaq ships no Zanzibar-style consistency machinery (no zookies, no revision tokens). The freshness contract sits at the resolver seam instead: a relationship answer is exactly as fresh as the organization records layer it reads. A request-scoped `DecisionCache` (the default, [BEH-EA-145](19-qadi-bridge-path-a.md#beh-ea-145-authorizedsubject-bridges-currentprincipal-to-currentsubject)) preserves that freshness; an application-scoped cache needs `DecisionCacheInvalidationLive` (organization/team membership and dynamic-role changes clear it) and, for application-owned resolvers, the application's own `DecisionCache.clear`. An application that outgrows this resolver — wanting OpenFGA or SpiceDB `check` calls — replaces the `OrganizationQadi.relationships` layer with one backed by that engine; membership tuples must then be exported from the `AfterAddMember`/`AfterRemoveMember` hook points. No adapter for such an engine ships (no speculative infrastructure).
 
 _Previous: [BEH-EA-161](21-qadi-resolvers-obligations.md#beh-ea-161-attributes-resolved-from-the-user-table) | Next: [BEH-EA-163](21-qadi-resolvers-obligations.md#beh-ea-163-fixed-graphs-use-relationshipresolverfromedges)_
 
@@ -127,10 +131,18 @@ REQUIREMENT: `ObligationHandlers.reauth` MUST compare the current session's
              `authenticatedAt` timestamp to the obligation's `maxAgeSeconds`
              and MUST fail with a typed re-authentication error when stale; it
              MUST NOT accept a session merely because it is currently valid,
-             independent of when it was last authenticated.
+             independent of when it was last authenticated. A `reauth`
+             obligation the handler cannot interpret (no finite, non-negative
+             numeric `maxAgeSeconds`) MUST fail loudly rather than discharge,
+             and among several `reauth` duties the strictest window wins.
+             The re-authentication error MUST be wire-decodable
+             (`Api.ReauthRequired`, `{ maxAgeSeconds }`, HTTP 403) so a client
+             can tell it from a plain permission denial.
 ```
 
 `usage-qadi.md` §8 states the mechanism directly: the handler "reads `CurrentPrincipal`'s session, compares `authenticatedAt` to the obligation's `maxAgeSeconds`, and fails with a typed error the client maps to a 'confirm your password' screen." This is the step-up authentication pattern applied through qadi's obligation mechanism rather than as a bespoke check in the `changeEmail` handler — the handler declares the requirement (`obliged(reauth, ...)`) and awthaq supplies the one discharge implementation every such requirement uses.
+
+**Wire shape and the Path A / Path B split (EEM-005).** The error is a shared `Schema.TaggedError` in `@awthaq/api`, not a plain `Data.TaggedError`: a Path A endpoint whose policy carries `reauth(...)` declares `Api.ReauthRequired` in its `error:` array and a generated client decodes it. Path B (`RequirePermission`) cannot carry it — qadi's middleware owns that response mapping and answers an undischarged obligation with `UndischargedObligation` ([BEH-EA-160](20-qadi-bridge-path-b.md#beh-ea-160-both-bridges-share-one-wiring-root)) — so a step-up flow uses Path A.
 
 _Previous: [BEH-EA-164](21-qadi-resolvers-obligations.md#beh-ea-164-decision-history-backed-by-audit-events) | Next: [BEH-EA-166](21-qadi-resolvers-obligations.md#beh-ea-166-sql-pushdown-and-its-limit)_
 

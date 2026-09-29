@@ -3,7 +3,7 @@ ID: "RRM-005"
 Title: "Roles.assign/revoke emit no audit events and take no authorization gate"
 Level: medium
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "roles"
 Source: "packages/roles/src/Roles.ts:64"
 Auditor: "rbac-role-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `compliance` · `roles` · reported by **RBAC Role Modeling Specialist** (`rbac-role-modeling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Publish auth.roles.assigned/revoked events through core's AuthEvents and shape a
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `roles-audit-and-admin`. Evidence at HEAD ec065a7: `packages/roles/src/Roles.ts:70`. Fix: Publish auth.roles.assigned/revoked (durably audited) on real state changes, recording the actor. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** core AuthEvents gains auth.roles.assigned/auth.roles.revoked {userId, roleName, actorUserId?} and AuditLog.actorOf returns the actor (not the target); Roles assign/revoke take optional { actorId } and publish only on a real state change (memory: Ref.modify flag; sql: INSERT ... ON CONFLICT DO NOTHING RETURNING / DELETE ... RETURNING); Roles.layer/layerSql now require AuthEvents. The authorization gate for who may call assign stays out of the service (trusted primitive, documented) — see YL-009. Tests: Roles.test.ts 'Roles audit events (RRM-005)' x2 and RolesSql.test.ts 'assign/revoke publish only on a real change, recording the actor'. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 923 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

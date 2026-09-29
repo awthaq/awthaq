@@ -3,7 +3,7 @@ ID: "OHS-004"
 Title: "Team membership carries no role; no per-team permission override exists"
 Level: medium
 Category: "architecture"
-Status: ready-for-human
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/TeamRecords.ts:35"
 Auditor: "organization-hierarchy-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `organization` · reported by **Organization Hierarchy Specialist** (`organization-hierarchy-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Add a role column to organization_team_membership plus team-scoped statements (o
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-team-hierarchy`. Evidence at HEAD ec065a7: `packages/organization/src/TeamRecords.ts:35`. Fix: Add team-scoped roles with explicit precedence (pending decision; ticket 34 deferred inheritance here). (effort L). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option 2 per plan; user may revisit. Team memberships carry role names (migration organization_team_membership_role, JSON array default ["member"]); OrganizationConfig.teamStatements (default lead -> team:update) maps team roles to team statements that apply to that team and its descendants (closure from OHS-001). requirePermission gained an optional teamId that merges org-level authority with team-role authority (org statements stay the default, a team role only adds); team update/delete/roster/move use it; nested create needs team:create on the parent; a move needs authority over the team and its destination (root is org-level). addTeamMember takes role and new updateTeamMemberRole (PATCH teams/:id/members/:userId) exist, both canGrant-guarded (requested roles and the target's current roles must be within the caller's authority over the team; undefined role = 422 UnknownTeamRole), with hooks Before/AfterUpdateTeamMemberRole and event auth.organization.teamMemberRoleUpdated. qadi: team-role:<name> relation (held on the team or an ancestor). Tests: Organization (lead scoped to own team/subtree, org admin retains authority, canGrant, re-role, lead cannot delete/move outside), TeamRecords both layers, OrganizationQadi, AuthHttp. Gates: tsc -b clean apart from packages/react, tsconfig.test clean, packages/organization 253 tests green.

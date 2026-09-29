@@ -56,35 +56,6 @@ export class ClientAddress extends Context.Service<ClientAddress, ClientAddressS
   "awthaq/ports/ClientAddress",
 ) {}
 
-/**
- * CSD-003: the longest `User-Agent` a session records. Browsers send a few
- * hundred characters; anything longer is truncated rather than persisted, so a
- * hostile header cannot bloat the sessions table.
- */
-export const MAX_USER_AGENT_LENGTH = 512;
-
-/** CSD-003: the request's `User-Agent`, bounded, or `undefined` when absent or empty. */
-export const userAgentOf = (request: HttpServerRequest.HttpServerRequest): string | undefined => {
-  const raw = request.headers["user-agent"];
-  return raw === undefined || raw === "" ? undefined : raw.slice(0, MAX_USER_AGENT_LENGTH);
-};
-
-/**
- * CSD-003: the `request` a session-minting flow hands `Sessions.issue`, so the
- * device list and forensics have data. Keys are omitted (not set to
- * `undefined`) when unknown; an over-long `userAgent` is bounded again here so
- * a domain caller that skipped `userAgentOf` cannot bypass the cap.
- */
-export const sessionRequest = (
-  ip: string | undefined,
-  userAgent: string | undefined,
-): { readonly ip?: string; readonly userAgent?: string } => ({
-  ...(ip === undefined ? {} : { ip }),
-  ...(userAgent === undefined || userAgent === ""
-    ? {}
-    : { userAgent: userAgent.slice(0, MAX_USER_AGENT_LENGTH) }),
-});
-
 /** Byte-for-byte today's behavior — the raw socket peer, no header trusted. */
 export const layerDirect: Layer.Layer<ClientAddress> = Layer.succeed(
   ClientAddress,

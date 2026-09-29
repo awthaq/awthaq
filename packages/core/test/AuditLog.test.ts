@@ -62,6 +62,24 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
       }).pipe(Effect.provide(layer)),
     );
 
+    // PERS-005: an organization PermissionEngine denial is durably recorded with who/what/why.
+    it.effect("records an organization permission denial with its actor", () =>
+      Effect.gen(function* () {
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* auditLog.record({
+          _tag: "auth.organization.permissionDenied",
+          organizationId: "org-1",
+          userId,
+          resource: "member",
+          action: "update",
+          reason: "missingStatement",
+        });
+        const recorded = yield* auditLog.list({ eventTag: "auth.organization.permissionDenied" });
+        assert.strictEqual(recorded.length, 1);
+        assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some(userId));
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("list narrows by eventTag", () =>
       Effect.gen(function* () {
         const auditLog = yield* AuditLog.AuditLog;

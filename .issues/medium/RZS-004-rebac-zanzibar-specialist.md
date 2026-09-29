@@ -3,7 +3,7 @@ ID: "RZS-004"
 Title: "Every relationship check re-reads the source of truth; role relations compute the full permission set they never use"
 Level: medium
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/OrganizationQadi.ts:76"
 Auditor: "rebac-zanzibar-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `performance` · `organization` · reported by **ReBAC / Zanzibar-style Specialist** (`rebac-zanzibar-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Answer member/admin/owner from the membership row directly (findByUserAndOrg alo
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-qadi-relationships`. Evidence at HEAD ec065a7: `packages/organization/src/OrganizationQadi.ts:76`. Fix: Answer member and role:* relations from the membership row alone; only permission relations compute statements. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** member and has-role:*/admin/owner relations are one MembershipRecords.findByUserAndOrg lookup (RelationshipResolver now requires MembershipRecords/OrganizationRecords directly); only <resource>:<action> computes statements. Test: OrganizationQadi.test.ts 'member and role relations perform no OrgRoleRecords read' (counting OrgRoleRecords layer with dynamic access control on: 0 reads for member/admin/has-role, >0 for team:create). Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 896 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

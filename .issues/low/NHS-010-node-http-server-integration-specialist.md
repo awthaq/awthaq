@@ -3,7 +3,7 @@ ID: "NHS-010"
 Title: "Auth strategy order is encoded as security-record key order in two synced places"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "api"
 Source: "packages/api/src/Api.ts:111"
 Auditor: "node-http-server-integration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `api` · reported by **Node HTTP Server Integration Specialist** (`node-http-server-integration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Keep the behavior test, but make the order explicit and structural — e.g. an o
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `optional-auth-contract`. Evidence at HEAD ec065a7: `packages/api/src/Api.ts:110`. Fix: Remove the one real positional coupling (OptionalAuthentication's fallback hard-wired to the last-declared `bearer` key) and pin the order with a wired test. Ordering stays the security record's declaration order, as BEH-EA-072 requires. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Covered by EHA-006's restructure (the anonymous fallback lives in the first handler and no longer depends on bearer being declared last); comments in Api.ts/Authentication.ts now say only the declaration's key order matters (Effect looks Live handlers up by key). Test: server Authentication.test.ts pins Object.keys(security) of both middlewares to [cookie, bearer]; the @skip BDD scenario for the ordering was not wired (unit test used instead, per the dossier's alternative). Spec BEH-EA-072 note.

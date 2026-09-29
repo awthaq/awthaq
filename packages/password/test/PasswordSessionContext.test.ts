@@ -1,6 +1,6 @@
 // CSD-003: the request's ip and user agent land on every session the password plugin mints.
 import { Sessions } from "@awthaq/core";
-import { ClientAddress, Mailer } from "@awthaq/ports";
+import { Mailer } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -49,16 +49,4 @@ describe("session issuance context", () => {
       assert.isTrue(Option.isNone(signedUp.session.userAgent));
     }).pipe(Effect.provide(makeTestLayer())),
   );
-});
-
-describe("ClientAddress request helpers", () => {
-  it("bounds an over-long user agent and omits empty ones", () => {
-    const long = "x".repeat(ClientAddress.MAX_USER_AGENT_LENGTH + 100);
-    assert.strictEqual(
-      ClientAddress.sessionRequest("1.2.3.4", long).userAgent?.length,
-      ClientAddress.MAX_USER_AGENT_LENGTH,
-    );
-    assert.deepStrictEqual(ClientAddress.sessionRequest(undefined, undefined), {});
-    assert.deepStrictEqual(ClientAddress.sessionRequest("1.2.3.4", ""), { ip: "1.2.3.4" });
-  });
 });

@@ -25,7 +25,8 @@ import * as Result from "effect/Result";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { UserId } from "./Users.ts";
 
-export type AccountId = string & Brand.Brand<"AccountId">;
+// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
+export type AccountId = SqlModels.AccountId;
 export const AccountId = Brand.nominal<AccountId>();
 
 /** BEH-EA-044: `providerId = "password"` is the reserved password-credential provider. */
@@ -81,7 +82,7 @@ export class LastAccountRefusal extends Data.TaggedError("LastAccountRefusal")<{
  */
 export class ProviderTokensUnreadable extends Data.TaggedError("ProviderTokensUnreadable")<{
   readonly id: AccountId;
-  readonly field: "accessToken" | "refreshToken";
+  readonly field: "accessToken" | "refreshToken" | "idToken";
   readonly reason: "DecryptionFailed" | "UnknownKeyId";
 }> {}
 
@@ -99,6 +100,14 @@ export class ProviderTokensUnreadable extends Data.TaggedError("ProviderTokensUn
 export interface ProviderTokenSet {
   readonly accessToken: Redacted.Redacted<string>;
   readonly refreshToken: Option.Option<Redacted.Redacted<string>>;
+  /**
+   * BAM-008: the OIDC `id_token` the provider returned, kept (encrypted at
+   * rest like the other two tokens) so a better-auth account import has a
+   * destination for it and a future RP-initiated logout can send it as
+   * `id_token_hint`. `None` for a plain OAuth2 provider, or when a refresh
+   * response carried none and none was stored.
+   */
+  readonly idToken: Option.Option<Redacted.Redacted<string>>;
   readonly accessTokenExpiresAt: Option.Option<DateTime.Utc>;
   readonly refreshTokenExpiresAt: Option.Option<DateTime.Utc>;
   readonly scope: Option.Option<string>;
@@ -211,6 +220,14 @@ const emptyState: State = {
   providerTokens: HashMap.empty(),
 };
 
+/**
+ * TRBS-005: single-process, test-grade storage. State is one per-process
+ * `Ref`: it is not shared across instances (a revocation on one instance does
+ * not propagate to another), it is lost on restart, and it grows without bound
+ * until a retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV
+ * layer, ADR-EA-014) for any multi-instance deployment. `AuthEvents`' in-process
+ * `PubSub` has the same process boundary.
+ */
 export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.effect(
   Accounts,
   Effect.gen(function* () {
@@ -446,6 +463,7 @@ const tokenSetToRow = (
 ): {
   readonly accessToken: string | null;
   readonly refreshToken: string | null;
+  readonly idToken: string | null;
   readonly accessTokenExpiresAt: DateTime.Utc | null;
   readonly refreshTokenExpiresAt: DateTime.Utc | null;
   readonly scope: string | null;
@@ -455,6 +473,7 @@ const tokenSetToRow = (
     ? {
         accessToken: null,
         refreshToken: null,
+        idToken: null,
         accessTokenExpiresAt: null,
         refreshTokenExpiresAt: null,
         scope: null,
@@ -463,6 +482,7 @@ const tokenSetToRow = (
     : {
         accessToken: Redacted.value(tokens.accessToken),
         refreshToken: Option.getOrNull(Option.map(tokens.refreshToken, Redacted.value)),
+        idToken: Option.getOrNull(Option.map(tokens.idToken, Redacted.value)),
         accessTokenExpiresAt: Option.getOrNull(tokens.accessTokenExpiresAt),
         refreshTokenExpiresAt: Option.getOrNull(tokens.refreshTokenExpiresAt),
         scope: Option.getOrNull(tokens.scope),
@@ -475,6 +495,7 @@ const rowToProviderTokenSet = (row: SqlModels.Account): Option.Option<ProviderTo
     Option.map((accessToken): ProviderTokenSet => ({
       accessToken: Redacted.make(accessToken),
       refreshToken: Option.fromNullOr(row.refreshToken).pipe(Option.map(Redacted.make)),
+      idToken: Option.fromNullOr(row.idToken).pipe(Option.map(Redacted.make)),
       accessTokenExpiresAt: Option.fromNullOr(row.accessTokenExpiresAt),
       refreshTokenExpiresAt: Option.fromNullOr(row.refreshTokenExpiresAt),
       scope: Option.fromNullOr(row.scope),
@@ -504,7 +525,7 @@ export const layerSql: Layer.Layer<
     const sql = yield* SqlClient.SqlClient;
 
     const link: AccountsShape["link"] = Effect.fnUntraced(function* (input) {
-      const insert = yield* SqlModels.Account.insert
+      const insert = yield* repo.models.Account.insert
         .makeEffect({
           userId: input.userId,
           providerId: input.providerId,
@@ -631,18 +652,12 @@ export const layerSql: Layer.Layer<
         Effect.map(rowToProviderTokenSet),
       );
 
-    // SMS-002: a targeted write of the whole token group. It needs the row's
-    // `providerId`/`userId` only as encryption AAD (a plain, token-free read),
-    // never the old token values.
+    // SMS-002/RRS-006: a targeted write of the whole token group. It needs the
+    // row's `providerId`/`userId` only as encryption AAD, read through
+    // `findAad` (no decrypt, no lazy re-encrypt), never the old token values.
     const updateProviderTokens: AccountsShape["updateProviderTokens"] = (id, tokens) =>
-      repo.findById(id).pipe(
-        Effect.flatMap((existing) =>
-          repo.updateProviderTokens(
-            id,
-            { providerId: existing.providerId, userId: existing.userId },
-            tokenSetToRow(tokens),
-          ),
-        ),
+      repo.findAad(id).pipe(
+        Effect.flatMap((aad) => repo.updateProviderTokens(id, aad, tokenSetToRow(tokens))),
         Effect.catchTags({
           NoSuchElementError: () =>
             Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),

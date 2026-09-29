@@ -3,7 +3,7 @@ ID: "TC-004"
 Title: "Signals API entirely absent; no browser-side passkey surface in any shipped package"
 Level: medium
 Category: "dx"
-Status: ready-for-human
+Status: resolved
 Package: "—"
 Source: ".scratch/passkey/spec.md:360"
 Auditor: "tim-cappalli"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `—` · reported by **Tim Cappalli — WebAuthn / Passkeys Standards Contributor** (`tim-cappalli`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Ship the loop at minimum as documented client guidance plus a typed, fire-and-fo
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `passkey-browser-signals`. Already fixed by commit 0441226. Evidence at HEAD ec065a7: `packages/client/src/passkey/PasskeyClient.ts:284`. Fix: Add a typed, fire-and-forget Signals layer to @awthaq/client's passkeyClient: signalAllAcceptedCredentials after delete and after every successful authenticate, signalCurrentUserDetails after a profile-name change; expose signal capabilities in getClientCapabilities. Server supplies the needed rpId/userHandle/credential-id list. (effort M). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option B per plan; user may revisit. @awthaq/client passkeyClient: signalAllAcceptedCredentials after deletePasskey and after every successful authenticate, signalCurrentUserDetails() for apps, a new signed-in reauthenticate() that sends unknownCredential only when the server answers PasskeyCredentialNotFound (never from the anonymous sign-in, whose InvalidCredentials stays uniform), all fire-and-forget; getClientCapabilities reports signalAllAcceptedCredentials/signalCurrentUserDetails/signalUnknownCredential/relatedOrigins. Tests: client PasskeyClient.test.ts (delete, unsupported browser, rejected signal, failed fetch, authenticate, anonymous failure sends nothing, reauth unknownCredential, currentUserDetails). Spec BEH-EA-134; README client section has the autocomplete='username webauthn' guidance. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

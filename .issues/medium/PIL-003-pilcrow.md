@@ -55,3 +55,5 @@ Delete the row on verify's expiry paths (cheap, self-healing) and/or add a perio
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `session-list-correctness`. Duplicate of `ESS-005-effect-stream-specialist` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:641`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ESS-005-effect-stream-specialist` — closed by its fix (see that issue's Resolved comment).

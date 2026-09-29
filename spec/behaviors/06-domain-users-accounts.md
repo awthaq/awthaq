@@ -34,6 +34,8 @@ REQUIREMENT: No two `User` rows MAY hold the same email compared
              schema level, not by application-level lookup discipline alone.
 ```
 
+The one fold is JavaScript's `String.prototype.toLowerCase()`, applied at the domain boundary (ESR-003): `Users.create` stores the folded value, and `Users.findByEmail` folds its argument before the repository binds it, so lookups behave identically on the in-memory, SQLite and Postgres backends for non-ASCII addresses too (SQLite's own `lower()` folds ASCII only). The repository compares `lower(email)` on the column side against the already-folded parameter, so the `lower(email)` expression index still serves the lookup and the database never sees a non-normalized value.
+
 `better-auth/01-core-domain/01-entities-and-invariants.md` §2.1 documents email uniqueness as better-auth's primary identity key, enforced by a schema-level unique constraint, and awthaq's plan follows the same choice for the same reason: it is the key both password sign-in and OAuth implicit account matching rely on. The same source file's note is worth carrying forward as a documented constraint rather than an eternal one — requiring email specifically is "the *current* invariant, not an eternal one," and any future relaxation toward a wider identity key must be an explicit, versioned design change, never a silent one.
 
 ## BEH-EA-042: `emailVerified` is monotone and never client-settable through a generic write
@@ -45,7 +47,7 @@ REQUIREMENT: `emailVerified` MUST default to `false` at creation, MUST NOT
              operation may reset it to `false` once true.
 ```
 
-`better-auth/01-core-domain/01-entities-and-invariants.md` §2.1-§2.2 documents this as a supplier-authority-only field, flipped only by specific, audited operations (consuming an email-verification token, an OAuth sign-in whose provider already verified a matching email), and monotone thereafter. awthaq's plan carries the same invariant but intends to enforce the "never client-settable" half structurally, through `Model.Class`'s field-level write gating, rather than through the `input:false` convention better-auth's own §6.2 documents as a default a field author must opt into and can therefore forget.
+`better-auth/01-core-domain/01-entities-and-invariants.md` §2.1-§2.2 documents this as a supplier-authority-only field, flipped only by specific, audited operations (consuming an email-verification token, an OAuth sign-in whose provider already verified a matching email), and monotone thereafter. The OAuth plugin is one sanctioned caller of `verifyEmail` (AOMS-007): a first-time (just-in-time) sign-up through a provider named in `trustedProviders` that asserts `email_verified` marks the new user verified inside the creating transaction — it is a plugin-mediated operation, not a client-settable write, and no other OAuth path (auto-link, explicit link) calls it. awthaq's plan carries the same invariant but intends to enforce the "never client-settable" half structurally, through `Model.Class`'s field-level write gating, rather than through the `input:false` convention better-auth's own §6.2 documents as a default a field author must opt into and can therefore forget.
 
 ## BEH-EA-043: An Account is identified by `(providerId, subject)`, enforced as a schema-level unique constraint
 
@@ -109,6 +111,8 @@ REQUIREMENT: The base domain model MUST NOT cap the number of Accounts one
 ```
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §3.2 and §4.2 document the identical cardinality choice — no base-system cap on linked providers, no base-system cap on concurrent sessions — and awthaq's plan matches it directly: a User with a password credential, two OAuth providers, and a passkey is an ordinary, fully-supported state, as is a user signed in simultaneously on a laptop, a phone, and a CI service account acting on their behalf.
+
+**The opt-in cap is that deployment capability (SMS-003).** `SessionConfig.maxConcurrent` (`{ limit, onExceed: "evictOldest" }`) is absent by default, so nothing above changes. When configured, `Sessions.issue` — in the same atomic step as the insert (one `Ref.modify` in `layerMemory`, one transaction in `layerSql`) — ends the least-recently-active surplus of the user's live sessions so that no more than `limit` remain, and publishes `auth.session.revoked` with reason `limitEvicted` for each ([BEH-EA-101](13-events.md)); `issue`'s error channel is unchanged. Impersonation (`actingAs`) sessions neither count toward nor trigger the cap, so an admin's support session can never end the target's own sessions. A `refuse` policy would need a typed, user-facing error in `issue`'s channel and is not part of v1.
 
 ## BEH-EA-048: A plugin-contributed field on `User` or `Account` defaults to client-writable unless the plugin declares otherwise
 

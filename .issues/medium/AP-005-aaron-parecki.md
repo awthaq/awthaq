@@ -3,7 +3,7 @@ ID: "AP-005"
 Title: "RFC 6749 4.1.2.1 authorization error responses are unparseable by the callback contract"
 Level: medium
 Category: "compliance"
-Status: ready-for-human
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuthApi.ts:74"
 Auditor: "aaron-parecki"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `compliance` · `oauth` · reported by **IETF OAuth Working Group / Creator of IndieAuth** (`aaron-parecki`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Extend CallbackQuery with optional error/error_description fields, make code opt
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-callback-error-contract`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuthApi.ts:74`. Fix: Model RFC 6749 §4.1.2.1 error responses in the callback contract and fold them into the handler's own validated failure path. (effort S). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option B per plan; user may revisit. CallbackQuery: code optional + error/error_description/error_uri; new OAuthAuthorizationDenied { error: Literals(RFC 6749 4.1.2.1 set) } (400) on the callback; OAuth.callback validates cookie+state and consumes the flow first, then (before any exchange) surfaces an enumerated error as the typed denial, an unknown error or a missing code as OAuthCallbackFailed; error_description is logged at debug only and never echoed. Tests (AuthHttp.test.ts, wire-level): error=access_denied with valid state -> {_tag:OAuthAuthorizationDenied,error} (red before: query decode error), unknown code / neither code nor error / mismatched state -> OAuthCallbackFailed, replay after denial fails; BDD scenario 'A user denying consent at the provider gets the typed denial outcome' (REQ-EA-333 tag) + steps. BEH-EA-122 amended. Gates: tsc -b, tsconfig.test.json, vitest 882 pass, test:bdd 106, spec:verify:strict, oxlint.

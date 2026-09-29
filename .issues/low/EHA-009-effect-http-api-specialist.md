@@ -3,7 +3,7 @@ ID: "EHA-009"
 Title: "Session 'current' handler defects to a 500 on a concurrent-revoke race"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Session.ts:67"
 Auditor: "effect-http-api-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `server` · reported by **Effect HTTP API Specialist** (`effect-http-api-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Treat a missing current row as the contract's Unauthenticated (or a typed Sessio
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-handler-hardening`. Evidence at HEAD ec065a7: `packages/server/src/Session.ts:60`. Fix: Answer a concurrently-revoked current session with a typed 401 and an expired cookie, not a 500 defect. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** api/Session.ts: current declares error Unauthenticated; server Session.ts current, when findOwned is None (session revoked between verify and read), expires the cookie and fails Api.Unauthenticated instead of dying. Test: AuthHttp.test.ts 'GET /session answers 401 Unauthenticated and expires the cookie' with a Sessions whose findOwned is None.

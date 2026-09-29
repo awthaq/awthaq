@@ -19,7 +19,7 @@
 // (about 32 MiB) but runs once per not-yet-rehashed account, and the
 // hasher bounds it with the same permits as every other KDF.
 
-import { ConstantTime, PasswordHasher } from "@awthaq/ports";
+import { Hmac, PasswordHasher } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -47,7 +47,7 @@ export const betterAuthScryptVerifier: PasswordHasher.LegacyPasswordVerifierShap
         outputType: "hex",
       }),
     ).pipe(
-      Effect.map((derived) => ConstantTime.equalHex(derived, key)),
+      Effect.map((derived) => Hmac.constantTimeEqualString(derived, key)),
       Effect.orElseSucceed(() => false),
     );
   },

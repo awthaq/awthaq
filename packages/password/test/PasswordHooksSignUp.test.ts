@@ -69,7 +69,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
     Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("password-hooks-test-csrf-secret"),
+      secret: Redacted.make("password-hooks-test-csrf-secret-padded-to-thirty-two-bytes"),
       allowedOrigins: [] as ReadonlyArray<string>,
     }),
   ),

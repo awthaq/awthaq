@@ -3,7 +3,7 @@ ID: "PPS-004"
 Title: "Zero connection-pool configuration for the shared PgClient anywhere in the repo"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/test/Repositories.postgres.test.ts:51"
 Auditor: "postgres-performance-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `sql` · reported by **Postgres Performance Specialist** (`postgres-performance-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Ship an ops-ready Layer (or documented recipe) that exposes explicit pool min/ma
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-docs-operations`. Evidence at HEAD ec065a7: `packages/sql/test/Repositories.postgres.test.ts:52`. Fix: Ship a documented, ops-ready PgClient recipe and update the spec example. Distinguishable pool-exhaustion errors are an upstream @effect/sql-pg concern and are out of scope. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** README 'Postgres client configuration': PgClient.layerConfig with maxConnections/minConnections/idleTimeout/connectionTTL/applicationName, sizing formula, prepare:false behind pgbouncer transaction pooling, role-level statement_timeout, pool exhaustion left to upstream. spec/overview.md example updated. spec:verify:strict passes.

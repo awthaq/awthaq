@@ -7,6 +7,7 @@
 // caller (`Organization.ts`) transitions it explicitly via `updateStatus`.
 
 import { Users } from "@awthaq/core";
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -33,6 +34,13 @@ export interface InvitationRecord {
   readonly status: InvitationStatus;
   readonly createdAt: DateTime.Utc;
   readonly expiresAt: DateTime.Utc;
+  /**
+   * MTI-010: hex SHA-256 of the random capability token mailed to the invitee
+   * — the invitation's own `id` (visible in REST paths) is not the secret.
+   * `none` only for a row that predates the column; such an invitation can no
+   * longer be accepted or rejected (fail closed) and must be re-issued.
+   */
+  readonly tokenHash: Option.Option<string>;
 }
 
 export class InvitationRecordNotFound extends Data.TaggedError("InvitationRecordNotFound")<{
@@ -47,8 +55,16 @@ export interface InvitationRecordsShape {
     readonly teamId?: string | undefined;
     readonly role: ReadonlyArray<string>;
     readonly expiresAt: DateTime.Utc;
+    readonly tokenHash: string;
   }) => Effect.Effect<InvitationRecord>;
   readonly findById: (id: string) => Effect.Effect<Option.Option<InvitationRecord>>;
+  /** MTI-010: resolves an invitation from the hash of its emailed token (the landing-page lookup). */
+  readonly findByTokenHash: (tokenHash: string) => Effect.Effect<Option.Option<InvitationRecord>>;
+  /** MTI-010: replaces the stored token hash — a resend mints a new token, so the old emailed one stops working. */
+  readonly setTokenHash: (
+    id: string,
+    tokenHash: string,
+  ) => Effect.Effect<InvitationRecord, InvitationRecordNotFound>;
   readonly findPendingByEmailAndOrg: (
     email: string,
     organizationId: string,
@@ -95,6 +111,7 @@ export const layerMemory = Layer.effect(
         status: "pending",
         createdAt: now,
         expiresAt: input.expiresAt,
+        tokenHash: Option.some(input.tokenHash),
       };
       yield* Ref.update(state, (s) => HashMap.set(s, id, record));
       return record;
@@ -102,6 +119,31 @@ export const layerMemory = Layer.effect(
 
     const findById: InvitationRecordsShape["findById"] = (id) =>
       Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
+
+    const findByTokenHash: InvitationRecordsShape["findByTokenHash"] = (tokenHash) =>
+      Ref.get(state).pipe(
+        Effect.map((s) =>
+          Option.fromNullishOr(
+            Array.from(HashMap.values(s)).find((row) =>
+              Option.exists(row.tokenHash, (hash) => hash === tokenHash),
+            ),
+          ),
+        ),
+      );
+
+    const setTokenHash: InvitationRecordsShape["setTokenHash"] = (id, tokenHash) =>
+      Ref.modify(
+        state,
+        (s): readonly [Result.Result<InvitationRecord, InvitationRecordNotFound>, State] => {
+          const existing = HashMap.get(s, id);
+          if (Option.isNone(existing)) return [Result.fail(notFound(id)), s] as const;
+          const updated: InvitationRecord = {
+            ...existing.value,
+            tokenHash: Option.some(tokenHash),
+          };
+          return [Result.succeed(updated), HashMap.set(s, id, updated)] as const;
+        },
+      ).pipe(Effect.flatMap(Effect.fromResult));
 
     const findPendingByEmailAndOrg: InvitationRecordsShape["findPendingByEmailAndOrg"] = (
       email,
@@ -169,6 +211,8 @@ export const layerMemory = Layer.effect(
     return {
       create,
       findById,
+      findByTokenHash,
+      setTokenHash,
       findPendingByEmailAndOrg,
       listByOrganization,
       listByEmail,
@@ -181,21 +225,25 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const InvitationRow = Schema.Struct({
-  id: Schema.String,
-  email: Schema.String,
-  inviterId: Schema.String,
-  organizationId: Schema.String,
-  teamId: Schema.NullOr(Schema.String),
-  role: Schema.String,
-  status: Schema.Literals(["pending", "accepted", "rejected", "canceled", "expired"]),
-  createdAt: Schema.DateTimeUtcFromString,
-  expiresAt: Schema.DateTimeUtcFromString,
-});
+const makeInvitationRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    email: Schema.String,
+    inviterId: Schema.String,
+    organizationId: Schema.String,
+    teamId: Schema.NullOr(Schema.String),
+    role: Schema.String,
+    status: Schema.Literals(["pending", "accepted", "rejected", "canceled", "expired"]),
+    createdAt: wire.dateTime,
+    expiresAt: wire.dateTime,
+    tokenHash: Schema.NullOr(Schema.String),
+  });
+
+type InvitationRow = ReturnType<typeof makeInvitationRow>["Type"];
 
 const parseRoleArray = (json: string): ReadonlyArray<string> => JSON.parse(json);
 
-const toRecord = (row: typeof InvitationRow.Type): InvitationRecord => ({
+const toRecord = (row: InvitationRow): InvitationRecord => ({
   id: row.id,
   email: row.email,
   inviterId: Users.UserId(row.inviterId),
@@ -205,12 +253,16 @@ const toRecord = (row: typeof InvitationRow.Type): InvitationRecord => ({
   status: row.status,
   createdAt: row.createdAt,
   expiresAt: row.expiresAt,
+  tokenHash: Option.fromNullishOr(row.tokenHash),
 });
 
 export const layerSql = Layer.effect(
   InvitationRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const InvitationRow = makeInvitationRow(wire);
     const crypto = yield* Crypto.Crypto;
 
     const insert = SqlSchema.findOne({
@@ -222,13 +274,14 @@ export const layerSql = Layer.effect(
         teamId: Schema.NullOr(Schema.String),
         role: Schema.String,
         status: Schema.String,
-        createdAt: Schema.DateTimeUtcFromString,
-        expiresAt: Schema.DateTimeUtcFromString,
+        createdAt: wire.dateTime,
+        expiresAt: wire.dateTime,
+        tokenHash: Schema.String,
       }),
       Result: InvitationRow,
       execute: (r) => sql`
-          INSERT INTO organization_invitation (id, email, inviterId, organizationId, teamId, role, status, createdAt, expiresAt)
-          VALUES (${r.id}, ${r.email}, ${r.inviterId}, ${r.organizationId}, ${r.teamId}, ${r.role}, ${r.status}, ${r.createdAt}, ${r.expiresAt})
+          INSERT INTO organization_invitation (id, email, "inviterId", "organizationId", "teamId", role, status, "createdAt", "expiresAt", "tokenHash")
+          VALUES (${r.id}, ${r.email}, ${r.inviterId}, ${r.organizationId}, ${r.teamId}, ${r.role}, ${r.status}, ${r.createdAt}, ${r.expiresAt}, ${r.tokenHash})
           RETURNING *
         `,
     });
@@ -239,18 +292,35 @@ export const layerSql = Layer.effect(
       execute: (id) => sql`SELECT * FROM organization_invitation WHERE id = ${id}`,
     });
 
+    const findByTokenHashQuery = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: InvitationRow,
+      execute: (tokenHash) =>
+        sql`SELECT * FROM organization_invitation WHERE "tokenHash" = ${tokenHash}`,
+    });
+
+    const setTokenHashQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({ id: Schema.String, tokenHash: Schema.String }),
+      Result: InvitationRow,
+      execute: (r) => sql`
+          UPDATE organization_invitation SET "tokenHash" = ${r.tokenHash}
+          WHERE id = ${r.id}
+          RETURNING *
+        `,
+    });
+
     const findPendingByEmailAndOrgQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({ email: Schema.String, organizationId: Schema.String }),
       Result: InvitationRow,
       execute: (r) =>
-        sql`SELECT * FROM organization_invitation WHERE email = ${r.email} AND organizationId = ${r.organizationId} AND status = 'pending'`,
+        sql`SELECT * FROM organization_invitation WHERE email = ${r.email} AND "organizationId" = ${r.organizationId} AND status = 'pending'`,
     });
 
     const listByOrganizationQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: InvitationRow,
       execute: (organizationId) =>
-        sql`SELECT * FROM organization_invitation WHERE organizationId = ${organizationId}`,
+        sql`SELECT * FROM organization_invitation WHERE "organizationId" = ${organizationId}`,
     });
 
     const listByEmailQuery = SqlSchema.findAll({
@@ -259,11 +329,12 @@ export const layerSql = Layer.effect(
       execute: (email) => sql`SELECT * FROM organization_invitation WHERE email = ${email}`,
     });
 
-    const countPendingByInviterQuery = SqlSchema.findAll({
+    // MTI-005: a COUNT(*), never a full-row materialization.
+    const countPendingByInviterQuery = SqlSchema.findOne({
       Request: Schema.String,
-      Result: InvitationRow,
+      Result: Schema.Struct({ count: Schema.Number }),
       execute: (inviterId) =>
-        sql`SELECT * FROM organization_invitation WHERE inviterId = ${inviterId} AND status = 'pending'`,
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_invitation WHERE "inviterId" = ${inviterId} AND status = 'pending'`,
     });
 
     const updateStatusQuery = SqlSchema.findOneOption({
@@ -289,12 +360,24 @@ export const layerSql = Layer.effect(
         status: "pending",
         createdAt: now,
         expiresAt: input.expiresAt,
+        tokenHash: input.tokenHash,
       }).pipe(Effect.orDie);
       return toRecord(row);
     });
 
     const findById: InvitationRecordsShape["findById"] = (id) =>
       findByIdQuery(id).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
+
+    const findByTokenHash: InvitationRecordsShape["findByTokenHash"] = (tokenHash) =>
+      findByTokenHashQuery(tokenHash).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
+
+    const setTokenHash: InvitationRecordsShape["setTokenHash"] = Effect.fnUntraced(
+      function* (id, tokenHash) {
+        const row = yield* setTokenHashQuery({ id, tokenHash }).pipe(Effect.orDie);
+        if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
+        return toRecord(row.value);
+      },
+    );
 
     const findPendingByEmailAndOrg: InvitationRecordsShape["findPendingByEmailAndOrg"] = (
       email,
@@ -319,7 +402,7 @@ export const layerSql = Layer.effect(
 
     const countPendingByInviter: InvitationRecordsShape["countPendingByInviter"] = (inviterId) =>
       countPendingByInviterQuery(inviterId).pipe(
-        Effect.map((rows) => rows.length),
+        Effect.map((row) => row.count),
         Effect.orDie,
       );
 
@@ -334,7 +417,7 @@ export const layerSql = Layer.effect(
     const removeAllForOrganization: InvitationRecordsShape["removeAllForOrganization"] = (
       organizationId,
     ) =>
-      sql`DELETE FROM organization_invitation WHERE organizationId = ${organizationId}`.pipe(
+      sql`DELETE FROM organization_invitation WHERE "organizationId" = ${organizationId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );
@@ -342,6 +425,8 @@ export const layerSql = Layer.effect(
     return {
       create,
       findById,
+      findByTokenHash,
+      setTokenHash,
       findPendingByEmailAndOrg,
       listByOrganization,
       listByEmail,

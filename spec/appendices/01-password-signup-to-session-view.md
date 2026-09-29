@@ -48,6 +48,8 @@ const plugins = [password()] as const
 
 export const AuthApi = Auth.api(plugins.map((p) => p.contract))
 
+// WAL, -wal/-shm sidecars, live backup, checkpointing, busy timeout, one-writer:
+// see packages/sql/README.md, "Embedded SQLite in production".
 const Sql = SqliteClient.layer({ filename: "auth.db" })
 const Migrations = Layer.unwrap(Effect.map(Auth.link(plugins), (linked) =>
   SqliteMigrator.layer({ loader: SqliteMigrator.fromRecord(linked.migrations) })))

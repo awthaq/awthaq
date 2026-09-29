@@ -3,7 +3,7 @@ ID: "CSG-006"
 Title: "Core PII columns are plaintext at rest with no documented encryption boundary"
 Level: medium
 Category: "compliance"
-Status: ready-for-human
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Models.ts:116"
 Auditor: "compliance-soc2-gdpr-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `compliance` · `sql` · reported by **Compliance (SOC2/GDPR) Specialist** (`compliance-soc2-gdpr-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Document the encryption boundary as an explicit deployer responsibility (full-di
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-docs-operations`. Evidence at HEAD ec065a7: `packages/sql/src/Models.ts:142`. Fix: Document the encryption boundary now. Depending on the decision, add opt-in application-level encryption for the non-lookup PII columns (ipAddress, userAgent, users.metadata) through the existing Encryption port, with row AAD. (effort M). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option B per plan; user may revisit. Documented boundary: packages/sql/README.md 'Encryption at rest' (accounts tokens app-encrypted; password/session/verification secrets hash-only; everything else relies on deployer disk/DB encryption and TLS) + BEH-EA-034 paragraph. Opt-in PII encryption: Repositories.SessionsRepositoryEncryptedLive (sessions.ipAddress/userAgent, AAD session:<id>:<field>) and UsersRepositoryEncryptedLive (users.metadata, AAD user:<id>:metadata), reusing Encryption, the SMS-002 degrade-to-null-and-log policy and the KRS-002 lazy re-encryption (AccountsRepositoryConfig.reencryptOnRead). Deviation from the dossier's wording, in line with the type-system-first preference: the opt-in is choosing the encrypted layer (Encryption is then in the Layer's requirements, checked by the compiler) rather than a runtime SqlPiiEncryption Reference that would force Encryption on every deployment. Legacy plaintext rows stay readable and are sealed on read (shape test Encryption.looksLikeEnvelope, new additive export in @awthaq/ports); an envelope-shaped value that fails authentication reads as null, never plaintext. Tests packages/sql/test/PiiEncryption.test.ts (raw columns are ciphertext, plaintext through insert/findById/listByUser/touch/reauthenticate/update/findByEmail/verifyEmail, AAD binding, legacy sealing, null stays null). Option C (blind-index email) deferred as planned.

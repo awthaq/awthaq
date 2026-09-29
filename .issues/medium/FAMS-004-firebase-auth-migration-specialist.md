@@ -3,7 +3,7 @@ ID: "FAMS-004"
 Title: "No per-user custom-claims store; Firebase setCustomUserClaims has no qadi-routed equivalent"
 Level: medium
 Category: "architecture"
-Status: ready-for-human
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/src/Resolvers.ts:35"
 Auditor: "firebase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `qadi` · reported by **Firebase Auth Migration Specialist** (`firebase-auth-migration-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Add a plugin-contributed per-user attribute/claims store (the plugin-field mecha
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `user-claims-store`. Evidence at HEAD ec065a7: `packages/qadi/src/Resolvers.ts:60`. Fix: Add an opt-in per-user claims store exposed to qadi as a namespaced attribute (pending decision), and document the Firebase import mapping. (effort M). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option 2 per plan; user may revisit. New packages/qadi/src/UserClaims.ts: an opt-in plugin like Roles (id claims, table claims_user with one dialect-branched migration, UserClaims.layer memory / layerSql, no HTTP contract) with get/set/merge/delete per user (merge is shallow, a null value deletes a key; the SQL read-modify-write is one transaction). A real change publishes the new auth.user.claimsUpdated event (keys only, never values; actor recorded; AuditLog actor case added) and announces Hooks.AfterUserAttributesChanged for 'claims' so an app-scoped DecisionCache is flushed via DecisionCacheInvalidation. UserClaimsAttributes is an AttributeResolver answering the single attribute 'claims' (typed name via claimsAttr, UserClaimsAttributeNames for attributeResolverRegistry, so it cannot shadow UserAttributes; a store outage is AttributeResolveError). Placed in @awthaq/qadi (JWT definePayload can copy from UserClaims.get; documented). Firebase mapping documented in packages/qadi/README.md (role claims -> Roles.assign, everything else -> UserClaims). Tests (packages/qadi/test/UserClaims.test.ts, 15 tests, both layers): round-trips, shallow merge and null delete, per-user isolation, events with keys not values, resolver, a real qadi policy hasAttribute(claims, fieldMatch(plan, eq(pro))) flipping allow/deny as the claim changes, plugin composition, registry coexistence, hook announcement. No size cap by design (documented). qadi gains @effect/sql-sqlite-node as a dev dep so pnpm-lock.yaml changed.

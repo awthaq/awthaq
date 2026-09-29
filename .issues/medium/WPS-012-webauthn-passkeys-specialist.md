@@ -55,3 +55,5 @@ Ship dual-dialect migrations for passkey_credential (id PK, userId index) and pa
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** ALREADY-FIXED (confidence high); workstream `passkey-docs`. Already fixed by commit 58ef46a. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:535`. Full dossier: `.plan/slices/10-passkey-admin.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Already fixed by BAM-002 (commit 58ef46a): Passkey.migrations ship the tables and ChallengeStore/PasskeyCredentials SQL tests run through them; extended here with four more migrations.

@@ -3,7 +3,7 @@ ID: "RZS-005"
 Title: "Schema-less hardcoded relation vocabulary conflates RBAC roles with edges and silently answers malformed questions"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/OrganizationQadi.ts:94"
 Auditor: "rebac-zanzibar-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `organization` · reported by **ReBAC / Zanzibar-style Specialist** (`rebac-zanzibar-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Validate that resourceId names the resource type each relation expects (org ids 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-qadi-relationships`. Evidence at HEAD ec065a7: `packages/organization/src/OrganizationQadi.ts:111`. Fix: Fail closed and legibly on malformed relation questions, and stop dynamic/custom role names from shadowing built-ins. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Unrecognised relations, organization-scoped relations naming no organization, and team-member naming no team now answer qadi's 'Unknown' (TeamRecords.findTeamByIdAnyOrg added); OrganizationQadi.test.ts expectation updated. The N8/reserved-name half landed earlier: createRole rejects owner/admin/member and static-custom names (ReservedOrgRoleName 409), Organization.config dies at build on a permissionStatements key that redefines a built-in, PermissionEngine.statementsByRoleFrom is built-in > static > dynamic so a stored dynamic 'owner' row is inert (tests in Organization.test.ts and PermissionEngine.test.ts). Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 896 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

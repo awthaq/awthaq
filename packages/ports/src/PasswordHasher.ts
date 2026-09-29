@@ -51,7 +51,7 @@
 // PHS-001: `verify` never calls hash-wasm's `argon2Verify`, whose digest
 // comparison is a plain `===` on the encoded strings. Both layers parse the
 // stored string themselves, recompute with the stored salt, and compare the
-// digest with `ConstantTime` (the workspace's one shared comparator, ACS-002).
+// digest with `Hmac`'s constant-time comparison (the workspace's one shared comparator, ACS-002).
 //
 // ACS-006/PHS-007: a stored hash is untrusted input (an imported or
 // corrupted row) yet its embedded cost parameters drive the recomputation,
@@ -113,7 +113,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Semaphore from "effect/Semaphore";
 import { argon2id, scrypt } from "hash-wasm";
-import * as ConstantTime from "./ConstantTime.ts";
+import * as Hmac from "./Hmac.ts";
 
 const SALT_LENGTH = 16;
 const HASH_LENGTH = 32;
@@ -400,7 +400,7 @@ export const makeArgon2id = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
           memorySize: parsed.memorySize,
           hashLength: parsed.digest.length,
         });
-        return ConstantTime.equalBytes(digest, parsed.digest);
+        return Hmac.constantTimeEqualBytes(digest, parsed.digest);
       }).pipe(Effect.orElseSucceed(() => false));
     };
 
@@ -566,7 +566,7 @@ export const makeScrypt = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
           parallelism: parsed.parallelism,
           hashLength: HASH_LENGTH,
         });
-        return ConstantTime.equalHex(toHex(digest), parsed.hash);
+        return Hmac.constantTimeEqualString(toHex(digest), parsed.hash);
       }).pipe(Effect.orElseSucceed(() => false));
     };
 

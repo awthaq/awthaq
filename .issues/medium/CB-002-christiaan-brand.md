@@ -3,7 +3,7 @@ ID: "CB-002"
 Title: "User-presence (UP) flag is never enforced in any ceremony"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/WebAuthn.ts:212"
 Auditor: "christiaan-brand"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `ports` · reported by **Christiaan Brand — W3C WebAuthn Specification Co-editor** (`christiaan-brand`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Expose `userPresent` on VerifiedRegistration/VerifiedAuthentication alongside `u
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `webauthn-user-presence`. Evidence at HEAD ec065a7: `packages/ports/src/WebAuthn.ts:204`. Fix: Enforce UP on ordinary registrations by letting the plugin choose requireUserPresence per ceremony; surface userPresent. (effort M). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Enforce user presence on ordinary registrations. Port (packages/ports/src/WebAuthn.ts): VerifyRegistrationInput.requireUserPresence is now a required field passed through to the library; VerifiedRegistration/VerifiedAuthentication surface userPresent (parsed from the verified authData). Plugin (Passkey.ts registerVerify): requireUserPresence: !conditional, so only the conditional-create scope may register UP=0. Tests: ports WebAuthn.test.ts (UP=0 registration rejected with requireUserPresence:true, accepted+reported false with false, userPresent surfaced, UP=0 assertion rejected pinning the library's auth-side enforcement); passkey PasskeyCeremony.test.ts (ordinary ceremony passes requireUserPresence true / conditional false; UP=0 ordinary registration -> PasskeyVerificationFailed) and PasskeyRealPort.test.ts (real library refuses UP=0). Red before the change (git apply -R of src): all of these failed. Spec BEH-EA-129/130 updated. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

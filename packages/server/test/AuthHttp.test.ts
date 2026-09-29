@@ -18,8 +18,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Path from "effect/Path";
+import * as Cause from "effect/Cause";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Cookies from "effect/unstable/http/Cookies";
 import * as Etag from "effect/unstable/http/Etag";
+import * as Headers from "effect/unstable/http/Headers";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -28,6 +34,8 @@ import * as Account from "../src/Account.ts";
 import * as Authentication from "../src/Authentication.ts";
 import * as AuthHttp from "../src/AuthHttp.ts";
 import * as Csrf from "../src/Csrf.ts";
+import { currentUser } from "../src/internal/CurrentUser.ts";
+import { HandlerInvariantViolation } from "../src/internal/Defects.ts";
 import * as Session from "../src/Session.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
@@ -54,9 +62,10 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 );
 
 const CSRF_TEST_COOKIE_VALUE: string = (() => {
-  const token = randomBytes(32).toString("hex");
-  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(token).digest("hex");
-  return `${token}.${signature}`;
+  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The router runs under `it.effect`'s TestClock, which starts at 0.
+  const signed = `0.${randomBytes(32).toString("hex")}`;
+  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(signed).digest("hex");
+  return `${signed}.${signature}`;
 })();
 
 const withCsrfCookie = (cookie?: string): string =>
@@ -70,31 +79,47 @@ const csrfHeaders = (cookie?: string): Record<string, string> => ({
   "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
 });
 
-const AppLayer = Layer.mergeAll(
-  AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
-    Layer.provide(Session.SessionHandlers),
-    Layer.provide(Account.AccountHandlers),
-  ),
-  AuthHttp.docs(AuthCore.AuthCoreApi),
-).pipe(
-  Layer.provideMerge(Authentication.AuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provide(CsrfProtectionLive),
-  // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
-  // `SqlTransaction` — a no-op wrapper for this in-memory composition.
-  Layer.provide(SqlTransaction.layerNoop),
-  Layer.provideMerge(Sessions.layerMemory),
-  Layer.provideMerge(Users.layerMemory),
-  Layer.provideMerge(Accounts.layerMemory),
-  Layer.provideMerge(Verification.layerMemory),
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provide(NodeCrypto.layer),
-  Layer.provideMerge(TestServices),
-  Layer.provideMerge(HttpRouter.layer),
-);
+const makeAppLayer = (sessionsLayer: typeof Sessions.layerMemory) =>
+  Layer.mergeAll(
+    AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
+      Layer.provide(Session.SessionHandlers),
+      Layer.provide(Account.AccountHandlers),
+    ),
+    AuthHttp.docs(AuthCore.AuthCoreApi),
+  ).pipe(
+    Layer.provideMerge(Authentication.AuthenticationLive),
+    Layer.provide(Authentication.PrincipalResolverLive),
+    Layer.provide(CsrfProtectionLive),
+    // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
+    // `SqlTransaction` — a no-op wrapper for this in-memory composition.
+    Layer.provide(SqlTransaction.layerNoop),
+    Layer.provideMerge(sessionsLayer),
+    Layer.provideMerge(Users.layerMemory),
+    Layer.provideMerge(Accounts.layerMemory),
+    Layer.provideMerge(Verification.layerMemory),
+    // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(Hooks.HooksLive),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(TestServices),
+    Layer.provideMerge(HttpRouter.layer),
+  );
+
+const AppLayer = makeAppLayer(Sessions.layerMemory);
+
+// TIR-003/ESS-005/GC-005: a `Sessions` whose `list` never contains the
+// caller's own session — what the SQL layer's 200-row page cap used to do to
+// a user with many historical sessions. Point queries must not depend on it.
+const ListlessSessions: typeof Sessions.layerMemory = Layer.effect(
+  Sessions.Sessions,
+  Effect.gen(function* () {
+    const real = yield* Sessions.Sessions;
+    return { ...real, list: () => Effect.succeed([]) };
+  }),
+).pipe(Layer.provide(Sessions.layerMemory));
+
+const ListlessAppLayer = makeAppLayer(ListlessSessions);
 
 const userId = Users.UserId("44444444-4444-4444-4444-444444444444");
 const otherUserId = Users.UserId("55555555-5555-5555-5555-555555555555");
@@ -292,6 +317,292 @@ describe("AuthHttp + Session (real HTTP)", () => {
   );
 });
 
+// CSS-002: pre-response handlers only run under `HttpEffect.toHandled`, so
+// these tests drive the router the way a real server does and read the
+// cookies of the response actually written.
+const sendHandled = (
+  path: string,
+  options: {
+    readonly method: string;
+    readonly token: Redacted.Redacted<string>;
+    readonly body?: unknown;
+  },
+) =>
+  Effect.gen(function* () {
+    const router = yield* HttpRouter.HttpRouter;
+    let written: HttpServerResponse.HttpServerResponse | undefined;
+    yield* HttpEffect.toHandled(router.asHttpEffect(), (_request, response) =>
+      Effect.sync(() => {
+        written = response;
+      }),
+    ).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(
+          new Request(`http://localhost${path}`, {
+            method: options.method,
+            headers: {
+              ...cookieHeader(options.token),
+              ...(options.body === undefined ? {} : { "content-type": "application/json" }),
+            },
+            ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+          }),
+        ),
+      ),
+    );
+    if (written === undefined) return yield* Effect.die("no response was written");
+    return written;
+  });
+
+const assertSessionCookieExpired = (response: HttpServerResponse.HttpServerResponse) => {
+  const cookie = Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME);
+  assert.isTrue(Option.isSome(cookie), "the session cookie must be expired on this response");
+  if (Option.isNone(cookie)) return;
+  assert.strictEqual(cookie.value.value, "");
+  assert.strictEqual(cookie.value.options?.maxAge, 0);
+  assert.strictEqual(cookie.value.options?.path, "/");
+  assert.isTrue(cookie.value.options?.secure);
+  assert.isTrue(cookie.value.options?.httpOnly);
+  assert.strictEqual(cookie.value.options?.sameSite, "strict");
+};
+
+describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)", () => {
+  it.effect("POST /session/sign-out expires __Host-session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/sign-out", { method: "POST", token });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  // TIR-008: sign-out and account deletion are audited, not silent.
+  it.effect("POST /session/sign-out records a signOut auth.session.revoked in AuditLog", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const audit = yield* AuditLog.AuditLog;
+        const { token, session } = yield* sessions.issue({ userId });
+        yield* sendHandled("/session/sign-out", { method: "POST", token });
+        const rows = yield* audit.list({ eventTag: "auth.session.revoked" });
+        assert.strictEqual(rows.length, 1);
+        const payload = rows[0]?.payload as { reason: string; sessionId: string; scope: string };
+        assert.strictEqual(payload.reason, "signOut");
+        assert.strictEqual(payload.sessionId, session.id);
+        assert.strictEqual(payload.scope, "one");
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("POST /session/revoke-all expires __Host-session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/revoke-all", { method: "POST", token });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("POST /session/revoke with the caller's own id expires the cookie", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token, session } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/revoke", {
+          method: "POST",
+          token,
+          body: { id: session.id },
+        });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("revoking a different session does NOT expire the caller's cookie", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const current = yield* sessions.issue({ userId });
+        const other = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/revoke", {
+          method: "POST",
+          token: current.token,
+          body: { id: other.session.id },
+        });
+        assert.strictEqual(response.status, 204);
+        assert.isTrue(Option.isNone(Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME)));
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("DELETE /user expires __Host-session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const user = yield* users.create({ email: "delete-me@example.com", name: "Del" });
+        const { token } = yield* sessions.issue({ userId: user.id });
+        const response = yield* sendHandled("/user", { method: "DELETE", token });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+});
+
+// EHA-009: the session was revoked between the middleware's verify and the
+// handler's keyed read — a typed 401 with an expired cookie, not a 500.
+const VanishingSessions: typeof Sessions.layerMemory = Layer.effect(
+  Sessions.Sessions,
+  Effect.gen(function* () {
+    const real = yield* Sessions.Sessions;
+    return { ...real, findOwned: () => Effect.succeed(Option.none()) };
+  }),
+).pipe(Layer.provide(Sessions.layerMemory));
+
+describe("AuthHttp + Session: a concurrently revoked current session (EHA-009)", () => {
+  it.effect("GET /session answers 401 Unauthenticated and expires the cookie", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session", { method: "GET", token });
+        assert.strictEqual(response.status, 401);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(makeAppLayer(VanishingSessions))),
+  );
+});
+
+describe("server handler invariants (GC-003/GC-008)", () => {
+  it.effect(
+    "a non-User principal reaching a required-auth group dies with HandlerInvariantViolation",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* currentUser.pipe(
+          Effect.provideService(
+            Api.CurrentPrincipal,
+            new Api.ApiKeyPrincipal({ ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }) }),
+          ),
+          Effect.exit,
+        );
+        assert.isTrue(Exit.isFailure(exit));
+        if (!Exit.isFailure(exit)) return;
+        assert.isTrue(Cause.hasDies(exit.cause));
+        const defect = Cause.squash(exit.cause);
+        assert.instanceOf(defect, HandlerInvariantViolation);
+        if (defect instanceof HandlerInvariantViolation) {
+          assert.strictEqual(defect.invariant, "NonUserPrincipal");
+        }
+      }),
+  );
+});
+
+describe("AuthHttp + Session: point queries never go through list (TIR-003/GC-005)", () => {
+  it.effect("GET /session answers 200 even when the caller's session is absent from list", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const { token, session } = yield* sessions.issue({ userId });
+        const response = yield* router
+          .asHttpEffect()
+          .pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              HttpServerRequest.fromWeb(
+                new Request("http://localhost/session", { headers: cookieHeader(token) }),
+              ),
+            ),
+          );
+        assert.strictEqual(response.status, 200);
+        const body = (yield* jsonBody(response)) as { id: string; current: boolean };
+        assert.strictEqual(body.id, session.id);
+        assert.isTrue(body.current);
+      }),
+    ).pipe(Effect.provide(ListlessAppLayer)),
+  );
+
+  it.effect("POST /session/revoke revokes an owned session even when list omits it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const current = yield* sessions.issue({ userId });
+        const other = yield* sessions.issue({ userId });
+        const response = yield* router.asHttpEffect().pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/session/revoke", {
+                method: "POST",
+                headers: { ...cookieHeader(current.token), "content-type": "application/json" },
+                body: JSON.stringify({ id: other.session.id }),
+              }),
+            ),
+          ),
+        );
+        assert.strictEqual(response.status, 204);
+        const failure = yield* sessions.verify(other.token).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "SessionNotFound");
+      }),
+    ).pipe(Effect.provide(ListlessAppLayer)),
+  );
+});
+
+describe("AuthHttp + Session: bearer clients (MNA-008, decision 24 §2)", () => {
+  it.effect("POST /session/sign-out with only a bearer token (no CSRF pair) answers 204", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* router.asHttpEffect().pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/session/sign-out", {
+                method: "POST",
+                headers: { authorization: `Bearer ${Redacted.value(token)}` },
+              }),
+            ),
+          ),
+        );
+        assert.strictEqual(response.status, 204);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("a cookie-authenticated POST without the CSRF pair is still rejected 403", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* router.asHttpEffect().pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/session/sign-out", {
+                method: "POST",
+                headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+              }),
+            ),
+          ),
+        );
+        assert.strictEqual(response.status, 403);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+});
+
 describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
   it.effect("PATCH /user updates the caller's own name; requires authentication", () =>
     Effect.scoped(
@@ -452,6 +763,38 @@ describe("AuthHttp (BEH-EA-087's ManagedRuntime escape hatch)", () => {
       );
       assert.strictEqual(session.userId, userId);
       yield* Effect.promise(() => runtime.dispose());
+    }),
+  );
+});
+
+describe("AuthHttp.layerRedactedHeaders (MAPS-008)", () => {
+  it.effect("redacts the rotated-token header and x-jwt-token alongside Effect's defaults", () =>
+    Effect.gen(function* () {
+      const names = yield* Headers.CurrentRedactedNames;
+      const redacted = Headers.redact(
+        Headers.fromInput({
+          [Api.ROTATED_TOKEN_HEADER]: "rotated-secret",
+          "x-jwt-token": "jwt-secret",
+          authorization: "Bearer secret",
+          "x-request-id": "not-secret",
+        }),
+        names,
+      );
+      assert.isTrue(Redacted.isRedacted(redacted[Api.ROTATED_TOKEN_HEADER]));
+      assert.isTrue(Redacted.isRedacted(redacted["x-jwt-token"]));
+      assert.isTrue(Redacted.isRedacted(redacted["authorization"]));
+      assert.strictEqual(redacted["x-request-id"], "not-secret");
+    }).pipe(Effect.provide(AuthHttp.layerRedactedHeaders)),
+  );
+
+  it.effect("without the layer the rotated token would be logged verbatim", () =>
+    Effect.gen(function* () {
+      const names = yield* Headers.CurrentRedactedNames;
+      const redacted = Headers.redact(
+        Headers.fromInput({ [Api.ROTATED_TOKEN_HEADER]: "rotated-secret" }),
+        names,
+      );
+      assert.strictEqual(redacted[Api.ROTATED_TOKEN_HEADER], "rotated-secret");
     }),
   );
 });

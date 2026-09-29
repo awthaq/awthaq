@@ -3,7 +3,7 @@ ID: "DRS-008"
 Title: "organization_active_context is keyed by sessionId, coupling core sessions to plugin tables across any future shard boundary"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/ActiveContextRecords.ts:3"
 Auditor: "data-residency-sharding-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `organization` · reported by **Data Residency & Sharding Specialist** (`data-residency-sharding-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Either re-key by userId (matching the delete cascade that exists) or document se
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-active-context-lifecycle`. Evidence at HEAD ec065a7: `packages/organization/src/ActiveContextRecords.ts:3`. Fix: Keep sessionId as the key (active org is per-session by design) but add an indexed userId column so the row can be cleared on user erasure and membership removal, and document its shard placement. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** organization_active_context gains a nullable userId column + index (migration organization_active_context_user_id); ActiveContextRecord.userId (Option); records ops unsetOrganization/unsetTeam/clearOrganization/clearOrganizationForUser/clearTeam/deleteAllByUser on both layers; Organization.beforeUserDeleteErasure now also sweeps the user's active-context rows (RIn gains ActiveContextRecords); ActiveContextRecords.ts header rewritten (sessionId key is deliberate, userId is the erasure/revocation index, shard placement). Tests: ActiveContextRecords.test.ts (both layers) deleteAllByUser + clear ops, OrganizationErasure.test.ts sweep (red before). Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 871 pass, test:bdd green, spec:verify:strict PASS, oxlint clean.

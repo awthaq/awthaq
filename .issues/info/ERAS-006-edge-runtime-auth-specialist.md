@@ -3,7 +3,7 @@ ID: "ERAS-006"
 Title: "SQL repositories are structurally driver-neutral, but no edge-viable SqlClient story exists or is documented"
 Level: info
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:76"
 Auditor: "edge-runtime-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `sql` · reported by **Edge Runtime Auth Specialist** (`edge-runtime-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ State the boundary in the persistence spec or a deployment ADR: edge runtime = s
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-docs-operations`. Evidence at HEAD ec065a7: `packages/sql/package.json:31`. Fix: Document the edge/origin split and the driver matrix, and prove one HTTP-capable sqlite-dialect driver against the contract suite so the documentation isn't aspirational. (effort M). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** README 'Runtimes & drivers' driver matrix and the edge/origin split (also in spec/overview.md). @effect/sql-libsql added as a dev dependency (catalog + minimumReleaseAgeExclude in pnpm-workspace.yaml) and packages/sql/test/Repositories.libsql.test.ts runs the shared contract cases and coreMigrations over a libSQL file: database (20/20 green), which also proves Migrator's withTransaction works on libSQL. D1/sqlite-do/pglite are documented as untested with the D1 no-interactive-transactions caveat (run migrations from Node). No ADR added; the overview note carries it.

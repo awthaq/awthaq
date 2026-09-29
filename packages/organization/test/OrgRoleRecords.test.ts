@@ -6,17 +6,17 @@
 // `packages/jwt/test/RevocationStore.test.ts` establishes.
 import { Migrations } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Organization from "../src/Organization.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const MemoryLayer = OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("organization_OrgRoleRecords");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
   Layer.provide(SqlLive),

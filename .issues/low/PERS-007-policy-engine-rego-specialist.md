@@ -3,7 +3,7 @@ ID: "PERS-007"
 Title: "HasCustom name typos fail at enforcement time; no registry-policy cross-check exists"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/node_modules/@qadi/core/src/CustomPredicate.ts:105"
 Auditor: "policy-engine-rego-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `qadi` · reported by **Policy Engine / Rego Specialist** (`policy-engine-rego-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Add a composition-time validator (or a debug-mode check) that walks registered p
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `qadi-upstream`. Evidence at HEAD ec065a7: `../qadi/packages/core/src/CustomPredicate.ts:105`. Fix: In ../qadi: a composition-time validator for HasCustom names against the registry. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** In ../qadi: danglingCustomPredicates(policies, table) walks policy trees (childrenOf) for HasCustom names absent from the table; customPredicateFromRecordChecked(table, policies) fails layer build with the new DanglingCustomPredicates error (Data.TaggedError, joins QadiError, ERROR_CODES ACL018, listed in spec/overview.md). Tests: core/test/CustomPredicate.test.ts 'danglingCustomPredicates / customPredicateFromRecordChecked (PERS-007)' x3 (red before). Fixed UPSTREAM in ../qadi on branch plan/audit-fixes, commit b4b9270 (not merged, not released; ../qadi's checkout was returned to main). Gates run in ../qadi: typecheck, vitest (2254 tests), tstyche, lint+house-style, spec:api, spec:verify:strict, spec:examples. Still to do in awthaq after qadi releases (0.9.0 changeset included): bump @qadi/* from ^0.7.0 and let Path A/B pass request context (ip, userAgent) into EvaluateOptions.context; awthaq's QadiLive examples should then use customPredicateFromRecordChecked.

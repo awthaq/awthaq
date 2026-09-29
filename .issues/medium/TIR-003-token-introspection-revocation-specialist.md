@@ -3,7 +3,7 @@ ID: "TIR-003"
 Title: "verifyLive consults page 1 of a paginated list - valid sessions beyond 200 rows false-negative"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:383"
 Auditor: "token-introspection-revocation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `sql` · reported by **Token Introspection & Revocation Specialist** (`token-introspection-revocation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Stop routing a point query through a paginated device list: add Sessions.isLive(
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `session-list-liveness-and-pagination`. Already fixed by commit 6629fd2. Evidence at HEAD ec065a7: `packages/jwt/src/Jwt.ts:446`. Fix: Add a keyed ownership lookup and route every point query through it. Make `list` exhaustive instead of silently truncating at 200. (effort M). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New Sessions.findOwned(userId, id) (one keyed findById + ownership/tombstone/expiry via the shared isLiveAt) in both layers; isLive is now findOwned+isSome; all four point-lookup call sites switched (server Session.ts current, passkey Passkey.ts requireFreshSession, qadi Resolvers.ts reauthHandler; revoke uses revokeOwned per GC-005). layerSql.list drains every page. grep: no production code calls sessions.list just to find one id. Tests as under ESS-005 (250-session layerSql test, server listless-Sessions tests, core findOwned test).

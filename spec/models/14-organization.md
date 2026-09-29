@@ -21,8 +21,9 @@ those CRUD concerns — a `RelationshipResolver` it contributes to qadi so that
 authorization policies can ask "is this subject a member of the organization
 that owns this resource" without the application hand-writing that resolver
 itself. `archive/PRD.md` §17's Phase-2 row describes it exactly this way:
-"`Organization` (membership, invitations, relationship resolver)." Nothing
-described here exists yet — awthaq is pre-implementation.
+"`Organization` (membership, invitations, relationship resolver)."
+
+**Status: implemented** as `@awthaq/organization` — organizations, memberships with built-in (`owner` > `admin` > `member`), static-custom and dynamic per-organization roles (bounded by `canGrant`), teams (with an optional parent per team: a per-organization forest backed by a closure table, OHS-001/ticket 34; structure plus team-scoped roles and statements, OHS-004: authority flows down the subtree), invitations (emailed hashed token, invitee-bound reads), active organization/team context, lifecycle hooks, transactional cascades, erasure, and `OrganizationQadi` (`relationships` with a `ResourceOrganizationLookup` for `depth >= 1`, the `member` / `has-role:<name>` / `<resource>:<action>` / `team-member` grammar, and `attributes`). The package README is the source of truth for configuration, HTTP surface and relation vocabulary; this document remains the non-normative adoption record below. Deviations from the sketch that follows: there is no BEH-EA range for the organization plugin (its behavior is specified by its tests and `.scratch/organization/spec.md`), and authorization for the plugin's own endpoints is self-contained (`PermissionEngine`), not a qadi round trip — qadi sees the same statements through `OrganizationQadi`.
 
 ## Who asks for it
 

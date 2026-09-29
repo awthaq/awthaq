@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-014 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Accepted — design; implementation deferred |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Consequences now state the single-process boundary of every core `layerMemory` (TRBS-005) |
 
 ---
 
@@ -36,6 +36,8 @@
 **Positive**: A deployment under real load can move session reads and idle-touch writes to a KV store without touching `Authentication`, `SessionView`, or any plugin that depends on `Sessions` — the same shape of win ADR-EA-010 and BEH-EA-109 already give `PasswordHasher`, `Mailer`, and `RateLimiter`. Revocation semantics are a property every backend must satisfy rather than a property only the reference SQL implementation happens to have, so an application cannot silently regress into better-auth's documented cache-lag failure mode merely by choosing a different `Sessions` store.
 
 **Negative**: Every `Sessions` backend implementation — including any third-party one — carries a real, non-trivial correctness burden that a naive KV port would not: it must implement domain-level absolute/idle expiry checks itself rather than delegating fully to the store's native TTL, and it must guarantee revocation is visible on the very next read, which for a KV store deployed for read-scaling (replicas, eventually-consistent caches) is a genuinely hard property to hold — a naive read-replica-backed `Sessions` implementation is exactly the shape of bug this ADR exists to rule out, and ruling it out is a real implementation constraint on whoever writes that backend, not a paperwork requirement.
+
+**Memory layers are single-process (TRBS-005)**: every core `layerMemory` (`Sessions`, `Users`, `Accounts`, `Verification`) is a per-process `Ref` — adequate for one process and for tests (BEH-EA-109 says the same of `RateLimiter`'s memory store), but a revocation on one instance does not propagate to another, state is lost on restart, and growth is unbounded until a retention sweep prunes it. A multi-instance deployment MUST use `layerSql` (or a future KV layer satisfying the two properties above). `AuthEvents`' in-process `PubSub` has the same boundary.
 
 **Trade-off accepted**: The project accepts that a `Sessions` backend author (including awthaq's own Redis-backed implementation, once built) must solve read-your-own-revocation across whatever replication or caching topology their store uses, rather than being allowed to treat "the store's native TTL and eventual consistency are good enough" as sufficient — a materially harder bar than better-auth's SQL-row-plus-optional-cache model clears, accepted because a silently revocation-lagging session store is a security regression, not a performance trade a backend author should be free to make unilaterally.
 

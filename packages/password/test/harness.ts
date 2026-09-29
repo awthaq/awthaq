@@ -72,7 +72,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
     Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("password-harness-csrf-secret"),
+      secret: Redacted.make("password-harness-csrf-secret-0123456789abcdef"),
       allowedOrigins: [] as ReadonlyArray<string>,
     }),
   ),

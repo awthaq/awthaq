@@ -3,7 +3,7 @@ ID: "YL-004"
 Title: "Zero enforcement wired anywhere: no endpoint in the repo uses RequirePermission"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/src/SubjectApi.ts:45"
 Auditor: "yang-luo"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `qadi` · reported by **Yang Luo — Creator of Casbin** (`yang-luo`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,7 @@ Attach requiresPermission to at least one representative endpoint in the example
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `qadi-bridge-hardening`. Evidence at HEAD ec065a7: `packages/qadi/src/SubjectApi.ts:45`. Fix: Dogfood enforcement on the shipped surface and make an un-annotated endpoint detectable at startup. (effort L). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29):** Half done, left open: packages/qadi/src/AuthorizationAudit.ts ships auditAuthorizationAnnotations(api) (composition-time counterpart of RequirePermission's per-request refusal; fails with UnannotatedEndpoints naming each endpoint in a RequirePermission-guarded group that has neither RequiredPermission nor PublicEndpoint), tested in AuthorizationAudit.test.ts. NOT done: dogfooding enforcement in examples/memory-server (a Path B group guarded by RequirePermission with a RequiredPermission per endpoint, one PublicEndpoint, a Path A enforce(...) handler with hideDenied, the permission registry route, running the audit at startup) and its 403/200 smoke test — the example composes plugin groups only via Auth.make/TestAuth and needs a second HttpApi plus the qadi evaluation layers; it is unblocked and can be done as its own step. If YL-009's RolesAdmin lands it becomes the first in-repo RequirePermission consumer.
+
+**Resolved (2026-09-29):** Enforcement is now wired on a shipped surface and a missing annotation is caught before serving. (1) packages/qadi/src/AuthorizationAudit.ts auditAuthorizationAnnotations(api) (earlier commit) — composition-time counterpart of RequirePermission's per-request 500; (2) the new RolesAdmin plugin (YL-009) is the first in-repo RequirePermission consumer, every endpoint carrying RequiredPermission (tested end to end, RolesAdmin.test.ts, including the audit on its own contract); (3) examples/memory-server now composes Roles + RolesAdmin with RequirePermissionLive (Path B), runs the audit before serving, and smoke-checked: GET /roles/catalog without the permission answers 403. NOT done from the dossier (scoped out, optional polish): a Path A enforce(...)+hideDenied->404 handler and the BEH-EA-158 permission-registry route in the example, and an automated example smoke test (the example has no test harness; the RolesAdmin test carries the 403/200 coverage).

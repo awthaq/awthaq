@@ -3,7 +3,7 @@ ID: "TC-007"
 Title: "Passkey docs claim the package is unimplemented while it is fully shipped"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/README.md:3"
 Auditor: "tim-cappalli"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `passkey` · reported by **Tim Cappalli — WebAuthn / Passkeys Standards Contributor** (`tim-cappalli`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Regenerate the README and spec status tables from the shipped code, and add a 'R
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-docs`. Evidence at HEAD ec065a7: `packages/passkey/README.md:3`. Fix: Rewrite the passkey README and passkey spec status text from the shipped code, including a Recovery section. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Passkey docs rewritten from the shipped code: packages/passkey/README.md (composition, config table, challenge stores, endpoints, client, Recovery with the last-credential guard and pairing recommendation, Limits), spec/behaviors/17-passkey.md banner + shipped-behavior paragraphs under BEH-EA-129..136, spec/models/03-passkey-webauthn.md status/'What is missing'/Verification, spec/traceability.md rows for the new test files. spec:verify:strict passes. Plan note: DTWS-001/002 (P19, shared banner wording) are not done yet; the passkey banner wording here is passkey-specific and P19's sweep should harmonize it. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

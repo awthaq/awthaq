@@ -3,7 +3,7 @@ ID: "IDS-007"
 Title: "Both stop paths refuse to revoke when the audit row is missing or already ended"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/Admin.ts:252"
 Auditor: "impersonation-delegation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `admin` · reported by **Impersonation & Delegation Specialist** (`impersonation-delegation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Revoke the session first (idempotently) and record the end best-effort, or treat
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `admin-impersonation-lifecycle`. Evidence at HEAD ec065a7: `packages/admin/src/Admin.ts:316`. Fix: Make revocation the primary, idempotent act on both stop paths and record the episode end best-effort, without letting forceStop revoke sessions that are not provably impersonation sessions. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Admin.stopImpersonating: revoke first and idempotently (SessionNotFound swallowed, never orDie), then endEpisode best-effort (Effect.option + logWarning when there is no open row), stopped event only when this call closed the row. forceStop: findBySessionId first (404 when absent - the row is the only proof it is an impersonation session), gate, revoke idempotently, then endEpisode; an already-ended episode is still revoked but reported AdminImpersonationNotFound (keeps REQ-EA-619). Tests red first (Admin.test.ts): 'IDS-007: stopImpersonating still revokes when the audit row was already ended' (was 404 + live session), 'forceStop after the target revokeAll does not die' (was a defect), 'forceStop never revokes a session that has no episode row', 'forceStop on an already-ended episode still revokes its live session'. Spec BEH-EA-216/217 amended. Gates as IDS-004.

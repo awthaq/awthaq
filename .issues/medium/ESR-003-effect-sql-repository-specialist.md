@@ -3,7 +3,7 @@ ID: "ESR-003"
 Title: "Email case-folding relies on lower() whose semantics diverge between SQLite and Postgres and from the app-level normalization"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:90"
 Auditor: "effect-sql-repository-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `sql` · reported by **Effect SQL Repository Specialist** (`effect-sql-repository-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Pick one fold and make it the only fold: normalize the bound parameter with `Str
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-repository-hygiene`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:90`. Fix: Make JS `toLowerCase()` the only fold. Normalize the bound parameter in the repository and keep `lower(email)` on the column side so the existing `users_email_unique` expression index still serves the lookup. Stored values are already JS-lowercased, so column-side `lower()` is a no-op for them on every dialect. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** findByEmail binds email.toLowerCase() and keeps lower(email) on the column so users_email_unique still serves it; core Users.layerSql passes the folded value too. Test packages/core/test/Users.test.ts 'ESR-003: findByEmail finds a non-ASCII email under any casing' (runs on memory and SQL): red before (SQLite lower() is ASCII-only), green after. BEH-EA-041 text updated.

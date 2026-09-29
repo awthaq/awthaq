@@ -56,3 +56,5 @@ Either request userVerification:required in ordinary registration options whenev
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** ALREADY-FIXED (confidence high); workstream `passkey-ceremony-policy`. Already fixed by commit 1f2df3a. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:662`. Full dossier: `.plan/slices/10-passkey-admin.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Already fixed by CB-001 (commit 1f2df3a): ordinary registration rejects UV=0 only when userVerification is 'required'; Passkey.test.ts 'CB-001: ... accepts UV=0 under the default preferred policy' proves it and still passes at this HEAD (Passkey.ts registerVerify).

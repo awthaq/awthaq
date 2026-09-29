@@ -3,7 +3,7 @@ ID: "TS-002"
 Title: "AttributeResolver cannot express outage vs no-opinion; BEH-EA-452/453 unimplementable"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/src/Resolvers.ts:78"
 Auditor: "torin-sandall"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `qadi` · reported by **Torin Sandall — Co-creator of Open Policy Agent (OPA)** (`torin-sandall`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Add a typed store-unreachable error to the Users port (distinct from UserNotFoun
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `qadi-bridge-hardening`. Evidence at HEAD ec065a7: `packages/qadi/node_modules/@qadi/core/src/Evaluate.ts:346`. Fix: Make UserAttributes itself map store failures to AttributeResolveError (mirroring OrganizationQadi.attributes) and wire REQ-EA-452/453. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** UserAttributes maps a Users store outage (a defect from Users.findById) to AttributeResolveError naming the attribute; a deleted user stays 'no opinion' (undefined). Header comment rewritten (REQ-EA-452/453 semantics). Test: Resolvers.test.ts 'a Users outage fails AttributeResolveError naming the attribute' (red before: unhandled defect). Deferred: wiring the REQ-EA-452/453 BDD scenarios (feature is @skip @unwired at Feature level; not cheap). Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 915 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

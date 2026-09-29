@@ -37,6 +37,7 @@
 // key nor re-extend a grace period that already started.
 
 import { Encryption } from "@awthaq/ports";
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -206,15 +207,18 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const SigningKeyRow = Schema.Struct({
-  kid: Schema.String,
-  alg: AlgorithmLiterals,
-  publicKeyJwk: Schema.String,
-  privateKeyJwk: Schema.NullOr(Schema.String),
-  createdAt: Schema.DateTimeUtcFromString,
-  rotatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-  retiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-});
+const makeSigningKeyRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    kid: Schema.String,
+    alg: AlgorithmLiterals,
+    publicKeyJwk: Schema.String,
+    privateKeyJwk: Schema.NullOr(Schema.String),
+    createdAt: wire.dateTime,
+    rotatedAt: wire.nullableDateTime,
+    retiresAt: wire.nullableDateTime,
+  });
+
+type SigningKeyRow = ReturnType<typeof makeSigningKeyRow>["Type"];
 
 const JwkJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
 
@@ -225,6 +229,9 @@ export const layerSql = Layer.effect(
   SigningKeyRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const SigningKeyRow = makeSigningKeyRow(wire);
     const encryption = yield* Encryption.Encryption;
 
     // An undecryptable or malformed signing key is a deployment fault (wrong
@@ -233,7 +240,7 @@ export const layerSql = Layer.effect(
     const unreadable = (kid: string) => () =>
       Effect.die(new Error(`awthaq/jwt: signing key "${kid}" could not be decoded or decrypted`));
 
-    const decodeRow = Effect.fnUntraced(function* (row: typeof SigningKeyRow.Type) {
+    const decodeRow = Effect.fnUntraced(function* (row: SigningKeyRow) {
       const publicKeyJwk = yield* Schema.decodeUnknownEffect(JwkJson)(row.publicKeyJwk).pipe(
         Effect.catch(unreadable(row.kid)),
       );
@@ -266,14 +273,14 @@ export const layerSql = Layer.effect(
         alg: AlgorithmLiterals,
         publicKeyJwk: Schema.String,
         privateKeyJwk: Schema.NullOr(Schema.String),
-        createdAt: Schema.DateTimeUtcFromString,
-        rotatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-        retiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+        createdAt: wire.dateTime,
+        rotatedAt: wire.nullableDateTime,
+        retiresAt: wire.nullableDateTime,
       }),
       Result: SigningKeyRow,
       execute: (r) => sql`
           INSERT INTO jwt_signing_key
-            (kid, alg, publicKeyJwk, privateKeyJwk, createdAt, rotatedAt, retiresAt)
+            (kid, alg, "publicKeyJwk", "privateKeyJwk", "createdAt", "rotatedAt", "retiresAt")
           VALUES
             (${r.kid}, ${r.alg}, ${r.publicKeyJwk}, ${r.privateKeyJwk}, ${r.createdAt}, ${r.rotatedAt}, ${r.retiresAt})
           RETURNING *
@@ -284,17 +291,17 @@ export const layerSql = Layer.effect(
       Request: Schema.Void,
       Result: SigningKeyRow,
       execute: () => sql`
-          SELECT * FROM jwt_signing_key WHERE rotatedAt IS NULL ORDER BY createdAt DESC LIMIT 1
+          SELECT * FROM jwt_signing_key WHERE "rotatedAt" IS NULL ORDER BY "createdAt" DESC LIMIT 1
         `,
     });
 
     const listVerifiableQuery = SqlSchema.findAll({
-      Request: Schema.DateTimeUtcFromString,
+      Request: wire.dateTime,
       Result: SigningKeyRow,
       execute: (now) => sql`
           SELECT * FROM jwt_signing_key
-          WHERE retiresAt IS NULL OR retiresAt > ${now}
-          ORDER BY createdAt DESC
+          WHERE "retiresAt" IS NULL OR "retiresAt" > ${now}
+          ORDER BY "createdAt" DESC
         `,
     });
 
@@ -304,13 +311,13 @@ export const layerSql = Layer.effect(
     const markRotatedQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         kid: Schema.String,
-        rotatedAt: Schema.DateTimeUtcFromString,
-        retiresAt: Schema.DateTimeUtcFromString,
+        rotatedAt: wire.dateTime,
+        retiresAt: wire.dateTime,
       }),
       Result: SigningKeyRow,
       execute: (r) => sql`
-          UPDATE jwt_signing_key SET rotatedAt = ${r.rotatedAt}, retiresAt = ${r.retiresAt}
-          WHERE kid = ${r.kid} AND rotatedAt IS NULL
+          UPDATE jwt_signing_key SET "rotatedAt" = ${r.rotatedAt}, "retiresAt" = ${r.retiresAt}
+          WHERE kid = ${r.kid} AND "rotatedAt" IS NULL
           RETURNING *
         `,
     });
@@ -319,13 +326,13 @@ export const layerSql = Layer.effect(
     const retireQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         kid: Schema.String,
-        retiresAt: Schema.DateTimeUtcFromString,
+        retiresAt: wire.dateTime,
       }),
       Result: SigningKeyRow,
       execute: (r) => sql`
-          UPDATE jwt_signing_key SET retiresAt = ${r.retiresAt}
-          WHERE kid = ${r.kid} AND rotatedAt IS NOT NULL
-            AND (retiresAt IS NULL OR retiresAt > ${r.retiresAt})
+          UPDATE jwt_signing_key SET "retiresAt" = ${r.retiresAt}
+          WHERE kid = ${r.kid} AND "rotatedAt" IS NOT NULL
+            AND ("retiresAt" IS NULL OR "retiresAt" > ${r.retiresAt})
           RETURNING *
         `,
     });

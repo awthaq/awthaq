@@ -73,7 +73,8 @@ REQUIREMENT: The audit trail of security-relevant operations MUST be
 ## BEH-EA-101: Events are typed, tagged values forming a registry contract
 
 ```ts
-"auth.user.created" | "auth.user.signedIn" | "auth.token.replay" | "auth.session.issued" | "auth.mail.failed"
+"auth.user.created" | "auth.user.signedIn" | "auth.token.replay"
+| "auth.session.issued" | "auth.session.revoked" | "auth.session.expired" | "auth.session.reuse" | "auth.mail.failed"
 ```
 
 ```text
@@ -85,6 +86,8 @@ REQUIREMENT: Every event published to `AuthEvents` MUST be a tagged value
 ```
 
 `archive/design/usage-examples-v4.md` §15 and §19 show events named this way (`auth.user.signedIn`, `auth.user.created`, `auth.token.replay`, `auth.session.issued`) with payloads a subscriber destructures directly (`e.userId`, `e.strategy`). Treating the event set as a registry — the same aggregation pattern BEH-EA-024 describes for hook taps and rate-limit rules — is what lets a plugin author add a new event tag without breaking existing subscribers filtering on the tags they already know about.
+
+**Session lifecycle events are published by `Sessions` itself (ESA-006, TIR-008).** The session tags are not the responsibility of whichever plugin happens to mint or end a session: `Sessions.issue` publishes exactly one `auth.session.issued` (session, user and family id, `actingAs` when present) for every path — password, OAuth, passkey, admin impersonation, a legacy-session bridge, a `supersedes` rotation. Every revocation primitive (`revoke`, `revokeOwned`, `revokeOthers`, `revokeAll`, and reuse detection's family revocation) takes the reason the session ended (`signOut`, `userRevoked`, `passwordChanged`, `passwordReset`, `userDeleted`, `impersonationStopped`, `admin`, `reuseDetected`) and publishes exactly one `auth.session.revoked` (`sessionId` for a single row, `null` for `others`/`all`/`family` scope), after the delete, so sign-out, account deletion and admin stops reach subscribers and `AuditLog` ([BEH-EA-100](13-events.md)). `Sessions.verify` publishes `auth.session.expired` (`absolute` or `idle`) when a correctly-secreted credential is presented past its expiry — lazily, since no background reaper exists. Plugins MUST NOT publish these tags themselves; they pass reasons instead. Cross-reference: [BEH-EA-053](07-sessions.md), [BEH-EA-054](07-sessions.md).
 
 ## BEH-EA-102: The raw event stream is available for direct, low-level consumption
 

@@ -39,6 +39,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Context from "effect/Context";
+import * as Redacted from "effect/Redacted";
+import * as Headers from "effect/unstable/http/Headers";
+import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import type { HttpApi, HttpApiEndpoint } from "effect/unstable/httpapi";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
@@ -100,6 +103,71 @@ export const CsrfClientLive: Layer.Layer<HttpApiMiddleware.ForClient<Api.CsrfPro
       ),
     ),
   );
+
+// ---------------------------------------------------------------------------
+// MNA-005/PIL-005: the bearer-client contract
+// ---------------------------------------------------------------------------
+
+export interface BearerTokenStoreShape {
+  readonly get: Effect.Effect<Option.Option<Redacted.Redacted<string>>>;
+  readonly set: (token: Redacted.Redacted<string>) => Effect.Effect<void>;
+  readonly clear: Effect.Effect<void>;
+}
+
+/**
+ * MNA-005: where a bearer (native/CLI/server-to-server) client keeps its
+ * session token. `BearerTokenStoreMemory` is process-local; durable storage
+ * (Keychain/Keystore, an encrypted file) is the application's responsibility —
+ * implement this service over it. The token is a long-lived secret: never log
+ * it, and preserve the `set-auth-token` response header through any proxy.
+ */
+export class BearerTokenStore extends Context.Service<BearerTokenStore, BearerTokenStoreShape>()(
+  "awthaq/client/BearerTokenStore",
+) {}
+
+export const BearerTokenStoreMemory = Layer.effect(
+  BearerTokenStore,
+  Effect.gen(function* () {
+    const state = yield* Ref.make(Option.none<Redacted.Redacted<string>>());
+    return {
+      get: Ref.get(state),
+      set: (token) => Ref.set(state, Option.some(token)),
+      clear: Ref.set(state, Option.none()),
+    };
+  }),
+);
+
+/**
+ * MNA-005: `make(api, { baseUrl, transformClient: bearerTransformClient(store) })`
+ * — attaches `Authorization: Bearer <token>` from the store on every request
+ * and captures a rotated token (`Api.ROTATED_TOKEN_HEADER`, the server's
+ * throttled-touch rotation, BEH-EA-052 — there is no grace window, so a missed
+ * capture logs the client out) from every response, whatever its status. A
+ * response without the header leaves the stored token unchanged. Contract for
+ * callers: an idle-expired or revoked token surfaces as the typed
+ * `Unauthenticated`; re-authenticate and `set` a fresh token.
+ */
+export const bearerTransformClient =
+  (store: BearerTokenStoreShape) =>
+  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+    client.pipe(
+      HttpClient.mapRequestEffect((request) =>
+        store.get.pipe(
+          Effect.map(
+            Option.match({
+              onNone: () => request,
+              onSome: (token) => HttpClientRequest.bearerToken(request, Redacted.value(token)),
+            }),
+          ),
+        ),
+      ),
+      HttpClient.tap((response) => {
+        const rotated = Headers.get(response.headers, Api.ROTATED_TOKEN_HEADER);
+        return Option.isSome(rotated) && rotated.value.length > 0
+          ? store.set(Redacted.make(rotated.value))
+          : Effect.void;
+      }),
+    );
 
 // ---------------------------------------------------------------------------
 // BEH-EA-172: error codes are derived from the contract

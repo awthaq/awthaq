@@ -3,7 +3,7 @@ ID: "SMS-004"
 Title: "CSRF and challenge-cookie HMAC secrets ship without any Config/env loading layer"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Csrf.ts:26"
 Auditor: "secrets-management-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `server` · reported by **Secrets Management Specialist** (`secrets-management-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Add Csrf.layerConfig / ChallengeStore.layerConfig factories reading Config.Redac
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `hmac-secret-hygiene`. Evidence at HEAD ec065a7: `packages/server/src/Csrf.ts:24`. Fix: Ship Config-backed layers for the CSRF secret and origins (mirroring KeyProvider.layerEnv), so the obvious path never puts a literal secret in source. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Csrf.layerConfig (packages/server/src/Csrf.ts): CsrfConfig from AWTHAQ_CSRF_SECRET (Config.Redacted, required, >= 32 bytes else WeakSigningSecret dies) and AWTHAQ_CSRF_ALLOWED_ORIGINS (Config.Array, default []). Tests in server/test/Csrf.test.ts (reads both vars, defaults origins, missing secret -> ConfigError, short secret dies WeakSigningSecret). README Configuration table gains the row. Deferred: ChallengeStore.layerConfig (AWTHAQ_CHALLENGE_COOKIE_SECRET) belongs to the passkey program; examples/memory-server keeps its checked-in dev-only placeholder (switching it would make the demo need an env var). The 32-byte floor is enforced inside layerConfig; enforcement inside CsrfProtectionLive itself is ACS-007, left open (see its Plan note).

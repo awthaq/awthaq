@@ -3,7 +3,7 @@ ID: "OAP-008"
 Title: "authorize endpoint is unthrottled while callback is rate-limited: unauthenticated Verification-row and crypto amplification"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:434"
 Auditor: "oauth2-authorization-code-pkce-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `oauth` · reported by **OAuth2 Authorization Code + PKCE Specialist** (`oauth2-authorization-code-pkce-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Register a second, looser rule for endpoint 'authorize' (e.g. 30/min per IP) and
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-callback-http-hardening`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:537`. Fix: Register and enforce a looser per-IP rule on authorize. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** OAuthConfig.rateLimits {authorize 30/min, callback 20/min} (configurable); OAuth registers an oauth/authorize rule beside oauth/callback and consumes oauth:authorize:<ip> at the top of authorize; the handler resolves the IP through ClientAddress; Api.RateLimited added to the authorize endpoint's errors. Tests: AuthHttp 'authorize is throttled after its own rule's limit' (31st -> 429) and OAuth.test.ts registry lists both rules. spec text in BEH-EA-122 (spec/behaviors/14-rate-limiting.md has no oauth-specific text to amend). Gates as CSS-004.

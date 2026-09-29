@@ -16,11 +16,36 @@ describe("PermissionEngine", () => {
     for (const role of ["owner", "admin"] as const) {
       const effective = PermissionEngine.effectivePermissions([role], statementsByRole);
       assert.isTrue(PermissionEngine.hasPermission(effective, "organization", "update"));
-      assert.isTrue(PermissionEngine.hasPermission(effective, "organization", "delete"));
       assert.isTrue(PermissionEngine.hasPermission(effective, "member", "create"));
       assert.isTrue(PermissionEngine.hasPermission(effective, "invitation", "create"));
       assert.isTrue(PermissionEngine.hasPermission(effective, "team", "create"));
     }
+  });
+
+  // OHS-005: owner is strictly above admin, so the last-owner invariant is
+  // load-bearing and `canGrant` stops an admin minting an owner.
+  it("admin lacks organization:delete; owner holds it", () => {
+    const statementsByRole = PermissionEngine.statementsByRoleFrom({});
+    const owner = PermissionEngine.effectivePermissions(["owner"], statementsByRole);
+    const admin = PermissionEngine.effectivePermissions(["admin"], statementsByRole);
+    assert.isTrue(PermissionEngine.hasPermission(owner, "organization", "delete"));
+    assert.isFalse(PermissionEngine.hasPermission(admin, "organization", "delete"));
+    assert.isTrue(PermissionEngine.canGrant(admin, owner));
+    assert.isFalse(PermissionEngine.canGrant(owner, admin));
+  });
+
+  // RZS-005/N8: a custom or dynamic role can never redefine a built-in tier.
+  it("custom and dynamic statements cannot overwrite the built-in owner/admin/member", () => {
+    const statementsByRole = PermissionEngine.statementsByRoleFrom(
+      { owner: { billing: ["update"] } },
+      { admin: { organization: ["delete"] }, member: { team: ["delete"] } },
+    );
+    assert.deepStrictEqual(statementsByRole.get("owner"), PermissionEngine.defaultStatements.owner);
+    assert.deepStrictEqual(statementsByRole.get("admin"), PermissionEngine.defaultStatements.admin);
+    assert.deepStrictEqual(
+      statementsByRole.get("member"),
+      PermissionEngine.defaultStatements.member,
+    );
   });
 
   it("effectivePermissions unions every held role's statements", () => {

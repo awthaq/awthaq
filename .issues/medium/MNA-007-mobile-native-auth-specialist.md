@@ -3,7 +3,7 @@ ID: "MNA-007"
 Title: "Passkey origin validation rejects Android-native assertions"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:135"
 Auditor: "mobile-native-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `passkey` · reported by **Mobile/Native Auth Specialist** (`mobile-native-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Accept platform origins explicitly: exact-match android:apk-key-hash:<sha256-of-
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `passkey-ceremony-policy`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:146`. Fix: Treat configured platform (android:apk-key-hash:) origins as exact-match origins exempt from the web rpId-suffix check, consistently across all ceremonies. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Platform origins: checkOrigin treats android:apk-key-hash: origins listed verbatim in origins as exact-match and exempt from the web rpId-suffix check, applied identically to registration, sign-in and step-up (sign-in now runs the same pre-check). Tests: PasskeyCeremony.test.ts (configured android origin accepted on register/sign-in/step-up; unconfigured rejected). README documents the origin format and Digital Asset Links setup. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

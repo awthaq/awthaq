@@ -3,7 +3,7 @@ ID: "NAM-007"
 Title: "Existing Auth.js sessions cannot be migrated — forced global re-authentication"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Models.ts:101"
 Auditor: "nextauth-authjs-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `sql` · reported by **NextAuth.js/Auth.js Migration Specialist** (`nextauth-authjs-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Publish a migration runbook: users/accounts ETL (Auth.js `provider`+`providerAcc
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `sql-docs-operations`. Already fixed by commit 19a3e00. Evidence at HEAD ec065a7: `packages/ports/src/LegacySessionBridge.ts:3`. Fix: Publish an Auth.js migration runbook built on the now-existing ports. No new package unless demand appears. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** docs/migrations/authjs.md: Auth.js ETL mapping (users, OAuth accounts incl. issuer and expires_at seconds), Credentials bcrypt hashes via migrate-auth0's BcryptVerifier + rehash-on-login, JWT vs database sessions, a LegacySessionBridge recipe (with the cookie alias), cutover checklist. The code snippets were compiled against the workspace before committing (temporary probe file, removed). Linked from packages/sql/README.md.

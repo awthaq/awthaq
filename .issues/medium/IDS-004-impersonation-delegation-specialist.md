@@ -3,7 +3,7 @@ ID: "IDS-004"
 Title: "endedBy=\"expired\" is declared but nothing ever sets it; audit trail reports dead episodes as active"
 Level: medium
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/ImpersonationRecords.ts:36"
 Auditor: "impersonation-delegation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `compliance` · `admin` · reported by **Impersonation & Delegation Specialist** (`impersonation-delegation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Either compute liveness in `list`/`findBySessionId` by joining the session's abs
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `admin-impersonation-lifecycle`. Evidence at HEAD ec065a7: `packages/admin/src/ImpersonationRecords.ts:32`. Fix: Record each episode's hard expiry and close expired episodes as endedBy="expired" — lazily on every read and via an exported sweep — publishing the stopped event from the same path. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ImpersonationRecords: new expiresAt (migration add_admin_impersonation_expires_at, nullable so pre-existing rows are never auto-closed), create takes expiresAt (Admin passes issued.session.absoluteExpiresAt), closeExpired(now) closes open past-expiry episodes atomically as endedBy='expired' (endedAt=expiresAt) in both layers (single UPDATE...RETURNING in SQL, Ref.modify in memory) and returns only the rows it closed. Admin: sweepExpired closes + publishes one impersonationStopped{expired} per closed row; list and forceStop run it first (lazy reconciliation); exported Admin.sweepExpiredEpisodes for host scheduling; the 'no code path produces it' paragraph removed. Tests red first: Admin.test.ts 'IDS-004: an episode past maxDuration is reported ended (expired)...' (+exactly-once), 'sweepExpiredEpisodes...', ImpersonationRecords.test.ts closeExpired (both layers). Spec BEH-EA-215/219 amended. Not added: a BDD scenario (the World runs on the real clock so a 1h expiry cannot be crossed cheaply). Gates: tsc -b (minus pre-existing packages/react TS2883) + tsconfig.test clean, pnpm test 841 pass (one unrelated scrypt timing flake in packages/ports passed on rerun), test:bdd 107, spec:verify:strict 19/19, oxlint clean.

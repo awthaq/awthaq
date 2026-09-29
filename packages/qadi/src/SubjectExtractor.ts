@@ -15,7 +15,7 @@
 // `Authentication`'s own `resolvePrincipal` (the identical hash-comparison
 // and absolute/idle-expiry logic over `Sessions`, per BEH-EA-153's own text).
 import { Api } from "@awthaq/api";
-import { Sessions } from "@awthaq/core";
+import { SessionCookie, Sessions } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -37,17 +37,18 @@ const BEARER_PREFIX = "bearer ";
  */
 const extractCredential = (
   request: HttpServerRequest.HttpServerRequest,
-): Redacted.Redacted<string> => {
-  const cookie = request.cookies[Sessions.SESSION_COOKIE_NAME];
+  cookieName: string,
+): { readonly scheme: "cookie" | "bearer"; readonly credential: Redacted.Redacted<string> } => {
+  const cookie = request.cookies[cookieName];
   if (cookie !== undefined && cookie.length > 0) {
-    return Redacted.make(cookie);
+    return { scheme: "cookie", credential: Redacted.make(cookie) };
   }
   const header = Headers.get(request.headers, "authorization");
   if (Option.isSome(header) && header.value.toLowerCase().startsWith(BEARER_PREFIX)) {
     const token = header.value.slice(BEARER_PREFIX.length).trim();
-    if (token.length > 0) return Redacted.make(token);
+    if (token.length > 0) return { scheme: "bearer", credential: Redacted.make(token) };
   }
-  return Redacted.make("");
+  return { scheme: "bearer", credential: Redacted.make("") };
 };
 
 /**
@@ -76,11 +77,42 @@ export const SubjectExtractorLive: Layer.Layer<
     return {
       extract: (request) =>
         Effect.gen(function* () {
-          const credential = extractCredential(request);
+          // IC-007: the configured session-cookie name (default `__Host-session`).
+          const cfg = yield* SessionCookie.SessionCookieConfig;
+          const cookieName = SessionCookie.cookieName(cfg);
+          // APS-006: `Authentication` prefers a live impersonation cookie over
+          // the caller's own session, so authorization must evaluate the same
+          // identity the request is being served as — not the admin behind it.
+          const impersonation = request.cookies[SessionCookie.cookieName(cfg, "impersonation")];
+          if (impersonation !== undefined && impersonation.length > 0) {
+            const impersonated = yield* Authentication.resolvePrincipal(
+              sessions,
+              principalResolver,
+              Redacted.make(impersonation),
+              "impersonation",
+            ).pipe(
+              Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+              Effect.option,
+            );
+            // Only a session carrying `actingAs` counts from that cookie (mirrors
+            // `Authentication`'s `impersonation` scheme); anything else falls through.
+            if (
+              Option.isSome(impersonated) &&
+              impersonated.value._tag === "User" &&
+              impersonated.value.actingAs !== undefined
+            ) {
+              return yield* subjectResolver.resolve(impersonated.value);
+            }
+          }
+          const { scheme, credential } = extractCredential(request, cookieName);
+          // PIL-005: `scheme` tells a rotating `verify` how to deliver the
+          // new secret — `resolveSession` registers that delivery on the
+          // request itself, so a Path-B-only route still rotates cleanly.
           const principal = yield* Authentication.resolvePrincipal(
             sessions,
             principalResolver,
             credential,
+            scheme,
           ).pipe(
             // Ticket 03: `resolvePrincipal` reads the ambient
             // `HttpServerRequest` to key its per-request verify memoization

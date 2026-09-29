@@ -25,8 +25,8 @@
 // See spec/overview.md for the full package map.
 
 export * as ClientAddress from "./ClientAddress.ts";
-export * as ConstantTime from "./ConstantTime.ts";
 export * as Encryption from "./Encryption.ts";
+export * as Hmac from "./Hmac.ts";
 export * as KeyProvider from "./KeyProvider.ts";
 export * as LegacySessionBridge from "./LegacySessionBridge.ts";
 export * as Mailer from "./Mailer.ts";

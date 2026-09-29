@@ -3,7 +3,7 @@ ID: "DTWS-002"
 Title: "20 of 21 package READMEs claim 'no line of source in this package has shipped yet' while shipping real source"
 Level: high
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "roles"
 Source: "packages/roles/README.md:3"
 Auditor: "documentation-technical-writing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `docs` · `roles` · reported by **Documentation & Technical Writing Specialist** (`documentation-technical-writing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/roles/README.md:3` matches the quoted banner verbatim; grepping `packages/*/README.md` for the banner text finds exactly 20 of 21 files carrying it (only `packages/next/README.md` is missing from the list), matching the claim precisely. Sweeping the 20 stale banners and adding a CI drift check is a well-scoped mechanical change. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `authz-docs-truthfulness`. Evidence at HEAD ec065a7: `packages/roles/README.md:3`. Fix: Rewrite the 16 stale banners to shipped-vs-planned status (packages/next/README.md as template), keep the banner only on the 4 placeholder packages, and add a CI drift check. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`.
+
+**Resolved (2026-09-29):** 16 package READMEs rewritten from the stale 'planned package' banner to shipped-state summaries (api, sql, ports, core, server, client, react, test, password, oauth, passkey, admin, jwt, roles, qadi, organization; the four genuine placeholders api-key, cli, magic-link, two-factor keep the banner). New scripts/check-readme-status.mjs (pnpm check:readmes, added to pnpm check): fails when a README carries the banner but src has real exports, or drops it while src is still 'export {}' — proven red against the old core README (flagged) and green after. NOTE: READMEs are also touched by other programs (P19); expect merge conflicts there. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, tests/bdd green apart from load-induced timeouts in password/ports (machine load average ~170 from parallel agents; each green in isolation), spec:verify:strict PASS, oxlint clean.

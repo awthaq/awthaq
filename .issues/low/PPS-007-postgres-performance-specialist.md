@@ -3,7 +3,7 @@ ID: "PPS-007"
 Title: "verifyEmail pays an extra round trip: UPDATE followed by a separate findById instead of RETURNING"
 Level: low
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:97"
 Auditor: "postgres-performance-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `performance` · `sql` · reported by **Postgres Performance Specialist** (`postgres-performance-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Use UPDATE ... WHERE id = $1 RETURNING * and decode the returned row through the
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-dialect-neutral-models`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:103`. Fix: Collapse verifyEmail into one `UPDATE ... RETURNING *` decoded through the dialect model. Bind the boolean through the model's own encoding so the per-dialect literal branch disappears. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** UsersRepository.verifyEmail is one UPDATE ... RETURNING * decoded through the dialect model; the boolean binds via the dialect wire codec so the onDialectOrElse literal branch is gone. Tests (Repositories.test.ts): single sql.execute span, NoSuchElementError on unknown id; pg case green on real Postgres.

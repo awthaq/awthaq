@@ -3,7 +3,7 @@ ID: "SSMS-006"
 Title: "Transactional, forward-only Migrator leaves no online index-creation path for post-GA migrations"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/CoreMigrations.ts:9"
 Auditor: "sql-schema-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `sql` · reported by **SQL Schema Migration Specialist** (`sql-schema-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Document an expand-phase runbook now: new indexes on populated tables ship out-o
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-docs-operations`. Evidence at HEAD ec065a7: `node_modules/.pnpm/effect@4.0.0-rc.116/node_modules/effect/src/unstable/sql/Migrator.ts:308`. Fix: Document an expand-phase runbook and adopt `IF NOT EXISTS` for every new index migration, so an operator can pre-build with CONCURRENTLY out of band and the recorded migration becomes a no-op. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Every CREATE [UNIQUE] INDEX in CoreMigrations is now IF NOT EXISTS with the convention documented at the top of CoreMigrations.ts; packages/sql/README.md 'Migrating a populated database' runbook (CONCURRENTLY out of band, expand/contract). Test packages/sql/test/CoreMigrations.test.ts: an index pre-created out of band does not break the recorded migration (red without IF NOT EXISTS) + a source scan that every index statement uses IF NOT EXISTS.

@@ -3,7 +3,7 @@ ID: "OHS-005"
 Title: "Admin role is permission-identical to owner, defanging the last-owner invariant"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/PermissionEngine.ts:32"
 Auditor: "organization-hierarchy-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `organization` · reported by **Organization Hierarchy Specialist** (`organization-hierarchy-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Differentiate admin from owner (drop organization:delete or role CRUD from admin
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-role-escalation-guards`. Evidence at HEAD ec065a7: `packages/organization/src/PermissionEngine.ts:25`. Fix: Make owner strictly above admin (better-auth parity: only owner may delete the organization), which also makes RRM-001's canGrant stop admins from minting owners. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** PermissionEngine.defaultStatements.admin.organization is now ["update"] (no delete), so admin is a strict subset of owner and RRM-001's canGrant stops an admin minting/promoting an owner or deleting the organization. Tests: PermissionEngine.test.ts 'admin lacks organization:delete; owner holds it' and Organization.test.ts 'OHS-005: admin is not owner' (delete denied, promote/invite owner -> RolePermissionEscalation, admin may still update/invite admin); red before (9 failures with the RZS-005 cases), green after. Gates: tsc -b (only pre-existing react errors), tsconfig.test clean, pnpm test 837 pass, test:bdd green, spec:verify:strict PASS, oxlint clean.

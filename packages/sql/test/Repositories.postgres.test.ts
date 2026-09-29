@@ -6,82 +6,67 @@
 // (not fails) without `AWTHAQ_POSTGRES_URL` set — CI provisions a real
 // Postgres service and sets it; a local run without one just proves nothing,
 // rather than reporting a false failure for an environment gap.
-import { Encryption, KeyProvider } from "@awthaq/ports";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { assert, describe, it } from "@effect/vitest";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
+import * as Layer from "effect/Layer";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as Models from "../src/Models.ts";
+import * as ReadRouting from "../src/ReadRouting.ts";
 import * as Repositories from "../src/Repositories.ts";
+import { contractCases, repositoriesLayer } from "./contract.ts";
+import { regclassTypes } from "./support/TestSql.ts";
+
+const M = Models.makeModels("pg");
 
 const postgresUrl = process.env["AWTHAQ_POSTGRES_URL"];
 
-// Shipping-gap map (.scratch/shipping-gaps), ticket 18:
-// `Repositories.AccountsRepositoryLive` now requires `Encryption` — a
-// fixed test key, isolated from the real `process.env`.
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
+const skip = postgresUrl === undefined;
+
+const SqlLive = PgClient.layer({ url: Redacted.make(postgresUrl ?? "") });
+
+// Forward-only migrator with no down migration (ticket 00's own finding) —
+// each run starts from tables this suite drops and recreates itself. Only the
+// tables `CoreMigrations` owns are dropped, never the whole schema: the
+// rate-limiter suite shares this database and runs in parallel. Keep the list
+// in step with `CoreMigrations.ts` (auth_audit_log was once missing from it).
+const coreTables = [
+  "users",
+  "accounts",
+  "sessions",
+  "verification_tokens",
+  "verification_reservations",
+  "auth_audit_log",
+  "effect_sql_migrations",
+];
+
+const RepositoriesLive = repositoriesLayer(
+  SqlLive,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    for (const table of coreTables) {
+      yield* sql.unsafe(`DROP TABLE IF EXISTS ${table} CASCADE`);
+    }
+  }),
 );
 
-const AccountsRepositoryLive = Repositories.AccountsRepositoryLive.pipe(
-  Layer.provide(EncryptionLive),
-);
+// ESR-009: the dialect-neutral contract cases, on a real server.
+contractCases("Repositories contract (real Postgres)", "pg", RepositoriesLive, { skip });
 
-describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () => {
-  const SqlLive = PgClient.layer({ url: Redacted.make(postgresUrl ?? "") });
-
-  // Forward-only migrator with no down migration (ticket 00's own
-  // finding) — each run starts from a schema this test drops and
-  // recreates itself, mirroring the same DROP/CREATE-per-run pattern
-  // this map's spec flagged as upstream's own (imperfect, but simplest)
-  // answer to the identical problem.
-  const Migrated = Layer.effectDiscard(
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`DROP TABLE IF EXISTS verification_reservations`;
-      yield* sql`DROP TABLE IF EXISTS verification_tokens`;
-      yield* sql`DROP TABLE IF EXISTS sessions`;
-      yield* sql`DROP TABLE IF EXISTS accounts`;
-      yield* sql`DROP TABLE IF EXISTS users`;
-      yield* sql`DROP TABLE IF EXISTS effect_sql_migrations`;
-      yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
-    }),
-  ).pipe(Layer.provide(SqlLive));
-
-  const RepositoriesLive = Layer.mergeAll(
-    Repositories.UsersRepositoryLive,
-    AccountsRepositoryLive,
-    Repositories.SessionsRepositoryLive,
-    Repositories.VerificationRepositoryLive,
-    Repositories.VerificationReservationsRepositoryLive,
-  ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
-
+describe.skipIf(skip)("Repositories (real Postgres)", () => {
   it.effect("migrates and round-trips a User through the real repository", () =>
     Effect.gen(function* () {
       const users = yield* Repositories.UsersRepository;
       const created = yield* users.insert(
-        yield* Models.User.insert.makeEffect({ email: "pg@example.com", name: "PG" }),
+        yield* M.User.insert.makeEffect({ email: "pg@example.com", name: "PG" }),
       );
       assert.isString(created.id);
       assert.strictEqual(created.emailVerified, false);
@@ -95,9 +80,9 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
       const users = yield* Repositories.UsersRepository;
       const accounts = yield* Repositories.AccountsRepository;
       const user = yield* users.insert(
-        yield* Models.User.insert.makeEffect({ email: "dupe@example.com", name: "Dupe" }),
+        yield* M.User.insert.makeEffect({ email: "dupe@example.com", name: "Dupe" }),
       );
-      const insert = yield* Models.Account.insert.makeEffect({
+      const insert = yield* M.Account.insert.makeEffect({
         userId: user.id,
         providerId: "password",
         subject: user.id,
@@ -125,7 +110,7 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
     Effect.gen(function* () {
       const users = yield* Repositories.UsersRepository;
       const user = yield* users.insert(
-        yield* Models.User.insert.makeEffect({ email: "verify@example.com", name: "V" }),
+        yield* M.User.insert.makeEffect({ email: "verify@example.com", name: "V" }),
       );
       assert.strictEqual(user.emailVerified, false);
       const verified = yield* users.verifyEmail(user.id);
@@ -140,10 +125,10 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
         const users = yield* Repositories.UsersRepository;
         const accounts = yield* Repositories.AccountsRepository;
         const user = yield* users.insert(
-          yield* Models.User.insert.makeEffect({ email: "acct-cols@example.com", name: "A" }),
+          yield* M.User.insert.makeEffect({ email: "acct-cols@example.com", name: "A" }),
         );
         yield* accounts.insert(
-          yield* Models.Account.insert.makeEffect({
+          yield* M.Account.insert.makeEffect({
             userId: user.id,
             providerId: "password",
             subject: user.id,
@@ -173,18 +158,19 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
         const sessions = yield* Repositories.SessionsRepository;
         const users = yield* Repositories.UsersRepository;
         const user = yield* users.insert(
-          yield* Models.User.insert.makeEffect({ email: "sess-cols@example.com", name: "S" }),
+          yield* M.User.insert.makeEffect({ email: "sess-cols@example.com", name: "S" }),
         );
         const now = yield* DateTime.now;
+        const future = DateTime.addDuration(now, Duration.days(1));
         const make = () =>
           sessions.insert(
-            Models.Session.insert.make({
+            M.Session.insert.make({
               userId: user.id,
               secretHash: "h",
               ipAddress: null,
               userAgent: null,
-              absoluteExpiresAt: now,
-              idleExpiresAt: Model.Override(now),
+              absoluteExpiresAt: future,
+              idleExpiresAt: Model.Override(future),
               actingAsType: null,
               actingAsId: null,
               familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
@@ -197,17 +183,17 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
         yield* make();
         yield* make();
 
-        const page = yield* sessions.listByUser(user.id, undefined, 10);
+        const page = yield* sessions.listByUser(user.id, now, undefined, 10);
         assert.strictEqual(page.items.length, 3);
         assert.isTrue(Option.isNone(page.nextCursor));
 
         yield* sessions.deleteAllForUserExcept(user.id, keep.id);
-        const afterExcept = yield* sessions.listByUser(user.id, undefined, 10);
+        const afterExcept = yield* sessions.listByUser(user.id, now, undefined, 10);
         assert.strictEqual(afterExcept.items.length, 1);
         assert.strictEqual(afterExcept.items[0]?.id, keep.id);
 
         yield* sessions.deleteAllByUser(user.id);
-        const afterAll = yield* sessions.listByUser(user.id, undefined, 10);
+        const afterAll = yield* sessions.listByUser(user.id, now, undefined, 10);
         assert.strictEqual(afterAll.items.length, 0);
       }).pipe(Effect.provide(RepositoriesLive)),
   );
@@ -221,7 +207,7 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
         const expiresAt = DateTime.add(now, { minutes: 15 });
 
         const issued = yield* verification.upsertLive(
-          yield* Models.VerificationToken.insert.makeEffect({
+          yield* M.VerificationToken.insert.makeEffect({
             identifier: "verify-email:pg-user",
             valueHash: "hash-1",
             expiresAt,
@@ -273,5 +259,71 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
         });
         assert.isFalse(second);
       }).pipe(Effect.provide(RepositoriesLive)),
+  );
+
+  // RRC-001: the default `ReplicationPosition` speaks Postgres LSNs. The
+  // "replica" here is the primary itself (there is no streaming replica in
+  // this environment), which is never in recovery, so `pg_last_wal_replay_lsn()`
+  // is NULL and it can never prove it caught up — exactly the safe direction.
+  it.effect(
+    "ReadRouting: captureToken reads a real LSN; an eventual read then pins the primary",
+    () =>
+      Effect.gen(function* () {
+        const replicaLive = ReadRouting.replica(SqlLive);
+        const users = yield* Repositories.UsersRepository;
+        const inFiber = Effect.gen(function* () {
+          const router = yield* ReadRouting.makeRouter;
+          assert.strictEqual(yield* router.target("eventual"), "replica"); // no token yet
+          yield* ReadRouting.captureToken(
+            users.insert(yield* M.User.insert.makeEffect({ email: "lsn@example.com", name: "L" })),
+          );
+          const token = yield* ReadRouting.CurrentCausalToken;
+          assert.isTrue(Option.isSome(token));
+          assert.match(Option.getOrThrow(token), /^[0-9A-F]+\/[0-9A-F]+$/);
+          assert.strictEqual(yield* router.target("eventual"), "primary");
+          assert.strictEqual(yield* router.target("authoritative"), "primary");
+        });
+        yield* inFiber.pipe(
+          Effect.provideService(ReadRouting.CurrentCausalToken, Option.none()),
+          Effect.provide(replicaLive),
+        );
+      }).pipe(Effect.provide(RepositoriesLive)),
+  );
+
+  // `Migrator`'s Postgres ledger check (`select 'name'::regclass`) cannot decode its
+  // row under @effect/sql-pg 4.0.0-rc.116 once the ledger exists, and the failure
+  // wrecks the connection: a *second* migrator run on a migrated database dies.
+  // A client-scoped regclass codec (README, "Postgres client configuration")
+  // makes a re-run the no-op it should be.
+  it.effect(
+    "re-running coreMigrations on a migrated database applies nothing (regclass codec)",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const again = yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+        assert.strictEqual(again.length, 0);
+        // The connection is still healthy afterwards.
+        const rows = yield* sql`SELECT 1 AS ok`;
+        assert.strictEqual(rows.length, 1);
+      }).pipe(
+        Effect.provide(
+          Layer.provideMerge(
+            Layer.effectDiscard(
+              Effect.gen(function* () {
+                const sql = yield* SqlClient.SqlClient;
+                for (const table of coreTables) {
+                  yield* sql.unsafe(`DROP TABLE IF EXISTS ${table} CASCADE`);
+                }
+                yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+              }),
+            ),
+            PgClient.layer({
+              url: Redacted.make(postgresUrl ?? ""),
+              types: regclassTypes(),
+              maxConnections: 1,
+            }),
+          ),
+        ),
+      ),
   );
 });

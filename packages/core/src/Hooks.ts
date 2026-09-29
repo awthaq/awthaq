@@ -83,6 +83,25 @@ export class BeforeUserDelete extends HookPoint.veto<BeforeUserDelete>()(
 ) {}
 
 /**
+ * AAPS-005: observe — fired once a user's awthaq-owned, policy-readable
+ * attributes actually change (`Users.updateProfile` → `name`,
+ * `Users.verifyEmail` → `emailVerified`, and only when it flips). qadi's
+ * `UserAttributes` resolver reads those attributes, so an application-scoped
+ * `DecisionCache` needs a signal to flush on — `@awthaq/qadi`'s
+ * `DecisionCacheInvalidationLive` taps this one. Optional at the call site:
+ * `Users` reads it through `Effect.serviceOption`, so a composition that does
+ * not provide it (or does not care) is unchanged.
+ */
+const UserAttributesChangedInput = Schema.Struct({
+  userId: Schema.String,
+  attributes: Schema.Array(Schema.String),
+});
+export class AfterUserAttributesChanged extends HookPoint.observe<AfterUserAttributesChanged>()(
+  "auth.user.attributesChanged",
+  UserAttributesChangedInput,
+) {}
+
+/**
  * Every point's own default (no-tap) layer, merged into one — an
  * application composing any of `Users`/`Password`/`OAuth`/`Passkey`
  * needs this once, the same way `OrganizationHooksLive` already covers
@@ -96,4 +115,5 @@ export const HooksLive = Layer.mergeAll(
   AfterSignIn.layer,
   BeforeSessionIssue.layer,
   BeforeUserDelete.layer,
+  AfterUserAttributesChanged.layer,
 );

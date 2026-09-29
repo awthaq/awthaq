@@ -3,7 +3,7 @@ ID: "EHA-006"
 Title: "OptionalAuthentication advertises a 401 that its implementation can never produce"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "api"
 Source: "packages/api/src/Api.ts:133"
 Auditor: "effect-http-api-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `api` · reported by **Effect HTTP API Specialist** (`effect-http-api-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Give OptionalAuthentication a dedicated internal error type distinct from the pu
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `optional-auth-contract`. Evidence at HEAD ec065a7: `packages/api/src/Api.ts:133`. Fix: Give OptionalAuthentication no error type, so the OpenAPI document stops advertising an impossible 401. The cookie handler resolves cookie, then bearer, then anonymous itself. (effort M). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** api/Api.ts: OptionalAuthentication declares no error type (doc comment rewritten); server Authentication.ts OptionalAuthenticationLive: the cookie handler resolves cookie, then decodes the bearer via HttpApiBuilder.securityDecode(Api.BearerToken) and tries it, then defaults to anonymousPrincipal (E never); bearer kept for the record. Rotation delivery/PostAuthResponseHook stay on success paths. Tests (server/test/Authentication.test.ts): OpenAPI lists 401 for the Authentication endpoint and none for the OptionalAuthentication one (was red: 401 advertised); cookie->bearer->anonymous order incl. garbage cookie + valid bearer; existing BEH-EA-068 tests unchanged. Spec BEH-EA-068 paragraph.

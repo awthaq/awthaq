@@ -3,7 +3,7 @@ ID: "PERS-005"
 Title: "Organization authorization bypasses the declarative policy layer — two parallel deny semantics"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:1040"
 Auditor: "policy-engine-rego-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `organization` · reported by **Policy Engine / Rego Specialist** (`policy-engine-rego-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Expose at least one Policy-valued hook point (or wire OrganizationQadi's permiss
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `org-qadi-relationships`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1308`. Fix: Keep the self-contained engine (design decision) but make its decisions auditable: publish a denial event into the durable AuditLog, and let qadi evaluate the same statements via RZS-006's permission relations. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** core AuthEvents gains auth.organization.permissionDenied {organizationId, userId, resource, action, reason: notMember|missingStatement} and AuditLog.actorOf its case (compile-enforced); Organization.requirePermission publishes it on both denial branches before failing (requireMembership read-only denials are not PermissionEngine denials and are not published). The qadi half (evaluating the same statements declaratively so qadi traces/DecisionSinks see them) is RZS-006's <resource>:<action> relations. Tests: Organization.test.ts 'permission denials are audited (PERS-005)' x2, core AuditLog.test.ts both layers. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 896 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

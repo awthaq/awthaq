@@ -3,7 +3,7 @@ ID: "AR-003"
 Title: "Admin API shares the public surface — no separate tier, scheme, or network boundary"
 Level: medium
 Category: "architecture"
-Status: ready-for-human
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/AdminApi.ts:111"
 Auditor: "aeneas-rekkas"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `admin` · reported by **Aeneas Rekkas — Founder/CEO of Ory** (`aeneas-rekkas`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Keep the contract but make the tier swappable: compose AdminApi into a second Ht
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `admin-api-tier`. Evidence at HEAD ec065a7: `packages/admin/src/AdminApi.ts:115`. Fix: Give admin groups a separable tier (own HttpApi + optional dedicated auth middleware), defaulting to today's co-hosted behavior. (effort L). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option A per plan (separable admin tier, defaulting to today's co-hosted behavior); user may revisit. Design (kept additive; no AuthPlugin.Class generics change): a contract group is admin-tier when any dot-separated segment of its id is 'admin' (BEH-EA-004 already confines ids to the plugin's own; AuthPlugin.isAdminTier at runtime, AdminTierId/AdminTierGroup at the type level, agreeing by construction). Auth.make now also returns publicApi (all groups except admin-tier) and adminApi (only admin-tier), each typed to exactly its groups via Exclude/Extract over GroupsOf<P[number]>, beside the unchanged api (all groups) - a host serves adminApi on its own listener/port with AuthHttp.routes(auth.adminApi) and publicApi elsewhere, handlers still from the one composed layer. @awthaq/api: new AdminAuthentication middleware (same security record/error/CurrentPrincipal as Authentication); @awthaq/server: AdminAuthenticationLive delegates to Authentication (co-hosted default unchanged; a host overriding it needs no Api.Authentication on an admin-only listener); @awthaq/admin: AdminGroup now sits behind Api.AdminAuthentication. Consequence: a host composing Admin must also provide AdminAuthenticationLive (default one-liner) - tests/BDD World updated. Deviation from the dossier's wording: no AuthHttp.layer({admin:{mount}}) option - AuthHttp.routes already takes any HttpApi, so choosing which api to serve IS the mount choice (the '/admin' path prefix already exists). Tests red first: core/test/AuthPlugin.test.ts 'AR-003: admin-tier groups are split into adminApi...' (runtime keys + @ts-expect-error type proof), admin/test/AdminTier.test.ts (publicApi-only listener answers /admin 404; admin listener with a swapped AdminAuthentication authenticates its own way; default scheme = ordinary session auth). Spec BEH-EA-071 amended (no new BEH id; see report). Gates: tsc -b (minus pre-existing packages/react TS2883) + tsconfig.test clean, pnpm test 860 pass, test:bdd 107, spec:verify:strict 19/19, oxlint clean.

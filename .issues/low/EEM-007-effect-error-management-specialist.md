@@ -55,3 +55,5 @@ Either drop the provider field from AccountExists (empty payload like the other 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `oauth-account-linking-policy`. Duplicate of `NAM-006` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:798`. Full dossier: `.plan/slices/03-oauth-flow.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `NAM-006-nextauth-authjs-migration-specialist` — closed by its fix (see that issue's Resolved comment).

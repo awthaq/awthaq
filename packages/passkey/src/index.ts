@@ -9,3 +9,4 @@ export * as ChallengeStore from "./ChallengeStore.ts";
 export * as Passkey from "./Passkey.ts";
 export * as PasskeyApi from "./PasskeyApi.ts";
 export * as PasskeyCredentials from "./PasskeyCredentials.ts";
+export * as PasskeyUserHandles from "./PasskeyUserHandles.ts";

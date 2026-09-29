@@ -3,7 +3,8 @@
   "include": [
     "features/**/*.steps.test.ts",
     "packages/*/test/**/*.test.ts",
-    "packages/*/test/**/*.test.tsx"
+    "packages/*/test/**/*.test.tsx",
+    "examples/plugin-template/test/**/*.test.ts"
   ],
   "compilerOptions": {
     "noEmit": true,

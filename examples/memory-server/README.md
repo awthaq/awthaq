@@ -33,6 +33,13 @@ curl -X POST localhost:3001/organization \
   -H 'cookie: __Host-session=<from sign-up>' \
   -d '{"name":"Acme","slug":"acme"}'
 # -> 200, a real organization row in the same in-memory backend
+
+curl localhost:3001/roles/catalog
+# -> 403: `RolesAdmin` (opt-in role administration) is guarded by qadi's
+#    Path B `RequirePermission`; only a subject whose `Roles` catalog role
+#    carries `roles:read`/`roles:manage` gets through. On startup the example
+#    also runs `AuthorizationAudit.auditAuthorizationAnnotations`, refusing to
+#    serve if any guarded endpoint declares neither a permission nor `publicEndpoint`.
 ```
 
 See `index.ts`'s own comments for what each composition step is doing and

@@ -3,7 +3,7 @@ ID: "BPAS-003"
 Title: "webauthnUserId is re-randomized per ceremony and diverges from the credential's real userHandle"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:481"
 Auditor: "biometric-platform-authenticator-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `passkey` · reported by **Biometric / Platform Authenticator Specialist** (`biometric-platform-authenticator-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Generate one webauthnUserId per user (memoized on Users or a plugin table keyed 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-user-handle`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:591`. Fix: Mint one random WebAuthn user handle per user, persist it in a plugin table, send it in every registration ceremony, store exactly it on the credential, and cross-check assertion userHandle. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Stable per-user handle: new PasskeyUserHandles service (layerMemory/layerSql, getOrCreate atomic via ON CONFLICT DO NOTHING + SELECT, deleteByUser) and migration create_passkey_user_handle (table added to Passkey.tables); all registration ceremonies send it as user.id and credentials.create stores exactly it; sign-in and step-up reject an assertion userHandle that differs from the stored one; beforeUserDeleteErasure erases it. Tests: PasskeyUserHandle.test.ts (stored handle == options.user.id shared across credentials and the conditional ceremony; mismatch rejected on sign-in/step-up; service tests on both layers incl. concurrency), PasskeyErasure.test.ts. Known consequence documented in the README/model: credentials registered before this change hold a random handle no authenticator has, so discoverable assertions for them fail the check and those users re-register (pre-release; no migration possible). Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

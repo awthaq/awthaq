@@ -3,7 +3,7 @@ ID: "TSS-003"
 Title: "OAuth callback compares state correlation secret with non-constant-time string !=="
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:529"
 Auditor: "timing-side-channel-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `oauth` · reported by **Timing / Side-Channel Specialist** (`timing-side-channel-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Route the cookieState/state comparison through a shared constantTimeEqual helper
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-callback-http-hardening`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:632`. Fix: Compare cookieState and state in constant time over fixed-length digests, using a shared helper. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/core/src/ConstantTime.ts (constantTimeEqual over bytes with length folded into the accumulator, constantTimeEqualString), exported from @awthaq/core, with test/ConstantTime.test.ts. OAuth callback now compares __Host-oauth-state to the returned state as constantTimeEqual(sha256(cookie), sha256(state)); no !== on secret material remains in OAuth.ts (existing mismatched-cookie test is the behavioural pin). NOT done here (other programs' files): replacing the private copies in Sessions.ts, Csrf.ts, ChallengeStore.ts, PasswordHasher.ts. Gates as CSS-004.
