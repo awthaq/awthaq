@@ -501,8 +501,14 @@ describe("GET /user/export (CSG-005)", () => {
           const accounts = yield* Accounts.Accounts;
           const sessions = yield* Sessions.Sessions;
           const audit = yield* AuditLog.AuditLog;
-          const user = yield* users.create({ identity: { _tag: "Email", email: "export-me@example.com" }, name: "Exp" });
-          const other = yield* users.create({ identity: { _tag: "Email", email: "not-me@example.com" }, name: "Other" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "export-me@example.com" },
+            name: "Exp",
+          });
+          const other = yield* users.create({
+            identity: { _tag: "Email", email: "not-me@example.com" },
+            name: "Other",
+          });
           yield* accounts.link({ userId: user.id, providerId: "google", subject: "sub-exp" });
           yield* accounts.link({ userId: other.id, providerId: "google", subject: "sub-other" });
           const { token } = yield* sessions.issue({ userId: user.id });
@@ -579,7 +585,10 @@ describe("GET /user/export (CSG-005)", () => {
       Effect.gen(function* () {
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ identity: { _tag: "Email", email: "hammer@example.com" }, name: "H" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "hammer@example.com" },
+          name: "H",
+        });
         const { token } = yield* sessions.issue({ userId: user.id });
         for (let i = 0; i < 5; i += 1) {
           const ok = yield* sendHandled("/user/export", { method: "GET", token });
@@ -624,7 +633,10 @@ describe("server handler invariants (GC-003/GC-008)", () => {
         const exit = yield* currentUser.pipe(
           Effect.provideService(
             Api.CurrentPrincipal,
-            new Api.ApiKeyPrincipal({ ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }), scopes: [] }),
+            new Api.ApiKeyPrincipal({
+              ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }),
+              scopes: [],
+            }),
           ),
           Effect.exit,
         );
@@ -919,36 +931,38 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
       ).pipe(Effect.provide(FieldsAppLayer)),
   );
 
-  it.effect("SAM-004: a composition that declares no field answers `fields: {}` and refuses any", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        const sessions = yield* Sessions.Sessions;
-        const router = yield* HttpRouter.HttpRouter;
-        const user = yield* users.create({
-          identity: { _tag: "Email", email: "nofields@example.com" },
-          name: "None",
-        });
-        const issued = yield* sessions.issue({ userId: user.id });
-        const patch = (body: unknown) =>
-          router.asHttpEffect().pipe(
-            Effect.provideService(
-              HttpServerRequest.HttpServerRequest,
-              HttpServerRequest.fromWeb(
-                new Request("http://localhost/user", {
-                  method: "PATCH",
-                  headers: { ...cookieHeader(issued.token), "content-type": "application/json" },
-                  body: JSON.stringify(body),
-                }),
+  it.effect(
+    "SAM-004: a composition that declares no field answers `fields: {}` and refuses any",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const sessions = yield* Sessions.Sessions;
+          const router = yield* HttpRouter.HttpRouter;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "nofields@example.com" },
+            name: "None",
+          });
+          const issued = yield* sessions.issue({ userId: user.id });
+          const patch = (body: unknown) =>
+            router.asHttpEffect().pipe(
+              Effect.provideService(
+                HttpServerRequest.HttpServerRequest,
+                HttpServerRequest.fromWeb(
+                  new Request("http://localhost/user", {
+                    method: "PATCH",
+                    headers: { ...cookieHeader(issued.token), "content-type": "application/json" },
+                    body: JSON.stringify(body),
+                  }),
+                ),
               ),
-            ),
-          );
-        const plain = yield* patch({ name: "None" });
-        assert.deepStrictEqual(((yield* jsonBody(plain)) as { fields: unknown }).fields, {});
-        const refused = yield* patch({ name: "None", fields: { billing_plan: "pro" } });
-        assert.strictEqual(refused.status, 422);
-      }),
-    ).pipe(Effect.provide(AppLayer)),
+            );
+          const plain = yield* patch({ name: "None" });
+          assert.deepStrictEqual(((yield* jsonBody(plain)) as { fields: unknown }).fields, {});
+          const refused = yield* patch({ name: "None", fields: { billing_plan: "pro" } });
+          assert.strictEqual(refused.status, 422);
+        }),
+      ).pipe(Effect.provide(AppLayer)),
   );
 
   it.effect(

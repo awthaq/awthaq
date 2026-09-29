@@ -59,65 +59,74 @@ describe("reading the export", () => {
 });
 
 describe("ImportFirebaseUser.mapUser", () => {
-  it.effect("maps an email-verified password user to a firebase-scrypt credential; extra fields are reported", () =>
-    Effect.gen(function* () {
-      const [first] = yield* mapAll();
-      assert.strictEqual(first?._tag, "Success");
-      if (first?._tag !== "Success") return;
-      assert.strictEqual(first.success.sourceRowId, "fb-user-1");
-      assert.deepStrictEqual(first.success.user.identity, { _tag: "Email", email: "user1@example.com" });
-      assert.strictEqual(first.success.user.name, "User One");
-      assert.isTrue(first.success.user.verified);
-      assert.strictEqual((first.success.user.credentials ?? []).length, 1);
-      const [account] = first.success.user.credentials ?? [];
-      assert.strictEqual(account?.providerId, "password");
-      assert.match(
-        account?.credentialHash === undefined ? "" : Redacted.value(account.credentialHash),
-        /^\$firebase-scrypt\$/,
-      );
-      assert.strictEqual(first.success.user.image, "https://example.com/u1.png");
-      assert.deepStrictEqual(first.success.unmapped, ["createdAt", "lastSignedInAt"]);
-    }),
+  it.effect(
+    "maps an email-verified password user to a firebase-scrypt credential; extra fields are reported",
+    () =>
+      Effect.gen(function* () {
+        const [first] = yield* mapAll();
+        assert.strictEqual(first?._tag, "Success");
+        if (first?._tag !== "Success") return;
+        assert.strictEqual(first.success.sourceRowId, "fb-user-1");
+        assert.deepStrictEqual(first.success.user.identity, {
+          _tag: "Email",
+          email: "user1@example.com",
+        });
+        assert.strictEqual(first.success.user.name, "User One");
+        assert.isTrue(first.success.user.verified);
+        assert.strictEqual((first.success.user.credentials ?? []).length, 1);
+        const [account] = first.success.user.credentials ?? [];
+        assert.strictEqual(account?.providerId, "password");
+        assert.match(
+          account?.credentialHash === undefined ? "" : Redacted.value(account.credentialHash),
+          /^\$firebase-scrypt\$/,
+        );
+        assert.strictEqual(first.success.user.image, "https://example.com/u1.png");
+        assert.deepStrictEqual(first.success.unmapped, ["createdAt", "lastSignedInAt"]);
+      }),
   );
 
-  it.effect("the imported password signs in through the legacy verifier and is flagged for rehash to argon2id", () =>
-    Effect.gen(function* () {
-      const [first] = yield* mapAll();
-      if (first?._tag !== "Success") return assert.fail("user 1 did not map");
-      const hash = first.success.user.credentials?.[0]?.credentialHash;
-      if (hash === undefined) return assert.fail("no credential hash");
-      const hasher = yield* PasswordHasher.PasswordHasher;
-      const phc = Redacted.value(hash);
-      assert.isTrue(yield* hasher.verify(Redacted.make("user1password"), phc));
-      assert.isFalse(yield* hasher.verify(Redacted.make("user1passwore"), phc));
-      assert.isTrue(hasher.needsRehash(phc));
-    }).pipe(
-      Effect.provide(
-        PasswordHasher.layerArgon2id.pipe(
-          Layer.provideMerge(FirebaseScryptVerifier.layer),
-          Layer.provide(NodeCrypto.layer),
+  it.effect(
+    "the imported password signs in through the legacy verifier and is flagged for rehash to argon2id",
+    () =>
+      Effect.gen(function* () {
+        const [first] = yield* mapAll();
+        if (first?._tag !== "Success") return assert.fail("user 1 did not map");
+        const hash = first.success.user.credentials?.[0]?.credentialHash;
+        if (hash === undefined) return assert.fail("no credential hash");
+        const hasher = yield* PasswordHasher.PasswordHasher;
+        const phc = Redacted.value(hash);
+        assert.isTrue(yield* hasher.verify(Redacted.make("user1password"), phc));
+        assert.isFalse(yield* hasher.verify(Redacted.make("user1passwore"), phc));
+        assert.isTrue(hasher.needsRehash(phc));
+      }).pipe(
+        Effect.provide(
+          PasswordHasher.layerArgon2id.pipe(
+            Layer.provideMerge(FirebaseScryptVerifier.layer),
+            Layer.provide(NodeCrypto.layer),
+          ),
         ),
       ),
-    ),
   );
 
-  it.effect("a google providerUserInfo becomes a linked account with the right subject and the issuer the caller names", () =>
-    Effect.gen(function* () {
-      const results = yield* mapAll({ google: "https://accounts.google.com" });
-      const second = results[1];
-      if (second?._tag !== "Success") return assert.fail("user 2 did not map");
-      const [account] = second.success.user.credentials ?? [];
-      assert.strictEqual(account?.providerId, "google");
-      assert.strictEqual(account?.subject, "112233445566778899");
-      assert.strictEqual(account?.issuer, "https://accounts.google.com");
-      assert.isUndefined(account?.credentialHash);
-      // Two things with no destination are reported, the phone identity and the phone number.
-      assert.deepStrictEqual(second.success.unmapped, [
-        "createdAt",
-        "phoneNumber",
-        "providerUserInfo.phone",
-      ]);
-    }),
+  it.effect(
+    "a google providerUserInfo becomes a linked account with the right subject and the issuer the caller names",
+    () =>
+      Effect.gen(function* () {
+        const results = yield* mapAll({ google: "https://accounts.google.com" });
+        const second = results[1];
+        if (second?._tag !== "Success") return assert.fail("user 2 did not map");
+        const [account] = second.success.user.credentials ?? [];
+        assert.strictEqual(account?.providerId, "google");
+        assert.strictEqual(account?.subject, "112233445566778899");
+        assert.strictEqual(account?.issuer, "https://accounts.google.com");
+        assert.isUndefined(account?.credentialHash);
+        // Two things with no destination are reported, the phone identity and the phone number.
+        assert.deepStrictEqual(second.success.unmapped, [
+          "createdAt",
+          "phoneNumber",
+          "providerUserInfo.phone",
+        ]);
+      }),
   );
 
   it.effect("an email-less record is reported as unmappable, not imported", () =>
@@ -140,13 +149,17 @@ describe("ImportFirebaseUser.mapUser", () => {
     }),
   );
 
-  it.effect("a password hash with no hash config cannot be verified, so the record is unmappable", () =>
-    Effect.gen(function* () {
-      const { users } = yield* load;
-      const error = yield* ImportFirebaseUser.mapUser(users[0], { config: undefined }).pipe(Effect.flip);
-      assert.strictEqual(error._tag, "UnmappableRow");
-      assert.include(error.reason, "hash config");
-    }),
+  it.effect(
+    "a password hash with no hash config cannot be verified, so the record is unmappable",
+    () =>
+      Effect.gen(function* () {
+        const { users } = yield* load;
+        const error = yield* ImportFirebaseUser.mapUser(users[0], { config: undefined }).pipe(
+          Effect.flip,
+        );
+        assert.strictEqual(error._tag, "UnmappableRow");
+        assert.include(error.reason, "hash config");
+      }),
   );
 
   it("providerIdFor strips the .com suffix and leaves other ids alone", () => {

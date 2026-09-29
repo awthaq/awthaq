@@ -112,7 +112,10 @@ export const SubjectHandlers = HttpApiBuilder.group(SubjectApi, "subject", (hand
         // silently omitted attribute a client would read as "not set".
         const resolver = yield* Effect.serviceOption(AttributeResolver);
         if (Option.isNone(resolver)) {
-          return yield* Defects.invalidConfiguration("SubjectApiConfig.exposedAttributes", "awthaq: SubjectApiConfig.exposedAttributes names resolver-backed attributes but no AttributeResolver is provided");
+          return yield* Defects.invalidConfiguration(
+            "SubjectApiConfig.exposedAttributes",
+            "awthaq: SubjectApiConfig.exposedAttributes names resolver-backed attributes but no AttributeResolver is provided",
+          );
         }
         for (const name of pending) {
           const value = yield* resolver.value.resolve(subject.id, name).pipe(Effect.orDie);

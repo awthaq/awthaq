@@ -31,7 +31,9 @@ export const memoryCredentials = (initial?: CredentialStore.Credential) =>
         backend: "memory",
         get: Ref.get(ref),
         set: (credential) =>
-          Ref.set(ref, Option.some(credential)).pipe(Effect.andThen(Ref.update(writes, (n) => n + 1))),
+          Ref.set(ref, Option.some(credential)).pipe(
+            Effect.andThen(Ref.update(writes, (n) => n + 1)),
+          ),
         clear: Ref.set(ref, Option.none()),
       }),
     );

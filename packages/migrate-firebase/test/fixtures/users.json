@@ -11,7 +11,12 @@
       "createdAt": "1700000000000",
       "lastSignedInAt": "1710000000000",
       "providerUserInfo": [
-        { "providerId": "password", "email": "user1@example.com", "rawId": "user1@example.com", "federatedId": "user1@example.com" }
+        {
+          "providerId": "password",
+          "email": "user1@example.com",
+          "rawId": "user1@example.com",
+          "federatedId": "user1@example.com"
+        }
       ]
     },
     {
@@ -21,7 +26,12 @@
       "displayName": "Google User",
       "createdAt": "1700000000001",
       "providerUserInfo": [
-        { "providerId": "google.com", "rawId": "112233445566778899", "email": "google-user@example.com", "federatedId": "112233445566778899" },
+        {
+          "providerId": "google.com",
+          "rawId": "112233445566778899",
+          "email": "google-user@example.com",
+          "federatedId": "112233445566778899"
+        },
         { "providerId": "phone", "rawId": "+15555550100" }
       ],
       "phoneNumber": "+15555550100"

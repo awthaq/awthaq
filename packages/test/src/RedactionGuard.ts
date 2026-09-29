@@ -25,6 +25,7 @@
 // The guard never prints a secret: a `Leak` names the channel, the path inside
 // the value and the canary's *label*.
 
+import { Defects } from "@awthaq/ports";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -37,7 +38,13 @@ import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import { AuthEvents } from "@awthaq/core";
 
-export type Channel = "span attribute" | "span event" | "log message" | "log annotation" | "log cause" | "event";
+export type Channel =
+  | "span attribute"
+  | "span event"
+  | "log message"
+  | "log annotation"
+  | "log cause"
+  | "event";
 
 export interface Leak {
   readonly channel: Channel;
@@ -173,10 +180,9 @@ const makeGuard = (recorder: Recorder): RedactionGuardShape => {
   return {
     watch: (label, secret) =>
       secret.length < MIN_CANARY_LENGTH
-        ? Effect.die(
-            new Error(
-              `awthaq/test: canary "${label}" is shorter than ${MIN_CANARY_LENGTH} characters and would match by accident`,
-            ),
+        ? Defects.invalidConfiguration(
+            "RedactionGuard.watch",
+            `awthaq/test: canary "${label}" is shorter than ${MIN_CANARY_LENGTH} characters and would match by accident`,
           )
         : Effect.sync(() => {
             recorder.canaries.set(label, secret);
@@ -216,7 +222,12 @@ export const layer = Layer.unwrap(
     const logger = Logger.make((options) => {
       const level = options.logLevel;
       scan(recorder, "log message", level, options.message);
-      scan(recorder, "log annotation", level, options.fiber.getRef(References.CurrentLogAnnotations));
+      scan(
+        recorder,
+        "log annotation",
+        level,
+        options.fiber.getRef(References.CurrentLogAnnotations),
+      );
       scan(recorder, "log cause", level, options.cause);
     });
     return Layer.mergeAll(

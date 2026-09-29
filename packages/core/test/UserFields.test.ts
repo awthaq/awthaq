@@ -129,21 +129,31 @@ describe("userFields declaration (BEH-EA-040)", () => {
     assert.strictEqual(descriptor?.kind, "text");
   });
 
-  it.effect("the client types offer only the client-writable fields (BEH-EA-048), encoded for the wire", () =>
-    Effect.gen(function* () {
-      const profile = UserFields.client(auth.userFields);
-      const wire = yield* profile.encode({ billing_nickname: "Ada", billing_seats: 2, billing_newsletter: null });
-      assert.deepStrictEqual(wire, { billing_nickname: "Ada", billing_seats: 2, billing_newsletter: null });
-      // @ts-expect-error `billing_plan` is server-only: it is not a key of what a client may write
-      yield* profile.encode({ billing_plan: "pro" });
-      expectTypeOf<UserFields.ClientWritableKeys<typeof auth.userFields>>().toEqualTypeOf<
-        "billing_nickname" | "billing_seats" | "billing_newsletter"
-      >();
-      // Reading is not gated: a user may see a value they may not write.
-      const read = yield* profile.decode({ billing_plan: "pro", billing_seats: 2 });
-      expectTypeOf(read.billing_plan).toEqualTypeOf<"free" | "pro" | undefined>();
-      assert.strictEqual(read.billing_plan, "pro");
-    }),
+  it.effect(
+    "the client types offer only the client-writable fields (BEH-EA-048), encoded for the wire",
+    () =>
+      Effect.gen(function* () {
+        const profile = UserFields.client(auth.userFields);
+        const wire = yield* profile.encode({
+          billing_nickname: "Ada",
+          billing_seats: 2,
+          billing_newsletter: null,
+        });
+        assert.deepStrictEqual(wire, {
+          billing_nickname: "Ada",
+          billing_seats: 2,
+          billing_newsletter: null,
+        });
+        // @ts-expect-error `billing_plan` is server-only: it is not a key of what a client may write
+        yield* profile.encode({ billing_plan: "pro" });
+        expectTypeOf<UserFields.ClientWritableKeys<typeof auth.userFields>>().toEqualTypeOf<
+          "billing_nickname" | "billing_seats" | "billing_newsletter"
+        >();
+        // Reading is not gated: a user may see a value they may not write.
+        const read = yield* profile.decode({ billing_plan: "pro", billing_seats: 2 });
+        expectTypeOf(read.billing_plan).toEqualTypeOf<"free" | "pro" | undefined>();
+        assert.strictEqual(read.billing_plan, "pro");
+      }),
   );
 
   it("two declarations that would share a column are refused when composed", () => {
@@ -188,86 +198,110 @@ const SqlTestLayer = Users.layerSql.pipe(
 
 const newUser = Effect.gen(function* () {
   const users = yield* Users.Users;
-  return yield* users.create({ identity: { _tag: "Email", email: "ada@example.com" }, name: "Ada" });
+  return yield* users.create({
+    identity: { _tag: "Email", email: "ada@example.com" },
+    name: "Ada",
+  });
 });
 
 const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): void => {
   describe(name, () => {
-    it.effect("an unset user has no fields; setFields round-trips every kind and clears with null", () =>
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        const user = yield* newUser;
-        assert.deepStrictEqual(yield* users.getFields(user.id), {});
+    it.effect(
+      "an unset user has no fields; setFields round-trips every kind and clears with null",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const user = yield* newUser;
+          assert.deepStrictEqual(yield* users.getFields(user.id), {});
 
-        const after = yield* users.setFields(user.id, {
-          billing_plan: "pro",
-          billing_nickname: "Countess",
-          billing_seats: 3.5,
-          billing_newsletter: true,
-        });
-        assert.deepStrictEqual(after, {
-          billing_plan: "pro",
-          billing_nickname: "Countess",
-          billing_seats: 3.5,
-          billing_newsletter: true,
-        });
-        assert.deepStrictEqual(yield* users.getFields(user.id, ["billing_nickname"]), {
-          billing_nickname: "Countess",
-        });
+          const after = yield* users.setFields(user.id, {
+            billing_plan: "pro",
+            billing_nickname: "Countess",
+            billing_seats: 3.5,
+            billing_newsletter: true,
+          });
+          assert.deepStrictEqual(after, {
+            billing_plan: "pro",
+            billing_nickname: "Countess",
+            billing_seats: 3.5,
+            billing_newsletter: true,
+          });
+          assert.deepStrictEqual(yield* users.getFields(user.id, ["billing_nickname"]), {
+            billing_nickname: "Countess",
+          });
 
-        // `false` is a value, not "unset"; `null` clears.
-        const cleared = yield* users.setFields(user.id, {
-          billing_newsletter: false,
-          billing_nickname: null,
-        });
-        assert.deepStrictEqual(cleared, {
-          billing_plan: "pro",
-          billing_seats: 3.5,
-          billing_newsletter: false,
-        });
-      }).pipe(Effect.provide(layer)),
+          // `false` is a value, not "unset"; `null` clears.
+          const cleared = yield* users.setFields(user.id, {
+            billing_newsletter: false,
+            billing_nickname: null,
+          });
+          assert.deepStrictEqual(cleared, {
+            billing_plan: "pro",
+            billing_seats: 3.5,
+            billing_newsletter: false,
+          });
+        }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("BEH-EA-048: a client may write a client-writable field but never a server-only one", () =>
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        const user = yield* newUser;
-        yield* users.setFields(user.id, { billing_nickname: "Ada" }, { source: "client" });
+    it.effect(
+      "BEH-EA-048: a client may write a client-writable field but never a server-only one",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const user = yield* newUser;
+          yield* users.setFields(user.id, { billing_nickname: "Ada" }, { source: "client" });
 
-        const refused = yield* users
-          .setFields(user.id, { billing_nickname: "Changed", billing_plan: "pro" }, { source: "client" })
-          .pipe(Effect.flip);
-        assert.strictEqual(refused._tag, "UserFieldNotWritable");
-        if (refused._tag === "UserFieldNotWritable") assert.strictEqual(refused.field, "billing_plan");
-        // Validated as a whole before anything is stored: the allowed field in the refused patch did not land.
-        assert.deepStrictEqual(yield* users.getFields(user.id), { billing_nickname: "Ada" });
+          const refused = yield* users
+            .setFields(
+              user.id,
+              { billing_nickname: "Changed", billing_plan: "pro" },
+              { source: "client" },
+            )
+            .pipe(Effect.flip);
+          assert.strictEqual(refused._tag, "UserFieldNotWritable");
+          if (refused._tag === "UserFieldNotWritable")
+            assert.strictEqual(refused.field, "billing_plan");
+          // Validated as a whole before anything is stored: the allowed field in the refused patch did not land.
+          assert.deepStrictEqual(yield* users.getFields(user.id), { billing_nickname: "Ada" });
 
-        // Trusted server code (the default source) may write it.
-        yield* users.setFields(user.id, { billing_plan: "pro" });
-        assert.deepStrictEqual(yield* users.getFields(user.id, ["billing_plan"]), {
-          billing_plan: "pro",
-        });
-      }).pipe(Effect.provide(layer)),
+          // Trusted server code (the default source) may write it.
+          yield* users.setFields(user.id, { billing_plan: "pro" });
+          assert.deepStrictEqual(yield* users.getFields(user.id, ["billing_plan"]), {
+            billing_plan: "pro",
+          });
+        }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("an undeclared key, a value the schema refuses and an unknown user are typed failures", () =>
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        const user = yield* newUser;
-        const unknown = yield* users.setFields(user.id, { billing_missing: "x" }).pipe(Effect.flip);
-        assert.strictEqual(unknown._tag, "UnknownUserField");
-        const unknownRead = yield* users.getFields(user.id, ["billing_missing"]).pipe(Effect.flip);
-        assert.strictEqual(unknownRead._tag, "UnknownUserField");
-        const invalid = yield* users.setFields(user.id, { billing_plan: "enterprise" }).pipe(Effect.flip);
-        assert.strictEqual(invalid._tag, "InvalidUserField");
-        const wrongKind = yield* users.setFields(user.id, { billing_seats: "many" }).pipe(Effect.flip);
-        assert.strictEqual(wrongKind._tag, "InvalidUserField");
-        const ghost = Users.UserId("99999999-9999-9999-9999-999999999999");
-        const missing = yield* users.setFields(ghost, { billing_nickname: "x" }).pipe(Effect.flip);
-        assert.strictEqual(missing._tag, "UserNotFound");
-        const missingRead = yield* users.getFields(ghost).pipe(Effect.flip);
-        assert.strictEqual(missingRead._tag, "UserNotFound");
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "an undeclared key, a value the schema refuses and an unknown user are typed failures",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const user = yield* newUser;
+          const unknown = yield* users
+            .setFields(user.id, { billing_missing: "x" })
+            .pipe(Effect.flip);
+          assert.strictEqual(unknown._tag, "UnknownUserField");
+          const unknownRead = yield* users
+            .getFields(user.id, ["billing_missing"])
+            .pipe(Effect.flip);
+          assert.strictEqual(unknownRead._tag, "UnknownUserField");
+          const invalid = yield* users
+            .setFields(user.id, { billing_plan: "enterprise" })
+            .pipe(Effect.flip);
+          assert.strictEqual(invalid._tag, "InvalidUserField");
+          const wrongKind = yield* users
+            .setFields(user.id, { billing_seats: "many" })
+            .pipe(Effect.flip);
+          assert.strictEqual(wrongKind._tag, "InvalidUserField");
+          const ghost = Users.UserId("99999999-9999-9999-9999-999999999999");
+          const missing = yield* users
+            .setFields(ghost, { billing_nickname: "x" })
+            .pipe(Effect.flip);
+          assert.strictEqual(missing._tag, "UserNotFound");
+          const missingRead = yield* users.getFields(ghost).pipe(Effect.flip);
+          assert.strictEqual(missingRead._tag, "UserNotFound");
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("typedFields decodes reads and encodes writes with the declared types", () =>
@@ -302,7 +336,10 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
 };
 
 suite("UserFields over Users.layerMemory", MemoryLayer);
-suite("UserFields over Users.layerSql (migrated by Auth.make's generated migrations)", SqlTestLayer);
+suite(
+  "UserFields over Users.layerSql (migrated by Auth.make's generated migrations)",
+  SqlTestLayer,
+);
 
 describe("UserFields over Users.layerSql: the generated columns", () => {
   it.effect("are nullable scalar columns added to `users`, and only those", () =>
@@ -312,7 +349,12 @@ describe("UserFields over Users.layerSql: the generated columns", () => {
       const rows = yield* sql`SELECT * FROM users WHERE id = ${user.id}`;
       const [row] = rows;
       assert.isDefined(row);
-      for (const column of ["billing_plan", "billing_nickname", "billing_seats", "billing_newsletter"]) {
+      for (const column of [
+        "billing_plan",
+        "billing_nickname",
+        "billing_seats",
+        "billing_newsletter",
+      ]) {
         assert.isTrue(column in (row ?? {}), column);
         assert.isNull(row?.[column]);
       }

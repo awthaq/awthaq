@@ -22,34 +22,8 @@
     "declaration": false,
     "declarationMap": false,
     "types": ["node"],
-    // Same rationale as tsconfig.base.json's `paths`: lets test files resolve
-    // a sibling workspace package by source rather than by built output.
-    "paths": {
-      "@awthaq/api": ["./packages/api/src/index.ts"],
-      "@awthaq/ports": ["./packages/ports/src/index.ts"],
-      "@awthaq/sql": ["./packages/sql/src/index.ts"],
-      "@awthaq/core": ["./packages/core/src/index.ts"],
-      "@awthaq/server": ["./packages/server/src/index.ts"],
-      "@awthaq/qadi": ["./packages/qadi/src/index.ts"],
-      "@awthaq/client": ["./packages/client/src/index.ts"],
-      "@awthaq/react": ["./packages/react/src/index.ts"],
-      "@awthaq/next": ["./packages/next/src/index.ts"],
-      "@awthaq/test": ["./packages/test/src/index.ts"],
-      "@awthaq/cli": ["./packages/cli/src/index.ts"],
-      "@awthaq/password": ["./packages/password/src/index.ts"],
-      "@awthaq/oauth": ["./packages/oauth/src/index.ts"],
-      "@awthaq/passkey": ["./packages/passkey/src/index.ts"],
-      "@awthaq/roles": ["./packages/roles/src/index.ts"],
-      "@awthaq/magic-link": ["./packages/magic-link/src/index.ts"],
-      "@awthaq/two-factor": ["./packages/two-factor/src/index.ts"],
-      "@awthaq/organization": ["./packages/organization/src/index.ts"],
-      "@awthaq/api-key": ["./packages/api-key/src/index.ts"],
-      "@awthaq/admin": ["./packages/admin/src/index.ts"],
-      "@awthaq/jwt": ["./packages/jwt/src/index.ts"],
-      "@awthaq/migrate-auth0": ["./packages/migrate-auth0/src/index.ts"],
-      "@awthaq/migrate-better-auth": ["./packages/migrate-better-auth/src/index.ts"],
-      "@awthaq/migrate-firebase": ["./packages/migrate-firebase/src/index.ts"],
-      "@awthaq/scim": ["./packages/scim/src/index.ts"]
-    }
+    // This one program also holds the browser-facing packages' tests (react `.tsx`, client),
+    // and the DOM `Response.json()`-style typings the wire tests lean on (AH-009).
+    "lib": ["ESNext", "DOM"]
   }
 }

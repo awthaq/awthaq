@@ -34,7 +34,9 @@ export const emit = (auth: LoadedAuth, options: { readonly out: string | undefin
       return yield* out.line(text);
     }
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(options.out, `${text}\n`).pipe(
-      Effect.mapError(() => new MigrationFailed({ message: `could not write ${options.out}` })),
-    );
+    yield* fs
+      .writeFileString(options.out, `${text}\n`)
+      .pipe(
+        Effect.mapError(() => new MigrationFailed({ message: `could not write ${options.out}` })),
+      );
   });

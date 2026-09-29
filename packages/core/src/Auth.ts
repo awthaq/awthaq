@@ -432,9 +432,15 @@ export interface Built<
    * serves on its public listener when it firewalls the admin surface separately.
    * Handlers still come from the one composed `layer`; serving fewer groups needs no more.
    */
-  readonly publicApi: HttpApi.HttpApi<"auth", Exclude<AllGroups<P, Extra>, AuthPlugin.AdminTierGroup>>;
+  readonly publicApi: HttpApi.HttpApi<
+    "auth",
+    Exclude<AllGroups<P, Extra>, AuthPlugin.AdminTierGroup>
+  >;
   /** AR-003: only the admin-tier groups, for a separate listener/port (empty when no plugin has one). */
-  readonly adminApi: HttpApi.HttpApi<"auth", Extract<AllGroups<P, Extra>, AuthPlugin.AdminTierGroup>>;
+  readonly adminApi: HttpApi.HttpApi<
+    "auth",
+    Extract<AllGroups<P, Extra>, AuthPlugin.AdminTierGroup>
+  >;
   /**
    * MA-005: the folded plugin layers with the composition's one `SlotsRegistry`
    * provided (and exposed in `ROut`, for introspection) — `Slots.override` requires it.
@@ -656,7 +662,9 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
   ),
 });
 
-const hasRoute = (endpoint: object): endpoint is { readonly method: string; readonly path: string } =>
+const hasRoute = (
+  endpoint: object,
+): endpoint is { readonly method: string; readonly path: string } =>
   "method" in endpoint &&
   typeof endpoint.method === "string" &&
   "path" in endpoint &&

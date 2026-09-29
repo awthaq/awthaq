@@ -3,7 +3,7 @@ ID: "CSD-010"
 Title: "The only runnable example composes a permissive limiter — out-of-the-box showcase has throttling off"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "examples/memory-server/index.ts:46"
 Auditor: "credential-stuffing-defense-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Credential Stuffing Defense Specialist** (`credential-stuffing-defense-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Wire the enforcing limiter (RateLimiter.layer over layerStoreMemory) into the ex
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `examples-memory-server`. Evidence at HEAD ec065a7: `examples/memory-server/index.ts:46`. Fix: Compose the enforcing `RateLimiter.layer` over `RateLimiter.layerStoreMemory` and `Password.config({ breachCheck: { onUnavailable: "allow" } })` in both runnable compositions (memory example and the README/sql-server example), with a comment on swapping the store for production. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Already true at HEAD when re-verified: the memory example composes the enforcing RateLimiter.layerMemory (layer over layerStoreMemory), Password's breachCheck is on by default, and the root README quickstart uses RateLimiter.layer over the SQL store (there is no examples/sql-server). Added the missing proof: a smoke test where the sixth wrong password in a row answers 429, plus a comment/README note on swapping the store for a shared one in production.

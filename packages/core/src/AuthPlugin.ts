@@ -217,7 +217,7 @@ export const Service =
        * SAM-004/BEH-EA-040/048: nullable scalar columns this plugin adds to `users`, `{ plan:
        * UserFields.serverOnly(Schema.Literals(["free", "pro"])) }` for a column `<id>_plan`. The linker
        * (`Auth.make`) generates the migration; a field is client-writable unless declared otherwise.
-       * Validated here, at definition time: a schema that is not one scalar throws `InvalidUserField`.
+       * Validated here, at definition time: a schema that is not one scalar throws `InvalidDeclaration`.
        */
       readonly userFields?: Fields;
     },

@@ -16,6 +16,7 @@ import * as Duration from "effect/Duration";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as OAuthProvider from "./OAuthProvider.ts";
+import type { OAuthRetryPolicy } from "./ProviderHttp.ts";
 
 /**
  * ECF-001: one deadline per outbound call class, covering the request *and*
@@ -31,18 +32,10 @@ export interface OAuthHttpTimeouts {
   readonly discovery: Duration.Duration;
 }
 
-/**
- * ERS-003: retries for the *idempotent* provider GETs only (JWKS, userinfo,
- * discovery) — jittered exponential backoff inside each call's deadline.
- * The code exchange is never retried: an authorization code is single-use
- * (RFC 6749 §4.1.2), so a replay after an ambiguous failure would turn a
- * transient error into a permanent one.
- */
-export interface OAuthRetryPolicy {
-  /** Extra attempts after the first (`0` disables retrying). */
-  readonly times: number;
-  readonly base: Duration.Duration;
-}
+// `OAuthRetryPolicy` lives in `ProviderHttp.ts` (which consumes it) so that module does not
+// import this one back — `OAuthConfig` -> `OAuthProvider` -> `ProviderHttp` would otherwise be a
+// type-level cycle. Re-exported here: this is where a config author looks for it.
+export type { OAuthRetryPolicy } from "./ProviderHttp.ts";
 
 /** A per-source-IP fixed-window limit (BEH-EA-107/108). */
 export interface OAuthRateLimit {

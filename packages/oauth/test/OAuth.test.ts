@@ -151,9 +151,7 @@ const buildLayer = (options: {
 }) =>
   OAuth.OAuth.layer.pipe(
     Layer.provide(
-      options.connections === undefined
-        ? Layer.empty
-        : OAuthConnections.layer(options.connections),
+      options.connections === undefined ? Layer.empty : OAuthConnections.layer(options.connections),
     ),
     // `OAuthApi.OAuthGroup`'s own `.middleware(Api.OptionalAuthentication)`
     // is part of what `OAuth.layer` merges its handlers with — required
@@ -1260,21 +1258,23 @@ describe("OAuth", () => {
         }),
     );
 
-    it.effect("AOMS-005: discovery advertising only unsupported id_token algorithms dies at boot", () =>
-      Effect.gen(function* () {
-        const message = yield* bootDefect({
-          providers: [okta()],
-          httpRoutes: {
-            ".well-known/openid-configuration": {
-              ...oktaDiscovery,
-              id_token_signing_alg_values_supported: ["HS256", "none"],
+    it.effect(
+      "AOMS-005: discovery advertising only unsupported id_token algorithms dies at boot",
+      () =>
+        Effect.gen(function* () {
+          const message = yield* bootDefect({
+            providers: [okta()],
+            httpRoutes: {
+              ".well-known/openid-configuration": {
+                ...oktaDiscovery,
+                id_token_signing_alg_values_supported: ["HS256", "none"],
+              },
             },
-          },
-        });
-        assert.isDefined(message);
-        assert.include(message, "okta");
-        assert.include(message, "id_token");
-      }),
+          });
+          assert.isDefined(message);
+          assert.include(message, "okta");
+          assert.include(message, "id_token");
+        }),
     );
 
     it.effect("ESS-002: a JSON array discovery body dies at boot", () =>
@@ -2483,71 +2483,75 @@ describe("OAuth", () => {
       ),
     );
 
-    it.effect("AOMS-005: an RS256 id_token is rejected for a provider whose allowlist is [ES256]", () =>
-      Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const { state, location } = yield* oauth.authorize("okta", {
-          callbackURL: undefined,
-          link: undefined,
-        });
-        currentClaims = {
-          iss: "https://okta.example.com/oauth2/default",
-          aud: "okta-client-id",
-          sub: "okta-rs-user",
-          exp: Math.floor(Date.now() / 1000) + 3600,
-          nonce: nonceFrom(location),
-        };
-        const failure = yield* oauth
-          .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [okta({ idTokenSigningAlgs: ["ES256"] })],
-            // The token is a perfectly valid RS256 one against the RS256 key the JWKS serves.
-            httpRoutes: idTokenRoutes(),
-          }),
+    it.effect(
+      "AOMS-005: an RS256 id_token is rejected for a provider whose allowlist is [ES256]",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state, location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          currentClaims = {
+            iss: "https://okta.example.com/oauth2/default",
+            aud: "okta-client-id",
+            sub: "okta-rs-user",
+            exp: Math.floor(Date.now() / 1000) + 3600,
+            nonce: nonceFrom(location),
+          };
+          const failure = yield* oauth
+            .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta({ idTokenSigningAlgs: ["ES256"] })],
+              // The token is a perfectly valid RS256 one against the RS256 key the JWKS serves.
+              httpRoutes: idTokenRoutes(),
+            }),
+          ),
         ),
-      ),
     );
 
-    it.effect("AOMS-005: the allowlist defaults to what discovery advertises, intersected with what is verifiable", () =>
-      Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const { state, location } = yield* oauth.authorize("okta", {
-          callbackURL: undefined,
-          link: undefined,
-        });
-        currentClaims = {
-          iss: "https://okta.example.com/oauth2/default",
-          aud: "okta-client-id",
-          sub: "okta-adv-user",
-          exp: Math.floor(Date.now() / 1000) + 3600,
-          nonce: nonceFrom(location),
-        };
-        // `HS256` is advertised too but is not verifiable here, so it never enters the allowlist.
-        const outcome = yield* oauth.callback("okta", {
-          code: "c1",
-          state,
-          iss: undefined,
-          cookieState: state,
-        });
-        assert.isDefined(outcome.session);
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [okta()],
-            httpRoutes: {
-              ...es256Routes(),
-              ".well-known/openid-configuration": {
-                ...oktaDiscovery,
-                id_token_signing_alg_values_supported: ["HS256", "ES256"],
+    it.effect(
+      "AOMS-005: the allowlist defaults to what discovery advertises, intersected with what is verifiable",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state, location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          currentClaims = {
+            iss: "https://okta.example.com/oauth2/default",
+            aud: "okta-client-id",
+            sub: "okta-adv-user",
+            exp: Math.floor(Date.now() / 1000) + 3600,
+            nonce: nonceFrom(location),
+          };
+          // `HS256` is advertised too but is not verifiable here, so it never enters the allowlist.
+          const outcome = yield* oauth.callback("okta", {
+            code: "c1",
+            state,
+            iss: undefined,
+            cookieState: state,
+          });
+          assert.isDefined(outcome.session);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta()],
+              httpRoutes: {
+                ...es256Routes(),
+                ".well-known/openid-configuration": {
+                  ...oktaDiscovery,
+                  id_token_signing_alg_values_supported: ["HS256", "ES256"],
+                },
               },
-            },
-          }),
+            }),
+          ),
         ),
-      ),
     );
 
     it.effect(
@@ -3549,12 +3553,13 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
     });
     return Effect.gen(function* () {
       const oauth = yield* OAuth.OAuth;
-      const { location } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+      const { location } = yield* oauth.authorize("acme", {
+        callbackURL: undefined,
+        link: undefined,
+      });
       assert.strictEqual(new URL(location).searchParams.get("client_id"), "acme-client-id");
       assert.deepStrictEqual(calls, []);
-    }).pipe(
-      Effect.provide(buildLayer({ providers: [acme()], connections: resolver })),
-    );
+    }).pipe(Effect.provide(buildLayer({ providers: [acme()], connections: resolver })));
   });
 
   it.effect("an id that is neither static nor a known connection is ProviderNotFound", () => {
@@ -3568,92 +3573,106 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
     }).pipe(Effect.provide(buildLayer({ providers: [], connections: resolver })));
   });
 
-  it.effect("with no resolver installed, connection ids are unknown (single-tenant unchanged)", () =>
-    Effect.gen(function* () {
-      const oauth = yield* OAuth.OAuth;
-      const failure = yield* oauth
-        .authorize(connectionId, { callbackURL: undefined, link: undefined })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "ProviderNotFound");
-    }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+  it.effect(
+    "with no resolver installed, connection ids are unknown (single-tenant unchanged)",
+    () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const failure = yield* oauth
+          .authorize(connectionId, { callbackURL: undefined, link: undefined })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "ProviderNotFound");
+      }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
   );
 
-  it.effect("a connection's discovery is fetched once per revision and refetched when it changes", () => {
-    let discoveries = 0;
-    const oidcConnection = () =>
-      okta({ id: connectionId });
-    const { resolver, state } = resolverOver({ [connectionId]: oidcConnection });
-    return Effect.gen(function* () {
-      const oauth = yield* OAuth.OAuth;
-      const authorize = () =>
-        oauth.authorize(connectionId, { callbackURL: undefined, link: undefined });
-      yield* authorize();
-      yield* authorize();
-      assert.strictEqual(discoveries, 1);
-      state.revision = "r2";
-      yield* authorize();
-      assert.strictEqual(discoveries, 2);
-    }).pipe(
-      Effect.provide(
-        buildLayer({
-          providers: [],
-          connections: resolver,
-          httpRoutes: {
-            ".well-known/openid-configuration": () => {
-              discoveries += 1;
-              return oktaDiscovery;
+  it.effect(
+    "a connection's discovery is fetched once per revision and refetched when it changes",
+    () => {
+      let discoveries = 0;
+      const oidcConnection = () => okta({ id: connectionId });
+      const { resolver, state } = resolverOver({ [connectionId]: oidcConnection });
+      return Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const authorize = () =>
+          oauth.authorize(connectionId, { callbackURL: undefined, link: undefined });
+        yield* authorize();
+        yield* authorize();
+        assert.strictEqual(discoveries, 1);
+        state.revision = "r2";
+        yield* authorize();
+        assert.strictEqual(discoveries, 2);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [],
+            connections: resolver,
+            httpRoutes: {
+              ".well-known/openid-configuration": () => {
+                discoveries += 1;
+                return oktaDiscovery;
+              },
             },
-          },
-        }),
-      ),
-    );
-  });
+          }),
+        ),
+      );
+    },
+  );
 
-  it.effect("a connection whose discovery is unreachable answers ProviderUnavailable and is retried", () => {
-    let reachable = false;
-    const { resolver } = resolverOver({ [connectionId]: () => okta({ id: connectionId }) });
-    return Effect.gen(function* () {
-      const oauth = yield* OAuth.OAuth;
-      const down = yield* oauth
-        .authorize(connectionId, { callbackURL: undefined, link: undefined })
-        .pipe(Effect.flip);
-      assert.strictEqual(down._tag, "ProviderUnavailable");
-      reachable = true;
-      const up = yield* oauth.authorize(connectionId, { callbackURL: undefined, link: undefined });
-      assert.isString(up.location);
-    }).pipe(
-      Effect.provide(
-        buildLayer({
-          providers: [],
-          connections: resolver,
-          retry: { times: 0 },
-          httpRoutes: {
-            ".well-known/openid-configuration": () =>
-              reachable ? oktaDiscovery : new FakeReply(503),
-          },
-        }),
-      ),
-    );
-  });
+  it.effect(
+    "a connection whose discovery is unreachable answers ProviderUnavailable and is retried",
+    () => {
+      let reachable = false;
+      const { resolver } = resolverOver({ [connectionId]: () => okta({ id: connectionId }) });
+      return Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const down = yield* oauth
+          .authorize(connectionId, { callbackURL: undefined, link: undefined })
+          .pipe(Effect.flip);
+        assert.strictEqual(down._tag, "ProviderUnavailable");
+        reachable = true;
+        const up = yield* oauth.authorize(connectionId, {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        assert.isString(up.location);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [],
+            connections: resolver,
+            retry: { times: 0 },
+            httpRoutes: {
+              ".well-known/openid-configuration": () =>
+                reachable ? oktaDiscovery : new FakeReply(503),
+            },
+          }),
+        ),
+      );
+    },
+  );
 
-  it.effect("a connection whose discovery issuer mismatches is refused, never a defect of the runtime", () => {
-    const { resolver } = resolverOver({
-      [connectionId]: () => okta({ id: connectionId, issuer: Config.succeed("https://evil.example.com") }),
-    });
-    return Effect.gen(function* () {
-      const oauth = yield* OAuth.OAuth;
-      const failure = yield* oauth
-        .authorize(connectionId, { callbackURL: undefined, link: undefined })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "ProviderUnavailable");
-    }).pipe(
-      Effect.provide(
-        buildLayer({
-          providers: [],
-          connections: resolver,
-          httpRoutes: { ".well-known/openid-configuration": oktaDiscovery },
-        }),
-      ),
-    );
-  });
+  it.effect(
+    "a connection whose discovery issuer mismatches is refused, never a defect of the runtime",
+    () => {
+      const { resolver } = resolverOver({
+        [connectionId]: () =>
+          okta({ id: connectionId, issuer: Config.succeed("https://evil.example.com") }),
+      });
+      return Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const failure = yield* oauth
+          .authorize(connectionId, { callbackURL: undefined, link: undefined })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "ProviderUnavailable");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [],
+            connections: resolver,
+            httpRoutes: { ".well-known/openid-configuration": oktaDiscovery },
+          }),
+        ),
+      );
+    },
+  );
 });

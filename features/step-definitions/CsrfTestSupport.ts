@@ -24,8 +24,7 @@ export const CsrfConfigForTests = {
   allowedOrigins: [] as ReadonlyArray<string>,
 };
 
-export const CSRF_COOKIE_NAME = "__Host-csrf";
-export const CSRF_HEADER_NAME = "x-csrf-token";
+const CSRF_COOKIE_NAME = "__Host-csrf";
 
 /**
  * One signed double-submit token, valid against `CsrfConfigForTests`'s

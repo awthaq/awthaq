@@ -3,7 +3,7 @@ ID: "DESS-005"
 Title: "Per-package quality metrics describe empty placeholders from the old naming era"
 Level: medium
 Category: "docs"
-Status: ready-for-human
+Status: resolved
 Package: "—"
 Source: ".quality-metrics/react.json:74"
 Auditor: "developer-experience-sdk-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `—` · reported by **Developer Experience / SDK Specialist** (`developer-experience-sdk-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -44,3 +44,5 @@ Re-run the metrics generator over the current tree and delete or archive the sta
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `quality-metrics-regeneration`. Evidence at HEAD ec065a7: `.quality-metrics/react.json:73`. Fix: Canonical for the seven 'stale .quality-metrics' findings: discard the Sep-12 snapshot and add the renderer freshness guard so stale numbers cannot be rendered silently. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option A (MTS-011) per plan; user may revisit. scripts/generate-quality-dashboard.mjs now documents the input contract and refuses stale metrics (sourceSha older than a change under the package's src, fileCount/totalLoc differing from the live tree, unknown package, pre-rename @effect-auth/ names) with exit 1 unless --allow-stale. Verified against the real Sep-12 snapshot: every one of its files is rejected. The local .quality-metrics/ directory belongs to the main checkout (untracked) and was not touched: delete it by hand.

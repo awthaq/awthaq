@@ -49,3 +49,5 @@ Pin all four release.yml actions to the same commit SHAs used elsewhere, with ve
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `ci-release-hardening`. Duplicate of `MM-006` — closed by that issue's fix. Evidence at HEAD ec065a7: `.github/workflows/release.yml:44`. Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `MM-006-mattia-manzati` — closed by its fix (see that issue's Resolved comment).

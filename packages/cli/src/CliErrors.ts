@@ -127,7 +127,9 @@ export class ServerUnavailable extends Data.TaggedError("ServerUnavailable")<{
 }
 
 /** BEH-EA-227: interactive `login` needs the DeviceAuthorization plugin, which does not exist yet; `login --token` is the path. */
-export class DeviceAuthorizationUnavailable extends Data.TaggedError("DeviceAuthorizationUnavailable")<{
+export class DeviceAuthorizationUnavailable extends Data.TaggedError(
+  "DeviceAuthorizationUnavailable",
+)<{
   readonly message: string;
 }> {
   override readonly [Runtime.errorExitCode] = ExitCode.unavailable;

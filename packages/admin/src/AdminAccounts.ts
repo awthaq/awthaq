@@ -203,7 +203,9 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
             .eraseAccount(userId, { deletedBy: "admin" })
             // Gone between the check and the erasure: the desired end state was reached by someone else.
             .pipe(
-              Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
+              Effect.catchTag("UserNotFound", () =>
+                Effect.fail(new AdminApi.AdminTargetNotFound()),
+              ),
             );
           yield* events.publish({
             _tag: "auth.admin.userDeleted",

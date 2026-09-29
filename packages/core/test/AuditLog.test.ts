@@ -459,7 +459,10 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
         const seeded = yield* auditLog.list({ eventTag: "auth.admin.seeded" });
         assert.strictEqual(seeded.length, 1);
         assert.deepStrictEqual(seeded[0]?.actorUserId, Option.none());
-        assert.strictEqual((yield* auditLog.list({ eventTag: "auth.admin.seedRefused" })).length, 1);
+        assert.strictEqual(
+          (yield* auditLog.list({ eventTag: "auth.admin.seedRefused" })).length,
+          1,
+        );
         assert.strictEqual((yield* auditLog.list({ eventTag: "auth.import.completed" })).length, 1);
       }).pipe(Effect.provide(layer)),
     );
@@ -503,66 +506,76 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
     );
 
     // ESA-003: the recovery path for the at-most-once bus.
-    it.effect("replay({ after }) yields every event after the checkpoint in publish order, across pages", () =>
-      Effect.gen(function* () {
-        const auditLog = yield* AuditLog.AuditLog;
-        for (let n = 1; n <= 7; n++) {
-          yield* auditLog.record(stamped({ _tag: "auth.token.replay", identifier: `e${n}` }, n));
-        }
-        const identifiers = (records: Iterable<AuditLog.AuditLogRecord>) =>
-          Array.from(records, (r) => (r.payload._tag === "auth.token.replay" ? r.payload.identifier : ""));
-        const all = yield* auditLog.replay({ batchSize: 3 }).pipe(Stream.runCollect);
-        assert.deepStrictEqual(identifiers(all), ["e1", "e2", "e3", "e4", "e5", "e6", "e7"]);
-        const checkpoint = Array.from(all)[2]?.id;
-        const rest = yield* auditLog
-          .replay(checkpoint === undefined ? {} : { after: checkpoint, batchSize: 2 })
-          .pipe(Stream.runCollect);
-        assert.deepStrictEqual(identifiers(rest), ["e4", "e5", "e6", "e7"]);
-        const onlyTag = yield* auditLog
-          .replay({ eventTag: "auth.user.created" })
-          .pipe(Stream.runCollect);
-        assert.strictEqual(onlyTag.length, 0);
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "replay({ after }) yields every event after the checkpoint in publish order, across pages",
+      () =>
+        Effect.gen(function* () {
+          const auditLog = yield* AuditLog.AuditLog;
+          for (let n = 1; n <= 7; n++) {
+            yield* auditLog.record(stamped({ _tag: "auth.token.replay", identifier: `e${n}` }, n));
+          }
+          const identifiers = (records: Iterable<AuditLog.AuditLogRecord>) =>
+            Array.from(records, (r) =>
+              r.payload._tag === "auth.token.replay" ? r.payload.identifier : "",
+            );
+          const all = yield* auditLog.replay({ batchSize: 3 }).pipe(Stream.runCollect);
+          assert.deepStrictEqual(identifiers(all), ["e1", "e2", "e3", "e4", "e5", "e6", "e7"]);
+          const checkpoint = Array.from(all)[2]?.id;
+          const rest = yield* auditLog
+            .replay(checkpoint === undefined ? {} : { after: checkpoint, batchSize: 2 })
+            .pipe(Stream.runCollect);
+          assert.deepStrictEqual(identifiers(rest), ["e4", "e5", "e6", "e7"]);
+          const onlyTag = yield* auditLog
+            .replay({ eventTag: "auth.user.created" })
+            .pipe(Stream.runCollect);
+          assert.strictEqual(onlyTag.length, 0);
+        }).pipe(Effect.provide(layer)),
     );
 
     // ESA-005: erasure keeps the forensic timeline and drops the person.
-    it.effect("pseudonymizeActor removes the user id and free-text reason from every row but keeps tag, time and id", () =>
-      Effect.gen(function* () {
-        const auditLog = yield* AuditLog.AuditLog;
-        yield* auditLog.record(stamped(samples["auth.user.created"], 1));
-        yield* auditLog.record(stamped(samples["auth.admin.impersonationStarted"], 2));
-        yield* auditLog.record(stamped(samples["auth.authz.denied"], 3));
-        yield* auditLog.record(stamped({ _tag: "auth.token.replay", identifier: `verify-email:${userId}` }, 4));
-        yield* auditLog.record(stamped({ _tag: "auth.user.created", userId: otherUserId }, 5));
+    it.effect(
+      "pseudonymizeActor removes the user id and free-text reason from every row but keeps tag, time and id",
+      () =>
+        Effect.gen(function* () {
+          const auditLog = yield* AuditLog.AuditLog;
+          yield* auditLog.record(stamped(samples["auth.user.created"], 1));
+          yield* auditLog.record(stamped(samples["auth.admin.impersonationStarted"], 2));
+          yield* auditLog.record(stamped(samples["auth.authz.denied"], 3));
+          yield* auditLog.record(
+            stamped({ _tag: "auth.token.replay", identifier: `verify-email:${userId}` }, 4),
+          );
+          yield* auditLog.record(stamped({ _tag: "auth.user.created", userId: otherUserId }, 5));
 
-        const rewritten = yield* auditLog.pseudonymizeActor(userId);
-        assert.strictEqual(rewritten, 4);
-        // Idempotent: a second pass finds nothing left to rewrite.
-        assert.strictEqual(yield* auditLog.pseudonymizeActor(userId), 0);
+          const rewritten = yield* auditLog.pseudonymizeActor(userId);
+          assert.strictEqual(rewritten, 4);
+          // Idempotent: a second pass finds nothing left to rewrite.
+          assert.strictEqual(yield* auditLog.pseudonymizeActor(userId), 0);
 
-        const rows = yield* auditLog.list();
-        assert.strictEqual(rows.length, 5);
-        const text = JSON.stringify(rows.map((row) => row.payload));
-        assert.notInclude(text, userId);
-        assert.notInclude(text, "billing bug");
-        // Tag, id and timestamp survive; the alias stands in consistently...
-        const created = rows.find((row) => row.id.endsWith("000000000001"));
-        assert.strictEqual(created?.eventTag, "auth.user.created");
-        assert.strictEqual(created?.occurredAt.epochMilliseconds, 1_700_000_001_000);
-        const alias = Option.getOrUndefined(created?.actorUserId ?? Option.none());
-        assert.isDefined(alias);
-        assert.notStrictEqual(alias, userId);
-        const impersonation = rows.find((row) => row.eventTag === "auth.admin.impersonationStarted");
-        assert.strictEqual(
-          impersonation?.payload._tag === "auth.admin.impersonationStarted"
-            ? impersonation.payload.targetUserId
-            : "",
-          alias,
-        );
-        // ...another user's rows are untouched, and nothing lists the erased id any more.
-        assert.strictEqual((yield* auditLog.list({ actorUserId: userId })).length, 0);
-        assert.strictEqual((yield* auditLog.list({ actorUserId: otherUserId })).length, 2);
-      }).pipe(Effect.provide(layer)),
+          const rows = yield* auditLog.list();
+          assert.strictEqual(rows.length, 5);
+          const text = JSON.stringify(rows.map((row) => row.payload));
+          assert.notInclude(text, userId);
+          assert.notInclude(text, "billing bug");
+          // Tag, id and timestamp survive; the alias stands in consistently...
+          const created = rows.find((row) => row.id.endsWith("000000000001"));
+          assert.strictEqual(created?.eventTag, "auth.user.created");
+          assert.strictEqual(created?.occurredAt.epochMilliseconds, 1_700_000_001_000);
+          const alias = Option.getOrUndefined(created?.actorUserId ?? Option.none());
+          assert.isDefined(alias);
+          assert.notStrictEqual(alias, userId);
+          const impersonation = rows.find(
+            (row) => row.eventTag === "auth.admin.impersonationStarted",
+          );
+          assert.strictEqual(
+            impersonation?.payload._tag === "auth.admin.impersonationStarted"
+              ? impersonation.payload.targetUserId
+              : "",
+            alias,
+          );
+          // ...another user's rows are untouched, and nothing lists the erased id any more.
+          assert.strictEqual((yield* auditLog.list({ actorUserId: userId })).length, 0);
+          assert.strictEqual((yield* auditLog.list({ actorUserId: otherUserId })).length, 2);
+        }).pipe(Effect.provide(layer)),
     );
   });
 };
@@ -571,41 +584,45 @@ suite("AuditLog (layerMemory)", AuditLog.layerMemory);
 suite("AuditLog (layerSql)", SqlLayer);
 
 describe("AuditLog (layerSql) — ESA-007 stored-row decoding", () => {
-  it.effect("a hand-inserted malformed row surfaces the typed AuditLogDecodeError, not a defect", () =>
-    Effect.gen(function* () {
-      const repo = yield* Repositories.AuditLogRepository;
-      const auditLog = yield* AuditLog.AuditLog;
-      yield* repo.insert({
-        id: "018f0000-0000-7000-8000-000000000099",
-        eventTag: "auth.user.created",
-        actorUserId: null,
-        occurredAt: DateTime.makeUnsafe(1_700_000_000_000),
-        correlationId: null,
-        payload: { _tag: "auth.user.created" }, // userId missing
-      });
-      const failure = yield* auditLog.list().pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "AuditLogDecodeError");
-      if (failure._tag === "AuditLogDecodeError") {
-        assert.strictEqual(failure.id, "018f0000-0000-7000-8000-000000000099");
-      }
-    }).pipe(Effect.provide(SqlLayer)),
+  it.effect(
+    "a hand-inserted malformed row surfaces the typed AuditLogDecodeError, not a defect",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* Repositories.AuditLogRepository;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* repo.insert({
+          id: "018f0000-0000-7000-8000-000000000099",
+          eventTag: "auth.user.created",
+          actorUserId: null,
+          occurredAt: DateTime.makeUnsafe(1_700_000_000_000),
+          correlationId: null,
+          payload: { _tag: "auth.user.created" }, // userId missing
+        });
+        const failure = yield* auditLog.list().pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "AuditLogDecodeError");
+        if (failure._tag === "AuditLogDecodeError") {
+          assert.strictEqual(failure.id, "018f0000-0000-7000-8000-000000000099");
+        }
+      }).pipe(Effect.provide(SqlLayer)),
   );
 
-  it.effect("a payload written before versioning existed (no `version`, no `meta`) still decodes", () =>
-    Effect.gen(function* () {
-      const repo = yield* Repositories.AuditLogRepository;
-      const auditLog = yield* AuditLog.AuditLog;
-      yield* repo.insert({
-        id: "018f0000-0000-7000-8000-000000000098",
-        eventTag: "auth.user.created",
-        actorUserId: null,
-        occurredAt: DateTime.makeUnsafe(1_700_000_000_000),
-        correlationId: null,
-        payload: { _tag: "auth.user.created", userId },
-      });
-      const [row] = yield* auditLog.list();
-      assert.deepStrictEqual(row?.payload, { _tag: "auth.user.created", userId });
-    }).pipe(Effect.provide(SqlLayer)),
+  it.effect(
+    "a payload written before versioning existed (no `version`, no `meta`) still decodes",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* Repositories.AuditLogRepository;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* repo.insert({
+          id: "018f0000-0000-7000-8000-000000000098",
+          eventTag: "auth.user.created",
+          actorUserId: null,
+          occurredAt: DateTime.makeUnsafe(1_700_000_000_000),
+          correlationId: null,
+          payload: { _tag: "auth.user.created", userId },
+        });
+        const [row] = yield* auditLog.list();
+        assert.deepStrictEqual(row?.payload, { _tag: "auth.user.created", userId });
+      }).pipe(Effect.provide(SqlLayer)),
   );
 });
 
@@ -690,21 +707,23 @@ describe("AuditLog infrastructure failures (MA-004)", () => {
       ),
   );
 
-  it.effect('the "required" policy: publish dies with the StoreUnavailable and delivers nothing', () =>
-    Effect.gen(function* () {
-      const events = yield* AuthEvents.AuthEvents;
-      const exit = yield* Effect.exit(events.publish({ _tag: "auth.user.created", userId }));
-      assert.isTrue(Exit.isFailure(exit));
-      if (Exit.isFailure(exit)) {
-        assert.isTrue(Predicate.isTagged(Cause.squash(exit.cause), "StoreUnavailable"));
-      }
-    }).pipe(
-      Effect.provide(
-        AuthEvents.layer.pipe(
-          Layer.provideMerge(DownAuditLog),
-          Layer.provide(AuthEvents.auditWritePolicy("required")),
+  it.effect(
+    'the "required" policy: publish dies with the StoreUnavailable and delivers nothing',
+    () =>
+      Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const exit = yield* Effect.exit(events.publish({ _tag: "auth.user.created", userId }));
+        assert.isTrue(Exit.isFailure(exit));
+        if (Exit.isFailure(exit)) {
+          assert.isTrue(Predicate.isTagged(Cause.squash(exit.cause), "StoreUnavailable"));
+        }
+      }).pipe(
+        Effect.provide(
+          AuthEvents.layer.pipe(
+            Layer.provideMerge(DownAuditLog),
+            Layer.provide(AuthEvents.auditWritePolicy("required")),
+          ),
         ),
       ),
-    ),
   );
 });

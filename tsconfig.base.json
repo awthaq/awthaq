@@ -3,10 +3,11 @@
   "compilerOptions": {
     "types": ["node"],
     // Enable latest features
-    // `DOM` is a superset addition for `@awthaq/react`'s `@types/react`
-    // (whose own types reference `HTMLElement`/etc. pervasively) — harmless
-    // for every other package, which simply never references any DOM global.
-    "lib": ["ESNext", "DOM"],
+    // No `DOM` here (AH-009): a server package that reaches for `document`/`window` (or a
+    // DOM-only type such as `CryptoKey`, which Node declares under `webcrypto`) must fail
+    // typecheck. The browser-facing packages (client, react, next) and `tsconfig.test.json`
+    // (whose one program includes their tests) opt in to `DOM` themselves.
+    "lib": ["ESNext"],
     // `react-jsx` only takes effect for a `.tsx` file; every other package's
     // `.ts` files are unaffected by this setting being on globally.
     "jsx": "react-jsx",
@@ -33,15 +34,15 @@
     "exactOptionalPropertyTypes": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noPropertyAccessFromIndexSignature": false,
+    "noPropertyAccessFromIndexSignature": true,
     "sourceMap": true,
     "declaration": true,
     "declarationMap": true,
     "noErrorTruncation": true,
-    // Workspace packages resolve to source, not to built output, via `paths`
-    // below — one entry per packages/* package, the same way qadi's
-    // tsconfig.base.json lists every @qadi/* package. Add a new entry here
-    // whenever a new package is scaffolded.
+    // Workspace packages resolve to source, not to built output, via `paths` below.
+    // The `@awthaq/*` entries are generated from packages/*/package.json by
+    // `pnpm workspace:sync` and verified by `pnpm workspace:check` (part of `pnpm check`);
+    // do not add one by hand.
     "paths": {
       "@awthaq/api": ["./packages/api/src/index.ts"],
       "@awthaq/ports": ["./packages/ports/src/index.ts"],
@@ -68,7 +69,9 @@
       "@awthaq/migrate-auth0": ["./packages/migrate-auth0/src/index.ts"],
       "@awthaq/migrate-better-auth": ["./packages/migrate-better-auth/src/index.ts"],
       "@awthaq/migrate-firebase": ["./packages/migrate-firebase/src/index.ts"],
-      "@awthaq/scim": ["./packages/scim/src/index.ts"]
+      "@awthaq/scim": ["./packages/scim/src/index.ts"],
+      "@awthaq/next/edge": ["./packages/next/src/edge.ts"],
+      "@awthaq/oauth/presets": ["./packages/oauth/src/presets/index.ts"]
     },
     "plugins": [
       {

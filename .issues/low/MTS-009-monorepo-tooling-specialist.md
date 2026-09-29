@@ -3,7 +3,7 @@ ID: "MTS-009"
 Title: "build.mjs and circular.mjs use cwd-relative globs and silently succeed from the wrong directory"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "scripts/build.mjs:13"
 Auditor: "monorepo-tooling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Monorepo Tooling Specialist** (`monorepo-tooling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Port package-smoke.mjs's rootDir anchoring into build.mjs and circular.mjs, and 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `dev-scripts-tooling`. Evidence at HEAD ec065a7: `scripts/build.mjs:11`. Fix: Anchor build.mjs/circular.mjs (and package-smoke.mjs's empty-guard) at the repo root and turn the empty-glob skip into a hard failure. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New scripts/_root.mjs (repo root anchor); build.mjs, circular.mjs, package-smoke.mjs (and the new clean/sync scripts) resolve from the root and an empty roster is a hard failure (exit 1) instead of a skip. circular.mjs also scans .tsx. Verified: circular.mjs run from /tmp still scans the repo (root-anchored); an empty roster is a hard failure by construction.

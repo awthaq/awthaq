@@ -44,7 +44,10 @@ describe("BAM-009: request", () => {
       assert.isTrue(Redacted.isRedacted(mail?.data?.["token"]));
       assert.notInclude(tokenOf(mail), user.id);
       // The address is still the old one, and the new one is free.
-      assert.strictEqual(Users.emailOf(yield* users.findById(user.id)).pipe(Option.getOrThrow), email);
+      assert.strictEqual(
+        Users.emailOf(yield* users.findById(user.id)).pipe(Option.getOrThrow),
+        email,
+      );
       assert.isTrue(Option.isNone(yield* users.findByEmail(newEmail)));
     }).pipe(Effect.provide(makeTestLayer())),
   );
@@ -70,7 +73,9 @@ describe("BAM-009: request", () => {
     }).pipe(
       Effect.provide(
         makeTestLayer({
-          config: { links: { changeEmail: (token) => `https://app.example/confirm-email#${token}` } },
+          config: {
+            links: { changeEmail: (token) => `https://app.example/confirm-email#${token}` },
+          },
         }),
       ),
     ),
@@ -140,35 +145,34 @@ describe("BAM-009: confirm", () => {
       yield* signedUpUser(newEmail);
       const failure = yield* password.confirmEmailChange({ token }).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "EmailAlreadyExists");
-      assert.strictEqual(
-        Option.getOrThrow(Users.emailOf(yield* users.findById(user.id))),
-        email,
-      );
+      assert.strictEqual(Option.getOrThrow(Users.emailOf(yield* users.findById(user.id))), email);
     }).pipe(Effect.provide(makeTestLayer())),
   );
 
-  it.effect("a token of another purpose is refused, and a change-email token cannot verify an address", () =>
-    Effect.gen(function* () {
-      const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
-      const user = yield* signedUpUser();
-      const verifyMail = (yield* mailer.sent).find((mail) => mail.template === "verify-email");
-      const crossed = yield* password
-        .confirmEmailChange({ token: Redacted.make(tokenOf(verifyMail)) })
-        .pipe(Effect.flip);
-      assert.strictEqual(crossed._tag, "TokenConsumed");
-      yield* password.requestEmailChange({ userId: user.id, newEmail });
-      const changeMail = changeEmailMail(yield* mailer.sent)[0];
-      const other = yield* password
-        .verifyEmail({ token: Redacted.make(tokenOf(changeMail)) })
-        .pipe(Effect.flip);
-      assert.strictEqual(other._tag, "TokenConsumed");
-      // Malformed input is a dead token, not a defect.
-      const junk = yield* password
-        .confirmEmailChange({ token: Redacted.make("not-a-token") })
-        .pipe(Effect.flip);
-      assert.strictEqual(junk._tag, "TokenConsumed");
-    }).pipe(Effect.provide(makeTestLayer())),
+  it.effect(
+    "a token of another purpose is refused, and a change-email token cannot verify an address",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const user = yield* signedUpUser();
+        const verifyMail = (yield* mailer.sent).find((mail) => mail.template === "verify-email");
+        const crossed = yield* password
+          .confirmEmailChange({ token: Redacted.make(tokenOf(verifyMail)) })
+          .pipe(Effect.flip);
+        assert.strictEqual(crossed._tag, "TokenConsumed");
+        yield* password.requestEmailChange({ userId: user.id, newEmail });
+        const changeMail = changeEmailMail(yield* mailer.sent)[0];
+        const other = yield* password
+          .verifyEmail({ token: Redacted.make(tokenOf(changeMail)) })
+          .pipe(Effect.flip);
+        assert.strictEqual(other._tag, "TokenConsumed");
+        // Malformed input is a dead token, not a defect.
+        const junk = yield* password
+          .confirmEmailChange({ token: Redacted.make("not-a-token") })
+          .pipe(Effect.flip);
+        assert.strictEqual(junk._tag, "TokenConsumed");
+      }).pipe(Effect.provide(makeTestLayer())),
   );
 });
 

@@ -10,10 +10,7 @@
     "paths": {
       "@/*": ["./src/*"],
       "@awthaq/qadi": ["../qadi/src/index.ts"],
-      "@awthaq/server": ["../server/src/index.ts"],
       "@awthaq/core": ["../core/src/index.ts"],
-      "@awthaq/sql": ["../sql/src/index.ts"],
-      "@awthaq/ports": ["../ports/src/index.ts"],
       "@awthaq/api": ["../api/src/index.ts"]
     }
   },
@@ -22,16 +19,7 @@
       "path": "../qadi/tsconfig.src.json"
     },
     {
-      "path": "../server/tsconfig.src.json"
-    },
-    {
       "path": "../core/tsconfig.src.json"
-    },
-    {
-      "path": "../sql/tsconfig.src.json"
-    },
-    {
-      "path": "../ports/tsconfig.src.json"
     },
     {
       "path": "../api/tsconfig.src.json"

@@ -3,7 +3,7 @@ ID: "MTS-004"
 Title: "Adding a package requires hand-syncing five 21-entry lists with no enforcement"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "tsconfig.base.json:43"
 Auditor: "monorepo-tooling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `—` · reported by **Monorepo Tooling Specialist** (`monorepo-tooling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Generate all five lists from one source of truth (glob packages/*) in a scripts/
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `workspace-roster-sync`. Evidence at HEAD ec065a7: `tsconfig.base.json:41`. Fix: Add scripts/sync-workspace.mjs that derives every roster from packages/*/package.json (name, private flag) and either writes (`--write`) or verifies (`--check`) the five lists; run `--check` in `pnpm check`. (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New scripts/sync-workspace.mjs (`pnpm workspace:sync` writes, `pnpm workspace:check` verifies; first step of `pnpm check`). Derives tsconfig.base paths (from each package's exports `bun` condition), tsconfig.json and tsconfig.packages.json references, the changeset fixed group, and each package's tsconfig.src.json paths/references (exactly its src imports); also checks vitest projects, knip workspace keys and that the root README names every package. Inclusion rule: all packages (private ones too), written in the script header. Red proof: at HEAD it reported tsconfig.packages.json and the changeset group missing migrate-auth0/-better-auth/-firebase and scim, and base paths missing @awthaq/oauth/presets and @awthaq/next/edge; a scratch package dir was reported in all rosters. The README half fails until the P19 README rewrite lists every package. Gates: pnpm typecheck (clean build, 0 errors), oxlint clean, knip clean, format:check clean, circular, package:smoke, coverage thresholds, test:bdd, spec:verify:strict.

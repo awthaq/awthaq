@@ -3,7 +3,7 @@ ID: "MM-007"
 Title: "package:smoke depends on typecheck's emit side effect with no lib/ precheck"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "scripts/package-smoke.mjs:12"
 Auditor: "mattia-manzati"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Mattia Manzati — Effect Developer Tooling** (`mattia-manzati`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Open package-smoke with an explicit existence check per package (`lib/index.js` 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `dev-scripts-tooling`. Evidence at HEAD ec065a7: `scripts/package-smoke.mjs:11`. Fix: Fail fast with an actionable message when lib/ is missing, and give the example a prestart build. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** package:smoke now checks once, up front, that every `exports` target exists and otherwise prints `run pnpm typecheck (or pnpm build) first` and exits 1; the memory example has `prestart` that builds the workspace (verified with `pnpm start`).

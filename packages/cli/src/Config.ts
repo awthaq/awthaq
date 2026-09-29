@@ -101,8 +101,7 @@ const isSelfContainedEffect = (u: unknown): u is Effect.Effect<unknown, unknown>
 
 const isPlainLayer = (u: unknown): u is Layer.Layer<never, unknown> => Layer.isLayer(u);
 
-const isSqlLayer = (u: unknown): u is Layer.Layer<SqlClient.SqlClient, unknown> =>
-  Layer.isLayer(u);
+const isSqlLayer = (u: unknown): u is Layer.Layer<SqlClient.SqlClient, unknown> => Layer.isLayer(u);
 
 const describeError = (error: unknown) =>
   error instanceof Error ? error.message : typeof error === "string" ? error : "unknown error";
@@ -137,7 +136,13 @@ const normalizeInput = (raw: unknown): Effect.Effect<CliConfig, LinkProblem | Co
       ? yield* raw.pipe(Effect.mapError(asLoadFailure))
       : raw;
     if (isLoadedAuth(resolved)) {
-      return { auth: resolved, config: undefined, sql: undefined, app: undefined, production: undefined };
+      return {
+        auth: resolved,
+        config: undefined,
+        sql: undefined,
+        app: undefined,
+        production: undefined,
+      };
     }
     if (!isRecord(resolved) || !("auth" in resolved)) {
       return yield* new ConfigUnavailable({
@@ -158,7 +163,11 @@ const normalizeInput = (raw: unknown): Effect.Effect<CliConfig, LinkProblem | Co
         ? Effect.succeed(undefined)
         : guard(value)
           ? Effect.succeed(value)
-          : Effect.fail(new ConfigUnavailable({ message: `\`${name}\` in the configuration module is not a Layer` }));
+          : Effect.fail(
+              new ConfigUnavailable({
+                message: `\`${name}\` in the configuration module is not a Layer`,
+              }),
+            );
     const config = yield* optionalLayer("config", resolved["config"], isPlainLayer);
     const sql = yield* optionalLayer("sql", resolved["sql"], isSqlLayer);
     const app = yield* optionalLayer("app", resolved["app"], isPlainLayer);
@@ -176,7 +185,12 @@ export const fromModule = (mod: unknown) => {
   return normalizeInput(raw);
 };
 
-const candidates = ["awthaq.config.ts", "awthaq.config.mts", "awthaq.config.js", "awthaq.config.mjs"];
+const candidates = [
+  "awthaq.config.ts",
+  "awthaq.config.mts",
+  "awthaq.config.js",
+  "awthaq.config.mjs",
+];
 
 /** How the CLI obtains its configuration: the real one imports the file; tests provide a fixed value. */
 export interface ConfigSourceShape {

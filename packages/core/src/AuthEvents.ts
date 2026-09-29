@@ -99,11 +99,15 @@ export class AuthEvents extends Context.Service<AuthEvents, AuthEventsShape>()(
  */
 export type AuditWritePolicy = "bestEffort" | "required";
 
-export const AuditWritePolicy = Context.Reference<AuditWritePolicy>("awthaq/core/AuditWritePolicy", {
-  defaultValue: () => "bestEffort",
-});
+export const AuditWritePolicy = Context.Reference<AuditWritePolicy>(
+  "awthaq/core/AuditWritePolicy",
+  {
+    defaultValue: () => "bestEffort",
+  },
+);
 
-export const auditWritePolicy = (policy: AuditWritePolicy) => Layer.succeed(AuditWritePolicy, policy);
+export const auditWritePolicy = (policy: AuditWritePolicy) =>
+  Layer.succeed(AuditWritePolicy, policy);
 
 /**
  * BEH-EA-097: a bounded capacity, so a slow or absent subscriber cannot
@@ -135,7 +139,8 @@ const makeEventIds = Effect.gen(function* () {
         return [fresh, fresh];
       }
       const next = previous.counter + 1;
-      const state = next > 0xfff ? { ms: previous.ms + 1, counter: 0 } : { ms: previous.ms, counter: next };
+      const state =
+        next > 0xfff ? { ms: previous.ms + 1, counter: 0 } : { ms: previous.ms, counter: next };
       return [state, state];
     });
     const variant = yield* Random.nextIntBetween(0, 3);
@@ -215,22 +220,24 @@ export const layer = Layer.effect(
           ip: request.ip,
           userAgent: request.userAgent,
         };
-        yield* auditLog.record(published).pipe(
-          Effect.catchTag("StoreUnavailable", (unavailable) =>
-            policy === "required"
-              ? Effect.die(unavailable)
-              : Metric.update(
-                  Metric.withAttributes(Observability.auditWriteFailures, { tag: event._tag }),
-                  1,
-                ).pipe(
-                  Effect.andThen(
-                    Effect.logError(
-                      `awthaq: the audit row for a "${event._tag}" event could not be written (${published.eventId})`,
+        yield* auditLog
+          .record(published)
+          .pipe(
+            Effect.catchTag("StoreUnavailable", (unavailable) =>
+              policy === "required"
+                ? Effect.die(unavailable)
+                : Metric.update(
+                    Metric.withAttributes(Observability.auditWriteFailures, { tag: event._tag }),
+                    1,
+                  ).pipe(
+                    Effect.andThen(
+                      Effect.logError(
+                        `awthaq: the audit row for a "${event._tag}" event could not be written (${published.eventId})`,
+                      ),
                     ),
                   ),
-                ),
-          ),
-        );
+            ),
+          );
         yield* countEvent(event);
         const accepted = yield* PubSub.publish(pubsub, published);
         if (!accepted) {

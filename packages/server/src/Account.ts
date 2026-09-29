@@ -37,10 +37,7 @@ const identityDto = (identity: Users.UserIdentity): AccountContract.IdentityDto 
   }
 };
 
-const toDto = (
-  user: Users.UserRecord,
-  fields: UserFields.Values,
-): AccountContract.AccountDto =>
+const toDto = (user: Users.UserRecord, fields: UserFields.Values): AccountContract.AccountDto =>
   new AccountContract.AccountDto({
     id: user.id,
     identity: identityDto(user.identity),

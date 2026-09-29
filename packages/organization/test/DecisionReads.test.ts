@@ -24,9 +24,9 @@ import * as TestSql from "../../sql/test/support/TestSql.ts";
 const PrimaryLive = TestSql.layer("organization_DecisionReads_primary");
 const ReplicaLive = TestSql.layer("organization_DecisionReads_replica");
 
-const MigratedPrimary = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
-  Layer.provide(PrimaryLive),
-);
+const MigratedPrimary = Layer.effectDiscard(
+  Migrations.run(Organization.Organization.migrations),
+).pipe(Layer.provide(PrimaryLive));
 
 // The primary-backed records service, with a replica configured beside it.
 const PrimaryWithReplica = MembershipRecords.layerSql.pipe(
@@ -40,34 +40,37 @@ const orgId = "org-1";
 const member = Users.UserId("user-a");
 
 describe("organization decision reads stay on the primary (RRC-003)", () => {
-  it.effect("a removed member is Unrelated on the very next read even though the replica still lists them", () =>
-    Effect.gen(function* () {
-      const primary = yield* MembershipRecords.MembershipRecords;
-      const replicaClient = yield* ReadRouting.ReplicaSqlClient;
-      if (Option.isNone(replicaClient)) return assert.fail("the replica client was not configured");
+  it.effect(
+    "a removed member is Unrelated on the very next read even though the replica still lists them",
+    () =>
+      Effect.gen(function* () {
+        const primary = yield* MembershipRecords.MembershipRecords;
+        const replicaClient = yield* ReadRouting.ReplicaSqlClient;
+        if (Option.isNone(replicaClient))
+          return assert.fail("the replica client was not configured");
 
-      // The replica: same schema, and a copy of the membership that replication has not yet removed.
-      // `Layer.fresh`: the memo map of the surrounding build would otherwise hand back the
-      // primary-bound service for the same `layerSql` reference.
-      const staleRecords = yield* Layer.build(
-        Layer.fresh(MembershipRecords.layerSql).pipe(
-          Layer.provide(NodeCrypto.layer),
-          Layer.provide(Layer.succeed(SqlClient.SqlClient, replicaClient.value)),
-        ),
-      ).pipe(Effect.map((context) => Context.get(context, MembershipRecords.MembershipRecords)));
-      yield* Migrations.run(Organization.Organization.migrations).pipe(
-        Effect.provideService(SqlClient.SqlClient, replicaClient.value),
-      );
-      yield* staleRecords.create({ userId: member, organizationId: orgId, role: ["owner"] });
+        // The replica: same schema, and a copy of the membership that replication has not yet removed.
+        // `Layer.fresh`: the memo map of the surrounding build would otherwise hand back the
+        // primary-bound service for the same `layerSql` reference.
+        const staleRecords = yield* Layer.build(
+          Layer.fresh(MembershipRecords.layerSql).pipe(
+            Layer.provide(NodeCrypto.layer),
+            Layer.provide(Layer.succeed(SqlClient.SqlClient, replicaClient.value)),
+          ),
+        ).pipe(Effect.map((context) => Context.get(context, MembershipRecords.MembershipRecords)));
+        yield* Migrations.run(Organization.Organization.migrations).pipe(
+          Effect.provideService(SqlClient.SqlClient, replicaClient.value),
+        );
+        yield* staleRecords.create({ userId: member, organizationId: orgId, role: ["owner"] });
 
-      yield* primary.create({ userId: member, organizationId: orgId, role: ["owner"] });
-      yield* primary.remove(member, orgId);
+        yield* primary.create({ userId: member, organizationId: orgId, role: ["owner"] });
+        yield* primary.remove(member, orgId);
 
-      // Sanity: the replica really is stale.
-      assert.isTrue(Option.isSome(yield* staleRecords.findByUserAndOrg(member, orgId)));
-      // The decision read: the primary, so the removal is visible immediately.
-      assert.isTrue(Option.isNone(yield* primary.findByUserAndOrg(member, orgId)));
-    }).pipe(Effect.scoped, Effect.provide(PrimaryWithReplica)),
+        // Sanity: the replica really is stale.
+        assert.isTrue(Option.isSome(yield* staleRecords.findByUserAndOrg(member, orgId)));
+        // The decision read: the primary, so the removal is visible immediately.
+        assert.isTrue(Option.isNone(yield* primary.findByUserAndOrg(member, orgId)));
+      }).pipe(Effect.scoped, Effect.provide(PrimaryWithReplica)),
   );
 
   // The classification is structural: none of the records modules a decision reads through may

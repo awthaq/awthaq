@@ -3,6 +3,8 @@
   "include": ["src/**/*.ts"],
   "compilerOptions": {
     "composite": true,
+    // Browser-facing: the base config carries no DOM lib (AH-009).
+    "lib": ["ESNext", "DOM"],
     "noEmit": false,
     "outDir": "./lib",
     "rootDir": "./src",
@@ -13,8 +15,8 @@
       "@awthaq/client": ["../client/src/index.ts"],
       "@awthaq/core": ["../core/src/index.ts"],
       "@awthaq/jwt/verify": ["../jwt/src/verify.ts"],
-      "@awthaq/ports": ["../ports/src/index.ts"],
-      "@awthaq/server": ["../server/src/index.ts"]
+      "@awthaq/server": ["../server/src/index.ts"],
+      "@awthaq/jwt": ["../jwt/src/index.ts"]
     }
   },
   "references": [
@@ -29,9 +31,6 @@
     },
     {
       "path": "../jwt/tsconfig.src.json"
-    },
-    {
-      "path": "../ports/tsconfig.src.json"
     },
     {
       "path": "../server/tsconfig.src.json"

@@ -73,7 +73,12 @@ export const AdminAccountsGroup = HttpApiGroup.make("admin.accounts")
     // 204. `HookAborted`: a `BeforeUserDelete` tap (an Invite-purge veto, say) refused.
     HttpApiEndpoint.delete("deleteUser", "/admin/users/:userId", {
       params: UserIdParams,
-      error: [AdminActionDenied, AdminTargetNotFound, AdminSelfActionRefused, HookPoint.HookAborted],
+      error: [
+        AdminActionDenied,
+        AdminTargetNotFound,
+        AdminSelfActionRefused,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(

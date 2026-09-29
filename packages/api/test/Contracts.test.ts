@@ -14,7 +14,10 @@ const endpointsOf = (group: {
 }) => Object.entries(group.endpoints).map(([id, e]) => `${id} ${e.method} ${e.path}`);
 
 const middlewareKeysOf = (group: {
-  readonly endpoints: Record<string, { readonly middlewares: ReadonlySet<{ readonly key: string }> }>;
+  readonly endpoints: Record<
+    string,
+    { readonly middlewares: ReadonlySet<{ readonly key: string }> }
+  >;
 }) => Object.values(group.endpoints).map((e) => [...e.middlewares].map((m) => m.key));
 
 describe("AuthCoreApi (BEH-EA-031)", () => {
@@ -79,6 +82,8 @@ describe("wire shapes", () => {
       identity: { _tag: "Email", email: "a@b.co", emailVerified: false },
       name: "A",
       image: null,
+      // SAM-004: plugin-declared user fields, keyed `<plugin id>_<field>`.
+      fields: { billing_plan: "pro", billing_seats: 3, billing_newsletter: false },
     };
     expect(
       Schema.encodeSync(Account.AccountDto)(Schema.decodeUnknownSync(Account.AccountDto)(account)),

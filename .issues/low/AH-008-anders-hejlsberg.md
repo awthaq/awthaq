@@ -3,7 +3,7 @@ ID: "AH-008"
 Title: "noPropertyAccessFromIndexSignature disabled in an otherwise maximal strict profile"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "tsconfig.base.json:36"
 Auditor: "anders-hejlsberg"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Anders Hejlsberg — Creator/Lead Architect of TypeScript** (`anders-hejlsberg`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Flip it to true and fix the resulting sites (they will be few and are exactly th
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `tooling-typecheck-lint`. Evidence at HEAD ec065a7: `tsconfig.base.json:36`. Fix: Flip `noPropertyAccessFromIndexSignature` to true in tsconfig.base.json and convert the resulting dot-access-on-index-signature sites to bracket access (which `noUncheckedIndexedAccess` then types as `T | undefined`). (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** tsconfig.base.json: noPropertyAccessFromIndexSignature true. Only five sites fired (migrate-better-auth AliasLegacyCookieMiddleware src + test, jwt verifyForeignIssuer test): converted to bracket access, no assertions. Gates: pnpm typecheck (clean build, 0 errors), oxlint clean, knip clean, format:check clean, circular, package:smoke, coverage thresholds, test:bdd, spec:verify:strict.

@@ -3,7 +3,7 @@ ID: "MM-010"
 Title: "format/format:check hand-duplicate their explicit target lists (drift already visible)"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "package.json:22"
 Auditor: "mattia-manzati"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Mattia Manzati — Effect Developer Tooling** (`mattia-manzati`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Move the target list into oxfmt's own config file (or a shared package.json fiel
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `dev-scripts-tooling`. Evidence at HEAD ec065a7: `package.json:22`. Fix: Move target selection into `.oxfmtrc.json` (ignorePatterns) so `format` = `oxfmt` and `format:check` = `oxfmt --check` with no lists. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Added .oxfmtrc.json (ignorePatterns: agent/plan/issue dirs, archive, better-auth, docs, research, spec, tools, markdown, html, feature files, lockfile, lib/node_modules). `format` is `oxfmt`, `format:check` is `oxfmt --check`, no path lists; examples/, .github/ and knip.json are now covered. Markdown and .feature stay out of scope (prose belongs to the docs work; reformatting tables causes conflicts). The tree was reformatted in a separate formatting-only commit.

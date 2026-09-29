@@ -569,69 +569,82 @@ describe("AuthHttp + Password (real HTTP)", () => {
     }),
   );
 
-  it.effect("BAM-009: change-email mails the new address, and confirming the token replaces the address", () =>
-    Effect.gen(function* () {
-      const mailer = capturingMailer();
-      const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
-      const signUp = yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", {
-          email: "before@example.com",
-          password: strongPassword,
-        }),
-      );
-      assert.strictEqual(signUp.status, 200);
-      yield* verifyLatestSignUp(handler, mailer);
-      const cookie = cookieFrom(signUp);
-
-      // Anonymous: refused before anything is mailed.
-      const anonymous = yield* Effect.promise(() =>
-        post(handler, "/change-email", { newEmail: "after@example.com" }),
-      );
-      assert.strictEqual(anonymous.status, 401);
-
-      const requested = yield* Effect.promise(() =>
-        handler(
-          new Request("http://localhost/change-email", {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              cookie: withCsrfCookie(cookie),
-              [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-            },
-            body: JSON.stringify({ newEmail: "after@example.com" }),
+  it.effect(
+    "BAM-009: change-email mails the new address, and confirming the token replaces the address",
+    () =>
+      Effect.gen(function* () {
+        const mailer = capturingMailer();
+        const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+        const signUp = yield* Effect.promise(() =>
+          post(handler, "/password/sign-up", {
+            email: "before@example.com",
+            password: strongPassword,
           }),
-        ),
-      );
-      assert.strictEqual(requested.status, 202);
-      const mail = (yield* mailer.sent).findLast((message) => message.template === "change-email");
-      assert.strictEqual(mail?.to, "after@example.com");
+        );
+        assert.strictEqual(signUp.status, 200);
+        yield* verifyLatestSignUp(handler, mailer);
+        const cookie = cookieFrom(signUp);
 
-      // The old address still signs in until the change is confirmed.
-      const stillOld = yield* Effect.promise(() =>
-        post(handler, "/password/sign-in", { email: "before@example.com", password: strongPassword }),
-      );
-      assert.strictEqual(stillOld.status, 200);
+        // Anonymous: refused before anything is mailed.
+        const anonymous = yield* Effect.promise(() =>
+          post(handler, "/change-email", { newEmail: "after@example.com" }),
+        );
+        assert.strictEqual(anonymous.status, 401);
 
-      const token = tokenOf(mail);
-      const confirmed = yield* Effect.promise(() =>
-        post(handler, "/change-email/confirm", { token }),
-      );
-      assert.strictEqual(confirmed.status, 204);
-      const replay = yield* Effect.promise(() =>
-        post(handler, "/change-email/confirm", { token }),
-      );
-      assert.strictEqual(replay.status, 410);
+        const requested = yield* Effect.promise(() =>
+          handler(
+            new Request("http://localhost/change-email", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                cookie: withCsrfCookie(cookie),
+                [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
+              },
+              body: JSON.stringify({ newEmail: "after@example.com" }),
+            }),
+          ),
+        );
+        assert.strictEqual(requested.status, 202);
+        const mail = (yield* mailer.sent).findLast(
+          (message) => message.template === "change-email",
+        );
+        assert.strictEqual(mail?.to, "after@example.com");
 
-      const oldAddress = yield* Effect.promise(() =>
-        post(handler, "/password/sign-in", { email: "before@example.com", password: strongPassword }),
-      );
-      assert.strictEqual(oldAddress.status, 401);
-      const newAddress = yield* Effect.promise(() =>
-        post(handler, "/password/sign-in", { email: "after@example.com", password: strongPassword }),
-      );
-      // Verified by the confirmation itself: no separate verify-email round trip.
-      assert.strictEqual(newAddress.status, 200);
-    }),
+        // The old address still signs in until the change is confirmed.
+        const stillOld = yield* Effect.promise(() =>
+          post(handler, "/password/sign-in", {
+            email: "before@example.com",
+            password: strongPassword,
+          }),
+        );
+        assert.strictEqual(stillOld.status, 200);
+
+        const token = tokenOf(mail);
+        const confirmed = yield* Effect.promise(() =>
+          post(handler, "/change-email/confirm", { token }),
+        );
+        assert.strictEqual(confirmed.status, 204);
+        const replay = yield* Effect.promise(() =>
+          post(handler, "/change-email/confirm", { token }),
+        );
+        assert.strictEqual(replay.status, 410);
+
+        const oldAddress = yield* Effect.promise(() =>
+          post(handler, "/password/sign-in", {
+            email: "before@example.com",
+            password: strongPassword,
+          }),
+        );
+        assert.strictEqual(oldAddress.status, 401);
+        const newAddress = yield* Effect.promise(() =>
+          post(handler, "/password/sign-in", {
+            email: "after@example.com",
+            password: strongPassword,
+          }),
+        );
+        // Verified by the confirmation itself: no separate verify-email round trip.
+        assert.strictEqual(newAddress.status, 200);
+      }),
   );
 
   it.effect("shipping-gaps/11/401: change-password without a session is rejected", () =>
@@ -667,28 +680,34 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   // TMS-005 (ADR-EA-026): `conceal` answers a fresh and an already-registered
   // address identically, and issues no session for either.
-  it.effect("TMS-005: with signUpEnumeration conceal, a duplicate and a fresh sign-up look identical", () => {
-    const mailer = capturingMailer();
-    return Effect.gen(function* () {
-      const { handler } = HttpRouter.toWebHandler(
-        buildAppLayer(mailer.layer, { signUpEnumeration: "conceal" }),
-      );
-      const signUp = () =>
-        post(handler, "/password/sign-up", { email: "dupe@example.com", password: strongPassword });
-      const fresh = yield* Effect.promise(signUp);
-      const duplicate = yield* Effect.promise(signUp);
-      assert.strictEqual(fresh.status, 202);
-      assert.strictEqual(duplicate.status, 202);
-      assert.strictEqual(yield* Effect.promise(() => fresh.text()), "");
-      assert.strictEqual(yield* Effect.promise(() => duplicate.text()), "");
-      assert.isNull(fresh.headers.get("set-cookie"));
-      assert.isNull(duplicate.headers.get("set-cookie"));
+  it.effect(
+    "TMS-005: with signUpEnumeration conceal, a duplicate and a fresh sign-up look identical",
+    () => {
+      const mailer = capturingMailer();
+      return Effect.gen(function* () {
+        const { handler } = HttpRouter.toWebHandler(
+          buildAppLayer(mailer.layer, { signUpEnumeration: "conceal" }),
+        );
+        const signUp = () =>
+          post(handler, "/password/sign-up", {
+            email: "dupe@example.com",
+            password: strongPassword,
+          });
+        const fresh = yield* Effect.promise(signUp);
+        const duplicate = yield* Effect.promise(signUp);
+        assert.strictEqual(fresh.status, 202);
+        assert.strictEqual(duplicate.status, 202);
+        assert.strictEqual(yield* Effect.promise(() => fresh.text()), "");
+        assert.strictEqual(yield* Effect.promise(() => duplicate.text()), "");
+        assert.isNull(fresh.headers.get("set-cookie"));
+        assert.isNull(duplicate.headers.get("set-cookie"));
 
-      yield* letForkedFibersRun;
-      const templates = (yield* mailer.sent).map((m) => m.template);
-      assert.deepStrictEqual(templates, ["verify-email", "account-exists"]);
-    });
-  });
+        yield* letForkedFibersRun;
+        const templates = (yield* mailer.sent).map((m) => m.template);
+        assert.deepStrictEqual(templates, ["verify-email", "account-exists"]);
+      });
+    },
+  );
 
   it.effect("TMS-005: conceal still reports a weak password, and reveal stays the default", () =>
     Effect.gen(function* () {
@@ -707,7 +726,12 @@ describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("ESS-006: a malformed email answers 400 and creates no user", () =>
     Effect.gen(function* () {
       const { handler } = HttpRouter.toWebHandler(AppLayer);
-      for (const path of ["/password/sign-up", "/password/sign-in", "/password/request-reset", "/resend-verification"]) {
+      for (const path of [
+        "/password/sign-up",
+        "/password/sign-in",
+        "/password/request-reset",
+        "/resend-verification",
+      ]) {
         const response = yield* Effect.promise(() =>
           post(handler, path, { email: "junk", password: strongPassword }),
         );
@@ -740,7 +764,8 @@ describe("AuthHttp + Password (real HTTP)", () => {
       "changePassword",
       "reauthenticate",
     ]);
-    for (const endpoint of account) assert.isTrue(requiresAuthentication(endpoint), endpoint.identifier);
+    for (const endpoint of account)
+      assert.isTrue(requiresAuthentication(endpoint), endpoint.identifier);
     for (const endpoint of Object.values(groups["password"].endpoints)) {
       assert.isFalse(requiresAuthentication(endpoint), endpoint.identifier);
     }
@@ -817,11 +842,17 @@ describe("AuthHttp + Password (real HTTP)", () => {
       const mailer = capturingMailer();
       const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
       yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", { email: "cookie@example.com", password: strongPassword }),
+        post(handler, "/password/sign-up", {
+          email: "cookie@example.com",
+          password: strongPassword,
+        }),
       );
       yield* verifyLatestSignUp(handler, mailer);
       const response = yield* Effect.promise(() =>
-        post(handler, "/password/sign-in", { email: "cookie@example.com", password: strongPassword }),
+        post(handler, "/password/sign-in", {
+          email: "cookie@example.com",
+          password: strongPassword,
+        }),
       );
       assert.strictEqual(response.status, 200);
       assert.match(cookieFrom(response), /^__Host-session=/);
@@ -835,7 +866,10 @@ describe("AuthHttp + Password (real HTTP)", () => {
       const mailer = capturingMailer();
       const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
       yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", { email: "device@example.com", password: strongPassword }),
+        post(handler, "/password/sign-up", {
+          email: "device@example.com",
+          password: strongPassword,
+        }),
       );
       yield* verifyLatestSignUp(handler, mailer);
       const response = yield* Effect.promise(() =>

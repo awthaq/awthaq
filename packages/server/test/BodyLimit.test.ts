@@ -36,18 +36,13 @@ const echoRoute = (reached: Ref.Ref<number>) =>
     }),
   );
 
-const jsonBody = (text: string) =>
-  HttpBody.text(text, "application/json");
+const jsonBody = (text: string) => HttpBody.text(text, "application/json");
 
 describe("BodyLimit (real Node server, NHS-004)", () => {
   it.effect("a 1 MiB JSON body returns 413 and never reaches the handler", () =>
     Effect.gen(function* () {
       const reached = yield* Ref.make(0);
-      yield* echoRoute(reached).pipe(
-        Layer.provide(BodyLimit.layer),
-        HttpRouter.serve,
-        Layer.build,
-      );
+      yield* echoRoute(reached).pipe(Layer.provide(BodyLimit.layer), HttpRouter.serve, Layer.build);
       const response = yield* HttpClient.post("/echo", { body: jsonBody(oneMiB) });
       assert.strictEqual(response.status, 413);
       const body = yield* response.json;
@@ -62,11 +57,7 @@ describe("BodyLimit (real Node server, NHS-004)", () => {
   it.effect("a normal payload still succeeds", () =>
     Effect.gen(function* () {
       const reached = yield* Ref.make(0);
-      yield* echoRoute(reached).pipe(
-        Layer.provide(BodyLimit.layer),
-        HttpRouter.serve,
-        Layer.build,
-      );
+      yield* echoRoute(reached).pipe(Layer.provide(BodyLimit.layer), HttpRouter.serve, Layer.build);
       const response = yield* HttpClient.post("/echo", { body: jsonBody(small) });
       assert.strictEqual(response.status, 204);
       assert.strictEqual(yield* Ref.get(reached), 1);
@@ -76,11 +67,7 @@ describe("BodyLimit (real Node server, NHS-004)", () => {
   it.effect("a streamed body with no content-length is cut off at the cap", () =>
     Effect.gen(function* () {
       const reached = yield* Ref.make(0);
-      yield* echoRoute(reached).pipe(
-        Layer.provide(BodyLimit.layer),
-        HttpRouter.serve,
-        Layer.build,
-      );
+      yield* echoRoute(reached).pipe(Layer.provide(BodyLimit.layer), HttpRouter.serve, Layer.build);
       const server = yield* HttpServer.HttpServer;
       assert.isTrue(NetAddress.isInetAddress(server.address));
       if (!NetAddress.isInetAddress(server.address)) return;
@@ -131,9 +118,7 @@ describe("BodyLimit (real Node server, NHS-004)", () => {
 
 describe("BodyLimit (toWebHandler, BEH-EA-085)", () => {
   const webLayer = (reached: Ref.Ref<number>) =>
-    Layer.mergeAll(echoRoute(reached), BodyLimit.layer).pipe(
-      Layer.provideMerge(HttpRouter.layer),
-    );
+    Layer.mergeAll(echoRoute(reached), BodyLimit.layer).pipe(Layer.provideMerge(HttpRouter.layer));
 
   it.effect("rejects an oversize content-length with 413 before the handler runs", () =>
     Effect.gen(function* () {

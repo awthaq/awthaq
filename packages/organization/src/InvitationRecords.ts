@@ -74,7 +74,9 @@ export interface InvitationRecordsShape {
   ) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
   readonly listByEmail: (email: string) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
   /** CSG-005: every invitation the user sent, any status — the data-subject export's "invitations sent". */
-  readonly listByInviter: (inviterId: Users.UserId) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
+  readonly listByInviter: (
+    inviterId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<InvitationRecord>>;
   readonly countPendingByInviter: (inviterId: Users.UserId) => Effect.Effect<number>;
   readonly updateStatus: (
     id: string,
@@ -189,7 +191,9 @@ export const layerMemory = Layer.effect(
 
     const listByInviter: InvitationRecordsShape["listByInviter"] = (inviterId) =>
       Ref.get(state).pipe(
-        Effect.map((s) => Array.from(HashMap.values(s)).filter((row) => row.inviterId === inviterId)),
+        Effect.map((s) =>
+          Array.from(HashMap.values(s)).filter((row) => row.inviterId === inviterId),
+        ),
       );
 
     const countPendingByInviter: InvitationRecordsShape["countPendingByInviter"] = (inviterId) =>

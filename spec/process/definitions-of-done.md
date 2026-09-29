@@ -34,7 +34,7 @@ table is active today, and no "Active?" cell below claims otherwise.
 | 3 | House-style check | Project-specific conventions a linter cannot express (naming, forbidden patterns) | Not yet — planned for M0 |
 | 4 | Circular-import check (`madge` or equivalent) | No circular imports across packages | Not yet — planned for M1 |
 | 5 | Type-level compile-error tests | `Auth.make`'s `Validate<P>` produces the exact documented compiler errors for the missing-dependency, slot-conflict, and duplicate-id cases (a `tstyche`-equivalent type-testing tool) | Not yet — planned for M1 |
-| 6 | Unit and integration tests | Tests pass, with a coverage threshold enforced rather than merely reported | Not yet — planned for M1 |
+| 6 | Unit and integration tests | Tests pass, with a coverage threshold enforced rather than merely reported | Active — `pnpm coverage` fails below the thresholds in `vitest.config.ts` (part of `pnpm check`) |
 | 7 | Plugin contract-test harness | Every official plugin passes `runPluginContractTests`: manifest legality, table prefixes, migration determinism, redaction, veto-only-in-veto-points (see `research/09-plugin-architecture.md`) | Not yet — planned for M6 |
 | 8 | Doc-example compilation | Every `typescript`/`tsx` fence in `spec/` compiles against the real API once one exists (today every fence in `spec/` is deliberately `ts` and uncompiled — this gate is what will let some of them graduate) | Not yet — planned for M6 |
 | 9 | Traceability verification | Spec-internal consistency: every `index.yaml` matches its directory, every cross-reference resolves, every `INV`/`ADR`/`BEH` identifier is reachable from a traceability document | Not yet — planned for M6 |

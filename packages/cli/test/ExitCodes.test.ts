@@ -11,7 +11,9 @@ import { widgetOnly } from "./support/WidgetPlugin.ts";
 import { Roles } from "@awthaq/roles";
 import { role } from "@qadi/core";
 
-const clean = configOf(passwordAndRoles, { config: Roles.config([role({ name: "editor", permissions: [] })]) });
+const clean = configOf(passwordAndRoles, {
+  config: Roles.config([role({ name: "editor", permissions: [] })]),
+});
 
 describe("the exit-code table (BEH-EA-225)", () => {
   it("every typed CLI error class carries its code as [Runtime.errorExitCode]", () => {
@@ -47,18 +49,24 @@ describe("the exit-code table (BEH-EA-225)", () => {
     }),
   );
 
-  it.effect("doctor on an insecure composition exits 3 and --json carries the same tag and code", () =>
-    Effect.gen(function* () {
-      const text = yield* runCli(["doctor"], configOf(widgetOnly));
-      assert.strictEqual(text.code, 3);
-      assert.isTrue(text.stdout.some((line) => line.includes("csrf-missing")));
-      const json = yield* runCli(["doctor", "--json"], configOf(widgetOnly));
-      assert.strictEqual(json.code, 3);
-      const failure: unknown = JSON.parse(json.stderr[0] ?? "null");
-      assert.deepStrictEqual(failure, { _tag: "DoctorFindings", code: 3, message: "1 finding(s)" });
-      const report: unknown = JSON.parse(json.stdout.join("\n"));
-      assert.isTrue(typeof report === "object" && report !== null && "findings" in report);
-    }),
+  it.effect(
+    "doctor on an insecure composition exits 3 and --json carries the same tag and code",
+    () =>
+      Effect.gen(function* () {
+        const text = yield* runCli(["doctor"], configOf(widgetOnly));
+        assert.strictEqual(text.code, 3);
+        assert.isTrue(text.stdout.some((line) => line.includes("csrf-missing")));
+        const json = yield* runCli(["doctor", "--json"], configOf(widgetOnly));
+        assert.strictEqual(json.code, 3);
+        const failure: unknown = JSON.parse(json.stderr[0] ?? "null");
+        assert.deepStrictEqual(failure, {
+          _tag: "DoctorFindings",
+          code: 3,
+          message: "1 finding(s)",
+        });
+        const report: unknown = JSON.parse(json.stdout.join("\n"));
+        assert.isTrue(typeof report === "object" && report !== null && "findings" in report);
+      }),
   );
 
   it.effect("migration apply without --yes exits 6 and applies nothing", () =>
@@ -108,16 +116,25 @@ describe("Schema-bound arguments (BEH-EA-226)", () => {
   it.effect("seed admin --email not-an-email is a usage error before any service is built", () =>
     Effect.gen(function* () {
       // No `app` is provided: were the command to get as far as building services it would exit 9.
-      const result = yield* runCli(["seed", "admin", "--email", "not-an-email"], configOf(passwordAndRoles));
+      const result = yield* runCli(
+        ["seed", "admin", "--email", "not-an-email"],
+        configOf(passwordAndRoles),
+      );
       assert.strictEqual(result.code, 2);
     }),
   );
 
   it.effect("a malformed --database-url and an unknown --format are usage errors", () =>
     Effect.gen(function* () {
-      const url = yield* runCli(["migration", "status", "--database-url", "mysql://x"], configOf(passwordAndRoles));
+      const url = yield* runCli(
+        ["migration", "status", "--database-url", "mysql://x"],
+        configOf(passwordAndRoles),
+      );
       assert.strictEqual(url.code, 2);
-      const format = yield* runCli(["plugin", "list", "--format", "yaml"], configOf(passwordAndRoles));
+      const format = yield* runCli(
+        ["plugin", "list", "--format", "yaml"],
+        configOf(passwordAndRoles),
+      );
       assert.strictEqual(format.code, 2);
     }),
   );

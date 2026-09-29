@@ -124,9 +124,12 @@ export const snapshot = (descriptors: ReadonlyArray<Owned>) =>
  * `EffectiveConfig.layer(auth.manifest)` next to its composition so the view lists every installed
  * plugin's descriptors, not only core's. Unprovided, it lists core's own.
  */
-export const Catalog = Context.Reference<ReadonlyArray<Owned>>("awthaq/core/EffectiveConfigCatalog", {
-  defaultValue: () => core,
-});
+export const Catalog = Context.Reference<ReadonlyArray<Owned>>(
+  "awthaq/core/EffectiveConfigCatalog",
+  {
+    defaultValue: () => core,
+  },
+);
 
 /** Provides the composition's own descriptors (`auth.manifest.config`) plus core's to `Catalog`. */
 export const layer = (manifest: {

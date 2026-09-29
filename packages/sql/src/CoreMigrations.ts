@@ -594,7 +594,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
         sql`CREATE INDEX IF NOT EXISTS auth_audit_log_occurred_at ON auth_audit_log ("occurredAt")`,
       sqlite: () =>
         sql`CREATE INDEX IF NOT EXISTS auth_audit_log_occurred_at ON auth_audit_log ("occurredAt")`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // CWM-004: the event relay's persisted position — one row per named relay holding the
@@ -616,7 +616,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           "lastEventId" TEXT NOT NULL,
           "updatedAt" TEXT NOT NULL
         )`,
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
 ]);

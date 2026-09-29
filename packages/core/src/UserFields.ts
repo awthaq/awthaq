@@ -72,7 +72,7 @@ export const isClientWritable = (schema: Schema.Top): boolean =>
   Schema.resolveAnnotations(schema)?.[CLIENT_WRITABLE] !== false;
 
 /** The plugin-authoring defect: a declaration that cannot be stored as one nullable scalar column. */
-export class InvalidUserField extends Data.TaggedError("InvalidUserField")<{
+export class InvalidDeclaration extends Data.TaggedError("UserFields/InvalidDeclaration")<{
   readonly key: string;
   readonly message: string;
 }> {}
@@ -138,28 +138,28 @@ const kindOf = (ast: SchemaAST.AST): Option.Option<ColumnKind> => {
 export const columnOf = (key: string): string => key.replaceAll(".", "_");
 
 /**
- * Validates one declaration and describes it. Throws `InvalidUserField` (a plugin-authoring defect,
+ * Validates one declaration and describes it. Throws `InvalidDeclaration` (a plugin-authoring defect,
  * raised where the plugin is defined, like `ConflictingDependsOn`) for a name that is not a plain
  * identifier, a column name Postgres would truncate, or a schema whose encoded side is not one scalar.
  */
 export const describe = (key: string, schema: Declaration): Descriptor => {
   const name = key.slice(key.lastIndexOf("_") + 1);
   if (!FIELD_NAME.test(name) || key.lastIndexOf("_") <= 0) {
-    throw new InvalidUserField({
+    throw new InvalidDeclaration({
       key,
       message: `awthaq: user field "${key}" must be named <plugin id>_<field>, with <field> a plain identifier (letters and digits)`,
     });
   }
   const column = columnOf(key);
   if (column.length > MAX_COLUMN_LENGTH) {
-    throw new InvalidUserField({
+    throw new InvalidDeclaration({
       key,
       message: `awthaq: user field "${key}" makes a column name longer than ${MAX_COLUMN_LENGTH} characters`,
     });
   }
   const kind = kindOf(Schema.toEncoded(schema).ast);
   if (Option.isNone(kind)) {
-    throw new InvalidUserField({
+    throw new InvalidDeclaration({
       key,
       message: `awthaq: user field "${key}" must encode to a string, a number or a boolean (or a union of literals of one kind): a shared table only accepts scalar columns`,
     });
@@ -273,7 +273,8 @@ export const migrationFor = (descriptor: Descriptor): Migration => ({
     yield* sql.onDialectOrElse({
       pg: () =>
         sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${column} ${sql.literal(PG_TYPES[descriptor.kind])}`,
-      sqlite: () => sql`ALTER TABLE users ADD COLUMN ${column} ${sql.literal(SQLITE_TYPES[descriptor.kind])}`,
+      sqlite: () =>
+        sql`ALTER TABLE users ADD COLUMN ${column} ${sql.literal(SQLITE_TYPES[descriptor.kind])}`,
       orElse: () => Defects.unsupportedDialect("migrations"),
     });
   }),
@@ -324,7 +325,9 @@ export const resolve = (
 ): Effect.Effect<ReadonlyArray<Descriptor>, UnknownUserField> =>
   Effect.forEach(keys ?? [...registry.keys()], (key) => {
     const descriptor = registry.get(key);
-    return descriptor === undefined ? Effect.fail(new UnknownUserField({ field: key })) : Effect.succeed(descriptor);
+    return descriptor === undefined
+      ? Effect.fail(new UnknownUserField({ field: key }))
+      : Effect.succeed(descriptor);
   });
 
 /**

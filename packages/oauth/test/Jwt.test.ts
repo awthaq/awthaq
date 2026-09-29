@@ -4,16 +4,10 @@
 // and this runs before signature verification.
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import {
-  constants,
-  generateKeyPairSync,
-  sign as nodeSign,
-  type KeyObject,
-} from "node:crypto";
+import { constants, generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
 import * as Jwt from "../src/Jwt.ts";
 
-const toBase64Url = (value: string): string =>
-  Buffer.from(value).toString("base64url");
+const toBase64Url = (value: string): string => Buffer.from(value).toString("base64url");
 
 const buildToken = (header: string, payload: string, signature = "sig"): string =>
   `${toBase64Url(header)}.${toBase64Url(payload)}.${toBase64Url(signature)}`;
@@ -67,7 +61,10 @@ describe("Jwt.findKey (ACS-004)", () => {
 
   it.effect("a kid-less token picks the lone valid RSA key", () =>
     Effect.gen(function* () {
-      const key = yield* Jwt.findKey(keysOf({ kty: "EC", crv: "P-256" }, { ...rsa, kid: "only" }), undefined);
+      const key = yield* Jwt.findKey(
+        keysOf({ kty: "EC", crv: "P-256" }, { ...rsa, kid: "only" }),
+        undefined,
+      );
       assert.strictEqual(key.kid, "only");
     }),
   );
@@ -190,7 +187,9 @@ describe("Jwt.verifySignature / findKey per algorithm (AOMS-005)", () => {
 
   it.effect("a key of the wrong type or curve is not a candidate for the algorithm", () =>
     Effect.gen(function* () {
-      const asEs256 = yield* Jwt.findKey(jwkOf(p384.publicKey, "k"), "k", "ES256").pipe(Effect.flip);
+      const asEs256 = yield* Jwt.findKey(jwkOf(p384.publicKey, "k"), "k", "ES256").pipe(
+        Effect.flip,
+      );
       assert.strictEqual(asEs256._tag, "JwtVerificationError");
       const rsaAsEs = yield* Jwt.findKey(jwkOf(rsa.publicKey, "k"), "k", "ES256").pipe(Effect.flip);
       assert.strictEqual(rsaAsEs._tag, "JwtVerificationError");
@@ -210,7 +209,13 @@ describe("Jwt.verifySignature / findKey per algorithm (AOMS-005)", () => {
   );
 
   it("only the five verified algorithms are recognised", () => {
-    assert.deepStrictEqual([...Jwt.SIGNING_ALGS].sort(), ["ES256", "ES384", "EdDSA", "PS256", "RS256"]);
+    assert.deepStrictEqual([...Jwt.SIGNING_ALGS].sort(), [
+      "ES256",
+      "ES384",
+      "EdDSA",
+      "PS256",
+      "RS256",
+    ]);
     assert.isFalse(Jwt.isSigningAlg("HS256"));
     assert.isFalse(Jwt.isSigningAlg("none"));
     assert.isTrue(Jwt.isSigningAlg("ES256"));

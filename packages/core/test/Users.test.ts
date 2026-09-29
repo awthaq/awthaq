@@ -563,7 +563,9 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
         yield* users
           .create({ identity: { _tag: "Email", email: "dir@example.com" }, name: "Dir" })
           .pipe(Tenant.withTenant("tenant-a"));
-        const found = yield* users.findByEmail("dir@example.com").pipe(Tenant.withTenant("tenant-b"));
+        const found = yield* users
+          .findByEmail("dir@example.com")
+          .pipe(Tenant.withTenant("tenant-b"));
         assert.isTrue(Option.isSome(found));
         const clash = yield* users
           .create({ identity: { _tag: "Email", email: "dir@example.com" }, name: "Dir 2" })
@@ -610,33 +612,35 @@ describe("Users (layerSql) profile update racing a delete (GC-004)", () => {
     }).pipe(Effect.provide(VanishingLayer)),
   );
 
-  it.effect("updateProfile changes name, metadata and image in one statement, leaving identity alone", () =>
-    Effect.gen(function* () {
-      const users = yield* Users.Users;
-      const created = yield* users.create({
-        identity: { _tag: "Email", email: "keep@example.com" },
-        name: "Keep",
-      });
-      const renamed = yield* users.updateProfile(created.id, {
-        name: "Kept",
-        metadata: "{}",
-        image: "https://example.com/a.png",
-      });
-      assert.strictEqual(renamed.name, "Kept");
-      assert.strictEqual(Option.getOrUndefined(Users.emailOf(renamed)), "keep@example.com");
-      assert.deepStrictEqual(renamed.metadata, Option.some("{}"));
-      assert.deepStrictEqual(renamed.image, Option.some("https://example.com/a.png"));
-      const untouched = yield* users.updateProfile(created.id, { name: "Kept again" });
-      assert.deepStrictEqual(untouched.metadata, Option.some("{}"));
-      assert.deepStrictEqual(untouched.image, Option.some("https://example.com/a.png"));
-      const cleared = yield* users.updateProfile(created.id, {
-        name: "Kept again",
-        metadata: null,
-        image: null,
-      });
-      assert.deepStrictEqual(cleared.metadata, Option.none());
-      assert.deepStrictEqual(cleared.image, Option.none());
-    }).pipe(Effect.provide(SqlTestLayer)),
+  it.effect(
+    "updateProfile changes name, metadata and image in one statement, leaving identity alone",
+    () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const created = yield* users.create({
+          identity: { _tag: "Email", email: "keep@example.com" },
+          name: "Keep",
+        });
+        const renamed = yield* users.updateProfile(created.id, {
+          name: "Kept",
+          metadata: "{}",
+          image: "https://example.com/a.png",
+        });
+        assert.strictEqual(renamed.name, "Kept");
+        assert.strictEqual(Option.getOrUndefined(Users.emailOf(renamed)), "keep@example.com");
+        assert.deepStrictEqual(renamed.metadata, Option.some("{}"));
+        assert.deepStrictEqual(renamed.image, Option.some("https://example.com/a.png"));
+        const untouched = yield* users.updateProfile(created.id, { name: "Kept again" });
+        assert.deepStrictEqual(untouched.metadata, Option.some("{}"));
+        assert.deepStrictEqual(untouched.image, Option.some("https://example.com/a.png"));
+        const cleared = yield* users.updateProfile(created.id, {
+          name: "Kept again",
+          metadata: null,
+          image: null,
+        });
+        assert.deepStrictEqual(cleared.metadata, Option.none());
+        assert.deepStrictEqual(cleared.image, Option.none());
+      }).pipe(Effect.provide(SqlTestLayer)),
   );
 });
 

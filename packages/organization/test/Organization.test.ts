@@ -2023,7 +2023,10 @@ describe("Organization", () => {
         const auditLog = yield* AuditLog.AuditLog;
         const owner = asCaller("owner-1");
         const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        yield* organization.invite(owner, org.id, { email: "private@example.com", role: ["member"] });
+        yield* organization.invite(owner, org.id, {
+          email: "private@example.com",
+          role: ["member"],
+        });
 
         const recorded = yield* auditLog.list({ eventTag: "auth.organization.invitationCreated" });
         assert.strictEqual(recorded.length, 1);
@@ -2204,32 +2207,36 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
     }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("EP-003: a suspended organization is refused everywhere, and reinstating restores it", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const records = yield* OrganizationRecords.OrganizationRecords;
-      const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const now = yield* DateTime.now;
-      yield* records.setSuspended(org.id, Option.some(now));
+  it.effect(
+    "EP-003: a suspended organization is refused everywhere, and reinstating restores it",
+    () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const records = yield* OrganizationRecords.OrganizationRecords;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const now = yield* DateTime.now;
+        yield* records.setSuspended(org.id, Option.some(now));
 
-      const read = yield* organization.get(owner, org.id).pipe(Effect.flip);
-      assert.strictEqual(read._tag, "OrganizationNotFound");
-      const write = yield* organization.update(owner, org.id, { name: "Renamed" }).pipe(Effect.flip);
-      assert.strictEqual(write._tag, "OrganizationNotFound");
-      const invite = yield* organization
-        .invite(owner, org.id, { email: "x@example.com", role: ["member"] })
-        .pipe(Effect.flip);
-      assert.strictEqual(invite._tag, "OrganizationNotFound");
-      // The member's own listing still shows it, flagged, so they can see why.
-      const listed = yield* organization.list(owner);
-      assert.strictEqual(listed.length, 1);
-      assert.isTrue(Option.isSome(listed[0]?.suspendedAt ?? Option.none()));
+        const read = yield* organization.get(owner, org.id).pipe(Effect.flip);
+        assert.strictEqual(read._tag, "OrganizationNotFound");
+        const write = yield* organization
+          .update(owner, org.id, { name: "Renamed" })
+          .pipe(Effect.flip);
+        assert.strictEqual(write._tag, "OrganizationNotFound");
+        const invite = yield* organization
+          .invite(owner, org.id, { email: "x@example.com", role: ["member"] })
+          .pipe(Effect.flip);
+        assert.strictEqual(invite._tag, "OrganizationNotFound");
+        // The member's own listing still shows it, flagged, so they can see why.
+        const listed = yield* organization.list(owner);
+        assert.strictEqual(listed.length, 1);
+        assert.isTrue(Option.isSome(listed[0]?.suspendedAt ?? Option.none()));
 
-      yield* records.setSuspended(org.id, Option.none());
-      const restored = yield* organization.get(owner, org.id);
-      assert.strictEqual(restored.id, org.id);
-    }).pipe(Effect.provide(buildLayer())),
+        yield* records.setSuspended(org.id, Option.none());
+        const restored = yield* organization.get(owner, org.id);
+        assert.strictEqual(restored.id, org.id);
+      }).pipe(Effect.provide(buildLayer())),
   );
 });
 
@@ -2251,22 +2258,32 @@ describe("Per-tenant configuration (EP-007)", () => {
 
   const inTenant = (tenantId: string) => Effect.provide(TenantConfig.get(tenantId));
 
-  it.effect("two tenants with different Organization.config in one composition, same layer instance", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const small = yield* organization.create({ caller: owner, name: "Small", slug: "small" });
-      const big = yield* organization.create({ caller: owner, name: "Big", slug: "big" });
-      const add = (organizationId: string, userId: string) =>
-        organization.addMember({ organizationId, userId: Users.UserId(userId), role: ["member"] });
-      // Each organization is already at one member (its owner). The `small` tenant's limit is 1.
-      const refused = yield* add(small.id, "m-1").pipe(inTenant("small"), Effect.flip);
-      assert.strictEqual(refused._tag, "MembershipLimitReached");
-      yield* add(big.id, "m-1").pipe(inTenant("big"));
-      yield* add(big.id, "m-2").pipe(inTenant("big"));
-      const full = yield* add(big.id, "m-3").pipe(inTenant("big"), Effect.flip);
-      assert.strictEqual(full._tag, "MembershipLimitReached");
-    }).pipe(Effect.provide(Layer.provideMerge(TenantConfig.layer, buildLayer({ membershipLimit: 100 })))),
+  it.effect(
+    "two tenants with different Organization.config in one composition, same layer instance",
+    () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-1");
+        const small = yield* organization.create({ caller: owner, name: "Small", slug: "small" });
+        const big = yield* organization.create({ caller: owner, name: "Big", slug: "big" });
+        const add = (organizationId: string, userId: string) =>
+          organization.addMember({
+            organizationId,
+            userId: Users.UserId(userId),
+            role: ["member"],
+          });
+        // Each organization is already at one member (its owner). The `small` tenant's limit is 1.
+        const refused = yield* add(small.id, "m-1").pipe(inTenant("small"), Effect.flip);
+        assert.strictEqual(refused._tag, "MembershipLimitReached");
+        yield* add(big.id, "m-1").pipe(inTenant("big"));
+        yield* add(big.id, "m-2").pipe(inTenant("big"));
+        const full = yield* add(big.id, "m-3").pipe(inTenant("big"), Effect.flip);
+        assert.strictEqual(full._tag, "MembershipLimitReached");
+      }).pipe(
+        Effect.provide(
+          Layer.provideMerge(TenantConfig.layer, buildLayer({ membershipLimit: 100 })),
+        ),
+      ),
   );
 
   it.effect("with no tenant override the build-time configuration applies, exactly as before", () =>

@@ -98,7 +98,11 @@ const buildHandler = (config: Partial<Admin.AdminConfigShape>) => {
 
   /** Runs `program` against the same running services the handler uses (shared via `memoMap`). */
   const inApp = <A, E>(
-    program: Effect.Effect<A, E, Users.Users | Sessions.Sessions | Accounts.Accounts | Mailer.Mailer>,
+    program: Effect.Effect<
+      A,
+      E,
+      Users.Users | Sessions.Sessions | Accounts.Accounts | Mailer.Mailer
+    >,
   ): Promise<A> =>
     Effect.runPromise(
       Effect.scoped(
@@ -174,7 +178,9 @@ describe("AdminAccounts (real HTTP)", () => {
       const targetId = yield* Effect.promise(() => app.seedUser("target"));
       const cookie = yield* Effect.promise(() => app.cookieFor(adminId));
 
-      const self = yield* Effect.promise(() => app.call("DELETE", `/admin/users/${adminId}`, cookie));
+      const self = yield* Effect.promise(() =>
+        app.call("DELETE", `/admin/users/${adminId}`, cookie),
+      );
       assert.strictEqual(self.status, 400);
       const response = yield* Effect.promise(() =>
         app.call("DELETE", `/admin/users/${targetId}`, cookie),
@@ -196,35 +202,37 @@ describe("AdminAccounts (real HTTP)", () => {
     }),
   );
 
-  it.effect("setUserEmail answers 202 and mails the new address; setUserPassword answers 204 or 422", () =>
-    Effect.gen(function* () {
-      const app = buildHandler({ canManageCredentials: allow });
-      const adminId = yield* Effect.promise(() => app.seedUser("admin"));
-      const targetId = yield* Effect.promise(() => app.seedUser("target"));
-      const cookie = yield* Effect.promise(() => app.cookieFor(adminId));
+  it.effect(
+    "setUserEmail answers 202 and mails the new address; setUserPassword answers 204 or 422",
+    () =>
+      Effect.gen(function* () {
+        const app = buildHandler({ canManageCredentials: allow });
+        const adminId = yield* Effect.promise(() => app.seedUser("admin"));
+        const targetId = yield* Effect.promise(() => app.seedUser("target"));
+        const cookie = yield* Effect.promise(() => app.cookieFor(adminId));
 
-      const email = yield* Effect.promise(() =>
-        app.call("POST", `/admin/users/${targetId}/email`, cookie, { email: "new@example.com" }),
-      );
-      assert.strictEqual(email.status, 202);
-      const sent = yield* Effect.promise(() =>
-        app.inApp(Mailer.Mailer.use((mailer) => mailer.sent)),
-      );
-      assert.deepStrictEqual(
-        sent.map((mail) => [mail.template, mail.to]),
-        [["change-email", "new@example.com"]],
-      );
+        const email = yield* Effect.promise(() =>
+          app.call("POST", `/admin/users/${targetId}/email`, cookie, { email: "new@example.com" }),
+        );
+        assert.strictEqual(email.status, 202);
+        const sent = yield* Effect.promise(() =>
+          app.inApp(Mailer.Mailer.use((mailer) => mailer.sent)),
+        );
+        assert.deepStrictEqual(
+          sent.map((mail) => [mail.template, mail.to]),
+          [["change-email", "new@example.com"]],
+        );
 
-      const weak = yield* Effect.promise(() =>
-        app.call("POST", `/admin/users/${targetId}/password`, cookie, { password: "short" }),
-      );
-      assert.strictEqual(weak.status, 422);
-      const changed = yield* Effect.promise(() =>
-        app.call("POST", `/admin/users/${targetId}/password`, cookie, {
-          password: "a brand new strong password",
-        }),
-      );
-      assert.strictEqual(changed.status, 204);
-    }),
+        const weak = yield* Effect.promise(() =>
+          app.call("POST", `/admin/users/${targetId}/password`, cookie, { password: "short" }),
+        );
+        assert.strictEqual(weak.status, 422);
+        const changed = yield* Effect.promise(() =>
+          app.call("POST", `/admin/users/${targetId}/password`, cookie, {
+            password: "a brand new strong password",
+          }),
+        );
+        assert.strictEqual(changed.status, 204);
+      }),
   );
 });

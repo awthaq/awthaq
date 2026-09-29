@@ -147,7 +147,10 @@ describe("doctor: configuration audits", () => {
     Effect.gen(function* () {
       const report = yield* Doctor.diagnose(
         configOf(passwordAndRoles, {
-          config: Layer.mergeAll(goodConfig, BodyLimit.config({ maxBytes: ByteSize.mebibytes(64) })),
+          config: Layer.mergeAll(
+            goodConfig,
+            BodyLimit.config({ maxBytes: ByteSize.mebibytes(64) }),
+          ),
         }),
         production,
       );
@@ -200,7 +203,10 @@ describe("doctor --build", () => {
         app: app(Layer.mergeAll(Mailer.layerMemory, RateLimiter.layerPermissive)),
       });
       const report = yield* Doctor.diagnose(config, { build: true, production: true });
-      assert.deepStrictEqual(codes(report).sort(), ["mailer-development", "rate-limiter-permissive"]);
+      assert.deepStrictEqual(codes(report).sort(), [
+        "mailer-development",
+        "rate-limiter-permissive",
+      ]);
       const dev = yield* Doctor.diagnose(config, { build: true, production: false });
       assert.deepStrictEqual(codes(dev), []);
     }),
@@ -221,15 +227,17 @@ describe("doctor --build", () => {
     }),
   );
 
-  it.effect("fails ApplicationUnavailable (exit 9) when the module exports no application Layer", () =>
-    Effect.gen(function* () {
-      const exit = yield* Effect.exit(
-        Doctor.diagnose(configOf(passwordAndRoles, { config: goodConfig }), {
-          build: true,
-          production: false,
-        }),
-      );
-      assert.strictEqual(exitCode(exit), 9);
-    }),
+  it.effect(
+    "fails ApplicationUnavailable (exit 9) when the module exports no application Layer",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(
+          Doctor.diagnose(configOf(passwordAndRoles, { config: goodConfig }), {
+            build: true,
+            production: false,
+          }),
+        );
+        assert.strictEqual(exitCode(exit), 9);
+      }),
   );
 });
