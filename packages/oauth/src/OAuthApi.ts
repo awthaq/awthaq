@@ -187,7 +187,12 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
     HttpApiEndpoint.get("callback", "/oauth/:provider/callback", {
       params: CallbackParams,
       query: CallbackQuery,
-      success: HttpApiSchema.Empty(302),
+      // PV-016: a `302` to the landing URL, or, while the session cookie is `SameSite=Strict` and
+      // `OAuthConfig.bounce` is on, a `200` same-site interstitial page that meta-refreshes there.
+      success: [
+        HttpApiSchema.Empty(302),
+        Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/html" })),
+      ],
       // Shipping-gap map (.scratch/shipping-gaps), ticket 13: rate-limited.
       // Wayfinder ticket 03 (BCR-004/THS-002): `Hooks.TwoFactorRequired`
       // when a `Hooks.BeforeSessionIssue` tap diverts. NAM-002:
