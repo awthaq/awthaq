@@ -3,10 +3,10 @@
 // (`TestAuth.layer`, `TestAuth.signInAs`, `TestAuth.runPluginContractTests`) — the same seam a
 // third-party author has (REQ-EA-565) — over plugins built here, never over `@awthaq/test`'s own
 // test fixtures.
-import { Api } from "@awthaq/api";
+import { Api, SubjectContract } from "@awthaq/api";
 import { Auth, AuthPlugin } from "@awthaq/core";
 import { Password } from "@awthaq/password";
-import { SubjectExtractor } from "@awthaq/qadi";
+import { AuthorizedSubject, SubjectApi, SubjectExtractor } from "@awthaq/qadi";
 import { Roles } from "@awthaq/roles";
 import { Authentication, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
@@ -147,6 +147,50 @@ export const gatedApp = TestAuth.layer(
   Auth.make([Roles.Roles, GatedPlugin]),
   Layer.mergeAll(GatedServices, HarnessServices),
 );
+
+// ---- qadi's GET /subject over the same harness (REQ-EA-063) ----
+
+/** `GET /subject` served next to the `Roles` resolver: what a browser's `subjectAtom` reads. */
+const SubjectServices = SubjectApi.SubjectHandlers.pipe(
+  Layer.provide(AuthorizedSubject.AuthorizedSubjectLive),
+  Layer.provideMerge(Roles.Roles.layer),
+  Layer.provide(Roles.config([memberRole, adminRole])),
+  // `GET /subject` is served behind the optional-authentication middleware.
+  Layer.provideMerge(
+    Authentication.OptionalAuthenticationLive.pipe(
+      Layer.provide(Authentication.PrincipalResolverLive),
+    ),
+  ),
+);
+
+export const subjectApp = TestAuth.layer(
+  Auth.make([Roles.Roles], { extraGroups: [SubjectApi.SubjectGroup] }),
+  Layer.mergeAll(SubjectServices, HarnessServices),
+);
+
+/** Signs in with exactly `roles` and reads the caller's own `GET /subject`, decoded as the wire `SubjectDto`. */
+export const subjectFor = (email: string, roles: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const rolesService = yield* Roles.Roles;
+    const signedIn = yield* TestAuth.signInAs({
+      email,
+      onSignedUp: (userId) =>
+        Effect.forEach(roles, (name) => rolesService.assign(userId, name), {
+          discard: true,
+        }).pipe(Effect.orDie),
+    });
+    const response = yield* dispatch(
+      new Request("http://localhost/subject", { headers: { cookie: signedIn.cookieHeader } }),
+    );
+    const body = yield* Effect.promise(() => response.json());
+    return {
+      status: response.status,
+      userId: signedIn.userId,
+      subject: yield* Schema.decodeUnknownEffect(SubjectContract.SubjectDto)(body).pipe(
+        Effect.orDie,
+      ),
+    };
+  });
 
 /** Signs in with exactly `roles` (assigned through the real `Roles` service) and requests the admin-only endpoint. */
 export const requestAdminOnlyAs = (email: string, roles: ReadonlyArray<string>) =>

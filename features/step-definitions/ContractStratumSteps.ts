@@ -38,6 +38,7 @@ import {
 } from "./FoundationsWorld.ts";
 import { LegacyLogin, LoginHost, PasswordFixture, SessionImposter } from "./PluginFixtures.ts";
 import { STRONG_PASSWORD } from "./shared/Harness.ts";
+import { subjectApp, subjectFor } from "./TestingHarnessWorld.ts";
 
 const GATES = "ContractTypeGates.ts";
 
@@ -264,6 +265,53 @@ export const contractStratumSteps = defineSteps<ScratchWorld | AppWorld>(
 
     When("their wire shapes are inspected", function* () {
       yield* Effect.void; // the shapes were read in the Given: nothing to await
+    });
+
+    // REQ-EA-063: the AuthSubject-to-SubjectDto mapper is module-private to @awthaq/qadi, so it is read
+    // through the served GET /subject: a real signed-in user holding the "member" role.
+    Given(
+      "qadi's AuthSubject for a signed-in user {string} carries roles and permissions",
+      function* (name: string) {
+        yield* put(strings, [name]);
+      },
+    );
+
+    When("the SubjectDto for {string} is produced", function* (name: string) {
+      const answer = yield* subjectFor(`${name}@example.com`, ["member"]).pipe(
+        Effect.provide(subjectApp),
+      );
+      assert.equal(answer.status, 200);
+      yield* put(strings, [
+        JSON.stringify({
+          id: answer.subject.id,
+          roles: answer.subject.roles,
+          permissions: answer.subject.permissions,
+          attributes: answer.subject.attributes,
+          userId: answer.userId,
+        }),
+      ]);
+    });
+
+    Then(
+      "the SubjectDto's {string} and {string} are each a flat array suitable for serialization",
+      function* (rolesField: string, permissionsField: string) {
+        assert.deepEqual([rolesField, permissionsField], ["roles", "permissions"]);
+        const [json] = yield* take(strings);
+        const dto = JSON.parse(json ?? "{}");
+        assert.ok(Array.isArray(dto.roles) && dto.roles.includes("member"));
+        assert.ok(Array.isArray(dto.permissions) && dto.permissions.includes("project:read"));
+        assert.ok(dto.roles.every((entry: unknown) => typeof entry === "string"));
+        assert.ok(dto.permissions.every((entry: unknown) => typeof entry === "string"));
+        assert.equal(dto.id, `user:${dto.userId}`);
+      },
+    );
+
+    Then("the SubjectDto carries an {string} record alongside them", function* (field: string) {
+      assert.equal(field, "attributes");
+      const [json] = yield* take(strings);
+      const dto = JSON.parse(json ?? "{}");
+      assert.ok(typeof dto.attributes === "object" && dto.attributes !== null);
+      assert.ok(!Array.isArray(dto.attributes));
     });
 
     Then(

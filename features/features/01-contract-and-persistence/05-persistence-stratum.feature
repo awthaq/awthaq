@@ -73,8 +73,7 @@ Feature: The Persistence Stratum
       When the method executes
       Then it does not call SqlClient.withTransaction itself
 
-    # @skip: atomic commit/rollback of confirmReset needs a SQLite-backed Password composition with fault injection (the memory World's SqlTransaction is a no-op); tracked by TIR-005's companion rollback scenario in 15-password.feature
-    @skip
+    # Observed through Password.confirmReset over a real SQLite transaction with a fault injected between the two writes (PasswordWorld, TIR-005).
     @REQ-EA-092
     Scenario: A domain service composing two repository calls holds the transaction boundary
       Given "Password.confirmReset" consuming a verification token and rotating a session in one operation
@@ -193,22 +192,18 @@ Feature: The Persistence Stratum
       Then the migration is rejected
       And the shared table "users" is not altered
 
-    # @skip: the SessionClaims registry this scenario names does not exist; the shipped extension point for `users` is a
-    # plugin-declared user field (`AuthPlugin.userFields`, SAM-004), whose column the linker adds (PV-252)
-    @skip
+    # Rewritten to the shipped extension point (PV-252, SAM-004): a plugin-declared user field, whose column the linker adds.
     @REQ-EA-107
     Scenario: A plugin extends a shared table only through a declared extension point
-      Given a plugin that needs to attach derived data to a signed-in user's session
-      When the plugin contributes that data through a declared extension point, such as a hook point or the SessionClaims registry
-      Then the shared table's own schema is not modified by the plugin's migration
-      And the extension is visible only through the declared extension point
+      Given a plugin that needs to attach a derived value to the shared "users" table
+      When the plugin contributes that value through the declared extension point "AuthPlugin.userFields"
+      Then the plugin's own migrations do not modify the shared "users" table
+      And the extension is visible only through the declared extension point: the column the linker generated, and the composition's typed user fields
 
-    # @skip: needs the declared user-field kinds (`UserFields.ColumnKind`: string, number, boolean) asserted as the
-    # scalar limit; the migration-DDL half is REQ-EA-106 (PV-252)
-    @skip
     @REQ-EA-108
-    Scenario: A shared-table extension is limited to a primitive, nullable or defaulted scalar
+    Scenario: A shared-table extension is limited to a primitive, nullable scalar
       Given a declared extension point for the shared "users" table
       When a plugin contributes an extension through that point
-      Then the extension is a primitive, nullable or defaulted scalar value
+      Then the extension is a primitive, nullable scalar column: text, real or boolean
+      And a declaration that is not one scalar is refused when the plugin is defined
       And it is never an unmediated ALTER TABLE from the plugin's migration code

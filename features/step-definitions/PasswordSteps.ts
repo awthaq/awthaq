@@ -131,7 +131,7 @@ const arrangeBreachFailure = (failure: BreachFailure) => {
 };
 
 /** Signs `email` up through the wire, registering the actor and, when a session was issued, its cookie. */
-const signUpActor = Effect.fn("features.password.signUpActor")(function* (
+export const signUpActor = Effect.fn("features.password.signUpActor")(function* (
   name: string,
   email: string,
   password: string,
@@ -143,7 +143,7 @@ const signUpActor = Effect.fn("features.password.signUpActor")(function* (
   return { response, cookie };
 });
 
-const signInAs = Effect.fn("features.password.signInAs")(function* (
+export const signInAs = Effect.fn("features.password.signInAs")(function* (
   email: string,
   password: string,
 ) {
@@ -151,7 +151,9 @@ const signInAs = Effect.fn("features.password.signInAs")(function* (
 });
 
 /** The reset token mailed to `email`, read from the captured mail. */
-const latestResetToken = Effect.fn("features.password.latestResetToken")(function* (email: string) {
+export const latestResetToken = Effect.fn("features.password.latestResetToken")(function* (
+  email: string,
+) {
   yield* letForkedFibersRun;
   const mail = (yield* sentMail()).findLast(
     (message) => message.template === "reset-password" && message.to === email,

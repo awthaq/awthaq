@@ -50,8 +50,7 @@ Feature: The Contract Stratum
       Then the session shape carries "id", "createdAt", "expiresAt" and "current"
       And the subject shape carries "id", "roles", "permissions" and "attributes"
 
-    # @skip: SubjectDto's mapper from AuthSubject is module-private to @awthaq/qadi and only reachable through the served GET /subject; covered by packages/qadi/test/SubjectApi.test.ts ("an exposed resolver-backed attribute appears in GET /subject", decoding the SubjectDto)
-    @skip
+    # The mapper is module-private to @awthaq/qadi, so it is observed through the served GET /subject over TestAuth.layer (TestingHarnessWorld.subjectApp).
     @REQ-EA-063
     Scenario: SubjectDto flattens qadi's AuthSubject into wire-safe arrays
       Given qadi's AuthSubject for a signed-in user "alice" carries roles and permissions
