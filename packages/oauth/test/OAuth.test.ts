@@ -1063,6 +1063,17 @@ describe("OAuth", () => {
     });
   });
 
+  describe("OAP-008: authorize has its own registered rate-limit rule", () => {
+    it.effect("the RateLimits registry lists an authorize rule beside the callback rule", () =>
+      Effect.gen(function* () {
+        const registry = yield* RateLimits.RateLimitsRegistry;
+        const rules = yield* registry.registered;
+        const endpoints = rules.filter((rule) => rule.group === "oauth").map((rule) => rule.endpoint);
+        assert.sameMembers([...endpoints], ["authorize", "callback"]);
+      }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+    );
+  });
+
   describe("BEH-EA-128: callback destination is validated, never echoed", () => {
     it.effect("REQ-EA-352: an allowlisted absolute callbackURL is honored", () =>
       Effect.gen(function* () {

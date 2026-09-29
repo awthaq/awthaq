@@ -22,6 +22,7 @@ import {
 } from "@awthaq/core";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
+import { CookieAssertions } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
@@ -287,6 +288,90 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
       assert.strictEqual(response.status, 400);
       const body = yield* Effect.promise(() => response.json());
       assert.deepStrictEqual(body, { _tag: "OAuthCallbackFailed" });
+    }),
+  );
+
+  it.effect("CSS-004: the authorize state cookie is a __Host- cookie, HttpOnly and SameSite=Lax", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const response = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/oauth/acme/authorize")),
+      );
+      CookieAssertions.assertHostPrefixedCookie(
+        CookieAssertions.findSetCookie(response, "__Host-oauth-state"),
+        { httpOnly: true, sameSite: "lax" },
+      );
+    }),
+  );
+
+  it.effect("CSS-004: the callback's session cookie is a __Host- cookie, HttpOnly and SameSite=Strict", () =>
+    Effect.gen(function* () {
+      const response = yield* runCallback(AppLayer);
+      assert.strictEqual(response.status, 302);
+      CookieAssertions.assertHostPrefixedCookie(
+        CookieAssertions.findSetCookie(response, "__Host-session"),
+        { httpOnly: true, sameSite: "strict" },
+      );
+    }),
+  );
+
+  it.effect("CSS-006: a successful callback expires __Host-oauth-state alongside the session cookie", () =>
+    Effect.gen(function* () {
+      const response = yield* runCallback(AppLayer);
+      assert.strictEqual(response.status, 302);
+      const state = CookieAssertions.findSetCookie(response, "__Host-oauth-state");
+      CookieAssertions.assertExpiredCookie(state);
+      // Cleared with the attributes it was set with, or a browser won't match it.
+      CookieAssertions.assertHostPrefixedCookie(state, { httpOnly: true, sameSite: "lax" });
+      assert.isDefined(
+        CookieAssertions.setCookiesOf(response).find((cookie) => cookie.name === "__Host-session"),
+      );
+    }),
+  );
+
+  it.effect("CSS-006: a failed callback (400) also expires __Host-oauth-state", () =>
+    Effect.gen(function* () {
+      const response = yield* runCallback(
+        buildAppLayer({ routes: { ...defaultRoutes, "/token": new FakeReply(400, {}) } }),
+      );
+      assert.strictEqual(response.status, 400);
+      CookieAssertions.assertExpiredCookie(
+        CookieAssertions.findSetCookie(response, "__Host-oauth-state"),
+      );
+    }),
+  );
+
+  it.effect("PDR-004: authorize and callback responses carry Referrer-Policy: no-referrer", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const authorize = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/oauth/acme/authorize")),
+      );
+      assert.strictEqual(authorize.headers.get("referrer-policy"), "no-referrer");
+      const callback = yield* runCallback(AppLayer);
+      assert.strictEqual(callback.status, 302);
+      assert.strictEqual(callback.headers.get("referrer-policy"), "no-referrer");
+      const failed = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/oauth/acme/callback?code=c1&state=bogus.state")),
+      );
+      assert.strictEqual(failed.status, 400);
+      assert.strictEqual(failed.headers.get("referrer-policy"), "no-referrer");
+    }),
+  );
+
+  it.effect("OAP-008: authorize is throttled after its own rule's limit", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(ThrottledAppLayer);
+      for (let i = 0; i < 30; i++) {
+        const response = yield* Effect.promise(() =>
+          handler(new Request("http://localhost/oauth/acme/authorize")),
+        );
+        assert.strictEqual(response.status, 302);
+      }
+      const throttled = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/oauth/acme/authorize")),
+      );
+      assert.strictEqual(throttled.status, 429);
     }),
   );
 

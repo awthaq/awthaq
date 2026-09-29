@@ -37,6 +37,24 @@ export interface OAuthRetryPolicy {
   readonly base: Duration.Duration;
 }
 
+/** A per-source-IP fixed-window limit (BEH-EA-107/108). */
+export interface OAuthRateLimit {
+  readonly limit: number;
+  readonly window: Duration.Duration;
+}
+
+/**
+ * OAP-008: both unauthenticated endpoints are throttled per source IP.
+ * `authorize` is looser (a real user opening the sign-in page repeatedly is
+ * normal) but still bounds the Verification-row and crypto amplification an
+ * anonymous caller could otherwise generate; `callback` is tighter because
+ * each admitted call may cost a provider round trip.
+ */
+export interface OAuthRateLimits {
+  readonly authorize: OAuthRateLimit;
+  readonly callback: OAuthRateLimit;
+}
+
 export interface OAuthConfigShape {
   readonly providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>;
   /** BEH-EA-123/124: `"explicit"` (default) or an opt-in, per-provider trusted-email-match auto-link list. */
@@ -48,13 +66,15 @@ export interface OAuthConfigShape {
   readonly defaultCallbackURL: string;
   readonly httpTimeouts: OAuthHttpTimeouts;
   readonly retry: OAuthRetryPolicy;
+  readonly rateLimits: OAuthRateLimits;
 }
 
 /** What `config(...)` accepts: the nested policy objects may be given partially. */
 export interface OAuthConfigInput
-  extends Partial<Omit<OAuthConfigShape, "httpTimeouts" | "retry">> {
+  extends Partial<Omit<OAuthConfigShape, "httpTimeouts" | "retry" | "rateLimits">> {
   readonly httpTimeouts?: Partial<OAuthHttpTimeouts>;
   readonly retry?: Partial<OAuthRetryPolicy>;
+  readonly rateLimits?: Partial<OAuthRateLimits>;
 }
 
 const defaultOAuthConfig: OAuthConfigShape = {
@@ -70,6 +90,10 @@ const defaultOAuthConfig: OAuthConfigShape = {
     discovery: Duration.seconds(10),
   },
   retry: { times: 2, base: Duration.millis(50) },
+  rateLimits: {
+    authorize: { limit: 30, window: Duration.minutes(1) },
+    callback: { limit: 20, window: Duration.minutes(1) },
+  },
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -84,4 +108,5 @@ export const config = (input: OAuthConfigInput): Layer.Layer<never> =>
     ...input,
     httpTimeouts: { ...defaultOAuthConfig.httpTimeouts, ...input.httpTimeouts },
     retry: { ...defaultOAuthConfig.retry, ...input.retry },
+    rateLimits: { ...defaultOAuthConfig.rateLimits, ...input.rateLimits },
   });

@@ -26,6 +26,7 @@ import {
   AuthEvents,
   AuthPlugin,
   Accounts,
+  ConstantTime,
   Hooks,
   RateLimits,
   Sessions,
@@ -46,6 +47,7 @@ import * as Schema from "effect/Schema";
 import * as HttpBody from "effect/unstable/http/HttpBody";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Jwt from "./Jwt.ts";
@@ -68,6 +70,32 @@ export type {
 } from "./OAuthConfig.ts";
 
 const OAUTH_STATE_COOKIE = "__Host-oauth-state";
+
+/**
+ * PDR-004: the authorize and callback URLs carry the provider's `code`/`state`
+ * in the query string, so neither response may leak them through `Referer`
+ * to a subresource or a link followed from a page the redirect lands on.
+ * Registered as a pre-response handler so it covers success *and* the
+ * framework-encoded typed-error responses alike.
+ */
+const noReferrer = HttpEffect.appendPreResponseHandler((_request, response) =>
+  Effect.succeed(HttpServerResponse.setHeader(response, "referrer-policy", "no-referrer")),
+);
+
+/**
+ * CSS-006: the correlation cookie is single-use, so every callback response
+ * — success, link, and typed failure — clears it rather than leaving a
+ * consumed value in the browser for its remaining ten minutes. Same
+ * attributes the cookie was set with, or a conforming browser won't match it.
+ */
+const expireStateCookie = HttpEffect.appendPreResponseHandler((_request, response) =>
+  HttpServerResponse.expireCookie(response, OAUTH_STATE_COOKIE, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+  }).pipe(Effect.orDie),
+);
 const FLOW_TTL = Duration.minutes(10);
 const FLOW_PREFIX = "oauth.flow:";
 /**
@@ -388,10 +416,13 @@ export const OAuthHandlers = HttpApiBuilder.group(
       authorize: Effect.fnUntraced(function* ({
         params,
         query,
+        request,
       }: {
         params: OAuthApi.AuthorizeParams;
         query: OAuthApi.AuthorizeQuery;
+        request: HttpServerRequest.HttpServerRequest;
       }) {
+        yield* noReferrer;
         const principal = yield* Api.CurrentPrincipal;
         const wantsLink = query.link === "true";
         if (wantsLink && principal._tag !== "User") {
@@ -399,9 +430,12 @@ export const OAuthHandlers = HttpApiBuilder.group(
         }
         const link =
           wantsLink && principal._tag === "User" ? { userId: principal.ref.id } : undefined;
+        // OAP-008: resolved through the same `ClientAddress` port as `callback`.
+        const resolvedAddress = yield* clientAddress.resolve(request);
         const url = yield* oauth.authorize(params.provider, {
           callbackURL: query.callbackURL,
           link,
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
         });
         const response = HttpServerResponse.redirect(url.location);
         return yield* HttpServerResponse.setCookie(response, OAUTH_STATE_COOKIE, url.state, {
@@ -425,6 +459,8 @@ export const OAuthHandlers = HttpApiBuilder.group(
         query: OAuthApi.CallbackQuery;
         request: HttpServerRequest.HttpServerRequest;
       }) {
+        yield* noReferrer;
+        yield* expireStateCookie;
         const cookieState = request.cookies[OAUTH_STATE_COOKIE];
         // AGA-001/NHS-003: resolved through the application-provided
         // `ClientAddress` port rather than `request.remoteAddress`
@@ -461,10 +497,12 @@ export interface OAuthShape {
     input: {
       readonly callbackURL: string | undefined;
       readonly link: { readonly userId: string } | undefined;
+      /** OAP-008: the rate-limit key, exactly as for `callback` — `undefined` shares one "unknown origin" bucket. */
+      readonly ip?: string;
     },
   ) => Effect.Effect<
     { readonly location: string; readonly state: string },
-    OAuthApi.ProviderNotFound | OAuthApi.ProviderUnavailable
+    OAuthApi.ProviderNotFound | OAuthApi.ProviderUnavailable | Api.RateLimited
   >;
   readonly callback: (
     providerId: string,
@@ -543,7 +581,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
        * `HttpServerRequest.remoteAddress`) shares one bucket, never
        * unthrottled.
        */
-      const CALLBACK_RATE_LIMIT = { limit: 20, window: Duration.minutes(1) };
+      const { authorize: AUTHORIZE_RATE_LIMIT, callback: CALLBACK_RATE_LIMIT } =
+        config_.rateLimits;
       // The explicit return-type annotation below is a narrow, necessary
       // exception, not a style choice: passing `OAuth` (this class) into
       // anything typed `AuthPlugin.Any` (which itself requires a `layer`
@@ -551,15 +590,28 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // initializer is a real TS circularity — see `@awthaq/password`'s
       // `Password.ts` for the identical problem and the same fix, first
       // hit there (ticket 12).
-      const registerCallbackRule: Effect.Effect<void, RateLimits.RateLimitScopeViolation> =
-        rateLimitsRegistry.register(OAuth, {
-          group: "oauth",
-          endpoint: "callback",
-          key: "ip",
-          limit: CALLBACK_RATE_LIMIT.limit,
-          window: CALLBACK_RATE_LIMIT.window,
-        });
-      yield* registerCallbackRule.pipe(Effect.orDie);
+      const registerRateLimitRules: Effect.Effect<void, RateLimits.RateLimitScopeViolation> =
+        rateLimitsRegistry
+          .register(OAuth, {
+            group: "oauth",
+            endpoint: "callback",
+            key: "ip",
+            limit: CALLBACK_RATE_LIMIT.limit,
+            window: CALLBACK_RATE_LIMIT.window,
+          })
+          // OAP-008: `authorize` is throttled too, on its own looser rule.
+          .pipe(
+            Effect.andThen(
+              rateLimitsRegistry.register(OAuth, {
+                group: "oauth",
+                endpoint: "authorize",
+                key: "ip",
+                limit: AUTHORIZE_RATE_LIMIT.limit,
+                window: AUTHORIZE_RATE_LIMIT.window,
+              }),
+            ),
+          );
+      yield* registerRateLimitRules.pipe(Effect.orDie);
 
       // BEH-EA-127/NAM-004: resolved by the shared `OAuthProviders` registry
       // — boot-mode providers while this layer builds (a mismatched or
@@ -570,6 +622,18 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         config_.linking === "explicit" ? [] : config_.linking.trustedProviders;
 
       const authorize: OAuthShape["authorize"] = Effect.fnUntraced(function* (providerId, input) {
+        yield* limiter
+          .consume({
+            key: `oauth:authorize:${input.ip ?? "unknown"}`,
+            limit: AUTHORIZE_RATE_LIMIT.limit,
+            window: AUTHORIZE_RATE_LIMIT.window,
+          })
+          .pipe(
+            Effect.catchTag(
+              "RateLimited",
+              (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
+            ),
+          );
         const provider = yield* providers.get(providerId);
         const callbackURL = resolveCallbackURL(
           input.callbackURL,
@@ -638,8 +702,18 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         // consumed — an attacker who tricks a victim's browser into
         // visiting a callback URL carrying the attacker's own `state`
         // fails here, since the victim's browser never held that cookie.
+        // TSS-003: compared in constant time over fixed-length digests, so
+        // neither where the values differ nor how long they are is observable.
         const decoded = decodeState(input.state);
-        if (Option.isNone(decoded) || input.cookieState !== input.state) {
+        const digest = (value: string) =>
+          crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(Effect.orDie);
+        const cookieMatches =
+          input.cookieState !== undefined &&
+          ConstantTime.constantTimeEqual(
+            yield* digest(input.cookieState),
+            yield* digest(input.state),
+          );
+        if (Option.isNone(decoded) || !cookieMatches) {
           return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
         }
         const { identifier, value } = decoded.value;

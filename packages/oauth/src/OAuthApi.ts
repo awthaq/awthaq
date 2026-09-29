@@ -106,7 +106,7 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
       // for `?link=true` from an anonymous caller — `OptionalAuthentication`
       // itself never fails (BEH-EA-029/068's own doc comment), it only
       // ever resolves `CurrentPrincipal`, defaulting to anonymous.
-      error: [ProviderNotFound, ProviderUnavailable, Api.Unauthenticated],
+      error: [ProviderNotFound, ProviderUnavailable, Api.Unauthenticated, Api.RateLimited],
     }),
   )
   .add(
