@@ -106,7 +106,7 @@ export const AccountHandlers = HttpApiBuilder.group(
               // in for "no session to keep" — that trick predates
               // `revokeAll` existing at all; bundled here since this line
               // was already being rewritten for CSG-001/DRS-002.
-              yield* sessions.revokeAll(userId);
+              yield* sessions.revokeAll(userId, "userDeleted");
               yield* verification.deleteAllByUser(userId);
               yield* users
                 .delete(userId)

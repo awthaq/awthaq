@@ -72,25 +72,60 @@ export interface SessionReuseEvent {
   readonly userId: UserId;
 }
 
-/** ALF-004: published whenever `@awthaq/password` mints a session — signUp's initial session, signIn, and changePassword's own rotation alike. */
+/**
+ * ALF-004/ESA-006: published by `Sessions.issue` itself (both layers), so
+ * every path that mints a session — password, OAuth, passkey, admin
+ * impersonation, a legacy-session bridge, a `supersedes` rotation — emits
+ * exactly one, with no plugin having to remember to.
+ */
 export interface SessionIssuedEvent {
   readonly _tag: "auth.session.issued";
   readonly sessionId: string;
   readonly userId: UserId;
+  /** RRS-003: the rotation family this session belongs to (its own id for a fresh family). */
+  readonly familyId: string;
+  /** BEH-EA-209: present only for an impersonation session. */
+  readonly actingAs?: { readonly type: string; readonly id: string };
 }
 
+/** TIR-008/ESA-006: why a session ended — supplied by the caller of every `Sessions` revocation primitive. */
+export type SessionRevocationReason =
+  | "signOut"
+  | "userRevoked"
+  | "passwordChanged"
+  | "passwordReset"
+  | "userDeleted"
+  | "impersonationStopped"
+  | "admin"
+  | "reuseDetected";
+
 /**
- * ALF-004: published whenever `@awthaq/password` bulk-revokes sessions as
- * part of a credential change — `confirmReset`'s `revokeAll` (no
- * authenticated "current" session to keep) and `changePassword`'s
- * `revokeOthers` (the caller's own session survives, rotated) alike. Carries
- * no `sessionId`: the underlying `Sessions.revokeAll`/`revokeOthers`
- * primitives are bulk operations with no per-row identity to report.
+ * TIR-008/ESA-006: published by `Sessions`' own revocation primitives
+ * (`revoke`, `revokeOwned`, `revokeOthers`, `revokeAll`, and reuse-detection's
+ * family revocation), so every revocation path is observable and lands in
+ * `AuditLog` — sign-out, account deletion and admin stops included, not just
+ * the password plugin's bulk revocations. `sessionId` is the ended row for
+ * `scope: "one"` and `null` for a bulk scope, which has no single row to name.
  */
 export interface SessionRevokedEvent {
   readonly _tag: "auth.session.revoked";
   readonly userId: UserId;
-  readonly reason: "passwordChanged" | "passwordReset";
+  readonly sessionId: string | null;
+  readonly scope: "one" | "others" | "all" | "family";
+  readonly reason: SessionRevocationReason;
+}
+
+/**
+ * ESA-006: published when `Sessions.verify` observes that a presented session
+ * (with its correct secret) is past its absolute or idle expiry. Lazy: there
+ * is no background reaper (CSG-003), so an expiry is only observed when the
+ * expired credential is presented, and each such presentation publishes one.
+ */
+export interface SessionExpiredEvent {
+  readonly _tag: "auth.session.expired";
+  readonly sessionId: string;
+  readonly userId: UserId;
+  readonly kind: "absolute" | "idle";
 }
 
 /** ALF-004: published by `@awthaq/password`'s `changePassword`, after the new hash is persisted. */
@@ -285,6 +320,7 @@ export type AuthEvent =
   | SessionReuseEvent
   | SessionIssuedEvent
   | SessionRevokedEvent
+  | SessionExpiredEvent
   | PasswordChangedEvent
   | PasswordResetCompletedEvent
   | PasskeyCounterAnomalyEvent

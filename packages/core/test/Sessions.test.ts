@@ -376,13 +376,13 @@ const suite = (
         const current = listed.find((row) => row.current);
         assert.strictEqual(current?.id, a.session.id);
 
-        yield* sessions.revokeOthers(userId, a.session.id);
+        yield* sessions.revokeOthers(userId, a.session.id, "userRevoked");
         const bFails = yield* sessions.verify(b.token).pipe(Effect.flip);
         assert.strictEqual(bFails._tag, "SessionNotFound");
         const aStillWorks = yield* sessions.verify(a.token);
         assert.strictEqual(aStillWorks.session.id, a.session.id);
 
-        yield* sessions.revoke(a.session.id);
+        yield* sessions.revoke(a.session.id, "signOut");
         const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
         assert.strictEqual(aFails._tag, "SessionNotFound");
       }).pipe(Effect.provide(layer)),
@@ -396,7 +396,7 @@ const suite = (
           const a = yield* sessions.issue({ userId, request: { userAgent: "device-a" } });
           const b = yield* sessions.issue({ userId, request: { userAgent: "device-b" } });
 
-          yield* sessions.revokeAll(userId);
+          yield* sessions.revokeAll(userId, "userRevoked");
 
           const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
           assert.strictEqual(aFails._tag, "SessionNotFound");
@@ -586,7 +586,7 @@ const suite = (
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const mine = yield* sessions.issue({ userId });
-        yield* sessions.revokeOwned(userId, mine.session.id);
+        yield* sessions.revokeOwned(userId, mine.session.id, "userRevoked");
         const failure = yield* sessions.verify(mine.token).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "SessionNotFound");
       }).pipe(Effect.provide(layer)),
@@ -597,7 +597,7 @@ const suite = (
         const sessions = yield* Sessions.Sessions;
         const otherUser = Users.UserId("22222222-2222-2222-2222-222222222222");
         const theirs = yield* sessions.issue({ userId: otherUser });
-        const failure = yield* sessions.revokeOwned(userId, theirs.session.id).pipe(Effect.flip);
+        const failure = yield* sessions.revokeOwned(userId, theirs.session.id, "userRevoked").pipe(Effect.flip);
         assert.strictEqual(failure._tag, "SessionNotFound");
         yield* sessions.verify(theirs.token);
       }).pipe(Effect.provide(layer)),
@@ -607,7 +607,7 @@ const suite = (
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const failure = yield* sessions
-          .revokeOwned(userId, Sessions.SessionId("missing"))
+          .revokeOwned(userId, Sessions.SessionId("missing"), "userRevoked")
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "SessionNotFound");
       }).pipe(Effect.provide(layer)),
@@ -798,6 +798,173 @@ const reuseSuite = (
   });
 };
 
+// ESA-006/TIR-008: `Sessions` itself publishes the lifecycle events, so every
+// issuance/revocation path is observable and lands in `AuditLog`.
+const eventsSuite = (
+  name: string,
+  layer: Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
+): void => {
+  /** Runs `body`, returning every session-lifecycle event published while it ran, in order. */
+  const collecting = <A, E>(body: Effect.Effect<A, E, Sessions.Sessions>) =>
+    Effect.gen(function* () {
+      const events = yield* AuthEvents.AuthEvents;
+      const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+      yield* Effect.forkChild(
+        events.stream.pipe(
+          Stream.filter((event) => event._tag.startsWith("auth.session.")),
+          Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
+        ),
+        { startImmediately: true },
+      );
+      yield* body;
+      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+      return yield* Ref.get(seen);
+    });
+
+  describe(name, () => {
+    it.effect("ESA-006: issue publishes exactly one auth.session.issued with the family id", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        let issuedId = "";
+        const seen = yield* collecting(
+          sessions.issue({ userId }).pipe(
+            Effect.tap(({ session }) =>
+              Effect.sync(() => {
+                issuedId = session.id;
+              }),
+            ),
+          ),
+        );
+        assert.strictEqual(seen.length, 1);
+        const [event] = seen;
+        assert.strictEqual(event?._tag, "auth.session.issued");
+        if (event?._tag === "auth.session.issued") {
+          assert.strictEqual(event.sessionId, issuedId);
+          assert.strictEqual(event.familyId, issuedId);
+          assert.strictEqual(event.userId, userId);
+          assert.isUndefined(event.actingAs);
+        }
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("ESA-006: an actingAs session's issued event carries actingAs; a rotation keeps the family", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const seen = yield* collecting(
+          Effect.gen(function* () {
+            yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-1" } });
+            yield* sessions.issue({ userId, supersedes: a.session.id });
+          }),
+        );
+        const issued = seen.filter((e) => e._tag === "auth.session.issued");
+        assert.strictEqual(issued.length, 2);
+        const [acting, rotated] = issued;
+        if (acting?._tag === "auth.session.issued") {
+          assert.deepStrictEqual(acting.actingAs, { type: "user", id: "admin-1" });
+        }
+        if (rotated?._tag === "auth.session.issued") {
+          assert.strictEqual(rotated.familyId, a.session.id);
+        }
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("TIR-008: revoke publishes one auth.session.revoked with sessionId and reason", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const seen = yield* collecting(sessions.revoke(a.session.id, "signOut"));
+        assert.deepStrictEqual(seen, [
+          {
+            _tag: "auth.session.revoked",
+            userId,
+            sessionId: a.session.id,
+            scope: "one",
+            reason: "signOut",
+          },
+        ]);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("TIR-008: a failed revoke (unknown id) publishes nothing", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const seen = yield* collecting(
+          sessions.revoke(Sessions.SessionId("missing"), "admin").pipe(Effect.ignore),
+        );
+        assert.deepStrictEqual(seen, []);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("TIR-008: revokeOwned, revokeOthers and revokeAll each publish one event with their scope", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const b = yield* sessions.issue({ userId });
+        yield* sessions.issue({ userId });
+        const seen = yield* collecting(
+          Effect.gen(function* () {
+            yield* sessions.revokeOwned(userId, b.session.id, "userRevoked");
+            yield* sessions.revokeOthers(userId, a.session.id, "passwordChanged");
+            yield* sessions.revokeAll(userId, "userDeleted");
+          }),
+        );
+        assert.deepStrictEqual(
+          seen.map((event) =>
+            event._tag === "auth.session.revoked"
+              ? [event.scope, event.sessionId, event.reason]
+              : [event._tag],
+          ),
+          [
+            ["one", b.session.id, "userRevoked"],
+            ["others", null, "passwordChanged"],
+            ["all", null, "userDeleted"],
+          ],
+        );
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("TIR-008: reuse detection also publishes a family auth.session.revoked (reuseDetected)", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        yield* sessions.issue({ userId, supersedes: a.session.id });
+        const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.ignore));
+        assert.deepStrictEqual(
+          seen.map((event) => event._tag),
+          ["auth.session.reuse", "auth.session.revoked"],
+        );
+        const revoked = seen[1];
+        if (revoked?._tag === "auth.session.revoked") {
+          assert.strictEqual(revoked.scope, "family");
+          assert.strictEqual(revoked.reason, "reuseDetected");
+          assert.isNull(revoked.sessionId);
+        }
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("ESA-006: verify publishes auth.session.expired when an expired session is presented", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        // Default idle is 7 days.
+        yield* TestClock.adjust(Duration.days(8));
+        const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.ignore));
+        assert.strictEqual(seen.length, 1);
+        const [event] = seen;
+        assert.strictEqual(event?._tag, "auth.session.expired");
+        if (event?._tag === "auth.session.expired") {
+          assert.strictEqual(event.sessionId, a.session.id);
+          assert.strictEqual(event.kind, "idle");
+        }
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+};
+
+eventsSuite("Sessions lifecycle events (layerMemory)", MemoryLayerWithEvents);
+eventsSuite("Sessions lifecycle events (layerSql)", SqlLayerWithEvents);
+
 reuseSuite("Sessions reuse detection (layerMemory)", MemoryLayerWithEvents);
 reuseSuite("Sessions reuse detection (layerSql)", SqlLayerWithEvents);
 
@@ -916,7 +1083,7 @@ describe("Sessions.list past one page (layerSql)", () => {
         const found = yield* sessions.findOwned(userId, newest.session.id);
         assert.isTrue(Option.isSome(found));
         // GC-005: an owned session beyond the first repository page revokes fine.
-        yield* sessions.revokeOwned(userId, newest.session.id);
+        yield* sessions.revokeOwned(userId, newest.session.id, "userRevoked");
         assert.strictEqual((yield* sessions.list(userId)).length, 249);
       }).pipe(Effect.provide(SqlLayer)),
     30_000,

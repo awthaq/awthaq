@@ -372,6 +372,24 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
     ).pipe(Effect.provide(AppLayer)),
   );
 
+  // TIR-008: sign-out and account deletion are audited, not silent.
+  it.effect("POST /session/sign-out records a signOut auth.session.revoked in AuditLog", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const audit = yield* AuditLog.AuditLog;
+        const { token, session } = yield* sessions.issue({ userId });
+        yield* sendHandled("/session/sign-out", { method: "POST", token });
+        const rows = yield* audit.list({ eventTag: "auth.session.revoked" });
+        assert.strictEqual(rows.length, 1);
+        const payload = rows[0]?.payload as { reason: string; sessionId: string; scope: string };
+        assert.strictEqual(payload.reason, "signOut");
+        assert.strictEqual(payload.sessionId, session.id);
+        assert.strictEqual(payload.scope, "one");
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
   it.effect("POST /session/revoke-all expires __Host-session", () =>
     Effect.scoped(
       Effect.gen(function* () {

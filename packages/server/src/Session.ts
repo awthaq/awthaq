@@ -71,7 +71,7 @@ export const SessionHandlers = HttpApiBuilder.group(
       signOut: Effect.fnUntraced(function* () {
         const { sessionId } = yield* currentUser;
         yield* sessions
-          .revoke(sessionId)
+          .revoke(sessionId, "signOut")
           .pipe(Effect.catchTag("SessionNotFound", () => Effect.void));
         yield* expireSessionCookie;
       }),
@@ -92,7 +92,7 @@ export const SessionHandlers = HttpApiBuilder.group(
         // (no list-then-check, no 200-row cap); a foreign id and an unknown
         // id are indistinguishable.
         yield* sessions
-          .revokeOwned(userId, targetId)
+          .revokeOwned(userId, targetId, targetId === sessionId ? "signOut" : "userRevoked")
           .pipe(Effect.catchTag("SessionNotFound", () => new SessionContract.SessionNotFound()));
         // CSS-002: revoking one's own current session ends it too; revoking a
         // different device's session leaves this cookie alone.
@@ -101,7 +101,7 @@ export const SessionHandlers = HttpApiBuilder.group(
 
       revokeOthers: Effect.fnUntraced(function* () {
         const { userId, sessionId } = yield* currentUser;
-        yield* sessions.revokeOthers(userId, sessionId);
+        yield* sessions.revokeOthers(userId, sessionId, "userRevoked");
       }),
 
       // Ticket 02: truly all, no exceptions — kills the caller's own
@@ -109,7 +109,7 @@ export const SessionHandlers = HttpApiBuilder.group(
       // CSS-002: so its cookie is expired as well.
       revokeAll: Effect.fnUntraced(function* () {
         const { userId } = yield* currentUser;
-        yield* sessions.revokeAll(userId);
+        yield* sessions.revokeAll(userId, "userRevoked");
         yield* expireSessionCookie;
       }),
     });

@@ -792,11 +792,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
         yield* events.publish({ _tag: "auth.user.created", userId: user.id });
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: user.id,
-        });
 
         // BEH-EA-113: dispatched, never awaited — response latency must
         // not depend on mail-provider latency, and per
@@ -900,11 +895,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           _tag: "auth.user.signedIn",
           userId: user.id,
           strategy: "password",
-        });
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: user.id,
         });
         yield* afterSignIn.run({ userId: user.id, strategy: "password" });
         return issued;
@@ -1053,7 +1043,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // `revokeAll` primitive, retiring the empty-string-id
               // `revokeOthers` trick this call site used to stand in for
               // it.
-              yield* sessions.revokeAll(userId);
+              // ESA-006/TIR-008: `Sessions.revokeAll` itself publishes the
+              // `auth.session.revoked` (reason `passwordReset`) — after this
+              // transaction's own write, like every other revocation.
+              yield* sessions.revokeAll(userId, "passwordReset");
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
@@ -1061,11 +1054,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // committed — mirroring `signUp`'s own `auth.user.created`
         // placement, never inside the transaction itself.
         yield* events.publish({ _tag: "auth.password.resetCompleted", userId });
-        yield* events.publish({
-          _tag: "auth.session.revoked",
-          userId,
-          reason: "passwordReset",
-        });
       });
 
       const verifyEmail: PasswordShape["verifyEmail"] = Effect.fnUntraced(function* (input) {
@@ -1166,12 +1154,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // row with a freshly minted one. Reversing this order would leave
         // `revokeOthers` nothing to `keep` (the superseded id no longer
         // exists once `issue` has run).
-        yield* sessions.revokeOthers(input.userId, input.currentSessionId);
-        yield* events.publish({
-          _tag: "auth.session.revoked",
-          userId: input.userId,
-          reason: "passwordChanged",
-        });
+        yield* sessions.revokeOthers(input.userId, input.currentSessionId, "passwordChanged");
         const issued = yield* sessions
           .issue({
             userId: input.userId,
@@ -1179,11 +1162,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             request: sessionRequest(input),
           })
           .pipe(Effect.orDie);
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: input.userId,
-        });
         return issued;
       });
 

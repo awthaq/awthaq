@@ -160,7 +160,7 @@ describe("Jwt verifyLive", () => {
       const beforeRevoke = yield* jwt.verifyLive(token);
       assert.strictEqual(beforeRevoke["sub"], "user-1");
 
-      yield* sessions.revoke(issued.session.id);
+      yield* sessions.revoke(issued.session.id, "admin");
 
       const stillVerifies = yield* jwt.verify(token);
       assert.strictEqual(stillVerifies["sub"], "user-1");
@@ -334,7 +334,7 @@ describe("Jwt introspect/introspectLive", () => {
       const caller = asCaller({ id: "user-1", sessionId: issued.session.id });
       const token = yield* jwt.sign(caller);
 
-      yield* sessions.revoke(issued.session.id);
+      yield* sessions.revoke(issued.session.id, "admin");
 
       // `introspect` alone (no session-liveness check) still sees it
       // active — the same deliberate distinction `verify`/`verifyLive`

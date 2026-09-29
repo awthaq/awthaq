@@ -320,7 +320,9 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
                 Effect.fail(new AdminApi.AdminImpersonationNotFound()),
               ),
             );
-          yield* sessions.revoke(Sessions.SessionId(caller.sessionId)).pipe(Effect.orDie);
+          yield* sessions
+            .revoke(Sessions.SessionId(caller.sessionId), "impersonationStopped")
+            .pipe(Effect.orDie);
           yield* events.publish({
             _tag: "auth.admin.impersonationStopped",
             sessionId: caller.sessionId,
@@ -345,7 +347,9 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
               Effect.fail(new AdminApi.AdminImpersonationNotFound()),
             ),
           );
-        yield* sessions.revoke(Sessions.SessionId(sessionId)).pipe(Effect.orDie);
+        yield* sessions
+          .revoke(Sessions.SessionId(sessionId), "impersonationStopped")
+          .pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.admin.impersonationStopped",
           sessionId,

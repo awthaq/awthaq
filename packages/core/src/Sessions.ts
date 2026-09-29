@@ -201,6 +201,10 @@ export interface SessionsShape {
    * new row inherits the old row's `familyId` — see `verify`'s own doc
    * comment for what presenting a tombstoned row again means.
    *
+   * ESA-006: publishes exactly one `auth.session.issued` (session id, user id,
+   * family id, and `actingAs` when present) after the row is persisted, for
+   * every caller — plugins no longer publish it themselves.
+   *
    * ESR-002/RRS-004: the tombstone and the successor's insert are one atomic
    * unit in both layers (`layerSql`: one transaction; `layerMemory`: one
    * `Ref.modify`), so a failed or interrupted issue never leaves a tombstoned
@@ -276,7 +280,16 @@ export interface SessionsShape {
     { readonly session: SessionView; readonly rotated: Option.Option<Redacted.Redacted<string>> },
     SessionNotFound | SessionExpired | PlatformError.PlatformError
   >;
-  readonly revoke: (id: SessionId) => Effect.Effect<void, SessionNotFound>;
+  /**
+   * TIR-008: every revocation primitive takes the `reason` the session ended
+   * and publishes exactly one `auth.session.revoked` (`AuditLog` records it)
+   * once the delete has happened — so sign-out, account deletion and admin
+   * stops are observable, not just the password plugin's bulk revocations.
+   */
+  readonly revoke: (
+    id: SessionId,
+    reason: AuthEvents.SessionRevocationReason,
+  ) => Effect.Effect<void, SessionNotFound>;
   /**
    * GC-005: revokes session `id` only if it belongs to `userId`, atomically —
    * ownership is enforced by the domain operation, not by a caller-side
@@ -284,11 +297,22 @@ export interface SessionsShape {
    * id alike (BEH-EA-086/ADR-EA-013's enumeration safety). Use bare `revoke`
    * only in already-authorized contexts (admin, the caller's own sign-out).
    */
-  readonly revokeOwned: (userId: UserId, id: SessionId) => Effect.Effect<void, SessionNotFound>;
+  readonly revokeOwned: (
+    userId: UserId,
+    id: SessionId,
+    reason: AuthEvents.SessionRevocationReason,
+  ) => Effect.Effect<void, SessionNotFound>;
   /** BEH-EA-054: revokes every session for `userId` except `keep`. */
-  readonly revokeOthers: (userId: UserId, keep: SessionId) => Effect.Effect<void>;
+  readonly revokeOthers: (
+    userId: UserId,
+    keep: SessionId,
+    reason: AuthEvents.SessionRevocationReason,
+  ) => Effect.Effect<void>;
   /** Ticket 02: revokes every session for `userId`, no exceptions — including the caller's own current session. */
-  readonly revokeAll: (userId: UserId) => Effect.Effect<void>;
+  readonly revokeAll: (
+    userId: UserId,
+    reason: AuthEvents.SessionRevocationReason,
+  ) => Effect.Effect<void>;
   /**
    * BEH-EA-054: exactly the user's *live* sessions — not tombstoned, past
    * neither `absoluteExpiresAt` nor `idleExpiresAt` — newest activity first
@@ -378,6 +402,21 @@ const newestActivityFirst = (
  * user somehow exceeds it.
  */
 export const LIST_LIMIT = 1000;
+
+/** ESA-006: the one `auth.session.issued` both layers publish. */
+const publishIssued = (
+  events: AuthEvents.AuthEventsShape,
+  session: { readonly id: string; readonly userId: UserId },
+  familyId: string,
+  actingAs: Option.Option<ActingAs>,
+) =>
+  events.publish({
+    _tag: "auth.session.issued",
+    sessionId: session.id,
+    userId: session.userId,
+    familyId,
+    ...(Option.isSome(actingAs) ? { actingAs: actingAs.value } : {}),
+  });
 
 interface SessionRow {
   readonly id: SessionId;
@@ -509,6 +548,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             return [created, HashMap.set(withAncestor, id, created)] as const;
           },
         );
+        yield* publishIssued(events, row, row.familyId, row.actingAs);
         return { session: toView(row), token: Redacted.make(`${id}.${secret}`) };
       });
 
@@ -594,17 +634,36 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
               familyId,
               userId: row.value.userId,
             });
+            yield* events.publish({
+              _tag: "auth.session.revoked",
+              userId: row.value.userId,
+              sessionId: null,
+              scope: "family",
+              reason: "reuseDetected",
+            });
           }
           return yield* Effect.fail(
             new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
           );
         }
         if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.absoluteExpiresAt)) {
+          yield* events.publish({
+            _tag: "auth.session.expired",
+            sessionId: id,
+            userId: row.value.userId,
+            kind: "absolute",
+          });
           return yield* Effect.fail(
             new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),
           );
         }
         if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.idleExpiresAt)) {
+          yield* events.publish({
+            _tag: "auth.session.expired",
+            sessionId: id,
+            userId: row.value.userId,
+            kind: "idle",
+          });
           return yield* Effect.fail(
             new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
           );
@@ -665,54 +724,85 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         };
       });
 
-      const revoke: SessionsShape["revoke"] = (id) =>
+      // TIR-008: each primitive removes the row(s) in one `Ref.modify` and
+      // then publishes exactly one `auth.session.revoked` for the call.
+      const removeOne = (
+        userId: UserId | undefined,
+        id: SessionId,
+      ): Effect.Effect<SessionRow, SessionNotFound> =>
         Ref.modify(
           state,
           (
             s,
           ): readonly [
-            Result.Result<void, SessionNotFound>,
-            HashMap.HashMap<SessionId, SessionRow>,
-          ] => {
-            if (!HashMap.has(s, id)) {
-              return [
-                Result.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
-                s,
-              ] as const;
-            }
-            const ok: Result.Result<void, SessionNotFound> = Result.succeed(undefined);
-            return [ok, HashMap.remove(s, id)] as const;
-          },
-        ).pipe(Effect.flatMap(Effect.fromResult));
-
-      const revokeOwned: SessionsShape["revokeOwned"] = (userId, id) =>
-        Ref.modify(
-          state,
-          (
-            s,
-          ): readonly [
-            Result.Result<void, SessionNotFound>,
+            Result.Result<SessionRow, SessionNotFound>,
             HashMap.HashMap<SessionId, SessionRow>,
           ] => {
             const row = HashMap.get(s, id);
-            if (Option.isNone(row) || row.value.userId !== userId) {
+            if (Option.isNone(row) || (userId !== undefined && row.value.userId !== userId)) {
               return [
                 Result.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
                 s,
               ] as const;
             }
-            const ok: Result.Result<void, SessionNotFound> = Result.succeed(undefined);
-            return [ok, HashMap.remove(s, id)] as const;
+            const removed: Result.Result<SessionRow, SessionNotFound> = Result.succeed(row.value);
+            return [removed, HashMap.remove(s, id)] as const;
           },
         ).pipe(Effect.flatMap(Effect.fromResult));
 
-      const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep) =>
-        Ref.update(state, (s) =>
-          HashMap.filter(s, (row, id) => id === keep || row.userId !== userId),
+      const revoke: SessionsShape["revoke"] = (id, reason) =>
+        removeOne(undefined, id).pipe(
+          Effect.flatMap((row) =>
+            events.publish({
+              _tag: "auth.session.revoked",
+              userId: row.userId,
+              sessionId: row.id,
+              scope: "one",
+              reason,
+            }),
+          ),
         );
 
-      const revokeAll: SessionsShape["revokeAll"] = (userId) =>
-        Ref.update(state, (s) => HashMap.filter(s, (row) => row.userId !== userId));
+      const revokeOwned: SessionsShape["revokeOwned"] = (userId, id, reason) =>
+        removeOne(userId, id).pipe(
+          Effect.flatMap((row) =>
+            events.publish({
+              _tag: "auth.session.revoked",
+              userId: row.userId,
+              sessionId: row.id,
+              scope: "one",
+              reason,
+            }),
+          ),
+        );
+
+      const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep, reason) =>
+        Ref.update(state, (s) =>
+          HashMap.filter(s, (row, id) => id === keep || row.userId !== userId),
+        ).pipe(
+          Effect.andThen(
+            events.publish({
+              _tag: "auth.session.revoked",
+              userId,
+              sessionId: null,
+              scope: "others",
+              reason,
+            }),
+          ),
+        );
+
+      const revokeAll: SessionsShape["revokeAll"] = (userId, reason) =>
+        Ref.update(state, (s) => HashMap.filter(s, (row) => row.userId !== userId)).pipe(
+          Effect.andThen(
+            events.publish({
+              _tag: "auth.session.revoked",
+              userId,
+              sessionId: null,
+              scope: "all",
+              reason,
+            }),
+          ),
+        );
 
       const toItem = (row: SessionRow, current: SessionId | undefined): SessionListItem => ({
         id: row.id,
@@ -880,7 +970,9 @@ export const layerSql: Layer.Layer<
       const row = yield* input.supersedes === undefined
         ? persist
         : sql.withTransaction(persist).pipe(Effect.catchTag("SqlError", Effect.die));
-      return { session: toSessionView(row), token: Redacted.make(`${row.id}.${secret}`) };
+      const view = toSessionView(row);
+      yield* publishIssued(events, view, row.familyId, view.actingAs);
+      return { session: view, token: Redacted.make(`${row.id}.${secret}`) };
     });
 
     /**
@@ -959,17 +1051,36 @@ export const layerSql: Layer.Layer<
             familyId,
             userId: UserId(row.userId),
           });
+          yield* events.publish({
+            _tag: "auth.session.revoked",
+            userId: UserId(row.userId),
+            sessionId: null,
+            scope: "family",
+            reason: "reuseDetected",
+          });
         }
         return yield* Effect.fail(
           new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
         );
       }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
+        yield* events.publish({
+          _tag: "auth.session.expired",
+          sessionId: id,
+          userId: UserId(row.userId),
+          kind: "absolute",
+        });
         return yield* Effect.fail(
           new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),
         );
       }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
+        yield* events.publish({
+          _tag: "auth.session.expired",
+          sessionId: id,
+          userId: UserId(row.userId),
+          kind: "idle",
+        });
         return yield* Effect.fail(
           new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
         );
@@ -1023,7 +1134,9 @@ export const layerSql: Layer.Layer<
       };
     });
 
-    const revoke: SessionsShape["revoke"] = (id) =>
+    // TIR-008: each primitive deletes, then publishes exactly one
+    // `auth.session.revoked` for the call.
+    const revoke: SessionsShape["revoke"] = (id, reason) =>
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
@@ -1031,24 +1144,65 @@ export const layerSql: Layer.Layer<
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
-        Effect.flatMap(() => repo.delete(id).pipe(Effect.orDie)),
+        Effect.flatMap((row) =>
+          repo.delete(id).pipe(
+            Effect.orDie,
+            Effect.andThen(
+              events.publish({
+                _tag: "auth.session.revoked",
+                userId: UserId(row.userId),
+                sessionId: id,
+                scope: "one",
+                reason,
+              }),
+            ),
+          ),
+        ),
       );
 
-    const revokeOwned: SessionsShape["revokeOwned"] = (userId, id) =>
+    const revokeOwned: SessionsShape["revokeOwned"] = (userId, id, reason) =>
       repo.deleteOwned(id, userId).pipe(
         Effect.orDie,
         Effect.flatMap((deleted) =>
           deleted
-            ? Effect.void
+            ? events.publish({
+                _tag: "auth.session.revoked",
+                userId,
+                sessionId: id,
+                scope: "one",
+                reason,
+              })
             : Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
         ),
       );
 
-    const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep) =>
-      repo.deleteAllForUserExcept(userId, keep).pipe(Effect.orDie);
+    const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep, reason) =>
+      repo.deleteAllForUserExcept(userId, keep).pipe(
+        Effect.orDie,
+        Effect.andThen(
+          events.publish({
+            _tag: "auth.session.revoked",
+            userId,
+            sessionId: null,
+            scope: "others",
+            reason,
+          }),
+        ),
+      );
 
-    const revokeAll: SessionsShape["revokeAll"] = (userId) =>
-      repo.deleteAllByUser(userId).pipe(Effect.orDie);
+    const revokeAll: SessionsShape["revokeAll"] = (userId, reason) =>
+      repo.deleteAllByUser(userId).pipe(
+        Effect.orDie,
+        Effect.andThen(
+          events.publish({
+            _tag: "auth.session.revoked",
+            userId,
+            sessionId: null,
+            scope: "all",
+            reason,
+          }),
+        ),
+      );
 
     const toItem = (row: SqlModels.Session, current: SessionId | undefined): SessionListItem => ({
       id: SessionId(row.id),
