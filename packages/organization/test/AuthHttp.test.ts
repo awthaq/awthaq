@@ -14,6 +14,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import { TestAuth } from "@awthaq/test";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
@@ -165,7 +166,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
         request(handler, "POST", "/organization", { name: "Acme", slug: "acme" }, { cookie }),
       );
       assert.strictEqual(created.status, 200);
-      const record = (yield* Effect.promise(() => created.json())) as { id: string; slug: string };
+      const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(
+        yield* Effect.promise(() => created.json()),
+      );
       assert.strictEqual(record.slug, "acme");
 
       const fetched = yield* Effect.promise(() =>
@@ -177,7 +180,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
         request(handler, "PATCH", `/organization/${record.id}`, { name: "Acme Inc" }, { cookie }),
       );
       assert.strictEqual(updated.status, 200);
-      const updatedBody = (yield* Effect.promise(() => updated.json())) as { name: string };
+      const updatedBody = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(
+        yield* Effect.promise(() => updated.json()),
+      );
       assert.strictEqual(updatedBody.name, "Acme Inc");
 
       const deleted = yield* Effect.promise(() =>
@@ -219,7 +224,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie: ownerCookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const denied = await request(
       handler,
@@ -251,7 +256,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie: ownerCookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const probes: ReadonlyArray<{ method: string; path: (id: string) => string; body?: unknown }> =
       [
@@ -300,7 +305,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie: ownerCookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
     const probes: ReadonlyArray<{ method: string; path: (id: string) => string; body?: unknown }> =
       [
         { method: "GET", path: (id) => `/organization/${id}/teams` },
@@ -330,7 +335,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie: ownerCookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
     await withServices(
       MembershipRecords.MembershipRecords.use((members) =>
         members.create({
@@ -373,7 +378,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme", metadata: '{"secret":true}' },
       { cookie: ownerCookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const outsider = await handler(
       new Request(`${ORIGIN}/organization/${record.id}`, { headers: { cookie: outsiderCookie } }),
@@ -395,7 +400,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const removed = await request(
       handler,
@@ -417,13 +422,15 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const members = await handler(
       new Request(`${ORIGIN}/organization/${record.id}/members`, { headers: { cookie } }),
     );
     assert.strictEqual(members.status, 200);
-    const rows = (await members.json()) as ReadonlyArray<unknown>;
+    const rows = Schema.decodeUnknownSync(Schema.Array(OrganizationApi.MembershipDto))(
+      await members.json(),
+    );
     assert.strictEqual(rows.length, 1);
   });
 
@@ -437,7 +444,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const set = await request(
       handler,
@@ -452,7 +459,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       new Request(`${ORIGIN}/organization/active`, { headers: { cookie } }),
     );
     assert.strictEqual(active.status, 200);
-    const activeBody = (await active.json()) as { activeOrganizationId: string | null };
+    const activeBody = Schema.decodeUnknownSync(OrganizationApi.ActiveContextDto)(
+      await active.json(),
+    );
     assert.strictEqual(activeBody.activeOrganizationId, record.id);
 
     const activeMember = await handler(
@@ -475,7 +484,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const inviteRes = await request(
       handler,
@@ -485,16 +494,20 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { cookie },
     );
     assert.strictEqual(inviteRes.status, 200);
-    const invitation = (await inviteRes.json()) as { id: string };
-    // MTI-010: neither the emailed token nor its hash ever appears on the wire.
-    assert.notProperty(invitation, "tokenHash");
-    assert.notProperty(invitation, "token");
+    const invitationJson: unknown = await inviteRes.json();
+    // MTI-010: neither the emailed token nor its hash ever appears on the wire (checked on the raw body,
+    // since decoding through the contract would strip an unknown field).
+    assert.notProperty(invitationJson, "tokenHash");
+    assert.notProperty(invitationJson, "token");
+    const invitation = Schema.decodeUnknownSync(OrganizationApi.InvitationDto)(invitationJson);
 
     const listRes = await handler(
       new Request(`${ORIGIN}/organization/${record.id}/invitations`, { headers: { cookie } }),
     );
     assert.strictEqual(listRes.status, 200);
-    const invitations = (await listRes.json()) as ReadonlyArray<unknown>;
+    const invitations = Schema.decodeUnknownSync(Schema.Array(OrganizationApi.InvitationDto))(
+      await listRes.json(),
+    );
     assert.strictEqual(invitations.length, 1);
 
     const cancelRes = await request(
@@ -522,7 +535,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const createRes = await request(
       handler,
@@ -532,13 +545,15 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { cookie },
     );
     assert.strictEqual(createRes.status, 200);
-    const role = (await createRes.json()) as { id: string };
+    const role = Schema.decodeUnknownSync(OrganizationApi.OrgRoleDto)(await createRes.json());
 
     const listRes = await handler(
       new Request(`${ORIGIN}/organization/${record.id}/roles`, { headers: { cookie } }),
     );
     assert.strictEqual(listRes.status, 200);
-    const roles = (await listRes.json()) as ReadonlyArray<unknown>;
+    const roles = Schema.decodeUnknownSync(Schema.Array(OrganizationApi.OrgRoleDto))(
+      await listRes.json(),
+    );
     assert.strictEqual(roles.length, 1);
 
     const deleteRes = await request(
@@ -568,7 +583,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const teamRes = await request(
       handler,
@@ -578,7 +593,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { cookie },
     );
     assert.strictEqual(teamRes.status, 200);
-    const team = (await teamRes.json()) as { id: string };
+    const team = Schema.decodeUnknownSync(OrganizationApi.TeamDto)(await teamRes.json());
 
     const addRes = await request(
       handler,
@@ -595,7 +610,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       }),
     );
     assert.strictEqual(membersRes.status, 200);
-    const members = (await membersRes.json()) as ReadonlyArray<unknown>;
+    const members = Schema.decodeUnknownSync(Schema.Array(OrganizationApi.TeamMembershipDto))(
+      await membersRes.json(),
+    );
     assert.strictEqual(members.length, 1);
 
     const setActiveTeamRes = await request(
@@ -606,7 +623,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { cookie },
     );
     assert.strictEqual(setActiveTeamRes.status, 200);
-    const activeBody = (await setActiveTeamRes.json()) as { activeTeamId: string | null };
+    const activeBody = Schema.decodeUnknownSync(OrganizationApi.ActiveContextDto)(
+      await setActiveTeamRes.json(),
+    );
     assert.strictEqual(activeBody.activeTeamId, team.id);
 
     const removeRes = await request(
@@ -637,7 +656,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie: ownerCookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
     for (const id of ["lead-1", "worker-1"]) {
       await withServices(
         MembershipRecords.MembershipRecords.use((members) =>
@@ -650,12 +669,14 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       );
     }
     const base = `/organization/${record.id}/teams`;
-    const eng = (await (
-      await request(handler, "POST", base, { name: "Eng" }, { cookie: ownerCookie })
-    ).json()) as { id: string };
-    const sales = (await (
-      await request(handler, "POST", base, { name: "Sales" }, { cookie: ownerCookie })
-    ).json()) as { id: string };
+    const eng = Schema.decodeUnknownSync(OrganizationApi.TeamDto)(
+      await (await request(handler, "POST", base, { name: "Eng" }, { cookie: ownerCookie })).json(),
+    );
+    const sales = Schema.decodeUnknownSync(OrganizationApi.TeamDto)(
+      await (
+        await request(handler, "POST", base, { name: "Sales" }, { cookie: ownerCookie })
+      ).json(),
+    );
 
     const promoted = await request(
       handler,
@@ -665,9 +686,10 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { cookie: ownerCookie },
     );
     assert.strictEqual(promoted.status, 200);
-    assert.deepStrictEqual(((await promoted.json()) as { role: ReadonlyArray<string> }).role, [
-      "lead",
-    ]);
+    assert.deepStrictEqual(
+      Schema.decodeUnknownSync(OrganizationApi.TeamMembershipDto)(await promoted.json()).role,
+      ["lead"],
+    );
 
     // The lead staffs their own team ...
     const added = await request(
@@ -728,7 +750,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
     const base = `/organization/${record.id}/teams`;
     const makeTeam = async (name: string, parentId?: string) => {
       const res = await request(
@@ -739,7 +761,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
         { cookie },
       );
       assert.strictEqual(res.status, 200);
-      return (await res.json()) as { id: string; parentId: string | null };
+      return Schema.decodeUnknownSync(OrganizationApi.TeamDto)(await res.json());
     };
     const get = async (path: string, headers: Record<string, string>) =>
       handler(new Request(`${ORIGIN}${path}`, { headers }));
@@ -750,10 +772,18 @@ describe("AuthHttp + Organization (real HTTP)", () => {
 
     const ancestors = await get(`${base}/${platform.id}/ancestors`, { cookie });
     assert.strictEqual(ancestors.status, 200);
-    assert.strictEqual(((await ancestors.json()) as ReadonlyArray<unknown>).length, 1);
+    assert.strictEqual(
+      Schema.decodeUnknownSync(Schema.Array(OrganizationApi.TeamDto))(await ancestors.json())
+        .length,
+      1,
+    );
     const descendants = await get(`${base}/${eng.id}/descendants`, { cookie });
     assert.strictEqual(descendants.status, 200);
-    assert.strictEqual(((await descendants.json()) as ReadonlyArray<unknown>).length, 1);
+    assert.strictEqual(
+      Schema.decodeUnknownSync(Schema.Array(OrganizationApi.TeamDto))(await descendants.json())
+        .length,
+      1,
+    );
 
     // Under its own descendant: 409.
     const cycle = await request(
@@ -777,7 +807,10 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { cookie },
     );
     assert.strictEqual(toRoot.status, 200);
-    assert.strictEqual(((await toRoot.json()) as { parentId: string | null }).parentId, null);
+    assert.strictEqual(
+      Schema.decodeUnknownSync(OrganizationApi.TeamDto)(await toRoot.json()).parentId,
+      null,
+    );
     const removed = await request(handler, "DELETE", `${base}/${eng.id}`, undefined, { cookie });
     assert.strictEqual(removed.status, 204);
 
@@ -792,9 +825,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       const { handler } = buildHandler();
       const openapi = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/openapi.json`)));
       assert.strictEqual(openapi.status, 200);
-      const spec = (yield* Effect.promise(() => openapi.json())) as {
-        paths: Record<string, unknown>;
-      };
+      const spec = Schema.decodeUnknownSync(
+        Schema.Struct({ paths: Schema.Record(Schema.String, Schema.Unknown) }),
+      )(yield* Effect.promise(() => openapi.json()));
       assert.isTrue("/organization" in spec.paths);
       const docs = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/docs`)));
       assert.strictEqual(docs.status, 200);

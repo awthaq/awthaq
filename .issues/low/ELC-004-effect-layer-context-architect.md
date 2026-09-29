@@ -3,7 +3,7 @@ ID: "ELC-004"
 Title: "Every memory layer requires Crypto.Crypto, forcing repeated Layer.provide(NodeCrypto.layer) boilerplate at ~40 composition sites"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/test/Users.test.ts:17"
 Auditor: "effect-layer-context-architect"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `core` · reported by **Effect Layer/Context Architect** (`effect-layer-context-architect`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Ship a shared `@awthaq/test` aggregate (or a `layerMemoryProvided` alias per mod
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `build-tooling-hygiene`. Evidence at HEAD ec065a7: `packages/core/test/Users.test.ts:18`. Fix: Provide ready-made crypto-provided memory aggregates and migrate tests. (effort M). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/test/src/TestAuth.ts: TestAuth.memoryFoundation (Crypto + AuthEvents over AuditLog.layerMemory + Hooks.HooksLive, services stay in the output); MemoryPorts is now built on it. packages/organization/src/OrganizationMemory.ts: OrganizationMemory.layer (the six memory record stores, one Crypto requirement). Tests first: packages/test/test/MemoryFoundation.test.ts and packages/organization/test/OrganizationMemory.test.ts (red: the exports did not exist). Migrated 45 suites/Worlds (admin, oauth, organization, magic-link, two-factor, qadi, webhooks, cli, scim, saml, features Worlds, plugin-template, memory-server example): the four-line Layer.provideMerge(AuthEvents/AuditLog.layerMemory/Hooks.HooksLive/NodeCrypto) group and the six record layerMemory+NodeCrypto lines are now one line each. NodeCrypto.layer sites in packages/*/test + examples/*/test went from 338 to 274 (plus the features Worlds). qadi, webhooks and cli gained @awthaq/test as a devDependency. Raw layers stay for suites that inject their own Crypto. Gates: typecheck, full test (3019 passed), test:bdd (1272 passed), knip, oxlint. Not migrated: packages/core tests (core cannot depend on @awthaq/test) and packages/password/test (would make password and test a dev dependency cycle).

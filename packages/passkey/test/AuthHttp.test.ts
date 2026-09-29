@@ -8,7 +8,7 @@
 // contract, mirroring `@awthaq/password`'s own `AuthHttp.test.ts`.
 // `WebAuthn` is still mocked (`Layer.mock`, BEH-EA-195) — this proves the
 // wire contract, not the cryptography (ticket 02's own job).
-import { Api } from "@awthaq/api";
+import { Api, SessionContract } from "@awthaq/api";
 import { Users, Accounts, Sessions, AuditLog, Hooks, AuthEvents, RateLimits } from "@awthaq/core";
 import { ClientAddress, RateLimiter, WebAuthn } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
@@ -20,6 +20,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
@@ -219,10 +220,9 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         ),
       );
       assert.strictEqual(verifyResponse.status, 200);
-      const body = (yield* Effect.promise(() => verifyResponse.json())) as {
-        id: string;
-        name: string;
-      };
+      const body = Schema.decodeUnknownSync(PasskeyApi.PasskeyCredentialDto)(
+        yield* Effect.promise(() => verifyResponse.json()),
+      );
       assert.strictEqual(body.id, "cred-mock-1");
     }),
   );
@@ -294,12 +294,9 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
           post(handler, "/passkey/authenticate/options", {}),
         );
         assert.strictEqual(authOptionsResponse.status, 200);
-        const { ceremonyId, options } = (yield* Effect.promise(() =>
-          authOptionsResponse.json(),
-        )) as {
-          ceremonyId: string;
-          options: unknown;
-        };
+        const { ceremonyId, options } = Schema.decodeUnknownSync(
+          PasskeyApi.AuthenticateOptionsResult,
+        )(yield* Effect.promise(() => authOptionsResponse.json()));
         const authChallenge = extractChallenge(options);
 
         const verifyResponse = yield* Effect.promise(() =>
@@ -366,9 +363,9 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         const authOptionsResponse = yield* Effect.promise(() =>
           post(handler, "/passkey/authenticate/options", {}),
         );
-        const { ceremonyId, options } = (yield* Effect.promise(() =>
-          authOptionsResponse.json(),
-        )) as { ceremonyId: string; options: unknown };
+        const { ceremonyId, options } = Schema.decodeUnknownSync(
+          PasskeyApi.AuthenticateOptionsResult,
+        )(yield* Effect.promise(() => authOptionsResponse.json()));
         const credential = {
           id: "cred-mock-bearer",
           rawId: "cred-mock-bearer",
@@ -402,7 +399,9 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         );
         assert.strictEqual(verifyResponse.status, 200);
         assert.isNull(verifyResponse.headers.get("set-cookie"));
-        const body = (yield* Effect.promise(() => verifyResponse.json())) as { token?: string };
+        const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* Effect.promise(() => verifyResponse.json()),
+        );
         assert.isString(body.token);
       }),
   );
@@ -414,10 +413,9 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         const optionsResponse = yield* Effect.promise(() =>
           post(handler, "/passkey/authenticate/options", {}),
         );
-        const { ceremonyId, options } = (yield* Effect.promise(() => optionsResponse.json())) as {
-          ceremonyId: string;
-          options: unknown;
-        };
+        const { ceremonyId, options } = Schema.decodeUnknownSync(
+          PasskeyApi.AuthenticateOptionsResult,
+        )(yield* Effect.promise(() => optionsResponse.json()));
         const response = yield* Effect.promise(() =>
           post(handler, "/passkey/authenticate/verify", {
             ceremonyId,
@@ -480,9 +478,9 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
           handler(new Request(`${ORIGIN}/passkey/credentials`, { headers: { cookie } })),
         );
         assert.strictEqual(listResponse.status, 200);
-        const listed = (yield* Effect.promise(() => listResponse.json())) as ReadonlyArray<{
-          id: string;
-        }>;
+        const listed = Schema.decodeUnknownSync(Schema.Array(PasskeyApi.PasskeyCredentialDto))(
+          yield* Effect.promise(() => listResponse.json()),
+        );
         assert.strictEqual(listed.length, 1);
 
         const renameResponse = yield* Effect.promise(() =>
@@ -597,14 +595,16 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
           handler(new Request(`${ORIGIN}/passkey/signals`, { headers: { cookie } })),
         );
         assert.strictEqual(response.status, 200);
-        const body = (yield* Effect.promise(() => response.json())) as {
-          rpId: string;
-          userId: string;
-          allAcceptedCredentialIds: ReadonlyArray<string>;
-        };
+        const body = Schema.decodeUnknownSync(PasskeyApi.PasskeySignalsDto)(
+          yield* Effect.promise(() => response.json()),
+        );
         assert.strictEqual(body.rpId, RP_ID);
         assert.deepStrictEqual(body.allAcceptedCredentialIds, ["cred-signals-1"]);
-        assert.strictEqual(body.userId, (options as { user: { id: string } }).user.id);
+        assert.strictEqual(
+          body.userId,
+          Schema.decodeUnknownSync(PasskeyApi.PublicKeyCredentialCreationOptionsSchema)(options)
+            .user.id,
+        );
       }),
   );
 

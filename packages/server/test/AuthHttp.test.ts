@@ -6,7 +6,7 @@
 // `HttpRouter`, requests built from actual `Request` objects (BEH-EA-085's
 // "any host that hands the application a `Request`" path), and `httpApiStatus`
 // annotations landing on the real response status (BEH-EA-088).
-import { Api, AuthCore } from "@awthaq/api";
+import { AccountContract, Api, AuthCore, SessionContract } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
@@ -187,13 +187,17 @@ describe("AuthHttp + Session (real HTTP)", () => {
 
         const current = yield* send("/session", { token: a.token });
         assert.strictEqual(current.status, 200);
-        const currentBody = (yield* jsonBody(current)) as { id: string; current: boolean };
+        const currentBody = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* jsonBody(current),
+        );
         assert.strictEqual(currentBody.id, a.session.id);
         assert.isTrue(currentBody.current);
 
         const list = yield* send("/session/list", { token: a.token });
         assert.strictEqual(list.status, 200);
-        const listBody = (yield* jsonBody(list)) as ReadonlyArray<unknown>;
+        const listBody = Schema.decodeUnknownSync(Schema.Array(SessionContract.SessionDto))(
+          yield* jsonBody(list),
+        );
         assert.strictEqual(listBody.length, 2);
 
         const signedOut = yield* send("/session/sign-out", { method: "POST", token: a.token });
@@ -234,11 +238,15 @@ describe("AuthHttp + Session (real HTTP)", () => {
 
           const revokeForeign = yield* revoke(foreign.session.id, mine.token);
           assert.strictEqual(revokeForeign.status, 404);
-          const foreignBody = (yield* jsonBody(revokeForeign)) as { _tag: string };
+          const foreignBody = Schema.decodeUnknownSync(SessionContract.SessionNotFound)(
+            yield* jsonBody(revokeForeign),
+          );
 
           const revokeUnknown = yield* revoke("00000000-0000-0000-0000-000000000000", mine.token);
           assert.strictEqual(revokeUnknown.status, 404);
-          const unknownBody = (yield* jsonBody(revokeUnknown)) as { _tag: string };
+          const unknownBody = Schema.decodeUnknownSync(SessionContract.SessionNotFound)(
+            yield* jsonBody(revokeUnknown),
+          );
 
           assert.strictEqual(foreignBody._tag, unknownBody._tag);
 
@@ -419,7 +427,9 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         yield* sendHandled("/session/sign-out", { method: "POST", token });
         const rows = yield* audit.list({ eventTag: "auth.session.revoked" });
         assert.strictEqual(rows.length, 1);
-        const payload = rows[0]?.payload as { reason: string; sessionId: string; scope: string };
+        const payload = Schema.decodeUnknownSync(
+          Schema.Struct({ reason: Schema.String, sessionId: Schema.String, scope: Schema.String }),
+        )(rows[0]?.payload);
         assert.strictEqual(payload.reason, "signOut");
         assert.strictEqual(payload.sessionId, session.id);
         assert.strictEqual(payload.scope, "one");
@@ -521,23 +531,9 @@ describe("GET /user/export (CSG-005)", () => {
             'attachment; filename="account-export.json"',
           );
           assert.strictEqual(response.headers["cache-control"], "no-store");
-          const body = (yield* jsonBody(response)) as {
-            readonly user: {
-              readonly id: string;
-              readonly identity: {
-                readonly _tag: string;
-                readonly email?: string;
-                readonly emailVerified?: boolean;
-              };
-            };
-            readonly accounts: ReadonlyArray<{
-              readonly providerId: string;
-              readonly subject: string;
-            }>;
-            readonly sessions: ReadonlyArray<unknown>;
-            readonly activity: ReadonlyArray<{ readonly event: string }>;
-            readonly sections: Record<string, unknown>;
-          };
+          const body = Schema.decodeUnknownSync(AccountContract.AccountExportDto)(
+            yield* jsonBody(response),
+          );
           assert.strictEqual(body.user.id, user.id);
           assert.deepStrictEqual(body.user.identity, {
             _tag: "Email",
@@ -670,7 +666,9 @@ describe("AuthHttp + Session: point queries never go through list (TIR-003/GC-00
             ),
           );
         assert.strictEqual(response.status, 200);
-        const body = (yield* jsonBody(response)) as { id: string; current: boolean };
+        const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* jsonBody(response),
+        );
         assert.strictEqual(body.id, session.id);
         assert.isTrue(body.current);
       }),
@@ -785,7 +783,9 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
 
         const response = yield* patch(issued.token);
         assert.strictEqual(response.status, 200);
-        const body = (yield* jsonBody(response)) as { name: string };
+        const body = Schema.decodeUnknownSync(AccountContract.AccountDto)(
+          yield* jsonBody(response),
+        );
         assert.strictEqual(body.name, "Ada Lovelace");
 
         const stored = yield* users.findById(user.id);
@@ -824,10 +824,7 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
 
           const ok = yield* patch({ name: "Img", image: "https://cdn.example.com/me.png" });
           assert.strictEqual(ok.status, 200);
-          const body = (yield* jsonBody(ok)) as {
-            identity: { _tag: string; email?: string; emailVerified?: boolean };
-            image: string | null;
-          };
+          const body = Schema.decodeUnknownSync(AccountContract.AccountDto)(yield* jsonBody(ok));
           assert.deepStrictEqual(body.identity, {
             _tag: "Email",
             email: "img@example.com",
@@ -892,11 +889,14 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
           });
           assert.strictEqual(ok.status, 200);
           // The server-only value the user cannot write is readable, alongside what they just wrote.
-          assert.deepStrictEqual(((yield* jsonBody(ok)) as { fields: unknown }).fields, {
-            billing_plan: "pro",
-            billing_nickname: "Countess",
-            billing_seats: 3,
-          });
+          assert.deepStrictEqual(
+            Schema.decodeUnknownSync(AccountContract.AccountDto)(yield* jsonBody(ok)).fields,
+            {
+              billing_plan: "pro",
+              billing_nickname: "Countess",
+              billing_seats: 3,
+            },
+          );
 
           // A server-only field is 403 and, as a whole-patch refusal, leaves the client-writable one unchanged.
           const forbidden = yield* patch({
@@ -918,15 +918,21 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
 
           // Omitting `fields` leaves them; null clears one; the DTO still carries the rest.
           const cleared = yield* patch({ name: "Fields", fields: { billing_nickname: null } });
-          assert.deepStrictEqual(((yield* jsonBody(cleared)) as { fields: unknown }).fields, {
-            billing_plan: "pro",
-            billing_seats: 3,
-          });
+          assert.deepStrictEqual(
+            Schema.decodeUnknownSync(AccountContract.AccountDto)(yield* jsonBody(cleared)).fields,
+            {
+              billing_plan: "pro",
+              billing_seats: 3,
+            },
+          );
           const untouched = yield* patch({ name: "Fields" });
-          assert.deepStrictEqual(((yield* jsonBody(untouched)) as { fields: unknown }).fields, {
-            billing_plan: "pro",
-            billing_seats: 3,
-          });
+          assert.deepStrictEqual(
+            Schema.decodeUnknownSync(AccountContract.AccountDto)(yield* jsonBody(untouched)).fields,
+            {
+              billing_plan: "pro",
+              billing_seats: 3,
+            },
+          );
         }),
       ).pipe(Effect.provide(FieldsAppLayer)),
   );
@@ -958,7 +964,10 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
               ),
             );
           const plain = yield* patch({ name: "None" });
-          assert.deepStrictEqual(((yield* jsonBody(plain)) as { fields: unknown }).fields, {});
+          assert.deepStrictEqual(
+            Schema.decodeUnknownSync(AccountContract.AccountDto)(yield* jsonBody(plain)).fields,
+            {},
+          );
           const refused = yield* patch({ name: "None", fields: { billing_plan: "pro" } });
           assert.strictEqual(refused.status, 422);
         }),
@@ -1080,7 +1089,9 @@ describe("AuthHttp (BEH-EA-085's toWebHandler serving path)", () => {
         handler(new Request("http://localhost/openapi.json")),
       );
       assert.strictEqual(openapi.status, 200);
-      const spec = (yield* Effect.promise(() => openapi.json())) as { paths?: unknown };
+      const spec = Schema.decodeUnknownSync(Schema.Struct({ paths: Schema.Unknown }))(
+        yield* Effect.promise(() => openapi.json()),
+      );
       assert.isDefined(spec.paths);
 
       const docs = yield* Effect.promise(() => handler(new Request("http://localhost/docs")));

@@ -3,7 +3,7 @@ ID: "ETVS-004"
 Title: "TestAuth memory bundle incomplete; memory-Layer assembly duplicated and drifting across suites"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "test"
 Source: "packages/test/src/TestAuth.ts:84"
 Auditor: "effect-testing-vitest-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `test` · reported by **Effect Testing & @effect/vitest Specialist** (`effect-testing-vitest-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -76,3 +76,5 @@ packages/server/test/Cors.test.ts
 packages/jwt/test/AuthHttp.test.ts) is therefore not yet satisfied.
 
 **Plan note (2026-09-29, P20a):** Step 3 (migrating the hand-rolled wire-level suites onto TestAuth.layer) was evaluated and deliberately left open. It is not the mechanical, behavior-preserving move the plan assumed: packages/password, server, oauth, passkey and jwt `AuthHttp.test.ts` each mount only their own plugin API over `AuthHttp.routes` (no core session/account groups, which `TestAuth.layer` always serves), with their own CSRF secret, a capturing Mailer, a stub HttpClient, a specific hasher or a refusing/lagging port. Rewriting them through `Auth.make` + `TestAuth.layer` would change what each suite asserts and would collide with the programs that still edit them. What did land under this issue: the BDD Worlds written in P20a that compose whole applications (CrossCuttingApp, CsrfWorld, HttpErrorWorld, TestingHarnessWorld) are built on `TestAuth.layer`, `TestAuth.layer` gained an optional third argument mounting the OpenAPI document and docs, and every BDD World now shares one cheap-KDF/harness module (`features/step-definitions/shared/Harness.ts`). The remaining migration is best done per suite when its plugin is next reworked.
+
+**Resolved (2026-09-29):** Step 1/2 (bundle completeness, services rename, BDD Worlds composing whole apps on TestAuth.layer) landed earlier (P11/P20a). This pass adds the shared piece the hand-rolled assemblies were duplicating: TestAuth.memoryFoundation (crypto + events + audit + hook defaults) and OrganizationMemory.layer, and moves 45 suites/Worlds onto them (see ELC-004), behavior-preserving (full test + BDD green). What stays on purpose: the wire-level AuthHttp suites of packages/password, server (+Cors), oauth, passkey and jwt still assemble their own memory stack rather than calling TestAuth.layer, because each mounts only its own plugin API over AuthHttp.routes (TestAuth.layer always serves core's session/account groups too) and swaps a port deliberately (capturing Mailer, listless/vanishing Sessions, real argon2id, stub HttpClient, refusing/lagging RateLimiter); rewriting them through Auth.make would change what they assert. They share the foundation line where the package can depend on @awthaq/test (oauth, admin, organization do; password does not, to avoid a password and test dev cycle).

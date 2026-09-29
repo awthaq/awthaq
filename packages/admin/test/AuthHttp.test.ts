@@ -17,6 +17,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
@@ -381,8 +382,9 @@ describe("AuthHttp + Admin (real HTTP)", () => {
           handler(new Request(`${ORIGIN}/admin`, { headers: { cookie: adminCookie } })),
         );
         assert.strictEqual(all.status, 200);
-        type Page = { items: ReadonlyArray<{ reason: string }>; nextCursor: string | null };
-        const allPage = (yield* Effect.promise(() => all.json())) as Page;
+        const allPage = Schema.decodeUnknownSync(AdminApi.ImpersonationPageDto)(
+          yield* Effect.promise(() => all.json()),
+        );
         assert.strictEqual(allPage.items.length, 2);
         assert.isNull(allPage.nextCursor);
 
@@ -390,7 +392,9 @@ describe("AuthHttp + Admin (real HTTP)", () => {
           handler(new Request(`${ORIGIN}/admin?active=true`, { headers: { cookie: adminCookie } })),
         );
         assert.strictEqual(active.status, 200);
-        const activePage = (yield* Effect.promise(() => active.json())) as Page;
+        const activePage = Schema.decodeUnknownSync(AdminApi.ImpersonationPageDto)(
+          yield* Effect.promise(() => active.json()),
+        );
         assert.strictEqual(activePage.items.length, 1);
 
         // ESS-006: keyset paging on the wire — newest first, opaque cursor, bounded limit.
@@ -400,12 +404,18 @@ describe("AuthHttp + Admin (real HTTP)", () => {
           );
         const first = yield* get("?limit=1");
         assert.strictEqual(first.status, 200);
-        const firstPage = (yield* Effect.promise(() => first.json())) as Page;
+        const firstPage = Schema.decodeUnknownSync(AdminApi.ImpersonationPageDto)(
+          yield* Effect.promise(() => first.json()),
+        );
         assert.strictEqual(firstPage.items.length, 1);
-        assert.isString(firstPage.nextCursor);
-        const second = yield* get(`?limit=1&cursor=${firstPage.nextCursor}`);
+        assert.isNotNull(firstPage.nextCursor);
+        const second = yield* get(
+          `?limit=1&cursor=${Schema.encodeSync(AdminApi.CursorSchema)(firstPage.nextCursor)}`,
+        );
         assert.strictEqual(second.status, 200);
-        const secondPage = (yield* Effect.promise(() => second.json())) as Page;
+        const secondPage = Schema.decodeUnknownSync(AdminApi.ImpersonationPageDto)(
+          yield* Effect.promise(() => second.json()),
+        );
         assert.strictEqual(secondPage.items.length, 1);
         assert.isNull(secondPage.nextCursor);
         // Two distinct episodes, no repeat and no gap (the order between them is the
@@ -495,10 +505,9 @@ describe("AuthHttp + Admin (real HTTP)", () => {
           allowed.handler(new Request(`${ORIGIN}/admin/config`, { headers: { cookie } })),
         );
         assert.strictEqual(response.status, 200);
-        const body = (yield* Effect.promise(() => response.json())) as ReadonlyArray<{
-          key: string;
-          entries: ReadonlyArray<{ path: string; value: string; sensitive: boolean }>;
-        }>;
+        const body = Schema.decodeUnknownSync(Schema.Array(AdminApi.ConfigItemDto))(
+          yield* Effect.promise(() => response.json()),
+        );
         assert.isTrue(body.some((item) => item.key === "awthaq/core/SessionConfig"));
         // Whatever the descriptors list, a sensitive leaf is only ever `<redacted>`.
         for (const item of body) {
@@ -548,17 +557,18 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         // Keyset paging on the wire.
         const page1 = yield* send("GET", "/admin/users?limit=1");
         assert.strictEqual(page1.status, 200);
-        const body1 = (yield* Effect.promise(() => page1.json())) as {
-          items: ReadonlyArray<{ id: string }>;
-          nextCursor: string | null;
-        };
+        const body1 = Schema.decodeUnknownSync(AdminApi.UserPageDto)(
+          yield* Effect.promise(() => page1.json()),
+        );
         assert.strictEqual(body1.items.length, 1);
-        assert.isString(body1.nextCursor);
-        const page2 = yield* send("GET", `/admin/users?limit=1&cursor=${body1.nextCursor}`);
-        const body2 = (yield* Effect.promise(() => page2.json())) as {
-          items: ReadonlyArray<{ id: string }>;
-          nextCursor: string | null;
-        };
+        assert.isNotNull(body1.nextCursor);
+        const page2 = yield* send(
+          "GET",
+          `/admin/users?limit=1&cursor=${Schema.encodeSync(AdminApi.UserCursorSchema)(body1.nextCursor)}`,
+        );
+        const body2 = Schema.decodeUnknownSync(AdminApi.UserPageDto)(
+          yield* Effect.promise(() => page2.json()),
+        );
         assert.strictEqual(body2.items.length, 1);
         assert.notStrictEqual(body2.items[0]?.id, body1.items[0]?.id);
         assert.strictEqual((yield* send("GET", "/admin/users?limit=0")).status, 400);
@@ -570,7 +580,8 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         const patched = yield* send("PATCH", `/admin/users/${targetId}`, { name: "Renamed" });
         assert.strictEqual(patched.status, 200);
         assert.strictEqual(
-          ((yield* Effect.promise(() => patched.json())) as { name: string }).name,
+          Schema.decodeUnknownSync(AdminApi.UserDto)(yield* Effect.promise(() => patched.json()))
+            .name,
           "Renamed",
         );
         assert.strictEqual(
@@ -643,12 +654,9 @@ describe("AuthHttp + Admin (real HTTP)", () => {
           ),
         );
         assert.strictEqual(banned.status, 200);
-        const bannedBody = (yield* Effect.promise(() => banned.json())) as {
-          status: string;
-          statusReason: string | null;
-          suspendedUntil: string | null;
-          identity: { _tag: string };
-        };
+        const bannedBody = Schema.decodeUnknownSync(AdminApi.UserDto)(
+          yield* Effect.promise(() => banned.json()),
+        );
         assert.strictEqual(bannedBody.status, "suspended");
         assert.strictEqual(bannedBody.statusReason, "abuse");
         assert.strictEqual(bannedBody.suspendedUntil, "2999-01-01T00:00:00.000Z");
@@ -668,7 +676,8 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         );
         assert.strictEqual(unbanned.status, 200);
         assert.strictEqual(
-          ((yield* Effect.promise(() => unbanned.json())) as { status: string }).status,
+          Schema.decodeUnknownSync(AdminApi.UserDto)(yield* Effect.promise(() => unbanned.json()))
+            .status,
           "active",
         );
 
@@ -733,9 +742,9 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         const { handler } = buildHandler(allow);
         const openapi = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/openapi.json`)));
         assert.strictEqual(openapi.status, 200);
-        const spec = (yield* Effect.promise(() => openapi.json())) as {
-          paths: Record<string, unknown>;
-        };
+        const spec = Schema.decodeUnknownSync(
+          Schema.Struct({ paths: Schema.Record(Schema.String, Schema.Unknown) }),
+        )(yield* Effect.promise(() => openapi.json()));
         assert.isTrue("/admin/impersonate/{userId}" in spec.paths);
         const docs = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/docs`)));
         assert.strictEqual(docs.status, 200);

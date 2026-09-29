@@ -17,7 +17,7 @@
 // only actually runs as part of the full handled-request lifecycle
 // (`HttpEffect.toHandled`'s `sendResponse`), which `toWebHandler` goes
 // through and a bare `router.asHttpEffect()` call does not.
-import { Api } from "@awthaq/api";
+import { Api, SessionContract } from "@awthaq/api";
 import {
   AuditLog,
   Hooks,
@@ -38,6 +38,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as Ref from "effect/Ref";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpClient from "effect/unstable/http/HttpClient";
@@ -238,7 +239,9 @@ describe("AuthHttp + Password (real HTTP)", () => {
         post(handler, "/password/sign-up", { email: "ada@example.com", password: strongPassword }),
       );
       assert.strictEqual(response.status, 200);
-      const body = (yield* Effect.promise(() => response.json())) as { current: boolean };
+      const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+        yield* Effect.promise(() => response.json()),
+      );
       assert.isTrue(body.current);
       assert.match(cookieFrom(response), /^__Host-session=/);
     }),
@@ -266,13 +269,15 @@ describe("AuthHttp + Password (real HTTP)", () => {
           );
         const plain = yield* signUp("ua-plain@example.com", "TestBrowser/1.0");
         assert.strictEqual(plain.status, 200);
-        const plainBody = (yield* Effect.promise(() => plain.json())) as {
-          userAgent: string | null;
-        };
+        const plainBody = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* Effect.promise(() => plain.json()),
+        );
         assert.strictEqual(plainBody.userAgent, "TestBrowser/1.0");
 
         const long = yield* signUp("ua-long@example.com", "x".repeat(2000));
-        const longBody = (yield* Effect.promise(() => long.json())) as { userAgent: string | null };
+        const longBody = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* Effect.promise(() => long.json()),
+        );
         assert.strictEqual(longBody.userAgent?.length, 512);
       }),
   );
@@ -670,7 +675,9 @@ describe("AuthHttp + Password (real HTTP)", () => {
           handler(new Request("http://localhost/openapi.json")),
         );
         assert.strictEqual(openapi.status, 200);
-        const spec = (yield* Effect.promise(() => openapi.json())) as { paths?: unknown };
+        const spec = Schema.decodeUnknownSync(Schema.Struct({ paths: Schema.Unknown }))(
+          yield* Effect.promise(() => openapi.json()),
+        );
         assert.isDefined(spec.paths);
 
         const docs = yield* Effect.promise(() => handler(new Request("http://localhost/docs")));
@@ -785,7 +792,9 @@ describe("AuthHttp + Password (real HTTP)", () => {
         ),
       );
       assert.strictEqual(response.status, 200);
-      const body = (yield* Effect.promise(() => response.json())) as { userAgent: string | null };
+      const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+        yield* Effect.promise(() => response.json()),
+      );
       assert.strictEqual(body.userAgent, "AwthaqTest/1.0");
     }),
   );
@@ -809,7 +818,9 @@ describe("AuthHttp + Password (real HTTP)", () => {
         assert.strictEqual(signedUp.status, 200);
         assert.isNull(signedUp.headers.get("set-cookie"));
         assert.match(signedUp.headers.get("cache-control") ?? "", /no-store/);
-        const body = (yield* Effect.promise(() => signedUp.json())) as { token?: string };
+        const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* Effect.promise(() => signedUp.json()),
+        );
         assert.isString(body.token);
 
         // The bearer token is a real credential: it authenticates change-password.
@@ -831,7 +842,9 @@ describe("AuthHttp + Password (real HTTP)", () => {
         );
         assert.strictEqual(changed.status, 200);
         assert.isNull(changed.headers.get("set-cookie"));
-        const rotated = (yield* Effect.promise(() => changed.json())) as { token?: string };
+        const rotated = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* Effect.promise(() => changed.json()),
+        );
         assert.isString(rotated.token);
         assert.notStrictEqual(rotated.token, body.token);
       }),
@@ -856,8 +869,10 @@ describe("AuthHttp + Password (real HTTP)", () => {
       );
       assert.strictEqual(response.status, 200);
       assert.match(cookieFrom(response), /^__Host-session=/);
-      const body = (yield* Effect.promise(() => response.json())) as Record<string, unknown>;
-      assert.notProperty(body, "token");
+      const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+        yield* Effect.promise(() => response.json()),
+      );
+      assert.isUndefined(body.token);
     }),
   );
 
@@ -883,7 +898,9 @@ describe("AuthHttp + Password (real HTTP)", () => {
       );
       assert.strictEqual(response.status, 200);
       assert.isNull(response.headers.get("set-cookie"));
-      const body = (yield* Effect.promise(() => response.json())) as { token?: string };
+      const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+        yield* Effect.promise(() => response.json()),
+      );
       assert.isString(body.token);
     }),
   );
