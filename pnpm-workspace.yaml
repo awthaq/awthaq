@@ -21,8 +21,8 @@ catalog:
   "@effect/sql-libsql": 4.0.0-rc.116
   "@effect/vitest": 4.0.0-rc.116
   "@effect/atom-react": 4.0.0-rc.116
-  vitest: 5.0.0
-  "@vitest/coverage-v8": 5.0.0
+  vitest: 5.0.2
+  "@vitest/coverage-v8": 5.0.2
   # Exact, like `@effect/tsgo` below: `effect-tsgo patch` (the root `prepare`) patches the
   # installed typescript binary for one specific pairing, so a caret range here could
   # drift the pair apart on a lockfile refresh (MM-003). Bump both together.
