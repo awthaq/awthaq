@@ -3,7 +3,7 @@ ID: "ETVS-006"
 Title: "Next-package tests share one ManagedRuntime and mutate TestClock across test cases"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/test/GetSession.test.ts:102"
 Auditor: "effect-testing-vitest-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `next` · reported by **Effect Testing & @effect/vitest Specialist** (`effect-testing-vitest-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -44,3 +44,5 @@ Give each clock-advancing case its own ManagedRuntime (as HasSessionCookie does)
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `next-getsession-hardening`. Evidence at HEAD ec065a7: `packages/next/test/GetSession.test.ts:40`. Fix: Per-case runtimes for clock-mutating cases and deterministic disposal everywhere. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** GetSession.test.ts uses a withRuntime(layer, body) helper (fresh ManagedRuntime per case, disposed in finally); HasSessionCookie.test.ts disposes in finally; next project passes under --sequence.shuffle. Note: RRS-002's 'import tests from ../src/index.ts' is done as a dynamic-import public-surface test because oxlint's no-import-from-barrel-package forbids static barrel imports in tests.

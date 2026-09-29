@@ -3,7 +3,7 @@ ID: "RRS-002"
 Title: "Next.js RSC path rotates the session secret then discards the rotated token — undeliverable rotation hard-logs the user out"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/src/GetSession.ts:83"
 Auditor: "refresh-token-rotation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `correctness` · `next` · reported by **Refresh Token Rotation Specialist** (`refresh-token-rotation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -58,3 +58,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/next/src/GetSession.ts:77-83` matches the evidence (the "rotated is intentionally discarded here" comment), and `.scratch/upstream-hardening/issues/01-session-token-rotation.md` confirms the team deliberately chose immediate invalidation with no grace window, delivering rotation only via `Set-Cookie`/`set-auth-token` on real HTTP responses — a path the RSC render cannot use. `sessions.verify`'s rotation therefore is genuinely undeliverable here, matching the claimed hard-logout. The recommended fix (a read-only verify variant skipping rotation on this path) is concretely scoped and follows the already-decided no-grace-window policy rather than reopening it. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `next-getsession-hardening`. Evidence at HEAD ec065a7: `packages/next/src/GetSession.ts:90`. Fix: Finish the ticket-16 design: export `applyRotatedSession`, fix the README snippet, and test through the public entry. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`.
+
+**Resolved (2026-09-29):** packages/next/src/index.ts now exports applyRotatedSession (test imports go through ../src/index.ts; red = TS2305 before the export); README snippet imports headers. Pure-RSC rotation limit unchanged (ticket 16). Gates: typecheck, next tests under --sequence.shuffle, full suite.

@@ -3,7 +3,7 @@ ID: "NSA-006"
 Title: "parseSetCookie percent-decodes values browsers would store verbatim, and NaN/Invalid Date options can reach the jar"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/src/WithNextCookies.ts:70"
 Auditor: "nextjs-server-actions-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `next` · reported by **Next.js Server Actions Auth Specialist** (`nextjs-server-actions-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Write the raw value verbatim (or document the decode as load-bearing), and guard
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `next-getsession-hardening`. Evidence at HEAD ec065a7: `packages/next/src/WithNextCookies.ts:69`. Fix: Pass the Set-Cookie value through verbatim and drop invalid numeric/date attributes. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** WithNextCookies.parseSetCookie drops non-numeric/empty Max-Age and unparseable Expires; value decode kept and documented as the exact inverse of Next's encodeURIComponent write (verified against @edge-runtime/cookies semantics; next is not installed here so it is asserted via a re-encoding round-trip test). Tests added in WithNextCookies.test.ts.

@@ -3,7 +3,7 @@ ID: "RSC-007"
 Title: "getSession resolves three services strictly sequentially in the RSC hot path"
 Level: low
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/src/GetSession.ts:83"
 Auditor: "react-server-components-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `performance` · `next` · reported by **React Server Components Auth Specialist** (`react-server-components-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Run user and principal fetches with Effect.all after verify: const [user, princi
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `next-getsession-hardening`. Evidence at HEAD ec065a7: `packages/next/src/GetSession.ts:90`. Fix: Run the two post-verify lookups concurrently. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** GetSession.resolve runs users.findById and resolver.resolve under Effect.all({concurrency:'unbounded'}); new GetSession test gates findById on the resolver (red = 'deadlock' with concurrency 1, green concurrent). Gates: typecheck, tests, oxlint.
