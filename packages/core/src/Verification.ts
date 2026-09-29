@@ -126,6 +126,15 @@ export type IssueInput = {
     }
 );
 
+/** PV-220: see `VerificationShape.recordMiss`. */
+export interface ConsumeOptions {
+  /**
+   * The caller consumes inside its own transaction and will call `recordMiss` after it: a miss
+   * then records nothing here, because a failing transaction would roll the record back too.
+   */
+  readonly deferMiss?: boolean | undefined;
+}
+
 export interface VerificationShape {
   /** BEH-EA-057/060/061: mints a token scoped to `identifier`, hashed at rest. */
   readonly issue: (
@@ -145,7 +154,16 @@ export interface VerificationShape {
   readonly consume: (
     identifier: string,
     value: Redacted.Redacted<string>,
+    options?: ConsumeOptions,
   ) => Effect.Effect<VerificationTokenView, TokenConsumed | StoreUnavailable>;
+  /**
+   * PV-220: what a failed `consume(..., { deferMiss: true })` left unrecorded: the spent attempt
+   * (`layerSql`) and the `auth.token.replay` event, and with it the durable audit row. Run it once
+   * the caller's own transaction has ended (rolled back), so the record is not undone with it. Only
+   * for a `consume` that itself failed, never after a hit: it would spend an attempt against a live
+   * token and report a replay that did not happen.
+   */
+  readonly recordMiss: (identifier: string) => Effect.Effect<void, StoreUnavailable>;
   /**
    * BEH-EA-063: `true` only for the first reservation of `identifier` while
    * unexpired, `false` for every later one — independent of `consume`, used
@@ -299,7 +317,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
       );
 
       const consume: VerificationShape["consume"] = Effect.fnUntraced(
-        function* (identifier, value) {
+        function* (identifier, value, options) {
           const now = yield* DateTime.now;
           const presentedHash = yield* hash(Redacted.value(value));
           // BEH-EA-062: the row is removed by the same atomic step that reads
@@ -366,12 +384,22 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           // BEH-EA-059: every failed consumption — expired, unknown, or
           // already-consumed — publishes the same `auth.token.replay` event,
           // uniformly, before the caller ever sees `TokenConsumed`.
+          // PV-220: a caller consuming inside its own transaction publishes it after (`recordMiss`).
           return yield* Effect.fromResult(outcome).pipe(
-            Effect.tapError(() => events.publish({ _tag: "auth.token.replay", identifier })),
+            Effect.tapError(() =>
+              options?.deferMiss === true
+                ? Effect.void
+                : events.publish({ _tag: "auth.token.replay", identifier }),
+            ),
           );
         },
         Effect.catchTag("PlatformError", storeUnavailable("Verification.consume")),
       );
+
+      // The memory attempt budget is spent inside `consume`'s own atomic `Ref.modify` (there is no
+      // transaction here to roll it back), so only the event is left to record.
+      const recordMiss: VerificationShape["recordMiss"] = (identifier) =>
+        events.publish({ _tag: "auth.token.replay", identifier });
 
       const reserve: VerificationShape["reserve"] = Effect.fnUntraced(function* (input) {
         const now = yield* DateTime.now;
@@ -420,7 +448,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           return tokens + reserved;
         });
 
-      return { issue, consume, reserve, deleteAllByUser, purgeExpired };
+      return { issue, consume, recordMiss, reserve, deleteAllByUser, purgeExpired };
     }),
   );
 
@@ -480,7 +508,7 @@ export const layerSql = Layer.effect(
     );
 
     const consume: VerificationShape["consume"] = Effect.fnUntraced(
-      function* (identifier, value) {
+      function* (identifier, value, options) {
         const now = yield* DateTime.now;
         const presentedHash = yield* hash(Redacted.value(value));
         // BEH-EA-058/062: one atomic `UPDATE ... RETURNING` decides win or
@@ -499,17 +527,37 @@ export const layerSql = Layer.effect(
         });
         // SOS-004: a miss against a live budgeted row spends one attempt (one atomic
         // statement; a row with no budget, an unknown or an expired one is untouched).
-        if (Option.isNone(claimed)) yield* repo.recordFailedAttempt({ identifier, now });
+        // PV-220: a caller consuming inside its own transaction (`deferMiss`) records the spent
+        // attempt and the event itself once that transaction has ended (`recordMiss`): written
+        // here they would roll back with the failure that follows.
+        const deferred = options?.deferMiss === true;
+        if (Option.isNone(claimed) && !deferred) {
+          yield* repo.recordFailedAttempt({ identifier, now });
+        }
         // BEH-EA-059: every failed consumption publishes the same
         // `auth.token.replay` event, uniformly, before the caller ever sees
         // `TokenConsumed`.
         return yield* Effect.fromResult(outcome).pipe(
-          Effect.tapError(() => events.publish({ _tag: "auth.token.replay", identifier })),
+          Effect.tapError(() =>
+            deferred ? Effect.void : events.publish({ _tag: "auth.token.replay", identifier }),
+          ),
         );
       },
       Effect.catchTags({
         PlatformError: storeUnavailable("Verification.consume"),
         SqlError: storeUnavailable("Verification.consume"),
+        SchemaError: Effect.die,
+      }),
+    );
+
+    const recordMiss: VerificationShape["recordMiss"] = Effect.fnUntraced(
+      function* (identifier) {
+        const now = yield* DateTime.now;
+        yield* repo.recordFailedAttempt({ identifier, now });
+        yield* events.publish({ _tag: "auth.token.replay", identifier });
+      },
+      Effect.catchTags({
+        SqlError: storeUnavailable("Verification.recordMiss"),
         SchemaError: Effect.die,
       }),
     );
@@ -550,6 +598,6 @@ export const layerSql = Layer.effect(
         ),
       ]).pipe(Effect.map(([tokens, reserved]) => tokens + reserved));
 
-    return { issue, consume, reserve, deleteAllByUser, purgeExpired };
+    return { issue, consume, recordMiss, reserve, deleteAllByUser, purgeExpired };
   }),
 );

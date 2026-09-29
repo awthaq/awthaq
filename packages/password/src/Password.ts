@@ -362,6 +362,14 @@ const VERIFY_TTL = Duration.hours(24);
 /** PHS-004: internal only — routed to `onUnavailable` by `isBreached`, never surfaced. */
 class MalformedBreachResponse extends Data.TaggedError("MalformedBreachResponse")<{}> {}
 
+/**
+ * PV-220: internal only. A token that missed while consumed inside a transaction; the transaction
+ * rolls back with it, and the miss is recorded (`Verification.recordMiss`) after that, outside it.
+ */
+class TokenMissed extends Data.TaggedError("Password/TokenMissed")<{
+  readonly identifier: string;
+}> {}
+
 /** One HIBP range line: the 35-hex-character SHA-1 suffix and its breach count. */
 const HIBP_LINE = /^[0-9A-F]{35}:\d+$/i;
 
@@ -741,6 +749,22 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const accounts = yield* Accounts.Accounts;
       const sessions = yield* Sessions.Sessions;
       const verification = yield* Verification.Verification;
+      // PV-220: `confirmReset`, `verifyEmail` and `confirmEmailChange` consume inside a
+      // transaction that a bad token fails, which would roll back the replay audit row (and, over
+      // SQL, the attempt a miss spends) written inline. A miss is instead reported as `TokenMissed`
+      // and recorded by `settleMiss` after the transaction has ended.
+      const consumeInTransaction = (identifier: string, value: Redacted.Redacted<string>) =>
+        verification
+          .consume(identifier, value, { deferMiss: true })
+          .pipe(
+            Effect.catchTag("Verification/TokenConsumed", () =>
+              Effect.fail(new TokenMissed({ identifier })),
+            ),
+          );
+      const settleMiss = (missed: TokenMissed) =>
+        verification
+          .recordMiss(missed.identifier)
+          .pipe(Effect.andThen(Effect.fail(new PasswordApi.TokenConsumed())));
       const hasher = yield* PasswordHasher.PasswordHasher;
       const mailer = yield* Mailer.Mailer;
       const events = yield* AuthEvents.AuthEvents;
@@ -1333,14 +1357,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const userId = yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
-              const consumed = yield* verification
-                .consume(identifier, value)
-                .pipe(
-                  Effect.catchTag(
-                    "Verification/TokenConsumed",
-                    () => new PasswordApi.TokenConsumed(),
-                  ),
-                );
+              const consumed = yield* consumeInTransaction(identifier, value);
               // ARF-009: the user comes from the consumed row, never from the
               // token; a row with none is no reset token this plugin issued.
               if (Option.isNone(consumed.userId)) {
@@ -1421,7 +1438,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               return userId;
             }),
           )
-          .pipe(Effect.catchTag("SqlError", Effect.die));
+          .pipe(
+            Effect.catchTag("SqlError", Effect.die),
+            Effect.catchTag("Password/TokenMissed", settleMiss),
+          );
         // ALF-004: published only after the transaction above has actually
         // committed — mirroring `signUp`'s own `auth.user.created`
         // placement, never inside the transaction itself.
@@ -1452,14 +1472,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const verifiedUserId = yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
-              const consumed = yield* verification
-                .consume(identifier, value)
-                .pipe(
-                  Effect.catchTag(
-                    "Verification/TokenConsumed",
-                    () => new PasswordApi.TokenConsumed(),
-                  ),
-                );
+              const consumed = yield* consumeInTransaction(identifier, value);
               // ARF-009: the user comes from the consumed row, not the token.
               if (Option.isNone(consumed.userId)) {
                 return yield* Effect.fail(new PasswordApi.TokenConsumed());
@@ -1487,7 +1500,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               return userId;
             }),
           )
-          .pipe(Effect.catchTag("SqlError", Effect.die));
+          .pipe(
+            Effect.catchTag("SqlError", Effect.die),
+            Effect.catchTag("Password/TokenMissed", settleMiss),
+          );
         // ARF-006: after the commit, like `resetCompleted`.
         yield* events.publish({ _tag: "auth.user.emailVerified", userId: verifiedUserId });
       });
@@ -1539,14 +1555,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           const changed = yield* sqlTransaction
             .withTransaction(
               Effect.gen(function* () {
-                const consumed = yield* verification
-                  .consume(identifier, value)
-                  .pipe(
-                    Effect.catchTag(
-                      "Verification/TokenConsumed",
-                      () => new PasswordApi.TokenConsumed(),
-                    ),
-                  );
+                const consumed = yield* consumeInTransaction(identifier, value);
                 const newEmail = EmailChange.newEmailOf(consumed.payload);
                 if (Option.isNone(consumed.userId) || Option.isNone(newEmail)) {
                   return yield* Effect.fail(new PasswordApi.TokenConsumed());
@@ -1577,7 +1586,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 return { userId, previous: Users.emailOf(before) };
               }),
             )
-            .pipe(Effect.catchTag("SqlError", Effect.die));
+            .pipe(
+              Effect.catchTag("SqlError", Effect.die),
+              Effect.catchTag("Password/TokenMissed", settleMiss),
+            );
           yield* events.publish({ _tag: "auth.user.emailChanged", userId: changed.userId });
           // The previous address learns of the change (a takeover signal) — dispatched, never
           // awaited, and carrying nothing but the template.

@@ -201,9 +201,10 @@ const probesLayer = (probes: Probes) => {
       const real = yield* Verification.Verification;
       return Verification.Verification.of({
         ...real,
-        consume: (identifier, value) =>
+        // PV-220: the options ride through (`deferMiss`), or a transactional caller's miss would be recorded twice.
+        consume: (identifier, value, options) =>
           sighting(probes, "Verification.consume").pipe(
-            Effect.andThen(real.consume(identifier, value)),
+            Effect.andThen(real.consume(identifier, value, options)),
           ),
       });
     }),

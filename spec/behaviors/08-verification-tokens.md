@@ -73,6 +73,8 @@ REQUIREMENT: A consumption attempt against a token that has already been
 
 `archive/design/usage-examples-v4.md` §6.2 documents the exact response shape (`410 TokenConsumed`) alongside the event. Without a distinguishable, queryable signal, an attacker probing stale reset or verification links is indistinguishable from ordinary user error in any downstream monitoring; publishing the event is designed to make replay attempts a first-class operational signal, independent of whatever the audit table separately records (see [13-events.md](13-events.md#beh-ea-100-the-audit-table-is-the-durable-record-of-record-independent-of-the-pubsub-stream)).
 
+**As shipped (PV-220):** an endpoint that consumes inside its own transaction (`Password.confirmReset`/`verifyEmail`/`confirmEmailChange`) fails that transaction with the replay itself, so a row written inline would roll back with it. Such a caller passes `consume(identifier, value, { deferMiss: true })` (which then records nothing) and calls `Verification.recordMiss(identifier)` after the transaction has ended; `recordMiss` writes the `auth.token.replay` event and durable audit row and, over SQL, spends the attempt a budgeted token is owed (REQ-EA-688, `packages/core/test/Verification.test.ts`).
+
 ## BEH-EA-060: A verification token is hashed at rest
 
 ```text

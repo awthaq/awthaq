@@ -3,7 +3,7 @@ ID: "TTE-009"
 Title: "HTTP tests assert against untyped JSON casts instead of contract schemas"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/test/AuthHttp.test.ts:252"
 Auditor: "typescript-type-level-engineer"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `admin` · reported by **TypeScript Type-Level Engineer** (`typescript-type-level-engineer`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Decode responses through the `@awthaq/api` contract schemas (the same `Schema.de
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `package-and-test-hygiene`. Evidence at HEAD ec065a7: `packages/admin/test/AuthHttp.test.ts:293`. Fix: Decode HTTP test responses through the contract schemas instead of casting. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** The password, server, organization, passkey and admin AuthHttp suites no longer cast response.json(): each body is decoded with Schema.decodeUnknownSync against the contract class it is served as (SessionContract.SessionDto, AccountContract.AccountDto/AccountExportDto, OrganizationApi.*Dto, PasskeyApi.PasskeyCredentialDto/AuthenticateOptionsResult/PasskeySignalsDto, AdminApi.UserPageDto/ImpersonationPageDto/ConfigItemDto/UserDto), so shape drift fails at the decode step. Keyset cursors are re-encoded with the contract's cursor schemas when paging (exercising them). Raw-wire checks stay on the raw body where decoding would hide the point (the invitation's tokenHash/token absence, MTI-010). The remaining casts in these files are the ReadonlyArray<string> constant for CSRF allowedOrigins, not wire data. Suites green (868 tests), typecheck (tsconfig.test.json) clean.

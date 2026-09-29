@@ -19,6 +19,7 @@ import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
@@ -576,5 +577,85 @@ describe("Verification infrastructure failures (MA-004)", () => {
         .pipe(Effect.flip);
       assert.strictEqual(consumeFailure._tag, "StoreUnavailable");
     }).pipe(Effect.provide(BrokenCryptoLayer)),
+  );
+});
+
+// PV-220: a consume that fails inside the caller's transaction must not lose what a miss records.
+// Both the replay audit row and (over SQL) the spent attempt are written by `recordMiss`, which the
+// caller runs once its transaction has rolled back; `consume(..., { deferMiss: true })` records nothing.
+describe("Verification deferred miss (PV-220)", () => {
+  const SqlAuditLayer = Verification.layerSql.pipe(
+    Layer.provide(Repositories.VerificationRepositoryLive),
+    Layer.provide(Repositories.VerificationReservationsRepositoryLive),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
+
+  const replayRows = Effect.flatMap(AuditLog.AuditLog, (log) =>
+    log.list({ eventTag: "auth.token.replay" }),
+  );
+
+  it.effect(
+    "layerSql: a miss inside a failing transaction records nothing until recordMiss runs after it",
+    () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const sql = yield* SqlClient.SqlClient;
+        const identifier = "verify-email:pv220";
+        const failed = yield* sql
+          .withTransaction(
+            verification.consume(identifier, Redacted.make("nope"), { deferMiss: true }),
+          )
+          .pipe(Effect.flip);
+        assert.strictEqual(failed._tag, "Verification/TokenConsumed");
+        assert.strictEqual((yield* replayRows).length, 0);
+        yield* verification.recordMiss(identifier);
+        const rows = yield* replayRows;
+        assert.strictEqual(rows.length, 1);
+        assert.deepStrictEqual(rows[0]?.payload, { _tag: "auth.token.replay", identifier });
+      }).pipe(Effect.provide(SqlAuditLayer)),
+  );
+
+  it.effect(
+    "layerSql: attempts spent by misses recorded after the rollback still burn a budgeted token",
+    () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const sql = yield* SqlClient.SqlClient;
+        const identifier = "email-otp:pv220@example.com";
+        const { value } = yield* verification.issue({
+          identifier,
+          ttl: Duration.minutes(5),
+          format: { _tag: "Numeric", digits: 6 },
+          maxAttempts: 2,
+        });
+        const wrong = Redacted.make(Redacted.value(value) === "000000" ? "111111" : "000000");
+        for (let i = 0; i < 2; i += 1) {
+          yield* sql
+            .withTransaction(verification.consume(identifier, wrong, { deferMiss: true }))
+            .pipe(Effect.flip);
+          yield* verification.recordMiss(identifier);
+        }
+        const late = yield* verification.consume(identifier, value).pipe(Effect.flip);
+        assert.strictEqual(late._tag, "Verification/TokenConsumed");
+      }).pipe(Effect.provide(SqlAuditLayer)),
+  );
+
+  it.effect(
+    "layerMemory: deferMiss publishes nothing and recordMiss publishes one replay row",
+    () =>
+      Effect.gen(function* () {
+        const verification = yield* Verification.Verification;
+        const identifier = "verify-email:pv220-memory";
+        yield* verification
+          .consume(identifier, Redacted.make("nope"), { deferMiss: true })
+          .pipe(Effect.flip);
+        assert.strictEqual((yield* replayRows).length, 0);
+        yield* verification.recordMiss(identifier);
+        assert.strictEqual((yield* replayRows).length, 1);
+      }).pipe(Effect.provide(MemoryLayer)),
   );
 });
