@@ -131,10 +131,18 @@ REQUIREMENT: `ObligationHandlers.reauth` MUST compare the current session's
              `authenticatedAt` timestamp to the obligation's `maxAgeSeconds`
              and MUST fail with a typed re-authentication error when stale; it
              MUST NOT accept a session merely because it is currently valid,
-             independent of when it was last authenticated.
+             independent of when it was last authenticated. A `reauth`
+             obligation the handler cannot interpret (no finite, non-negative
+             numeric `maxAgeSeconds`) MUST fail loudly rather than discharge,
+             and among several `reauth` duties the strictest window wins.
+             The re-authentication error MUST be wire-decodable
+             (`Api.ReauthRequired`, `{ maxAgeSeconds }`, HTTP 403) so a client
+             can tell it from a plain permission denial.
 ```
 
 `usage-qadi.md` §8 states the mechanism directly: the handler "reads `CurrentPrincipal`'s session, compares `authenticatedAt` to the obligation's `maxAgeSeconds`, and fails with a typed error the client maps to a 'confirm your password' screen." This is the step-up authentication pattern applied through qadi's obligation mechanism rather than as a bespoke check in the `changeEmail` handler — the handler declares the requirement (`obliged(reauth, ...)`) and awthaq supplies the one discharge implementation every such requirement uses.
+
+**Wire shape and the Path A / Path B split (EEM-005).** The error is a shared `Schema.TaggedError` in `@awthaq/api`, not a plain `Data.TaggedError`: a Path A endpoint whose policy carries `reauth(...)` declares `Api.ReauthRequired` in its `error:` array and a generated client decodes it. Path B (`RequirePermission`) cannot carry it — qadi's middleware owns that response mapping and answers an undischarged obligation with `UndischargedObligation` ([BEH-EA-160](20-qadi-bridge-path-b.md#beh-ea-160-both-bridges-share-one-wiring-root)) — so a step-up flow uses Path A.
 
 _Previous: [BEH-EA-164](21-qadi-resolvers-obligations.md#beh-ea-164-decision-history-backed-by-audit-events) | Next: [BEH-EA-166](21-qadi-resolvers-obligations.md#beh-ea-166-sql-pushdown-and-its-limit)_
 

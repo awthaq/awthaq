@@ -73,6 +73,25 @@ export class CsrfRejected extends Schema.TaggedError<CsrfRejected>()(
   { httpApiStatus: 403 },
 ) {}
 
+/**
+ * BEH-EA-165 (EEM-005): the session must be re-authenticated within
+ * `maxAgeSeconds` before this operation may proceed — the client maps it to a
+ * "confirm your password" prompt. A `Schema.TaggedError` (unlike a plain
+ * `Data.TaggedError`) so it crosses the wire: a Path A endpoint whose policy
+ * carries `reauth(...)` declares it in its `error:` array and a generated
+ * `HttpApiClient` decodes it, telling a reauth demand (with its window) apart
+ * from a plain permission denial. `@awthaq/qadi`'s `ObligationHandlers.reauth`
+ * fails with this exact error.
+ */
+export class ReauthRequired extends Schema.TaggedError<ReauthRequired>()(
+  "ReauthRequired",
+  { maxAgeSeconds: Schema.Number },
+  { httpApiStatus: 403 },
+) {}
+
+/** Narrows an unknown decoded error to `ReauthRequired` — the client's "confirm your password" branch. */
+export const isReauthRequired = Schema.is(ReauthRequired);
+
 /** BEH-EA-027: identical whether the submitted credential's target account exists or not. */
 export class InvalidCredentials extends Schema.TaggedError<InvalidCredentials>()(
   "InvalidCredentials",

@@ -18,7 +18,7 @@ import { Api } from "@awthaq/api";
 import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expectTypeOf, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -125,4 +125,31 @@ describe("AuthorizedSubject (real HTTP)", () => {
         assert.match(body.subjectId, /^user:/);
       }),
   );
+});
+
+// YL-008: the helper applies the pair in the one order that works, and the type
+// system objects to the other order (an unsatisfied `CurrentPrincipal`).
+describe("withAuthorizedSubject (YL-008)", () => {
+  const base = HttpApiGroup.make("typed").add(
+    HttpApiEndpoint.get("get", "/typed", { success: Whoami }),
+  );
+  const viaHelper = AuthorizedSubject.withAuthorizedSubject(base);
+  const misordered = base
+    .middleware(Api.Authentication)
+    .middleware(AuthorizedSubject.AuthorizedSubject);
+  const handRolled = base
+    .middleware(AuthorizedSubject.AuthorizedSubject)
+    .middleware(Api.Authentication);
+
+  it("leaves no unsatisfied middleware service, exactly like the hand-ordered pair", () => {
+    expectTypeOf<HttpApiGroup.MiddlewareServices<typeof viaHelper>>().toEqualTypeOf<never>();
+    expectTypeOf<HttpApiGroup.MiddlewareServices<typeof handRolled>>().toEqualTypeOf<never>();
+  });
+
+  it("the reversed order leaves CurrentPrincipal unsatisfied", () => {
+    expectTypeOf<HttpApiGroup.MiddlewareServices<typeof misordered>>().not.toEqualTypeOf<never>();
+    expectTypeOf<Api.CurrentPrincipal>().toExtend<
+      HttpApiGroup.MiddlewareServices<typeof misordered>
+    >();
+  });
 });

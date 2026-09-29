@@ -4,7 +4,7 @@
 // carries) — proving the real, exported `SubjectApi`/`SubjectHandlers`
 // actually serve a decodable `SubjectDto`, not just that the underlying
 // `AuthorizedSubject` middleware chain resolves a subject in memory.
-import { Api } from "@awthaq/api";
+import { Api, SubjectContract } from "@awthaq/api";
 import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -23,6 +23,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as AuthorizedSubject from "../src/AuthorizedSubject.ts";
+import * as Resolvers from "../src/Resolvers.ts";
 import * as SubjectApi from "../src/SubjectApi.ts";
 
 // A separate, standalone tiny `HttpApi` (its own id, its own group) rather
@@ -83,6 +84,80 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(TestServices),
   Layer.provideMerge(HttpRouter.layer),
 );
+
+// AAPS-008: the same real app, but the operator exposes one resolver-backed
+// attribute; `UserAttributes` answers it (and memoizes the user per request).
+const ExposingLayer = Layer.mergeAll(
+  AuthHttp.routes(SubjectApi.SubjectApi, {}).pipe(
+    Layer.provide(SubjectApi.SubjectHandlers),
+    Layer.provide(AuthorizedSubject.AuthorizedSubjectLive),
+    Layer.provide(Authentication.OptionalAuthenticationLive),
+    Layer.provide(Authentication.PrincipalResolverLive),
+  ),
+  AuthHttp.routes(LoginApi, {}).pipe(Layer.provide(LoginHandlers)),
+).pipe(
+  Layer.provideMerge(Resolvers.UserAttributes),
+  Layer.provideMerge(SubjectApi.config(["emailVerified"])),
+  Layer.provideMerge(CoreLive),
+  Layer.provideMerge(TestServices),
+  Layer.provideMerge(HttpRouter.layer),
+);
+
+const loginCookie = (handler: (request: Request) => Promise<Response>) =>
+  Effect.promise(async () => {
+    const response = await handler(new Request("http://localhost/login", { method: "POST" }));
+    return response.headers.get("set-cookie")?.split(";")[0] ?? "";
+  });
+
+describe("SubjectApi exposedAttributes (AAPS-008)", () => {
+  it.effect(
+    "an exposed resolver-backed attribute appears in GET /subject, unexposed ones do not",
+    () =>
+      Effect.gen(function* () {
+        const { handler } = HttpRouter.toWebHandler(ExposingLayer);
+        const cookie = yield* loginCookie(handler);
+        const response = yield* Effect.promise(() =>
+          handler(new Request("http://localhost/subject", { headers: { cookie } })),
+        );
+        assert.strictEqual(response.status, 200);
+        const dto = Schema.decodeUnknownSync(SubjectContract.SubjectDto)(
+          yield* Effect.promise(() => response.json()),
+        );
+        assert.strictEqual(dto.attributes["emailVerified"], false);
+        // `email`/`name` are resolver-backed too, but the operator did not name them.
+        assert.notProperty(dto.attributes, "email");
+        assert.notProperty(dto.attributes, "name");
+      }),
+  );
+
+  it.effect("by default (nothing exposed) no resolver-backed attribute reaches the client", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const cookie = yield* loginCookie(handler);
+      const response = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/subject", { headers: { cookie } })),
+      );
+      const dto = Schema.decodeUnknownSync(SubjectContract.SubjectDto)(
+        yield* Effect.promise(() => response.json()),
+      );
+      assert.notProperty(dto.attributes, "emailVerified");
+    }),
+  );
+
+  it.effect("exposing an attribute for an anonymous caller resolves to nothing, not an error", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(ExposingLayer);
+      const response = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/subject")),
+      );
+      assert.strictEqual(response.status, 200);
+      const dto = Schema.decodeUnknownSync(SubjectContract.SubjectDto)(
+        yield* Effect.promise(() => response.json()),
+      );
+      assert.notProperty(dto.attributes, "emailVerified");
+    }),
+  );
+});
 
 describe("SubjectApi (real HTTP)", () => {
   it.effect("BEH-EA-179: with no credential, /subject resolves qadi's anonymous subject", () =>

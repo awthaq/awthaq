@@ -23,8 +23,10 @@
 // See spec/overview.md for the full package map.
 
 export * as AttributeResolvers from "./AttributeResolvers.ts";
+export * as AuthorizationAudit from "./AuthorizationAudit.ts";
 export * as AuthorizedSubject from "./AuthorizedSubject.ts";
 export * as DecisionCacheInvalidation from "./DecisionCacheInvalidation.ts";
+export * as DecisionLogging from "./DecisionLogging.ts";
 export * as RequestDecisionCache from "./RequestDecisionCache.ts";
 export * as Resolvers from "./Resolvers.ts";
 export * as SubjectApi from "./SubjectApi.ts";

@@ -91,6 +91,11 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.admin.impersonationStarted":
     case "auth.admin.impersonationDenied":
       return Option.some(event.adminUserId);
+    case "auth.authz.denied":
+      // qadi's own subject id: only a `user:` subject names an awthaq user.
+      return event.subjectId.startsWith("user:")
+        ? Option.some(UserId(event.subjectId.slice("user:".length)))
+        : Option.none();
     case "auth.organization.created":
       return Option.some(event.creatorUserId);
     case "auth.token.replay":

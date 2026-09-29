@@ -292,6 +292,23 @@ export interface OrganizationPermissionDeniedEvent {
   readonly reason: "notMember" | "missingStatement";
 }
 
+/**
+ * Published by `@awthaq/qadi`'s `DecisionSinkAudit` for every authorization
+ * denial qadi's evaluator reaches (TS-003) — which policy denied which
+ * subject, durably, without the operator writing a sink of their own.
+ * `subjectId` is qadi's own subject id (`user:<id>`, `apikey:<id>`,
+ * `anonymous`, ...); `reason` is qadi's denial sentence (it names attributes,
+ * never their values).
+ */
+export interface AuthorizationDeniedEvent {
+  readonly _tag: "auth.authz.denied";
+  readonly subjectId: string;
+  readonly evaluationId: string;
+  readonly policyTag: string;
+  readonly action?: string | undefined;
+  readonly reason: string;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
@@ -325,7 +342,8 @@ export type AuthEvent =
   | OrganizationTeamDeletedEvent
   | OrganizationTeamMemberAddedEvent
   | OrganizationTeamMemberRemovedEvent
-  | OrganizationPermissionDeniedEvent;
+  | OrganizationPermissionDeniedEvent
+  | AuthorizationDeniedEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */
