@@ -24,6 +24,7 @@ import { Api, SessionContract } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
+  Defects,
   Errors,
   Migrations,
   SessionCookie,
@@ -284,9 +285,7 @@ const toRecordDto = (
 const currentUserPrincipal = Effect.gen(function* () {
   const principal = yield* Api.CurrentPrincipal;
   if (principal._tag !== "User") {
-    return yield* Effect.die(
-      new Error(`awthaq: admin group reached with a non-User principal: ${principal._tag}`),
-    );
+    return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: admin group reached with a non-User principal: ${principal._tag}`);
   }
   return principal;
 });
@@ -436,7 +435,7 @@ const adminMigrations: Migrations.Migrations = [
             "endedAt" TEXT,
             "endedBy" TEXT
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -449,7 +448,7 @@ const adminMigrations: Migrations.Migrations = [
           sql`CREATE INDEX admin_impersonation_session_id ON admin_impersonation("sessionId")`,
         sqlite: () =>
           sql`CREATE INDEX admin_impersonation_session_id ON admin_impersonation("sessionId")`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -463,7 +462,7 @@ const adminMigrations: Migrations.Migrations = [
       yield* sql.onDialectOrElse({
         pg: () => sql`ALTER TABLE admin_impersonation ADD COLUMN "expiresAt" TIMESTAMPTZ`,
         sqlite: () => sql`ALTER TABLE admin_impersonation ADD COLUMN "expiresAt" TEXT`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -477,7 +476,7 @@ const adminMigrations: Migrations.Migrations = [
           sql`CREATE INDEX admin_impersonation_started_at ON admin_impersonation("startedAt", id)`,
         sqlite: () =>
           sql`CREATE INDEX admin_impersonation_started_at ON admin_impersonation("startedAt", id)`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -507,7 +506,7 @@ const adminMigrations: Migrations.Migrations = [
             payload TEXT NOT NULL,
             "rowHash" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -579,7 +578,7 @@ const adminMigrations: Migrations.Migrations = [
               CREATE TRIGGER admin_impersonation_chain_no_delete BEFORE DELETE ON admin_impersonation_chain
               BEGIN SELECT RAISE(ABORT, 'awthaq: admin_impersonation_chain is append-only: DELETE is rejected'); END`;
           }),
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },

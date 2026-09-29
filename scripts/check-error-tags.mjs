@@ -8,6 +8,10 @@
 // internal tags are prefixed by their service (`Sessions/NotFound`, `Users/EmailAlreadyExists`);
 // wire tags are the HTTP contract and keep their plain names.
 //
+// The same script keeps defects tagged (GC-008): no `Effect.die(new Error(...))` in `packages/*/src`,
+// since a plain `Error` carries no tag a log pipeline or test could tell apart from another; use
+// `Defects.invalidConfiguration` / `unsupportedDialect` / `invariantViolation` (`@awthaq/ports`).
+//
 // Scans `packages/*/src` for the class declarations (a declaration is `class X extends
 // Data.TaggedError("Tag")` or `class X extends Schema.TaggedError<X>()("Tag"`), so it needs no
 // build and no imports across packages (which the dependency direction would forbid for a test
@@ -22,6 +26,9 @@ const packagesDir = join(root, "packages");
 const dataTags = new Map();
 const schemaTags = new Map();
 const note = (map, tag, where) => map.set(tag, [...(map.get(tag) ?? []), where]);
+
+const plainDiePattern = /die\(\s*new Error\(/g;
+const plainDies = [];
 
 const dataPattern = /class\s+(\w+)\s+extends\s+Data\.TaggedError\(\s*"([^"]+)"/g;
 const schemaPattern = /class\s+(\w+)\s+extends\s+Schema\.TaggedError<\w+>\(\)\(\s*"([^"]+)"/g;
@@ -38,6 +45,14 @@ for (const pkg of readdirSync(packagesDir, { withFileTypes: true })) {
   for (const file of files) {
     const path = join(src, file);
     const text = readFileSync(path, "utf8");
+    // Comments naming the pattern (the defect modules' own headers) are not uses of it.
+    const code = text
+      .split("\n")
+      .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join("\n");
+    for (const match of code.matchAll(plainDiePattern)) {
+      plainDies.push(`${relative(root, path)}:${code.slice(0, match.index).split("\n").length}`);
+    }
     for (const [pattern, map] of [
       [dataPattern, dataTags],
       [schemaPattern, schemaTags],
@@ -48,6 +63,12 @@ for (const pkg of readdirSync(packagesDir, { withFileTypes: true })) {
       }
     }
   }
+}
+
+if (plainDies.length > 0) {
+  console.error("error-tags: plain Effect.die(new Error(...)) in package sources (use Defects.*):");
+  for (const where of plainDies) console.error(`  ${where}`);
+  process.exit(1);
 }
 
 const shared = [...dataTags.keys()].filter((tag) => schemaTags.has(tag)).sort();

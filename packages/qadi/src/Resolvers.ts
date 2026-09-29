@@ -18,7 +18,7 @@
 //   already-working uses of `@qadi/predicate-sql`/`@qadi/audit`/
 //   `@qadi/devtools` an application wires itself — application-level usage
 //   patterns, not something this bridge package ships.
-import { Sessions, Users } from "@awthaq/core";
+import { Defects, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -232,9 +232,7 @@ const reauthHandler: ObligationHandler<
   Effect.gen(function* () {
     for (const duty of obligations) {
       if (duty.id !== REAUTH_OBLIGATION_ID) {
-        return yield* Effect.die(
-          new Error(`awthaq: ObligationHandlers.reauth cannot discharge obligation "${duty.id}"`),
-        );
+        return yield* Defects.invalidConfiguration("onObligations", `awthaq: ObligationHandlers.reauth cannot discharge obligation "${duty.id}"`);
       }
     }
     if (obligations.length === 0) return;
@@ -245,11 +243,7 @@ const reauthHandler: ObligationHandler<
     for (const duty of obligations) {
       const value = duty.attributes["maxAgeSeconds"];
       if (!isValidMaxAge(value)) {
-        return yield* Effect.die(
-          new Error(
-            "awthaq: reauth obligation is missing a finite, non-negative numeric maxAgeSeconds",
-          ),
-        );
+        return yield* Defects.invalidConfiguration("maxAgeSeconds", "awthaq: reauth obligation is missing a finite, non-negative numeric maxAgeSeconds");
       }
       windows.push(value);
     }

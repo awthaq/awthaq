@@ -5,7 +5,7 @@
 // an array (multi-role, spec.md's richer-than-a-single-value decision) — a
 // JSON-serialized `TEXT` column under `layerSql`, a plain array in memory.
 
-import { Users } from "@awthaq/core";
+import { Defects, Users } from "@awthaq/core";
 import { Models as SqlModels } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -363,7 +363,7 @@ export const layerSql = Layer.effect(
           pg: () => sql`
             SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership
             WHERE "organizationId" = ${organizationId} AND role::jsonb @> '"owner"'::jsonb`,
-          orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for countOwners")),
+          orElse: () => Defects.unsupportedDialect("countOwners"),
         }),
     });
 

@@ -36,7 +36,7 @@
 // whether it did, so a second rotator can neither mint a duplicate current
 // key nor re-extend a grace period that already started.
 
-import { Encryption } from "@awthaq/ports";
+import { Defects, Encryption } from "@awthaq/ports";
 import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -238,7 +238,7 @@ export const layerSql = Layer.effect(
     // or retired encryption key, tampered or swapped row), not something a
     // caller can recover from, so it dies with a clear message.
     const unreadable = (kid: string) => () =>
-      Effect.die(new Error(`awthaq/jwt: signing key "${kid}" could not be decoded or decrypted`));
+      Defects.invariantViolation("SigningKeyUndecodable", `awthaq/jwt: signing key "${kid}" could not be decoded or decrypted`);
 
     const decodeRow = Effect.fnUntraced(function* (row: SigningKeyRow) {
       const publicKeyJwk = yield* Schema.decodeUnknownEffect(JwkJson)(row.publicKeyJwk).pipe(

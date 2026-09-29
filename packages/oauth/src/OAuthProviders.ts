@@ -13,6 +13,7 @@
 // "lazy" }` providers resolve on first use instead — see
 // `OAuthProvider.OAuthDiscoveryPolicy`.
 
+import { Defects } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -94,7 +95,9 @@ export const layer = Layer.effect(
         );
       } else {
         const resolved = yield* resolveOne(provider).pipe(
-          Effect.catchTag("DiscoveryUnavailable", (error) => Effect.die(new Error(error.message))),
+          Effect.catchTag("DiscoveryUnavailable", (error) =>
+            Defects.invalidConfiguration("discoveryUrl", error.message),
+          ),
         );
         registry.set(provider.id, Effect.succeed(resolved));
       }

@@ -28,7 +28,7 @@
 // `RevocationStore.layerSql` (`INSERT ... ON CONFLICT ... DO NOTHING`,
 // same plugin-owned-table pattern this plugin now follows).
 import { Api } from "@awthaq/api";
-import { Users } from "@awthaq/core";
+import { Defects, Users } from "@awthaq/core";
 import { AuthEvents, AuthPlugin, Migrations, Slots } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as Context from "effect/Context";
@@ -116,11 +116,7 @@ const validatedCatalog = Effect.gen(function* () {
   const names = rolesConfig.catalog.map((role) => role.name);
   const duplicates = Array.from(new Set(names.filter((name, i) => names.indexOf(name) !== i)));
   if (duplicates.length > 0) {
-    return yield* Effect.die(
-      new Error(
-        `awthaq: the Roles catalog defines duplicate role name(s): ${duplicates.join(", ")}`,
-      ),
-    );
+    return yield* Defects.invalidConfiguration("catalog", `awthaq: the Roles catalog defines duplicate role name(s): ${duplicates.join(", ")}`);
   }
   return new Map(rolesConfig.catalog.map((role) => [role.name, role] as const));
 });
@@ -312,7 +308,7 @@ const rolesMigrations: Migrations.Migrations = [
             "createdAt" TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             UNIQUE ("userId", role)
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -323,7 +319,7 @@ const rolesMigrations: Migrations.Migrations = [
       yield* sql.onDialectOrElse({
         pg: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments("userId")`,
         sqlite: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments("userId")`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },

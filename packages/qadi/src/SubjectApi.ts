@@ -29,6 +29,7 @@
 // real, well-formed `AuthSubject` too (qadi's own `anonymous` value,
 // `SubjectResolver.ts`'s `resolveIdentityOnly`) — this endpoint should
 // resolve for every caller, logged in or not, never 401.
+import { Defects } from "@awthaq/ports";
 import { Api, SubjectContract } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -111,11 +112,7 @@ export const SubjectHandlers = HttpApiBuilder.group(SubjectApi, "subject", (hand
         // silently omitted attribute a client would read as "not set".
         const resolver = yield* Effect.serviceOption(AttributeResolver);
         if (Option.isNone(resolver)) {
-          return yield* Effect.die(
-            new Error(
-              "awthaq: SubjectApiConfig.exposedAttributes names resolver-backed attributes but no AttributeResolver is provided",
-            ),
-          );
+          return yield* Defects.invalidConfiguration("SubjectApiConfig.exposedAttributes", "awthaq: SubjectApiConfig.exposedAttributes names resolver-backed attributes but no AttributeResolver is provided");
         }
         for (const name of pending) {
           const value = yield* resolver.value.resolve(subject.id, name).pipe(Effect.orDie);

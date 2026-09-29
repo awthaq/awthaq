@@ -25,6 +25,7 @@ import {
 } from "@awthaq/core";
 import {
   ClientAddress,
+  Defects,
   Hmac,
   Mailer,
   PasswordHasher,
@@ -542,11 +543,7 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
         // reaching it is a wiring defect, mirroring `Session.ts`'s own
         // `currentUserPrincipal` guard.
         if (principal._tag !== "User") {
-          return yield* Effect.die(
-            new Error(
-              `awthaq: change-password reached with a non-User principal: ${principal._tag}`,
-            ),
-          );
+          return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: change-password reached with a non-User principal: ${principal._tag}`);
         }
         const resolvedAddress = yield* clientAddress.resolve(request);
         const issued = yield* password.changePassword({
@@ -568,11 +565,7 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }) {
         const principal = yield* Api.CurrentPrincipal;
         if (principal._tag !== "User") {
-          return yield* Effect.die(
-            new Error(
-              `awthaq: reauthenticate reached with a non-User principal: ${principal._tag}`,
-            ),
-          );
+          return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: reauthenticate reached with a non-User principal: ${principal._tag}`);
         }
         yield* password.reauthenticate({
           userId: Users.UserId(principal.ref.id),
@@ -1108,7 +1101,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 .verifyEmail(userId)
                 .pipe(
                   Effect.catchTag("UserNotFound", () =>
-                    Effect.die(new Error(`awthaq: reset token's own user missing: ${userId}`)),
+                    Defects.invariantViolation("RowVanished", "awthaq: reset token's own user missing"),
                   ),
                 );
 
@@ -1177,9 +1170,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 .verifyEmail(userId)
                 .pipe(
                   Effect.catchTag("UserNotFound", () =>
-                    Effect.die(
-                      new Error(`awthaq: verify-email token's own user missing: ${userId}`),
-                    ),
+                    Defects.invariantViolation("RowVanished", "awthaq: verify-email token's own user missing"),
                   ),
                 );
             }),
@@ -1276,11 +1267,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             // `SessionNotFound` here would mean it was revoked in the
             // narrow window since, a race this endpoint has no
             // request-level recovery for.
-            Effect.die(
-              new Error(
-                `awthaq: reauthenticate's own current session vanished: ${input.currentSessionId}`,
-              ),
-            ),
+            Defects.invariantViolation("RowVanished", "awthaq: reauthenticate's own current session vanished"),
           ),
         );
       });

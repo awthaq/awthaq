@@ -10,6 +10,7 @@
 // these two factories with a vendor's issuer/endpoints/claim mapping, so the
 // factories remain the escape hatch for any provider not listed.
 
+import { Defects } from "@awthaq/ports";
 import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
@@ -213,18 +214,14 @@ export const resolve = (
         : Option.some(yield* liftConfig(config.issuer).pipe(Effect.orDie));
 
     if (config.kind === "oidc" && Option.isNone(configuredIssuer)) {
-      return yield* Effect.die(
-        new Error(`awthaq/oauth: provider "${config.id}" is oidc but declares no issuer`),
-      );
+      return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" is oidc but declares no issuer`);
     }
 
     // JR-009: an oidc provider that never asks for `openid` gets no
     // `id_token` back, which would otherwise surface only as an opaque
     // runtime 400 at the first callback.
     if (config.kind === "oidc" && !config.scopes.includes("openid")) {
-      return yield* Effect.die(
-        new Error(`awthaq/oauth: provider "${config.id}" is oidc but its scopes omit "openid"`),
-      );
+      return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" is oidc but its scopes omit "openid"`);
     }
 
     // OAP-005 (RFC 9700 §2.1.1): `skipPkce` is a per-vendor escape hatch for
@@ -233,12 +230,8 @@ export const resolve = (
     const skipPkce = config.quirks?.skipPkce ?? false;
     if (skipPkce) {
       if (Option.isNone(clientSecret)) {
-        return yield* Effect.die(
-          new Error(
-            `awthaq/oauth: provider "${config.id}" sets quirks.skipPkce but has no clientSecret — ` +
-              "a public client must use PKCE (RFC 9700 §2.1.1)",
-          ),
-        );
+        return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" sets quirks.skipPkce but has no clientSecret — ` +
+              "a public client must use PKCE (RFC 9700 §2.1.1)");
       }
       yield* Effect.logWarning(
         `awthaq/oauth: provider "${config.id}" runs the authorization-code flow without PKCE (quirks.skipPkce)`,
@@ -265,21 +258,13 @@ export const resolve = (
                   message: `awthaq/oauth: provider "${config.id}" discovery is unreachable: ${error.message}`,
                 }),
               )
-            : Effect.die(
-                new Error(
-                  `awthaq/oauth: provider "${config.id}" discovery document is invalid ` +
-                    `or unfetchable: ${error.message}`,
-                ),
-              ),
+            : Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" discovery document is invalid ` +
+                    `or unfetchable: ${error.message}`),
         ),
       );
       if (Option.isSome(configuredIssuer) && document.issuer !== configuredIssuer.value) {
-        return yield* Effect.die(
-          new Error(
-            `awthaq/oauth: provider "${config.id}" discovery issuer "${document.issuer}" ` +
-              `does not match configured issuer "${configuredIssuer.value}"`,
-          ),
-        );
+        return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" discovery issuer "${document.issuer}" ` +
+              `does not match configured issuer "${configuredIssuer.value}"`);
       }
       authorizationEndpoint ??= document.authorization_endpoint;
       tokenEndpoint ??= document.token_endpoint;
@@ -290,12 +275,8 @@ export const resolve = (
     }
 
     if (authorizationEndpoint === undefined || tokenEndpoint === undefined) {
-      return yield* Effect.die(
-        new Error(
-          `awthaq/oauth: provider "${config.id}" has no authorizationEndpoint/tokenEndpoint ` +
-            "(supply endpoints, or a discoveryUrl that publishes them)",
-        ),
-      );
+      return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" has no authorizationEndpoint/tokenEndpoint ` +
+            "(supply endpoints, or a discoveryUrl that publishes them)");
     }
 
     // ESS-002: explicit endpoints get the same absolute-URL guarantee the
@@ -307,11 +288,7 @@ export const resolve = (
       ["userinfoEndpoint", userinfoEndpoint],
     ]) {
       if (value !== undefined && !URL.canParse(value)) {
-        return yield* Effect.die(
-          new Error(
-            `awthaq/oauth: provider "${config.id}" ${field} "${value}" is not an absolute URL`,
-          ),
-        );
+        return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" ${field} "${value}" is not an absolute URL`);
       }
     }
 
@@ -321,7 +298,7 @@ export const resolve = (
     const hasSecret = Option.isSome(clientSecret);
     const configuredMethod = config.tokenEndpointAuthMethod;
     const methodProblem = (problem: string) =>
-      Effect.die(new Error(`awthaq/oauth: provider "${config.id}" ${problem}`));
+      Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" ${problem}`);
     let tokenEndpointAuthMethod: TokenEndpointAuthMethod;
     if (configuredMethod !== undefined) {
       if (configuredMethod === "none" && hasSecret) {
@@ -370,13 +347,9 @@ export const resolve = (
         ? Jwt.SIGNING_ALGS.filter((alg) => alg === "RS256")
         : Jwt.SIGNING_ALGS.filter((alg) => advertisedIdTokenAlgs.includes(alg)));
     if (config.kind === "oidc" && idTokenSigningAlgs.length === 0) {
-      return yield* Effect.die(
-        new Error(
-          `awthaq/oauth: provider "${config.id}" advertises id_token signing algorithms ` +
+      return yield* Defects.invalidConfiguration("provider", `awthaq/oauth: provider "${config.id}" advertises id_token signing algorithms ` +
             `[${(advertisedIdTokenAlgs ?? []).join(", ")}], none of which this plugin verifies ` +
-            `(${Jwt.SIGNING_ALGS.join(", ")}); set idTokenSigningAlgs explicitly or use another provider`,
-        ),
-      );
+            `(${Jwt.SIGNING_ALGS.join(", ")}); set idTokenSigningAlgs explicitly or use another provider`);
     }
 
     return {

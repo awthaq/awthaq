@@ -35,7 +35,7 @@ import {
   Sessions,
   Users,
 } from "@awthaq/core";
-import { ClientAddress, RateLimiter, WebAuthn } from "@awthaq/ports";
+import { ClientAddress, Defects, RateLimiter, WebAuthn } from "@awthaq/ports";
 import { Session } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -574,9 +574,7 @@ const currentUserPrincipal: Effect.Effect<Api.UserPrincipal, never, Api.CurrentP
   Effect.gen(function* () {
     const principal = yield* Api.CurrentPrincipal;
     if (principal._tag !== "User") {
-      return yield* Effect.die(
-        new Error(`awthaq: passkey group reached with a non-User principal: ${principal._tag}`),
-      );
+      return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: passkey group reached with a non-User principal: ${principal._tag}`);
     }
     return principal;
   });
@@ -793,7 +791,7 @@ const passkeyMigrations: Migrations.Migrations = [
             "createdAt" TEXT NOT NULL,
             "lastUsedAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -804,7 +802,7 @@ const passkeyMigrations: Migrations.Migrations = [
       yield* sql.onDialectOrElse({
         pg: () => sql`CREATE INDEX passkey_credential_user_id ON passkey_credential("userId")`,
         sqlite: () => sql`CREATE INDEX passkey_credential_user_id ON passkey_credential("userId")`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -827,7 +825,7 @@ const passkeyMigrations: Migrations.Migrations = [
             "expiresAt" TEXT NOT NULL,
             "createdAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -839,7 +837,7 @@ const passkeyMigrations: Migrations.Migrations = [
         pg: () => sql`CREATE INDEX passkey_challenge_expires_at ON passkey_challenge("expiresAt")`,
         sqlite: () =>
           sql`CREATE INDEX passkey_challenge_expires_at ON passkey_challenge("expiresAt")`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -850,7 +848,7 @@ const passkeyMigrations: Migrations.Migrations = [
       yield* sql.onDialectOrElse({
         pg: () => sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyAt" TIMESTAMPTZ`,
         sqlite: () => sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyAt" TEXT`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -863,7 +861,7 @@ const passkeyMigrations: Migrations.Migrations = [
           sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyCount" INTEGER NOT NULL DEFAULT 0`,
         sqlite: () =>
           sql`ALTER TABLE passkey_credential ADD COLUMN "counterAnomalyCount" INTEGER NOT NULL DEFAULT 0`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -884,7 +882,7 @@ const passkeyMigrations: Migrations.Migrations = [
             "webauthnUserId" TEXT NOT NULL UNIQUE,
             "createdAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -922,11 +920,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       if (
         Duration.toMillis(config.ceremonyTimeout) > Duration.toMillis(ChallengeStore.CHALLENGE_TTL)
       ) {
-        return yield* Effect.die(
-          new Error(
-            "awthaq: PasskeyConfig.ceremonyTimeout must not exceed the challenge TTL (five minutes, BEH-EA-132)",
-          ),
-        );
+        return yield* Defects.invalidConfiguration("ceremonyTimeout", "awthaq: PasskeyConfig.ceremonyTimeout must not exceed the challenge TTL (five minutes, BEH-EA-132)");
       }
       // HSK-002: conveyance is a request, not a verification.
       if (config.attestation !== "none" && config.attestationPolicy === undefined) {
@@ -1620,9 +1614,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
                 // `passkey.reauthenticate`'s own `Authentication` middleware
                 // already proved this exact session live moments ago — see
                 // `Password.ts`'s own identical `reauthenticate` comment.
-                Effect.die(
-                  new Error(`awthaq: reauthenticate's own current session vanished: ${sessionId}`),
-                ),
+                Defects.invariantViolation("RowVanished", "awthaq: reauthenticate's own current session vanished"),
               ),
             );
         },

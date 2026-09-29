@@ -38,6 +38,7 @@
 // port convention: a plugin (ticket 18/19's encryption service) depends
 // on this port, never a concrete implementation.
 
+import * as Defects from "./Defects.ts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -80,19 +81,13 @@ const decodeKey = (label: string, encoded: string) =>
   Effect.gen(function* () {
     const decoded = Encoding.decodeBase64(encoded);
     if (decoded._tag === "Failure") {
-      return yield* Effect.die(
-        new Error(`awthaq: ${label} must be valid base64 (${decoded.failure.message}).`),
-      );
+      return yield* Defects.invalidConfiguration("AWTHAQ_ENCRYPTION_KEYS", `awthaq: ${label} must be valid base64 (${decoded.failure.message}).`);
     }
     if (decoded.success.length !== AES_256_KEY_LENGTH) {
       // Zero the (too short/long) decoded copy before dying (SMS-005).
       const length = decoded.success.length;
       decoded.success.fill(0);
-      return yield* Effect.die(
-        new Error(
-          `awthaq: ${label} must decode to exactly ${AES_256_KEY_LENGTH} bytes for AES-256, got ${length}.`,
-        ),
-      );
+      return yield* Defects.invalidConfiguration("AWTHAQ_ENCRYPTION_KEYS", `awthaq: ${label} must decode to exactly ${AES_256_KEY_LENGTH} bytes for AES-256, got ${length}.`);
     }
     return decoded.success;
   });
@@ -140,9 +135,7 @@ export const layerEnv: Layer.Layer<KeyProvider, Config.ConfigError> = Layer.effe
           const kids = new Set<string>();
           for (const { kid } of parsed) {
             if (kids.has(kid)) {
-              return yield* Effect.die(
-                new Error(`awthaq: AWTHAQ_ENCRYPTION_KEYS has a duplicate kid "${kid}".`),
-              );
+              return yield* Defects.invalidConfiguration("AWTHAQ_ENCRYPTION_KEYS", `awthaq: AWTHAQ_ENCRYPTION_KEYS has a duplicate kid "${kid}".`);
             }
             kids.add(kid);
           }
@@ -171,11 +164,7 @@ export const layerEnv: Layer.Layer<KeyProvider, Config.ConfigError> = Layer.effe
     const byKid = new Map(entries.map((material) => [material.kid, material]));
     const current = byKid.get(currentKid);
     if (current === undefined) {
-      return yield* Effect.die(
-        new Error(
-          `awthaq: AWTHAQ_ENCRYPTION_KEY_ID "${currentKid}" does not name a kid in AWTHAQ_ENCRYPTION_KEYS.`,
-        ),
-      );
+      return yield* Defects.invalidConfiguration("AWTHAQ_ENCRYPTION_KEY_ID", `awthaq: AWTHAQ_ENCRYPTION_KEY_ID "${currentKid}" does not name a kid in AWTHAQ_ENCRYPTION_KEYS.`);
     }
     const getKey: KeyProviderShape["getKey"] = (requestedKid) => {
       const material = byKid.get(requestedKid);

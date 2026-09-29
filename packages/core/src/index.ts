@@ -31,6 +31,8 @@ export * as AuditLog from "./AuditLog.ts";
 export * as AuthEvents from "./AuthEvents.ts";
 export * as AuthPlugin from "./AuthPlugin.ts";
 export * as Errors from "./Errors.ts";
+// The tagged defect kinds (`Effect.die` with a name), defined in ports so ports and sql can use them too.
+export { Defects } from "@awthaq/ports";
 export * as HookPoint from "./HookPoint.ts";
 export * as Hooks from "./Hooks.ts";
 // MA-003: re-exported, not wrapped — see this file's own header comment

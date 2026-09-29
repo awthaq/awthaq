@@ -19,6 +19,7 @@
 // keeps only a nominal constructor over each, so a key rename on either side
 // breaks the bridge at compile time.
 
+import { Defects } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
@@ -162,7 +163,7 @@ export const resolveDialect = (sql: SqlClient.SqlClient): Effect.Effect<Dialect>
   sql.onDialectOrElse({
     pg: () => Effect.succeed<Dialect>("pg"),
     sqlite: () => Effect.succeed<Dialect>("sqlite"),
-    orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for models")),
+    orElse: () => Defects.unsupportedDialect("models"),
   });
 
 // ---- dialect-independent field declarations ---------------------------------

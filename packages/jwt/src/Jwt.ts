@@ -50,7 +50,7 @@
 
 import { Api } from "@awthaq/api";
 import { AuthPlugin, Errors, Migrations, Sessions, Users } from "@awthaq/core";
-import { RefreshingCache } from "@awthaq/ports";
+import { Defects, RefreshingCache } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as Arr from "effect/Array";
 import * as Crypto from "effect/Crypto";
@@ -387,7 +387,7 @@ const jwtMigrations: Migrations.Migrations = [
             "rotatedAt" TEXT,
             "retiresAt" TEXT
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -406,7 +406,7 @@ const jwtMigrations: Migrations.Migrations = [
             jti TEXT PRIMARY KEY,
             "expiresAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -532,11 +532,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
                 Option.match(remoteSigner, {
                   onSome: Effect.succeed,
                   onNone: () =>
-                    Effect.die(
-                      new Error(
-                        `awthaq/jwt: signing key "${key.kid}" has no local private key material and no RemoteSigner is configured`,
-                      ),
-                    ),
+                    Defects.invalidConfiguration("remoteSigner", `awthaq/jwt: signing key "${key.kid}" has no local private key material and no RemoteSigner is configured`),
                 }),
             });
             return yield* JwtCodec.sign({

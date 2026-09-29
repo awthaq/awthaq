@@ -13,6 +13,7 @@
 // The layer dies at build time when no Web Crypto object exists (better than a later,
 // per-call failure in a security primitive); a digest failure is a `PlatformError`.
 
+import * as Defects from "./Defects.ts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -35,7 +36,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const webCrypto = globalThis.crypto;
     if (webCrypto === undefined) {
-      return yield* Effect.die(new Error("awthaq: the Web Crypto API (globalThis.crypto) is not available"));
+      return yield* Defects.invalidConfiguration("Crypto", "awthaq: the Web Crypto API (globalThis.crypto) is not available");
     }
 
     const randomBytes = (size: number) => {

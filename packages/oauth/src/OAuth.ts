@@ -34,7 +34,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { ClientAddress, Encryption, Hmac, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Defects, Encryption, Hmac, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -518,12 +518,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         parsedBase.username !== "" ||
         parsedBase.password !== ""
       ) {
-        return yield* Effect.die(
-          new Error(
-            `awthaq/oauth: baseUrl "${config_.baseUrl}" must be the public scheme+host ` +
-              '(e.g. "https://app.example.com") with no path, query, fragment or credentials',
-          ),
-        );
+        return yield* Defects.invalidConfiguration("baseUrl", `awthaq/oauth: baseUrl "${config_.baseUrl}" must be the public scheme+host ` +
+              '(e.g. "https://app.example.com") with no path, query, fragment or credentials');
       }
       const baseOrigin = parsedBase.origin;
       if (parsedBase.protocol === "http:" && !LOOPBACK_HOSTS.has(parsedBase.hostname)) {

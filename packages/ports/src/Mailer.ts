@@ -23,6 +23,7 @@
 // whichever `Mailer` layer it happened to provide without needing to know
 // which one it was.
 
+import * as Defects from "./Defects.ts";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -84,13 +85,9 @@ export const layerNoop: Layer.Layer<Mailer> = Layer.succeed(
   Mailer,
   Mailer.of({
     send: (message) =>
-      Effect.die(
-        new Error(
-          // EOTS-010: the template only — never the recipient.
+      Defects.invalidConfiguration("Mailer", // EOTS-010: the template only — never the recipient.
           `awthaq: no Mailer configured — dropped a "${message.template}" message. ` +
-            "Provide a real Mailer layer (or Mailer.layerMemory for tests).",
-        ),
-      ),
+            "Provide a real Mailer layer (or Mailer.layerMemory for tests)."),
     sent: Effect.succeed([]),
   }),
 );

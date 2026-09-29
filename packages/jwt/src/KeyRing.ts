@@ -49,7 +49,7 @@
 // old key immediately, and `revoke(kid)` does the same for a key that was
 // already rotated out. See spec/decisions/017-jwt-signing-key-rotation.md.
 
-import { SqlTransaction } from "@awthaq/ports";
+import { Defects, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -187,9 +187,7 @@ const settleCurrent = Effect.fnUntraced(function* (options: {
     const winner = yield* records.findCurrent();
     if (Option.isSome(winner) && options.force) return winner.value;
   }
-  return yield* Effect.die(
-    new Error("awthaq/jwt: could not settle a single current signing key after 5 attempts"),
-  );
+  return yield* Defects.invariantViolation("SigningKeyUnsettled", "awthaq/jwt: could not settle a single current signing key after 5 attempts");
 });
 
 /**

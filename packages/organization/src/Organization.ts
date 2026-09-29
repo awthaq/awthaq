@@ -15,7 +15,7 @@
 
 import { Api } from "@awthaq/api";
 import { AuthEvents, AuthPlugin, Errors, HookPoint, Hooks, Migrations, Users } from "@awthaq/core";
-import { Hmac, Mailer, SqlTransaction } from "@awthaq/ports";
+import { Defects, Hmac, Mailer, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -110,11 +110,7 @@ export const config = (partial: Partial<OrganizationConfigShape>) => {
   return reserved.length > 0
     ? Layer.effect(
         OrganizationConfig,
-        Effect.die(
-          new Error(
-            `awthaq: Organization.config permissionStatements may not redefine the built-in role(s): ${reserved.join(", ")}`,
-          ),
-        ),
+        Defects.invalidConfiguration("permissionStatements", `awthaq: Organization.config permissionStatements may not redefine the built-in role(s): ${reserved.join(", ")}`),
       )
     : Layer.succeed(OrganizationConfig, { ...defaultOrganizationConfig, ...partial });
 };
@@ -685,9 +681,7 @@ const toTeamMembershipDto = (
 const currentUserPrincipal = Effect.gen(function* () {
   const principal = yield* Api.CurrentPrincipal;
   if (principal._tag !== "User") {
-    return yield* Effect.die(
-      new Error(`awthaq: organization group reached with a non-User principal: ${principal._tag}`),
-    );
+    return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: organization group reached with a non-User principal: ${principal._tag}`);
   }
   return principal;
 });
@@ -1204,7 +1198,7 @@ const organizationMigrations: Migrations.Migrations = [
             metadata TEXT,
             "createdAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -1229,7 +1223,7 @@ const organizationMigrations: Migrations.Migrations = [
             role TEXT NOT NULL,
             "createdAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -1250,7 +1244,7 @@ const organizationMigrations: Migrations.Migrations = [
               sql`CREATE INDEX organization_membership_user_id ON organization_membership("userId")`,
             ),
           ),
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -1283,7 +1277,7 @@ const organizationMigrations: Migrations.Migrations = [
             "createdAt" TEXT NOT NULL,
             "expiresAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -1310,7 +1304,7 @@ const organizationMigrations: Migrations.Migrations = [
               sql`CREATE INDEX organization_invitation_inviter_id ON organization_invitation("inviterId")`,
             ),
           ),
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -1337,7 +1331,7 @@ const organizationMigrations: Migrations.Migrations = [
             "createdAt" TEXT NOT NULL,
             "updatedAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -1350,7 +1344,7 @@ const organizationMigrations: Migrations.Migrations = [
           sql`CREATE INDEX organization_team_organization_id ON organization_team("organizationId")`,
         sqlite: () =>
           sql`CREATE INDEX organization_team_organization_id ON organization_team("organizationId")`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -1373,7 +1367,7 @@ const organizationMigrations: Migrations.Migrations = [
             "userId" TEXT NOT NULL,
             "createdAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -1386,7 +1380,7 @@ const organizationMigrations: Migrations.Migrations = [
           sql`CREATE INDEX organization_team_membership_team_id ON organization_team_membership("teamId")`,
         sqlite: () =>
           sql`CREATE INDEX organization_team_membership_team_id ON organization_team_membership("teamId")`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -1415,7 +1409,7 @@ const organizationMigrations: Migrations.Migrations = [
             "updatedAt" TEXT NOT NULL,
             UNIQUE("organizationId", role)
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -1438,7 +1432,7 @@ const organizationMigrations: Migrations.Migrations = [
             "activeTeamId" TEXT,
             "updatedAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },
@@ -1932,7 +1926,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .update(organizationId, { ...input, name: vetoed.name, slug: vetoed.slug })
             .pipe(
               Effect.catchTag("OrganizationRecordNotFound", () =>
-                Effect.die(new Error("awthaq: organization vanished between check and write")),
+                Defects.invariantViolation("RowVanished", "awthaq: organization vanished between check and write"),
               ),
               Effect.catchTag("OrganizationRecordSlugTaken", () =>
                 Effect.fail(new OrganizationApi.OrganizationSlugTaken()),
@@ -1973,9 +1967,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                   .delete(organizationId)
                   .pipe(
                     Effect.catchTag("OrganizationRecordNotFound", () =>
-                      Effect.die(
-                        new Error("awthaq: organization vanished between check and write"),
-                      ),
+                      Defects.invariantViolation("RowVanished", "awthaq: organization vanished between check and write"),
                     ),
                   );
               }),
@@ -2020,7 +2012,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 .remove(userId, organizationId)
                 .pipe(
                   Effect.catchTag("MembershipRecordNotFound", () =>
-                    Effect.die(new Error("awthaq: membership vanished between check and write")),
+                    Defects.invariantViolation("RowVanished", "awthaq: membership vanished between check and write"),
                   ),
                 );
               yield* activeContext.clearOrganizationForUser(userId, organizationId);
@@ -2125,7 +2117,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .updateRole(targetUserId, organizationId, vetoed.role)
             .pipe(
               Effect.catchTag("MembershipRecordNotFound", () =>
-                Effect.die(new Error("awthaq: membership vanished between check and write")),
+                Defects.invariantViolation("RowVanished", "awthaq: membership vanished between check and write"),
               ),
             );
           yield* events.publish({
@@ -2523,7 +2515,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
               Effect.flatMap(
                 Option.match({
                   onNone: () =>
-                    Effect.die(new Error("awthaq: invitation's team vanished before acceptance")),
+                    Defects.invariantViolation("RowVanished", "awthaq: invitation's team vanished before acceptance"),
                   onSome: Effect.succeed,
                 }),
               ),
@@ -2814,7 +2806,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .update(organizationId, roleId, permission)
             .pipe(
               Effect.catchTag("OrgRoleRecordNotFound", () =>
-                Effect.die(new Error("awthaq: org role vanished between check and write")),
+                Defects.invariantViolation("RowVanished", "awthaq: org role vanished between check and write"),
               ),
             );
           yield* events.publish({
@@ -2841,7 +2833,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .remove(organizationId, roleId)
             .pipe(
               Effect.catchTag("OrgRoleRecordNotFound", () =>
-                Effect.die(new Error("awthaq: org role vanished between check and write")),
+                Defects.invariantViolation("RowVanished", "awthaq: org role vanished between check and write"),
               ),
             );
           yield* events.publish({
@@ -3016,7 +3008,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             .updateTeam(organizationId, teamId, vetoed.name)
             .pipe(
               Effect.catchTag("TeamRecordNotFound", () =>
-                Effect.die(new Error("awthaq: team vanished between check and write")),
+                Defects.invariantViolation("RowVanished", "awthaq: team vanished between check and write"),
               ),
             );
           yield* events.publish({ _tag: "auth.organization.teamUpdated", organizationId, teamId });
@@ -3054,7 +3046,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 yield* teams.removeTeam(organizationId, teamId).pipe(
                   Effect.catchTags({
                     TeamRecordNotFound: () =>
-                      Effect.die(new Error("awthaq: team vanished between check and write")),
+                      Defects.invariantViolation("RowVanished", "awthaq: team vanished between check and write"),
                     "TeamRecords/HasChildren": () =>
                       Effect.fail(new OrganizationApi.TeamHasChildren()),
                   }),
