@@ -36,6 +36,7 @@ export * as DataExport from "./DataExport.ts";
 // The tagged defect kinds (`Effect.die` with a name), defined in ports so ports and sql can use them too.
 export { Defects } from "@awthaq/ports";
 export * as EffectiveConfig from "./EffectiveConfig.ts";
+export * as EmailChange from "./EmailChange.ts";
 export * as Erasure from "./Erasure.ts";
 export * as Errors from "./Errors.ts";
 export * as EventRelay from "./EventRelay.ts";

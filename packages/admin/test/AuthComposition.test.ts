@@ -5,6 +5,7 @@ import { Auth } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import { Organization } from "@awthaq/organization";
 import * as Admin from "../src/Admin.ts";
+import * as AdminAccounts from "../src/AdminAccounts.ts";
 import * as AdminTenants from "../src/AdminTenants.ts";
 
 describe("Auth.make([Admin])", () => {
@@ -41,5 +42,17 @@ describe("Auth.make([Organization, Admin, AdminTenants])", () => {
     // The plain Admin composition is unchanged: no organization plugin, no tenant group.
     const plain = Auth.make([Admin.Admin]);
     assert.notInclude(Object.keys(plain.adminApi.groups), "admin.tenants");
+  });
+});
+
+// BAM-005/BAM-009: destructive and credential administration is its own opt-in plugin, admin tier,
+// so `Admin` alone composes without the erasure cascade, hasher and mailer it needs.
+describe("Auth.make([Admin, AdminAccounts])", () => {
+  const auth = Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]);
+
+  it("puts the accounts group on the admin tier, out of the public API", () => {
+    assert.include(Object.keys(auth.adminApi.groups), "admin.accounts");
+    assert.notInclude(Object.keys(auth.publicApi.groups), "admin.accounts");
+    assert.notInclude(Object.keys(Auth.make([Admin.Admin]).adminApi.groups), "admin.accounts");
   });
 });

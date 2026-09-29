@@ -249,6 +249,51 @@ export const makeRules = (emailKey: (email: string) => string) => {
     window: Duration.minutes(15),
   });
 
+  // BAM-009: the authenticated requester's own budget, keyed on their user id.
+  const changeEmail = rule({
+    group: "password.account",
+    name: "changeEmail",
+    endpoint: "changeEmail",
+    dimension: "identity",
+    input: UserInput,
+    keyOf: (input) => `password:change-email:${input.userId}`,
+    limit: 5,
+    window: Duration.hours(1),
+  });
+  // BAM-009: a signed-in account can name any address, so the *target* inbox is budgeted too —
+  // one address cannot be mail-bombed with confirmation links by many accounts (same posture as
+  // `resendVerification`, whose abuse is likewise harassment of the target).
+  const changeEmailTarget = rule({
+    group: "password.account",
+    name: "changeEmailTarget",
+    endpoint: "changeEmail",
+    dimension: "identity",
+    input: EmailInput,
+    keyOf: (input) => `password:change-email-target:${emailKey(input.email)}`,
+    limit: 3,
+    window: Duration.minutes(15),
+  });
+  // BAM-009: token-guess flood control, like `verifyEmail`'s pair (keyed on the token's public id
+  // and on the source).
+  const confirmEmailChange = rule({
+    name: "confirmEmailChange",
+    endpoint: "confirmEmailChange",
+    dimension: "identity",
+    input: IdentifierInput,
+    keyOf: (input) => `password:change-email-confirm:${input.identifier}`,
+    limit: 5,
+    window: Duration.minutes(15),
+  });
+  const confirmEmailChangeByIp = rule({
+    name: "confirmEmailChangeByIp",
+    endpoint: "confirmEmailChange",
+    dimension: "ip",
+    input: IpInput,
+    keyOf: ipKey("password:change-email-confirm"),
+    limit: 30,
+    window: Duration.minutes(15),
+  });
+
   return {
     signUp,
     signUpByIp,
@@ -263,6 +308,10 @@ export const makeRules = (emailKey: (email: string) => string) => {
     resendVerificationByIp,
     verifyEmail,
     verifyEmailByIp,
+    changeEmail,
+    changeEmailTarget,
+    confirmEmailChange,
+    confirmEmailChangeByIp,
   };
 };
 

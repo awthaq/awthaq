@@ -162,6 +162,7 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.user.created":
     case "auth.user.signedIn":
     case "auth.user.emailVerified":
+    case "auth.user.emailChanged":
     case "auth.user.deleted":
     case "auth.user.dataExported":
     case "auth.session.reuse":
@@ -196,6 +197,9 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.admin.userUpdated":
     case "auth.admin.userBanned":
     case "auth.admin.userUnbanned":
+    case "auth.admin.userDeleted":
+    case "auth.admin.userEmailChangeRequested":
+    case "auth.admin.userPasswordSet":
     case "auth.admin.sessionRevoked":
     case "auth.admin.organizationSuspended":
     case "auth.admin.organizationUnsuspended":

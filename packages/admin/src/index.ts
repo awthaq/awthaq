@@ -6,6 +6,8 @@
 // See spec/overview.md for the full package map.
 
 export * as Admin from "./Admin.ts";
+export * as AdminAccounts from "./AdminAccounts.ts";
+export * as AdminAccountsApi from "./AdminAccountsApi.ts";
 export * as AdminApi from "./AdminApi.ts";
 export * as AdminTenants from "./AdminTenants.ts";
 export * as AdminTenantsApi from "./AdminTenantsApi.ts";

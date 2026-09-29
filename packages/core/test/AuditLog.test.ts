@@ -303,6 +303,18 @@ const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.EventOf<T
     until: null,
   },
   "auth.admin.userUnbanned": { _tag: "auth.admin.userUnbanned", adminUserId: otherUserId, userId },
+  "auth.admin.userDeleted": { _tag: "auth.admin.userDeleted", adminUserId: otherUserId, userId },
+  "auth.admin.userEmailChangeRequested": {
+    _tag: "auth.admin.userEmailChangeRequested",
+    adminUserId: otherUserId,
+    userId,
+  },
+  "auth.admin.userPasswordSet": {
+    _tag: "auth.admin.userPasswordSet",
+    adminUserId: otherUserId,
+    userId,
+  },
+  "auth.user.emailChanged": { _tag: "auth.user.emailChanged", userId },
   "auth.admin.organizationSuspended": {
     _tag: "auth.admin.organizationSuspended",
     adminUserId: otherUserId,
