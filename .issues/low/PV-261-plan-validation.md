@@ -27,3 +27,5 @@ Amend BEH-EA-196 to the real helper names, then add `@qadi/testing` and `@qadi/h
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Plan note (2026-09-29, P22):** Spec half done, issue left open. BEH-EA-196's requirement now names the real helpers (makeSubject/fromRoles and currentSubjectLayer from @qadi/core, EvaluationServicesNone) with an as-shipped paragraph saying subjectWith/qadiTestLayer/@qadi/testing do not exist (the heading keeps its text so anchors stay valid); the skipped scenarios' comments say why (authoring guidance with no runtime behavior; @qadi/http is a features dependency by now, so that half of the issue text is stale). Remaining: REQ-EA-557/558 need a harness World that composes @qadi/http's RequirePermission and a policy with TestAuth.signInAs (a real fixture, not a text change); the property is covered today by 20-qadi-bridge-path-b.feature and packages/qadi/test/AuthorizedSubject.test.ts.

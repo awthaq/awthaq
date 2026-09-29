@@ -68,7 +68,7 @@ REQUIREMENT: A test needing to override only one method of a multi-method
 
 _Previous: [BEH-EA-194](25-testing-harness.md#beh-ea-194-httpapitestgroups-runs-under-testclock) | Next: [BEH-EA-196](25-testing-harness.md#beh-ea-196-qaditestlayer-and-subjectwith-for-authorization-unit-tests)_
 
-## BEH-EA-196: `makeSubject`/`fromRoles` and `currentSubjectLayer` for authorization unit tests
+## BEH-EA-196: `qadiTestLayer` and `subjectWith` for authorization unit tests
 
 ```ts
 const owner = makeSubject({ id: "user:u1", permissions: [project.delete] })
