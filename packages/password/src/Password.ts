@@ -209,6 +209,7 @@ export interface PasswordShape {
     | Api.InvalidCredentials
     | PasswordApi.EmailNotVerified
     | Api.RateLimited
+    | HookPoint.HookAborted
     | Hooks.TwoFactorRequired
   >;
   /** BEH-EA-064/117: identical response whether or not `email` resolves to an account — the caller (the HTTP handler) always answers 202. */
@@ -618,6 +619,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // an Auth0-Rule-style sign-up policy, and the MFA divert point a
       // future `TwoFactor` plugin taps, both attach through.
       const beforeSignUp = yield* Hooks.BeforeSignUp;
+      const afterSignUp = yield* Hooks.AfterSignUp;
+      const beforeSignIn = yield* Hooks.BeforeSignIn;
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
       const afterSignIn = yield* Hooks.AfterSignIn;
 
@@ -703,30 +706,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           ),
         );
 
-      /**
-       * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s
-       * own `veto` helper — the same translation): BEH-EA-090 requires a
-       * veto abort to reach the caller as a typed `HookAborted`, not the
-       * bare `HookAbort` a tap itself fails with.
-       */
-      const vetoBeforeSignUp = (
-        effect: Effect.Effect<
-          { readonly email: string; readonly name: string },
-          HookPoint.HookAbort
-        >,
-      ): Effect.Effect<{ readonly email: string; readonly name: string }, HookPoint.HookAborted> =>
-        effect.pipe(
-          Effect.catchTag(
-            "HookAbort",
-            (abort) =>
-              new HookPoint.HookAborted({
-                point: "auth.user.signUp",
-                code: abort.code,
-                message: abort.message,
-              }),
-          ),
-        );
-
       /** Issues a verify-email token and mails it; dispatched, never awaited. */
       const dispatchVerificationMail = (user: Users.UserRecord) =>
         mailDispatcher.dispatch(
@@ -774,8 +753,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // allow-list) may reject the sign-up outright, or amend the input
         // for whatever taps run after it — before the (comparatively
         // expensive) password hash is even computed.
-        const vetoedSignUp = yield* vetoBeforeSignUp(
-          beforeSignUp.run({ email: input.email, name }),
+        const vetoedSignUp = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
+          beforeSignUp.run({ email: input.email, name, strategy: "password" }),
         );
         const hash = yield* hasher.hash(input.password);
         return { vetoedSignUp, hash };
@@ -816,6 +795,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
         yield* events.publish({ _tag: "auth.user.created", userId: user.id });
+        yield* afterSignUp.run({ userId: user.id, email: user.email, strategy: "password" });
 
         // BEH-EA-113: dispatched, never awaited — response latency must
         // not depend on mail-provider latency, and per
@@ -859,6 +839,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           );
         if (Option.isSome(created)) {
           yield* events.publish({ _tag: "auth.user.created", userId: created.value.id });
+          yield* afterSignUp.run({
+            userId: created.value.id,
+            email: created.value.email,
+            strategy: "password",
+          });
           yield* dispatchVerificationMail(created.value);
           return;
         }
@@ -943,6 +928,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             .updateCredentialHash(account.id, Redacted.make(rehashed))
             .pipe(Effect.orDie);
         }
+
+        // NAM-002: the sign-in veto (an Auth.js `signIn` callback returning
+        // `false`), consulted only now that the password is proven — so a
+        // `HookAborted` here can never be used to probe a guessed password.
+        yield* HookPoint.aborted(Hooks.BeforeSignIn)(
+          beforeSignIn.run({ userId: user.id, email: user.email, strategy: "password" }),
+        );
 
         // BCR-004/THS-002: THE canonical MFA attachment point — consulted
         // here, right before this flow's own `sessions.issue`, never

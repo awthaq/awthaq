@@ -120,6 +120,22 @@ export class HookTapOutputInvalid extends Data.TaggedError("HookTapOutputInvalid
 }> {}
 
 /**
+ * NAM-002: BEH-EA-090's translation, once — a veto point's `run` fails with
+ * the `HookAbort` a tap raised; every call site turns that into the typed,
+ * wire-shaped `HookAborted` naming the point (`Point.id`) right where the
+ * point is run.
+ */
+export const aborted =
+  (point: { readonly id: string }) =>
+  <A, R>(effect: Effect.Effect<A, HookAbort, R>): Effect.Effect<A, HookAborted, R> =>
+    effect.pipe(
+      Effect.catchTag(
+        "HookAbort",
+        (abort) => new HookAborted({ point: point.id, code: abort.code, message: abort.message }),
+      ),
+    );
+
+/**
  * JH-003: the contributing plugin of a tap, as far as ordering needs to
  * know it. Structural on purpose: every `AuthPlugin` class already has this
  * shape (its `id` and `dependsOn` statics), and requiring only this keeps
@@ -219,6 +235,8 @@ export interface VetoClass<Self, Id extends string, Input> extends Context.Servi
   VetoShape<Input>
 > {
   readonly kind: "veto";
+  /** The point's id as declared (`"auth.user.signUp"`), which `HookAborted.point` reports. */
+  readonly id: Id;
   readonly tap: (handler: VetoTap<Input>, options?: TapOptions) => Layer.Layer<never, never, Self>;
   readonly declareTap: (
     handler: VetoTap<Input>,
@@ -233,6 +251,7 @@ export interface ObserveClass<Self, Id extends string, Input> extends Context.Se
   ObserveShape<Input>
 > {
   readonly kind: "observe";
+  readonly id: Id;
   readonly tap: (
     handler: ObserveTap<Input>,
     options?: TapOptions,
@@ -250,6 +269,7 @@ export interface DivertClass<Self, Id extends string, Input, Diverted> extends C
   DivertShape<Input, Diverted>
 > {
   readonly kind: "divert";
+  readonly id: Id;
   readonly tap: (
     handler: DivertTap<Input, Diverted>,
     options?: TapOptions,
@@ -400,10 +420,11 @@ export const veto =
     );
     const statics: {
       readonly kind: "veto";
+      readonly id: Id;
       readonly tap: typeof tap;
       readonly declareTap: typeof declareTap;
       readonly layer: typeof layer;
-    } = { kind: "veto", tap, declareTap, layer };
+    } = { kind: "veto", id, tap, declareTap, layer };
     return Object.assign(serviceKey, statics);
   };
 
@@ -476,10 +497,11 @@ export const observe =
     );
     const statics: {
       readonly kind: "observe";
+      readonly id: Id;
       readonly tap: typeof tap;
       readonly declareTap: typeof declareTap;
       readonly layer: typeof layer;
-    } = { kind: "observe", tap, declareTap, layer };
+    } = { kind: "observe", id, tap, declareTap, layer };
     return Object.assign(serviceKey, statics);
   };
 
@@ -559,9 +581,10 @@ export const divert =
     );
     const statics: {
       readonly kind: "divert";
+      readonly id: Id;
       readonly tap: typeof tap;
       readonly declareTap: typeof declareTap;
       readonly layer: typeof layer;
-    } = { kind: "divert", tap, declareTap, layer };
+    } = { kind: "divert", id, tap, declareTap, layer };
     return Object.assign(serviceKey, statics);
   };

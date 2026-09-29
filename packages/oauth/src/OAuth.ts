@@ -27,6 +27,7 @@ import {
   AuthPlugin,
   Accounts,
   ConstantTime,
+  HookPoint,
   Hooks,
   RateLimits,
   SessionCookie,
@@ -478,6 +479,7 @@ export interface OAuthShape {
     | OAuthApi.OAuthAuthorizationDenied
     | OAuthApi.AccountExists
     | Api.RateLimited
+    | HookPoint.HookAborted
     | Hooks.TwoFactorRequired
   >;
 }
@@ -554,6 +556,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // session).
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
       const afterSignIn = yield* Hooks.AfterSignIn;
+      // NAM-002: the sign-in veto every sign-in-completing flow consults, and
+      // the sign-up veto/observer for the first-login user creation below.
+      const beforeSignIn = yield* Hooks.BeforeSignIn;
+      const beforeSignUp = yield* Hooks.BeforeSignUp;
+      const afterSignUp = yield* Hooks.AfterSignUp;
 
       /**
        * Ticket 13: 20 callback attempts per minute per source IP — loose
@@ -938,11 +945,21 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
               // every other `.pipe(Effect.orDie)` in this codebase already
               // treats an unexpected persistence failure.
               const name = profile.name ?? profile.email ?? profile.subject;
+              // NAM-002/SCP-008: creation via OAuth is still a sign-up, so the
+              // same `BeforeSignUp` veto guards it (its `strategy` is the
+              // provider id), before anything is written.
+              const vetoedSignUp = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
+                beforeSignUp.run({
+                  email: profile.email ?? `${providerId}:${profile.subject}`,
+                  name,
+                  strategy: providerId,
+                }),
+              );
               const created = yield* sqlTransaction
                 .withTransaction(
                   Effect.gen(function* () {
                     const user = yield* users
-                      .create({ email: profile.email ?? `${providerId}:${profile.subject}`, name })
+                      .create({ email: vetoedSignUp.email, name: vetoedSignUp.name })
                       .pipe(
                         Effect.catchTag("EmailAlreadyExists", () =>
                           // A concurrent sign-up claimed the address between
@@ -1003,6 +1020,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                 // and must still reach the caller as itself.
                 .pipe(Effect.catchTag("SqlError", Effect.die));
               yield* events.publish({ _tag: "auth.user.created", userId: created.id });
+              yield* afterSignUp.run({
+                userId: created.id,
+                email: created.email,
+                strategy: providerId,
+              });
               return created.id;
             }),
         });
@@ -1012,6 +1034,16 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           // session, the caller's existing one is untouched.
           return { callbackURL: flow.callbackURL, session: undefined };
         }
+
+        // NAM-002: the sign-in veto, before the MFA divert point below.
+        const signedInUser = yield* users.findById(targetUserId).pipe(Effect.orDie);
+        yield* HookPoint.aborted(Hooks.BeforeSignIn)(
+          beforeSignIn.run({
+            userId: targetUserId,
+            email: signedInUser.email,
+            strategy: providerId,
+          }),
+        );
 
         // BCR-004/THS-002: same canonical MFA attachment point
         // `@awthaq/password`'s own `signIn` consults, right before this

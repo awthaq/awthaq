@@ -20,12 +20,13 @@
 //   installed `@qadi/testing`/`@qadi/core`; the real equivalent is
 //   `@qadi/core`'s own `makeSubject`/`fromRoles`, and `@qadi/testing`'s
 //   `Fixtures.ts` ready-made subjects — a test imports those directly.
-// - BEH-EA-200 (hook veto/observe isolation) is now directly testable via
+// - BEH-EA-200 (hook veto/observe isolation) is directly testable via
 //   `@awthaq/core`'s `HookPoint.ts` (see `packages/core/test/HookPoint.test.ts`
-//   for veto-abort/observe-isolation/divert coverage) — but no hook point is
-//   wired into a real signUp/signIn flow yet (`HookPoint.ts`'s own header
-//   comment), so `TestAuth.layer` itself still has nothing plugin-facing to
-//   assemble for this one.
+//   for veto-abort/observe-isolation/divert coverage), and every core hook
+//   point is wired into the real sign-up/sign-in flows (NAM-002). Every point's
+//   own layer (`Hooks.HooksLive`) rides in `MemoryPorts`, so a test taps a point
+//   by passing the tap in `TestAuth.layer`'s second parameter — it requires its
+//   point, which `MemoryPorts` provides.
 // - BEH-EA-199's "no `Redacted` value reaches a span or event" check is
 //   already, honestly, documented by that behavior file itself as "not
 //   mechanically verifiable today" (no tracer/logger interceptor exists) —

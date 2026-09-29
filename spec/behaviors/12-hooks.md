@@ -48,6 +48,8 @@ REQUIREMENT: A tap on a `kind: "veto"` hook point MUST be able to return a
              `code`.
 ```
 
+**As shipped (NAM-002/SCP-008):** core declares the six points `spec/overview.md` lists — `BeforeSignUp`, `AfterSignUp`, `BeforeSignIn`, `BeforeSessionIssue`, `AfterSignIn`, `BeforeUserDelete`. `BeforeSignUp` (input `{ email, name, strategy }`) guards every user-creating path, password sign-up and the OAuth first-login creation alike; `BeforeSignIn` (input `{ userId, email, strategy }`) guards every sign-in-completing flow (password, OAuth, passkey) once the credential is proven and before `BeforeSessionIssue`. An abort reaches the caller as `HookAborted` (HTTP 403) and no session is issued. `docs/migrations/authjs.md` maps Auth.js's `signIn` callback onto these points.
+
 **As shipped (JH-004):** a veto tap's returned value is checked against the point's own `input` schema (and a divert tap's diverted value against its outcome schema) before it reaches the next tap or the guarded operation; a value that fails is a `HookTapOutputInvalid` defect naming the point and the tap's owner, never a value the operation acts on.
 
 `archive/design/usage-examples-v4.md` §14 is the worked example of this exact case — a company restricting sign-up to its own email domain by tapping `Hooks.beforeSignUp` — and shows the abort reaching the caller as a structured `{ code, message }` rather than a generic failure. This is designed to let a veto tap enforce a business rule (domain allow-listing, a custom eligibility check) without the plugin that defines the hook point needing to know about that rule in advance.

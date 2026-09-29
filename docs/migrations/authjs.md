@@ -154,7 +154,35 @@ export const AuthJsSessionBridge = Layer.effect(
 
 (The bridge cannot fail: any error degrades to "not a bridgeable session", which `Sessions.verify` reports as the ordinary uniform `SessionNotFound`.) With no bridge installed the port defaults to a no-op, and forced re-login is exactly what happens.
 
-## 4. Cutover checklist
+## 4. Callbacks: `signIn`, `jwt`, `session`
+
+Auth.js's `callbacks` have direct landing spots. The sign-in ones are **hook points** (`@awthaq/core`'s `Hooks`, BEH-EA-089 to 096); a tap is a `Layer` provided next to the hook points' own layer (`Hooks.HooksLive`), and a veto's abort reaches the client as the typed `HookAborted` (HTTP 403) carrying your `code`.
+
+| Auth.js callback | awthaq |
+|---|---|
+| `signIn` returns `true` | a `Hooks.BeforeSignIn` tap returns its input (or no tap at all) |
+| `signIn` returns `false` | a `BeforeSignIn` tap fails with `new HookPoint.HookAbort({ code: "ACCESS_DENIED" })` |
+| `signIn` returns a redirect path (a string) | fail with a `code` (and `message`) your client maps to that redirect; a hook cannot itself redirect a JSON API |
+| `signIn` throws | the same as `false`: an unexpected defect in a tap is a 500, so translate business refusals into `HookAbort` |
+| `events.createUser` / `events.signIn` | `Hooks.AfterSignUp` / `Hooks.AfterSignIn` taps (observe: a failure never fails the sign-in), or an `AuthEvents.on("auth.user.created" \| "auth.user.signedIn", ...)` subscriber |
+| domain allow-list on first login (`signIn` checking `profile.email`) | a `Hooks.BeforeSignUp` tap: it is consulted on password sign-up **and** on OAuth first-login creation (`strategy` is `"password"` or the provider id) |
+| `jwt` / `session` (add claims to the token or session object) | `@awthaq/qadi` attribute resolvers and `UserClaims`, not a token mutation: authorization reads attributes at decision time |
+
+`BeforeSignIn` is consulted by every sign-in-completing flow (password, OAuth, passkey) after the credential is proven and before `BeforeSessionIssue` (the MFA divert point), so a denial can never be used to probe a guessed password. Its input is `{ userId, email, strategy }`:
+
+```ts
+import { HookPoint, Hooks } from "@awthaq/core";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+
+const AllowCompanyDomain = Hooks.BeforeSignIn.tap((input) =>
+  input.email.endsWith("@acme.com")
+    ? Effect.succeed(input)
+    : Effect.fail(new HookPoint.HookAbort({ code: "DOMAIN_NOT_ALLOWED" })),
+).pipe(Layer.provideMerge(Hooks.HooksLive));
+```
+
+## 5. Cutover checklist
 
 1. Provision awthaq (`CoreMigrations` for the core tables, `Migrations.run(auth.migrations)` for plugins — see `packages/sql/README.md`, *Running migrations*).
 2. Import users, accounts and credential hashes (steps 1–2). Keep the Auth.js database read-only from here on.

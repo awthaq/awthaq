@@ -32,9 +32,39 @@ import * as Schema from "effect/Schema";
 import * as HookPoint from "./HookPoint.ts";
 
 // BEH-EA-090: veto — a plugin may reject a sign-up outright (e.g. an
-// Auth0-Rule-style email-domain allow-list or subscription gate).
-const SignUpInput = Schema.Struct({ email: Schema.String, name: Schema.String });
+// Auth0-Rule-style email-domain allow-list or subscription gate). Consulted on
+// *every* user-creating path (NAM-002/SCP-008: password sign-up and the OAuth
+// first-login creation), so `strategy` says which one — `"password"`, or the
+// OAuth provider id — and one tap can tell them apart.
+const SignUpInput = Schema.Struct({
+  email: Schema.String,
+  name: Schema.String,
+  strategy: Schema.String,
+});
 export class BeforeSignUp extends HookPoint.veto<BeforeSignUp>()("auth.user.signUp", SignUpInput) {}
+
+// NAM-002: observe — fired once a new user's creation has committed, whichever
+// strategy created it (the after-the-fact twin of `BeforeSignUp`; welcome mail,
+// provisioning fan-out, CRM sync).
+const SignedUp = Schema.Struct({
+  userId: Schema.String,
+  email: Schema.String,
+  strategy: Schema.String,
+});
+export class AfterSignUp extends HookPoint.observe<AfterSignUp>()("auth.user.signedUp", SignedUp) {}
+
+// NAM-002: veto — consulted by every sign-in-completing flow (password,
+// oauth, passkey) once the credential has been proven and before
+// `BeforeSessionIssue`. This is where an Auth.js `signIn` callback returning
+// `false` lands (a domain allow-list, a banned user): a tap fails with
+// `HookAbort({ code })`, surfaced to the client as `HookAborted` (403). The
+// amended value is ignored: a sign-in cannot change who is signing in.
+const SignInInput = Schema.Struct({
+  userId: Schema.String,
+  email: Schema.String,
+  strategy: Schema.String,
+});
+export class BeforeSignIn extends HookPoint.veto<BeforeSignIn>()("auth.user.signIn", SignInInput) {}
 
 // BEH-EA-092: observe — fired once a session-backed sign-in completes,
 // regardless of which strategy (password/oauth/passkey) produced it.
@@ -112,6 +142,8 @@ export class AfterUserAttributesChanged extends HookPoint.observe<AfterUserAttri
  */
 export const HooksLive = Layer.mergeAll(
   BeforeSignUp.layer,
+  AfterSignUp.layer,
+  BeforeSignIn.layer,
   AfterSignIn.layer,
   BeforeSessionIssue.layer,
   BeforeUserDelete.layer,

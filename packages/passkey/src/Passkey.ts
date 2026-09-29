@@ -27,6 +27,7 @@ import {
   AuthEvents,
   AuthPlugin,
   Accounts,
+  HookPoint,
   Hooks,
   Migrations,
   RateLimits,
@@ -543,6 +544,7 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyChallengeInvalid
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCounterAnomaly
+    | HookPoint.HookAborted
     | Hooks.TwoFactorRequired
   >;
   readonly listCredentials: (
@@ -910,6 +912,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       // future `TwoFactor` plugin taps.
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
       const afterSignIn = yield* Hooks.AfterSignIn;
+      const beforeSignIn = yield* Hooks.BeforeSignIn;
 
       // ---- layer-build validation and operator warnings --------------------
 
@@ -1426,9 +1429,18 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // session for a dead `userId` with no existence check of its
           // own: same uniform `InvalidCredentials` collapse BEH-EA-136
           // already applies to every other failure in this ceremony.
-          yield* users
+          const signedInUser = yield* users
             .findById(stored.userId)
             .pipe(Effect.catchTag("UserNotFound", () => Effect.fail(new Api.InvalidCredentials())));
+
+          // NAM-002: the sign-in veto, before the MFA divert point below.
+          yield* HookPoint.aborted(Hooks.BeforeSignIn)(
+            beforeSignIn.run({
+              userId: stored.userId,
+              email: signedInUser.email,
+              strategy: "passkey",
+            }),
+          );
 
           // BCR-004/THS-002: same canonical MFA attachment point
           // `@awthaq/password`'s own `signIn` consults, right before this
