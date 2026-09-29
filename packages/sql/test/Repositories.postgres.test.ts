@@ -46,6 +46,7 @@ const coreTables = [
   "verification_tokens",
   "verification_reservations",
   "auth_audit_log",
+  "auth_relay_cursor",
   "effect_sql_migrations",
 ];
 
