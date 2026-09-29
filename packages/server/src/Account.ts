@@ -5,7 +5,7 @@
 // the same way `Session.SessionHandlers` is.
 
 import { AuthCore, Api, AccountContract } from "@awthaq/api";
-import { AuthEvents, DataExport, Erasure, RateLimits, Users } from "@awthaq/core";
+import { AuthEvents, DataExport, Erasure, RateLimits, UserFields, Users } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -37,12 +37,16 @@ const identityDto = (identity: Users.UserIdentity): AccountContract.IdentityDto 
   }
 };
 
-const toDto = (user: Users.UserRecord): AccountContract.AccountDto =>
+const toDto = (
+  user: Users.UserRecord,
+  fields: UserFields.Values,
+): AccountContract.AccountDto =>
   new AccountContract.AccountDto({
     id: user.id,
     identity: identityDto(user.identity),
     name: user.name,
     image: Option.getOrNull(user.image),
+    fields,
   });
 
 /** Reading every plugin's store is the costliest thing an account can ask for; a person needs it rarely. */
@@ -57,6 +61,8 @@ export const AccountHandlers = HttpApiBuilder.group(
     const dataExport = yield* DataExport.AccountExport;
     const limiter = yield* RateLimiter.RateLimiter;
     const events = yield* AuthEvents.AuthEvents;
+    // SAM-004: a composition that declares no user field answers `fields: {}` without a query.
+    const declared = yield* UserFields.UserFieldRegistry;
 
     return handlers.handleAll({
       updateProfile: Effect.fnUntraced(function* ({
@@ -68,17 +74,38 @@ export const AccountHandlers = HttpApiBuilder.group(
         // The token was validated at authentication time; the user it
         // names must still exist — a `UserNotFound` here is a defect, not
         // a request-level condition the caller can act on.
-        const updated = yield* users.updateProfile(userId, payload).pipe(
-          Effect.catchTag("UserNotFound", () =>
-            Effect.die(
-              new HandlerInvariantViolation({
-                invariant: "AuthenticatedUserMissing",
-                message: `awthaq: authenticated user missing: ${userId}`,
-              }),
-            ),
-          ),
-        );
-        return toDto(updated);
+        const missing = () =>
+          Effect.die(
+            new HandlerInvariantViolation({
+              invariant: "AuthenticatedUserMissing",
+              message: `awthaq: authenticated user missing: ${userId}`,
+            }),
+          );
+        // SAM-004/BEH-EA-048: declared fields first, as `source: "client"` — validated and gated as a
+        // whole before anything is stored, so a refused field leaves the profile untouched too. Only
+        // the fields their plugin left `clientWritable` are accepted.
+        const requested = payload.fields === undefined ? {} : payload.fields;
+        const written =
+          Object.keys(requested).length === 0
+            ? Option.none<UserFields.Values>()
+            : Option.some(
+                yield* users
+                  .setFields(userId, requested, { source: "client" })
+                  .pipe(Effect.catchTag("UserNotFound", missing)),
+              );
+        const updated = yield* users
+          .updateProfile(userId, { name: payload.name, image: payload.image })
+          .pipe(Effect.catchTag("UserNotFound", missing));
+        const fields = Option.isSome(written)
+          ? written.value
+          : declared.size === 0
+            ? {}
+            : yield* users.getFields(userId).pipe(
+                Effect.catchTag("UserNotFound", missing),
+                // A key the registry itself listed cannot be undeclared.
+                Effect.catchTag("UnknownUserField", Effect.die),
+              );
+        return toDto(updated, fields);
       }),
 
       // Deletes the caller's own account. The cascade itself — every registered

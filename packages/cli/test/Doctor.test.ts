@@ -65,6 +65,7 @@ describe("doctor: graph", () => {
         ],
         hooks: {},
         config: [],
+        userFields: [],
       };
       const config = configOf({ ...passwordAndRoles, manifest });
       const report = yield* Doctor.diagnose(config, development);

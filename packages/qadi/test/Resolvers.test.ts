@@ -269,6 +269,8 @@ describe("UserAttributes maps a Users outage to AttributeResolveError (TS-002)",
     setStatus: () => Effect.die("setStatus is not used"),
     delete: () => Effect.die("delete is not used"),
     list: () => Effect.die("list is not used"),
+    getFields: () => Effect.die("getFields is not used"),
+    setFields: () => Effect.die("setFields is not used"),
   });
 
   it.effect("a Users outage fails AttributeResolveError naming the attribute", () =>

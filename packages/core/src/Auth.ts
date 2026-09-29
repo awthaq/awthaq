@@ -13,6 +13,7 @@ import { AuthCore } from "@awthaq/api";
 import type * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as Layer from "effect/Layer";
+import type * as Types from "effect/Types";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -21,6 +22,7 @@ import * as HookPoint from "./HookPoint.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
 import * as Slots from "./Slots.ts";
+import * as UserFields from "./UserFields.ts";
 
 // ---------------------------------------------------------------------------
 // Errors — catchable by class instead of by string-matching a plain `Error`
@@ -300,6 +302,16 @@ export interface Manifest {
   readonly hooks: Readonly<Record<string, ReadonlyArray<ManifestTap>>>;
   /** ECS-008: every installed plugin's configuration descriptors, in link order — static, no Layer evaluated. */
   readonly config: ReadonlyArray<ManifestConfig>;
+  /** SAM-004: every plugin-declared user field the linker adds a column for, in link order. */
+  readonly userFields: ReadonlyArray<ManifestUserField>;
+}
+
+/** SAM-004: one declared user field as the manifest reports it (the schema itself lives in `Built.userFields`). */
+export interface ManifestUserField {
+  readonly key: string;
+  readonly column: string;
+  readonly kind: UserFields.ColumnKind;
+  readonly clientWritable: boolean;
 }
 
 /**
@@ -314,6 +326,29 @@ export interface Manifest {
 type GroupsOf<Plugin> = Plugin extends { readonly contract: HttpApi.HttpApi<string, infer Groups> }
   ? Groups
   : never;
+
+/**
+ * SAM-004: one plugin's declared user fields, keyed `<plugin id>_<field>`. Read off the type-only
+ * `"~userFields"` member (see `AuthPlugin.Class`), so at a concrete call site it is the per-key type the
+ * plugin declared, not the widened `Declarations`; a plugin declaring none contributes `{}`.
+ */
+type UserFieldsOfPlugin<Plugin> = Plugin extends {
+  readonly id: infer Id extends string;
+  readonly "~userFields"?: infer Fields;
+}
+  ? {
+      readonly [K in keyof NonNullable<Fields> & string as `${Id}_${K}`]: NonNullable<Fields>[K];
+    }
+  : {};
+
+/**
+ * SAM-004: the composed user fields of a plugin tuple, as `{ "<plugin id>_<field>": Schema }`. This is
+ * the type of `Built.userFields` and what a typed accessor (`Users.typedFields(auth.userFields)`) and the
+ * client's profile `fields` are typed by.
+ */
+export type UserFieldsOf<P extends ReadonlyArray<AuthPlugin.Any>> = Types.UnionToIntersection<
+  UserFieldsOfPlugin<P[number]>
+>;
 
 /**
  * MW-002 (wayfinder ticket 26): core's own `session`/`account` groups, read off
@@ -405,8 +440,25 @@ export interface Built<
    * provided (and exposed in `ROut`, for introspection) — `Slots.override` requires it.
    */
   readonly layer: ProvideMerged<FoldLayer<P>, typeof Slots.layer>;
+  /**
+   * SAM-004: the migrations the linker generates for `userFields` are part of these, after every
+   * plugin's own (see `renumberMigrations`). Run core's migrations first, then these.
+   */
   readonly migrations: Migrations;
   readonly manifest: Manifest;
+  /**
+   * SAM-004 (BEH-EA-040/048): every plugin-declared user field of this composition, keyed `<plugin id>_<field>`
+   * with the field's own schema. Pass it to `UserFields.layer` (so `Users` validates and gates writes) and to
+   * `Users.typedFields` (typed reads and writes); `TestAuth.layer` provides the registry for you.
+   */
+  readonly userFields: UserFieldsOf<P>;
+  /**
+   * SAM-004: provides the `UserFields.UserFieldRegistry` for `userFields` — provide it to `Users` (and to
+   * whatever serves the HTTP profile endpoint) so declared fields are validated, gated and readable:
+   * `Users.layerSql.pipe(Layer.provide(auth.userFieldsLayer))`. Empty, and harmless, when no plugin
+   * declares a field.
+   */
+  readonly userFieldsLayer: Layer.Layer<never>;
 }
 
 // ---------------------------------------------------------------------------
@@ -518,20 +570,49 @@ const findCycle = (
   ];
 };
 
-/** BEH-EA-016: core first (none yet, see the module header), then plugins in dependency order, keys re-written `NNNN_<plugin>_<name>`. */
+/**
+ * BEH-EA-016: core first (none yet, see the module header), then plugins in dependency order, keys re-written
+ * `NNNN_<plugin>_<name>`. SAM-004/BEH-EA-040: then the columns of every plugin's declared `userFields`, one
+ * generated `ALTER TABLE users ADD COLUMN` each (`UserFields.migrationFor`), in link order — the only way a
+ * plugin changes a shared table. They come after every plugin's own migrations so that adding a field never
+ * renumbers a hand-written one; as with adding a plugin, add a field on a database that has already been
+ * migrated by appending (the last plugin's, or a new field of the last one), because a migration whose id
+ * sorts before an applied one is refused by `awthaq migration status` (ECS-009), not applied late.
+ */
 const renumberMigrations = (order: ReadonlyArray<AuthPlugin.Any>): Migrations => {
   const out: Array<Migrations[number]> = [];
   let index = 0;
+  const next = (pluginId: string, migration: Migrations[number]) => {
+    index += 1;
+    out.push({
+      ...migration,
+      name: `${String(index).padStart(4, "0")}_${pluginId}_${migration.name}`,
+    });
+  };
   for (const plugin of order) {
-    for (const migration of plugin.migrations) {
-      index += 1;
-      out.push({
-        ...migration,
-        name: `${String(index).padStart(4, "0")}_${plugin.id}_${migration.name}`,
-      });
+    for (const migration of plugin.migrations) next(plugin.id, migration);
+  }
+  for (const plugin of order) {
+    for (const descriptor of UserFields.describePlugin(plugin.id, plugin.userFields ?? {})) {
+      next(plugin.id, UserFields.migrationFor(descriptor));
     }
   }
   return out;
+};
+
+/** SAM-004: every plugin's declared user fields in one record keyed `<plugin id>_<field>`; refuses two that share a column. */
+const composeUserFields = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+): Readonly<Record<string, UserFields.Declaration>> => {
+  const composed = Object.fromEntries(
+    order.flatMap((plugin) =>
+      Object.entries(plugin.userFields ?? {}).map(
+        ([name, schema]): [string, UserFields.Declaration] => [`${plugin.id}_${name}`, schema],
+      ),
+    ),
+  );
+  UserFields.describeAll(composed);
+  return composed;
 };
 
 const buildHooks = (
@@ -569,6 +650,9 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
   hooks: buildHooks(order),
   config: order.flatMap((plugin) =>
     (plugin.config ?? []).map((descriptor) => ({ pluginId: plugin.id, descriptor })),
+  ),
+  userFields: UserFields.describeAll(composeUserFields(order)).map(
+    ({ key, column, kind, clientWritable }) => ({ key, column, kind, clientWritable }),
   ),
 });
 
@@ -784,5 +868,7 @@ export function make(
     layer: composeLayer(order),
     migrations: renumberMigrations(order),
     manifest: buildManifest(order),
+    userFields: composeUserFields(order),
+    userFieldsLayer: UserFields.layer(composeUserFields(order)),
   };
 }
