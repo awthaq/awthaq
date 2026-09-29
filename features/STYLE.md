@@ -1,12 +1,12 @@
 # Gherkin authoring style — awthaq
 
-This is the contract every `.feature` file in `features/features/` follows. It exists so that ~700 scenarios written by different authors (human or agent) read as one suite, not twenty-six. Read this in full before writing or editing any `.feature` file.
+This is the contract every `.feature` file in `features/features/` follows. It exists so that the ~700 scenarios written by different authors (human or agent) read as one suite, not thirty. Read this in full before writing or editing any `.feature` file.
 
 ## Where this suite comes from
 
 Every scenario here is a Gherkin restatement of a requirement already specified in `spec/behaviors/NN-*.md`. This suite does not invent requirements — it makes the existing `BEH-EA-NNN` catalog executable-shaped. If a scenario needs a fact the source `.md` doesn't state, that's a signal to re-read the source (and its cross-referenced `ADR-EA`/`INV-EA`/`MOD-EA` entries), not to invent one.
 
-`awthaq` is pre-implementation: no package, no source, no test runner. Every `.feature` file therefore opens with the same banner comment (see template below) stating plainly that this describes intended behavior of a system that does not exist yet — the same discipline every `spec/*.md` file already follows.
+The suite is executable. A Feature whose behavior is implemented is wired to real step definitions (see [`README.md`](README.md)); only a Feature with no shipped implementation yet is `@unwired`, and only that Feature carries the pre-implementation banner (see "Banner" below).
 
 ## File structure
 
@@ -32,10 +32,13 @@ Do not merge two `BEH-EA` ids into one `Rule`, and do not split one `BEH-EA` id 
 
 - `Feature:` gets 1–2 free-text domain tags (`@sessions`, `@oauth`, `@authorization-bridge`, ...) — pick words that would help someone run `cucumber --tags` for a subsystem later. Not load-bearing; use your judgment.
 - `Rule:` gets exactly one tag: `@BEH-EA-NNN`, matching the source heading. This is load-bearing — it is how `spec/traceability.md` and `verify-traceability.sh` will trace back to the specification.
-- **`Scenario:` gets no `@REQ-EA` tag from you.** `REQ-EA-NNN` ids are allocated in one later deterministic pass across the whole suite, in file order, so that parallel authors never collide on a number. Leave scenarios untagged (beyond whatever the `Rule:` above them carries).
+- **`Scenario:` gets no `@REQ-EA` tag from you, but it does get one.** `REQ-EA-NNN` tags are mandatory and *allocator-owned*: `python3 features/scripts/allocate-req-ea.py` assigns them in one deterministic, idempotent pass (existing ids are permanent), so parallel authors never collide on a number. Add scenarios untagged, run the allocator, commit the regenerated [`traceability.md`](traceability.md). Never hand-tag; `pnpm run spec:verify:strict` fails on a duplicate, an unmanifested tag or an orphan manifest row.
+- **`@skip`, `@only`, `@unwired`.** `@skip` on a `Scenario:` marks a *pruned* scenario, and a comment directly above it must state the concrete reason — `# @skip: <why it is not observable>; covered by <test file/name>` or `# @skip: blocked by <issue id>`. Never a bare `@skip`, never a pointer to a ticket that is not in the repository. `@skip @unwired` on the `Feature:` marks a Feature with no implementation to run against; it is removed the moment the Feature is wired. `@only` is for local debugging and must not be committed.
 - A `Rule` whose source heading cites an `ADR-EA` or `INV-EA` gets a one-line comment directly above it: `# BEH-EA-NNN — spec/behaviors/NN-*.md; see also ADR-EA-xxx, INV-EA-xxx`. Copy the citations straight from the source heading's `> **See:**` / `> **Invariant:**` line — don't re-derive them.
 
-## Banner (top of every `.feature` file)
+## Banner (top of an `@unwired` `.feature` file only)
+
+A Feature that is `@unwired` opens with this banner; **wiring the Feature removes it** (`27-admin-impersonation.feature` is the model of a wired file — it has no banner). The banner and the `@unwired` tag must appear together: `spec/scripts/verify-traceability.sh` fails when only one of them is present.
 
 ```gherkin
 # awthaq is pre-implementation (see spec/README.md). Every scenario in
@@ -92,11 +95,6 @@ Reuse the same phrasing for the same concept across every file, so `grep` across
 ### 1. An ordinary runtime behavior (Sessions)
 
 ```gherkin
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @domain @sessions
 Feature: Sessions
 
@@ -233,8 +231,10 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
 ## What not to do
 
 - Don't invent a requirement the source `.md` doesn't state, even a plausible one — file it as a gap in your final summary instead, don't quietly add it as a scenario.
-- Don't tag scenarios with `@REQ-EA-*`.
+- Don't hand-tag scenarios with `@REQ-EA-*` — the allocator does (see "Tagging").
+- Don't leave a bare `@skip`: every scenario-level `@skip` carries its rationale comment.
+- Don't write a step that claims something it does not check (a `Then` that is an empty effect, a `Given` that performs the `When`'s request).
 - Don't touch any file outside your assigned `.feature` file(s).
 - Don't collapse a named edge case into the happy path's `And` clauses.
 - Don't write a scenario that asserts qadi's own policy-evaluation result.
-- Don't use `\`\`\`typescript`/`\`\`\`tsx`-style compiled-language framing anywhere — this suite, like the rest of `spec/`, describes a system that does not exist yet.
+- Don't use `\`\`\`typescript`/`\`\`\`tsx`-style compiled-language framing in a `.feature` file — scenarios describe developer- and user-observable behavior in Gherkin, not code.
