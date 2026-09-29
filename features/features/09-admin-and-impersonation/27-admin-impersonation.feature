@@ -251,6 +251,35 @@ Feature: Admin and Impersonation
       When a signed-in user calls "admin.listUsers"
       Then the user-administration call is denied with "403 Forbidden"
 
+    Scenario: The gate runs before the target's existence is checked, so refusal and absence look the same
+      Given "Admin" configured with a "canManageUsers" predicate that admits only the target "target-1"
+      When a signed-in user calls "admin.getUser" for "unknown-user" and for "protected-1"
+      Then both calls are denied with "403 Forbidden", the unknown user never answering "404 Not Found"
+      And the same caller is served the admitted target "target-1"
+
+  # BEH-EA-222 — spec/behaviors/27-admin-impersonation.md
+  @BEH-EA-222
+  Rule: Users are listed keyset-paginated, read, and updated through the admin surface
+
+    Scenario: Users are listed a page at a time through an opaque cursor
+      Given "Admin" configured with a "canManageUsers" predicate that always resolves "true"
+      And three users besides the admin
+      When the admin calls "admin.listUsers" with "limit=2", then again with the returned cursor
+      Then the first page holds 2 users and a next cursor
+      And the second page holds the remaining 2 users and no next cursor
+
+    Scenario: A malformed cursor is a bad request
+      Given "Admin" configured with a "canManageUsers" predicate that always resolves "true"
+      When the admin calls "admin.listUsers" with "cursor=not-a-cursor"
+      Then the user-administration call is denied with "400 Bad Request"
+
+    Scenario: updateUser changes the name and never the email
+      Given "Admin" configured with a "canManageUsers" predicate that always resolves "true"
+      And a user with an active session of their own
+      When the admin calls "admin.updateUser" naming that user with the name "Ada"
+      Then the user-administration call succeeds with "200 OK"
+      And the returned user is named "Ada" and keeps the email it had
+
   # BEH-EA-223 — spec/behaviors/27-admin-impersonation.md
   @BEH-EA-223
   Rule: An admin manages a user's own sessions, never an impersonation episode's
@@ -262,3 +291,18 @@ Feature: Admin and Impersonation
       When the admin calls "admin.revokeUserSession" naming that user's session
       Then the user-administration call succeeds with "204 No Content"
       And that session no longer authenticates
+
+  # BEH-EA-224 — spec/behaviors/27-admin-impersonation.md
+  @BEH-EA-224
+  Rule: Admin actions are audited by events
+
+    Scenario: A refused user-administration call publishes an actionDenied event naming the caller
+      Given an application composing "Admin" with no "canManageUsers" predicate configured
+      When a signed-in user calls "admin.listUsers"
+      Then an "auth.admin.actionDenied" event is published for the caller "admin-1"
+
+    Scenario: Revoking a user's session publishes a sessionRevoked event
+      Given "Admin" configured with a "canManageUsers" predicate that always resolves "true"
+      And a user with an active session of their own
+      When the admin calls "admin.revokeUserSession" naming that user's session
+      Then an "auth.admin.sessionRevoked" event is published for the admin "admin-1" and that session

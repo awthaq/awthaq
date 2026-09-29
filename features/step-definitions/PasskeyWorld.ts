@@ -157,6 +157,8 @@ export interface AppOptions {
   readonly authenticatorSelection?: WebAuthn.AuthenticatorSelection;
   readonly counterAnomalyPolicy?: "flag" | "reject";
   readonly webAuthn?: MockWebAuthnOverrides;
+  /** REQ-EA-355/356/357: which `WebAuthn` port implementation the app is composed against — the mock (default) or the real `WebAuthn.layerSimpleWebAuthn`. Nothing else in the composition changes. */
+  readonly webAuthnPort?: "mock" | "simplewebauthn";
 }
 
 const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAuthnOverrides>) =>
@@ -187,7 +189,9 @@ const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAut
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
       Layer.mergeAll(
-        mockWebAuthn(webAuthnBehavior),
+        options.webAuthnPort === "simplewebauthn"
+          ? WebAuthn.layerSimpleWebAuthn
+          : mockWebAuthn(webAuthnBehavior),
         ChallengeStore.layerMemory,
         PasskeyCredentials.layerMemory,
         PasskeyUserHandles.layerMemory,
@@ -229,9 +233,11 @@ export const WorldLive = Layer.effect(
 /** Merges (not replaces) — the same `PasswordWorld.configureApp` pattern, so two Given steps compose. */
 export const configureApp = Effect.fn("features.passkey.configureApp")(function* (
   options: AppOptions,
+  mode: "merge" | "replace" = "merge",
 ) {
   const world = yield* World;
-  const merged = { ...(yield* Ref.get(world.appOptions)), ...options };
+  // `replace` starts from a clean composition — for a step that builds several independent apps in one Scenario.
+  const merged = { ...(mode === "merge" ? yield* Ref.get(world.appOptions) : {}), ...options };
   yield* Ref.set(world.appOptions, merged);
   const webAuthnBehavior = Ref.makeUnsafe<MockWebAuthnOverrides>(merged.webAuthn ?? {});
   const appLayer = buildAppLayer(merged, webAuthnBehavior);
@@ -325,6 +331,60 @@ export const signIn = Effect.fn("features.passkey.signIn")(function* (email: str
             const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
             const issued = yield* sessions.issue({ userId: user.id });
             return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
+          }).pipe(Effect.provide(context));
+        }),
+      ),
+    ),
+  );
+});
+
+/**
+ * REQ-EA-358: what `registerVerify` actually persisted for `email`'s user — read from the same
+ * running `PasskeyCredentials` store the handler wrote to (same `MemoMap`, same real-clock
+ * boundary as `signIn`), so a Then can compare every stored field, not just the wire response.
+ */
+export const storedCredentials = Effect.fn("features.passkey.storedCredentials")(function* (
+  email: string,
+) {
+  const { appLayer, memoMap } = yield* appHandle();
+  return yield* Effect.promise(() =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
+          return yield* Effect.gen(function* () {
+            const users = yield* Users.Users;
+            const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+            const user = yield* users.findByEmail(email);
+            if (Option.isNone(user)) throw new Error(`no user found for ${email}`);
+            return yield* credentials.listByUser(user.value.id);
+          }).pipe(Effect.provide(context));
+        }),
+      ),
+    ),
+  );
+});
+
+/**
+ * REQ-EA-363: reads a session back by its cookie — expiry windows the wire never exposes.
+ * Same real-clock `runPromise` boundary as `signIn` (see its comment).
+ */
+export const inspectSession = Effect.fn("features.passkey.inspectSession")(function* (
+  cookie: string,
+) {
+  const { appLayer, memoMap } = yield* appHandle();
+  const token = decodeURIComponent(cookie.replace(/^__Host-session=/, ""));
+  return yield* Effect.promise(() =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
+          return yield* Effect.gen(function* () {
+            const sessions = yield* Sessions.Sessions;
+            const { session } = yield* sessions.verify(Redacted.make(token));
+            return session;
           }).pipe(Effect.provide(context));
         }),
       ),

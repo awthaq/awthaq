@@ -1,8 +1,3 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @authentication-methods @passkey
 Feature: Passkey and WebAuthn
 
@@ -10,26 +5,12 @@ Feature: Passkey and WebAuthn
   @BEH-EA-129
   Rule: WebAuthn is a port, wrapped, not reimplemented
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 25: pruned, not
-    # force-implemented — a type-level/composition claim (Passkey depends
-    # only on the WebAuthn port's interface, never a concrete
-    # implementation), provable by reading Passkey.ts's own `make` Effect
-    # and its `yield* WebAuthn.WebAuthn`, not by a runtime request this
-    # step framework could make. The real `WebAuthn.layerSimpleWebAuthn`
-    # composition is already exercised for real by
-    # `packages/ports/test/WebAuthn.test.ts`.
-    @skip
     @REQ-EA-355
     Scenario: The application supplies the default SimpleWebAuthn implementation and Passkey composes against it
       Given an application composing "Passkey"
       When the application provides "WebAuthn.layerSimpleWebAuthn"
       Then "Passkey" performs its ceremonies using the provided "WebAuthn" port
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 25: pruned, not
-    # force-implemented — a structural/source-inspection claim ("Passkey's
-    # own code performs none of that parsing"), not a runtime behavior a
-    # wire-level step could observe.
-    @skip
     @REQ-EA-356
     Scenario: The passkey plugin performs no cryptographic verification of its own
       Given a registration or authentication ceremony being verified
@@ -37,15 +18,6 @@ Feature: Passkey and WebAuthn
       Then the CBOR/COSE parsing, attestation verification, and signature checking are all performed by the "WebAuthn" port
       And "Passkey"'s own code performs none of that parsing or verification itself
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 25: pruned, not
-    # force-implemented — same port-composition claim as REQ-EA-355, this
-    # time about swappability; this World already proves the plugin is
-    # driven entirely through the `WebAuthn` port interface (a mock
-    # implementation, not `layerSimpleWebAuthn`), which is the same
-    # structural property this scenario names, but "requires no change to
-    # the Passkey plugin" itself is a claim about the plugin's own source
-    # code, not a wire-observable behavior.
-    @skip
     @REQ-EA-357
     Scenario: Swapping the WebAuthn port implementation requires no change to the Passkey plugin
       Given an application composing "Passkey" against "WebAuthn.layerSimpleWebAuthn"
@@ -146,6 +118,12 @@ Feature: Passkey and WebAuthn
       When a ceremony's origin host is checked against "rpId"
       Then "rpId" is validated as a registrable-domain suffix of that origin
       And a bare substring or unrelated host match is not accepted in its place
+
+    Scenario: rpId suffix validation applies even to an origin the deployment listed
+      Given "passkey({ rpId: \"example.com\", origins: [\"https://example.com\", \"https://www.example.com\", \"https://evil-example.com\"] })"
+      When ceremonies arrive from "https://www.example.com" and from "https://evil-example.com"
+      Then the ceremony from "https://www.example.com" is accepted
+      And the ceremony from "https://evil-example.com" is rejected as an rpId mismatch
 
     @REQ-EA-371
     Scenario: Multiple explicit deployment origins are each matched individually

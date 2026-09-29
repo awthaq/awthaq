@@ -1,8 +1,3 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @authentication-methods @oauth
 Feature: OAuth and OIDC
 
@@ -16,12 +11,6 @@ Feature: OAuth and OIDC
       When an authorization request is built for "google"
       Then the request includes a PKCE challenge using the "S256" method
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 22: pruned, not
-    # force-implemented — "the interface declares pkce as structurally true" is a
-    # TypeScript type-level property (OAuthProviderConfig.pkce: true, a
-    # literal type, not boolean) — provable by reading the type
-    # declaration, not by any runtime request a step could make.
-    @skip
     @REQ-EA-329
     Scenario: The provider interface offers no configuration to disable PKCE
       Given the "OAuthProvider" interface
@@ -45,6 +34,12 @@ Feature: OAuth and OIDC
       When the authorization request is built
       Then "state", "codeVerifier", and "nonce" are stored server-side under core Verification with purpose "oauth.flow"
       And the stored entry is single-use and TTL-bounded
+
+    Scenario: Initiating an OIDC flow also stores the nonce server-side, encrypted at rest
+      Given an OIDC flow configured for provider "okta"
+      When an authorization request is built for "okta"
+      Then the stored flow entry carries an encrypted "codeVerifier" and an encrypted "nonce"
+      And the nonce sent to the provider does not appear in plaintext in the stored entry
 
     @REQ-EA-332
     Scenario: The browser receives only an opaque correlation cookie, never the verifier or nonce
@@ -158,13 +153,6 @@ Feature: OAuth and OIDC
       Then both Accounts remain distinct, keyed only by their own (provider, subject, issuer) tuples
       And neither callback is matched or merged by the shared email
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 22: pruned, not
-    # force-implemented — needs a real SQL backend (the in-memory Ref-backed Accounts
-    # implementation this suite composes has no genuine race to lose) plus
-    # real concurrent dispatch — already covered at the repository level
-    # by BEH-EA-043's own UNIQUE constraint
-    # (packages/sql/test/Repositories.test.ts).
-    @skip
     @REQ-EA-345
     Scenario: The tuple uniqueness holds under two concurrent link attempts for the same tuple
       Given no Account exists with provider "okta", subject "u-2", and issuer "https://okta.example.com/oauth2/default"
@@ -176,27 +164,17 @@ Feature: OAuth and OIDC
   @BEH-EA-126
   Rule: Provider secrets are `Config.Redacted`, inside Layers
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 22: pruned, not
-    # force-implemented — hit a real `Config.Redacted`/`Schema.Redacted`
-    # decode failure ("Encoding" schema issue) building a provider Layer
-    # from a `process.env`-set var in this harness, not yet root-caused
-    # within this ticket's own budget; `Config.Redacted` reading real env
-    # vars is exercised without issue elsewhere in this codebase
-    # (`packages/ports/src/PasswordHasher.ts`'s own `Config.Int` usage,
-    # `OAuth.test.ts`'s own `Config.succeed`-based fixtures), so this is
-    # flagged as a genuine follow-up specific to this scenario's own setup,
-    # not a real product defect assumed from a skipped test.
-    @skip
     @REQ-EA-346
     Scenario: A provider's client secret is read via Config.Redacted inside its own Layer construction
       Given a provider "okta" configured with "clientSecret: Config.Redacted(\"AUTH_OAUTH_OKTA_CLIENT_SECRET\")"
       When "okta"'s provider Layer is constructed
       Then the secret value is obtained from the environment via "Config.Redacted", inside that Layer
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 22: pruned, not
-    # force-implemented — a static source-code-inspection claim ("the application's
-    # plugin-wiring source code"), not a runtime behavior any step could
-    # exercise — closer to a lint/review concern than an acceptance test.
+    # @skip: a static claim about application wiring source, not a runtime behavior; the
+    # type system is the enforcement — `clientSecret` is `Config<Redacted<string>>`, so a plaintext
+    # literal does not compile (covered by the `@ts-expect-error` at packages/oauth/test/OAuth.test.ts
+    # "a secret must be a Config<Redacted>") and `Config.Redacted` reads the environment
+    # (packages/oauth/test/OAuthProviderConfig.test.ts, REQ-EA-346's unit counterpart).
     @skip
     @REQ-EA-347
     Scenario: The client secret never appears as a plaintext option or plugin argument

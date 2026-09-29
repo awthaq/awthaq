@@ -1,14 +1,11 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-#
-# DAG-007: the `DeviceAuthorization` plugin (RFC 8628) has no code and no
-# BEH-EA range yet, so these scenarios trace to its model,
-# spec/models/13-device-authorization.md (MOD-EA-013), whose "Security
-# parameters" and "Design constraints" sections they pin ahead of the
-# implementation. Registered `@skip @unwired`; wiring them (and giving them BEH
-# ids) belongs to the milestone that schedules the plugin.
+# @unwired: the `DeviceAuthorization` plugin (RFC 8628) is not built — there is no
+# package, no BEH-EA range and no step definitions, so these scenarios are specification only
+# and every one is reported as a skipped vitest node (see features/README.md, "Wired vs
+# unwired"). They trace to spec/models/13-device-authorization.md (MOD-EA-013), whose "Security
+# parameters" and "Design constraints" they pin ahead of the implementation.
+# Blocked by: the device-authorization-grant workstream (DAG-005, plan P16). Wiring them (and
+# giving them BEH-EA ids) belongs to the milestone that builds the plugin; that removes
+# `@skip @unwired` from the Feature line below.
 
 @authentication-methods @device-authorization @skip @unwired
 Feature: Device authorization grant (RFC 8628)

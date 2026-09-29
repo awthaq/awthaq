@@ -1,5 +1,6 @@
 // DAG-007: this Feature carries no step definitions yet — the `DeviceAuthorization`
-// plugin it specifies does not exist (spec/models/13-device-authorization.md). Registering
+// plugin it specifies is not built (spec/models/13-device-authorization.md; blocked by DAG-005's
+// device-authorization-grant workstream). Registering
 // it here with zero steps, against `@skip @unwired`, makes every Scenario a real,
 // individually reported vitest node (status: skipped) instead of invisible — vitest's
 // include glob only discovers `*.steps.test.ts` files. Wiring real steps replaces this

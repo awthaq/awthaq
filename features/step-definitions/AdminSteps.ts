@@ -1,5 +1,7 @@
 import { defineSteps } from "@effect-cucumber/vitest";
+import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import {
   configureApp,
   getOutcome,
@@ -921,6 +923,181 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       if (response.status !== 401) {
         throw new Error(`expected 401 for a revoked session, got ${response.status}`);
       }
+    }),
+  );
+
+  // ---- BEH-EA-221: the gate precedes the existence check ----
+
+  Given(
+    '"Admin" configured with a "canManageUsers" predicate that admits only the target {string}',
+    Effect.fn(function* (admitted: string) {
+      yield* configureApp({
+        canManageUsers: ({ target }) =>
+          Effect.succeed(Option.isSome(target) && target.value.id === admitted),
+      });
+      yield* setOutcome("adminCookie", yield* signIn("admin-1"));
+    }),
+  );
+
+  When(
+    'a signed-in user calls "admin.getUser" for {string} and for {string}',
+    Effect.fn(function* (unknownId: string, refusedId: string) {
+      const cookie = (yield* getOutcome("adminCookie")) as string;
+      yield* setOutcome("getUserResponses", [
+        yield* request("GET", `/admin/users/${unknownId}`, { headers: { cookie } }),
+        yield* request("GET", `/admin/users/${refusedId}`, { headers: { cookie } }),
+      ]);
+      yield* setOutcome(
+        "admittedResponse",
+        yield* request("GET", "/admin/users/target-1", { headers: { cookie } }),
+      );
+    }),
+  );
+
+  Then(
+    'both calls are denied with "403 Forbidden", the unknown user never answering "404 Not Found"',
+    Effect.fn(function* () {
+      const responses = (yield* getOutcome("getUserResponses")) as ReadonlyArray<Response>;
+      assert.deepStrictEqual(
+        responses.map((response) => response.status),
+        [403, 403],
+      );
+    }),
+  );
+
+  Then(
+    "the same caller is served the admitted target {string}",
+    Effect.fn(function* (_id: string) {
+      // The predicate is what refused the others, not a blanket denial: the admitted target reads fine.
+      const response = (yield* getOutcome("admittedResponse")) as Response;
+      assert.strictEqual(response.status, 200);
+    }),
+  );
+
+  // ---- BEH-EA-222: keyset-paginated listing, read and update ----
+
+  Given(
+    "three users besides the admin",
+    Effect.fn(function* () {
+      for (const id of ["listed-1", "listed-2", "listed-3"]) yield* signIn(id);
+    }),
+  );
+
+  When(
+    'the admin calls "admin.listUsers" with {string}, then again with the returned cursor',
+    Effect.fn(function* (query: string) {
+      const cookie = (yield* getOutcome("adminCookie")) as string;
+      const firstResponse = yield* request("GET", `/admin/users?${query}`, { headers: { cookie } });
+      const first = (yield* Effect.promise(() => firstResponse.json())) as {
+        readonly items: ReadonlyArray<unknown>;
+        readonly nextCursor: string | null;
+      };
+      yield* setOutcome("firstPage", first);
+      if (first.nextCursor === null) throw new Error("expected a next cursor on the first page");
+      const secondResponse = yield* request(
+        "GET",
+        `/admin/users?${query}&cursor=${encodeURIComponent(first.nextCursor)}`,
+        { headers: { cookie } },
+      );
+      yield* setOutcome("secondPage", yield* Effect.promise(() => secondResponse.json()));
+    }),
+  );
+
+  Then(
+    "the first page holds {int} users and a next cursor",
+    Effect.fn(function* (count: number) {
+      const page = (yield* getOutcome("firstPage")) as {
+        readonly items: ReadonlyArray<unknown>;
+        readonly nextCursor: string | null;
+      };
+      assert.strictEqual(page.items.length, count);
+      assert.ok(page.nextCursor !== null);
+    }),
+  );
+
+  Then(
+    "the second page holds the remaining {int} users and no next cursor",
+    Effect.fn(function* (count: number) {
+      const page = (yield* getOutcome("secondPage")) as {
+        readonly items: ReadonlyArray<unknown>;
+        readonly nextCursor: string | null;
+      };
+      // Four users exist in all (the admin and the three above): 2 + 2.
+      assert.strictEqual(page.items.length, count);
+      assert.strictEqual(page.nextCursor, null);
+    }),
+  );
+
+  When(
+    'the admin calls "admin.listUsers" with {string}',
+    Effect.fn(function* (query: string) {
+      const cookie = (yield* getOutcome("adminCookie")) as string;
+      yield* setOutcome(
+        "userAdminResponse",
+        yield* request("GET", `/admin/users?${query}`, { headers: { cookie } }),
+      );
+    }),
+  );
+
+  When(
+    'the admin calls "admin.updateUser" naming that user with the name {string}',
+    Effect.fn(function* (name: string) {
+      const cookie = (yield* getOutcome("adminCookie")) as string;
+      const listResponse = yield* request("GET", "/admin/users", { headers: { cookie } });
+      const users = (yield* Effect.promise(() => listResponse.json())) as {
+        readonly items: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+      };
+      const target = users.items.find((user) => user.name === "target-1");
+      if (target === undefined) throw new Error("expected the target user to be listed");
+      yield* setOutcome("updateTarget", target);
+      yield* setOutcome(
+        "userAdminResponse",
+        yield* request("PATCH", `/admin/users/${target.id}`, {
+          body: { name },
+          headers: { cookie },
+        }),
+      );
+    }),
+  );
+
+  Then(
+    "the returned user is named {string} and keeps the email it had",
+    Effect.fn(function* (name: string) {
+      const response = (yield* getOutcome("userAdminResponse")) as Response;
+      const updated = (yield* Effect.promise(() => response.json())) as {
+        readonly name: string;
+        readonly identity: { readonly email: string };
+      };
+      assert.strictEqual(updated.name, name);
+      assert.strictEqual(updated.identity.email, "target-1@example.com");
+    }),
+  );
+
+  // ---- BEH-EA-224: admin actions are audited by events ----
+
+  Then(
+    'an "auth.admin.actionDenied" event is published for the caller {string}',
+    Effect.fn(function* (adminId: string) {
+      const events = yield* publishedEvents();
+      const denied = events.find((event) => event._tag === "auth.admin.actionDenied");
+      assert.ok(denied !== undefined, "expected an actionDenied event");
+      assert.ok(denied._tag === "auth.admin.actionDenied");
+      assert.strictEqual(denied.adminUserId, adminId);
+      assert.strictEqual(typeof denied.action, "string");
+    }),
+  );
+
+  Then(
+    'an "auth.admin.sessionRevoked" event is published for the admin {string} and that session',
+    Effect.fn(function* (adminId: string) {
+      const userCookie = (yield* getOutcome("userCookie")) as string;
+      const sessionId = tokenFromCookie(userCookie).split(".")[0]!;
+      const events = yield* publishedEvents();
+      const revoked = events.find((event) => event._tag === "auth.admin.sessionRevoked");
+      assert.ok(revoked !== undefined, "expected a sessionRevoked event");
+      assert.ok(revoked._tag === "auth.admin.sessionRevoked");
+      assert.strictEqual(revoked.adminUserId, adminId);
+      assert.strictEqual(revoked.sessionId, sessionId);
     }),
   );
 

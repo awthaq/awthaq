@@ -1,12 +1,22 @@
-import { defineSteps } from "@effect-cucumber/vitest";
-import * as Effect from "effect/Effect";
+import { defineSteps, ParameterTypeStore } from "@effect-cucumber/vitest";
+import { ChallengeStore, PasskeyApi } from "@awthaq/passkey";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
+import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
+import assert from "node:assert/strict";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import {
   buildClientDataJSON,
   configureApp,
   extractChallenge,
   getLastResponse,
   getOutcome,
+  inspectSession,
   linkOtherAccount,
   ORIGIN,
   overrideWebAuthnBehavior,
@@ -14,6 +24,7 @@ import {
   RP_ID,
   setOutcome,
   signIn,
+  storedCredentials,
   World,
 } from "./PasskeyWorld.ts";
 import { cookieFrom } from "./shared/Harness.ts";
@@ -47,6 +58,55 @@ const registerCredential = Effect.fn("features.passkey.registerCredential")(func
   });
 });
 
+/** Asks `register/options` for a fresh ceremony, returning its challenge. */
+const issueChallenge = Effect.fn("features.passkey.issueChallenge")(function* (cookie: string) {
+  const optionsResponse = yield* request("POST", "/passkey/register/options", {
+    body: {},
+    headers: { cookie },
+  });
+  return extractChallenge(yield* Effect.promise(() => optionsResponse.json()));
+});
+
+/** Presents a registration credential for exactly `challenge` — the same wire call `registerCredential` makes, for a challenge the caller chose. */
+const verifyChallenge = Effect.fn("features.passkey.verifyChallenge")(function* (
+  cookie: string,
+  challenge: string,
+  credentialId = "cred-mock-1",
+) {
+  return yield* request("POST", "/passkey/register/verify", {
+    body: {
+      credential: {
+        id: credentialId,
+        rawId: credentialId,
+        type: "public-key",
+        response: {
+          clientDataJSON: buildClientDataJSON({
+            type: "webauthn.create",
+            challenge,
+            origin: ORIGIN,
+          }),
+          attestationObject: "",
+        },
+      },
+    },
+    headers: { cookie },
+  });
+});
+
+const bodyTag = Effect.fn("features.passkey.bodyTag")(function* (response: Response) {
+  const body = (yield* Effect.promise(() => response.clone().json())) as { readonly _tag?: string };
+  return body._tag;
+});
+
+/** A rejected ceremony: not a 200, and precisely this typed error. */
+const assertRejectedWith = Effect.fn("features.passkey.assertRejectedWith")(function* (
+  response: Response,
+  tag: string,
+) {
+  assert.notStrictEqual(response.status, 200);
+  assert.strictEqual(yield* bodyTag(response), tag);
+});
+
 const authenticate = Effect.fn("features.passkey.authenticate")(function* (
   credentialId = "cred-mock-1",
 ) {
@@ -73,7 +133,172 @@ const authenticate = Effect.fn("features.passkey.authenticate")(function* (
   });
 });
 
+/** What a `passkeyConfig` literal in the feature text stands for. */
+export interface PasskeyConfigChoice {
+  readonly rpId: string;
+  readonly origins: ReadonlyArray<string>;
+}
+
+// The literal as it reads in 17-passkey.feature: `"passkey({ rpId: \"example.com\", origins: [\"https://example.com\", ...] })"`.
+const PASSKEY_CONFIG =
+  /^"passkey\(\{ rpId: \\"([^"\\]+)\\", origins: \[((?:\\"[^"\\]+\\"(?:, )?)+)\] \}\)"$/;
+
+export const passkeyParameterTypes = ParameterTypeStore.layer([
+  {
+    name: "passkeyConfig",
+    regexp: /"passkey\(\{ rpId: \\"[^"\\]+\\", origins: \[(?:\\"[^"\\]+\\"(?:, )?)+\] \}\)"/,
+    transform: (literal: string): PasskeyConfigChoice => {
+      const match = PASSKEY_CONFIG.exec(literal);
+      if (match === null || match[1] === undefined || match[2] === undefined) {
+        throw new Error(`unrecognised passkey config literal: ${literal}`);
+      }
+      return {
+        rpId: match[1],
+        origins: [...match[2].matchAll(/\\"([^"\\]+)\\"/g)].map((origin) => origin[1] ?? ""),
+      };
+    },
+    definedAt: Option.some("PasskeySteps.ts"),
+    useForSnippets: Option.none(),
+    preferForRegexpMatch: Option.none(),
+  },
+]).pipe(Layer.orDie);
+
 export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
+  // ---- BEH-EA-129: WebAuthn is a port (355-357) ----
+  //
+  // The whole suite runs Passkey against a mocked `WebAuthn` port; these scenarios swap that one
+  // layer — the real `WebAuthn.layerSimpleWebAuthn` and the mock — under an otherwise identical
+  // composition, and observe what Passkey itself does and does not do.
+
+  interface PortOptions {
+    readonly cookie: string;
+    readonly status: number;
+    readonly options: {
+      readonly challenge: string;
+      readonly rp: { readonly id: string };
+      readonly pubKeyCredParams: ReadonlyArray<unknown>;
+    };
+  }
+
+  const registrationOptionsUnder = Effect.fn(function* (port: "mock" | "simplewebauthn") {
+    yield* configureApp({ webAuthnPort: port });
+    const cookie = yield* signIn(`port-${port}-${Date.now()}@example.com`);
+    const response = yield* request("POST", "/passkey/register/options", {
+      body: {},
+      headers: { cookie },
+    });
+    const options = (yield* Effect.promise(() => response.json())) as PortOptions["options"];
+    return { cookie, status: response.status, options };
+  });
+
+  Given(
+    "an application composing {string}",
+    Effect.fn(function* (_plugin: string) {
+      yield* configureApp({});
+    }),
+  );
+
+  When(
+    'the application provides "WebAuthn.layerSimpleWebAuthn"',
+    Effect.fn(function* () {
+      yield* setOutcome("realPortOptions", yield* registrationOptionsUnder("simplewebauthn"));
+    }),
+  );
+
+  Then(
+    "{string} performs its ceremonies using the provided {string} port",
+    Effect.fn(function* (_plugin: string, _port: string) {
+      const { status, options } = (yield* getOutcome("realPortOptions")) as PortOptions;
+      assert.strictEqual(status, 200);
+      // Options only the real SimpleWebAuthn implementation produces (the mock returns an empty
+      // `pubKeyCredParams`): the port behind the ceremony is the one the application provided.
+      assert.ok(options.pubKeyCredParams.length > 0);
+      assert.strictEqual(options.rp.id, RP_ID);
+    }),
+  );
+
+  Given(
+    "a registration or authentication ceremony being verified",
+    Effect.fn(function* () {
+      // A credential whose attestation object is not even CBOR, and an assertion with an empty
+      // signature: input any parser or signature check would refuse.
+      yield* setOutcome("ceremonyInput", { attestationObject: "", signature: "" });
+    }),
+  );
+
+  When(
+    '"Passkey" processes the ceremony',
+    Effect.fn(function* () {
+      // Under the real port: the malformed attestation is refused.
+      const real = yield* registrationOptionsUnder("simplewebauthn");
+      const refused = yield* verifyChallenge(real.cookie, real.options.challenge);
+      yield* setOutcome("realPortRegistration", refused);
+      // Under the mock port (whose verification always succeeds): the very same inputs go through,
+      // for registration and for authentication alike.
+      const mocked = yield* registrationOptionsUnder("mock");
+      yield* setOutcome(
+        "mockPortRegistration",
+        yield* verifyChallenge(mocked.cookie, mocked.options.challenge),
+      );
+      yield* setOutcome("mockPortAuthentication", yield* authenticate());
+    }),
+  );
+
+  Then(
+    "the CBOR\\/COSE parsing, attestation verification, and signature checking are all performed by the {string} port",
+    Effect.fn(function* (_port: string) {
+      // The real port is what rejected the malformed attestation, surfaced as its typed failure.
+      yield* assertRejectedWith(
+        (yield* getOutcome("realPortRegistration")) as Response,
+        "PasskeyVerificationFailed",
+      );
+    }),
+  );
+
+  Then(
+    "{string}'s own code performs none of that parsing or verification itself",
+    Effect.fn(function* (_plugin: string) {
+      // With the port's verdict swapped, the same malformed attestation and the same empty
+      // signature are accepted: nothing in Passkey itself looked at them.
+      assert.strictEqual(((yield* getOutcome("mockPortRegistration")) as Response).status, 200);
+      assert.strictEqual(((yield* getOutcome("mockPortAuthentication")) as Response).status, 200);
+    }),
+  );
+
+  Given(
+    "an application composing {string} against {string}",
+    Effect.fn(function* (_plugin: string, _port: string) {
+      const real = yield* registrationOptionsUnder("simplewebauthn");
+      assert.strictEqual(real.status, 200);
+      yield* setOutcome("realPortStatus", real.status);
+    }),
+  );
+
+  When(
+    'the application instead provides a different "WebAuthn" port implementation',
+    Effect.fn(function* () {
+      // Only the layer changes: `configureApp` rebuilds the same composition with `mockWebAuthn`.
+      const swapped = yield* registrationOptionsUnder("mock");
+      yield* setOutcome("swappedOptions", swapped);
+      yield* setOutcome(
+        "swappedRegistration",
+        yield* verifyChallenge(swapped.cookie, swapped.options.challenge),
+      );
+      yield* setOutcome("swappedAuthentication", yield* authenticate());
+    }),
+  );
+
+  Then(
+    '"Passkey" continues to function unchanged, calling only the "WebAuthn" port\'s interface',
+    Effect.fn(function* () {
+      // The mock implements exactly the port's interface (`Layer.mock` dies on anything else), and
+      // the full register-then-authenticate flow still works over it.
+      assert.strictEqual(((yield* getOutcome("swappedOptions")) as { status: number }).status, 200);
+      assert.strictEqual(((yield* getOutcome("swappedRegistration")) as Response).status, 200);
+      assert.strictEqual(((yield* getOutcome("swappedAuthentication")) as Response).status, 200);
+    }),
+  );
+
   // ---- BEH-EA-130: Registration ceremony (358-360) ----
 
   Given(
@@ -82,6 +307,7 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* configureApp({});
       const cookie = yield* signIn("register-358@example.com");
       yield* setOutcome("cookie", cookie);
+      yield* setOutcome("email", "register-358@example.com");
     }),
   );
 
@@ -98,9 +324,19 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.fn(function* () {
       const response = yield* getLastResponse();
       const body = (yield* Effect.promise(() => response.json())) as { id: string };
-      if (response.status !== 200 || body.id !== "cred-mock-1") {
-        throw new Error(`expected a persisted credential, got ${response.status}`);
-      }
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(body.id, "cred-mock-1");
+      // Every field below is what the (mocked) port verified and returned — read from the store.
+      const [stored, ...rest] = yield* storedCredentials((yield* getOutcome("email")) as string);
+      assert.strictEqual(rest.length, 0);
+      assert.ok(stored !== undefined);
+      assert.strictEqual(stored.id, "cred-mock-1");
+      assert.deepStrictEqual([...stored.publicKey], [1, 2, 3]);
+      assert.strictEqual(stored.counter, 0);
+      assert.strictEqual(stored.deviceType, "singleDevice");
+      assert.strictEqual(stored.backedUp, false);
+      assert.deepStrictEqual(stored.transports, []);
+      assert.strictEqual(stored.aaguid, "00000000-0000-0000-0000-000000000000");
     }),
   );
 
@@ -110,6 +346,7 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* configureApp({ webAuthn: { failVerifyRegistration: true } });
       const cookie = yield* signIn("claims-success@example.com");
       yield* setOutcome("cookie", cookie);
+      yield* setOutcome("email", "claims-success@example.com");
     }),
   );
 
@@ -125,7 +362,8 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     "persistence does not occur, regardless of what the client's request claims",
     Effect.fn(function* () {
       const response = yield* getLastResponse();
-      if (response.status === 200) throw new Error("expected verification to fail");
+      yield* assertRejectedWith(response, "PasskeyVerificationFailed");
+      assert.deepStrictEqual(yield* storedCredentials((yield* getOutcome("email")) as string), []);
     }),
   );
 
@@ -143,7 +381,8 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     "no credential record is persisted",
     Effect.fn(function* () {
       const response = (yield* getOutcome("registerVerifyResponse")) as Response;
-      if (response.status === 200) throw new Error("expected registration to fail");
+      yield* assertRejectedWith(response, "PasskeyVerificationFailed");
+      assert.deepStrictEqual(yield* storedCredentials((yield* getOutcome("email")) as string), []);
     }),
   );
 
@@ -214,13 +453,27 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 
+  // A password (or OAuth) sign-in mints its session with `Sessions.issue` and no method-specific
+  // options; `signIn` does exactly that. Both are read back and their windows compared.
+  const windowsOf = (session: {
+    readonly createdAt: { readonly epochMilliseconds: number };
+    readonly idleExpiresAt: { readonly epochMilliseconds: number };
+    readonly absoluteExpiresAt: { readonly epochMilliseconds: number };
+  }) => ({
+    idle: session.idleExpiresAt.epochMilliseconds - session.createdAt.epochMilliseconds,
+    absolute: session.absoluteExpiresAt.epochMilliseconds - session.createdAt.epochMilliseconds,
+  });
+
   When(
     "that session's idle expiry, absolute expiry, and sliding refresh are compared against a session issued via password sign-in",
     Effect.fn(function* () {
-      // No behavior to trigger — REQ-EA-363 is a structural claim (both
-      // session kinds flow through the same core `Sessions.issue`); the
-      // Then step below verifies the passkey-issued session carries the
-      // same cookie shape/attributes core Sessions issues everywhere.
+      const passkeyCookie = (yield* getOutcome("passkeySession")) as string;
+      const passwordCookie = yield* signIn("auth-363-password@example.com");
+      const passkeySession = yield* inspectSession(passkeyCookie);
+      const passwordSession = yield* inspectSession(passwordCookie);
+      yield* setOutcome("passkeyWindows", windowsOf(passkeySession));
+      yield* setOutcome("passwordWindows", windowsOf(passwordSession));
+      yield* setOutcome("passkeyActingAs", passkeySession.actingAs);
     }),
   );
 
@@ -228,9 +481,13 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     "both sessions follow the same expiry and refresh rules, uniformly across authentication methods",
     Effect.fn(function* () {
       const cookie = (yield* getOutcome("passkeySession")) as string;
-      if (!cookie.startsWith("__Host-session=")) {
-        throw new Error(`expected the same __Host-session cookie shape every sign-in method uses`);
-      }
+      assert.ok(cookie.startsWith("__Host-session="));
+      const passkey = (yield* getOutcome("passkeyWindows")) as { idle: number; absolute: number };
+      const password = (yield* getOutcome("passwordWindows")) as { idle: number; absolute: number };
+      assert.deepStrictEqual(passkey, password);
+      assert.ok(passkey.idle > 0 && passkey.absolute >= passkey.idle);
+      // A passkey session is an ordinary one: it slides (it is not an `actingAs` episode, which never does).
+      assert.ok(Option.isNone((yield* getOutcome("passkeyActingAs")) as Option.Option<unknown>));
     }),
   );
 
@@ -242,6 +499,7 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* configureApp({});
       const cookie = yield* signIn("challenge-364@example.com");
       yield* setOutcome("cookie", cookie);
+      yield* setOutcome("challenge", yield* issueChallenge(cookie));
     }),
   );
 
@@ -249,7 +507,8 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     "a verification attempt for that challenge is made, whether it succeeds or fails",
     Effect.fn(function* () {
       const cookie = (yield* getOutcome("cookie")) as string;
-      const first = yield* registerCredential(cookie);
+      const challenge = (yield* getOutcome("challenge")) as string;
+      const first = yield* verifyChallenge(cookie, challenge);
       yield* setOutcome("firstAttempt", first);
     }),
   );
@@ -258,36 +517,11 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     'the challenge is deleted from the "ChallengeStore" as part of that attempt',
     Effect.fn(function* () {
       const cookie = (yield* getOutcome("cookie")) as string;
-      const first = (yield* getOutcome("firstAttempt")) as Response;
-      if (first.status !== 200) throw new Error("expected the first attempt to succeed");
-      // A second attempt reusing the same (now-consumed) challenge must fail.
-      const optionsResponse = yield* request("POST", "/passkey/register/options", {
-        body: {},
-        headers: { cookie },
-      });
-      const challenge = extractChallenge(yield* Effect.promise(() => optionsResponse.json()));
-      const secondSameChallenge = yield* request("POST", "/passkey/register/verify", {
-        body: {
-          credential: {
-            id: "cred-reuse-probe",
-            rawId: "cred-reuse-probe",
-            type: "public-key",
-            response: {
-              clientDataJSON: buildClientDataJSON({
-                type: "webauthn.create",
-                challenge: "stale-challenge-not-issued",
-                origin: ORIGIN,
-              }),
-              attestationObject: "",
-            },
-          },
-        },
-        headers: { cookie },
-      });
-      if (secondSameChallenge.status === 200) {
-        throw new Error("expected a request using an unissued/stale challenge to fail");
-      }
-      void challenge;
+      const challenge = (yield* getOutcome("challenge")) as string;
+      assert.strictEqual(((yield* getOutcome("firstAttempt")) as Response).status, 200);
+      // The very same challenge, presented again: gone from the store.
+      const again = yield* verifyChallenge(cookie, challenge, "cred-mock-2");
+      yield* assertRejectedWith(again, "PasskeyChallengeInvalid");
     }),
   );
 
@@ -356,7 +590,7 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     "the second call fails, since the challenge is no longer in the store",
     Effect.fn(function* () {
       const second = (yield* getOutcome("secondAttempt")) as Response;
-      if (second.status === 200) throw new Error("expected the reused-challenge call to fail");
+      yield* assertRejectedWith(second, "PasskeyChallengeInvalid");
     }),
   );
 
@@ -425,17 +659,25 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     "the second attempt also fails, since the first attempt already deleted the challenge on failure",
     Effect.fn(function* () {
       const second = (yield* getOutcome("secondAttempt")) as Response;
-      if (second.status === 200) throw new Error("expected the second attempt to also fail");
+      // The first attempt failed on verification (PasskeyVerificationFailed); the retry finds no challenge at all.
+      yield* assertRejectedWith(second, "PasskeyChallengeInvalid");
     }),
   );
+
+  // REQ-EA-367: the five-minute TTL belongs to `ChallengeStore`. The HTTP handler runs on the real
+  // clock, outside any step's `TestClock` (see `PasskeyWorld.signIn`), so this scenario exercises the
+  // store the plugin is composed with directly, in the step's own fiber where `TestClock` governs it.
+  // Wire-level single-use/replay behaviour is REQ-EA-364..366 above.
+  const memoryChallenges = ChallengeStore.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
   Given(
     "a challenge issued and never presented for verification",
     Effect.fn(function* () {
-      yield* configureApp({});
-      const cookie = yield* signIn("ttl-367@example.com");
-      yield* request("POST", "/passkey/register/options", { body: {}, headers: { cookie } });
-      yield* setOutcome("cookie", cookie);
+      const context = yield* Layer.build(memoryChallenges);
+      const store = Context.get(context, ChallengeStore.ChallengeStore);
+      const challenge = yield* store.issue("ceremony-367");
+      yield* setOutcome("challengeStore", store);
+      yield* setOutcome("issuedChallenge", Redacted.value(challenge));
     }),
   );
 
@@ -449,44 +691,25 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the challenge is no longer valid once its TTL has elapsed",
     Effect.fn(function* () {
-      const cookie = (yield* getOutcome("cookie")) as string;
-      const response = yield* request("POST", "/passkey/register/verify", {
-        body: {
-          credential: {
-            id: "cred-mock-1",
-            rawId: "cred-mock-1",
-            type: "public-key",
-            response: {
-              clientDataJSON: buildClientDataJSON({
-                type: "webauthn.create",
-                challenge: "any-challenge-value",
-                origin: ORIGIN,
-              }),
-              attestationObject: "",
-            },
-          },
-        },
-        headers: { cookie },
-      });
-      if (response.status === 200) throw new Error("expected the expired challenge to be rejected");
+      const store = (yield* getOutcome("challengeStore")) as ChallengeStore.ChallengeStoreShape;
+      const issued = (yield* getOutcome("issuedChallenge")) as string;
+      assert.strictEqual(Duration.toMillis(ChallengeStore.CHALLENGE_TTL), 5 * 60 * 1000);
+      // The very challenge that was issued, now past its TTL.
+      assert.strictEqual(yield* store.consume("ceremony-367", issued), false);
+      // Control: a challenge issued just now still consumes, so the refusal above is the TTL's.
+      const fresh = Redacted.value(yield* store.issue("ceremony-367"));
+      assert.strictEqual(yield* store.consume("ceremony-367", fresh), true);
     }),
   );
 
   // ---- BEH-EA-133: RP config is exact origin matching (368-371) ----
 
+  // AH-007: the config Givens resolve through the `passkeyConfig` parameter type (registered in the
+  // feature's steps.test.ts); anything but the documented shape fails to match.
   Given(
-    "{string}",
-    Effect.fn(function* (config: string) {
-      if (config.includes("passkey(")) {
-        const originsMatch = /origins:\s*\[([^\]]*)\]/.exec(config);
-        const origins =
-          originsMatch === undefined || originsMatch?.[1] === undefined
-            ? [ORIGIN]
-            : originsMatch[1].split(",").map((s) => s.trim().replace(/^\\?"|\\?"$/g, ""));
-        yield* configureApp({ rpId: RP_ID, origins });
-      } else {
-        throw new Error(`unrecognized config literal: ${config}`);
-      }
+    "{passkeyConfig}",
+    Effect.fn(function* (config: PasskeyConfigChoice) {
+      yield* configureApp({ rpId: config.rpId, origins: config.origins });
     }),
   );
 
@@ -550,8 +773,16 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'a ceremony\'s origin host is checked against "rpId"',
     Effect.fn(function* () {
-      const response = yield* verifyAtOrigin("https://evil-example.com.attacker.net");
-      yield* setOutcome("ceremonyResponse", response);
+      // Hosts that contain (or end like) "example.com" without being it or a subdomain of it.
+      const impostors = [
+        "https://evil-example.com.attacker.net",
+        "https://notexample.com",
+        "https://example.com.evil.io",
+      ];
+      const responses: Array<Response> = [];
+      for (const origin of impostors) responses.push(yield* verifyAtOrigin(origin));
+      yield* setOutcome("impostorResponses", responses);
+      yield* setOutcome("ceremonyResponse", responses[0]);
     }),
   );
 
@@ -559,16 +790,18 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     '"rpId" is validated as a registrable-domain suffix of that origin',
     Effect.fn(function* () {
       const response = (yield* getOutcome("ceremonyResponse")) as Response;
-      if (response.status === 200) {
-        throw new Error("expected a host that merely contains rpId as a substring to be rejected");
-      }
+      yield* assertRejectedWith(response, "PasskeyOriginMismatch");
     }),
   );
 
   Then(
     "a bare substring or unrelated host match is not accepted in its place",
     Effect.fn(function* () {
-      // Asserted together with the previous Then, above — same response.
+      const responses = (yield* getOutcome("impostorResponses")) as ReadonlyArray<Response>;
+      assert.strictEqual(responses.length, 3);
+      for (const response of responses) {
+        yield* assertRejectedWith(response, "PasskeyOriginMismatch");
+      }
     }),
   );
 
@@ -579,6 +812,8 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
       const responseB = yield* verifyAtOrigin(originB);
       yield* setOutcome("responseA", responseA);
       yield* setOutcome("responseB", responseB);
+      yield* setOutcome(`ceremony:${originA}`, responseA);
+      yield* setOutcome(`ceremony:${originB}`, responseB);
     }),
   );
 
@@ -590,6 +825,24 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
       if (responseA.status !== 200 || responseB.status !== 200) {
         throw new Error("expected both explicitly-listed origins to be accepted");
       }
+    }),
+  );
+
+  // rpId suffix validation is independent of the origin allowlist: a *listed* origin whose host is
+  // not the rpId or one of its subdomains is still refused.
+  Then(
+    "the ceremony from {string} is accepted",
+    Effect.fn(function* (origin: string) {
+      const response = (yield* getOutcome(`ceremony:${origin}`)) as Response;
+      assert.strictEqual(response.status, 200);
+    }),
+  );
+
+  Then(
+    "the ceremony from {string} is rejected as an rpId mismatch",
+    Effect.fn(function* (origin: string) {
+      const response = (yield* getOutcome(`ceremony:${origin}`)) as Response;
+      yield* assertRejectedWith(response, "PasskeyRpIdMismatch");
     }),
   );
 
@@ -765,7 +1018,17 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     "a registration ceremony completes with {string} attestation",
     Effect.fn(function* (_conveyance: string) {
       const cookie = yield* signIn(`v1-attestation-${Date.now()}@example.com`);
-      const response = yield* registerCredential(cookie);
+      // The conveyance this ceremony's options asked the authenticator for.
+      const optionsResponse = yield* request("POST", "/passkey/register/options", {
+        body: {},
+        headers: { cookie },
+      });
+      const options = (yield* Effect.promise(() => optionsResponse.json())) as {
+        readonly challenge: string;
+        readonly attestation?: string;
+      };
+      yield* setOutcome("requestedAttestation", options.attestation ?? "none");
+      const response = yield* verifyChallenge(cookie, options.challenge);
       yield* setOutcome("registerVerifyResponse", response);
     }),
   );
@@ -781,9 +1044,9 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     'neither "direct" nor "enterprise" attestation was required for it to succeed',
     Effect.fn(function* () {
-      // Asserted together with the previous Then — the ceremony above ran
-      // under `attestation: "none"` (the default from the Given) and
-      // still succeeded.
+      const requested = (yield* getOutcome("requestedAttestation")) as string;
+      assert.ok(requested !== "direct" && requested !== "enterprise", `requested ${requested}`);
+      assert.strictEqual(requested, "none");
     }),
   );
 
@@ -820,121 +1083,92 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   };
 
+  // The wire failure each documented reason produces, induced for real against a fresh app.
+  const induceFailure = Effect.fn("features.passkey.induceFailure")(function* (reason: string) {
+    const known = FAILURE_TAGS[reason];
+    if (known === undefined) throw new Error(`unrecognized failure reason: ${reason}`);
+
+    // Configure with whatever WebAuthn override this failure needs
+    // BEFORE signing in — `configureApp` rebuilds the app (a fresh
+    // memoMap/handler), which would silently discard a session created
+    // by an earlier `signIn` call against the previous app instance.
+    yield* configureApp(
+      known.tag === "PasskeyVerificationFailed"
+        ? { webAuthn: { failVerifyRegistration: true } }
+        : known.tag === "PasskeyUserVerificationRequired"
+          ? // CB-001 (.issues/high): enforcement follows the RP's own
+            // conveyed `userVerification` policy — the default
+            // `"preferred"` no longer rejects UV=0, so this scenario
+            // must explicitly opt into `"required"` to still exercise
+            // the failure it names, mirroring the sign-in path's own
+            // already-`"required"`-gated equivalent.
+            {
+              webAuthn: { registrationVerified: { userVerified: false } },
+              authenticatorSelection: { userVerification: "required" },
+            }
+          : known.tag === "PasskeyRpIdMismatch"
+            ? // An accepted origin whose host doesn't match `rpId` as a
+              // registrable-domain suffix — needed to reach the rpId
+              // check at all, since the origin check runs first and
+              // rejects any origin outside `config.origins` before ever
+              // reaching it.
+              { origins: [ORIGIN, "https://mismatched-host.example"] }
+            : {},
+      "replace",
+    );
+    const cookie = yield* signIn(`fails-${Date.now()}-${Math.random()}@example.com`);
+    switch (known.tag) {
+      case "PasskeyChallengeInvalid":
+        return yield* verifyChallenge(cookie, "never-issued");
+      case "PasskeyOriginMismatch":
+        return yield* verifyAtOrigin("https://not-configured.example.org");
+      case "PasskeyRpIdMismatch":
+        return yield* verifyAtOrigin("https://mismatched-host.example");
+      case "PasskeyCredentialNotFound":
+        // A management call (rename) against an id this user never
+        // registered — the real source of this tag; see the FAILURE_TAGS
+        // comment above for why the authenticate ceremony itself never
+        // produces it.
+        return yield* request("PATCH", "/passkey/credentials/no-such-credential", {
+          body: { name: "New Name" },
+          headers: { cookie },
+        });
+      case "PasskeyVerificationFailed":
+      case "PasskeyUserVerificationRequired":
+        return yield* registerCredential(cookie);
+      case "PasskeyLastCredential": {
+        yield* registerCredential(cookie);
+        const listResponse = yield* request("GET", "/passkey/credentials", {
+          headers: { cookie },
+        });
+        const listed = (yield* Effect.promise(() => listResponse.json())) as ReadonlyArray<{
+          id: string;
+        }>;
+        return yield* request("DELETE", `/passkey/credentials/${listed[0]!.id}`, {
+          headers: { cookie },
+        });
+      }
+      default:
+        throw new Error(`unhandled failure tag: ${known.tag}`);
+    }
+  });
+
   Given(
     "a ceremony that fails for the reason {string}",
     Effect.fn(function* (failure: string) {
       const known = FAILURE_TAGS[failure];
       if (known === undefined) throw new Error(`unrecognized failure reason: ${failure}`);
+      yield* setOutcome("failureReason", failure);
       yield* setOutcome("expectedTag", known.tag);
       yield* setOutcome("expectedStatus", known.status);
-
-      // Configure with whatever WebAuthn override this failure needs
-      // BEFORE signing in — `configureApp` rebuilds the app (a fresh
-      // memoMap/handler), which would silently discard a session created
-      // by an earlier `signIn` call against the previous app instance.
-      yield* configureApp(
-        known.tag === "PasskeyVerificationFailed"
-          ? { webAuthn: { failVerifyRegistration: true } }
-          : known.tag === "PasskeyUserVerificationRequired"
-            ? // CB-001 (.issues/high): enforcement follows the RP's own
-              // conveyed `userVerification` policy — the default
-              // `"preferred"` no longer rejects UV=0, so this scenario
-              // must explicitly opt into `"required"` to still exercise
-              // the failure it names, mirroring the sign-in path's own
-              // already-`"required"`-gated equivalent.
-              {
-                webAuthn: { registrationVerified: { userVerified: false } },
-                authenticatorSelection: { userVerification: "required" },
-              }
-            : known.tag === "PasskeyRpIdMismatch"
-              ? // An accepted origin whose host doesn't match `rpId` as a
-                // registrable-domain suffix — needed to reach the rpId
-                // check at all, since the origin check runs first and
-                // rejects any origin outside `config.origins` before ever
-                // reaching it.
-                { origins: [ORIGIN, "https://mismatched-host.example"] }
-              : {},
-      );
-      const cookie = yield* signIn(`fails-${Date.now()}-${Math.random()}@example.com`);
-      switch (known.tag) {
-        case "PasskeyChallengeInvalid": {
-          const response = yield* request("POST", "/passkey/register/verify", {
-            body: {
-              credential: {
-                id: "cred-mock-1",
-                rawId: "cred-mock-1",
-                type: "public-key",
-                response: {
-                  clientDataJSON: buildClientDataJSON({
-                    type: "webauthn.create",
-                    challenge: "never-issued",
-                    origin: ORIGIN,
-                  }),
-                  attestationObject: "",
-                },
-              },
-            },
-            headers: { cookie },
-          });
-          yield* setOutcome("failureResponse", response);
-          break;
-        }
-        case "PasskeyOriginMismatch": {
-          const response = yield* verifyAtOrigin("https://not-configured.example.org");
-          yield* setOutcome("failureResponse", response);
-          break;
-        }
-        case "PasskeyRpIdMismatch": {
-          const response = yield* verifyAtOrigin("https://mismatched-host.example");
-          yield* setOutcome("failureResponse", response);
-          break;
-        }
-        case "PasskeyCredentialNotFound": {
-          // A management call (rename) against an id this user never
-          // registered — the real source of this tag; see the FAILURE_TAGS
-          // comment above for why the authenticate ceremony itself never
-          // produces it.
-          const response = yield* request("PATCH", "/passkey/credentials/no-such-credential", {
-            body: { name: "New Name" },
-            headers: { cookie },
-          });
-          yield* setOutcome("failureResponse", response);
-          break;
-        }
-        case "PasskeyVerificationFailed": {
-          const response = yield* registerCredential(cookie);
-          yield* setOutcome("failureResponse", response);
-          break;
-        }
-        case "PasskeyUserVerificationRequired": {
-          const response = yield* registerCredential(cookie);
-          yield* setOutcome("failureResponse", response);
-          break;
-        }
-        case "PasskeyLastCredential": {
-          yield* registerCredential(cookie);
-          const listResponse = yield* request("GET", "/passkey/credentials", {
-            headers: { cookie },
-          });
-          const listed = (yield* Effect.promise(() => listResponse.json())) as ReadonlyArray<{
-            id: string;
-          }>;
-          const response = yield* request("DELETE", `/passkey/credentials/${listed[0]!.id}`, {
-            headers: { cookie },
-          });
-          yield* setOutcome("failureResponse", response);
-          break;
-        }
-        default:
-          throw new Error(`unhandled failure tag: ${known.tag}`);
-      }
     }),
   );
 
   When(
     "the failure is returned to the caller",
     Effect.fn(function* () {
-      // No-op: the Given step above already made the failing request.
+      const failure = (yield* getOutcome("failureReason")) as string;
+      yield* setOutcome("failureResponse", yield* induceFailure(failure));
     }),
   );
 
@@ -943,95 +1177,101 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.fn(function* (expectedTag: string) {
       const response = (yield* getOutcome("failureResponse")) as Response;
       const status = (yield* getOutcome("expectedStatus")) as number;
-      const body = (yield* Effect.promise(() => response.json())) as { _tag?: string };
-      if (response.status !== status) {
-        throw new Error(`expected status ${status} for ${expectedTag}, got ${response.status}`);
-      }
-      if (body._tag !== undefined && body._tag !== expectedTag) {
-        throw new Error(`expected _tag "${expectedTag}", got "${body._tag}"`);
-      }
+      assert.strictEqual(response.status, status);
+      assert.strictEqual(yield* bodyTag(response), expectedTag);
     }),
   );
 
   Given(
     "the same set of distinct ceremony failure reasons",
     Effect.fn(function* () {
-      const world = yield* World;
-      void world;
-      const responses: Array<{
-        readonly tag: string;
-        readonly status: number;
-        readonly body: unknown;
-      }> = [];
-      for (const [reason, known] of Object.entries(FAILURE_TAGS)) {
-        void reason;
-        yield* configureApp({});
-        const cookie = yield* signIn(`distinct-${Date.now()}-${Math.random()}@example.com`);
-        if (known.tag === "PasskeyChallengeInvalid") {
-          const response = yield* request("POST", "/passkey/register/verify", {
-            body: {
-              credential: {
-                id: "cred-mock-1",
-                rawId: "cred-mock-1",
-                type: "public-key",
-                response: {
-                  clientDataJSON: buildClientDataJSON({
-                    type: "webauthn.create",
-                    challenge: "never-issued",
-                    origin: ORIGIN,
-                  }),
-                  attestationObject: "",
-                },
-              },
-            },
-            headers: { cookie },
-          });
-          const body = yield* Effect.promise(() => response.json());
-          responses.push({ tag: known.tag, status: response.status, body });
-        }
-      }
-      yield* setOutcome("distinctResponses", responses);
+      yield* setOutcome("failureReasons", Object.keys(FAILURE_TAGS));
     }),
   );
 
   When(
     "each is returned to the caller",
     Effect.fn(function* () {
-      // No-op: the Given step already collected every response.
+      const reasons = (yield* getOutcome("failureReasons")) as ReadonlyArray<string>;
+      const observed: Array<{ readonly tag: string | undefined; readonly expected: string }> = [];
+      for (const reason of reasons) {
+        const response = yield* induceFailure(reason);
+        observed.push({ tag: yield* bodyTag(response), expected: FAILURE_TAGS[reason]!.tag });
+      }
+      yield* setOutcome("observedFailures", observed);
     }),
   );
 
   Then(
     "no single generic error tag is used for more than one of them",
     Effect.fn(function* () {
-      const responses = (yield* getOutcome("distinctResponses")) as ReadonlyArray<{
-        readonly tag: string;
+      const observed = (yield* getOutcome("observedFailures")) as ReadonlyArray<{
+        readonly tag: string | undefined;
+        readonly expected: string;
       }>;
-      const tags = new Set(responses.map((r) => r.tag));
-      if (tags.size !== responses.length)
-        throw new Error("expected every failure to carry a distinct tag");
-      // Cross-check against the full 7-row table this scenario references,
-      // proven individually by REQ-EA-378's own Scenario Outline above.
-      const allTags = new Set(Object.values(FAILURE_TAGS).map((v) => v.tag));
-      if (allTags.size !== Object.keys(FAILURE_TAGS).length) {
-        throw new Error("expected all 7 documented failure tags to be pairwise distinct");
-      }
+      assert.strictEqual(observed.length, Object.keys(FAILURE_TAGS).length);
+      // Each reason produced its own tag on the wire, and no two reasons share one.
+      for (const { tag, expected } of observed) assert.strictEqual(tag, expected);
+      assert.strictEqual(new Set(observed.map((o) => o.tag)).size, observed.length);
     }),
   );
+
+  // The wire tags decode to the plugin's own typed errors, and one `Effect.catchTags` record
+  // covering exactly those tags handles every reason — a missing key would not compile.
+  const WireFailure = Schema.Union([
+    PasskeyApi.PasskeyChallengeInvalid,
+    PasskeyApi.PasskeyOriginMismatch,
+    PasskeyApi.PasskeyRpIdMismatch,
+    PasskeyApi.PasskeyCredentialNotFound,
+    PasskeyApi.PasskeyVerificationFailed,
+    PasskeyApi.PasskeyUserVerificationRequired,
+    PasskeyApi.PasskeyLastCredential,
+  ]);
 
   Then(
     'the caller can use "Effect.catchTags" to distinguish every reason exhaustively',
     Effect.fn(function* () {
-      // Structural: `Effect.catchTags` dispatches on the `_tag` discriminant
-      // every `PasskeyApi.ts` error already carries — proven exhaustive by
-      // the pairwise-distinctness check in the previous Then.
+      const observed = (yield* getOutcome("observedFailures")) as ReadonlyArray<{
+        readonly tag: string | undefined;
+      }>;
+      const handled: Array<string> = [];
+      for (const { tag } of observed) {
+        const decoded = yield* Schema.decodeUnknownEffect(WireFailure)({ _tag: tag });
+        yield* Effect.fail(decoded).pipe(
+          Effect.catchTags({
+            PasskeyChallengeInvalid: () =>
+              Effect.sync(() => handled.push("PasskeyChallengeInvalid")),
+            PasskeyOriginMismatch: () => Effect.sync(() => handled.push("PasskeyOriginMismatch")),
+            PasskeyRpIdMismatch: () => Effect.sync(() => handled.push("PasskeyRpIdMismatch")),
+            PasskeyCredentialNotFound: () =>
+              Effect.sync(() => handled.push("PasskeyCredentialNotFound")),
+            PasskeyVerificationFailed: () =>
+              Effect.sync(() => handled.push("PasskeyVerificationFailed")),
+            PasskeyUserVerificationRequired: () =>
+              Effect.sync(() => handled.push("PasskeyUserVerificationRequired")),
+            PasskeyLastCredential: () => Effect.sync(() => handled.push("PasskeyLastCredential")),
+          }),
+        );
+      }
+      assert.deepStrictEqual(
+        handled,
+        observed.map((o) => o.tag),
+      );
     }),
   );
 
+  // REQ-EA-380: the unknown-credential ceremony and a known-credential-that-fails ceremony
+  // answer identically. The Given only arranges; the When performs both attempts.
   Given(
     "an authentication attempt for a user identifier that has no registered passkey credential",
     Effect.fn(function* () {
       yield* configureApp({});
+    }),
+  );
+
+  When(
+    '"PasskeyCredentialNotFound" is returned',
+    Effect.fn(function* () {
       const optionsResponse = yield* request("POST", "/passkey/authenticate/options", {
         body: { email: "nobody-registered@example.com" },
       });
@@ -1068,13 +1308,6 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* overrideWebAuthnBehavior({ failVerifyAuthentication: true });
       const failsResponse = yield* authenticate();
       yield* setOutcome("existsButFailsResponse", failsResponse);
-    }),
-  );
-
-  When(
-    '"PasskeyCredentialNotFound" is returned',
-    Effect.fn(function* () {
-      // No-op: the Given step above already performed the request.
     }),
   );
 
