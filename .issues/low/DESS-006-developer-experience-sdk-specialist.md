@@ -3,7 +3,7 @@ ID: "DESS-006"
 Title: "@awthaq/react star-re-exports the entire @qadi/react surface"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "react"
 Source: "packages/react/src/index.ts:19"
 Auditor: "developer-experience-sdk-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `react` · reported by **Developer Experience / SDK Specialist** (`developer-experience-sdk-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Keep the no-wrapper rule but make provenance explicit: either enumerate the re-e
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `react-package-deps`. Evidence at HEAD ec065a7: `packages/react/src/index.ts:19`. Fix: Make the context-owning libraries peers and document provenance. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/react/package.json: @qadi/react, @qadi/core, @effect/atom-react moved to peerDependencies (same ranges) and kept as devDependencies for tests, so a consuming app resolves one copy of the context-owning libraries; lockfile refreshed offline. Deviation: effect stays a runtime dependency (the workspace convention pins it exact in every package, pnpm-workspace.yaml). Provenance table (awthaq-owned vs @qadi/react passthrough) lands with the DESS-001 README rewrite. Gates: typecheck, react tests, package:smoke react PASS, knip.
