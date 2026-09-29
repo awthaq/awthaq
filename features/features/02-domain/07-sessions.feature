@@ -1,8 +1,3 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @domain @sessions
 Feature: Sessions
 
@@ -10,14 +5,9 @@ Feature: Sessions
   @BEH-EA-049
   Rule: A session token is an opaque id.secret pair
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — the token-shape half is wire-testable (see REQ-EA-154), but
-    # "the secret component is redacted in any log or span" is a
-    # telemetry-capture claim this suite has no proven mechanism to
-    # assert (would need to intercept the real structured logger, not
-    # just `Console`) — the whole scenario is pruned rather than
-    # silently passing half its own Then clause.
-    @skip
+    # AH-005: the "redacted in any log or span" clause runs against the World's
+    # RedactionGuard, which records every span, log line and published event and flags a
+    # `Redacted` instance or the watched secret.
     @REQ-EA-136
     Scenario: Issuing a session returns a token composed of a public id and a secret
       Given a signed-in user "alice"
@@ -25,11 +15,7 @@ Feature: Sessions
       Then the returned token has the shape "<id>.<secret>"
       And the secret component is redacted in any log or span
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — needs direct repository/row access, not this plugin's real HTTP
-    # surface — already covered at the domain level by
-    # packages/core/test/Sessions.test.ts.
-    @skip
+    # AH-005: the World runs Sessions over a real SQLite table, so the row is read raw.
     @REQ-EA-137
     Scenario: The persisted session row alone never yields the secret
       Given a session has been issued for "alice"
@@ -40,9 +26,6 @@ Feature: Sessions
   @BEH-EA-050
   Rule: Only SHA-256(secret) is persisted; the plaintext secret is never stored
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — the same not-wire-observable reason as REQ-EA-137.
-    @skip
     @REQ-EA-138
     Scenario: Issuing a session persists only the hash of the secret
       Given a signed-in user "alice"
@@ -50,12 +33,9 @@ Feature: Sessions
       Then the persisted Session row stores "SHA-256(secret)"
       And the persisted Session row does not store the plaintext secret
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — an internal-mechanism claim (hash-then-compare vs. plaintext
-    # compare) with no externally observable difference in this
-    # suite's own HTTP responses — already covered by
-    # packages/core/test/Sessions.test.ts.
-    @skip
+    # AH-005: the hash-then-compare mechanism is observed through its consequences on a real
+    # row (the token verifies, the stored digest is not itself a credential, no plaintext is
+    # stored); the World pins the row's digest to "s3cr3t" so the literal secret is honest.
     @REQ-EA-139
     Scenario: Verifying a presented token hashes the presented secret rather than comparing plaintext
       Given a session issued for "alice" with secret "s3cr3t"
@@ -63,11 +43,6 @@ Feature: Sessions
       Then the presented secret is hashed and the hash is compared against the stored hash
       And no comparison is made against a stored plaintext value
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — needs direct repository access to obtain "a disclosed row's stored
-    # hash" in the first place — not reachable through this plugin's
-    # real HTTP surface.
-    @skip
     @REQ-EA-140
     Scenario: A leaked sessions table cannot be replayed as a bearer credential
       Given the Session table's rows have been disclosed, as by a backup or a compromised read replica
@@ -78,33 +53,20 @@ Feature: Sessions
   @BEH-EA-051
   Rule: A session carries independent absolute and idle expiries; idle refresh never extends the absolute deadline
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — exercising real day-scale expiry math needs `TestClock` control
-    # verified to actually reach a freshly `HttpRouter.toWebHandler`-built
-    # runtime's own service construction — unverified in this suite
-    # today, so a green assertion here could easily be passing for the
-    # wrong reason (the clock manipulation silently doing nothing)
-    # rather than a real one; flagged as a genuine follow-up rather than
-    # shipped on an unverified assumption.
-    @skip
+    # AH-005: the World's TestClock is in the same runtime the handler serves from, so
+    # `advance` moves the clock every row timestamp and the CSRF token's age check read.
     @REQ-EA-141
     Scenario: A session's absolute expiry is fixed at issuance and unaffected by activity
       Given a session issued for "alice" with an absolute expiry of 30 days from issuance
       When "alice" makes requests using that session every day for 10 days
       Then the session's absolute expiry remains exactly 30 days from issuance
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — the same unverified-TestClock-propagation reason as REQ-EA-141.
-    @skip
     @REQ-EA-142
     Scenario: A session's idle expiry is pushed forward by activity
       Given a session for "alice" with an idle expiry 1 hour from its last touch
       When "alice" makes a request using that session
       Then the session's idle expiry is pushed forward by activity
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — the same unverified-TestClock-propagation reason as REQ-EA-141.
-    @skip
     @REQ-EA-143
     Scenario: Idle refresh never advances the idle expiry past the absolute expiry
       Given a session for "alice" whose absolute expiry is 10 minutes away and whose idle window is 1 hour
@@ -112,9 +74,6 @@ Feature: Sessions
       Then the session's idle expiry is capped at the absolute expiry
       And the idle expiry is not extended 1 hour past the absolute expiry
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — the same unverified-TestClock-propagation reason as REQ-EA-141.
-    @skip
     @REQ-EA-144
     Scenario: A session touched continuously without pause still expires at its original absolute deadline
       Given a session for "alice" with an absolute expiry of 30 days from issuance
@@ -125,10 +84,6 @@ Feature: Sessions
   @BEH-EA-052
   Rule: Idle-window refresh is throttled to at most one write per touchEvery
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — the same unverified-TestClock-propagation reason as REQ-EA-141
-    # (touchEvery throttling is itself a time-window claim).
-    @skip
     @REQ-EA-145
     Scenario: A single request within touchEvery does not trigger a refresh write
       Given a session last touched 10 minutes ago
@@ -136,9 +91,6 @@ Feature: Sessions
       When a request is served using that session
       Then no idle-refresh write occurs
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — the same unverified-TestClock-propagation reason as REQ-EA-145.
-    @skip
     @REQ-EA-146
     Scenario: Repeated requests within touchEvery collapse to at most one refresh write
       Given a session last touched 10 minutes ago
@@ -156,26 +108,24 @@ Feature: Sessions
       When "alice" signs in
       Then a newly minted session is issued for "alice"
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — the Outline's "password change" row is real and wire-testable
-    # (change-password, ticket 11), but its "email change" row names a
-    # capability that does not exist anywhere in this codebase (no
-    # changeEmail-shaped HTTP endpoint) — standard Gherkin has no
-    # per-row tag, so the whole Outline is pruned rather than force-
-    # implementing a capability out of this ticket's own scope or
-    # restructuring the spec's authored Outline to dodge the gap.
-    @skip
+    # SMS-008: split from the original "password change | email change" Outline — the
+    # password-change row is real and wire-testable (POST /change-password); the
+    # email-change row is a separate skipped scenario below.
     @REQ-EA-148
-    Scenario Outline: A privilege-changing operation issues a new session and tombstones the superseded row
+    Scenario: A password change issues a new session and tombstones the superseded row
       Given a signed-in user "alice" with session "s0"
-      When "alice" performs a "<operation>"
+      When "alice" performs a "password change"
       Then a newly minted session replaces "s0"
       And session "s0" no longer verifies, its row tombstoned rather than left valid
 
-      Examples:
-        | operation       |
-        | password change |
-        | email change    |
+    # @skip: no changeEmail capability exists in any package (no changeEmail-shaped endpoint
+    # or Users operation), so there is nothing to perform; un-skip when one ships (SMS-008)
+    @skip
+    Scenario: An email change issues a new session and tombstones the superseded row
+      Given a signed-in user "alice" with session "s0"
+      When "alice" performs a "email change"
+      Then a newly minted session replaces "s0"
+      And session "s0" no longer verifies, its row tombstoned rather than left valid
 
   # BEH-EA-054 — spec/behaviors/07-sessions.md
   @BEH-EA-054
@@ -201,12 +151,16 @@ Feature: Sessions
       Then "s2" and "s3" are no longer valid
       And "s1" remains valid
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — a real concurrency/race-condition claim (an in-flight request's
-    # already-resolved principal surviving a concurrent revoke) —
-    # not something sequential step-definitions can exercise without
-    # genuine fiber-interleaving control this suite doesn't have.
-    @skip
+    # TIR-006: the sixth session endpoint (POST /session/revoke-all) kills the caller's own
+    # session too and expires its cookie (CSS-002).
+    Scenario: Revoking all sessions also ends the caller's current session
+      Given "alice" has sessions "s1" (current), "s2", and "s3"
+      When "alice" revokes all of her sessions
+      Then "s1", "s2", and "s3" are no longer valid
+      And the response expires the "__Host-session" cookie
+
+    # AH-005: the World's `gate` endpoint sits behind the real Authentication middleware and
+    # blocks until released, giving the fiber-interleaving control this needs.
     @REQ-EA-152
     Scenario: A request already validated before a concurrent revoke is allowed to complete
       Given "alice"'s session "s1" is validated by the authentication middleware for an in-flight request
@@ -214,9 +168,6 @@ Feature: Sessions
       Then the in-flight request completes normally on the principal it already resolved
       And the next request presenting session "s1" is rejected
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — the same concurrency-control reason as REQ-EA-152.
-    @skip
     @REQ-EA-153
     Scenario: Only the single already-in-flight request is granted the bounded window, never a second one
       Given "alice"'s session "s1" is validated by the authentication middleware for an in-flight request, and session "s1" is then revoked
@@ -242,10 +193,9 @@ Feature: Sessions
       When a session is issued for "alice"
       Then the cookie sets no "Domain" attribute
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — describes real BROWSER-side cookie-jar enforcement (the
-    # `__Host-` prefix's own rules) — outside any server-side response
-    # test's reach entirely, by construction.
+    # @skip: describes the browser's own cookie-jar enforcement of the `__Host-` prefix, outside
+    # any server-side response test by construction; the server half (the attributes it
+    # sets) is asserted by REQ-EA-154/155 and packages/core/test/SessionCookie.test.ts
     @skip
     @REQ-EA-156
     Scenario: A misconfiguration that relaxes a secure attribute makes the cookie fail to be set, not insecurely set
@@ -258,9 +208,10 @@ Feature: Sessions
   @BEH-EA-056
   Rule: Session-secret verification is a constant-time comparison over a fixed-length hash
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — a constant-time-comparison implementation-mechanism claim, not an
-    # externally observable outcome.
+    # @skip: a constant-time-comparison mechanism claim with no externally observable outcome
+    # a request/response test can tell apart from an ordinary equality check; the observable
+    # half (a tampered secret is rejected, the stored digest is not a credential) is REQ-EA-139/140
+    # and packages/core/test/Sessions.test.ts "BEH-EA-050/056: a tampered secret is rejected"
     @skip
     @REQ-EA-157
     Scenario: Verifying a presented secret compares its hash against the stored hash using a constant-time check
@@ -268,9 +219,9 @@ Feature: Sessions
       When the token is presented for verification
       Then "SHA-256(presented secret)" is compared against the stored hash using a constant-time equality check
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — a timing-side-channel assertion; not deterministically
-    # assertable in CI, same category as password's own REQ-EA-306/309.
+    # @skip: a timing-side-channel assertion is not deterministic in CI (same category as
+    # password's REQ-EA-306/309); the comparison is the shared Hmac primitive's constant-time
+    # equality, covered by packages/core/test/Sessions.test.ts
     @skip
     @REQ-EA-158
     Scenario: Verification timing does not vary with how many leading bytes of the hash match
@@ -279,8 +230,8 @@ Feature: Sessions
       Then the comparison does not short-circuit on the first mismatched byte
       And the comparison time does not vary based on how many leading bytes matched
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 21: pruned, not
-    # force-implemented — an internal-mechanism claim with no externally observable outcome.
+    # @skip: an internal-mechanism claim (the operands are fixed-length digests) with no
+    # externally observable outcome; the digests are asserted fixed-length hex in REQ-EA-138
     @skip
     @REQ-EA-159
     Scenario: The comparison operates over fixed-length hashes regardless of the original secret's length or content
