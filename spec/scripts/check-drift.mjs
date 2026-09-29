@@ -15,6 +15,7 @@
 //  13  ports inventory matches source           (DTWS-008, DoD gate 10)
 //  14  Document Control revision is current     (BDD-003)
 //  15  no REQ-EA tag is claimed twice           (BDD-003)
+//  16  ADR/INV/URS/NFR/MOD ids are unique       (parallel branches allocating "the next number")
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -236,6 +237,29 @@ const block = (file, name) => {
   const dupes = [...owners].filter(([, at]) => at.length > 1).map(([id, at]) => `${id} (${at.join(", ")})`);
   if (dupes.length > 0) report("FAIL", "REQ-EA tags are unique", dupes.join("; "));
   else report("PASS", "REQ-EA tags are unique", `${owners.size} tag(s), no scenario id claimed twice`);
+}
+
+// ---------------------------------------------------------------------------
+// 16. ADR, INV, URS, NFR and MOD ids are each defined exactly once. BEH ids have
+// their own contiguity check in the bash driver; these series had none, and
+// parallel branches that each took "the next number" collide silently.
+// ---------------------------------------------------------------------------
+{
+  const defs = new Map();
+  const note = (id, at) => defs.set(id, [...(defs.get(id) ?? []), at]);
+  for (const file of readdirSync(join(specDir, "decisions")).filter((f) => /^\d{3}-.*\.md$/.test(f))) {
+    note(`ADR-EA-${file.slice(0, 3)}`, `decisions/${file}`);
+  }
+  const headings = (file, re) => lines(join(specDir, file)).forEach((l, i) => { const m = l.match(re); if (m) note(m[1], `${file}:${i + 1}`); });
+  headings("invariants.md", /^## (INV-EA-\d{3})\b/);
+  headings("urs.md", /^### ((?:URS|NFR)-EA-\d{3})\b/);
+  for (const file of readdirSync(join(specDir, "models")).filter((f) => /^\d{2}-.*\.md$/.test(f))) {
+    const id = readFileSync(join(specDir, "models", file), "utf8").match(/Document ID \| (EFAUTH-MOD-\d{2}) \|/)?.[1];
+    if (id) note(id, `models/${file}`);
+  }
+  const dupes = [...defs].filter(([, at]) => at.length > 1).map(([id, at]) => `${id} (${at.join(", ")})`);
+  if (dupes.length > 0) report("FAIL", "ADR/INV/URS/MOD ids are unique", dupes.join("; "));
+  else report("PASS", "ADR/INV/URS/MOD ids are unique", `${defs.size} id(s), each defined once`);
 }
 
 console.log(results.join("\n"));
