@@ -46,6 +46,7 @@ import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Password from "../src/Password.ts";
 import * as PasswordApi from "../src/PasswordApi.ts";
+import { tokenOf } from "./harness.ts";
 
 /** BEH-EA-119: nothing in the corpus ever matches — this file never exercises the breach check itself. */
 const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
@@ -218,7 +219,7 @@ const verifyLatestSignUp = (
     const messages = yield* mailer.sent;
     const verifyMail = messages.findLast((m) => m.template === "verify-email");
     if (verifyMail === undefined) throw new Error("expected a verify-email mail");
-    const token = (verifyMail.data as { token: string }).token;
+    const token = tokenOf(verifyMail);
     const verified = yield* Effect.promise(() => post(handler, "/verify-email", { token }));
     assert.strictEqual(verified.status, 204);
   });
@@ -331,7 +332,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
         const messages = yield* mailer.sent;
         const resetMail = messages.findLast((m) => m.template === "reset-password");
         if (resetMail === undefined) throw new Error("expected a reset-password mail");
-        const token = (resetMail.data as { token: string }).token;
+        const token = tokenOf(resetMail);
 
         const confirmed = yield* Effect.promise(() =>
           post(handler, "/password/confirm-reset", {
@@ -379,7 +380,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
         const messages = yield* mailer.sent;
         const resetMail = messages.findLast((m) => m.template === "reset-password");
         if (resetMail === undefined) throw new Error("expected a reset-password mail");
-        const token = (resetMail.data as { token: string }).token;
+        const token = tokenOf(resetMail);
 
         const first = yield* Effect.promise(() =>
           post(handler, "/password/confirm-reset", { token, password: "second strong password" }),
@@ -416,7 +417,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
         const messages = yield* mailer.sent;
         const verifyMail = messages.findLast((m) => m.template === "verify-email");
         if (verifyMail === undefined) throw new Error("expected a verify-email mail");
-        const token = (verifyMail.data as { token: string }).token;
+        const token = tokenOf(verifyMail);
 
         const verified = yield* Effect.promise(() => post(handler, "/verify-email", { token }));
         assert.strictEqual(verified.status, 204);

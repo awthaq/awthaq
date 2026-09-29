@@ -30,6 +30,8 @@ REQUIREMENT: A `VerificationToken` row MUST carry an identifier whose
              purpose, even if the raw token value were somehow reused.
 ```
 
+MLO-009/ARF-007/ARF-009: the mailed form is `<purpose>:<publicId>.<secret>`, built and parsed only by `VerificationLink` (`@awthaq/core`), which every plugin that mails a token uses. `publicId` is 128 random bits and identifies the token, never the user (the user is recovered from the consumed row's `userId`, so no mailed artifact carries a user id or a UUIDv7 timestamp); `decode(raw, purpose)` refuses a malformed token or another purpose's, before any rate limit or consume. Mail data for a token is `{ token: Redacted, expiresAt, url? }` (`VerificationLink.mailData`), the `url` present when the application configured a link builder.
+
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 documents `Verification` as "a generic, single-purpose ephemeral keyed value store," whose `identifier` is an arbitrary string whose meaning is defined entirely by the caller that created the row. awthaq's plan adopts the same generic entity but requires the purpose to be encoded in the identifier's own naming convention, so a password-reset token and an email-verification token are structurally distinct rows even when both happen to exist for the same user at once.
 
 ## BEH-EA-058: A verification token's consumption and the state change it authorizes commit in one transaction
@@ -120,7 +122,11 @@ yield* client.password.requestReset({ payload: { email } })   // always 202, eve
 REQUIREMENT: A verification-token-issuing endpoint (password reset,
              email-verification resend) MUST return the same status and
              body whether or not the submitted identifier (email) resolves
-             to an existing account.
+             to an existing account. Uniformity extends to latency: the token
+             issue and mail send for the "exists" branch MUST run outside the
+             response path (dispatched in the background), so both branches do
+             the same work before responding and a slow or failing mail
+             provider changes neither the response time nor its status.
 ```
 
 `archive/design/usage-examples-v4.md` §6.1 fixes the concrete response: `requestReset` always answers `202`, whether the email belongs to a real account or not. This is the verification-token analogue of BEH-EA-027's uniform `InvalidCredentials`: an endpoint that answered differently for "no such account" would let an attacker enumerate registered emails one request at a time, defeating the same enumeration-safety goal `archive/PRD.md` §18 states for the sign-in path.

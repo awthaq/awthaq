@@ -14,10 +14,12 @@ import {
   Accounts,
   Hooks,
   HookPoint,
+  MailDispatch,
   RateLimits,
   Sessions,
   Users,
   Verification,
+  VerificationLink,
 } from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
@@ -57,6 +59,17 @@ export interface PasswordConfigShape {
    * uses the literal address. Override for providers with other conventions.
    */
   readonly rateLimitEmailKey: (email: string) => string;
+  /**
+   * MLO-009: builds the link mailed for each token, from the token string. When
+   * set, the mail's `data.url` carries it (alongside `token` and `expiresAt`,
+   * which are always present). Point it at a page that consumes the token from
+   * the URL fragment or a form POST — never a query string a GET handler
+   * acts on, which mail scanners prefetch.
+   */
+  readonly links: {
+    readonly verifyEmail?: (token: string) => string;
+    readonly resetPassword?: (token: string) => string;
+  };
 }
 
 const defaultPasswordConfig: PasswordConfigShape = {
@@ -66,6 +79,7 @@ const defaultPasswordConfig: PasswordConfigShape = {
   rehashOnLogin: true,
   signInTimingFloor: "calibrated",
   rateLimitEmailKey: PasswordRateLimits.defaultEmailRateKey,
+  links: {},
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -206,31 +220,11 @@ export interface PasswordShape {
 const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
-/**
- * The mailed reset/verification link's token embeds `Verification`'s own
- * `identifier` alongside its secret value (`<identifier>.<secret>`) — the
- * domain service's `consume` needs `identifier` to look the row up at all,
- * and the caller who receives this link has nothing else to supply it with.
- * Neither half can contain a literal `.` (`identifier`'s own `:`-delimited
- * scheme, BEH-EA-057; `value`'s hex digest), so splitting on the last `.`
- * round-trips exactly.
- */
-const encodeVerificationToken = (identifier: string, value: Redacted.Redacted<string>): string =>
-  `${identifier}.${Redacted.value(value)}`;
-
-const decodeVerificationToken = (
-  raw: string,
-): Option.Option<{ readonly identifier: string; readonly value: Redacted.Redacted<string> }> => {
-  const separator = raw.lastIndexOf(".");
-  if (separator === -1) return Option.none();
-  return Option.some({
-    identifier: raw.slice(0, separator),
-    value: Redacted.make(raw.slice(separator + 1)),
-  });
-};
-
-const RESET_PREFIX = "reset-password:";
-const VERIFY_PREFIX = "verify-email:";
+// MLO-009: the mailed token's codec is `VerificationLink`'s, shared with every
+// plugin that mails a `Verification` token; these are this plugin's purposes.
+const RESET_PURPOSE = "reset-password";
+const VERIFY_PURPOSE = "verify-email";
+const VERIFY_TTL = Duration.hours(24);
 
 /**
  * BEH-EA-119: the k-anonymity HIBP check — only a 5-character SHA-1 prefix
@@ -497,6 +491,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const limiter = yield* RateLimiter.RateLimiter;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
+      // ERS-002: mail is dispatched in the background (BEH-EA-064/113) by a
+      // dispatcher this layer owns — supervised, retried, bounded, observable
+      // and drained on shutdown — in place of unowned `forkDetach` fibers.
+      const mailDispatcher = yield* MailDispatch.make;
       // AOMS-006/BCR-004 (.issues/high, wayfinder ticket 03): the mechanism
       // an Auth0-Rule-style sign-up policy, and the MFA divert point a
       // future `TwoFactor` plugin taps, both attach through.
@@ -610,6 +608,27 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           ),
         );
 
+      /** Issues a verify-email token and mails it; dispatched, never awaited. */
+      const dispatchVerificationMail = (user: Users.UserRecord) =>
+        mailDispatcher.dispatch(
+          { template: "verify-email", userId: user.id },
+          Effect.gen(function* () {
+            const issued = yield* VerificationLink.issue(
+              { verification, crypto },
+              { purpose: VERIFY_PURPOSE, ttl: VERIFY_TTL, userId: user.id },
+            );
+            yield* mailer.send({
+              to: user.email,
+              template: "verify-email",
+              data: VerificationLink.mailData({
+                token: issued.token,
+                expiresAt: issued.expiresAt,
+                link: config.links.verifyEmail,
+              }),
+            });
+          }),
+        );
+
       const signUp: PasswordShape["signUp"] = Effect.fnUntraced(function* (input) {
         // AGA-001/NHS-003: per-IP first, cheaper to enforce, bounds mass
         // account creation from one source before the per-email check.
@@ -673,21 +692,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // not depend on mail-provider latency, and per
         // research/05-oauth-oidc.md Q48, a slow-vs-fast response is
         // itself an enumeration side channel.
-        yield* Effect.forkDetach(
-          Effect.gen(function* () {
-            const identifier = `${VERIFY_PREFIX}${user.id}`;
-            const { value } = yield* verification.issue({
-              identifier,
-              ttl: Duration.hours(24),
-              userId: user.id,
-            });
-            yield* mailer.send({
-              to: user.email,
-              template: "verify-email",
-              data: { token: encodeVerificationToken(identifier, value) },
-            });
-          }).pipe(Effect.ignore),
-        );
+        yield* dispatchVerificationMail(user);
 
         return issued;
       });
@@ -798,18 +803,19 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // `verification.issue` + real `mailer.send` (network I/O) only
         // ever runs in this branch, making response *latency* (and, if
         // the mail provider is down, response *status*) an enumeration
-        // oracle. `signUp`'s own `Effect.forkDetach`+`Effect.ignore`
-        // posture (above) fixes the identical hazard there; mirrored here
-        // so both branches cost one user lookup and return with the same
-        // latency distribution regardless of mail-provider health.
+        // oracle. `signUp`'s own background dispatch (above) fixes the
+        // identical hazard there; mirrored here so both branches cost one
+        // user lookup and return with the same latency distribution
+        // regardless of mail-provider health.
         if (Option.isSome(userOpt)) {
           const user = userOpt.value;
-          yield* Effect.forkDetach(
+          yield* mailDispatcher.dispatch(
+            { template: "reset-password", userId: user.id },
             Effect.gen(function* () {
               // ARF-004: an OAuth-/passkey-only account has no password to
               // reset — a token would only lead to a dead link. Looked up
-              // here, inside the fork, so both branches still cost the same
-              // on the response path (BEH-EA-064).
+              // here, inside the dispatched work, so both branches still cost
+              // the same on the response path (BEH-EA-064).
               const account = yield* accounts.findByProviderSubject(
                 Accounts.PASSWORD_PROVIDER_ID,
                 user.id,
@@ -818,18 +824,20 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 yield* mailer.send({ to: user.email, template: "reset-password-unavailable" });
                 return;
               }
-              const identifier = `${RESET_PREFIX}${user.id}`;
-              const { value } = yield* verification.issue({
-                identifier,
-                ttl: config.resetTtl,
-                userId: user.id,
-              });
+              const issued = yield* VerificationLink.issue(
+                { verification, crypto },
+                { purpose: RESET_PURPOSE, ttl: config.resetTtl, userId: user.id },
+              );
               yield* mailer.send({
                 to: user.email,
                 template: "reset-password",
-                data: { token: encodeVerificationToken(identifier, value) },
+                data: VerificationLink.mailData({
+                  token: issued.token,
+                  expiresAt: issued.expiresAt,
+                  link: config.links.resetPassword,
+                }),
               });
-            }).pipe(Effect.ignore),
+            }),
           );
         }
       });
@@ -840,7 +848,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           yield* rateLimit(rules.resendVerificationByIp, input);
           yield* rateLimit(rules.resendVerification, input);
           const userOpt = yield* users.findByEmail(input.email);
-          // TSS-002: same forkDetach+ignore posture as `requestReset`
+          // TSS-002: same background-dispatch posture as `requestReset`
           // above — without it this branch is the only one paying for a
           // `verification.issue` + awaited `mailer.send`, which (combined
           // with `requestReset`'s own timing) lets a caller classify any
@@ -848,44 +856,23 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           // by latency.
           if (Option.isSome(userOpt) && !userOpt.value.emailVerified) {
             const user = userOpt.value;
-            yield* Effect.forkDetach(
-              Effect.gen(function* () {
-                const identifier = `${VERIFY_PREFIX}${user.id}`;
-                const { value } = yield* verification.issue({
-                  identifier,
-                  ttl: Duration.hours(24),
-                  userId: user.id,
-                });
-                yield* mailer.send({
-                  to: user.email,
-                  template: "verify-email",
-                  data: { token: encodeVerificationToken(identifier, value) },
-                });
-              }).pipe(Effect.ignore),
-            );
+            yield* dispatchVerificationMail(user);
           }
         },
       );
 
       const confirmReset: PasswordShape["confirmReset"] = Effect.fnUntraced(function* (input) {
-        const decoded = decodeVerificationToken(Redacted.value(input.token));
+        // ARF-007: a token of another purpose (a verify-email token) or a
+        // malformed one is refused before it is rate-limited or consumed.
+        const decoded = VerificationLink.decode(Redacted.value(input.token), RESET_PURPOSE);
         if (Option.isNone(decoded)) {
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
         }
-        const { identifier, value } = decoded.value;
-        // ARF-007: a verify-email token (or any other purpose's) is not a
-        // reset token — refuse it before it is rate-limited, consumed or
-        // sliced into a garbage user id.
-        if (!identifier.startsWith(RESET_PREFIX)) {
-          return yield* Effect.fail(new PasswordApi.TokenConsumed());
-        }
-        // Keyed on the token's own decoded identifier (e.g.
-        // `reset-password:<userId>`) rather than email — already available
-        // for free at this point, and ties the limit to the specific
-        // account the token names, matching `signIn`/`requestReset`'s own
-        // identity-keyed posture without a second lookup.
-        yield* rateLimit(rules.confirmReset, { identifier });
-        const userId = Users.UserId(identifier.slice(RESET_PREFIX.length));
+        const { identifier, publicId, value } = decoded.value;
+        // Keyed on the token's own public id rather than email — already
+        // available for free at this point, and ties the limit to the
+        // specific token without a second lookup (ARF-009: it names no user).
+        yield* rateLimit(rules.confirmReset, { identifier: publicId });
 
         // ARF-002: the policy (including the breach check's network call)
         // is decided before the token is touched, so a weak password never
@@ -905,13 +892,19 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // usage: only the transaction's own `SqlError` dies below —
         // `TokenConsumed` is a real, expected outcome and must still reach
         // the caller as itself.
-        yield* sqlTransaction
+        const userId = yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
-              yield* verification.consume(identifier, value).pipe(
+              const consumed = yield* verification.consume(identifier, value).pipe(
                 Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
                 Effect.catchTag("PlatformError", Effect.die),
               );
+              // ARF-009: the user comes from the consumed row, never from the
+              // token; a row with none is no reset token this plugin issued.
+              if (Option.isNone(consumed.userId)) {
+                return yield* Effect.fail(new PasswordApi.TokenConsumed());
+              }
+              const userId = consumed.userId.value;
 
               const account = yield* accounts
                 .findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId)
@@ -950,6 +943,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // `revokeOthers` trick this call site used to stand in for
               // it.
               yield* sessions.revokeAll(userId);
+              return userId;
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
@@ -969,21 +963,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // tokens before even attempting to decode one, mirroring
         // `signIn`/`requestReset`'s own IP-then-identity ordering.
         yield* rateLimit(rules.verifyEmailByIp, input);
-        const decoded = decodeVerificationToken(Redacted.value(input.token));
+        // ARF-007: mirror of `confirmReset`'s purpose check.
+        const decoded = VerificationLink.decode(Redacted.value(input.token), VERIFY_PURPOSE);
         if (Option.isNone(decoded)) {
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
         }
-        const { identifier, value } = decoded.value;
-        // ARF-007: mirror of `confirmReset`'s purpose check.
-        if (!identifier.startsWith(VERIFY_PREFIX)) {
-          return yield* Effect.fail(new PasswordApi.TokenConsumed());
-        }
-        // Keyed on the token's own decoded identifier, mirroring
-        // `confirmReset`'s identical posture — already available for
-        // free at this point, ties the limit to the specific account the
-        // token names.
-        yield* rateLimit(rules.verifyEmail, { identifier });
-        const userId = Users.UserId(identifier.slice(VERIFY_PREFIX.length));
+        const { identifier, publicId, value } = decoded.value;
+        // Keyed on the token's own public id, mirroring `confirmReset`.
+        yield* rateLimit(rules.verifyEmail, { identifier: publicId });
 
         // RRC-002: same class of bug `ARF-001` closes for `confirmReset` —
         // a crash between `consume` and `verifyEmail` previously burned
@@ -995,10 +982,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
-              yield* verification.consume(identifier, value).pipe(
+              const consumed = yield* verification.consume(identifier, value).pipe(
                 Effect.catchTag("TokenConsumed", () => new PasswordApi.TokenConsumed()),
                 Effect.catchTag("PlatformError", Effect.die),
               );
+              // ARF-009: the user comes from the consumed row, not the token.
+              if (Option.isNone(consumed.userId)) {
+                return yield* Effect.fail(new PasswordApi.TokenConsumed());
+              }
+              const userId = consumed.userId.value;
 
               // Mirrors `confirmReset`'s own posture on the analogous
               // case: this token was only ever issued right after

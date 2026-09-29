@@ -291,6 +291,20 @@ export interface RateLimitExceededEvent {
   readonly retryAfterMillis: number;
 }
 
+/**
+ * ERS-002: published by `MailDispatch` when a mail that was accepted for
+ * background delivery could not be delivered after its retries (or failed
+ * permanently) — the one signal that a verification/reset mail was lost,
+ * since the request that triggered it already answered uniformly. Carries the
+ * template and, when known, the user it concerned, never the recipient
+ * address or any token (EOTS-010).
+ */
+export interface MailFailedEvent {
+  readonly _tag: "auth.mail.failed";
+  readonly template: string;
+  readonly userId?: UserId;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
@@ -324,7 +338,8 @@ export type AuthEvent =
   | OrganizationTeamDeletedEvent
   | OrganizationTeamMemberAddedEvent
   | OrganizationTeamMemberRemovedEvent
-  | RateLimitExceededEvent;
+  | RateLimitExceededEvent
+  | MailFailedEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */

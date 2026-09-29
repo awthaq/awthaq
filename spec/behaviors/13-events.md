@@ -73,7 +73,7 @@ REQUIREMENT: The audit trail of security-relevant operations MUST be
 ## BEH-EA-101: Events are typed, tagged values forming a registry contract
 
 ```ts
-"auth.user.created" | "auth.user.signedIn" | "auth.token.replay" | "auth.session.issued"
+"auth.user.created" | "auth.user.signedIn" | "auth.token.replay" | "auth.session.issued" | "auth.mail.failed"
 ```
 
 ```text

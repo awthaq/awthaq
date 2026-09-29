@@ -9,6 +9,7 @@ import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { PasswordHasher } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
+import { mailedToken } from "./MailedToken.ts";
 import {
   World,
   configureApp,
@@ -346,7 +347,7 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
     const messages = yield* sentMail();
     const resetMail = messages.findLast((m) => m.template === "reset-password");
     if (resetMail === undefined) throw new Error("expected a reset-password mail");
-    const token = (resetMail.data as { token: string }).token;
+    const token = mailedToken(resetMail);
     const response = yield* request("/password/confirm-reset", {
       token,
       password: "a whole new strong password",
@@ -414,7 +415,7 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
     const messages = yield* sentMail();
     const resetMail = messages.findLast((m) => m.template === "reset-password");
     if (resetMail === undefined) throw new Error("expected a reset-password mail");
-    const token = (resetMail.data as { token: string }).token;
+    const token = mailedToken(resetMail);
     yield* request("/password/confirm-reset", { token, password: "another whole new password" });
   });
 
@@ -444,7 +445,7 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
     const messages = yield* sentMail();
     const verifyMail = messages.findLast((m) => m.template === "verify-email");
     if (verifyMail === undefined) throw new Error("expected a verify-email mail");
-    const token = (verifyMail.data as { token: string }).token;
+    const token = mailedToken(verifyMail);
     const firstUse = yield* request("/verify-email", { token });
     assert.equal(firstUse.status, 204, "expected the token's first use to succeed");
     yield* setActor("replay-token-value", {

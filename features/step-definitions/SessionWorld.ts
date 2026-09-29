@@ -34,6 +34,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import { mailedToken } from "./MailedToken.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -232,7 +233,7 @@ export const signUp = Effect.fn("features.session.signUp")(function* (name: stri
     (message) => message.template === "verify-email" && message.to === email,
   );
   if (verifyMail === undefined) throw new Error(`expected a verify-email mail for ${email}`);
-  const verifyToken = (verifyMail.data as { token: string }).token;
+  const verifyToken = mailedToken(verifyMail);
   const verified = yield* Effect.promise(() =>
     post(handler, "/verify-email", { token: verifyToken }),
   );

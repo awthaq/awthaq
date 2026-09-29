@@ -35,9 +35,11 @@ export * as Hooks from "./Hooks.ts";
 // for why a plugin author should import the httpapi contract classes from
 // here rather than straight from `effect/unstable/httpapi/*`.
 export * from "./HttpApiTypes.ts";
+export * as MailDispatch from "./MailDispatch.ts";
 export * as Migrations from "./Migrations.ts";
 export * as RateLimits from "./RateLimits.ts";
 export * as Sessions from "./Sessions.ts";
 export * as Slots from "./Slots.ts";
 export * as Users from "./Users.ts";
 export * as Verification from "./Verification.ts";
+export * as VerificationLink from "./VerificationLink.ts";

@@ -18,6 +18,7 @@ import {
   Verification,
 } from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { mailedToken } from "./MailedToken.ts";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { Password, PasswordApi } from "@awthaq/password";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -278,7 +279,7 @@ export const verifyLatestSignUp = Effect.fn("features.password.verifyLatestSignU
   yield* letForkedFibersRun;
   const mail = (yield* sentMail()).findLast((message) => message.template === "verify-email");
   if (mail === undefined) throw new Error("expected a verify-email mail");
-  const token = (mail.data as { token: string }).token;
+  const token = mailedToken(mail);
   const response = yield* request("/verify-email", { token });
   if (response.status !== 204) {
     throw new Error(`verify-email failed: ${response.status}`);

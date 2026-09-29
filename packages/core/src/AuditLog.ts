@@ -90,6 +90,8 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.admin.impersonationStarted":
     case "auth.admin.impersonationDenied":
       return Option.some(event.adminUserId);
+    case "auth.mail.failed":
+      return Option.fromNullishOr(event.userId);
     case "auth.organization.created":
       return Option.some(event.creatorUserId);
     case "auth.token.replay":

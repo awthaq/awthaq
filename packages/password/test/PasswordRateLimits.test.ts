@@ -52,7 +52,8 @@ describe("RBS-006: one definition feeds registry and enforcement", () => {
           });
 
           const enforced = new Set(yield* Ref.get(keys));
-          const identifierOf = (token: string) => token.slice(0, token.lastIndexOf("."));
+          // The rate-limit key names the token's public id (`<purpose>:<publicId>`), never its secret half.
+        const identifierOf = (token: string) => token.slice(token.indexOf(":") + 1, token.lastIndexOf("."));
           // The union of every field any rule's key reads; each rule's schema
           // picks out the one(s) its endpoint names.
           const registered = yield* registry.registered;

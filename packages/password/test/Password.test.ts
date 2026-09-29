@@ -13,6 +13,7 @@ import {
   AuditLog,
   Hooks,
   AuthEvents,
+  MailDispatch,
   RateLimits,
   Sessions,
   Users,
@@ -36,6 +37,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as Password from "../src/Password.ts";
+import { tokenOf } from "./harness.ts";
 
 const sha1Hex = (plain: string): string =>
   createHash("sha1").update(plain).digest("hex").toUpperCase();
@@ -161,6 +163,9 @@ const TestLayerHangingMailer = Password.Password.layer.pipe(
   Layer.provide(NoBreachHttpClient),
   Layer.provide(SqlTransaction.layerNoop),
   Layer.provide(ClientAddress.layerDirect),
+  // ERS-002: scope close waits `drainTimeout` for in-flight mail; this
+  // mailer never finishes and `TestClock` never advances, so don't wait.
+  Layer.provideMerge(MailDispatch.config({ drainTimeout: Duration.zero })),
 );
 
 const email = "ada@example.com";
@@ -193,7 +198,7 @@ const signUpAndVerify = (
     yield* letForkedFibersRun;
     const sent = yield* mailer.sent;
     const verifyMail = sent.findLast((mail) => mail.template === "verify-email");
-    const token = Redacted.make(String(verifyMail?.data?.["token"]));
+    const token = Redacted.make(tokenOf(verifyMail));
     yield* password.verifyEmail({ token });
     return issued;
   });
@@ -485,7 +490,7 @@ describe("Password", () => {
         // still-live token signUp minted — the most recently mailed token
         // is the only one still valid, not the first.
         const verifyMail = afterKnown.findLast((mail) => mail.template === "verify-email");
-        yield* password.verifyEmail({ token: Redacted.make(String(verifyMail?.data?.["token"])) });
+        yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
         yield* password.resendVerification({ email });
         yield* letForkedFibersRun;
         const afterVerified = yield* mailer.sent;
@@ -557,14 +562,14 @@ describe("Password", () => {
         // verified account — consume signUp's own dispatched mail first.
         yield* letForkedFibersRun;
         const verifyMail = (yield* mailer.sent).find((mail) => mail.template === "verify-email");
-        yield* password.verifyEmail({ token: Redacted.make(String(verifyMail?.data?.["token"])) });
+        yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
 
         yield* password.requestReset({ email });
         yield* letForkedFibersRun;
         const sent = yield* mailer.sent;
         const resetMail = sent.find((m) => m.template === "reset-password");
         assert.isDefined(resetMail);
-        const mailedToken = Redacted.make(String(resetMail?.data?.["token"]));
+        const mailedToken = Redacted.make(tokenOf(resetMail));
 
         const newPassword = Redacted.make("a brand new strong password");
         yield* password.confirmReset({ token: mailedToken, password: newPassword });
@@ -598,7 +603,7 @@ describe("Password", () => {
         yield* password.requestReset({ email });
         yield* letForkedFibersRun;
         const resetMail = (yield* mailer.sent).findLast((m) => m.template === "reset-password");
-        const mailedToken = Redacted.make(String(resetMail?.data?.["token"]));
+        const mailedToken = Redacted.make(tokenOf(resetMail));
 
         const captured = yield* Effect.forkChild(
           events.stream.pipe(
@@ -643,7 +648,7 @@ describe("Password", () => {
         yield* letForkedFibersRun;
         const sent = yield* mailer.sent;
         const resetMail = sent.find((m) => m.template === "reset-password");
-        const mailedToken = Redacted.make(String(resetMail?.data?.["token"]));
+        const mailedToken = Redacted.make(tokenOf(resetMail));
 
         yield* password.confirmReset({
           token: mailedToken,
@@ -1174,7 +1179,7 @@ describe("Password", () => {
 
       const sent = yield* mailer.sent;
       const verifyMail = sent.findLast((mail) => mail.template === "verify-email");
-      const realToken = String(verifyMail?.data?.["token"]);
+      const realToken = tokenOf(verifyMail);
       const separator = realToken.lastIndexOf(".");
       const identifier = realToken.slice(0, separator);
 
@@ -1244,7 +1249,7 @@ describe("Password", () => {
           const mail = sent.find(
             (m) => m.template === "verify-email" && m.to === `verify-spray-${i}@example.com`,
           );
-          const realToken = String(mail?.data?.["token"]);
+          const realToken = tokenOf(mail);
           identifiers.push(realToken.slice(0, realToken.lastIndexOf(".")));
         }
 
