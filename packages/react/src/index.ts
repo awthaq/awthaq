@@ -5,7 +5,9 @@
 // Implemented: AuthClientAtom.ts (spec/behaviors/22-client-effect.md's
 // BEH-EA-169 reactive `AtomHttpApi.Service` alternative; BEH-EA-177/178),
 // Subject.ts (BEH-EA-179's `AuthSubject` derivation), Providers.tsx
-// (BEH-EA-177/178/179's `RegistryProvider`/`QadiProvider` composition).
+// (BEH-EA-177/178/179's `RegistryProvider`/`QadiProvider` composition),
+// ReactClient.ts (BE-004: `makeReactClient`, the CSRF-carrying reactive
+// client factory over an application's own composed api).
 //
 // BEH-EA-180 through 184 (`Can`/`Cannot`/`useCan`/`useInvalidate`/
 // `useProjected`/`useSubject`/`useDecision`/etc.) are `@qadi/react`'s own
@@ -19,4 +21,5 @@
 export * from "@qadi/react";
 export * as AuthClientAtom from "./AuthClientAtom.ts";
 export * from "./Providers.tsx";
+export * as ReactClient from "./ReactClient.ts";
 export * as Subject from "./Subject.ts";

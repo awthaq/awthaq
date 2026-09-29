@@ -28,29 +28,45 @@
 // header comment) backs `subjectDtoAtom` — BEH-EA-179's other half, composed
 // with `sessionAtom` in `Providers.tsx`, not merged into one query.
 import { AuthCore, SubjectContract } from "@awthaq/api";
+import type { AccountContract, Api, SessionContract } from "@awthaq/api";
 import * as Option from "effect/Option";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Atom from "effect/unstable/reactivity/Atom";
-import * as AtomHttpApi from "effect/unstable/reactivity/AtomHttpApi";
+import { SESSION_KEY, makeReactClient } from "./ReactClient.ts";
 
-export class ReactAuthClient extends AtomHttpApi.Service<ReactAuthClient>()(
+/**
+ * The contract types `ReactAuthClient` and `sessionAtom` are built from,
+ * named once in this module's own scope. Not a convenience alias: declaration
+ * emit can only spell a type reachable through an in-scope import, and
+ * `@awthaq/api` exposes these classes only as members of namespace re-exports
+ * (`Api.Authentication`, `SessionContract.SessionDto`, ...) whose files a
+ * consumer package's `tsc` cannot address by path — without these imports,
+ * a clean `tsc -b` fails with TS2883 (incremental caches mask it), and the
+ * only alternatives are return-type annotations on the atoms. Kept as a
+ * public type because it doubles as documentation of what the core atoms
+ * carry.
+ */
+export interface AuthCoreTypes {
+  readonly session: SessionContract.SessionDto;
+  readonly account: AccountContract.AccountDto;
+  readonly middleware: Api.Authentication | Api.CsrfProtection;
+  readonly errors: Api.Unauthenticated | Api.CsrfRejected | SessionContract.SessionNotFound;
+}
+
+export class ReactAuthClient extends makeReactClient<ReactAuthClient>()(
   "awthaq/react/ReactAuthClient",
-  {
-    api: AuthCore.AuthCoreApi,
-    httpClient: FetchHttpClient.layer,
-  },
+  { api: AuthCore.AuthCoreApi },
 ) {}
 
 const rawSessionAtom = ReactAuthClient.query("session", "current", {
-  reactivityKeys: ["session"],
+  reactivityKeys: [SESSION_KEY],
 });
 
 /**
  * BEH-EA-177/178: the one session atom every `Providers` tree seeds for SSR
  * and every session-changing mutation invalidates via
- * `reactivityKeys: ["session"]` — `sessionAtom = AuthClient.query("session",
- * "current", { reactivityKeys: ["session"] })`'s own illustration, built
+ * `reactivityKeys: [SESSION_KEY]` — `sessionAtom = AuthClient.query("session",
+ * "current", { reactivityKeys: [SESSION_KEY] })`'s own illustration, built
  * here once so every consumer reads the identical atom rather than each
  * defining its own equivalent query and accidentally tracking session state
  * twice under two different atoms.
@@ -79,21 +95,18 @@ export const sessionAtom = Atom.make((get) => {
   return result;
 });
 
-export class ReactSubjectClient extends AtomHttpApi.Service<ReactSubjectClient>()(
+export class ReactSubjectClient extends makeReactClient<ReactSubjectClient>()(
   "awthaq/react/ReactSubjectClient",
-  {
-    api: SubjectContract.SubjectApi,
-    httpClient: FetchHttpClient.layer,
-  },
+  { api: SubjectContract.SubjectApi },
 ) {}
 
 /**
  * BEH-EA-179: the subject half `Providers.tsx`'s `toSubject` reads —
- * `reactivityKeys: ["session"]` too, the same key `sessionAtom`'s own
+ * `reactivityKeys: [SESSION_KEY]` too, the same key `sessionAtom`'s own
  * session-changing mutations already invalidate, since a subject can only
  * ever be as current as the session it was resolved for (sign-in, sign-out,
  * a role change behind a re-issued session all need to refetch both).
  */
 export const subjectDtoAtom = ReactSubjectClient.query("subject", "current", {
-  reactivityKeys: ["session"],
+  reactivityKeys: [SESSION_KEY],
 });

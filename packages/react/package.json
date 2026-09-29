@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@awthaq/api": "workspace:*",
+    "@awthaq/client": "workspace:*",
     "@effect/atom-react": "catalog:",
     "@qadi/core": "^0.7.0",
     "@qadi/react": "^0.7.0",
