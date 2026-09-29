@@ -3,7 +3,7 @@ ID: "TMS-004"
 Title: "Memory stores never evict expired state — attacker-keyed unbounded growth in rate limiter, sessions, and verification reservations"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/RateLimiter.ts:124"
 Auditor: "threat-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `ports` · reported by **Threat Modeling Specialist** (`threat-modeling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Evict on write (periodic sweep of expired buckets/rows, or cap the map and rejec
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `ratelimit-memory-eviction`. Evidence at HEAD ec065a7: `packages/ports/src/RateLimiter.ts:114`. Fix: Prune expired rows in the core memory layers (Sessions, Verification). (effort M). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Added packages/core/src/internal/pruneExpired.ts (pruneExpired, pruneExpiredAbove, threshold 10_000) and applied it inside Verification.layerMemory (issue's Ref.update, reserve's Ref.modify) and Sessions.layerMemory.issue (absoluteExpiresAt). Tests: packages/core/test/pruneExpired.test.ts (red first: module absent) + Verification.test.ts reserve-after-prune regression. Rate-limiter half closed by RBS-003. Gates as RBS-003.

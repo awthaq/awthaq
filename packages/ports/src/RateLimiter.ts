@@ -103,30 +103,106 @@ export const layer: Layer.Layer<RateLimiter, never, RateLimiterStore> = Layer.ef
 );
 
 /**
+ * RBS-003: the memory store's observable size — tests and saturation
+ * metrics read it, and `layerStoreMemoryWith` provides it next to the store.
+ */
+export interface RateLimiterMemoryStatsShape {
+  readonly size: Effect.Effect<number>;
+}
+
+export class RateLimiterMemoryStats extends Context.Service<
+  RateLimiterMemoryStats,
+  RateLimiterMemoryStatsShape
+>()("awthaq/ports/RateLimiterMemoryStats") {}
+
+export interface MemoryStoreOptions {
+  /** Hard cap on live buckets. Bucket keys embed attacker-chosen input (emails, identifiers), so the map must not grow with it. */
+  readonly maxBuckets: number;
+  /** How often expired buckets are reclaimed even if their key never comes back. */
+  readonly sweepInterval: Duration.Input;
+}
+
+// At the cap, eviction frees a tenth of the room in one pass instead of one
+// bucket per insert: a key spray against a full map would otherwise pay a
+// full O(n) scan on every request.
+const evictionRetainRatio = 0.9;
+
+/**
  * BEH-EA-105: fixed-window counter. `Ref.modify` reads and advances each
  * key's bucket in one step — under concurrent callers, every caller sees a
  * distinct, already-incremented count, never a stale pre-increment read
  * (the check-then-act race BEH-EA-105 rules out).
+ *
+ * RBS-003: bounded. A scoped sweeper drops buckets whose window has elapsed,
+ * and inserting a new key into a full map first drops the expired buckets,
+ * then the earliest-expiring live ones. Evicting a live bucket forgives that
+ * key's count; that is the price of a hard memory bound, and picking the
+ * earliest `resetAt` keeps it to the buckets that were closest to forgiving
+ * themselves anyway. Single-process only: a multi-replica deployment needs a
+ * shared store.
  */
-export const layerStoreMemory: Layer.Layer<RateLimiterStore> = Layer.effect(
-  RateLimiterStore,
-  Effect.gen(function* () {
-    const buckets = yield* Ref.make(HashMap.empty<string, Bucket>());
-    const increment: RateLimiterStoreShape["increment"] = (key, window) =>
-      Effect.gen(function* () {
-        const now = yield* DateTime.now;
-        return yield* Ref.modify(buckets, (state) => {
-          const existing = HashMap.get(state, key);
-          const next: Bucket =
-            Option.isSome(existing) && DateTime.isLessThan(now, existing.value.resetAt)
-              ? { count: existing.value.count + 1, resetAt: existing.value.resetAt }
-              : { count: 1, resetAt: DateTime.addDuration(now, window) };
-          return [next, HashMap.set(state, key, next)];
+export const layerStoreMemoryWith = (options: MemoryStoreOptions) =>
+  Layer.effectContext(
+    Effect.gen(function* () {
+      const buckets = yield* Ref.make(HashMap.empty<string, Bucket>());
+      const retained = Math.floor(options.maxBuckets * evictionRetainRatio);
+
+      const dropExpired = (state: HashMap.HashMap<string, Bucket>, now: DateTime.Utc) =>
+        HashMap.filter(state, (bucket) => DateTime.isLessThan(now, bucket.resetAt));
+
+      const makeRoom = (state: HashMap.HashMap<string, Bucket>, now: DateTime.Utc) => {
+        const live = dropExpired(state, now);
+        if (HashMap.size(live) < options.maxBuckets) return live;
+        const byResetAt = Array.from(live).sort(
+          ([, a], [, b]) => DateTime.toEpochMillis(a.resetAt) - DateTime.toEpochMillis(b.resetAt),
+        );
+        return HashMap.fromIterable(byResetAt.slice(byResetAt.length - retained));
+      };
+
+      const increment: RateLimiterStoreShape["increment"] = (key, window) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          return yield* Ref.modify(buckets, (state) => {
+            const existing = HashMap.get(state, key);
+            if (Option.isSome(existing) && DateTime.isLessThan(now, existing.value.resetAt)) {
+              const next: Bucket = {
+                count: existing.value.count + 1,
+                resetAt: existing.value.resetAt,
+              };
+              return [next, HashMap.set(state, key, next)];
+            }
+            const next: Bucket = { count: 1, resetAt: DateTime.addDuration(now, window) };
+            // A stale row for this very key is replaced, not a reason to evict others.
+            const room = HashMap.remove(state, key);
+            const base = HashMap.size(room) < options.maxBuckets ? room : makeRoom(room, now);
+            return [next, HashMap.set(base, key, next)];
+          });
         });
+
+      const sweep = Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        yield* Ref.update(buckets, (state) => dropExpired(state, now));
       });
-    return RateLimiterStore.of({ increment });
-  }),
-);
+      yield* Effect.sleep(options.sweepInterval).pipe(
+        Effect.andThen(sweep),
+        Effect.forever,
+        Effect.forkScoped,
+      );
+
+      return Context.make(RateLimiterStore, RateLimiterStore.of({ increment })).pipe(
+        Context.add(
+          RateLimiterMemoryStats,
+          RateLimiterMemoryStats.of({ size: Effect.map(Ref.get(buckets), HashMap.size) }),
+        ),
+      );
+    }),
+  );
+
+/** RBS-003: the default bounded memory store — 100k buckets, swept every minute. */
+export const layerStoreMemory = layerStoreMemoryWith({
+  maxBuckets: 100_000,
+  sweepInterval: "1 minute",
+});
 
 /**
  * BEH-EA-112: a limiter that never rejects, under any iteration count —

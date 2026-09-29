@@ -47,6 +47,92 @@ describe("RateLimiter.layer + layerStoreMemory (BEH-EA-105/106)", () => {
   );
 });
 
+describe("RateLimiter.layerStoreMemoryWith (RBS-003 bounded memory store)", () => {
+  const window = Duration.seconds(10);
+
+  it.effect("the sweeper reclaims expired buckets without the same key being re-used", () =>
+    Effect.gen(function* () {
+      const store = yield* RateLimiter.RateLimiterStore;
+      const stats = yield* RateLimiter.RateLimiterMemoryStats;
+      yield* Effect.forEach(["a", "b", "c"], (key) => store.increment(key, window));
+      assert.strictEqual(yield* stats.size, 3);
+      // The window (10s) has elapsed, plus one sweep interval (1 minute default).
+      yield* TestClock.adjust(Duration.seconds(61));
+      assert.strictEqual(yield* stats.size, 0);
+    }).pipe(Effect.provide(RateLimiter.layerStoreMemory)),
+  );
+
+  it.effect("the sweeper keeps buckets whose window has not elapsed", () =>
+    Effect.gen(function* () {
+      const store = yield* RateLimiter.RateLimiterStore;
+      const stats = yield* RateLimiter.RateLimiterMemoryStats;
+      yield* store.increment("short", Duration.seconds(5));
+      yield* store.increment("long", Duration.minutes(10));
+      yield* TestClock.adjust(Duration.seconds(61));
+      assert.strictEqual(yield* stats.size, 1);
+    }).pipe(Effect.provide(RateLimiter.layerStoreMemory)),
+  );
+
+  it.effect("spraying distinct keys past maxBuckets evicts the earliest-expiring bucket", () =>
+    Effect.gen(function* () {
+      const store = yield* RateLimiter.RateLimiterStore;
+      const stats = yield* RateLimiter.RateLimiterMemoryStats;
+      yield* store.increment("soonest", Duration.seconds(10));
+      yield* store.increment("middle", Duration.seconds(20));
+      yield* store.increment("latest", Duration.seconds(30));
+      assert.strictEqual(yield* stats.size, 3);
+      yield* store.increment("intruder", Duration.seconds(30));
+      assert.strictEqual(yield* stats.size, 3);
+      // "soonest" was evicted, so it starts a fresh bucket; "latest" survived and keeps counting.
+      assert.strictEqual((yield* store.increment("soonest", Duration.seconds(10))).count, 1);
+      assert.strictEqual((yield* store.increment("latest", Duration.seconds(30))).count, 2);
+    }).pipe(
+      Effect.provide(
+        RateLimiter.layerStoreMemoryWith({
+          maxBuckets: 3,
+          sweepInterval: Duration.minutes(1),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("size never exceeds maxBuckets however many distinct keys arrive", () =>
+    Effect.gen(function* () {
+      const store = yield* RateLimiter.RateLimiterStore;
+      const stats = yield* RateLimiter.RateLimiterMemoryStats;
+      for (let i = 0; i < 200; i++) {
+        yield* store.increment(`attacker:${i}`, window);
+        assert.isTrue((yield* stats.size) <= 10);
+      }
+    }).pipe(
+      Effect.provide(
+        RateLimiter.layerStoreMemoryWith({
+          maxBuckets: 10,
+          sweepInterval: Duration.minutes(1),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("an existing key is never evicted to make room for itself", () =>
+    Effect.gen(function* () {
+      const store = yield* RateLimiter.RateLimiterStore;
+      const stats = yield* RateLimiter.RateLimiterMemoryStats;
+      yield* store.increment("a", window);
+      yield* store.increment("b", window);
+      assert.strictEqual((yield* store.increment("a", window)).count, 2);
+      assert.strictEqual(yield* stats.size, 2);
+    }).pipe(
+      Effect.provide(
+        RateLimiter.layerStoreMemoryWith({
+          maxBuckets: 2,
+          sweepInterval: Duration.minutes(1),
+        }),
+      ),
+    ),
+  );
+});
+
 describe("RateLimiter.layerPermissive (BEH-EA-112)", () => {
   it.effect("never rejects, no matter how many times it is consumed", () =>
     Effect.gen(function* () {
