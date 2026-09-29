@@ -36,6 +36,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as OAuth from "../src/OAuth.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
 import * as OAuthTokenAccess from "../src/OAuthTokenAccess.ts";
+import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { FakeReply, fakeHttpClient, hangingRoute, type FakeRoutes } from "./FakeProvider.ts";
 
 // Shipping-gap map (.scratch/shipping-gaps), ticket 19: `OAuth.layer` now
@@ -1367,6 +1368,201 @@ describe("OAuth", () => {
         Effect.provide(buildLayer({ providers: [acme()], baseUrl: "https://app.example.com/" })),
       ),
     );
+  });
+
+  describe("token endpoint client authentication (AP-006)", () => {
+    /** What one token request looked like on the wire. */
+    interface SeenRequest {
+      readonly authorization: string | undefined;
+      readonly form: URLSearchParams;
+    }
+    const recordingTokenRoute = (seen: Array<SeenRequest>) => (request: HttpClientRequest.HttpClientRequest) => {
+      const body = request.body;
+      seen.push({
+        authorization: request.headers["authorization"],
+        form: new URLSearchParams(
+          body._tag === "Uint8Array" ? new TextDecoder().decode(body.body) : "",
+        ),
+      });
+      return { access_token: "at-1" };
+    };
+
+    const exchange = Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const { state } = yield* oauth.authorize("okta", { callbackURL: undefined, link: undefined });
+      return yield* oauth
+        .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+        .pipe(Effect.flip);
+    });
+
+    const boot = (
+      providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>,
+      discovery: Record<string, unknown>,
+    ) =>
+      Effect.void.pipe(
+        Effect.provide(
+          buildLayer({ providers, httpRoutes: { ".well-known/openid-configuration": discovery } }),
+        ),
+        Effect.exit,
+      );
+
+    const layerAdvertising = (advertised: ReadonlyArray<string> | undefined, seen: Array<SeenRequest>) =>
+      buildLayer({
+        providers: [okta({ mapProfile: (claims) => ({ subject: String(claims["sub"]) }) })],
+        httpRoutes: {
+          ".well-known/openid-configuration": {
+            ...oktaDiscovery,
+            ...(advertised === undefined ? {} : { token_endpoint_auth_methods_supported: advertised }),
+          },
+          "/jwks": { keys: [jwk] },
+          "/token": recordingTokenRoute(seen),
+        },
+      });
+
+    it.effect("a provider advertising only client_secret_basic gets Authorization: Basic and no client_secret in the body", () => {
+      const seen: Array<SeenRequest> = [];
+      return Effect.gen(function* () {
+        yield* exchange;
+        assert.strictEqual(seen.length, 1);
+        assert.strictEqual(
+          seen[0]?.authorization,
+          `Basic ${btoa("okta-client-id:okta-secret")}`,
+        );
+        assert.isFalse(seen[0]?.form.has("client_secret"));
+        assert.strictEqual(seen[0]?.form.get("client_id"), "okta-client-id");
+      }).pipe(Effect.provide(layerAdvertising(["client_secret_basic"], seen)));
+    });
+
+    it.effect("a provider advertising only client_secret_post gets client_secret in the body and no Authorization", () => {
+      const seen: Array<SeenRequest> = [];
+      return Effect.gen(function* () {
+        yield* exchange;
+        assert.isUndefined(seen[0]?.authorization);
+        assert.strictEqual(seen[0]?.form.get("client_secret"), "okta-secret");
+      }).pipe(Effect.provide(layerAdvertising(["client_secret_post"], seen)));
+    });
+
+    it.effect("with no advertised list and no explicit method, the RFC 6749 default (basic) is used", () => {
+      const seen: Array<SeenRequest> = [];
+      return Effect.gen(function* () {
+        yield* exchange;
+        assert.strictEqual(seen[0]?.authorization, `Basic ${btoa("okta-client-id:okta-secret")}`);
+      }).pipe(Effect.provide(layerAdvertising(undefined, seen)));
+    });
+
+    it.effect("when both are advertised, basic wins; an explicit method overrides discovery", () => {
+      const seen: Array<SeenRequest> = [];
+      return Effect.gen(function* () {
+        yield* exchange;
+        assert.isUndefined(seen[0]?.authorization);
+        assert.strictEqual(seen[0]?.form.get("client_secret"), "okta-secret");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [
+              okta({
+                tokenEndpointAuthMethod: "client_secret_post",
+                mapProfile: (claims) => ({ subject: String(claims["sub"]) }),
+              }),
+            ],
+            httpRoutes: {
+              ".well-known/openid-configuration": {
+                ...oktaDiscovery,
+                token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
+              },
+              "/jwks": { keys: [jwk] },
+              "/token": recordingTokenRoute(seen),
+            },
+          }),
+        ),
+      );
+    });
+
+    it.effect("client ids containing reserved characters are form-urlencoded before base64 (RFC 6749 2.3.1)", () => {
+      const seen: Array<SeenRequest> = [];
+      return Effect.gen(function* () {
+        yield* exchange;
+        assert.strictEqual(seen[0]?.authorization, `Basic ${btoa("my+app%3Aid:s%3Dcr%26t")}`);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [
+              okta({
+                clientId: Config.succeed("my app:id"),
+                clientSecret: Config.succeed(Redacted.make("s=cr&t")),
+                tokenEndpointAuthMethod: "client_secret_basic",
+                mapProfile: (claims) => ({ subject: String(claims["sub"]) }),
+              }),
+            ],
+            httpRoutes: {
+              ".well-known/openid-configuration": oktaDiscovery,
+              "/jwks": { keys: [jwk] },
+              "/token": recordingTokenRoute(seen),
+            },
+          }),
+        ),
+      );
+    });
+
+    it.effect("a configured method the discovery document does not advertise fails at boot", () =>
+      Effect.gen(function* () {
+        const exit = yield* boot([okta({ tokenEndpointAuthMethod: "client_secret_basic" })], {
+          ...oktaDiscovery,
+          token_endpoint_auth_methods_supported: ["client_secret_post"],
+        });
+        if (exit._tag === "Success") return assert.fail("expected boot to die");
+        assert.include(Cause.pretty(exit.cause), "client_secret_basic");
+      }),
+    );
+
+    it.effect("a provider advertising only methods this plugin cannot use fails at boot", () =>
+      Effect.gen(function* () {
+        const exit = yield* boot([okta()], {
+          ...oktaDiscovery,
+          token_endpoint_auth_methods_supported: ["private_key_jwt"],
+        });
+        assert.strictEqual(exit._tag, "Failure");
+      }),
+    );
+
+    it.effect("a client-secret method with no clientSecret, or method none with one, fails at boot", () =>
+      Effect.gen(function* () {
+        const { clientSecret: _omitted, ...publicClient } = okta({
+          tokenEndpointAuthMethod: "client_secret_post",
+        });
+        assert.strictEqual((yield* boot([publicClient], oktaDiscovery))._tag, "Failure");
+        const withSecret = okta({ tokenEndpointAuthMethod: "none" });
+        assert.strictEqual((yield* boot([withSecret], oktaDiscovery))._tag, "Failure");
+      }),
+    );
+
+    it.effect("a public client (no clientSecret) authenticates with nothing but client_id", () => {
+      const seen: Array<SeenRequest> = [];
+      return Effect.gen(function* () {
+        yield* exchange;
+        assert.isUndefined(seen[0]?.authorization);
+        assert.strictEqual(seen[0]?.form.get("client_id"), "okta-client-id");
+        assert.isFalse(seen[0]?.form.has("client_secret"));
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [
+              (() => {
+                const { clientSecret: _omitted, ...publicClient } = okta({
+                  mapProfile: (claims) => ({ subject: String(claims["sub"]) }),
+                });
+                return publicClient;
+              })(),
+            ],
+            httpRoutes: {
+              ".well-known/openid-configuration": oktaDiscovery,
+              "/jwks": { keys: [jwk] },
+              "/token": recordingTokenRoute(seen),
+            },
+          }),
+        ),
+      );
+    });
   });
 
   describe("BEH-EA-128: callback destination is validated, never echoed", () => {

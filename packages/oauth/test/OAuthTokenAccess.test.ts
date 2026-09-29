@@ -17,6 +17,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
+import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as OAuth from "../src/OAuth.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
 import * as OAuthTokenAccess from "../src/OAuthTokenAccess.ts";
@@ -317,6 +318,47 @@ describe("OAuthTokenAccess", () => {
           { "/token": hang.route },
           { httpTimeouts: { tokenExchange: Duration.seconds(3) } },
         ),
+      ),
+    );
+  });
+
+  it.effect("AP-006: the refresh grant authenticates with the provider's resolved method (basic by default)", () => {
+    const seen: Array<{ authorization: string | undefined; hasSecretInBody: boolean }> = [];
+    return Effect.gen(function* () {
+      const accounts = yield* Accounts.Accounts;
+      const now = yield* DateTime.now;
+      const account = yield* accounts.link({
+        userId,
+        providerId: "acme",
+        subject: "sub-refresh-basic",
+        tokens: {
+          accessToken: Redacted.make("at-old"),
+          refreshToken: Option.some(Redacted.make("rt-old")),
+          accessTokenExpiresAt: Option.some(DateTime.addDuration(now, Duration.seconds(-1))),
+          refreshTokenExpiresAt: Option.none(),
+          scope: Option.none(),
+          tokenType: Option.none(),
+        },
+      });
+      const tokenAccess = yield* OAuthTokenAccess.OAuthTokenAccess;
+      yield* tokenAccess.withAccessToken(account.id, () => Effect.void);
+      assert.strictEqual(seen.length, 1);
+      assert.strictEqual(seen[0]?.authorization, `Basic ${btoa("acme-client-id:acme-secret")}`);
+      assert.isFalse(seen[0]?.hasSecretInBody);
+    }).pipe(
+      Effect.provide(
+        buildLayer({
+          "/token": (request: HttpClientRequest.HttpClientRequest) => {
+            const body = request.body;
+            seen.push({
+              authorization: request.headers["authorization"],
+              hasSecretInBody:
+                body._tag === "Uint8Array" &&
+                new URLSearchParams(new TextDecoder().decode(body.body)).has("client_secret"),
+            });
+            return { access_token: "at-new", expires_in: 3600 };
+          },
+        }),
       ),
     );
   });

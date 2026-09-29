@@ -130,6 +130,8 @@ REQUIREMENT: A provider's client secret MUST be read via `Config.Redacted`
 
 `usage-examples-v4.md` §2.1 states the property directly: "Secrets are environment only... nothing secret appears in this file." Reading the secret through `Config.Redacted` inside the Layer means the value is neither loggable by accident nor visible in a diff of the wiring code — the wiring file names the environment variable, never the value, and `Redacted`'s type prevents it from being printed even if someone tries.
 
+**Token-endpoint client authentication (AP-006).** The secret is sent by the method the provider's token endpoint supports, chosen once at boot (`tokenEndpointAuthMethod`, RFC 6749 §2.3.1 / RFC 8414 `token_endpoint_auth_methods_supported`): `client_secret_basic` (an `Authorization: Basic` header over the *form-urlencoded* client id and secret, then base64 — the RFC default, and used when the discovery document advertises it or advertises nothing), `client_secret_post` (the secret in the request body, used when only that is advertised or explicitly configured), or `none` for a public client. An explicitly configured method that the discovery document does not advertise, a secret-bearing method with no `clientSecret`, `none` alongside a `clientSecret`, or a provider advertising only methods this plugin cannot use, all fail at boot rather than as an `invalid_client` at the first sign-in. The code exchange and the refresh grant authenticate identically.
+
 _Previous: [BEH-EA-125](16-oauth.md#beh-ea-125-provider-subject-issuer-is-the-identity-anchor) | Next: [BEH-EA-127](16-oauth.md#beh-ea-127-generic-oidc-discovery-with-exact-issuer-match)_
 
 ## BEH-EA-127: Generic OIDC discovery, with exact issuer match

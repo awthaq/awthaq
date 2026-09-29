@@ -23,13 +23,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as HttpBody from "effect/unstable/http/HttpBody";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as OAuthConfig from "./OAuthConfig.ts";
 import type * as OAuthProvider from "./OAuthProvider.ts";
 import * as OAuthProviders from "./OAuthProviders.ts";
 import * as ProviderHttp from "./ProviderHttp.ts";
 import * as ProviderResponses from "./ProviderResponses.ts";
+import * as TokenEndpoint from "./TokenEndpoint.ts";
 
 /** No account, no stored tokens for it, or a stored access token expired with no refresh token to recover it. */
 export class OAuthTokenUnavailable extends Data.TaggedError("OAuthTokenUnavailable")<{
@@ -83,22 +83,19 @@ const refresh = (
   timeout: Duration.Duration,
 ): Effect.Effect<Redacted.Redacted<string>, OAuthRefreshFailed> =>
   Effect.gen(function* () {
-    const form: Record<string, string> = {
+    const grant: Record<string, string> = {
       grant_type: "refresh_token",
       refresh_token: Redacted.value(refreshToken),
-      client_id: provider.clientId,
     };
-    if (Option.isSome(provider.clientSecret)) {
-      form["client_secret"] = Redacted.value(provider.clientSecret.value);
-    }
     // ESS-003: the same schema the code exchange uses — a body without a
     // string `access_token` fails the decode and normalizes to
     // `OAuthRefreshFailed` below.
     // ECF-001: bounded by the token-exchange deadline, request plus decode.
     // Not retried: a refresh token may rotate on use, so a replay after an
     // ambiguous failure could strand the account.
+    // AP-006: the same client authentication the code exchange uses.
     const body = yield* httpClient
-      .post(provider.tokenEndpoint, { body: HttpBody.urlParams(form) })
+      .post(provider.tokenEndpoint, TokenEndpoint.clientAuthentication(provider, grant))
       .pipe(
         Effect.flatMap(ProviderHttp.decodeBody(ProviderResponses.TokenResponseSchema)),
         Effect.timeout(timeout),

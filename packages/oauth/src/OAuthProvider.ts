@@ -29,6 +29,13 @@ export interface OAuthEndpoints {
   readonly userinfoEndpoint?: string;
 }
 
+/**
+ * AP-006 (RFC 6749 §2.3.1, RFC 8414 `token_endpoint_auth_methods_supported`):
+ * how the client authenticates at the token endpoint. `"none"` is a public
+ * client (no secret). Chosen at boot — see `resolve`.
+ */
+export type TokenEndpointAuthMethod = "client_secret_basic" | "client_secret_post" | "none";
+
 /** BEH-EA-121: a provider that rejects PKCE outright (documented per-provider, never a general escape hatch). */
 export interface OAuthProviderQuirks {
   readonly skipPkce?: boolean;
@@ -85,6 +92,14 @@ export interface OAuthProviderConfig {
   readonly scopes: ReadonlyArray<string>;
   readonly pkce: true;
   readonly quirks?: OAuthProviderQuirks;
+  /**
+   * AP-006: leave unset to let `resolve` pick — `client_secret_basic` (the
+   * RFC 6749 default) unless the discovery document advertises only
+   * `client_secret_post`; `"none"` when there is no `clientSecret`. Set it
+   * for a provider that documents one method without advertising it (Apple,
+   * for instance, wants the secret in the body).
+   */
+  readonly tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
   /** NAM-004: only meaningful with a `discoveryUrl`. */
   readonly discovery?: OAuthDiscoveryPolicy;
   readonly mapProfile: (claims: Record<string, unknown>) => OAuthProfile;
@@ -118,6 +133,7 @@ export interface ResolvedProvider {
   readonly clientSecret: Option.Option<Redacted.Redacted<string>>;
   readonly scopes: ReadonlyArray<string>;
   readonly skipPkce: boolean;
+  readonly tokenEndpointAuthMethod: TokenEndpointAuthMethod;
   readonly mapProfile: (claims: Record<string, unknown>) => OAuthProfile;
 }
 
@@ -138,6 +154,7 @@ const DiscoveryDocumentSchema = Schema.Struct({
   token_endpoint: Schema.optional(AbsoluteUrl),
   jwks_uri: Schema.optional(AbsoluteUrl),
   userinfo_endpoint: Schema.optional(AbsoluteUrl),
+  token_endpoint_auth_methods_supported: Schema.optional(Schema.Array(Schema.String)),
 });
 
 /**
@@ -213,6 +230,7 @@ export const resolve = (
     let tokenEndpoint = config.endpoints?.tokenEndpoint;
     let jwksUri = config.endpoints?.jwksUri;
     let userinfoEndpoint = config.endpoints?.userinfoEndpoint;
+    let advertisedAuthMethods: ReadonlyArray<string> | undefined;
 
     if (config.discoveryUrl !== undefined) {
       const discoveryUrl = yield* config.discoveryUrl.pipe(Effect.orDie);
@@ -247,6 +265,7 @@ export const resolve = (
       tokenEndpoint ??= document.token_endpoint;
       jwksUri ??= document.jwks_uri;
       userinfoEndpoint ??= document.userinfo_endpoint;
+      advertisedAuthMethods = document.token_endpoint_auth_methods_supported;
     }
 
     if (authorizationEndpoint === undefined || tokenEndpoint === undefined) {
@@ -275,6 +294,52 @@ export const resolve = (
       }
     }
 
+    // AP-006: the client-authentication method is decided once, here, so a
+    // mismatch with what the provider advertises surfaces at boot instead of
+    // as a `invalid_client` at the first sign-in.
+    const hasSecret = Option.isSome(clientSecret);
+    const configuredMethod = config.tokenEndpointAuthMethod;
+    const methodProblem = (problem: string) =>
+      Effect.die(new Error(`awthaq/oauth: provider "${config.id}" ${problem}`));
+    let tokenEndpointAuthMethod: TokenEndpointAuthMethod;
+    if (configuredMethod !== undefined) {
+      if (configuredMethod === "none" && hasSecret) {
+        return yield* methodProblem(
+          'sets tokenEndpointAuthMethod "none" but has a clientSecret it would never send',
+        );
+      }
+      if (configuredMethod !== "none" && !hasSecret) {
+        return yield* methodProblem(
+          `sets tokenEndpointAuthMethod "${configuredMethod}" but has no clientSecret`,
+        );
+      }
+      if (
+        configuredMethod !== "none" &&
+        advertisedAuthMethods !== undefined &&
+        !advertisedAuthMethods.includes(configuredMethod)
+      ) {
+        return yield* methodProblem(
+          `sets tokenEndpointAuthMethod "${configuredMethod}" but its discovery document ` +
+            `advertises only [${advertisedAuthMethods.join(", ")}]`,
+        );
+      }
+      tokenEndpointAuthMethod = configuredMethod;
+    } else if (!hasSecret) {
+      tokenEndpointAuthMethod = "none";
+    } else if (
+      advertisedAuthMethods === undefined ||
+      advertisedAuthMethods.includes("client_secret_basic")
+    ) {
+      tokenEndpointAuthMethod = "client_secret_basic";
+    } else if (advertisedAuthMethods.includes("client_secret_post")) {
+      tokenEndpointAuthMethod = "client_secret_post";
+    } else {
+      return yield* methodProblem(
+        `advertises only [${advertisedAuthMethods.join(", ")}] at its token endpoint; ` +
+          "this plugin supports client_secret_basic and client_secret_post",
+      );
+    }
+
     return {
       id: config.id,
       kind: config.kind,
@@ -288,6 +353,7 @@ export const resolve = (
       clientSecret,
       scopes: config.scopes,
       skipPkce,
+      tokenEndpointAuthMethod,
       mapProfile: config.mapProfile,
     };
   });

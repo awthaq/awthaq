@@ -44,7 +44,6 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as HttpBody from "effect/unstable/http/HttpBody";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
@@ -57,6 +56,7 @@ import * as OAuthProvider from "./OAuthProvider.ts";
 import * as OAuthProviders from "./OAuthProviders.ts";
 import * as ProviderHttp from "./ProviderHttp.ts";
 import * as ProviderResponses from "./ProviderResponses.ts";
+import * as TokenEndpoint from "./TokenEndpoint.ts";
 
 // The policy knobs live in `OAuthConfig.ts` (so the shared provider registry
 // can read them without a module cycle); re-exported so `OAuth.config(...)`
@@ -259,23 +259,20 @@ const exchangeCode = (
   timeout: Duration.Duration,
 ): Effect.Effect<TokenSet, OAuthApi.OAuthCallbackFailed | OAuthApi.ProviderUnavailable> =>
   Effect.gen(function* () {
-    const form: Record<string, string> = {
+    const grant: Record<string, string> = {
       grant_type: "authorization_code",
       code: input.code,
       redirect_uri: input.redirectUri,
-      client_id: provider.clientId,
     };
-    if (!provider.skipPkce) form["code_verifier"] = input.codeVerifier;
-    if (Option.isSome(provider.clientSecret)) {
-      form["client_secret"] = Redacted.value(provider.clientSecret.value);
-    }
+    if (!provider.skipPkce) grant["code_verifier"] = input.codeVerifier;
     // ESS-003: decoded at the boundary — a body without a string
     // `access_token` (or with a mistyped member) fails the schema, typed.
     // ECF-001: the deadline covers the request and its body decode. ERS-003:
     // this is the one call that is never retried — the authorization code is
     // single-use (RFC 6749 §4.1.2), so `httpClient` here is the plain client.
+    // AP-006: the client authenticates per the provider's resolved method.
     const body = yield* httpClient
-      .post(provider.tokenEndpoint, { body: HttpBody.urlParams(form) })
+      .post(provider.tokenEndpoint, TokenEndpoint.clientAuthentication(provider, grant))
       .pipe(
         Effect.flatMap(ProviderHttp.decodeBody(ProviderResponses.TokenResponseSchema)),
         Effect.timeout(timeout),
