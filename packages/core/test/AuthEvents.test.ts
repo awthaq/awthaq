@@ -286,6 +286,37 @@ describe("AuthEvents", () => {
     },
   );
 
+  it.effect(
+    "BEH-EA-104 (REQ-EA-275): the observer-error log names the failing subscription as well as the event",
+    () => {
+      const records = Ref.makeUnsafe<ReadonlyArray<string>>([]);
+      const Capture = Logger.layer([
+        Logger.make((options) => {
+          Effect.runSync(Ref.update(records, (r) => [...r, JSON.stringify(options.message, replacer)]));
+        }),
+      ]);
+      return Effect.gen(function* () {
+        const done = yield* Deferred.make<void>();
+        const events = yield* AuthEvents.AuthEvents;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Layer.build(
+              AuthEvents.on(["auth.token.replay", "auth.user.created"], () =>
+                Effect.die(new Error("boom")).pipe(Effect.ensuring(Deferred.succeed(done, undefined))),
+              ),
+            );
+            yield* events.publish({ _tag: "auth.token.replay", identifier: "x" });
+            yield* Deferred.await(done);
+            yield* Effect.yieldNow;
+          }),
+        );
+        const entry = (yield* Ref.get(records)).find((text) => text.includes("auth.event.observer.error"));
+        assert.include(entry ?? "", "auth.token.replay");
+        assert.include(entry ?? "", "auth.token.replay,auth.user.created");
+      }).pipe(Effect.provide(Layer.merge(AuthEventsLive, Capture)));
+    },
+  );
+
   it.effect("EOTS-005/JH-002: subscriber failures are counted in awthaq_event_observer_error_total", () => {
     const counter = Metric.withAttributes(Observability.eventObserverErrors, {
       tag: "auth.token.replay",

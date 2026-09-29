@@ -36,13 +36,14 @@
 // not a type error at the call site the way `Validate<P>` gives for plugin
 // composition itself.
 //
-// BEH-EA-111's "dependency order, then declared `order`, then rule id"
-// resolved-order rule is implemented for hook taps (`HookPoint.compareTaps`,
-// JH-003, which reads each owner's `dependsOn`); rules are not yet ordered
-// that way — this module orders by declared `order` then registration
-// sequence. A real `awthaq plugin list --graph` CLI command
-// (BEH-EA-111's own example) is `@awthaq/cli`'s job, not built yet;
-// `registered` is this module's own introspection primitive for it to call.
+// BEH-EA-111's "dependency order, then declared `order`, then plugin id"
+// resolved-order rule is the one `HookPoint.compareTaps` implements for hook
+// taps (JH-003), and `registered` sorts with that very comparator (P20a,
+// REQ-EA-299/300: the registry used to order by declared `order` then
+// registration sequence alone, so an import-order accident decided which of two
+// unrelated plugins' rules listed first). Two rules of one plugin with the same
+// `order` keep their registration sequence. `registered` is the introspection
+// primitive a CLI listing of the rules would call.
 
 import { RateLimiter } from "@awthaq/ports";
 import * as Context from "effect/Context";
@@ -54,6 +55,7 @@ import * as Metric from "effect/Metric";
 import * as Ref from "effect/Ref";
 import * as AuthEvents from "./AuthEvents.ts";
 import type * as AuthPlugin from "./AuthPlugin.ts";
+import * as HookPoint from "./HookPoint.ts";
 
 /** BEH-EA-108: the built-in bucket-key strategies, plus an escape hatch for a plugin author who has already reasoned through the risk a fixed string key would otherwise carry (a caller-chosen value collectively locking out a NATed office, or an attacker-controlled bucket). */
 export type RateLimitKey = "principal" | "ip" | ((input: unknown) => string);
@@ -91,7 +93,7 @@ export interface RateLimitsRegistryShape {
     owner: AuthPlugin.Any,
     input: RuleInput,
   ) => Effect.Effect<void, RateLimitScopeViolation>;
-  /** BEH-EA-111: every rule registered so far, ordered by declared `order` then registration sequence (see this module's own header comment for the full dependency-aware rule this stands in for) — frozen the first time it is read. */
+  /** BEH-EA-111: every rule registered so far, ordered by dependency order, then declared `order`, then plugin id (`HookPoint.compareTaps`, the hook registry's own comparator), then registration sequence — frozen the first time it is read. */
   readonly registered: Effect.Effect<ReadonlyArray<RegisteredRule>>;
 }
 
@@ -103,7 +105,11 @@ export class RateLimitsRegistry extends Context.Service<
 export const layer: Layer.Layer<RateLimitsRegistry> = Layer.effect(
   RateLimitsRegistry,
   Effect.gen(function* () {
-    const entries = yield* Ref.make<ReadonlyArray<RegisteredRule>>([]);
+    // The owner rides beside each rule (not on `RegisteredRule`, which is what callers see):
+    // ordering needs its `dependsOn`, introspection only its id.
+    const entries = yield* Ref.make<
+      ReadonlyArray<{ readonly rule: RegisteredRule; readonly owner: AuthPlugin.Any }>
+    >([]);
     const frozen = yield* Ref.make<ReadonlyArray<RegisteredRule> | undefined>(undefined);
 
     const register: RateLimitsRegistryShape["register"] = (owner, input) =>
@@ -127,16 +133,22 @@ export const layer: Layer.Layer<RateLimitsRegistry> = Layer.effect(
         }
         yield* Ref.update(entries, (current) => [
           ...current,
-          { ...input, plugin: owner.id, sequence: current.length },
+          { rule: { ...input, plugin: owner.id, sequence: current.length }, owner },
         ]);
       });
 
     const registered: RateLimitsRegistryShape["registered"] = Effect.gen(function* () {
       const already = yield* Ref.get(frozen);
       if (already !== undefined) return already;
-      const sorted = (yield* Ref.get(entries)).toSorted(
-        (a, b) => (a.order ?? 0) - (b.order ?? 0) || a.sequence - b.sequence,
-      );
+      const sorted = (yield* Ref.get(entries))
+        .toSorted(
+          (a, b) =>
+            HookPoint.compareTaps(
+              { owner: a.owner, order: a.rule.order ?? 0 },
+              { owner: b.owner, order: b.rule.order ?? 0 },
+            ) || a.rule.sequence - b.rule.sequence,
+        )
+        .map((entry) => entry.rule);
       yield* Ref.set(frozen, sorted);
       return sorted;
     });

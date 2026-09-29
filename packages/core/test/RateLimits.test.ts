@@ -103,6 +103,34 @@ describe("RateLimits.RateLimitsRegistry.registered (BEH-EA-111)", () => {
     }).pipe(Effect.provide(RateLimits.layer)),
   );
 
+  it.effect(
+    "BEH-EA-111 (REQ-EA-299): a dependent plugin's rules list after its dependency's, whatever their declared order; equal keys fall to plugin id",
+    () =>
+      Effect.gen(function* () {
+        const base = fakePlugin("zeta", ["zeta"]);
+        const dependent: AuthPlugin.Any = { ...fakePlugin("alpha", ["alpha"]), dependsOn: [base] };
+        const peer = fakePlugin("beta", ["beta"]);
+        const rule = (group: string, order?: number): RateLimits.RuleInput => ({
+          group,
+          endpoint: "verify",
+          key: "ip",
+          limit: 3,
+          window: Duration.seconds(10),
+          ...(order === undefined ? {} : { order }),
+        });
+        // Registered dependent-first, and the dependent even declares the lowest order:
+        // dependency order still wins, then declared order, then plugin id.
+        yield* install(dependent, rule("alpha", -10));
+        yield* install(peer, rule("beta"));
+        yield* install(base, rule("zeta"));
+        const registry = yield* RateLimits.RateLimitsRegistry;
+        assert.deepStrictEqual(
+          (yield* registry.registered).map((registered) => registered.plugin),
+          ["beta", "zeta", "alpha"],
+        );
+      }).pipe(Effect.provide(RateLimits.layer)),
+  );
+
   it.effect("BEH-EA-024: freezes at first read — a rule registered afterward is a defect", () =>
     Effect.gen(function* () {
       const invite = fakePlugin("invite", ["invite"]);

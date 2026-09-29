@@ -267,12 +267,13 @@ const originLinks = (event: Published): ReadonlyArray<Tracer.SpanLink> =>
  * root span *linked* to the publishing span, with the correlation id annotated
  * on every log line it writes.
  */
-const isolate = (event: Published, run: Effect.Effect<void, unknown>) =>
+const isolate = (label: string, event: Published, run: Effect.Effect<void, unknown>) =>
   run.pipe(
     Effect.catchCause((cause) =>
       Observability.logObserverFailure(
         "auth.event.observer.error",
-        { tag: event._tag },
+        // BEH-EA-104 (P20a, REQ-EA-275): the entry names the subscription as well as the event.
+        { tag: event._tag, subscription: label },
         cause,
       ).pipe(
         Effect.andThen(
@@ -367,7 +368,7 @@ export const on = <const Select extends TagSelect>(
     supervise(label, (stream) =>
       stream.pipe(
         Stream.filter(isSelected),
-        Stream.runForEach((event) => isolate(event, handler(event))),
+        Stream.runForEach((event) => isolate(label, event, handler(event))),
       ),
     ),
   );
@@ -396,7 +397,7 @@ export const onBatch = <const Select extends TagSelect>(
         Stream.runForEach((batch) => {
           const events = [...batch];
           const [head] = events;
-          return head === undefined ? Effect.void : isolate(head, handler(events));
+          return head === undefined ? Effect.void : isolate(label, head, handler(events));
         }),
       ),
     ),

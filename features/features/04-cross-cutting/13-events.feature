@@ -1,10 +1,4 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @cross-cutting @events
-@skip @unwired
 Feature: Events
 
   # BEH-EA-097 — spec/behaviors/13-events.md; see also ADR-EA-001.
