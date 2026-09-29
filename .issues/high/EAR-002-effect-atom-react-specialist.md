@@ -3,7 +3,7 @@ ID: "EAR-002"
 Title: "Subject is derived from a second independent fetch, and after sign-out it is an anonymous AuthSubject rather than undefined"
 Level: high
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "react"
 Source: "packages/react/src/Subject.ts:5"
 Auditor: "effect-atom-react-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `compliance` · `react` · reported by **Effect Atom/React Reactivity Specialist** (`effect-atom-react-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/react/src/Subject.ts:3-11` matches the quoted BEH-EA-179 comment verbatim, and `toSubject` derives its result from `subjectDtoAtom`, not `sessionAtom`. `packages/qadi/src/SubjectApi.ts:28-31,66-73` confirms the endpoint uses `OptionalAuthentication` and resolves `CurrentSubject` for every caller including anonymous ones, so `dto` is never `undefined` after sign-out — only after a second round trip, and then as a well-formed anonymous subject rather than `undefined`. Gating `toSubject` on `sessionAtom`'s value is a well-scoped, mechanical fix confined to `packages/react`. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `react-provider-subject-pipeline`. Evidence at HEAD ec065a7: `packages/react/src/Subject.ts:38`. Fix: Gate the subject on sessionAtom: `subjectAtom` is undefined unless sessionAtom is a settled, non-waiting Success with a real session AND subjectDtoAtom is a settled, non-waiting Success. Keeps the separate /subject endpoint (Subject.ts / qadi SubjectApi.ts rationale) but makes sessionAtom the gate, closing the stale-grant window in the same registry batch. (effort M). Full dossier: `.plan/slices/11-frontend-next-react-client.md`.
+
+**Resolved (2026-09-29):** AuthClientAtom.subjectAtom = subjectDtoAtom gated on sessionAtom (settled non-null Success; dto settled, non-waiting). Deviation noted: sessionAtom's own waiting is not part of the gate so window-focus revalidation does not blink gates to pending; sign-out closes the gate in the same registry batch (HistoryProbe test proves no render pairs no-session with a granted subject). Seeded subject without seeded session is not trusted. SubjectAtom.test.ts pure-registry tests + Providers.test.tsx. BEH-EA-179 note added in spec/behaviors/23-react.md; traceability row updated.

@@ -3,7 +3,7 @@ ID: "EAR-004"
 Title: "Tests cover only the seeded path; the live fetch, invalidation, and failure paths are untested"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "react"
 Source: "packages/react/test/Providers.test.tsx:8"
 Auditor: "effect-atom-react-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `react` · reported by **Effect Atom/React Reactivity Specialist** (`effect-atom-react-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Add tests that intercept fetch (or point the AtomHttpApi clients at a local stub
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `react-provider-subject-pipeline`. Evidence at HEAD ec065a7: `packages/react/test/Providers.test.tsx:7`. Fix: Add a fetch-stubbed live-path suite; these tests are the TDD drivers for EAR-001/EAR-002/EAR-006 and the CSRF new finding. (effort M). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Added test/support/stubFetch.ts (single delegating fetch stub; FetchHttpClient memoizes globalThis.fetch so per-test stubbing would not be seen) and live-path scenarios: anonymous load, signed-in load, invalidation flip, sign-out window, 500 as Failure, CSRF header, focus revalidation. Unrouted requests throw; no ECONNRESET noise in the react project. Traceability row updated.

@@ -3,7 +3,7 @@ ID: "RSC-002"
 Title: "Providers.tsx lacks \"use client\"; canonical RSC usage crashes on first hook call"
 Level: high
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "react"
 Source: "packages/react/src/Providers.tsx:58"
 Auditor: "react-server-components-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `dx` · `react` · reported by **React Server Components Auth Specialist** (`react-server-components-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — a grep across `packages/` finds zero `"use client"` directives, and Providers.tsx:58's `SubjectBridge` component calls `useAtomValue(subjectDtoAtom)` with no client boundary, matching the auditor's evidence exactly. Adding `"use client"` to the file top is a mechanical, well-scoped fix. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `react-provider-subject-pipeline`. Evidence at HEAD ec065a7: `packages/react/src/Providers.tsx:1`. Fix: Mark every hook-bearing/client-only module of @awthaq/react as a client module and pin SSR behavior with a server-render test. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`.
+
+**Resolved (2026-09-29):** use client added to Providers.tsx, Hooks.ts, index.ts (first line, verified preserved in lib/*.js); ClientBoundary.test.ts enumerates src for the directive; scripts/package-smoke.mjs asserts lib/index.js|Providers.js|Hooks.js start with it; Providers.ssr.test.tsx (node env, no window) and Providers.hydrate.test.tsx (hydrateRoot with onRecoverableError) pin SSR/hydration.

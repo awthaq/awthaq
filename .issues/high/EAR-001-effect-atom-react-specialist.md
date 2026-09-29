@@ -3,7 +3,7 @@ ID: "EAR-001"
 Title: "QadiProvider's inner registry shadows the outer one, so the subject prop can never update after mount"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "react"
 Source: "packages/react/src/Providers.tsx:105"
 Auditor: "effect-atom-react-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `correctness` · `react` · reported by **Effect Atom/React Reactivity Specialist** (`effect-atom-react-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/react/src/Providers.tsx:104-106` matches the quoted JSX verbatim: `SubjectBridge` (which calls `useAtomValue(subjectDtoAtom)`) is rendered as a child of the outer `RegistryProvider`, *around* `QadiProvider`, not inside it. `node_modules/.../@qadi/react/lib/QadiProvider.js:78-88` confirms `QadiProvider` constructs its own `AtomRegistry.make(...)` and provides it via `RegistryContext.Provider` only to `children` — so `SubjectBridge`'s read resolves against the outer registry while app mutations under `children` invalidate the inner one. `effect/src/unstable/reactivity/AtomRegistry.ts:6` confirms "Each registry is independent" verbatim. The fix is confined to `packages/react/src/Providers.tsx` and doesn't require touching the external `@qadi/react` library. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `react-provider-subject-pipeline`. Evidence at HEAD ec065a7: `packages/react/src/Providers.tsx:103`. Fix: Collapse to ONE registry: drop the outer RegistryProvider, seed everything through QadiProvider's initialValues, and derive/sync the qadi subject inside QadiProvider's registry from a new derived `subjectAtom` (implemented jointly with EAR-002). (effort M). Full dossier: `.plan/slices/11-frontend-next-react-client.md`.
+
+**Resolved (2026-09-29):** Providers.tsx now has one registry (QadiProvider's): outer RegistryProvider removed, seeds via initialValues computed once (useState), SubjectSync forwards AuthClientAtom.subjectAtom into atoms.subject via useAtomSubscribe (immediate). Tests (Providers.test.tsx live path): session-keyed mutation flips useSubject without remount; parent re-render does not reset to seed. Proven red: removing the subscription fails 5 live-path tests. Gates: typecheck (clean build), react tests, full suite, spec:verify:strict, oxlint.

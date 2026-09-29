@@ -3,7 +3,7 @@ ID: "EAR-006"
 Title: "Fetch failure is reported with a render-phase console.error and is otherwise indistinguishable from loading"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "react"
 Source: "packages/react/src/Providers.tsx:65"
 Auditor: "effect-atom-react-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `react` · reported by **Effect Atom/React Reactivity Specialist** (`effect-atom-react-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Move diagnostics into an effect (or a registered failure reporter), and expose r
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `react-provider-subject-pipeline`. Evidence at HEAD ec065a7: `packages/react/src/Providers.tsx:65`. Fix: Replace the render-phase console.error with an exported auth-status atom/hook plus an optional `onError` prop and a retry handle. (effort M). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** authStatusAtom (Data.taggedEnum Pending/SignedOut/Ready/Failed) + useAuthStatus() {status, retry} (src/Hooks.ts) + Providers onError prop (default one console.error per transition into Failed; ref-deduped so StrictMode never double-reports); render-phase console.error deleted. Tests: 500 => Failed, onError exactly once under StrictMode, console.error 0 during render, retry() recovers.
