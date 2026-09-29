@@ -3,7 +3,7 @@ ID: "MTI-008"
 Title: "GET /organization/:organizationId serves org metadata, including free-form metadata, without any membership check"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:1094"
 Auditor: "multi-tenant-isolation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `organization` · reported by **Multi-Tenant Isolation Specialist** (`multi-tenant-isolation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Require membership for get (or restrict its response to a public projection — 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-tenant-read-isolation`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1448`. Fix: Require membership for GET /organization/:organizationId, answering 404 to non-members. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** OrganizationShape.get(caller, organizationId) now requires membership (non-member -> OrganizationNotFound); handler passes the principal. Tests: AuthHttp.test.ts 'GET /organization/:id answers a non-member 404 and a member the DTO', Organization.test.ts checkSlug/list/get. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test all pass (one unrelated ports PasswordHasher scrypt timing flake under machine load, green on rerun), test:bdd green, spec:verify:strict PASS, oxlint clean.
