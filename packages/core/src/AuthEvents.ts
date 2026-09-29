@@ -88,6 +88,24 @@ export class AuthEvents extends Context.Service<AuthEvents, AuthEventsShape>()(
 ) {}
 
 /**
+ * MA-004/ADR-EA-028: what `publish` does when the durable audit row cannot be written because
+ * the store is unavailable. `"bestEffort"` (default): the failure is logged and counted
+ * (`awthaq_audit_write_failed_total`), the operation that published the event still succeeds and
+ * the bus still delivers it, so an audit-table outage degrades the trail instead of taking down
+ * sign-in. `"required"`: the publishing operation dies with the `StoreUnavailable`, so no
+ * security-relevant operation completes without its row (the pre-MA-004 behaviour, for a
+ * deployment whose audit obligation outranks availability). Provide with
+ * `AuthEvents.auditWritePolicy("required")`.
+ */
+export type AuditWritePolicy = "bestEffort" | "required";
+
+export const AuditWritePolicy = Context.Reference<AuditWritePolicy>("awthaq/core/AuditWritePolicy", {
+  defaultValue: () => "bestEffort",
+});
+
+export const auditWritePolicy = (policy: AuditWritePolicy) => Layer.succeed(AuditWritePolicy, policy);
+
+/**
  * BEH-EA-097: a bounded capacity, so a slow or absent subscriber cannot
  * cause unbounded memory growth in the publishing process. No spec'd number
  * exists for this — 1024 is chosen as a generous, arbitrary default; an
@@ -165,6 +183,7 @@ export const layer = Layer.effect(
   AuthEvents,
   Effect.gen(function* () {
     const auditLog = yield* AuditLog;
+    const policy = yield* AuditWritePolicy;
     // ALF-002/ESS-001/TMS-002/TRBS-003: `PubSub.bounded` applies
     // backpressure — its own publish suspends the calling fiber once the
     // buffer is full, directly contradicting this shape's own "never
@@ -196,7 +215,22 @@ export const layer = Layer.effect(
           ip: request.ip,
           userAgent: request.userAgent,
         };
-        yield* auditLog.record(published);
+        yield* auditLog.record(published).pipe(
+          Effect.catchTag("StoreUnavailable", (unavailable) =>
+            policy === "required"
+              ? Effect.die(unavailable)
+              : Metric.update(
+                  Metric.withAttributes(Observability.auditWriteFailures, { tag: event._tag }),
+                  1,
+                ).pipe(
+                  Effect.andThen(
+                    Effect.logError(
+                      `awthaq: the audit row for a "${event._tag}" event could not be written (${published.eventId})`,
+                    ),
+                  ),
+                ),
+          ),
+        );
         yield* countEvent(event);
         const accepted = yield* PubSub.publish(pubsub, published);
         if (!accepted) {

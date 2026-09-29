@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-028 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-29 |
-> | Status | Accepted — implemented for `Sessions`, `Verification`, `Users` and `Accounts`; `AuditLog` pending |
+> | Status | Accepted — implemented for `Sessions`, `Verification`, `Users`, `Accounts` and `AuditLog` |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (MA-004, EEM-006) |
+> | Change History | 1.0 (2026-09-29): Initial release (MA-004, EEM-006); 1.1 (2026-09-29): `AuditLog` converted, the audit-write failure policy, the transient-retry helper (MA-004, SEA-002) |
 
 ---
 
@@ -42,6 +42,19 @@ Core services fail in two different ways. A *domain* failure (`SessionNotFound`,
 
 **Negative**: every Shape that reaches a core service widens by one error, a one-time cascade through the plugin Shapes; `StoreUnavailable` is declared on the middleware rather than per endpoint, so a public endpoint behind neither cannot fail with it without declaring it itself (none does today).
 
-**Rollout**: `Sessions` (the hot path), `Verification`, `VerificationLink`, `Users` and `Accounts` are done, in both layers (`Users.create`'s crypto `PlatformError` included). `AuditLog` (owned by the events program) still routes `SqlError`/`SchemaError` through `Effect.orDie`; converting it is mechanical with the same helper, and `MA-004` stays open until then. A `Schedule`-based retry for `SQLITE_BUSY`/serialization failures on hot writes (SEA-002) builds on the typed error and is not part of this decision.
+**Rollout**: `Sessions` (the hot path), `Verification`, `VerificationLink`, `Users`, `Accounts` and `AuditLog` are done, in both layers (`Users.create`'s crypto `PlatformError` included). Every `AuditLog` method (`record`, `list`, `replay`, `pseudonymizeActor`, `purge`) fails with `StoreUnavailable` instead of dying; `DataExport`, `Retention` and `EventRelay` carry it in their own `E`.
+
+## Audit-write failure policy (1.1)
+
+`AuthEvents.publish` is `Effect<void>` and runs inline in nearly every operation, so what it does when `AuditLog.record` fails with `StoreUnavailable` is a policy, not an accident, and it is explicit: `AuthEvents.AuditWritePolicy`, read when the `AuthEvents` layer is built.
+
+- **`"bestEffort"` (default).** The failure is logged at error level and counted (`awthaq_audit_write_failed_total{tag}`); the operation that published the event still succeeds and the bus still delivers the event. An outage of the audit table degrades the trail (the log line names the `eventId` and tag, so the gap is reconstructible) instead of turning every sign-in into an error after its own write has already committed. A store that is down for the operation itself fails that operation with `StoreUnavailable` in its own right.
+- **`"required"`.** `publish` dies with the `StoreUnavailable`, so no security-relevant operation completes without its row (the behaviour before this decision, where the `orDie` was implicit). For a deployment whose audit obligation outranks availability: `AuthEvents.layer.pipe(Layer.provide(AuthEvents.auditWritePolicy("required")))`.
+
+Widening `publish`'s `E` to `StoreUnavailable` was rejected: it would cascade through every service and plugin Shape for a failure the caller cannot act on (the operation it belongs to has already committed).
+
+## Transient retry (1.1)
+
+`Errors.retryTransient()` retries an effect while it fails with a *retryable* `SqlError` (`SQLITE_BUSY`/`SQLITE_LOCKED`, a Postgres deadlock or serialization failure, a lock or statement timeout, a dropped connection) up to three times on a jittered exponential schedule from 25 ms, and nothing else (constraint violations, `SchemaError`, defects are never retried). It wraps a whole unit of work: `Sessions.issue`'s statement or transaction and `Sessions.verify`'s idle-refresh touch (SEA-002). Once the retries are spent the last `SqlError` reaches the service's own `storeUnavailable(operation)`. See [the SQLite embedded-deployment appendix](../appendices/04-sqlite-embedded-deployment.md).
 
 _Related: [ADR-EA-013](013-error-taxonomy-http-mapping.md), [BEH-EA-035](../behaviors/05-persistence-stratum.md#beh-ea-035-repositories-are-built-with-sqlmodelmakerepository-over-the-ambient-sqlclient-never-opening-their-own-transactions)._

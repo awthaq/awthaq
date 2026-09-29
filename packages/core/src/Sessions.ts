@@ -29,7 +29,12 @@ import * as Result from "effect/Result";
 import * as Model from "effect/unstable/schema/Model";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
-import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
+import {
+  orStoreUnavailable,
+  retryTransient,
+  storeUnavailable,
+  type StoreUnavailable,
+} from "./Errors.ts";
 import * as Observability from "./Observability.ts";
 import * as SecretHash from "./SecretHash.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
@@ -1255,10 +1260,13 @@ export const layerSql: Layer.Layer<
         }
         return { inserted, evicted, superseded };
       });
-      const { inserted: row, evicted, superseded } = yield* input.supersedes === undefined &&
+      // SEA-002: a busy/deadlocked write is retried as a whole unit (the statement, or the rolled
+      // back transaction) a few times before it becomes `StoreUnavailable`.
+      const { inserted: row, evicted, superseded } = yield* (input.supersedes === undefined &&
       config.maxConcurrent === undefined
         ? persist
-        : sql.withTransaction(persist);
+        : sql.withTransaction(persist)
+      ).pipe(retryTransient());
       // RRS-008: see `layerMemory.issue`.
       if (superseded !== undefined) {
         yield* events.publish({
@@ -1427,7 +1435,8 @@ export const layerSql: Layer.Layer<
             DateTime.addDuration(now, config.idle),
             row.absoluteExpiresAt,
           ),
-        });
+        })
+        .pipe(retryTransient());
       if (Option.isNone(touched)) {
         const current = yield* repo.findById(id).pipe(
           Effect.catchTags({

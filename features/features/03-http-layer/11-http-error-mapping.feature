@@ -161,6 +161,8 @@ Feature: HTTP Serving and Error Mapping
         | Unauthenticated    | 401 Unauthorized |
         | InvalidCredentials | 401 Unauthorized |
         | CsrfRejected       | 403 Forbidden    |
+        # MA-004/ADR-EA-028: an unavailable backing store is a typed, retryable outage, not a 401 or a 500.
+        | StoreUnavailable   | 503 Service Unavailable |
 
     @REQ-EA-241
     Scenario: No separate, out-of-band status-mapping table is maintained anywhere in the HTTP stratum
