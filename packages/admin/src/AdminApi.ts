@@ -48,6 +48,23 @@ export class AdminTargetNotFound extends Schema.TaggedError<AdminTargetNotFound>
   { httpApiStatus: 404 },
 ) {}
 
+/**
+ * BAM-005: a non-impersonation admin capability (`AdminConfig.canManageUsers`) refused the
+ * caller. Distinct from `AdminImpersonationDenied` so the two signals stay separable.
+ */
+export class AdminActionDenied extends Schema.TaggedError<AdminActionDenied>()(
+  "AdminActionDenied",
+  {},
+  { httpApiStatus: 403 },
+) {}
+
+/** BAM-005: the named session is not one of the named user's own, revocable sessions (an unknown id, another user's, or an impersonation session, which `forceStop` owns). */
+export class AdminSessionNotFound extends Schema.TaggedError<AdminSessionNotFound>()(
+  "AdminSessionNotFound",
+  {},
+  { httpApiStatus: 404 },
+) {}
+
 /** BEH-EA-213: non-empty after trimming, capped at 1000 characters (`archive/PRD.md` §18's "reason required"). */
 export const ReasonSchema = Schema.String.pipe(
   Schema.check(
@@ -79,6 +96,36 @@ export type UserIdParams = typeof UserIdParams.Type;
 export const SessionIdParams = Schema.Struct({ sessionId: PathIdSchema });
 export type SessionIdParams = typeof SessionIdParams.Type;
 
+/** BAM-005: `DELETE /admin/users/:userId/sessions/:sessionId`. */
+export const UserSessionParams = Schema.Struct({ userId: PathIdSchema, sessionId: PathIdSchema });
+export type UserSessionParams = typeof UserSessionParams.Type;
+
+/** BAM-005: bounds mirror `Users`' own profile (`name` non-blank, `metadata` an opaque string). */
+export const UpdateUserPayload = Schema.Struct({
+  name: Schema.String.pipe(
+    Schema.check(
+      Schema.makeFilter((value: string) =>
+        value.trim().length > 0 && value.length <= 200
+          ? undefined
+          : "a non-blank name of at most 200 characters",
+      ),
+    ),
+  ),
+  /** Left out leaves the user's metadata untouched; `null` clears it. */
+  metadata: Schema.optional(
+    Schema.NullOr(
+      Schema.String.pipe(
+        Schema.check(
+          Schema.makeFilter((value: string) =>
+            value.length <= 10_000 ? undefined : "metadata of at most 10000 characters",
+          ),
+        ),
+      ),
+    ),
+  ),
+});
+export type UpdateUserPayload = typeof UpdateUserPayload.Type;
+
 /**
  * ESS-006: the opaque page cursor — base64url of the JSON `(startedAt, id)` keyset
  * position. Decoding is a plain Schema transform, so a malformed or tampered cursor
@@ -97,6 +144,22 @@ export const MAX_PAGE_SIZE = 200;
 export const LimitSchema = Schema.NumberFromString.pipe(
   Schema.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: MAX_PAGE_SIZE })),
 );
+
+/** BAM-005: `Users.list`'s keyset position `(createdAt, id)`, opaque on the wire like `CursorSchema`. */
+export const UserCursorSchema = Schema.StringFromBase64Url.pipe(
+  Schema.decodeTo(
+    Schema.fromJsonString(
+      Schema.Struct({ createdAt: Schema.DateTimeUtcFromString, id: Schema.String }),
+    ),
+  ),
+);
+
+/** BAM-005: `GET /admin/users`'s query params. */
+export const ListUsersQuery = Schema.Struct({
+  cursor: Schema.optional(UserCursorSchema),
+  limit: Schema.optional(LimitSchema),
+});
+export type ListUsersQuery = typeof ListUsersQuery.Type;
 
 /** `GET /admin`'s own query params. */
 export const ListQuery = Schema.Struct({
@@ -120,6 +183,23 @@ export class ImpersonationRecordDto extends Schema.Class<ImpersonationRecordDto>
   expiresAt: Schema.NullOr(Schema.String),
   endedAt: Schema.NullOr(Schema.String),
   endedBy: Schema.NullOr(Schema.Literals(["self", "forcedByAdmin", "expired"])),
+}) {}
+
+/** BAM-005: the wire shape of `@awthaq/core`'s `UserRecord`. */
+export class UserDto extends Schema.Class<UserDto>("AdminUserDto")({
+  id: Schema.String,
+  email: Schema.String,
+  emailVerified: Schema.Boolean,
+  name: Schema.String,
+  metadata: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+}) {}
+
+/** BAM-005: one page of `listUsers`; `nextCursor` is null on the last page. */
+export class UserPageDto extends Schema.Class<UserPageDto>("AdminUserPageDto")({
+  items: Schema.Array(UserDto),
+  nextCursor: Schema.NullOr(UserCursorSchema),
 }) {}
 
 /** ESS-006: one page of `list`; `nextCursor` is null on the last page. */
@@ -161,6 +241,52 @@ export const AdminGroup = HttpApiGroup.make("admin")
     HttpApiEndpoint.get("list", "/admin", {
       query: ListQuery,
       success: ImpersonationPageDto,
+    }),
+  )
+  // BAM-005 (wayfinder ticket 19 §1): user and session administration. Each endpoint is
+  // gated by `AdminConfig.canManageUsers` (fail-closed), after which an unknown user is a
+  // 404 — the gate first, so a caller who fails it learns nothing about which ids exist.
+  .add(
+    HttpApiEndpoint.get("listUsers", "/admin/users", {
+      query: ListUsersQuery,
+      success: UserPageDto,
+      error: AdminActionDenied,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("getUser", "/admin/users/:userId", {
+      params: UserIdParams,
+      success: UserDto,
+      error: [AdminActionDenied, AdminTargetNotFound],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.patch("updateUser", "/admin/users/:userId", {
+      params: UserIdParams,
+      payload: UpdateUserPayload,
+      success: UserDto,
+      error: [AdminActionDenied, AdminTargetNotFound],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("listUserSessions", "/admin/users/:userId/sessions", {
+      params: UserIdParams,
+      success: Schema.Array(SessionContract.SessionDto),
+      error: [AdminActionDenied, AdminTargetNotFound],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.delete("revokeUserSession", "/admin/users/:userId/sessions/:sessionId", {
+      params: UserSessionParams,
+      success: HttpApiSchema.Empty(204),
+      error: [AdminActionDenied, AdminTargetNotFound, AdminSessionNotFound],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.delete("revokeUserSessions", "/admin/users/:userId/sessions", {
+      params: UserIdParams,
+      success: HttpApiSchema.Empty(204),
+      error: [AdminActionDenied, AdminTargetNotFound],
     }),
   )
   // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `CsrfProtection`

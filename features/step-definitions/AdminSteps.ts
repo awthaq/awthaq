@@ -838,6 +838,92 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 
+  // ---- BAM-005: user and session administration ----
+
+  Given(
+    'an application composing "Admin" with no "canManageUsers" predicate configured',
+    Effect.fn(function* () {
+      yield* configureApp({ canImpersonate: () => Effect.succeed(true) });
+      yield* setOutcome("adminCookie", yield* signIn("admin-1"));
+    }),
+  );
+
+  When(
+    'a signed-in user calls "admin.listUsers"',
+    Effect.fn(function* () {
+      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      yield* setOutcome(
+        "userAdminResponse",
+        yield* request("GET", "/admin/users", { headers: { cookie: adminCookie } }),
+      );
+    }),
+  );
+
+  Then(
+    "the user-administration call is denied with {string}",
+    Effect.fn(function* (statusText: string) {
+      const response = (yield* getOutcome("userAdminResponse")) as Response;
+      const expected = Number(statusText.split(" ")[0]);
+      if (response.status !== expected) {
+        throw new Error(`expected ${expected} ("${statusText}"), got ${response.status}`);
+      }
+    }),
+  );
+
+  Given(
+    '"Admin" configured with a "canManageUsers" predicate that always resolves "true"',
+    Effect.fn(function* () {
+      yield* configureApp({ canManageUsers: () => Effect.succeed(true) });
+      yield* setOutcome("adminCookie", yield* signIn("admin-1"));
+    }),
+  );
+
+  Given(
+    "a user with an active session of their own",
+    Effect.fn(function* () {
+      yield* setOutcome("userCookie", yield* signIn("target-1"));
+    }),
+  );
+
+  When(
+    'the admin calls "admin.revokeUserSession" naming that user\'s session',
+    Effect.fn(function* () {
+      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const userCookie = (yield* getOutcome("userCookie")) as string;
+      const sessionId = tokenFromCookie(userCookie).split(".")[0]!;
+      yield* setOutcome(
+        "userAdminResponse",
+        yield* request("DELETE", `/admin/users/target-1/sessions/${sessionId}`, {
+          headers: { cookie: adminCookie },
+        }),
+      );
+    }),
+  );
+
+  Then(
+    "the user-administration call succeeds with {string}",
+    Effect.fn(function* (statusText: string) {
+      const response = (yield* getOutcome("userAdminResponse")) as Response;
+      const expected = Number(statusText.split(" ")[0]);
+      if (response.status !== expected) {
+        throw new Error(`expected ${expected} ("${statusText}"), got ${response.status}`);
+      }
+    }),
+  );
+
+  Then(
+    "that session no longer authenticates",
+    Effect.fn(function* () {
+      // The user has no admin rights in this World; a 401 (unauthenticated) rather
+      // than a 403 (authenticated, refused) is what proves the session itself is gone.
+      const userCookie = (yield* getOutcome("userCookie")) as string;
+      const response = yield* request("GET", "/admin/users", { headers: { cookie: userCookie } });
+      if (response.status !== 401) {
+        throw new Error(`expected 401 for a revoked session, got ${response.status}`);
+      }
+    }),
+  );
+
   // ---- APS-006: one real browser cookie jar ----
 
   Given(

@@ -298,4 +298,102 @@ REQUIREMENT: Neither `impersonate`, `stopImpersonating`, `forceStop`, nor
 
 A target user who is impersonated keeps using their own account, on their own sessions, exactly as before; nothing about being impersonated is visible to `Sessions`' own view of that user's session list, and no code path in this plugin ever iterates or touches it.
 
-_Previous: [BEH-EA-219](27-admin-impersonation.md#beh-ea-219-the-audit-trail-is-queryable)_
+_Previous: [BEH-EA-219](27-admin-impersonation.md#beh-ea-219-the-audit-trail-is-queryable) | Next: [BEH-EA-221](27-admin-impersonation.md#beh-ea-221-user-and-session-administration-is-gated-per-capability-fail-closed-with-the-target-in-view)_
+
+## BEH-EA-221: User and session administration is gated per capability, fail-closed, with the target in view
+
+```ts
+interface AdminConfigShape {
+  // …BEH-EA-212…
+  readonly canManageUsers: (input: {
+    admin: AuthSubject
+    target: Option<AuthSubject>   // None for a collection-level call (listUsers)
+  }) => Effect.Effect<boolean>
+}
+```
+
+```text
+REQUIREMENT: Every user- and session-administration operation (`listUsers`,
+             `getUser`, `updateUser`, `listUserSessions`, `revokeUserSession`,
+             `revokeUserSessions`) MUST be gated by
+             `AdminConfig.canManageUsers`, which MUST deny by default. The
+             predicate MUST receive the target user (identity-only
+             `AuthSubject`, like BEH-EA-212) for every per-user operation.
+             The gate MUST run before the target's existence is checked, so a
+             caller who fails it cannot use 404-versus-403 to probe which
+             user ids exist; an unknown user is then `AdminTargetNotFound`
+             (404). A denied call fails `AdminActionDenied` (403) and
+             publishes `auth.admin.actionDenied` (BEH-EA-224) — never
+             `impersonationDenied`, which stays specific to BEH-EA-212/218.
+```
+
+BAM-005 (wayfinder ticket 19 §1): an admin plugin that only impersonates cannot run a support desk. Each capability has its own predicate — `canManageUsers` here; banning (`canBanUsers`) and tenant administration (`canAdministerTenants`) get theirs when those land — so a deployment enables exactly the powers it means to, and impersonation being on says nothing about user administration. The target is in the gate's view for the reason BEH-EA-212's IDS-001 amendment gives: a caller-only predicate cannot refuse an operation on a more privileged account. **Role assignment (`setRole`) is deliberately not an admin endpoint** (ADR-EA-009, wayfinder ticket 19 §2): who holds which role is a qadi/application concern, and duplicating it here would put a second authority next to the authorization library.
+
+_Previous: [BEH-EA-220](27-admin-impersonation.md#beh-ea-220-impersonation-never-touches-the-targets-own-sessions) | Next: [BEH-EA-222](27-admin-impersonation.md#beh-ea-222-users-are-listed-keyset-paginated-read-and-updated-through-the-admin-surface)_
+
+## BEH-EA-222: Users are listed keyset-paginated, read, and updated through the admin surface
+
+```ts
+yield* client.admin.listUsers({ urlParams: { limit: 50, cursor } })   // { items, nextCursor }
+yield* client.admin.getUser({ params: { userId } })
+yield* client.admin.updateUser({ params: { userId }, payload: { name: "Ada", metadata: null } })
+```
+
+```text
+REQUIREMENT: `listUsers` MUST be keyset-paginated on `(createdAt, id)` (oldest
+             first) through `Users.list` — an opaque cursor in, `{ items,
+             nextCursor }` out, `limit` defaulting to 50 and bounded to 1..200
+             on the wire, never an offset and never more than `limit + 1`
+             rows read (BEH-EA-036); a malformed cursor is a 400. `updateUser`
+             MUST change only what `Users.updateProfile` can — `name`
+             (non-blank, at most 200 characters) and `metadata` (left out:
+             untouched; `null`: cleared) — never `email` or `emailVerified`
+             (BEH-EA-042), and MUST publish `auth.admin.userUpdated`
+             (BEH-EA-224).
+```
+
+The admin surface reuses the same domain operations a user's own `Account` endpoints use rather than a second write path, so BEH-EA-041/042's invariants hold identically here. Changing a user's email or password, deleting a user, and banning one are separate capabilities (tracked under BAM-005) because each needs a domain operation `Users`/`Accounts` do not have yet.
+
+_Previous: [BEH-EA-221](27-admin-impersonation.md#beh-ea-221-user-and-session-administration-is-gated-per-capability-fail-closed-with-the-target-in-view) | Next: [BEH-EA-223](27-admin-impersonation.md#beh-ea-223-an-admin-manages-a-users-own-sessions-never-an-impersonation-episodes)_
+
+## BEH-EA-223: An admin manages a user's own sessions, never an impersonation episode's
+
+```ts
+yield* client.admin.listUserSessions({ params: { userId } })
+yield* client.admin.revokeUserSession({ params: { userId, sessionId } })   // 204
+yield* client.admin.revokeUserSessions({ params: { userId } })              // 204
+```
+
+```text
+REQUIREMENT: `listUserSessions` MUST list only sessions that belong to the named
+             user and are not impersonation sessions (no `admin_impersonation`
+             row). `revokeUserSession` MUST revoke a session only if it appears
+             in that list, answering `AdminSessionNotFound` (404)
+             identically for an unknown id, another user's session, and an
+             impersonation session — no ownership oracle — and MUST treat a
+             session that vanished in between as success.
+             `revokeUserSessions` MUST revoke every session in that list and
+             MUST leave impersonation sessions alone. Both publish
+             `auth.admin.sessionRevoked` (BEH-EA-224).
+```
+
+An impersonation session carries the target's `userId`, so a naive "all of this user's sessions" would also kill a support episode without closing its audit row. Episodes have their own lifecycle and controls (BEH-EA-216/217, `forceStop`); user-session administration stays strictly on the user's own credentials.
+
+_Previous: [BEH-EA-222](27-admin-impersonation.md#beh-ea-222-users-are-listed-keyset-paginated-read-and-updated-through-the-admin-surface) | Next: [BEH-EA-224](27-admin-impersonation.md#beh-ea-224-admin-actions-are-audited-by-events)_
+
+## BEH-EA-224: Admin actions are audited by events
+
+```text
+REQUIREMENT: `Admin` MUST publish `auth.admin.actionDenied { adminUserId,
+             action }` when `canManageUsers` resolves `false`,
+             `auth.admin.userUpdated { adminUserId, userId }` after a
+             successful `updateUser`, and `auth.admin.sessionRevoked {
+             adminUserId, userId, sessionId }` after `revokeUserSession`
+             (`sessionId: null` after `revokeUserSessions`). All three are
+             `AuthEvent` members, so `AuditLog` (BEH-EA-100) records them
+             durably with `adminUserId` as the actor.
+```
+
+Denials, changes and revocations are exactly the events a security review reconstructs "who did what to whom" from; making them `AuthEvent`s (rather than logs) puts them on the durable audit path BEH-EA-100 already guarantees, with no per-plugin persistence.
+
+_Previous: [BEH-EA-223](27-admin-impersonation.md#beh-ea-223-an-admin-manages-a-users-own-sessions-never-an-impersonation-episodes)_

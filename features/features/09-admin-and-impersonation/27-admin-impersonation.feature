@@ -240,3 +240,25 @@ Feature: Admin and Impersonation
       Given a target user with their own active session, issued before any impersonation begins
       When an admin impersonates that target user
       Then the target's own original session cookie still authenticates afterward, unaffected
+
+  # BEH-EA-221 — spec/behaviors/27-admin-impersonation.md
+  @BEH-EA-221
+  Rule: User and session administration is gated per capability, fail-closed, with the target in view
+
+    @REQ-EA-631
+    Scenario: With no canManageUsers configured, user administration is denied by default
+      Given an application composing "Admin" with no "canManageUsers" predicate configured
+      When a signed-in user calls "admin.listUsers"
+      Then the user-administration call is denied with "403 Forbidden"
+
+  # BEH-EA-223 — spec/behaviors/27-admin-impersonation.md
+  @BEH-EA-223
+  Rule: An admin manages a user's own sessions, never an impersonation episode's
+
+    @REQ-EA-632
+    Scenario: An admin revokes one of a user's sessions
+      Given "Admin" configured with a "canManageUsers" predicate that always resolves "true"
+      And a user with an active session of their own
+      When the admin calls "admin.revokeUserSession" naming that user's session
+      Then the user-administration call succeeds with "204 No Content"
+      And that session no longer authenticates

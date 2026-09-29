@@ -67,6 +67,21 @@ export interface AdminConfigShape {
    * scoping on stop/list without writing a second predicate.
    */
   readonly canManageEpisode: (input: EpisodeGateInput) => Effect.Effect<boolean>;
+  /**
+   * BAM-005: the one fail-closed predicate behind the user and session administration
+   * endpoints. `target` is `None` for a collection-level call (`listUsers`) and the
+   * user being acted on otherwise — the same "the gate sees the target" rule as
+   * `canImpersonate` (IDS-001), so a host can keep, say, a superadmin account out of
+   * reach of ordinary administrators. Banning (`canBanUsers`) and tenant administration
+   * (`canAdministerTenants`) get their own predicates when those capabilities land.
+   */
+  readonly canManageUsers: (input: UserAdminGateInput) => Effect.Effect<boolean>;
+}
+
+/** BAM-005: what `canManageUsers` is asked — see there. */
+export interface UserAdminGateInput {
+  readonly admin: AuthSubject;
+  readonly target: Option.Option<AuthSubject>;
 }
 
 /** IDS-001: the identity-only subject for a bare user id (the episode's target). */
@@ -81,6 +96,7 @@ const defaultAdminConfig: AdminConfigShape = {
   maxDuration: Duration.hours(1),
   canImpersonate: () => Effect.succeed(false),
   canManageEpisode: episodeGateFrom(() => Effect.succeed(false)),
+  canManageUsers: () => Effect.succeed(false),
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -158,6 +174,51 @@ export interface AdminShape {
    * it wants the audit trail closed without anyone reading it.
    */
   readonly sweepExpired: Effect.Effect<number>;
+  /**
+   * BAM-005: user and session administration, every call behind `canManageUsers` and
+   * then (per-user calls) an existence check — see `AdminConfigShape.canManageUsers`.
+   * Errors: `AdminActionDenied` (gate), `AdminTargetNotFound` (no such user),
+   * `AdminSessionNotFound` (`revokeUserSession`: not one of that user's revocable
+   * sessions — unknown, another user's, or an impersonation session, which `forceStop` owns).
+   */
+  readonly listUsers: (
+    caller: Api.UserPrincipal,
+    input?: {
+      readonly cursor?: Users.UserCursor | undefined;
+      readonly limit?: number | undefined;
+    },
+  ) => Effect.Effect<Users.UsersPage, AdminApi.AdminActionDenied>;
+  readonly getUser: (
+    caller: Api.UserPrincipal,
+    userId: Users.UserId,
+  ) => Effect.Effect<Users.UserRecord, AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound>;
+  /** `metadata` left out leaves it untouched; `null` clears it (`Users.updateProfile`'s own rule). */
+  readonly updateUser: (
+    caller: Api.UserPrincipal,
+    userId: Users.UserId,
+    input: { readonly name: string; readonly metadata?: string | null | undefined },
+  ) => Effect.Effect<Users.UserRecord, AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound>;
+  /** The user's own sessions — impersonation sessions issued *as* that user are not among them. */
+  readonly listUserSessions: (
+    caller: Api.UserPrincipal,
+    userId: Users.UserId,
+  ) => Effect.Effect<
+    ReadonlyArray<Sessions.SessionListItem>,
+    AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound
+  >;
+  readonly revokeUserSession: (
+    caller: Api.UserPrincipal,
+    userId: Users.UserId,
+    sessionId: string,
+  ) => Effect.Effect<
+    void,
+    AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound | AdminApi.AdminSessionNotFound
+  >;
+  /** Revokes every one of the user's own sessions; impersonation sessions stay (end them with `forceStop`). */
+  readonly revokeUserSessions: (
+    caller: Api.UserPrincipal,
+    userId: Users.UserId,
+  ) => Effect.Effect<void, AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound>;
 }
 
 const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto =>
@@ -168,6 +229,28 @@ const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto
     expiresAt: DateTime.formatIso(session.absoluteExpiresAt),
     userAgent: Option.getOrNull(session.userAgent),
     current: true,
+  });
+
+const toSessionListDto = (session: Sessions.SessionListItem): SessionContract.SessionDto =>
+  new SessionContract.SessionDto({
+    id: session.id,
+    createdAt: DateTime.formatIso(session.createdAt),
+    lastActiveAt: DateTime.formatIso(session.lastActiveAt),
+    expiresAt: DateTime.formatIso(session.expiresAt),
+    userAgent: Option.getOrNull(session.userAgent),
+    // The admin is never "the current session" of the user they are looking at.
+    current: false,
+  });
+
+const toUserDto = (user: Users.UserRecord): AdminApi.UserDto =>
+  new AdminApi.UserDto({
+    id: user.id,
+    email: user.email,
+    emailVerified: user.emailVerified,
+    name: user.name,
+    metadata: Option.getOrNull(user.metadata),
+    createdAt: DateTime.formatIso(user.createdAt),
+    updatedAt: DateTime.formatIso(user.updatedAt),
   });
 
 const toRecordDto = (
@@ -243,6 +326,54 @@ export const AdminHandlers = HttpApiBuilder.group(
         yield* admin.forceStop(caller, params.sessionId);
         // APS-006: ending one's own current episode must hand the browser back.
         if (params.sessionId === caller.sessionId) yield* clearImpersonationCookie;
+      }),
+      listUsers: Effect.fnUntraced(function* ({ query }: { query: AdminApi.ListUsersQuery }) {
+        const caller = yield* currentUserPrincipal;
+        const page = yield* admin.listUsers(caller, { cursor: query.cursor, limit: query.limit });
+        return new AdminApi.UserPageDto({
+          items: page.items.map(toUserDto),
+          nextCursor: Option.getOrNull(page.nextCursor),
+        });
+      }),
+      getUser: Effect.fnUntraced(function* ({ params }: { params: AdminApi.UserIdParams }) {
+        const caller = yield* currentUserPrincipal;
+        return toUserDto(yield* admin.getUser(caller, Users.UserId(params.userId)));
+      }),
+      updateUser: Effect.fnUntraced(function* ({
+        params,
+        payload,
+      }: {
+        params: AdminApi.UserIdParams;
+        payload: AdminApi.UpdateUserPayload;
+      }) {
+        const caller = yield* currentUserPrincipal;
+        const updated = yield* admin.updateUser(caller, Users.UserId(params.userId), payload);
+        return toUserDto(updated);
+      }),
+      listUserSessions: Effect.fnUntraced(function* ({
+        params,
+      }: {
+        params: AdminApi.UserIdParams;
+      }) {
+        const caller = yield* currentUserPrincipal;
+        const listed = yield* admin.listUserSessions(caller, Users.UserId(params.userId));
+        return listed.map(toSessionListDto);
+      }),
+      revokeUserSession: Effect.fnUntraced(function* ({
+        params,
+      }: {
+        params: AdminApi.UserSessionParams;
+      }) {
+        const caller = yield* currentUserPrincipal;
+        yield* admin.revokeUserSession(caller, Users.UserId(params.userId), params.sessionId);
+      }),
+      revokeUserSessions: Effect.fnUntraced(function* ({
+        params,
+      }: {
+        params: AdminApi.UserIdParams;
+      }) {
+        const caller = yield* currentUserPrincipal;
+        yield* admin.revokeUserSessions(caller, Users.UserId(params.userId));
       }),
       list: Effect.fnUntraced(function* ({ query }: { query: AdminApi.ListQuery }) {
         const caller = yield* currentUserPrincipal;
@@ -475,6 +606,132 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         return yield* Effect.fail(new AdminApi.AdminImpersonationDenied());
       });
 
+      // BAM-005: the user-administration gate — same shape as `deny` above but its own
+      // predicate and its own event, so impersonation monitoring stays uncluttered.
+      const authorizeUsers = Effect.fnUntraced(function* (
+        caller: Api.UserPrincipal,
+        action: string,
+        target: Option.Option<Users.UserId>,
+      ) {
+        const allowed = yield* adminConfig.canManageUsers({
+          admin: subjectOf(caller),
+          target: Option.map(target, subjectOfUserId),
+        });
+        if (!allowed) {
+          yield* events.publish({
+            _tag: "auth.admin.actionDenied",
+            adminUserId: Users.UserId(caller.ref.id),
+            action,
+          });
+          return yield* Effect.fail(new AdminApi.AdminActionDenied());
+        }
+      });
+
+      /** Gate first, then existence — a caller who fails the gate cannot probe which ids exist. */
+      const authorizeUser = Effect.fnUntraced(function* (
+        caller: Api.UserPrincipal,
+        action: string,
+        userId: Users.UserId,
+      ) {
+        yield* authorizeUsers(caller, action, Option.some(userId));
+        return yield* users
+          .findById(userId)
+          .pipe(
+            Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
+          );
+      });
+
+      /** Sessions an impersonation episode owns are never touched by user-session administration (`forceStop` ends them). */
+      const isImpersonationSession = (sessionId: string) =>
+        records.findBySessionId(sessionId).pipe(Effect.map(Option.isSome));
+
+      const ownSessions = Effect.fnUntraced(function* (userId: Users.UserId) {
+        const listed = yield* sessions.list(userId);
+        return yield* Effect.filter(listed, (session) =>
+          Effect.map(isImpersonationSession(session.id), (impersonation) => !impersonation),
+        );
+      });
+
+      const listUsers: AdminShape["listUsers"] = Effect.fnUntraced(function* (caller, input) {
+        yield* authorizeUsers(caller, "listUsers", Option.none());
+        return yield* users.list(input);
+      });
+
+      const getUser: AdminShape["getUser"] = (caller, userId) =>
+        authorizeUser(caller, "getUser", userId);
+
+      const updateUser: AdminShape["updateUser"] = Effect.fnUntraced(
+        function* (caller, userId, input) {
+          yield* authorizeUser(caller, "updateUser", userId);
+          const updated = yield* users
+            .updateProfile(userId, {
+              name: input.name,
+              ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+            })
+            .pipe(
+              Effect.catchTag("UserNotFound", () =>
+                Effect.fail(new AdminApi.AdminTargetNotFound()),
+              ),
+            );
+          yield* events.publish({
+            _tag: "auth.admin.userUpdated",
+            adminUserId: Users.UserId(caller.ref.id),
+            userId,
+          });
+          return updated;
+        },
+      );
+
+      const listUserSessions: AdminShape["listUserSessions"] = Effect.fnUntraced(
+        function* (caller, userId) {
+          yield* authorizeUser(caller, "listUserSessions", userId);
+          return yield* ownSessions(userId);
+        },
+      );
+
+      const revokeUserSession: AdminShape["revokeUserSession"] = Effect.fnUntraced(
+        function* (caller, userId, sessionId) {
+          yield* authorizeUser(caller, "revokeUserSession", userId);
+          // Must be one of *this user's own* revocable sessions — the same not-found for an
+          // unknown id, another user's, or an impersonation session (no ownership oracle).
+          const own = yield* ownSessions(userId);
+          if (!own.some((session) => session.id === sessionId)) {
+            return yield* Effect.fail(new AdminApi.AdminSessionNotFound());
+          }
+          yield* sessions
+            .revoke(Sessions.SessionId(sessionId))
+            // Gone between the check and the revoke: the desired end state, not an error.
+            .pipe(Effect.catchTag("SessionNotFound", () => Effect.void));
+          yield* events.publish({
+            _tag: "auth.admin.sessionRevoked",
+            adminUserId: Users.UserId(caller.ref.id),
+            userId,
+            sessionId,
+          });
+        },
+      );
+
+      const revokeUserSessions: AdminShape["revokeUserSessions"] = Effect.fnUntraced(
+        function* (caller, userId) {
+          yield* authorizeUser(caller, "revokeUserSessions", userId);
+          const own = yield* ownSessions(userId);
+          yield* Effect.forEach(
+            own,
+            (session) =>
+              sessions
+                .revoke(session.id)
+                .pipe(Effect.catchTag("SessionNotFound", () => Effect.void)),
+            { discard: true },
+          );
+          yield* events.publish({
+            _tag: "auth.admin.sessionRevoked",
+            adminUserId: Users.UserId(caller.ref.id),
+            userId,
+            sessionId: null,
+          });
+        },
+      );
+
       const impersonate: AdminShape["impersonate"] = Effect.fnUntraced(function* ({
         caller,
         targetUserId,
@@ -623,7 +880,19 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         return { items, nextCursor: page.nextCursor };
       });
 
-      return Admin.of({ impersonate, stopImpersonating, forceStop, list, sweepExpired });
+      return Admin.of({
+        impersonate,
+        stopImpersonating,
+        forceStop,
+        list,
+        sweepExpired,
+        listUsers,
+        getUser,
+        updateUser,
+        listUserSessions,
+        revokeUserSession,
+        revokeUserSessions,
+      });
     }),
   });
 }

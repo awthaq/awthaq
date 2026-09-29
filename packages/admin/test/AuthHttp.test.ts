@@ -473,6 +473,91 @@ describe("AuthHttp + Admin (real HTTP)", () => {
       }),
   );
 
+  it.effect(
+    "BAM-005: user and session administration over real HTTP — gated, paged, patched, revoked",
+    () =>
+      Effect.gen(function* () {
+        const denied = buildHandler({});
+        const deniedCookie = yield* Effect.promise(() =>
+          denied.issueSessionCookieHeader("admin-1"),
+        );
+        const forbidden = yield* Effect.promise(() =>
+          denied.handler(
+            new Request(`${ORIGIN}/admin/users`, { headers: { cookie: deniedCookie } }),
+          ),
+        );
+        assert.strictEqual(forbidden.status, 403);
+
+        const { handler, issueSessionCookieHeader, seedUser } = buildHandler({
+          canManageUsers: () => Effect.succeed(true),
+        });
+        const adminCookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+        const targetId = yield* Effect.promise(() => seedUser("target-1"));
+        yield* Effect.promise(() => seedUser("target-2"));
+        const send = (method: string, path: string, body?: unknown) =>
+          Effect.promise(() =>
+            handler(
+              new Request(`${ORIGIN}${path}`, {
+                method,
+                headers: {
+                  cookie: withCsrfCookie(adminCookie),
+                  "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
+                  ...(body === undefined ? {} : { "content-type": "application/json" }),
+                },
+                ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+              }),
+            ),
+          );
+
+        // Keyset paging on the wire.
+        const page1 = yield* send("GET", "/admin/users?limit=1");
+        assert.strictEqual(page1.status, 200);
+        const body1 = (yield* Effect.promise(() => page1.json())) as {
+          items: ReadonlyArray<{ id: string }>;
+          nextCursor: string | null;
+        };
+        assert.strictEqual(body1.items.length, 1);
+        assert.isString(body1.nextCursor);
+        const page2 = yield* send("GET", `/admin/users?limit=1&cursor=${body1.nextCursor}`);
+        const body2 = (yield* Effect.promise(() => page2.json())) as {
+          items: ReadonlyArray<{ id: string }>;
+          nextCursor: string | null;
+        };
+        assert.strictEqual(body2.items.length, 1);
+        assert.notStrictEqual(body2.items[0]?.id, body1.items[0]?.id);
+        assert.strictEqual((yield* send("GET", "/admin/users?limit=0")).status, 400);
+        assert.strictEqual((yield* send("GET", "/admin/users?cursor=garbage")).status, 400);
+
+        // Read, patch, 404.
+        const got = yield* send("GET", `/admin/users/${targetId}`);
+        assert.strictEqual(got.status, 200);
+        const patched = yield* send("PATCH", `/admin/users/${targetId}`, { name: "Renamed" });
+        assert.strictEqual(patched.status, 200);
+        assert.strictEqual(
+          ((yield* Effect.promise(() => patched.json())) as { name: string }).name,
+          "Renamed",
+        );
+        assert.strictEqual(
+          (yield* send("PATCH", `/admin/users/${targetId}`, { name: "  " })).status,
+          400,
+        );
+        assert.strictEqual((yield* send("GET", "/admin/users/ghost")).status, 404);
+
+        // Sessions: the target has none until issued; revoke of an unknown one is a 404.
+        const sessionsList = yield* send("GET", `/admin/users/${targetId}/sessions`);
+        assert.strictEqual(sessionsList.status, 200);
+        assert.deepStrictEqual(yield* Effect.promise(() => sessionsList.json()), []);
+        assert.strictEqual(
+          (yield* send("DELETE", `/admin/users/${targetId}/sessions/none`)).status,
+          404,
+        );
+        assert.strictEqual(
+          (yield* send("DELETE", `/admin/users/${targetId}/sessions`)).status,
+          204,
+        );
+      }),
+  );
+
   it.effect("IDS-003: an unknown target answers 404 for a gate-passing admin, 403 otherwise", () =>
     Effect.gen(function* () {
       const allowed = buildHandler(allow);

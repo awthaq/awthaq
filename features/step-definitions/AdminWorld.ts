@@ -99,6 +99,8 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 export interface AppOptions {
   /** Omitted entirely means `AdminConfig`'s own fail-closed default (`() => false`) applies — REQ-EA-382/400's own point. */
   readonly canImpersonate?: Admin.AdminConfigShape["canImpersonate"];
+  /** BAM-005: omitted means the fail-closed default, exactly like `canImpersonate`. */
+  readonly canManageUsers?: Admin.AdminConfigShape["canManageUsers"];
 }
 
 const buildAppLayer = (
@@ -133,7 +135,14 @@ const buildAppLayer = (
   return Layer.mergeAll(
     AuthHttp.routes(AdminApi.AdminApi, { openapiPath: "/openapi.json" }).pipe(
       Layer.provide(Admin.Admin.layer),
-      Layer.provide(Admin.config({ canImpersonate })),
+      Layer.provide(
+        Admin.config({
+          canImpersonate,
+          ...(options.canManageUsers === undefined
+            ? {}
+            : { canManageUsers: options.canManageUsers }),
+        }),
+      ),
       Layer.provide(AdminAuthenticationLive),
     ),
     AuthHttp.docs(AdminApi.AdminApi),
