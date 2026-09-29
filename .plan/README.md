@@ -2,9 +2,9 @@
 
 > ## Execution outcome (2026-09-29)
 > **The plan has been executed** on branch `plan/resolve-audit-issues` (nothing pushed).
-> Of 934 issue files (900 audited + 17 found during validation + 17 filed by implementing agents), **910 are `resolved`**, **23 are `wontfix`**
-> (each with a written rationale in the issue), and **1 is `ready-for-human`**: **MW-005** (needs a human: git remote, npm org, trusted publisher,
-> dropping `private` from `@awthaq/ports`; the release pipeline and a dormant canary workflow are prepared).
+> Of 934 issue files (900 audited + 17 found during validation + 17 filed by implementing agents), **911 are `resolved`** and **23 are `wontfix`**
+> (each with a written rationale in the issue). The last one, MW-005, closed after a real canary publish of `@awthaq/ports` through OIDC trusted
+> publishing with provenance (github.com/awthaq/awthaq, run 36585854508).
 > - The 32 wontfix candidates were re-triaged: the worthwhile ones were implemented (e.g. OAuth bounce page PV-016, qadi 0.8.0 bump PV-230,
 >   `Models.d.ts` declaration emit PV-380 with a smoke guard), the rest closed as wontfix.
 > - Verified from a clean build on the final tree: `pnpm run check` exits 0 (workspace:check, typecheck incl. tests, package:smoke, lint, knip,
