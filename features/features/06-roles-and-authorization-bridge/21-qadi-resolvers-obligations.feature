@@ -1,10 +1,4 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @authorization-bridge @qadi-resolvers-obligations
-@skip @unwired
 Feature: Qadi Resolvers and Obligations
 
   # BEH-EA-161 — spec/behaviors/21-qadi-resolvers-obligations.md; see also
@@ -24,7 +18,7 @@ Feature: Qadi Resolvers and Obligations
       Given awthaq's user-table-backed AttributeResolver
       And the user table is unreachable while resolving the "plan" attribute for a subject
       When it is asked to resolve that attribute
-      Then it fails with a typed AttributeResolveError naming the subject and the attribute
+      Then it fails with a typed AttributeResolveError naming the attribute
       And it does not return undefined
       And it does not swallow the failure as an uncaught exception
 
@@ -32,7 +26,7 @@ Feature: Qadi Resolvers and Obligations
     Scenario: A resolver failure is never indistinguishable from "this subject has no such attribute"
       Given awthaq's user-table-backed AttributeResolver
       And the user table is experiencing an outage
-      When it is asked to resolve the "plan" attribute for a subject who does have a plan
+      When it is asked to resolve the "emailVerified" attribute for a subject who does have a verified email
       Then the outage surfaces as a typed AttributeResolveError
       And it is never reported the same way as a subject who genuinely has no "plan" attribute
 
@@ -53,7 +47,7 @@ Feature: Qadi Resolvers and Obligations
       Given awthaq's Organization.relationships resolver
       And the organization-membership lookup fails while walking from a resource to its owning organization
       When it is asked to check a "member" relation for a subject against that resource
-      Then it fails with a typed RelationshipResolveError naming the subject, relation, and resource
+      Then it fails with a typed RelationshipResolveError naming the relation and resource
       And it does not report "Unrelated"
 
   # BEH-EA-163 — spec/behaviors/21-qadi-resolvers-obligations.md
@@ -92,6 +86,11 @@ Feature: Qadi Resolvers and Obligations
   @BEH-EA-164
   Rule: Decision history backed by audit events
 
+    # @skip: blocked by an unshipped module: no audit-table-backed DecisionHistory exists
+    #   (packages/qadi/src/Resolvers.ts header records BEH-EA-164 as a follow-up with no consumer
+    #   yet; only @qadi/core's decisionHistoryFromEvents is available), so there is no awthaq code
+    #   for this scenario to exercise.
+    @skip
     @REQ-EA-460
     Scenario: hasActed answers from durable audit event records, not in-memory state
       Given awthaq's audit-table-backed DecisionHistory
@@ -100,6 +99,11 @@ Feature: Qadi Resolvers and Obligations
       Then it answers "Acted"
       And the answer is read from the durable audit table, not from any in-memory cache of this process
 
+    # @skip: blocked by an unshipped module: no audit-table-backed DecisionHistory exists
+    #   (BEH-EA-164 follow-up, packages/qadi/src/Resolvers.ts header). The typed-outage half is
+    #   exercised for the resolvers that do ship: REQ-EA-452/453 (attributes) and REQ-EA-455
+    #   (relationships).
+    @skip
     @REQ-EA-461
     Scenario: An audit-table query failure while answering hasActed maps to a typed DecisionHistoryUnavailable
       Given awthaq's audit-table-backed DecisionHistory
@@ -108,6 +112,10 @@ Feature: Qadi Resolvers and Obligations
       Then it fails with a typed DecisionHistoryUnavailable
       And it does not answer "NotActed"
 
+    # @skip: blocked by an unshipped module: no audit-table-backed DecisionHistory exists
+    #   (BEH-EA-164 follow-up, packages/qadi/src/Resolvers.ts header); an outage-is-not-denial
+    #   check for it cannot run before it does.
+    @skip
     @REQ-EA-462
     Scenario: A database outage does not silently deny a subject who has genuinely acted
       Given awthaq's audit-table-backed DecisionHistory
@@ -156,12 +164,21 @@ Feature: Qadi Resolvers and Obligations
   @BEH-EA-166
   Rule: SQL pushdown, and its limit
 
+    # @skip: not awthaq code: SQL pushdown is a direct use of @qadi/predicate-sql
+    #   (toPredicate/compileSql), which is not a dependency of any awthaq package
+    #   (packages/qadi/src/Resolvers.ts header: 'an application wires itself'); the
+    #   PredicateNotRenderable contract is covered by ../qadi's own predicate-sql tests.
+    @skip
     @REQ-EA-466
     Scenario: A policy containing a hasRelationship node fails compileSql with PredicateNotRenderable
       Given a policy that contains a hasRelationship node
       When it is compiled to SQL via toPredicate and compileSql
       Then compilation fails with PredicateNotRenderable
 
+    # @skip: not awthaq code: compileSql belongs to @qadi/predicate-sql, not installed here (see
+    #   REQ-EA-466); ../qadi's predicate-sql suite asserts it never approximates a hasRelationship
+    #   node.
+    @skip
     @REQ-EA-467
     Scenario: compileSql never silently omits or approximates the hasRelationship portion of a policy
       Given a policy that contains a hasRelationship node
@@ -169,6 +186,9 @@ Feature: Qadi Resolvers and Obligations
       Then no partial WHERE clause that silently drops the hasRelationship condition is ever returned
       And the caller never receives rows that were only excluded by the omitted condition
 
+    # @skip: application-level usage pattern over @qadi/predicate-sql, not installed here (see
+    #   REQ-EA-466); nothing in awthaq to run.
+    @skip
     @REQ-EA-468
     Scenario: The caller splits a policy containing a hasRelationship node into a SQL-rendered part and a filter-evaluated part
       Given a policy containing both SQL-renderable conditions and a hasRelationship node
@@ -180,6 +200,11 @@ Feature: Qadi Resolvers and Obligations
   @BEH-EA-167
   Rule: A sink cannot change a decision
 
+    # @skip: not shipped: an AuditDecisionSinkLive with a failureThreshold breaker is @qadi/audit
+    #   (../qadi), not an awthaq layer; awthaq ships DecisionSinkLog/DecisionSinkAudit
+    #   (packages/qadi/src/DecisionLogging.ts) with no breaker. The shipped guarantee is covered by
+    #   the new scenario 'A failing audit write never changes the decision it observed'.
+    @skip
     @REQ-EA-469
     Scenario: A broken or unreachable audit DecisionSink trips its own breaker and logs
       Given an AuditDecisionSinkLive configured with a failureThreshold of 5
@@ -188,6 +213,11 @@ Feature: Qadi Resolvers and Obligations
       Then the sink's own breaker trips
       And the failure is logged
 
+    # @skip: not the shipped behavior: qadi awaits DecisionSink.record (containing a failure, not
+    #   detaching it), so a slow or broken sink is not 'returned without waiting'; the breaker that
+    #   would bound it is @qadi/audit, not awthaq. See the new scenario 'A failing audit write
+    #   never changes the decision it observed'.
+    @skip
     @REQ-EA-470
     Scenario: A broken audit DecisionSink does not block or delay the response to the request that produced the decision
       Given an audit DecisionSink whose underlying storage is unreachable
@@ -195,6 +225,11 @@ Feature: Qadi Resolvers and Obligations
       Then the request's response is returned without waiting on the sink
       And the response is not delayed by the sink's failure
 
+    # @skip: the 'audit trail is marked as degraded' clause has no shipped counterpart (awthaq's
+    #   DecisionSinkAudit has no degradation marker; that lives in @qadi/audit). The
+    #   unchanged-decision half is covered by the new scenario 'A failing audit write never changes
+    #   the decision it observed'.
+    @skip
     @REQ-EA-471
     Scenario: A broken audit DecisionSink does not alter the decision's answer
       Given an audit DecisionSink whose underlying storage is unreachable
@@ -202,6 +237,12 @@ Feature: Qadi Resolvers and Obligations
       When that request's decision is routed to the broken sink
       Then the request still receives the Allow decision's outcome unchanged
       And only the audit trail, not the decision, is marked as degraded
+
+    Scenario: A failing audit write never changes the decision it observed
+      Given awthaq's DecisionSinkAudit whose durable audit write fails
+      And qadi's evaluator would return a Deny decision for a request
+      When that request's decision is routed to the sink
+      Then the request still receives the Deny decision's outcome unchanged
 
   # BEH-EA-168 — spec/behaviors/21-qadi-resolvers-obligations.md
   @BEH-EA-168
@@ -214,6 +255,11 @@ Feature: Qadi Resolvers and Obligations
       When that caller requests the decision stream
       Then the stream is not opened for them
 
+    # @skip: timing of qadi's own reauth loop (Schedule.spaced inside decisionStreamRoute, ../qadi
+    #   packages/http); what awthaq contributes to a re-check, that the extractor re-reads the
+    #   session and sees a revocation, is REQ-EA-474. Not observable through a served SSE response
+    #   on the test clock.
+    @skip
     @REQ-EA-473
     Scenario: The stream re-checks the viewing subject at the configured interval
       Given decisionStreamRoute is configured with reauth every 30 seconds
@@ -229,6 +275,10 @@ Feature: Qadi Resolvers and Obligations
       Then qadi's evaluator returns a Deny decision for "alice" against the stream's guarding policy
       And "alice" stops receiving further decisions from the stream
 
+    # @skip: bounded-staleness timing of qadi's own reauth loop (Schedule.spaced inside
+    #   decisionStreamRoute, ../qadi packages/http), not observable through a served SSE response;
+    #   the re-check itself is REQ-EA-474.
+    @skip
     @REQ-EA-475
     Scenario: A viewer whose access is revoked mid-stream may still receive decisions until the next scheduled re-check
       Given decisionStreamRoute is configured with reauth every 30 seconds
