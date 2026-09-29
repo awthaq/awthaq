@@ -45,20 +45,25 @@ describe("hasSessionCookie (BEH-EA-188)", () => {
       Layer.provideMerge(AuditLog.layerMemory),
       Layer.provideMerge(Hooks.HooksLive),
     );
+    // ETVS-006: disposed deterministically, even when an assertion throws.
     const runtime = ManagedRuntime.make(TestLayer);
-    const token = await runtime.runPromise(
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ email: "stale@example.com", name: "Stale" });
-        const { token } = yield* sessions.issue({ userId: user.id });
-        return token;
-      }),
-    );
-    await runtime.runPromise(TestClock.adjust(Duration.days(31)));
+    try {
+      const token = await runtime.runPromise(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const sessions = yield* Sessions.Sessions;
+          const user = yield* users.create({ email: "stale@example.com", name: "Stale" });
+          const { token } = yield* sessions.issue({ userId: user.id });
+          return token;
+        }),
+      );
+      await runtime.runPromise(TestClock.adjust(Duration.days(31)));
 
-    assert.isTrue(
-      hasSessionCookie(requestWithCookie(`${Api.SessionCookie.key}=${Redacted.value(token)}`)),
-    );
+      assert.isTrue(
+        hasSessionCookie(requestWithCookie(`${Api.SessionCookie.key}=${Redacted.value(token)}`)),
+      );
+    } finally {
+      await runtime.dispose();
+    }
   });
 });

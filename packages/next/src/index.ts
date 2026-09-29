@@ -6,7 +6,9 @@
 // See .scratch/next-package/spec.md for the implementation decisions this
 // package follows, and spec/overview.md for the full package map.
 
-export { getSession } from "./GetSession.ts";
+// RRS-002/NF-11-2: `applyRotatedSession` is half of the ticket-16 rotation design —
+// without it a Server Action has no way to deliver `Session.rotated`.
+export { applyRotatedSession, getSession } from "./GetSession.ts";
 export type { HeadersLike, Session } from "./GetSession.ts";
 export { hasSessionCookie } from "./HasSessionCookie.ts";
 export { withNextCookies } from "./WithNextCookies.ts";

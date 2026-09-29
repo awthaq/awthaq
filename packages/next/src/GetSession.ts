@@ -88,8 +88,11 @@ const resolve = (token: string) =>
     const users = yield* Users.Users;
     const resolver = yield* Authentication.PrincipalResolver;
     const { session, rotated } = yield* sessions.verify(Redacted.make(token));
-    const user = yield* users.findById(session.userId);
-    const principal = yield* resolver.resolve(session);
+    // RSC-007: independent of each other once `verify` has succeeded.
+    const [user, principal] = yield* Effect.all(
+      [users.findById(session.userId), resolver.resolve(session)],
+      { concurrency: "unbounded" },
+    );
     return { principal, user, session, rotated: Option.getOrUndefined(rotated) };
   }).pipe(
     // BEH-EA-185: "no valid session" — cookie names a session that doesn't

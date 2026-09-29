@@ -66,6 +66,11 @@ const parseSetCookie = (
   const separator = (pair ?? "").indexOf("=");
   const name = separator === -1 ? (pair ?? "") : (pair ?? "").slice(0, separator);
   const rawValue = separator === -1 ? "" : (pair ?? "").slice(separator + 1);
+  // NSA-006: Next's `ResponseCookies.set` (`@edge-runtime/cookies`) writes
+  // `encodeURIComponent(value)`, so decoding here is its exact inverse — the
+  // invariant is "the bytes Next puts on the wire equal the original
+  // `Set-Cookie` value". Passing `rawValue` verbatim would double-encode
+  // every `%`. A value that does not decode (a lone `%`) is passed as-is.
   const value = (() => {
     try {
       return decodeURIComponent(rawValue);
@@ -80,13 +85,16 @@ const parseSetCookie = (
     const key = (eq === -1 ? attribute : attribute.slice(0, eq)).toLowerCase();
     const raw = eq === -1 ? undefined : attribute.slice(eq + 1);
     if (key === "max-age" && raw !== undefined) {
-      options.maxAge = Number(raw);
+      // NSA-006: a non-numeric Max-Age is dropped (RFC 6265 §5.2.2 ignores it), never `NaN`.
+      const seconds = Number(raw);
+      if (raw.trim() !== "" && Number.isFinite(seconds)) options.maxAge = seconds;
     } else if (key === "path" && raw !== undefined) {
       options.path = raw;
     } else if (key === "domain" && raw !== undefined) {
       options.domain = raw;
     } else if (key === "expires" && raw !== undefined) {
-      options.expires = new Date(raw);
+      const expires = new Date(raw);
+      if (!Number.isNaN(expires.getTime())) options.expires = expires;
     } else if (key === "secure") {
       options.secure = true;
     } else if (key === "httponly") {

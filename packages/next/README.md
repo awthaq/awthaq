@@ -127,7 +127,7 @@ holds a mutable cookie jar — a Server Action or a Route Handler:
 ```ts
 // app/actions.ts
 "use server";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { getSession, applyRotatedSession } from "@awthaq/next";
 import { runtime } from "./lib/runtime.ts";
 

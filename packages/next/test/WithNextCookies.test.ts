@@ -96,6 +96,46 @@ describe("withNextCookies — parsing a Response's Set-Cookie headers (BEH-EA-18
   });
 });
 
+describe("withNextCookies — hostile attribute values and value fidelity (NSA-006)", () => {
+  const setFrom = (header: string) => {
+    const jar = recordingJar();
+    withNextCookies(new Response(null, { headers: { "set-cookie": header } }), jar);
+    return jar.calls[0]!;
+  };
+
+  it("drops a non-numeric Max-Age instead of writing NaN", () => {
+    const [, , options] = setFrom("a=1; Max-Age=abc; Path=/");
+    assert.deepStrictEqual(options, { path: "/" });
+  });
+
+  it("drops an empty Max-Age", () => {
+    const [, , options] = setFrom("a=1; Max-Age=; Path=/");
+    assert.deepStrictEqual(options, { path: "/" });
+  });
+
+  it("keeps Max-Age=0 and negative values, which delete the cookie", () => {
+    assert.strictEqual(setFrom("a=1; Max-Age=0")[2]?.maxAge, 0);
+    assert.strictEqual(setFrom("a=1; Max-Age=-1")[2]?.maxAge, -1);
+  });
+
+  it("drops an unparseable Expires instead of writing an Invalid Date", () => {
+    const [, , options] = setFrom("a=1; Expires=garbage; Path=/");
+    assert.deepStrictEqual(options, { path: "/" });
+  });
+
+  it("keeps a valid Expires", () => {
+    const [, , options] = setFrom("a=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT");
+    assert.strictEqual(options?.expires?.toISOString(), "2015-10-21T07:28:00.000Z");
+  });
+
+  it("a percent-encoded value reaches the wire unchanged once Next re-encodes it", () => {
+    // Next's `ResponseCookies.set` writes `encodeURIComponent(value)`.
+    const wire = "tok%3Den%20with%2Fchars";
+    const [, value] = setFrom(`session=${wire}; Path=/`);
+    assert.strictEqual(encodeURIComponent(value), wire);
+  });
+});
+
 describe("withNextCookies — a real HTTP response (BEH-EA-189)", () => {
   const LoginGroup = HttpApiGroup.make("login").add(
     HttpApiEndpoint.post("login", "/login", { success: Schema.Void }),
