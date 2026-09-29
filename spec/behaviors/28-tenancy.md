@@ -121,15 +121,23 @@ _Previous: [BEH-EA-230](28-tenancy.md#beh-ea-230-organization-oauth-connections-
 ## BEH-EA-232: A suspended organization refuses organization-scoped access
 
 ```text
-REQUIREMENT: An organization with `suspended = true` MUST refuse organization-
-             scoped operations for its members with a typed
-             `OrganizationSuspended`, and membership answers to qadi
-             (`hasRelationship`) MUST NOT confer access through it. Suspension
-             and reinstatement are performed only through the superadmin
-             tenant-administration surface, gated by `canAdministerTenants`
-             (fail-closed by default).
+REQUIREMENT: An organization with `suspendedAt` set MUST refuse every
+             organization-scoped operation of the organization plugin —
+             members and outsiders alike — with the same `OrganizationNotFound`
+             an unknown id gets (MTI-009: a denial never reveals a tenant), MUST
+             not become or remain a member's active organization, and MUST
+             confer no qadi relationship (`member`, `has-role:*`,
+             `<resource>:<action>`, `team-member`, `team-role:*`) through its
+             memberships. The member's own `list` MUST still return it,
+             flagged `suspended`. Suspension and reinstatement are performed
+             only by `AdminTenants` (`Auth.make([Organization, Admin,
+             AdminTenants])`), gated by `canAdministerTenants` (fail-closed by
+             default, gate before existence), published as
+             `auth.admin.organizationSuspended` / `organizationUnsuspended`.
 ```
 
-Suspension is reversible and never a deletion. Impersonation records are stamped with the ambient tenant, and `list`/`forceStop` are confined to it unless `canAdministerTenants` passes.
+Suspension is reversible and never a deletion: every row stays, and reinstating restores access exactly as it was. Using the existing not-found error rather than a new typed one keeps every endpoint's error contract unchanged; the suspended flag on the member's own listing is how a member learns why.
+
+Impersonation records are stamped with the ambient tenant and confined to it unless the caller passes `canAdministerTenants` ([BEH-EA-215](27-admin-impersonation.md#beh-ea-215-admin_impersonation-is-a-durable-audit-trail), [BEH-EA-217](27-admin-impersonation.md#beh-ea-217-forcestop-lets-another-admin-end-someone-elses-impersonation), [BEH-EA-219](27-admin-impersonation.md#beh-ea-219-the-audit-trail-is-queryable)).
 
 _Previous: [BEH-EA-231](28-tenancy.md#beh-ea-231-per-tenant-configuration-applies-per-request-without-changing-the-plugin-tuple)_

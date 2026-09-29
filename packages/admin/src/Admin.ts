@@ -21,7 +21,15 @@
 // violation above.
 
 import { AccountContract, Api, SessionContract } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Migrations, SessionCookie, Sessions, Users } from "@awthaq/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  Migrations,
+  SessionCookie,
+  Sessions,
+  Tenant,
+  Users,
+} from "@awthaq/core";
 import { Session } from "@awthaq/server";
 import type { AuthSubject } from "@qadi/core";
 import { makeSubject } from "@qadi/core";
@@ -46,6 +54,8 @@ import * as ImpersonationRecords from "./ImpersonationRecords.ts";
 export interface ImpersonationGateInput {
   readonly admin: AuthSubject;
   readonly target: AuthSubject;
+  /** IDS-002: the ambient tenant the request acts for, so a host predicate can compare tenant affinity. */
+  readonly tenantId: Option.Option<string>;
 }
 
 /** IDS-001: the per-episode form of the gate used by `forceStop` and `list`. */
@@ -76,6 +86,15 @@ export interface AdminConfigShape {
    */
   readonly canManageUsers: (input: UserAdminGateInput) => Effect.Effect<boolean>;
   /**
+   * IDS-002/EP-003 (ADR-EA-018): the superadmin predicate — "may `admin` act across
+   * tenants?". Fail-closed. Without it, `list`/`forceStop` see only the ambient
+   * tenant's impersonation episodes; with it they see every tenant's. The tenant
+   * administration surface (`AdminTenants`, `listOrganizations`, `suspendOrganization`,
+   * ...) is gated by it too, with `organizationId` naming the organization acted on
+   * (`None` for the collection-level listing).
+   */
+  readonly canAdministerTenants: (input: TenantAdminGateInput) => Effect.Effect<boolean>;
+  /**
    * BAM-005/SCP-001: the fail-closed predicate behind `banUser`/`unbanUser` — its own
    * capability, since locking an account out is a stronger act than editing it. Same
    * `{ admin, target }` shape as `canManageUsers`.
@@ -87,6 +106,14 @@ export interface AdminConfigShape {
 export interface UserAdminGateInput {
   readonly admin: AuthSubject;
   readonly target: Option.Option<AuthSubject>;
+  /** IDS-002: the ambient tenant of the request. */
+  readonly tenantId: Option.Option<string>;
+}
+
+/** EP-003: what `canAdministerTenants` is asked — see there. */
+export interface TenantAdminGateInput {
+  readonly admin: AuthSubject;
+  readonly organizationId: Option.Option<string>;
 }
 
 /** IDS-001: the identity-only subject for a bare user id (the episode's target). */
@@ -95,7 +122,12 @@ const subjectOfUserId = (id: string): AuthSubject => makeSubject({ id });
 const episodeGateFrom =
   (canImpersonate: AdminConfigShape["canImpersonate"]): AdminConfigShape["canManageEpisode"] =>
   ({ admin, episode }) =>
-    canImpersonate({ admin, target: subjectOfUserId(episode.targetUserId) });
+    canImpersonate({
+      admin,
+      target: subjectOfUserId(episode.targetUserId),
+      // The episode's own tenant: the gate compares affinity with where the episode ran.
+      tenantId: episode.tenantId,
+    });
 
 const defaultAdminConfig: AdminConfigShape = {
   maxDuration: Duration.hours(1),
@@ -103,6 +135,7 @@ const defaultAdminConfig: AdminConfigShape = {
   canManageEpisode: episodeGateFrom(() => Effect.succeed(false)),
   canManageUsers: () => Effect.succeed(false),
   canBanUsers: () => Effect.succeed(false),
+  canAdministerTenants: () => Effect.succeed(false),
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -285,6 +318,7 @@ const toUserDto = (user: Users.UserRecord): AdminApi.UserDto =>
     name: user.name,
     image: Option.getOrNull(user.image),
     metadata: Option.getOrNull(user.metadata),
+    tenantId: Option.getOrNull(user.tenantId),
     status: user.status,
     statusReason: Option.getOrNull(user.statusReason),
     suspendedUntil: Option.match(user.suspendedUntil, {
@@ -308,6 +342,7 @@ const toRecordDto = (
     expiresAt: Option.match(record.expiresAt, { onNone: () => null, onSome: DateTime.formatIso }),
     endedAt: Option.match(record.endedAt, { onNone: () => null, onSome: DateTime.formatIso }),
     endedBy: Option.getOrNull(record.endedBy),
+    tenantId: Option.getOrNull(record.tenantId),
   });
 
 /** Same forward-reference pattern `@awthaq/passkey`'s own `Passkey.ts` documents. */
@@ -634,11 +669,70 @@ const adminMigrations: Migrations.Migrations = [
   },
 ];
 
+/**
+ * IDS-002 (ADR-EA-018): the tenant column, appended as its own migration so an existing
+ * deployment upgrades in place. The immutability triggers list the frozen columns
+ * explicitly, so they are recreated with `tenantId` added — otherwise the new column
+ * would be the one an UPDATE could rewrite. Nullable, unbackfilled: `NULL` is "no
+ * tenant", which every episode written before tenancy — and every single-tenant one —
+ * carries.
+ */
+const addTenantIdMigration: Migrations.Migrations[number] = {
+  name: "add_admin_impersonation_tenant_id",
+  up: Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`ALTER TABLE admin_impersonation ADD COLUMN "tenantId" TEXT`;
+    yield* sql`CREATE INDEX admin_impersonation_tenant_started_at ON admin_impersonation("tenantId", "startedAt", id)`;
+    yield* sql.onDialectOrElse({
+      pg: () =>
+        Effect.gen(function* () {
+          yield* sql`
+            CREATE OR REPLACE FUNCTION admin_impersonation_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+              IF TG_TABLE_NAME = 'admin_impersonation' AND TG_OP = 'UPDATE' THEN
+                IF NEW.id IS DISTINCT FROM OLD.id
+                  OR NEW."adminUserId" IS DISTINCT FROM OLD."adminUserId"
+                  OR NEW."targetUserId" IS DISTINCT FROM OLD."targetUserId"
+                  OR NEW."sessionId" IS DISTINCT FROM OLD."sessionId"
+                  OR NEW.reason IS DISTINCT FROM OLD.reason
+                  OR NEW."startedAt" IS DISTINCT FROM OLD."startedAt"
+                  OR NEW."expiresAt" IS DISTINCT FROM OLD."expiresAt"
+                  OR NEW."tenantId" IS DISTINCT FROM OLD."tenantId"
+                  OR OLD."endedAt" IS NOT NULL THEN
+                  RAISE EXCEPTION 'awthaq: % is append-only: this UPDATE is rejected', TG_TABLE_NAME;
+                END IF;
+                RETURN NEW;
+              END IF;
+              RAISE EXCEPTION 'awthaq: % is append-only: % is rejected', TG_TABLE_NAME, TG_OP;
+            END
+            $$`;
+        }),
+      sqlite: () =>
+        Effect.gen(function* () {
+          yield* sql`DROP TRIGGER admin_impersonation_immutable`;
+          yield* sql`
+            CREATE TRIGGER admin_impersonation_immutable BEFORE UPDATE ON admin_impersonation
+            WHEN NEW.id IS NOT OLD.id
+              OR NEW."adminUserId" IS NOT OLD."adminUserId"
+              OR NEW."targetUserId" IS NOT OLD."targetUserId"
+              OR NEW."sessionId" IS NOT OLD."sessionId"
+              OR NEW.reason IS NOT OLD.reason
+              OR NEW."startedAt" IS NOT OLD."startedAt"
+              OR NEW."expiresAt" IS NOT OLD."expiresAt"
+              OR NEW."tenantId" IS NOT OLD."tenantId"
+              OR OLD."endedAt" IS NOT NULL
+            BEGIN SELECT RAISE(ABORT, 'awthaq: admin_impersonation is append-only: this UPDATE is rejected'); END`;
+        }),
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    });
+  }),
+};
+
 export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
   apiVersion: 1,
   contract: AdminApi.AdminApi,
   tables: ["admin_impersonation", "admin_impersonation_chain"],
-  migrations: adminMigrations,
+  migrations: [...adminMigrations, addTenantIdMigration],
 }) {
   static readonly layer = AuthPlugin.layer(Admin, {
     handlers: AdminHandlers,
@@ -668,6 +762,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         const allowed = yield* adminConfig[gate]({
           admin: subjectOf(caller),
           target: Option.map(target, subjectOfUserId),
+          tenantId: yield* Tenant.TenantContext,
         });
         if (!allowed) {
           yield* events.publish({
@@ -695,8 +790,10 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       });
 
       /** Sessions an impersonation episode owns are never touched by user-session administration (`forceStop` ends them). */
+      // IDS-002: classification, not authorization — a session that any tenant's episode owns must
+      // never be revoked as an ordinary user session, so the lookup is deliberately tenant-blind.
       const isImpersonationSession = (sessionId: string) =>
-        records.findBySessionId(sessionId).pipe(Effect.map(Option.isSome));
+        records.findBySessionId(sessionId, { anyTenant: true }).pipe(Effect.map(Option.isSome));
 
       const ownSessions = Effect.fnUntraced(function* (userId: Users.UserId) {
         const listed = yield* sessions.list(userId);
@@ -846,6 +943,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         const allowed = yield* adminConfig.canImpersonate({
           admin: subjectOf(caller),
           target: subjectOfUserId(targetUserId),
+          tenantId: yield* Tenant.TenantContext,
         });
         if (!allowed) return yield* deny(caller);
 
@@ -930,11 +1028,23 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         },
       );
 
+      /**
+       * IDS-002: episodes are confined to the ambient tenant unless the caller passes the
+       * superadmin predicate, in which case the records are read tenant-blind. A denied
+       * predicate is not an error here — it just leaves the confinement in place.
+       */
+      const tenantScopeFor = (caller: Api.UserPrincipal) =>
+        adminConfig
+          .canAdministerTenants({ admin: subjectOf(caller), organizationId: Option.none() })
+          .pipe(Effect.map((crossTenant): ImpersonationRecords.TenantScope => ({ anyTenant: crossTenant })));
+
       const forceStop: AdminShape["forceStop"] = Effect.fnUntraced(function* (caller, sessionId) {
         yield* sweepExpired;
+        const scope = yield* tenantScopeFor(caller);
         // IDS-001: the row is the only proof `sessionId` is an impersonation
-        // session, and the per-episode gate needs its target.
-        const episode = yield* records.findBySessionId(sessionId);
+        // session, and the per-episode gate needs its target. IDS-002: another
+        // tenant's episode is simply not found, unless the caller is a superadmin.
+        const episode = yield* records.findBySessionId(sessionId, scope);
         if (Option.isNone(episode)) {
           return yield* Effect.fail(new AdminApi.AdminImpersonationNotFound());
         }
@@ -947,13 +1057,11 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         // impersonation session, so it is safe to revoke even if the row is already
         // ended (which is then reported as not-found below).
         yield* revokeQuietly(sessionId);
-        yield* records
-          .endEpisode(sessionId, "forcedByAdmin")
-          .pipe(
-            Effect.catchTag("ImpersonationRecordNotFound", () =>
-              Effect.fail(new AdminApi.AdminImpersonationNotFound()),
-            ),
-          );
+        yield* records.endEpisode(sessionId, "forcedByAdmin", scope).pipe(
+          Effect.catchTag("ImpersonationRecordNotFound", () =>
+            Effect.fail(new AdminApi.AdminImpersonationNotFound()),
+          ),
+        );
         yield* events.publish({
           _tag: "auth.admin.impersonationStopped",
           sessionId,
@@ -965,7 +1073,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         // IDS-004: lazy reconciliation — an expired episode is never reported active.
         yield* sweepExpired;
         const admin = subjectOf(caller);
-        const page = yield* records.list(input);
+        const page = yield* records.list(input, yield* tenantScopeFor(caller));
         // IDS-001: per-row gate — a deny-all/unconfigured host exposes nothing. The gate
         // runs after paging, so a page can hold fewer than `limit` visible rows while
         // `nextCursor` still points onward.

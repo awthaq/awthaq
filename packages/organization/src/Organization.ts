@@ -2408,9 +2408,20 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           ),
         );
 
+      /** EP-003: the active-context paths read memberships directly, so they check suspension themselves. */
+      const isSuspended = (organizationId: string) =>
+        orgs
+          .findById(organizationId)
+          .pipe(
+            Effect.map((found) => Option.isSome(found) && Option.isSome(found.value.suspendedAt)),
+          );
+
       const getActiveMember: OrganizationShape["getActiveMember"] = Effect.fnUntraced(
         function* (caller) {
           const organizationId = yield* activeOrganizationOf(caller);
+          if (yield* isSuspended(organizationId)) {
+            return yield* Effect.fail(new OrganizationApi.NoActiveOrganization());
+          }
           const membership = yield* members.findByUserAndOrg(
             Users.UserId(caller.ref.id),
             organizationId,
@@ -2431,7 +2442,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             return yield* activeContext.unsetOrganization(caller.sessionId, callerId);
           }
           const membership = yield* members.findByUserAndOrg(callerId, organizationId);
-          if (Option.isNone(membership))
+          if (Option.isNone(membership) || (yield* isSuspended(organizationId)))
             return yield* Effect.fail(new OrganizationApi.MembershipNotFound());
           // MTI-001: the membership record is the witness the setter requires.
           return yield* activeContext.setOrganization(caller.sessionId, membership.value);

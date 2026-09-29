@@ -238,6 +238,25 @@ export interface AdminSessionRevokedEvent {
   readonly sessionId: string | null;
 }
 
+/**
+ * EP-003 (ADR-EA-018): published by `@awthaq/admin`'s `AdminTenants.suspendOrganization`,
+ * after the organization is marked suspended. `reason` is the operator's note, `null`
+ * when none was given.
+ */
+export interface AdminOrganizationSuspendedEvent {
+  readonly _tag: "auth.admin.organizationSuspended";
+  readonly adminUserId: UserId;
+  readonly organizationId: string;
+  readonly reason: string | null;
+}
+
+/** EP-003: published by `AdminTenants.unsuspendOrganization`, after the suspension is lifted. */
+export interface AdminOrganizationUnsuspendedEvent {
+  readonly _tag: "auth.admin.organizationUnsuspended";
+  readonly adminUserId: UserId;
+  readonly organizationId: string;
+}
+
 /** Published by `@awthaq/organization`'s `create`. */
 export interface OrganizationCreatedEvent {
   readonly _tag: "auth.organization.created";
@@ -501,6 +520,8 @@ export type AuthEvent =
   | AdminUserBannedEvent
   | AdminUserUnbannedEvent
   | AdminSessionRevokedEvent
+  | AdminOrganizationSuspendedEvent
+  | AdminOrganizationUnsuspendedEvent
   | OrganizationCreatedEvent
   | OrganizationUpdatedEvent
   | OrganizationDeletedEvent

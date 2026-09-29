@@ -97,6 +97,8 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.admin.userBanned":
     case "auth.admin.userUnbanned":
     case "auth.admin.sessionRevoked":
+    case "auth.admin.organizationSuspended":
+    case "auth.admin.organizationUnsuspended":
       return Option.some(event.adminUserId);
     case "auth.mail.failed":
       return Option.fromNullishOr(event.userId);

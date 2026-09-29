@@ -155,6 +155,7 @@ interface ImpersonationRecord {
   readonly expiresAt: DateTime.Utc | null   // the session's hard expiry (IDS-004)
   readonly endedAt: DateTime.Utc | null
   readonly endedBy: "self" | "forcedByAdmin" | "expired" | null
+  readonly tenantId: string | null            // the ambient tenant when it started (IDS-002)
 }
 ```
 
@@ -186,6 +187,8 @@ REQUIREMENT: The trail MUST be tamper-evident (ALF-005). The database MUST
 ```
 
 ALF-005 (decision recorded 2026-09-29: adopted recommended option C now + A, shared primitive; B — an external append-only sink — is left as an optional future port): a DBA can still drop the triggers, which is what the chain is for — editing, deleting or reordering a row, or forging one with raw SQL, is detectable by anyone holding the key. Without a configured key the chain is unkeyed SHA-256: it catches casual edits but can be recomputed end to end, so a host wanting forgery-evidence supplies `AuditChain.config({ key })`. Detecting truncation of the newest links needs an external anchor (an exported head hash) and is the host's. The primitive (`@awthaq/core`'s `AuditChain`) is table-agnostic; applying it to the core `audit_log` (BEH-EA-100) is tracked separately. The Postgres trigger DDL ships in the same migration but is untested here (SQLite only).
+
+IDS-002 ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)): the row records the ambient `TenantContext` at `impersonate` (`null` when none), frozen with the other start facts by the immutability triggers and included in the ledger payload only when set — so every link written before the column existed, and every single-tenant one, still verifies byte-for-byte. `findBySessionId`, `endEpisode` and `list` see only the ambient tenant's episodes (an untenanted request sees the untenanted ones — everything, in a single-tenant deployment) unless the caller opts into `{ anyTenant: true }`, which `Admin` does only for a caller passing `canAdministerTenants`, and for its own tenant-blind "is this an impersonation session" classification (so another tenant's impersonation session is never mistaken for an ordinary one by the user-session endpoints). `closeExpired` and `verifyChain` are maintenance over every tenant.
 
 IDS-004: before this, `"expired"` was declared but nothing produced it, so a naturally-expired episode stayed reported `active` forever and the audit trail never closed. The close is a single atomic statement that returns only the rows it closed, so concurrent readers cannot double-announce an episode.
 
@@ -239,6 +242,13 @@ REQUIREMENT: `forceStop` MUST look the episode up by the named session id
              an episode row proves is an impersonation session; an episode
              that had already ended is reported `AdminImpersonationNotFound`
              (its live session, if any, is still revoked) (IDS-007).
+
+REQUIREMENT: An episode belonging to another tenant than the ambient one MUST
+             be reported `AdminImpersonationNotFound`, exactly like an unknown
+             id (IDS-002), unless the caller passes
+             `AdminConfig.canAdministerTenants` (fail-closed by default), in
+             which case `forceStop` may end any tenant's episode (still
+             subject to `canManageEpisode`).
 ```
 
 [MOD-EA-015](../models/15-admin-impersonation.md) named this explicitly as an undecided question. Resolved here: yes, an admin (any caller passing the same gate) can end another active impersonation episode, identified by the impersonation session's own id — the same id BEH-EA-219's listing endpoint surfaces — rather than inventing a second, parallel identifier space for it.
@@ -281,7 +291,10 @@ REQUIREMENT: `Admin` MUST expose a listing endpoint over `admin_impersonation`,
              defaulting to 50 and bounded to 1..200 on the wire, never an
              offset and never more than `limit + 1` rows read (BEH-EA-036;
              ESS-006). An expired episode MUST NOT be listed as active
-             (IDS-004).
+             (IDS-004). The listing MUST show only the ambient tenant's
+             episodes unless the caller passes `canAdministerTenants`
+             (IDS-002), and the impersonation gates MUST be told the ambient
+             `tenantId` so a host predicate can compare tenant affinity.
 ```
 
 An audit trail nobody can query defeats much of its own purpose; both the "what happened" (full history) and "what's live right now" (support-ops needing a kill switch target for BEH-EA-217) shapes are real, distinct use cases over the same one table.
