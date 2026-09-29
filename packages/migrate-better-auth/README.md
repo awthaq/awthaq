@@ -9,7 +9,7 @@ single opaque token under a differently named cookie, so it can never
 parse — cutting over with no bridge installed forces every live session to
 re-authenticate.
 
-This package ships three pieces:
+This package ships four pieces:
 
 - `LegacySessionBridgeLive` — a `SqlClient`-backed
   `@awthaq/ports` `LegacySessionBridge` implementation, querying a
@@ -24,6 +24,30 @@ This package ships three pieces:
   better-auth session mint a real awthaq session transparently, on its
   next request — delivered through the same `rotated` → `Set-Cookie`
   channel every ordinary session rotation already uses.
+
+- `BetterAuthScryptVerifier` — a `LegacyPasswordVerifier` so imported
+  better-auth **password** users keep their password (BAM-004). better-auth
+  stores `${saltHex}:${keyHex}` (scrypt over the NFKC-normalized password,
+  N=16384, r=16, p=1, 64-byte key, the hex salt string used as the salt);
+  that cannot be re-serialized into awthaq's own `$scrypt$` form, so import
+  each `account.password` value verbatim as the credential hash and install
+  the verifier next to your primary hasher:
+
+  ```ts
+  import { BetterAuthScryptVerifier } from "@awthaq/migrate-better-auth";
+
+  const HasherLive = PasswordHasher.layerArgon2id.pipe(
+    Layer.provideMerge(BetterAuthScryptVerifier.layer),
+  );
+  ```
+
+  On the user's first successful sign-in `rehashOnLogin` replaces the hash
+  with argon2id. The verifier holds one list: to accept several legacy formats
+  (this one plus bcrypt or Firebase), provide
+  `Layer.succeed(PasswordHasher.LegacyPasswordVerifiers, [a, b])` with each
+  package's verifier instead of merging their `layer`s. Carry
+  `emailVerified` across too, or set `Password.config({ requireVerifiedEmail: false })`
+  if part of your population was never verified.
 
 Confirm the retained database's `session` table matches the column
 names this package queries (`token`, `userId`, `ipAddress`, `userAgent`,

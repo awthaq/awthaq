@@ -91,7 +91,7 @@ Each table below is a planned surface, not a shipped one. "Source" is the intend
 
 | Export | Kind | Source |
 |---|---|---|
-| `PasswordHasher` (`layerArgon2id`, `layerScrypt`) | `Context.Tag` + Layers | `PasswordHasher.ts` |
+| `PasswordHasher` (`layerArgon2id`, `layerScrypt`, worker-pool variants in `PasswordHasherWorkerPool`) | `Context.Tag` + Layers | `PasswordHasher.ts` — plus a verify-only `LegacyPasswordVerifiers` reference for imported foreign hashes (bcrypt, Firebase scrypt, better-auth scrypt) |
 | `Mailer` (`layerNoop`, `layerMemory`) | `Context.Tag` + Layers | `Mailer.ts` — `send` fails with a typed `MailDeliveryFailed` (EEM-002); `layerNoop` still dies |
 | `WebAuthn` (`layerSimpleWebAuthn`) | `Context.Tag` + Layers | `WebAuthn.ts` |
 

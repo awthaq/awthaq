@@ -71,6 +71,9 @@
       "path": "packages/migrate-better-auth"
     },
     {
+      "path": "packages/migrate-firebase"
+    },
+    {
       "path": "features"
     },
     {

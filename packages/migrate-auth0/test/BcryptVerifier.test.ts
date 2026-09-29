@@ -35,6 +35,30 @@ describe("BcryptVerifier", () => {
     }),
   );
 
+  // SAM-001: Supabase GoTrue stores `auth.users.encrypted_password` as `$2a$10$...`
+  // bcrypt. `$2a$` and `$2b$` are algorithm-identical, so rewriting bcryptjs's `$2b$`
+  // prefix produces a hash byte-shaped exactly like a GoTrue export.
+  it.effect(
+    "a GoTrue-style $2a$10$ hash verifies through layerArgon2id + BcryptVerifier.layer and needsRehash is true",
+    () =>
+      Effect.gen(function* () {
+        const hasher = yield* PasswordHasher.PasswordHasher;
+        const gotrueHash = bcrypt.hashSync("imported-from-supabase", 10).replace(/^\$2b\$/, "$2a$");
+        assert.match(gotrueHash, /^\$2a\$10\$/);
+
+        assert.isTrue(yield* hasher.verify(Redacted.make("imported-from-supabase"), gotrueHash));
+        assert.isFalse(yield* hasher.verify(Redacted.make("wrong-guess"), gotrueHash));
+        assert.isTrue(hasher.needsRehash(gotrueHash));
+      }).pipe(
+        Effect.provide(
+          PasswordHasher.layerArgon2id.pipe(
+            Layer.provideMerge(BcryptVerifier.layer),
+            Layer.provide(NodeCrypto.layer),
+          ),
+        ),
+      ),
+  );
+
   it.effect("verify: false (not a defect) for a malformed hash", () =>
     Effect.gen(function* () {
       const result = yield* BcryptVerifier.bcryptVerifier.verify(

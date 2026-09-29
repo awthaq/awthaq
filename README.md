@@ -296,6 +296,16 @@ CORS never relaxes CSRF: cross-site mutations still need the double-submit cooki
 
 Each composes into `Auth.make([...])` alongside Password exactly as shown in the quickstart — `Auth.make`'s own type-level `Validate<P>` rejects the tuple at compile time if a plugin's `dependsOn` isn't also in the list, or if two plugins share an id. `two-factor`, `magic-link`, `api-key`, `cli`, and `next` remain stub packages — see [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md)'s "Out of scope" section for why they're deliberately not part of this pass.
 
+### Migrating users from another provider
+
+Each package lets imported users keep their password: it verifies the old hash on their first sign-in and `rehashOnLogin` upgrades it to argon2id.
+
+| Source | Package | Hash it verifies |
+|---|---|---|
+| Auth0, Supabase (GoTrue) | `@awthaq/migrate-auth0` | bcrypt (`$2a$`/`$2b$`/`$2y$`) |
+| Firebase Authentication | `@awthaq/migrate-firebase` | Firebase's modified scrypt |
+| better-auth | `@awthaq/migrate-better-auth` | better-auth's scrypt (`salt:key`), plus live-session bridging |
+
 ## Publishing status
 
 No `@awthaq/*` package is published to npm — every `package.json` in `packages/` is still `"private": true`. A provenance-publish workflow (`.github/workflows/release.yml`, npm OIDC trusted publishing, no stored tokens) is wired and ready per [`spec/process/definitions-of-done.md`](spec/process/definitions-of-done.md)'s gate 12, but going live needs a one-time, manual trusted-publisher registration on npmjs.com that no automation here can perform. Until then, use this library from a clone: `pnpm install && pnpm build`, then reference packages the way the quickstart above does, or `pnpm link` a package into another project.

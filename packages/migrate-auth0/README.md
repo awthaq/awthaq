@@ -30,6 +30,24 @@ set `Password.config({ requireVerifiedEmail: false })` and restrict unverified
 users downstream instead. (The same applies to Firebase and Supabase/GoTrue
 imports.)
 
+## Other bcrypt sources: Supabase (GoTrue)
+
+`BcryptVerifier` recognizes any `$2a$`/`$2b$`/`$2y$` bcrypt hash, not only
+Auth0's, so it is also the verifier for **Supabase Auth (GoTrue)**. GoTrue keeps
+each password user's hash in `auth.users.encrypted_password` (`$2a$10$...`).
+Import it byte-for-byte as `passwordHash`, map `email_confirmed_at IS NOT NULL`
+to `emailVerified`, and install `BcryptVerifier.layer` alongside your primary
+hasher exactly as in step 3 below. A migrated Supabase user then signs in with
+the old password and is rehashed to argon2id on that first login. The `$2a$`
+path is covered by `test/BcryptVerifier.test.ts`.
+
+Concretely: export `auth.users` (`email`, `encrypted_password`,
+`email_confirmed_at`), then per row call `ImportAuth0User.importUser({ email,
+name, emailVerified: email_confirmed_at !== null, passwordHash:
+encrypted_password })` (it is `Users.create` + `Accounts.link({ credentialHash })`
++ `verifyEmail`). Sign-in stays uniform for unknown emails: they still cost a
+real dummy-hash verify (BEH-EA-114).
+
 ## The recipe
 
 **1. Export** your Auth0 database connection's users (Auth0's bulk user
