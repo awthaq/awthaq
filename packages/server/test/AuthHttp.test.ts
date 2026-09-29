@@ -505,7 +505,11 @@ describe("GET /user/export (CSG-005)", () => {
           const body = (yield* jsonBody(response)) as {
             readonly user: {
               readonly id: string;
-              readonly identity: { readonly _tag: string; readonly email?: string };
+              readonly identity: {
+                readonly _tag: string;
+                readonly email?: string;
+                readonly emailVerified?: boolean;
+              };
             };
             readonly accounts: ReadonlyArray<{
               readonly providerId: string;
