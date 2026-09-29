@@ -14,25 +14,32 @@
 // specifically — the one fixed contract every awthaq composition serves
 // regardless of which plugins are installed (a standalone `HttpApi` carrying
 // only the core `session` group; see `@awthaq/api`'s `Session.ts` header
-// comment) — not the application's own full, per-composition
-// `Auth.make`-derived `api`, whose shape this package cannot know generically.
-// An application wanting reactive atoms for its own plugin endpoints (e.g.
-// Password's sign-in mutation) builds its own `AtomHttpApi.Service` directly
-// against its own composed `api`, the same way it already builds its own
-// `Auth`/`AuthPlugin` classes (ADR-EA-005/008) — this module only owns the
-// one thing every composition shares: the session.
+// comment) — because this module only owns the one thing every composition
+// shares: the session. An application wanting reactive atoms for its own
+// plugin endpoints (organizations, password sign-in, ...) builds them with
+// `ReactClient.makeReactClient` over its own composed `auth.api` (BE-004).
+//
 // `SubjectContract.SubjectApi` (BEH-EA-026's `SubjectDto`, `@awthaq/api`'s
 // own file — not `@awthaq/qadi`'s `SubjectApi.ts`, which attaches the
 // real `AuthorizedSubject` middleware and would pull qadi's much heavier,
 // server-only dependency graph into a browser bundle; see that file's own
-// header comment) backs `subjectDtoAtom` — BEH-EA-179's other half, composed
-// with `sessionAtom` in `Providers.tsx`, not merged into one query.
+// header comment) backs `subjectDtoAtom` — BEH-EA-179's other half.
+//
+// EAR-002/BEH-EA-179: the qadi subject is *not* `subjectDtoAtom` read on its
+// own — that endpoint answers an anonymous `SubjectDto` for a signed-out
+// caller, which would hand qadi a real (empty) subject after sign-out.
+// `subjectAtom` is the one derivation Providers feeds qadi: `sessionAtom` is
+// the gate, and the DTO only counts once the session is a settled, real one.
 import { AuthCore, SubjectContract } from "@awthaq/api";
 import type { AccountContract, Api, SessionContract } from "@awthaq/api";
+import * as Data from "effect/Data";
+import type * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Atom from "effect/unstable/reactivity/Atom";
+import type { AuthSubject } from "@qadi/core";
 import { SESSION_KEY, makeReactClient } from "./ReactClient.ts";
+import { toSubject } from "./Subject.ts";
 
 /**
  * The contract types `ReactAuthClient` and `sessionAtom` are built from,
@@ -84,16 +91,20 @@ const rawSessionAtom = ReactAuthClient.query("session", "current", {
  * ordinary logged-out case; any *other* failure (a genuine network/server
  * error) still surfaces as a real `AsyncResult.Failure`, not swallowed.
  */
-export const sessionAtom = Atom.make((get) => {
-  const result = get(rawSessionAtom);
-  if (AsyncResult.isFailure(result)) {
-    const cause = AsyncResult.error(result);
-    if (Option.isSome(cause) && cause.value._tag === "Unauthenticated") {
-      return AsyncResult.success(null);
+export const sessionAtom = Atom.readable(
+  (get) => {
+    const result = get(rawSessionAtom);
+    if (AsyncResult.isFailure(result)) {
+      const cause = AsyncResult.error(result);
+      if (Option.isSome(cause) && cause.value._tag === "Unauthenticated") {
+        return AsyncResult.success(null, { waiting: result.waiting });
+      }
     }
-  }
-  return result;
-});
+    return result;
+  },
+  // Refreshing the wrapper means re-running the query it reads (`useAtomRefresh(sessionAtom)`).
+  (refresh) => refresh(rawSessionAtom),
+);
 
 export class ReactSubjectClient extends makeReactClient<ReactSubjectClient>()(
   "awthaq/react/ReactSubjectClient",
@@ -101,7 +112,7 @@ export class ReactSubjectClient extends makeReactClient<ReactSubjectClient>()(
 ) {}
 
 /**
- * BEH-EA-179: the subject half `Providers.tsx`'s `toSubject` reads —
+ * BEH-EA-179: the raw subject half `subjectAtom` (below) is derived from —
  * `reactivityKeys: [SESSION_KEY]` too, the same key `sessionAtom`'s own
  * session-changing mutations already invalidate, since a subject can only
  * ever be as current as the session it was resolved for (sign-in, sign-out,
@@ -110,3 +121,76 @@ export class ReactSubjectClient extends makeReactClient<ReactSubjectClient>()(
 export const subjectDtoAtom = ReactSubjectClient.query("subject", "current", {
   reactivityKeys: [SESSION_KEY],
 });
+
+/**
+ * EAR-001/EAR-002/BEH-EA-179: the subject `Providers` feeds qadi —
+ * `AuthSubject | undefined`, `undefined` meaning "no subject *yet*" so every
+ * gate stays pending rather than momentarily granting or denying.
+ *
+ * `sessionAtom` is the gate: the subject exists only while the session is a
+ * settled, real one (`Success`, non-`null`) *and* `subjectDtoAtom` has a
+ * settled `Success` of its own. Consequences, each a registry-level fact and
+ * not a render-timing hope:
+ *
+ * - sign-out (`sessionAtom` -> `success(null)`) makes the subject
+ *   `undefined` in the same registry batch, so no render sees "signed out,
+ *   still holding the old user's grants";
+ * - a session-keyed mutation refetches both queries at once
+ *   (`reactivityKeys: [SESSION_KEY]`), and the subject's own `waiting` closes
+ *   the gate until it has settled against the new session, so a session
+ *   swap never leaves the previous user's permissions visible;
+ * - an anonymous visitor gets `undefined`, not the anonymous DTO
+ *   `/subject` would answer (BEH-EA-179 states it; anonymous-permitted gates
+ *   would be a spec amendment).
+ *
+ * `sessionAtom`'s own `waiting` is deliberately *not* part of the gate: a
+ * background re-check of the session (window-focus revalidation) must not
+ * blink every guarded control back to pending — if the session turned out
+ * to be gone it settles to `success(null)`, which closes the gate anyway.
+ *
+ * Refreshing it (`useAtomRefresh(subjectAtom)`) re-runs both queries.
+ */
+export const subjectAtom = Atom.readable(
+  (get): AuthSubject | undefined => {
+    const session = get(sessionAtom);
+    if (!AsyncResult.isSuccess(session) || session.value === null) return undefined;
+    const dto = get(subjectDtoAtom);
+    if (!AsyncResult.isSuccess(dto) || dto.waiting) return undefined;
+    return toSubject(dto.value);
+  },
+  (refresh) => {
+    refresh(sessionAtom);
+    refresh(subjectDtoAtom);
+  },
+);
+
+/**
+ * EAR-006: what the auth pipeline is doing, as one value — replaces a
+ * render-phase `console.error` that made a failed fetch indistinguishable
+ * from "still loading". `Failed` is a persistent failure of either query
+ * (a signed-out visitor is `SignedOut`, never `Failed`: `sessionAtom`
+ * already translated that 401).
+ */
+export type AuthStatus = Data.TaggedEnum<{
+  Pending: {};
+  SignedOut: {};
+  Ready: { readonly subject: AuthSubject };
+  Failed: { readonly cause: Cause.Cause<unknown> };
+}>;
+export const AuthStatus = Data.taggedEnum<AuthStatus>();
+
+export const authStatusAtom = Atom.readable(
+  (get) => {
+    const session = get(sessionAtom);
+    if (AsyncResult.isFailure(session)) {
+      return session.waiting ? AuthStatus.Pending() : AuthStatus.Failed({ cause: session.cause });
+    }
+    if (!AsyncResult.isSuccess(session)) return AuthStatus.Pending();
+    if (session.value === null) return AuthStatus.SignedOut();
+    const dto = get(subjectDtoAtom);
+    if (AsyncResult.isFailure(dto) && !dto.waiting) return AuthStatus.Failed({ cause: dto.cause });
+    const subject = get(subjectAtom);
+    return subject === undefined ? AuthStatus.Pending() : AuthStatus.Ready({ subject });
+  },
+  (refresh) => refresh(subjectAtom),
+);

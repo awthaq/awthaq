@@ -1,14 +1,13 @@
 // @awthaq/react — Subject
 //
-// spec/behaviors/23-react.md, BEH-EA-179: "the React provider tree MUST
-// derive qadi's `subject` prop from `sessionAtom`'s current value, not from
-// a second, independently fetched source." The actual data this reads is
-// `AuthClientAtom.ts`'s `subjectDtoAtom` — `@awthaq/api`'s
-// `SubjectContract.SubjectDto` (BEH-EA-026), served by
-// `@awthaq/qadi`'s own endpoint (see that module's `SubjectApi.ts` for
-// why a *separate* endpoint, not a field folded into the core session
-// response) — not a second, independently-*chosen* source the application
-// picks itself.
+// spec/behaviors/23-react.md, BEH-EA-179: the qadi `subject` is derived from
+// `sessionAtom` — `AuthClientAtom.ts`'s `subjectAtom` gates the data this
+// module converts on a settled, real session (EAR-002), so sign-out makes the
+// subject `undefined` in the same registry batch rather than leaving an
+// anonymous `AuthSubject` behind. The data itself is `SubjectContract.SubjectDto`
+// (BEH-EA-026), served by `@awthaq/qadi`'s own endpoint (see that module's
+// `SubjectApi.ts` for why a *separate* endpoint, not a field folded into the
+// core session response).
 import type { AuthSubject } from "@qadi/core";
 import { makeSubject } from "@qadi/core";
 import type { SubjectContract } from "@awthaq/api";
@@ -34,6 +33,7 @@ const isPermissionKey = (value: string): value is PermissionKey => {
  * BEH-EA-179: `undefined` in, `undefined` out — a subject that has not
  * resolved yet yields no subject, so `QadiProvider`'s every gate stays
  * pending rather than momentarily granting or denying against nothing.
+ * (Session gating is `subjectAtom`'s job, not this converter's.)
  */
 export const toSubject = (dto: SubjectContract.SubjectDto | undefined): AuthSubject | undefined =>
   dto === undefined

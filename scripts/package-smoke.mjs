@@ -13,6 +13,7 @@
 // project references are what produce the real `lib/` output these
 // checks pack and inspect.
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as glob from "glob";
@@ -94,6 +95,18 @@ for (const packageJsonPath of packageJsonPaths) {
     const stdout =
       error && typeof error === "object" && "stdout" in error ? String(error.stdout) : "";
     problems.push(`attw: default-severity problems found${stdout ? `\n${stdout}` : ""}`);
+  }
+
+  // 4. RSC-002: the built client modules of @awthaq/react must still open with
+  // the "use client" directive (tsc keeps a leading prologue; a future
+  // build change that dropped it would silently break Server Component use).
+  if (pkgName === "react") {
+    for (const file of ["index.js", "Providers.js", "Hooks.js"]) {
+      const built = readFileSync(path.join(pkgDir, "lib", file), "utf8");
+      if (!built.startsWith('"use client";')) {
+        problems.push(`lib/${file} does not start with "use client"`);
+      }
+    }
   }
 
   if (problems.length > 0) {

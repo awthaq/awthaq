@@ -62,7 +62,9 @@ export const makeReactClient =
       readonly httpClient?:
         | Layer.Layer<HttpApiGroup.ClientServices<Groups> | HttpClient.HttpClient>
         | undefined;
-      readonly transformClient?: ((client: HttpClient.HttpClient) => HttpClient.HttpClient) | undefined;
+      readonly transformClient?:
+        | ((client: HttpClient.HttpClient) => HttpClient.HttpClient)
+        | undefined;
       readonly runtime?: Atom.RuntimeFactory | undefined;
     },
   ) =>

@@ -68,6 +68,8 @@ REQUIREMENT: The React provider tree MUST derive qadi's `subject` prop from
 
 `usage-qadi.md` §12.1 states the consequence directly: "Sign-out sets `subject` to `undefined` and every gate closes at once." Deriving `subject` from the one session atom, rather than from a parallel fetch, is what makes that guarantee hold — there is no window where the session has cleared but a stale subject still grants access in a `Can` gate somewhere on the page.
 
+**Implementation (EAR-001/EAR-002).** `SessionView` does not carry a `subject` field (BEH-EA-026's single combined struct is not built; the subject is its own `SubjectApi` endpoint — `@awthaq/api`'s `SubjectContract`). The requirement is met by making `sessionAtom` the *gate* over that endpoint's data: `AuthClientAtom.subjectAtom` is `undefined` unless `sessionAtom` is a settled, real (`Success`, non-`null`) session **and** `subjectDtoAtom` is a settled `Success` (not `waiting`). Both queries carry `reactivityKeys: ["session"]`, so a session-changing mutation refetches both in one registry tick and the gate stays closed until both settle; sign-out (`success(null)`) closes it in the same registry batch. An anonymous visitor's `/subject` answer (an anonymous `SubjectDto`) is never handed to qadi. `Providers` runs exactly one registry (`QadiProvider`'s) and forwards `subjectAtom` into `atoms.subject` from a registry subscription, not a React effect.
+
 _Previous: [BEH-EA-178](23-react.md#beh-ea-178-mutations-invalidate-the-session-reactivity-key) | Next: [BEH-EA-180](23-react.md#beh-ea-180-a-stale-decision-is-not-a-decision)_
 
 ## BEH-EA-180: A stale decision is not a decision
