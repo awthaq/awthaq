@@ -66,6 +66,7 @@ import {
   Hooks,
   RateLimits,
   Sessions,
+  Slots,
   Users,
   Verification,
 } from "@awthaq/core";
@@ -102,6 +103,9 @@ const MemoryPorts = Layer.mergeAll(
   Mailer.layerMemory,
   RateLimiter.layerPermissive,
   RateLimits.layer,
+  // MA-005: `Auth.make` provides its own `SlotsRegistry`; this one is for a plugin layer a
+  // test composes standalone (outside `Auth.make`), whose `Slots.override` requires one.
+  Slots.layer,
   SqlTransaction.layerNoop,
   // AGA-001/NHS-003: `ClientAddress.layerDirect` — the raw-`remoteAddress`
   // passthrough every zero-config app (and every composition here) gets

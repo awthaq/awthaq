@@ -407,8 +407,9 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
    * exposes both `Roles` and the overridden `SubjectResolver` in its
    * `ROut` — the real, working half of BEH-EA-138 this module's own header
    * comment describes. `Slots.override` also registers this claim with
-   * `@awthaq/core`'s opt-in `Slots.SlotsRegistry`, so an application
-   * that provides `Slots.layer` gets a real `SlotConflict` if some other
+   * `@awthaq/core`'s `Slots.SlotsRegistry` (MA-005: required; `Auth.make`
+   * provides one per composition, a standalone build provides `Slots.layer`),
+   * so a `SlotConflict` fails the build if some other
    * plugin ever claims this same slot too (`Slots.ts`'s own header comment
    * explains why that check is enforced at `Layer`-build time, not by
    * `Auth.make`'s type checker).

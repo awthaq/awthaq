@@ -3,7 +3,7 @@ ID: "ELC-006"
 Title: "AuthPlugin.layer silently overwrites a prior dependsOn registration for the same plugin class"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthPlugin.ts:254"
 Auditor: "effect-layer-context-architect"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `core` · reported by **Effect Layer/Context Architect** (`effect-layer-context-architect`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ In AuthPlugin.layer, throw (or die with a typed error) when dependsOnByPlugin al
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `plugin-composition-soundness`. Evidence at HEAD ec065a7: `packages/core/src/AuthPlugin.ts:254`. Fix: Refuse a second AuthPlugin.layer registration for the same class whose dependsOn ids differ from the first (a definition-time invariant violation). (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** AuthPlugin.ConflictingDependsOn (TaggedError) thrown by AuthPlugin.layer at definition time when a class is re-registered with a different (sorted-id) dependsOn set; identical re-registration allowed (Roles.layer/layerSql). Tests in AuthPlugin.test.ts (red first: symbol missing). The old cycle test that re-registered Ping with deps was rewritten to use hand-built AuthPlugin.Any values with mutually-referencing dependsOn. Full test suite proves no shipped plugin has divergent registrations.

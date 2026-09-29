@@ -66,7 +66,7 @@ describe("Auth.make([Roles])", () => {
 });
 
 // RRM-012: BEH-EA-138's exclusivity is enforced when the layers are *built*
-// (through the opt-in `Slots.SlotsRegistry`), before any request is served —
+// (through the `Slots.SlotsRegistry` `Auth.make` provides per composition, MA-005), before any request is served —
 // not by `Auth.make`'s type checker, which cannot observe a `Context.Reference`
 // override (`Slots.ts`'s and `SubjectResolver.ts`'s own header comments give the
 // structural reason).

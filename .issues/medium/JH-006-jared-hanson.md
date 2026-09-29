@@ -3,7 +3,7 @@ ID: "JH-006"
 Title: "Static layer type matches the runtime fold only when the tuple is pre-sorted"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Auth.ts:207"
 Auditor: "jared-hanson"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Jared Hanson — Creator of Passport.js** (`jared-hanson`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Either enforce dependency-before-dependent order in Validate<P> (a type-level Mi
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `plugin-composition-soundness`. Evidence at HEAD ec065a7: `packages/core/src/Auth.ts:218`. Fix: Make the static fold provably equal to the runtime fold by refusing out-of-order tuples in Validate<P> (dependency must be listed before its dependent). (effort M). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Validate<P> gains OutOfOrderDep (dependency must precede dependent; message 'plugin "X" depends on plugin "Y", which must be listed before it'), so FoldLayer<P> equals composeLayer's runtime fold; FoldLayer doc + stale Auth.ts header rewritten. Tests: @ts-expect-error on Auth.make([Pong, Ping]) (was an unused-directive tsc error = red), type test that the composed layer needs nothing. Spec BEH-EA-011 text + REQ-EA-641 scenario. Gates green.

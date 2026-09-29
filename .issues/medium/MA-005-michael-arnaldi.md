@@ -3,7 +3,7 @@ ID: "MA-005"
 Title: "Slot-conflict protection is opt-in; two plugins overriding one slot silently last-win without Slots.layer"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Slots.ts:186"
 Auditor: "michael-arnaldi"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `core` · reported by **Michael Arnaldi — Creator of Effect** (`michael-arnaldi`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Have Auth.make itself provide Slots.layer (and RateLimits.layer) into the compos
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `plugin-composition-soundness`. Evidence at HEAD ec065a7: `packages/core/src/Slots.ts:39`. Fix: Make slot-conflict checking always-on: Auth.make provides one SlotsRegistry per composition, and Slots.override requires the registry instead of looking it up optionally. (effort M). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Slots.override now requires SlotsRegistry (in RIn, no serviceOption); Auth.make's composeLayer provideMerges one Slots.layer per composition and Built<P>['layer'] = ProvideMerged<FoldLayer<P>, typeof Slots.layer>, so two overriders always fail the build with SlotConflict naming both owners with no Slots.layer in application code. TestAuth MemoryPorts also provides Slots.layer for standalone plugin layers (memory-server example RolesLive); roles tests that build Roles.layer standalone provide Slots.layer. Tests: AuthPlugin.test.ts INV-EA-004 two-overrider composition (red first), single overrider resolves, Slots.test override-requires-registry type test. Spec BEH-EA-012 + INV-EA-004 text, REQ-EA-642 scenario, Slots.ts header. RateLimits.layer folding left out (optional per dossier).

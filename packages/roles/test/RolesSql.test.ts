@@ -8,7 +8,7 @@
 // `layerMemory`'s own "assigning an already-held role name is a no-op"
 // contract — the one property `Roles.test.ts`'s in-memory suite cannot
 // itself prove.
-import { AuditLog, AuthEvents, Migrations, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Migrations, Slots, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -36,7 +36,11 @@ const owner = role({
 
 // `Roles` publishes `auth.roles.assigned/revoked` (RRM-005) and validates
 // assignments against the catalog (RRM-003), so it needs `AuthEvents` and a catalog.
-const CoreLive = AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory));
+// MA-005: a plugin layer built outside `Auth.make` (which provides one itself) needs a `SlotsRegistry`.
+const CoreLive = AuthEvents.layer.pipe(
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Slots.layer),
+);
 
 const TestLayer = Roles.Roles.layerSql.pipe(
   Layer.provide(Roles.config([editor, owner])),
