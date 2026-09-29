@@ -10,7 +10,7 @@
 // real bug (`Schema.Union` collapsing per-member `httpApiStatus`) that its
 // domain-level tests could not — this file exists for the same reason,
 // against `OAuthApi.ts`'s own array-form `error` declarations.
-import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
+import { Accounts, RateLimits, SessionCookie, Sessions, Users, Verification } from "@awthaq/core";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import { CookieAssertions, TestAuth } from "@awthaq/test";
@@ -389,6 +389,23 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
         CookieAssertions.assertHostPrefixedCookie(
           CookieAssertions.findSetCookie(response, "__Host-session"),
           { httpOnly: true, sameSite: "strict" },
+        );
+      }),
+  );
+
+  // PV-016: under the default `SameSite=Strict` cookie the first landing request after the provider's
+  // redirect chain may not carry the session; `HostLax` is the opt-in that fixes it (BEH-EA-055).
+  it.effect(
+    "PV-016: with SessionCookie.config({ mode: HostLax }) the callback's session cookie is __Host- and SameSite=Lax",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* runCallback(
+          AppLayer.pipe(Layer.provideMerge(SessionCookie.config({ mode: SessionCookie.HostLax }))),
+        );
+        assert.strictEqual(response.status, 302);
+        CookieAssertions.assertHostPrefixedCookie(
+          CookieAssertions.findSetCookie(response, "__Host-session"),
+          { httpOnly: true, sameSite: "lax" },
         );
       }),
   );

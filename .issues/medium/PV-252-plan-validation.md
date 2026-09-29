@@ -3,7 +3,7 @@ ID: "PV-252"
 Title: "INV-EA-016 / BEH-EA-040 (a plugin migration may not alter a shared table) has no enforcement at all"
 Level: medium
 Category: "testing"
-Status: open
+Status: resolved
 Package: "core"
 Source: "spec/invariants.md:183"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `MEDIUM` · `testing` · `core` · found while wiring `05-persistence-stratum.feature` (P20a, REQ-EA-106..108)
 
-Status: **open**
+Status: **resolved**
 
 ## Summary
 
@@ -33,3 +33,5 @@ Either enforce it where it can be observed — `runPluginContractTests`' migrati
 _Triage notes and discussion append here._
 
 **Plan note (2026-09-29, P20a):** Left open: INV-EA-016 enforcement (a migration cannot alter a shared table) needs a statement-level check in Migrations.run or a validating test harness; larger than a cheap fix and it wants a design call on how to inspect raw SQL. REQ-EA-106..108 stay skipped.
+
+**Resolved (2026-09-29):** Enforcement for the migration-DDL half of INV-EA-016 landed where the issue recommended: packages/test/src/TestAuth.ts runPluginContractTests gains a check that applies core's migrations, snapshots what core created, then applies the composition's plugin migrations on a fresh SQLite database and fails (message names INV-EA-016 and the object) if any core table/index was altered or dropped (its sqlite_master SQL changed) or anything new hangs off a table outside every installed plugin's own prefix (an index on a core table included). Red first: packages/test/test/runPluginContractTests.test.ts migration-ownership tests (ALTER users, index on users, stray table, own-prefix table passes). Every shipped plugin's contract suite still passes (full suite 3049 tests). REQ-EA-106 un-skipped and wired (a plugin migration ALTERing users is rejected; PersistenceMigrationSteps.ts). spec/invariants.md INV-EA-016 and spec/traceability.md updated (the planned MigrationOwnership.test.ts is retired; verify-traceability.sh now treats zero Planned cells as PASS instead of SKIP). Left skipped with updated reasons: REQ-EA-107 (needs a SessionClaims registry that does not exist; the shipped extension point for users is AuthPlugin.userFields) and REQ-EA-108 (needs the user-field kinds asserted as the scalar limit). Gates: typecheck, full test, features 01-contract, spec:verify:strict.

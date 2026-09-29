@@ -152,6 +152,17 @@ describe("EffectiveConfig", () => {
       }),
   );
 
+  it.effect("PV-016: the HostLax cookie mode is flagged like every relaxed SameSite", () =>
+    Effect.gen(function* () {
+      const context = yield* contextOf(SessionCookie.config({ mode: SessionCookie.HostLax }));
+      const production = EffectiveConfig.audit(context, EffectiveConfig.core, { production: true });
+      assert.deepStrictEqual(
+        production.filter((f) => f.code === "cookie-samesite-relaxed").map((f) => f.severity),
+        ["warning"],
+      );
+    }),
+  );
+
   it.effect("the core session cookie descriptor flags a relaxed SameSite only in production", () =>
     Effect.gen(function* () {
       const context = yield* contextOf(

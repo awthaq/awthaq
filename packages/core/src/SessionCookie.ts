@@ -25,6 +25,15 @@ export type Mode =
   /** `__Host-session`, `SameSite=Strict`, no `Domain` — the secure default. */
   | { readonly _tag: "Host" }
   /**
+   * PV-016: `__Host-session`, `SameSite=Lax`, no `Domain`. The opt-in for a deployment whose landing
+   * page is server-rendered behind an auth check after a redirect chain that began on another site
+   * (an OAuth or SAML callback): `Strict` withholds the cookie from that first landing request, `Lax`
+   * sends it on the top-level navigation. It trades away `Strict`'s protection against a cross-site
+   * top-level GET, so nothing state-changing may hang off a GET, and the CSRF double-submit middleware
+   * (BEH-EA-073–078, mandatory for cookie auth) stays the defence for unsafe methods.
+   */
+  | { readonly _tag: "HostLax" }
+  /**
    * AGA-004: for a deployment embedded in a third-party iframe. `__Host-` is
    * kept (CHIPS recommends it for `Partitioned` cookies) but `SameSite=None;
    * Partitioned` replaces `Strict`, which makes the CSRF double-submit
@@ -44,6 +53,7 @@ export type Mode =
     };
 
 export const Host: Mode = { _tag: "Host" };
+export const HostLax: Mode = { _tag: "HostLax" };
 export const HostEmbedded: Mode = { _tag: "HostEmbedded" };
 export const SecureDomain = (options: {
   readonly domain: string;
@@ -111,6 +121,8 @@ const baseOptions = (cfg: SessionCookieConfigShape): CookieOptions => {
   switch (cfg.mode._tag) {
     case "Host":
       return { secure: true, httpOnly: true, path: "/", sameSite: "strict" };
+    case "HostLax":
+      return { secure: true, httpOnly: true, path: "/", sameSite: "lax" };
     case "HostEmbedded":
       return { secure: true, httpOnly: true, path: "/", sameSite: "none", partitioned: true };
     case "SecureDomain":

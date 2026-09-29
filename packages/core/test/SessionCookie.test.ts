@@ -61,6 +61,21 @@ describe("SessionCookie.renderAt", () => {
     assert.notProperty(cookie.options, "domain");
   });
 
+  // PV-016: the opt-in that lets the first landing request after an OAuth redirect carry the session.
+  it("PV-016: HostLax keeps __Host- and renders SameSite=Lax with no Domain, expiring with the same attributes", () => {
+    const config = { mode: SessionCookie.HostLax, persistence: "absolute" } as const;
+    const cookie = SessionCookie.renderAt(config, "t", in30Days, now);
+    assert.strictEqual(cookie.name, "__Host-session");
+    assert.strictEqual(cookie.options.sameSite, "lax");
+    assert.isTrue(cookie.options.secure);
+    assert.isTrue(cookie.options.httpOnly);
+    assert.notProperty(cookie.options, "domain");
+    assert.notProperty(cookie.options, "partitioned");
+    // The CSRF double-submit cookie stays strict: it is only ever read by same-site JavaScript.
+    assert.deepStrictEqual(SessionCookie.csrfCookieOptions(config), { sameSite: "strict" });
+    assert.strictEqual(SessionCookie.cookieName(config, "impersonation"), "__Host-impersonation");
+  });
+
   it("IC-007: SecureDomain renders __Secure-session with the Domain (never __Host- + Domain)", () => {
     const cookie = SessionCookie.renderAt(
       {

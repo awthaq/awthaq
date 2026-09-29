@@ -55,6 +55,15 @@ const cookieAudit = (
       ),
     );
   }
+  if (value.mode._tag === "HostLax") {
+    findings.push(
+      ConfigDescriptor.finding(
+        severity,
+        "cookie-samesite-relaxed",
+        "the session cookie is SameSite=Lax: it rides top-level cross-site GET navigations, so nothing state-changing may hang off a GET; the CSRF double-submit middleware covers unsafe methods",
+      ),
+    );
+  }
   if (value.mode._tag === "HostEmbedded") {
     findings.push(
       ConfigDescriptor.finding(
