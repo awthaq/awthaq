@@ -447,7 +447,10 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
       Effect.gen(function* () {
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ email: "delete-me@example.com", name: "Del" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "delete-me@example.com" },
+          name: "Del",
+        });
         const { token } = yield* sessions.issue({ userId: user.id });
         const response = yield* sendHandled("/user", { method: "DELETE", token });
         assert.strictEqual(response.status, 204);
@@ -610,7 +613,10 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
         const router = yield* HttpRouter.HttpRouter;
-        const user = yield* users.create({ email: "ada@example.com", name: "Ada" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "ada@example.com" },
+          name: "Ada",
+        });
         const issued = yield* sessions.issue({ userId: user.id });
 
         const patch = (token?: Redacted.Redacted<string>) =>
@@ -645,6 +651,68 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
   );
 
   it.effect(
+    "BAM-009/FAMS-002: PATCH /user sets the avatar (http(s) only) and the DTO carries the identity union",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const sessions = yield* Sessions.Sessions;
+          const router = yield* HttpRouter.HttpRouter;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "img@example.com" },
+            name: "Img",
+          });
+          const issued = yield* sessions.issue({ userId: user.id });
+
+          const patch = (body: unknown) =>
+            router.asHttpEffect().pipe(
+              Effect.provideService(
+                HttpServerRequest.HttpServerRequest,
+                HttpServerRequest.fromWeb(
+                  new Request("http://localhost/user", {
+                    method: "PATCH",
+                    headers: { ...cookieHeader(issued.token), "content-type": "application/json" },
+                    body: JSON.stringify(body),
+                  }),
+                ),
+              ),
+            );
+
+          const ok = yield* patch({ name: "Img", image: "https://cdn.example.com/me.png" });
+          assert.strictEqual(ok.status, 200);
+          const body = (yield* jsonBody(ok)) as {
+            identity: { _tag: string; email?: string; emailVerified?: boolean };
+            image: string | null;
+          };
+          assert.deepStrictEqual(body.identity, {
+            _tag: "Email",
+            email: "img@example.com",
+            emailVerified: false,
+          });
+          assert.strictEqual(body.image, "https://cdn.example.com/me.png");
+
+          // A `javascript:` URL is a payload error, never stored.
+          // (This raw router has no `HttpApiSchemaError` -> 400 mapping; the point is the
+          // payload never reaches `Users.updateProfile`.)
+          const rejected = yield* patch({ name: "Img", image: "javascript:alert(1)" }).pipe(
+            Effect.exit,
+          );
+          assert.strictEqual(rejected._tag, "Failure");
+          assert.deepStrictEqual(
+            (yield* users.findById(user.id)).image,
+            Option.some("https://cdn.example.com/me.png"),
+          );
+
+          // Omitted leaves it; null clears it.
+          assert.strictEqual((yield* patch({ name: "Img 2" })).status, 200);
+          assert.isTrue(Option.isSome((yield* users.findById(user.id)).image));
+          assert.strictEqual((yield* patch({ name: "Img 2", image: null })).status, 200);
+          assert.isTrue(Option.isNone((yield* users.findById(user.id)).image));
+        }),
+      ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect(
     "DELETE /user deletes the caller's own account, its accounts, sessions, and verification tokens",
     () =>
       Effect.scoped(
@@ -654,7 +722,10 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
           const sessions = yield* Sessions.Sessions;
           const verification = yield* Verification.Verification;
           const router = yield* HttpRouter.HttpRouter;
-          const user = yield* users.create({ email: "bo@example.com", name: "Bo" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "bo@example.com" },
+            name: "Bo",
+          });
           yield* accounts.link({
             userId: user.id,
             providerId: "password",

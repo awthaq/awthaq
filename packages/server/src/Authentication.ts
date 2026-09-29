@@ -81,7 +81,7 @@ export const PrincipalResolverWithUserFactsLive = Layer.effect(
     return {
       resolve: (session: Sessions.SessionView) =>
         users.findById(session.userId).pipe(
-          Effect.map((user) => user.emailVerified),
+          Effect.map(Users.isEmailVerified),
           Effect.catchTag("UserNotFound", () => Effect.succeed(false)),
           Effect.map(
             (emailVerified) =>

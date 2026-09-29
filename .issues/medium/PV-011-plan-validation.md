@@ -3,7 +3,7 @@ ID: "PV-011"
 Title: "coreMigrations (ids 1-17) and index-numbered plugin migrations share effect_sql_migrations — running them separately silently skips plugin migrations"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Migrations.ts"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `MEDIUM` · `correctness` · `sql` · found during the 2026-09-29 plan validation (not in the original audit)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -31,3 +31,5 @@ Planned under: SSMS-005 → BE-003 / cli-manifest-tooling (P17).
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29):** fixed under SSMS-005 (P09: plugin migrations tracked in awthaq_plugin_migrations); see that issue's Resolved comment for files, tests and gates.

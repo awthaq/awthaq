@@ -12,7 +12,7 @@
 // went wrong" redirect belongs, not this plugin.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { Hooks } from "@awthaq/core";
+import { Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -197,6 +197,8 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
         OAuthCallbackFailed,
         OAuthAuthorizationDenied,
         AccountExists,
+        // SCP-001: `Users.assertCanSignIn` refused a suspended user.
+        Users.UserSuspended,
         Api.RateLimited,
         Hooks.TwoFactorRequired,
       ],

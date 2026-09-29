@@ -1,9 +1,7 @@
-// BCR-004/THS-002 (.issues/high, wayfinder ticket 03): proves
-// `Passkey.authenticateVerify` genuinely consults
-// `Hooks.BeforeSessionIssue` — a dedicated file, not folded into
-// `Passkey.test.ts`, for the same reason
-// `packages/password/test/PasswordHooksSignUp.test.ts`'s own header
-// comment gives.
+// SCP-001/BAM-005: `Passkey.authenticateVerify` consults the one shared sign-in
+// gate (`Users.assertCanSignIn`) after the assertion verifies and before any
+// session exists. A dedicated file, like `PasskeyHooksSignIn.test.ts`, so its
+// layers carry no unrelated `BeforeSessionIssue` tap.
 import { AuditLog, Hooks, AuthEvents, Accounts, RateLimits, Sessions, Users } from "@awthaq/core";
 import { ClientAddress, RateLimiter } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
@@ -11,7 +9,6 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as ChallengeStore from "../src/ChallengeStore.ts";
 import * as Passkey from "../src/Passkey.ts";
@@ -31,16 +28,6 @@ const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Session
   Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(RateLimits.layer),
   Layer.provideMerge(RateLimiter.layerPermissive),
-  // BEH-EA-093: unconditionally diverts — enough to prove the wiring is
-  // real; the mechanism itself is proven generically elsewhere (see this
-  // file's own header comment).
-  Layer.provideMerge(
-    Hooks.BeforeSessionIssue.tap((input) =>
-      Effect.succeed(
-        Option.some(new Hooks.TwoFactorRequired({ userId: input.userId, challengeId: "chal-1" })),
-      ),
-    ),
-  ),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -51,7 +38,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
     Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("passkey-hooks-test-csrf-secret-padded-to-thirty-two-bytes"),
+      secret: Redacted.make("passkey-suspended-test-csrf-secret-padded-to-thirty-two-bytes"),
       allowedOrigins: [] as ReadonlyArray<string>,
     }),
   ),
@@ -74,9 +61,9 @@ const TestLayer = Passkey.Passkey.layer.pipe(
   Layer.provideMerge(PortsLive),
 );
 
-describe("Passkey authenticateVerify hook (BEH-EA-093)", () => {
+describe("Passkey authenticateVerify sign-in gate (SCP-001)", () => {
   it.effect(
-    "a BeforeSessionIssue divert tap redirects authenticateVerify's own sign-in to TwoFactorRequired",
+    "a suspended user's valid assertion is refused with UserSuspended and issues no session; reactivating restores it",
     () =>
       Effect.gen(function* () {
         const passkey = yield* Passkey.Passkey;
@@ -84,15 +71,15 @@ describe("Passkey authenticateVerify hook (BEH-EA-093)", () => {
         const sessions = yield* Sessions.Sessions;
 
         const user = yield* users.create({
-          identity: { _tag: "Email", email: "bo@example.com" },
-          name: "Bo",
+          identity: { _tag: "Email", email: "gate@example.com" },
+          name: "Gate",
         });
         const registerSession = yield* sessions.issue({ userId: user.id });
         const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
         yield* passkey.registerVerify(user.id, registerSession.session.id, {
           credential: {
-            id: "cred-mock-1",
-            rawId: "cred-mock-1",
+            id: "cred-gate-1",
+            rawId: "cred-gate-1",
             type: "public-key",
             response: {
               clientDataJSON: buildClientDataJSON({
@@ -105,30 +92,36 @@ describe("Passkey authenticateVerify hook (BEH-EA-093)", () => {
           },
         });
 
-        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-        const clientDataJSON = buildClientDataJSON({
-          type: "webauthn.get",
-          challenge: extractChallenge(options),
-          origin: ORIGIN,
-        });
-
-        const diverted = yield* passkey
-          .authenticateVerify({
+        const signIn = Effect.gen(function* () {
+          const { ceremonyId, options } = yield* passkey.authenticateOptions({});
+          return yield* passkey.authenticateVerify({
             ceremonyId,
             credential: {
-              id: "cred-mock-1",
-              rawId: "cred-mock-1",
+              id: "cred-gate-1",
+              rawId: "cred-gate-1",
               type: "public-key",
-              response: { clientDataJSON, authenticatorData: "", signature: "" },
+              response: {
+                clientDataJSON: buildClientDataJSON({
+                  type: "webauthn.get",
+                  challenge: extractChallenge(options),
+                  origin: ORIGIN,
+                }),
+                authenticatorData: "",
+                signature: "",
+              },
             },
-          })
-          .pipe(
-            Effect.flip,
-            Effect.flatMap((error) =>
-              error._tag === "TwoFactorRequired" ? Effect.succeed(error) : Effect.die(error),
-            ),
-          );
-        assert.strictEqual(diverted.challengeId, "chal-1");
+          });
+        });
+
+        yield* users.setStatus(user.id, "suspended", { reason: "abuse" });
+        const before = (yield* sessions.list(user.id)).length;
+        const refused = yield* signIn.pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "UserSuspended");
+        assert.strictEqual((yield* sessions.list(user.id)).length, before);
+
+        yield* users.setStatus(user.id, "active");
+        const restored = yield* signIn;
+        assert.strictEqual(restored.session.userId, user.id);
       }).pipe(Effect.provide(TestLayer)),
   );
 });

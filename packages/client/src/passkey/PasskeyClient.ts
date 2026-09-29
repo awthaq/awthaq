@@ -56,7 +56,7 @@
 // therefore derived from `passkeyClient`'s own return type below, not
 // declared ahead of it.
 import type { Api, SessionContract } from "@awthaq/api";
-import type { Hooks } from "@awthaq/core";
+import type { Hooks, Users } from "@awthaq/core";
 import type { PasskeyApi } from "@awthaq/passkey";
 import {
   browserSupportsWebAuthn,
@@ -127,6 +127,8 @@ export type PasskeyInvalidCredentials = Api.InvalidCredentials;
  * `src/`, which attw rejects); type-only, erased at runtime.
  */
 export type PasskeyTwoFactorRequired = Hooks.TwoFactorRequired;
+/** SCP-001: the same declaration-emit anchor for `Users.UserSuspended`, the sign-in gate's refusal. */
+export type PasskeyUserSuspended = Users.UserSuspended;
 
 const UNSUPPORTED_CAPABILITIES: PasskeyClientCapabilities = {
   conditionalCreate: "unsupported",

@@ -3,7 +3,7 @@ ID: "AOMS-008"
 Title: "No bulk user import/export surface anywhere in the monorepo"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Users.ts:56"
 Auditor: "auth0-okta-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `core` · reported by **Auth0/Okta Migration Specialist** (`auth0-okta-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -58,3 +58,5 @@ Document an official import recipe (transactional batch of users.create + accoun
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `user-import-idempotency`. Evidence at HEAD ec065a7: `packages/migrate-auth0/src/ImportAuth0User.ts:32`. Fix: Provide a transactional, idempotent import primitive in core and batch importers on top of it. (effort L). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Closed by commit 4b63d9e. core UserImport.ts: importUser({identity, name, verified?, metadata?, image?, credentials?}) -> {user, created, accounts}: createOrGet + verifyEmail/verifyPhone (monotone; the documented BEH-EA-042 import exception, never un-verifies) + idempotent credential links (already linked to the same user: kept; to a different user: ImportConflict), all inside one SqlTransaction.withTransaction; importUsers(inputs, {concurrency}) reports per-row Result outcomes in order without aborting the batch. A credential with no subject defaults to the user's own id (Password.ts convention). migrate-auth0 importUser now delegates (returns created; needs SqlTransaction in the environment) and gains importUsers; READMEs updated (migrate-auth0 recipe, migrate-better-auth field mapping). Tests: core UserImport.test.ts on memory and SQL (sqlite + real Postgres): twice with the same input -> same user, created=false; a re-run only adds (verifies, never un-verifies); Phone identity; ImportConflict rolls the whole row back (no user without its credential, SQL suite); a batch keeps going past a conflicting row and re-runs converge. Deferred: a dedicated Supabase importer (auth.users mapping) — the generic importUser plus the documented mapping covers it; admin listUsers already provides the reconciliation export (no separate export API, per the dossier).

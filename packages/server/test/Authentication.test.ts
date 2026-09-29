@@ -875,7 +875,10 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
       const resolver = yield* Authentication.PrincipalResolver;
-      const user = yield* users.create({ email: "facts@example.com", name: "Facts" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "facts@example.com" },
+        name: "Facts",
+      });
       const { session } = yield* sessions.issue({ userId: user.id, amr: ["pwd"] });
       const principal = yield* resolver.resolve(session);
       assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);

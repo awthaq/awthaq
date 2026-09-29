@@ -208,7 +208,6 @@ describe("PII column encryption (CSG-006)", () => {
           const updated = yield* users.update(
             yield* M.User.update.makeEffect({
               id: created.id,
-              email: created.email,
               name: "M2",
               metadata: '{"plan":"team"}',
             }),

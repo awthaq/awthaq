@@ -3,7 +3,7 @@ ID: "SAM-003"
 Title: "User model cannot represent anonymous or phone-only Supabase users"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/CoreMigrations.ts:61"
 Auditor: "supabase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `correctness` · `sql` · reported by **Supabase Auth Migration Specialist** (`supabase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [UserRecord model extension (optional email, phone/anonymous identity, deactivation state)](../../.scratch/resolve-ready-for-human-findings/issues/09-userrecord-model-extension.md) — `email`/`phone` become nullable columns folded into a `UserIdentity` tagged union at the domain layer, with a new `phone`/`phoneVerified`/unique-index migration sequence (ids 10-12) and dialect-specific SQLite table-rebuild handling for `DROP NOT NULL`. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `user-identity-lifecycle`. Evidence at HEAD ec065a7: `packages/sql/src/CoreMigrations.ts:58`. Fix: Implement ticket 09's decision: a `UserIdentity` tagged union (Email | Phone | Anonymous) at the domain layer, flattened to nullable email/phone columns plus phoneVerified in SQL, with a `promoteIdentity` upgrade path. Ticket 09's migration ids 10-12 are already taken; use the next free ids. (effort XL). Full dossier: `.plan/slices/05-sql.md`.
+
+**Resolved (2026-09-29):** Closed by FAMS-002 / commit 4b63d9e (the same change): UserIdentity union at the domain layer, flattened nullable email/phone + phoneVerified columns, promoteIdentity, migrations 21-23 on both dialects (the ticket's ids 10-12 were taken; next free ids used). Proof: sql CoreMigrations/contract suites and the core Users suite on sqlite and on real Postgres (scripts/test-pg.sh: 20 files, 384 tests).

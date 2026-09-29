@@ -3,7 +3,7 @@ ID: "FAMS-002"
 Title: "UserRecord requires an email; Firebase anonymous and phone users cannot be represented"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Users.ts:31"
 Auditor: "firebase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `core` · reported by **Firebase Auth Migration Specialist** (`firebase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [UserRecord model extension (optional email, phone/anonymous identity, deactivation state)](../../.scratch/resolve-ready-for-human-findings/issues/09-userrecord-model-extension.md) — `UserRecord.email: string` is replaced by a tagged `UserIdentity` union (`Email`/`Phone`/`Anonymous`), with a new `Users.promoteIdentity` upgrade path retiring the `OAuth.ts` synthetic-email workaround and enabling anonymous-account upgrade. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `users-identity-model`. Evidence at HEAD ec065a7: `packages/core/src/Users.ts:51`. Fix: Implement ticket 09: UserRecord.identity: UserIdentity union + status, widened create, promoteIdentity, setStatus, dialect-branched migrations, and retire OAuth's synthetic email. (effort XL). Full dossier: `.plan/slices/01-core-sessions-users.md`.
+
+**Resolved (2026-09-29):** P14 commit 4b63d9e. Implemented wayfinder ticket 09 as designed. core Users.ts: UserIdentity = Email{email,emailVerified} | Phone{phone: E164,phoneVerified} | Anonymous; UserRecord {id, identity, name, metadata, image, status, statusReason, suspendedUntil, createdAt, updatedAt}; create({identity,name,metadata?,image?}) failing EmailAlreadyExists|PhoneAlreadyExists; findByPhone; promoteIdentity (Anonymous -> Email/Phone in place, IdentityMismatch otherwise); verifyPhone; setStatus; emailOf/phoneOf/isEmailVerified/accountLabel helpers. sql: Models.User (email/phone NullOr, phoneVerified, status, image; identity and status columns excluded from update/jsonUpdate), CoreMigrations 21 (make_users_email_nullable: pg DROP NOT NULL, sqlite table rebuild), 22 (phone/phoneVerified/status/statusReason/suspendedUntil/image), 23 (partial unique users_phone_unique), UsersRepository findByPhone/insertIfAbsent/verifyPhone/promoteIdentity/changeEmail/setStatus as targeted UPDATE ... RETURNING. toUserRecord folds the columns into the union (a row with both email and phone dies with a defect). Call sites: oauth (a profile with no email now creates an Anonymous user; the synthetic providerId:subject email is gone), password (mail only to an Email identity), passkey (WebAuthn user name via Users.accountLabel), organization (invitations match Users.emailOf), server Account DTO + Authentication (identity-aware AccountDto {id, identity, name, image}), admin UserDto, qadi email/emailVerified readers (undefined for non-Email), migrate-auth0, Hooks.BeforeUserDelete.email now optional. Tests: core Users.test.ts (both layers: Anonymous, Phone, promoteIdentity, verifyPhone, uniqueness), sql CoreMigrations.test.ts (rows written under the pre-change schema survive the sqlite rebuild; lower(email) unique index survives; NULL emails coexist; phone unique), sql contract.ts (repository ops on sqlite/file/libsql/postgres), oauth 'profile without an email creates an Anonymous user, never a synthetic email'. Red proof: the type change itself made the whole old suite fail to compile (the red state); the new behaviour tests were then written against it. Gates: typecheck 0 errors incl. tsconfig.test.json; vitest 1894 passed; test:bdd 113 passed; spec:verify:strict PASS; scripts/test-pg.sh against real postgres:16: 20 files / 384 tests passed incl. the core Users + UserImport suites; oxlint clean on touched packages (only pre-existing HttpApiTypes.test.ts / PasskeyClient warnings). Spec: BEH-EA-041/042/046 revised in place (spec/behaviors/06 rev 1.1). Deferred: new Gherkin scenarios for the revised behaviours (no new BEH ids were minted, so spec:verify stays contiguous at 224).

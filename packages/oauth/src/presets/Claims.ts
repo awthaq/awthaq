@@ -51,9 +51,11 @@ export const profileOf = (fields: {
   readonly email?: string | undefined;
   readonly emailVerified?: boolean | undefined;
   readonly name?: string | undefined;
+  readonly image?: string | undefined;
 }): OAuthProfile => ({
   subject: fields.subject,
   ...(fields.email === undefined ? {} : { email: fields.email }),
   ...(fields.emailVerified === undefined ? {} : { emailVerified: fields.emailVerified }),
   ...(fields.name === undefined ? {} : { name: fields.name }),
+  ...(fields.image === undefined ? {} : { image: fields.image }),
 });

@@ -15,7 +15,7 @@ This package ships two pieces:
   deployment's primary hasher and `PasswordHasher.verify` transparently
   dispatches a bcrypt-shaped hash to it instead of failing outright.
   `hasher.hash()` still only ever produces argon2id/scrypt output — bcrypt
-  is a *recognized, retiring* format here, never a re-adopted target.
+  is a _recognized, retiring_ format here, never a re-adopted target.
 - `ImportAuth0User` — one Auth0 export record in, one awthaq `User` +
   `Account` pair out, with the exported bcrypt hash stored byte-for-byte.
 
@@ -44,9 +44,10 @@ path is covered by `test/BcryptVerifier.test.ts`.
 Concretely: export `auth.users` (`email`, `encrypted_password`,
 `email_confirmed_at`), then per row call `ImportAuth0User.importUser({ email,
 name, emailVerified: email_confirmed_at !== null, passwordHash:
-encrypted_password })` (it is `Users.create` + `Accounts.link({ credentialHash })`
-+ `verifyEmail`). Sign-in stays uniform for unknown emails: they still cost a
-real dummy-hash verify (BEH-EA-114).
+encrypted_password })` (it is `Users.createOrGet` + `Accounts.link({ credentialHash })`
+
+- `verifyEmail`, in one transaction). Sign-in stays uniform for unknown emails: they still cost a
+  real dummy-hash verify (BEH-EA-114).
 
 ## The recipe
 
@@ -69,10 +70,22 @@ const program = ImportAuth0User.importUser({
 });
 ```
 
-`importUser` fails with `Users.EmailAlreadyExists` /
-`Accounts.AccountAlreadyLinked` rather than silently double-importing on a
-re-run against a partially-completed batch — a bulk-import script decides
-for itself whether to treat those as "already migrated" and move on.
+`importUser` is idempotent and transactional (AOMS-008): it builds on
+`@awthaq/core`'s `UserImport.importUser`, so re-running an export converges — an
+already-imported user comes back with `created: false`, and only the verified
+flag and any missing credential are added — and the user row, its verified flag
+and its credential commit together, so a failed row leaves no user without its
+credential (it needs a `SqlTransaction` in the environment; provide
+`SqlTransaction.layerSql` in production, `layerNoop` in memory). The one real
+failure is `ImportConflict`: the password credential is already linked to a
+_different_ user. `importUsers(exports, { concurrency })` runs a whole export,
+one transaction per user, and reports every row's outcome in order — a
+conflicting row does not abort the rest, so fix it and re-run the batch.
+
+A source user with no email (a Firebase phone or anonymous user, a Supabase
+phone-only user) goes through `UserImport.importUser` directly with a `Phone` or
+`Anonymous` identity — there is no synthetic-email workaround (see
+`Users.UserIdentity`).
 
 **3. Install `BcryptVerifier.layer`** alongside your primary hasher at
 composition time:
@@ -82,9 +95,7 @@ import { BcryptVerifier } from "@awthaq/migrate-auth0";
 import { PasswordHasher } from "@awthaq/ports";
 import * as Layer from "effect/Layer";
 
-const HasherLive = PasswordHasher.layerArgon2id.pipe(
-  Layer.provideMerge(BcryptVerifier.layer),
-);
+const HasherLive = PasswordHasher.layerArgon2id.pipe(Layer.provideMerge(BcryptVerifier.layer));
 ```
 
 **4. Nothing else.** The first time a migrated user signs in, `@awthaq/password`'s

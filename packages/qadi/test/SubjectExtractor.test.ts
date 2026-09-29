@@ -67,7 +67,10 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const sessions = yield* Sessions.Sessions;
         const users = yield* Users.Users;
         const extractor = yield* QadiSubjectExtractor;
-        const user = yield* users.create({ email: "path-b@example.com", name: "Path B" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "path-b@example.com" },
+          name: "Path B",
+        });
         const { token } = yield* sessions.issue({ userId: user.id });
         const request = HttpServerRequest.fromWeb(
           new Request("http://localhost/whatever", {
@@ -86,7 +89,10 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const sessions = yield* Sessions.Sessions;
         const users = yield* Users.Users;
         const extractor = yield* QadiSubjectExtractor;
-        const user = yield* users.create({ email: "path-b-bearer@example.com", name: "Path B" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "path-b-bearer@example.com" },
+          name: "Path B",
+        });
         const { token } = yield* sessions.issue({ userId: user.id });
         const request = HttpServerRequest.fromWeb(
           new Request("http://localhost/whatever", {
@@ -105,8 +111,14 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const sessions = yield* Sessions.Sessions;
         const users = yield* Users.Users;
         const extractor = yield* QadiSubjectExtractor;
-        const admin = yield* users.create({ email: "aps006-admin@example.com", name: "Admin" });
-        const target = yield* users.create({ email: "aps006-target@example.com", name: "Target" });
+        const admin = yield* users.create({
+          identity: { _tag: "Email", email: "aps006-admin@example.com" },
+          name: "Admin",
+        });
+        const target = yield* users.create({
+          identity: { _tag: "Email", email: "aps006-target@example.com" },
+          name: "Target",
+        });
         const own = yield* sessions.issue({ userId: admin.id });
         const impersonation = yield* sessions.issue({
           userId: target.id,
@@ -153,7 +165,10 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const users = yield* Users.Users;
         const resolver = yield* Authentication.PrincipalResolver;
         const extractor = yield* QadiSubjectExtractor;
-        const user = yield* users.create({ email: "both-bridges@example.com", name: "Both" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "both-bridges@example.com" },
+          name: "Both",
+        });
         const { token } = yield* sessions.issue({ userId: user.id });
 
         // Past touchEvery — the next verify rotates the session secret.
@@ -195,7 +210,10 @@ describe("SubjectExtractor (Path B adapter)", () => {
           const sessions = yield* Sessions.Sessions;
           const users = yield* Users.Users;
           const extractor = yield* QadiSubjectExtractor;
-          const user = yield* users.create({ email: "path-b-only@example.com", name: "PathB" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "path-b-only@example.com" },
+            name: "PathB",
+          });
           const { token } = yield* sessions.issue({ userId: user.id });
           yield* TestClock.adjust(Duration.millis(200));
 

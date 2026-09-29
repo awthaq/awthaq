@@ -100,6 +100,8 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.admin.impersonationDenied":
     case "auth.admin.actionDenied":
     case "auth.admin.userUpdated":
+    case "auth.admin.userBanned":
+    case "auth.admin.userUnbanned":
     case "auth.admin.sessionRevoked":
       return Option.some(event.adminUserId);
     case "auth.mail.failed":

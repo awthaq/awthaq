@@ -30,5 +30,6 @@ export const github = (input: PresetInput) =>
           subject: idClaim(claims, "id"),
           email: stringClaim(claims, "email"),
           name: stringClaim(claims, "name") ?? stringClaim(claims, "login"),
+          image: stringClaim(claims, "avatar_url"),
         })),
   });

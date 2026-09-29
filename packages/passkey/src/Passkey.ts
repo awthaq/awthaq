@@ -536,6 +536,7 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyChallengeInvalid
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCounterAnomaly
+    | Users.UserSuspended
     | Hooks.TwoFactorRequired
   >;
   readonly listCredentials: (
@@ -1057,7 +1058,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           rpName: config.rpName,
           challenge: Redacted.value(challenge),
           userId: webauthnUserId,
-          userName: user.email,
+          userName: Users.accountLabel(user),
           userDisplayName: user.name,
           excludeCredentials: existing.map((row) => ({ id: row.id, transports: row.transports })),
           attestation: config.attestation,
@@ -1421,9 +1422,13 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // session for a dead `userId` with no existence check of its
           // own: same uniform `InvalidCredentials` collapse BEH-EA-136
           // already applies to every other failure in this ceremony.
-          yield* users
+          const user = yield* users
             .findById(stored.userId)
             .pipe(Effect.catchTag("UserNotFound", () => Effect.fail(new Api.InvalidCredentials())));
+
+          // SCP-001/BAM-005: THE shared sign-in gate, after the credential is
+          // proven and before any session exists.
+          yield* Users.assertCanSignIn(user);
 
           // BCR-004/THS-002: same canonical MFA attachment point
           // `@awthaq/password`'s own `signIn` consults, right before this
@@ -1466,7 +1471,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         return {
           rpId: config.rpId,
           userId: yield* handles.getOrCreate(userId),
-          name: user.email,
+          name: Users.accountLabel(user),
           displayName: user.name,
           allAcceptedCredentialIds: owned.map((row) => row.id),
         };
