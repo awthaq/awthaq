@@ -295,6 +295,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
   config: [ConfigDescriptor.make(WebhooksConfig.WebhooksConfig)],
 }) {
   static readonly layer = AuthPlugin.layer(Webhooks, {
+    ports: [Encryption.Encryption, HostResolver.HostResolver, RateLimiter.RateLimiter],
     handlers: HttpApiBuilder.group(
       WebhooksApi.WebhooksApi,
       "webhooks.admin",

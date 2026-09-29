@@ -224,10 +224,13 @@ export const MagicLinkHandlers = HttpApiBuilder.group(
 export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("magicLink", {
   apiVersion: 1,
   contract: MagicLinkApi.MagicLinkApi,
+  // PV-241: declared from the rule table the layer registers.
+  rateLimits: AuthPlugin.declareRateLimits(["magicLink"], Object.values(rules)),
   // BEH-EA-270: no table — the links are `Verification` rows (`verification_tokens`, core's).
   tables: [],
 }) {
   static readonly layer = AuthPlugin.layer(MagicLink, {
+    ports: [ClientAddress.ClientAddress, Mailer.Mailer, RateLimiter.RateLimiter],
     handlers: MagicLinkHandlers,
     make: Effect.gen(function* () {
       const users = yield* Users.Users;

@@ -217,6 +217,7 @@ export class PortUserFixture extends AuthPlugin.Service<PortUserFixture, Record<
   { apiVersion: 1, contract: HttpApi.make("auth") },
 ) {
   static readonly layer = AuthPlugin.layer(PortUserFixture, {
+    ports: [Mailer.Mailer, PasswordHasher.PasswordHasher],
     make: Effect.gen(function* () {
       yield* Mailer.Mailer;
       yield* PasswordHasher.PasswordHasher;
@@ -233,6 +234,7 @@ export class NotifierFixture extends AuthPlugin.Service<
 >()("notifier", { apiVersion: 1, contract: HttpApi.make("auth") }) {
   /** The full layer reads the `Mailer` port. */
   static readonly layer = AuthPlugin.layer(NotifierFixture, {
+    ports: [Mailer.Mailer],
     make: Effect.gen(function* () {
       const mailer = yield* Mailer.Mailer;
       return { notify: () => Effect.map(mailer.sent, (sent) => `mailed:${sent.length}`) };

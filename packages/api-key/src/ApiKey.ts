@@ -691,6 +691,30 @@ const CredentialContributionsLive = Layer.unwrap(
 export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", {
   apiVersion: 1,
   contract: ApiKeyApi.ApiKeyApi,
+  // PV-241: the default budgets (`ApiKeyConfig.tokenRateLimit`/`resolveRateLimit` tune them), named as `RateLimits.enforce` reports them.
+  rateLimits: [
+    {
+      group: "apikey.token",
+      endpoint: "token",
+      name: "token-ip",
+      dimension: "ip",
+      ...defaultConfig.tokenRateLimit.ip,
+    },
+    {
+      group: "apikey.token",
+      endpoint: "token",
+      name: "token-client",
+      dimension: "custom",
+      ...defaultConfig.tokenRateLimit.client,
+    },
+    {
+      group: "apikey",
+      endpoint: "resolve",
+      name: "resolve-ip",
+      dimension: "ip",
+      ...defaultConfig.resolveRateLimit,
+    },
+  ],
   tables: ["apikey_key", "apikey_client"],
   migrations: apiKeyMigrations,
   // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.
@@ -714,6 +738,8 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
     AuthPlugin.layer(ApiKey, {
       // `Jwt` mints the service tokens, and its signing keys must exist first.
       dependsOn: [Jwt.Jwt],
+      // PV-241: the token endpoint and the credential contributions throttle by address.
+      ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
       handlers: ApiKeyHandlers,
       make: Effect.gen(function* () {
         const records = yield* ApiKeyRecords.ApiKeyRecords;
@@ -746,6 +772,16 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
               window: settings.tokenRateLimit.ip.window,
             })
             .pipe(
+              // PV-241: the per-client budget is enforced by the token handler, so it is listed too.
+              Effect.andThen(
+                rateLimits.register(ApiKey, {
+                  group: "apikey.token",
+                  endpoint: "token",
+                  key: (input) => `apikey:token:client:${String(input)}`,
+                  limit: settings.tokenRateLimit.client.limit,
+                  window: settings.tokenRateLimit.client.window,
+                }),
+              ),
               Effect.andThen(
                 rateLimits.register(ApiKey, {
                   group: "apikey",

@@ -153,6 +153,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
   },
 ) {
   static readonly layer = AuthPlugin.layer(AdminAccounts, {
+    ports: [Mailer.Mailer, PasswordHasher.PasswordHasher, SqlTransaction.SqlTransaction],
     handlers: AdminAccountsHandlers,
     make: Effect.gen(function* () {
       const users = yield* Users.Users;

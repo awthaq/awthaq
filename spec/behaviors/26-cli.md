@@ -59,17 +59,17 @@ REQUIREMENT: `plugin list --graph` MUST print the installed plugins in
              `dependsOn` edges, contract groups and owned tables; the
              ordering printed MUST match the order the linker actually uses
              for migrations and hook resolution. `--format json|dot` MUST
-             emit the same graph as data. Each plugin's required ports and
-             resolved hook-tap chain belong in this output too, but are not
-             derivable from the manifest (below): until they are, the command
-             MUST say they are not printed rather than omit them silently.
+             emit the same graph as data. It MUST also print each plugin's
+             required ports and the position of each of its declared hook
+             taps in the resolved chain of the point it taps; both are read
+             off the manifest (static declarations, no Layer built).
 ```
 
 PRD §21 and `usage-examples-v4.md` §14's "Resolved order is printable: `awthaq plugin list --hooks`" both point at the same need: the composition order that determines behavior (which hook tap runs first, which migration applies first) must be inspectable as data, not something a developer has to infer by reading `Auth.make`'s plugin array and reasoning about `dependsOn` by hand.
 
-*Implementation* (`Plugin.ts`; `test/Inspection.test.ts`). `manifest.plugins` is `linkPlugins`' topological order, so the printed order is the linker's by construction. What is **not** printed: a plugin's required ports are its layer's requirements (`RIn`), a type-level fact with no runtime trace short of building the layer; so a manifest-only command (BEH-EA-208) cannot print it, and the report ends with a line saying so; ports would need a static declaration on the plugin, which this revision does not add (it would duplicate what the types already say and could drift from them).
+*Implementation* (`Plugin.ts`; `test/Inspection.test.ts`). `manifest.plugins` is `linkPlugins`' topological order, so the printed order is the linker's by construction. A plugin's required ports are its layer's requirements (`RIn`), a type-level fact with no runtime trace short of building the layer, which a manifest-only command (BEH-EA-208) may not do. So the plugin *declares* them, `AuthPlugin.layer(Self, { ports: [Mailer.Mailer, ...] })`, and the declaration cannot silently drift: the declared classes join the layer's `RIn` like `dependsOn`, and a port-keyed service (`.../ports/...`) that `make`, the handlers or a contribution require but `ports` omits fails to type-check, naming the missing keys. The declarations reach `Manifest.ports` (link order, then declaration order) and the class static `Plugin.ports`; the report prints them per plugin, beside where the plugin's declared taps sit in each point's chain (`manifest.hooks`, `HookPoint.compareTaps`, BEH-EA-096). Application taps (`Point.tap` in the host) register when a layer is built and run after every listed entry, so they are not shown; the report says so.
 
-**As shipped (PV-241):** `plugin list --hooks` (`--format json` for data) prints `Auth.make(...).manifest.hooks`: each hook point's taps that plugins declare statically (`AuthPlugin.layer`'s `taps`), in the order the runtime chain runs them (`HookPoint.compareTaps`, BEH-EA-096). Application taps (`Point.tap` in the host) register when a layer is built and run after every listed entry, so they are not shown. Rate-limit rules register at layer build and have no static declaration, so a rule listing (BEH-EA-111's `plugin list --hooks` counterpart) is not shipped.
+**As shipped (PV-241):** `plugin list --hooks` (`--format json` for data) prints `Auth.make(...).manifest.hooks`: each hook point's taps that plugins declare statically (`AuthPlugin.layer`'s `taps`), in the order the runtime chain runs them. `plugin list --rules` prints `manifest.rateLimits`, the rate-limit rules plugins declare statically (`AuthPlugin.Service`'s `rateLimits`, BEH-EA-111): plugin, rule, endpoint, dimension and the default limit and window. A rule's `group` is confined at the type level to the plugin's own contract groups (BEH-EA-107 as a compile error), and each shipped plugin's suite asserts its declaration equals what its layer registers (`RateLimits.declarationDrift`); the numbers are the defaults, which a configurable plugin's `Context.Reference` may tune at build.
 
 _Previous: [BEH-EA-201](26-cli.md#beh-ea-201-doctor-checks-link-config-and-insecure-defaults) | Next: [BEH-EA-203](26-cli.md#beh-ea-203-routes-lists-every-endpoint-with-its-owning-plugin-and-middleware)_
 

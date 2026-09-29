@@ -229,10 +229,13 @@ export const EmailOtpHandlers = HttpApiBuilder.group(
 export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("emailOtp", {
   apiVersion: 1,
   contract: EmailOtpApi.EmailOtpApi,
+  // PV-241: declared from the rule table the layer registers.
+  rateLimits: AuthPlugin.declareRateLimits(["emailOtp"], Object.values(rules)),
   // BEH-EA-274: no table — the codes are `Verification` rows (`verification_tokens`, core's).
   tables: [],
 }) {
   static readonly layer = AuthPlugin.layer(EmailOtp, {
+    ports: [ClientAddress.ClientAddress, Mailer.Mailer, RateLimiter.RateLimiter],
     handlers: EmailOtpHandlers,
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
