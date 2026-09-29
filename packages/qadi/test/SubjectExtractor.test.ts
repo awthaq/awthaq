@@ -1,5 +1,6 @@
 // spec/behaviors/20-qadi-bridge-path-b.md, BEH-EA-153.
 import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Api } from "@awthaq/api";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -246,4 +247,58 @@ describe("SubjectExtractor (Path B adapter)", () => {
         Effect.provide(Layer.mergeAll(Authentication.PrincipalResolverLive, ShortLivedTestLayer)),
       ),
   );
+
+  // MAPS-001/OCM-002: Path B recognises exactly the credentials `Authentication` does.
+  describe("contributed credential resolvers", () => {
+    const service = (id: string) =>
+      new Api.ServicePrincipal({
+        ref: new Api.PrincipalRef({ type: "service", id }),
+        scopes: [],
+      });
+    const contributions = Layer.mergeAll(
+      Authentication.contribute("bearer", {
+        id: "svc-jwt",
+        claims: (raw) => raw.startsWith("svc."),
+        resolve: () => Effect.succeed(service("from-bearer")),
+      }),
+      Authentication.contribute("apiKey", {
+        id: "keys",
+        claims: (raw) => raw.startsWith("ak_"),
+        resolve: () => Effect.succeed(service("from-key")),
+      }),
+    ).pipe(Layer.provideMerge(Authentication.CredentialResolversLive));
+    const WithResolvers = SubjectExtractor.SubjectExtractorLive.pipe(
+      Layer.provide(Authentication.PrincipalResolverLive),
+      Layer.provideMerge(contributions),
+      Layer.provideMerge(CoreLive),
+    );
+    const extract = (headers: Record<string, string>) =>
+      Effect.gen(function* () {
+        const extractor = yield* QadiSubjectExtractor;
+        return yield* extractor.extract(
+          HttpServerRequest.fromWeb(new Request("http://localhost/whatever", { headers })),
+        );
+      });
+
+    it.effect("a claimed bearer credential resolves to its principal's subject", () =>
+      Effect.gen(function* () {
+        const subject = yield* extract({ authorization: "Bearer svc.x.y" });
+        assert.strictEqual(subject.id, "service:from-bearer");
+      }).pipe(Effect.provide(WithResolvers)),
+    );
+
+    it.effect("an x-api-key credential resolves through the apiKey carrier", () =>
+      Effect.gen(function* () {
+        const subject = yield* extract({ "x-api-key": "ak_1.secret" });
+        assert.strictEqual(subject.id, "service:from-key");
+      }).pipe(Effect.provide(WithResolvers)),
+    );
+
+    it.effect("an unclaimed x-api-key is anonymous, never treated as a session token", () =>
+      Effect.gen(function* () {
+        const subject = yield* extract({ "x-api-key": "not-a-key" });
+        assert.strictEqual(subject.id, "anonymous");
+      }).pipe(Effect.provide(WithResolvers)),
+    );
+  });
 });

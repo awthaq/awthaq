@@ -698,4 +698,115 @@ describe("AuthHttp + Password (real HTTP)", () => {
       assert.strictEqual(body.userAgent, "AwthaqTest/1.0");
     }),
   );
+  // MNA-001 (decision ticket 17): opt-in bearer delivery on every
+  // session-minting response — token in the body, no Set-Cookie, mutually
+  // exclusive per request; absent header leaves the browser path unchanged.
+  it.effect(
+    "MNA-001: sign-up with X-Awthaq-Token-Delivery: bearer returns body.token and no Set-Cookie; the token authenticates a bearer request",
+    () =>
+      Effect.gen(function* () {
+        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const signedUp = yield* Effect.promise(() =>
+          post(
+            handler,
+            "/password/sign-up",
+            { email: "native@example.com", password: strongPassword },
+            undefined,
+            { [Api.TOKEN_DELIVERY_HEADER]: "bearer" },
+          ),
+        );
+        assert.strictEqual(signedUp.status, 200);
+        assert.isNull(signedUp.headers.get("set-cookie"));
+        assert.match(signedUp.headers.get("cache-control") ?? "", /no-store/);
+        const body = (yield* Effect.promise(() => signedUp.json())) as { token?: string };
+        assert.isString(body.token);
+
+        // The bearer token is a real credential: it authenticates change-password.
+        const changed = yield* Effect.promise(() =>
+          handler(
+            new Request("http://localhost/change-password", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                authorization: `Bearer ${body.token}`,
+                [Api.TOKEN_DELIVERY_HEADER]: "bearer",
+              },
+              body: JSON.stringify({
+                currentPassword: strongPassword,
+                newPassword: "a whole new strong password",
+              }),
+            }),
+          ),
+        );
+        assert.strictEqual(changed.status, 200);
+        assert.isNull(changed.headers.get("set-cookie"));
+        const rotated = (yield* Effect.promise(() => changed.json())) as { token?: string };
+        assert.isString(rotated.token);
+        assert.notStrictEqual(rotated.token, body.token);
+      }),
+  );
+
+  it.effect("MNA-001: sign-in without the header sets the cookie and carries no body token", () =>
+    Effect.gen(function* () {
+      const mailer = capturingMailer();
+      const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+      yield* Effect.promise(() =>
+        post(handler, "/password/sign-up", { email: "cookie@example.com", password: strongPassword }),
+      );
+      yield* verifyLatestSignUp(handler, mailer);
+      const response = yield* Effect.promise(() =>
+        post(handler, "/password/sign-in", { email: "cookie@example.com", password: strongPassword }),
+      );
+      assert.strictEqual(response.status, 200);
+      assert.match(cookieFrom(response), /^__Host-session=/);
+      const body = (yield* Effect.promise(() => response.json())) as Record<string, unknown>;
+      assert.notProperty(body, "token");
+    }),
+  );
+
+  it.effect("MNA-001: sign-in with bearer delivery returns the token and no cookie", () =>
+    Effect.gen(function* () {
+      const mailer = capturingMailer();
+      const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+      yield* Effect.promise(() =>
+        post(handler, "/password/sign-up", { email: "device@example.com", password: strongPassword }),
+      );
+      yield* verifyLatestSignUp(handler, mailer);
+      const response = yield* Effect.promise(() =>
+        post(
+          handler,
+          "/password/sign-in",
+          { email: "device@example.com", password: strongPassword },
+          undefined,
+          { [Api.TOKEN_DELIVERY_HEADER]: "bearer" },
+        ),
+      );
+      assert.strictEqual(response.status, 200);
+      assert.isNull(response.headers.get("set-cookie"));
+      const body = (yield* Effect.promise(() => response.json())) as { token?: string };
+      assert.isString(body.token);
+    }),
+  );
+
+  it.effect("MNA-001: an unknown delivery mode answers 400 and mints no session", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const response = yield* Effect.promise(() =>
+        post(
+          handler,
+          "/password/sign-up",
+          { email: "typo@example.com", password: strongPassword },
+          undefined,
+          { [Api.TOKEN_DELIVERY_HEADER]: "beaerr" },
+        ),
+      );
+      assert.strictEqual(response.status, 400);
+      assert.isNull(response.headers.get("set-cookie"));
+      // Rejected before the account exists: the same address signs up cleanly afterwards.
+      const retry = yield* Effect.promise(() =>
+        post(handler, "/password/sign-up", { email: "typo@example.com", password: strongPassword }),
+      );
+      assert.strictEqual(retry.status, 200);
+    }),
+  );
 });

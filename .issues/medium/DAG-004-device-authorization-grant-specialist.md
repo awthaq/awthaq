@@ -3,7 +3,7 @@ ID: "DAG-004"
 Title: "No user-code entropy/format or rate-limit design exists for the verification surface"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/13-device-authorization.md:60"
 Auditor: "device-authorization-grant-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `—` · reported by **Device Authorization Grant Specialist** (`device-authorization-grant-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Specify explicitly: crowd-readable alphabet excluding visually ambiguous charact
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `device-authorization-design`. Evidence at HEAD ec065a7: `spec/models/13-device-authorization.md:60`. Fix: Now that decision 06 makes the device plugin the CLI's login backend, write its security parameters into the model doc (and later BEHs): user-code alphabet/length/entropy, TTL, normalization, constant-time lookup, RateLimiter rules on /device/code, /device/token and the approval endpoint. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/models/13-device-authorization.md rev 1.1: new 'Security parameters' section — user code 8 chars from the 20-symbol consonant alphabet BCDFGHJKLMNPQRSTVWXZ (~34.6 bits, RFC 8628 §6.1) shown XXXX-XXXX, normalized (uppercase, strip - and spaces) then exact match, stored SHA-256-hashed and looked up by hash; device_code 32 CSPRNG bytes hashed at rest; TTL 15 min (DeviceAuthorizationConfig Reference), interval 5s with slow_down +5s; RateLimiter rules: /device/code 5 per TTL per IP, verification/approval 5 failed lookups per 15 min per IP and per session, /device/token enforces interval per device_code; session issuance via Sessions.issue through Hooks.BeforeSessionIssue (ticket 03) with device ip/userAgent (BEH-EA-054). BEH ids deferred to when the plugin is specified as behaviors.

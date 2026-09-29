@@ -1,4 +1,4 @@
-// EP-004/CWM-001 (ADR-EA-018, BEH-EA-230): per-organization OAuth connections.
+// EP-004/CWM-001 (ADR-EA-018, BEH-EA-235): per-organization OAuth connections.
 // The store validates and seals; `OrganizationConnections` (a `LayerMap`) turns
 // an organization's rows into provider configs; `oauthConnections` installs the
 // resolver `@awthaq/oauth` consults after its static registry — proven here end
@@ -90,7 +90,7 @@ const oauth2Input = (organizationId: string): OrganizationConnections.Connection
   scopes: ["read"],
 });
 
-describe("OrganizationConnectionStore (BEH-EA-230)", () => {
+describe("OrganizationConnectionStore (BEH-EA-235)", () => {
   it.effect("the client secret is ciphertext at rest and never shown back", () =>
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
@@ -175,7 +175,7 @@ describe("OrganizationConnectionStore (BEH-EA-230)", () => {
   );
 });
 
-describe("oauthConnections resolver (BEH-EA-230)", () => {
+describe("oauthConnections resolver (BEH-EA-235)", () => {
   it.effect("resolves a stored connection to a provider config, cached per organization, revisioned by edits", () =>
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;
@@ -232,7 +232,7 @@ describe("oauthConnections resolver (BEH-EA-230)", () => {
   );
 });
 
-describe("cleanupOnOrganizationDelete (BEH-EA-230)", () => {
+describe("cleanupOnOrganizationDelete (BEH-EA-235)", () => {
   it.effect("deleting an organization removes its connections and frees their domains", () =>
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;

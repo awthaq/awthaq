@@ -27,15 +27,15 @@ import {
   AuthEvents,
   AuthPlugin,
   Accounts,
+  ConfigDescriptor,
   Hooks,
   Migrations,
   RateLimits,
-  SessionCookie,
   Sessions,
   Users,
 } from "@awthaq/core";
 import { ClientAddress, RateLimiter, WebAuthn } from "@awthaq/ports";
-import { Session } from "@awthaq/server";
+import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -456,12 +456,6 @@ export interface PasskeySignals {
   readonly allAcceptedCredentialIds: ReadonlyArray<string>;
 }
 
-// RSC-005: the mapping is `@awthaq/server`'s `Session.toSessionDto`; the typed
-// wrapper also keeps `SessionContract` in scope so declaration emit can name
-// `SessionDto` in the handler group's inferred type (TS2883 otherwise).
-const sessionResponse = (view: Sessions.SessionView): SessionContract.SessionDto =>
-  Session.toSessionDto(view);
-
 export interface IssuedSession {
   readonly session: Sessions.SessionView;
   readonly token: Redacted.Redacted<string>;
@@ -645,14 +639,16 @@ export const PasskeyHandlers = Layer.mergeAll(
         }) {
           // CSD-003: address via the application-provided `ClientAddress`
           // port (trusted-proxy aware), user agent from the header.
+          const delivery = yield* SessionDelivery.mode(request);
           const resolvedAddress = yield* clientAddress.resolve(request);
           const userAgent = Headers.get(request.headers, "user-agent");
           const issued = yield* passkey.authenticateVerify(
             { ...payload, ip: Option.getOrUndefined(resolvedAddress) },
             Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
           );
-          yield* SessionCookie.set(issued.session, issued.token);
-          return sessionResponse(issued.session);
+          // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+          const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+          return response;
         }),
       });
     }),
@@ -891,6 +887,32 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   contract: PasskeyApi.PasskeyApi,
   tables: ["passkey_credential", "passkey_challenge", "passkey_user_handle"],
   migrations: passkeyMigrations,
+  // ECS-008/BEH-EA-229: the dev defaults (`localhost`, an `http` origin) are the classic thing left in production.
+  config: [
+    ConfigDescriptor.make(PasskeyConfig, {
+      sensitive: [],
+      audit: (value, environment) => [
+        ...(environment.production && value.rpId === "localhost"
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "passkey-rp-id-localhost",
+                "the relying-party id is still the development default `localhost`",
+              ),
+            ]
+          : []),
+        ...(environment.production && value.origins.some((origin) => origin.startsWith("http://"))
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "passkey-origin-not-https",
+                "an allowed origin uses plain http",
+              ),
+            ]
+          : []),
+      ],
+    }),
+  ],
 }) {
   static readonly layer = AuthPlugin.layer(Passkey, {
     handlers: PasskeyHandlers,

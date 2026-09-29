@@ -302,6 +302,49 @@ export interface ScimGroupChangedEvent {
   readonly change: "created" | "updated" | "deleted";
 }
 
+/**
+ * ECS-006: published by `awthaq seed admin` after it grants the administrative role
+ * (BEH-EA-206). `outcome` says whether the account was created or an existing one
+ * promoted; `forced` that the grant went past an existing administrator. Carries the
+ * user id and the role, never the address.
+ */
+export interface AdminSeededEvent {
+  readonly _tag: "auth.admin.seeded";
+  readonly targetUserId: UserId;
+  readonly outcome: "created" | "promoted";
+  readonly forced: boolean;
+  readonly role: string;
+  readonly via: "cli";
+}
+
+/** ECS-006: `awthaq seed admin` refused because an administrator already exists (and `--force` was not given). No address: the refusal names a reason, not a person. */
+export interface AdminSeedRefusedEvent {
+  readonly _tag: "auth.admin.seedRefused";
+  readonly reason: "adminExists";
+}
+
+/** ECS-002: one `awthaq import --yes` run finished — every source row was imported, skipped or failed. */
+export interface ImportCompletedEvent {
+  readonly _tag: "auth.import.completed";
+  readonly source: string;
+  readonly runId: string;
+  readonly imported: number;
+  readonly skipped: number;
+  readonly failed: number;
+  readonly unmapped: number;
+}
+
+/** ECS-002: one `awthaq import --yes` run stopped on a failed batch (counts are those reached so far). */
+export interface ImportFailedEvent {
+  readonly _tag: "auth.import.failed";
+  readonly source: string;
+  readonly runId: string;
+  readonly imported: number;
+  readonly skipped: number;
+  readonly failed: number;
+  readonly unmapped: number;
+}
+
 /** Published by `@awthaq/organization`'s `create`. */
 export interface OrganizationCreatedEvent {
   readonly _tag: "auth.organization.created";
@@ -544,6 +587,49 @@ export interface MailFailedEvent {
   readonly userId?: UserId;
 }
 
+/**
+ * OCM-002/OCM-005 (`@awthaq/api-key`): the lifecycle of a long-lived API key and of a
+ * `client_credentials` client. `userId` is the owner who acted; `keyId`/`clientId`
+ * are the public ids (never a secret or a hash). `rotated` names the predecessor
+ * (`keyId`) and its successor.
+ */
+export interface ApiKeyCreatedEvent {
+  readonly _tag: "auth.apiKey.created";
+  readonly userId: UserId;
+  readonly keyId: string;
+}
+
+export interface ApiKeyRevokedEvent {
+  readonly _tag: "auth.apiKey.revoked";
+  readonly userId: UserId;
+  readonly keyId: string;
+}
+
+export interface ApiKeyRotatedEvent {
+  readonly _tag: "auth.apiKey.rotated";
+  readonly userId: UserId;
+  readonly keyId: string;
+  readonly successorKeyId: string;
+}
+
+export interface ApiKeyClientRegisteredEvent {
+  readonly _tag: "auth.apiKey.clientRegistered";
+  readonly userId: UserId;
+  readonly clientId: string;
+}
+
+export interface ApiKeyClientRevokedEvent {
+  readonly _tag: "auth.apiKey.clientRevoked";
+  readonly userId: UserId;
+  readonly clientId: string;
+}
+
+export interface ApiKeyClientSecretRotatedEvent {
+  readonly _tag: "auth.apiKey.clientSecretRotated";
+  readonly userId: UserId;
+  readonly clientId: string;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
@@ -572,6 +658,10 @@ export type AuthEvent =
   | ScimUserReactivatedEvent
   | ScimUserDeletedEvent
   | ScimGroupChangedEvent
+  | AdminSeededEvent
+  | AdminSeedRefusedEvent
+  | ImportCompletedEvent
+  | ImportFailedEvent
   | OrganizationCreatedEvent
   | OrganizationUpdatedEvent
   | OrganizationDeletedEvent
@@ -598,7 +688,13 @@ export type AuthEvent =
   | UserClaimsUpdatedEvent
   | RolesRevokedEvent
   | RateLimitExceededEvent
-  | MailFailedEvent;
+  | MailFailedEvent
+  | ApiKeyCreatedEvent
+  | ApiKeyRevokedEvent
+  | ApiKeyRotatedEvent
+  | ApiKeyClientRegisteredEvent
+  | ApiKeyClientRevokedEvent
+  | ApiKeyClientSecretRotatedEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */

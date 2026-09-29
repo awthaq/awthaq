@@ -14,7 +14,7 @@
 // their shape.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, HookPoint, Hooks, Migrations, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, ConfigDescriptor, HookPoint, Hooks, Migrations, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -1675,6 +1675,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     apiVersion: 1,
     contract: OrganizationApi.OrganizationApi,
     migrations: organizationMigrations,
+    config: [ConfigDescriptor.make(OrganizationConfig)],
     tables: [
       "organization_org",
       "organization_membership",

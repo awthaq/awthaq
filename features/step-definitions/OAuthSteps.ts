@@ -897,6 +897,64 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* Effect.void;
   });
 
+  // ---- MNA-003/MNA-004: the native return leg ----
+
+  Given("a native redirect allowlist including {string}", function* (deepLink: string) {
+    yield* configure({
+      providers: [google()],
+      nativeRedirectURLs: [deepLink],
+      httpRoutes: {
+        "/token": { access_token: "at-1" },
+        "/userinfo": { id: "native-sub", email: "native@example.com" },
+      },
+    });
+  });
+
+  When(
+    "a native-mode sign-in request specifies {string}",
+    Effect.fn(function* (queryParam: string) {
+      const callbackURL = queryParam.split("callbackURL=")[1];
+      const oauth = yield* oauthService();
+      const { state } = yield* oauth.authorize("google", {
+        callbackURL,
+        link: undefined,
+        native: {},
+      });
+      const outcome = yield* oauth.callback("google", {
+        code: "auth-code",
+        state,
+        iss: undefined,
+        cookieState: state,
+      });
+      yield* setOutcome("nativeOutcome", outcome);
+    }),
+  );
+
+  Then(
+    "the post-login redirect to {string} carries a one-time exchange code and no session",
+    function* (deepLink: string) {
+      const outcome = (yield* getOutcome("nativeOutcome")) as {
+        readonly callbackURL: string;
+        readonly session: unknown;
+      };
+      assert.ok(outcome.callbackURL.startsWith(`${deepLink}?code=`));
+      assert.strictEqual(outcome.session, undefined);
+    },
+  );
+
+  Then(
+    "redeeming that code returns a session token exactly once",
+    Effect.fn(function* () {
+      const outcome = (yield* getOutcome("nativeOutcome")) as { readonly callbackURL: string };
+      const code = URL.parse(outcome.callbackURL)?.searchParams.get("code") ?? "";
+      const oauth = yield* oauthService();
+      const redeemed = yield* oauth.exchange({ code });
+      assert.ok(typeof redeemed.token === "string" && redeemed.token.length > 0);
+      const replay = yield* oauth.exchange({ code }).pipe(Effect.flip);
+      assert.strictEqual(replay._tag, "OAuthCallbackFailed");
+    }),
+  );
+
   // ---- REQ-EA-354: redirect_uri always derived from configured base URL ----
 
   Given(

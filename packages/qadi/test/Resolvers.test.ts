@@ -160,6 +160,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
     Effect.gen(function* () {
       const principal = new Api.ApiKeyPrincipal({
         ref: new Api.PrincipalRef({ type: "apikey", id: "key-1" }),
+        scopes: [],
       });
       const failure = yield* Resolvers.ObligationHandlers.reauth([Resolvers.reauth(300)]).pipe(
         Effect.provideService(Api.CurrentPrincipal, principal),
@@ -173,6 +174,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
     Effect.gen(function* () {
       const principal = new Api.ApiKeyPrincipal({
         ref: new Api.PrincipalRef({ type: "apikey", id: "key-2" }),
+        scopes: [],
       });
       yield* Resolvers.ObligationHandlers.reauth([]).pipe(
         Effect.provideService(Api.CurrentPrincipal, principal),
@@ -185,6 +187,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
 describe("ObligationHandlers.reauth fails closed on a malformed obligation (TS-001)", () => {
   const apiKey = new Api.ApiKeyPrincipal({
     ref: new Api.PrincipalRef({ type: "apikey", id: "key-ts001" }),
+    scopes: [],
   });
   const run = (duties: ReadonlyArray<ReturnType<typeof obligation>>) =>
     Resolvers.ObligationHandlers.reauth(duties).pipe(

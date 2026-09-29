@@ -1,6 +1,6 @@
 // @awthaq/scim — ScimRecords
 //
-// spec/behaviors/30-scim.md, BEH-EA-241/242. This plugin's own persistence, owned
+// spec/behaviors/30-scim.md, BEH-EA-246/242. This plugin's own persistence, owned
 // here rather than in `@awthaq/core` so no SCIM concept leaks into the core
 // schema (wayfinder ticket 08), built the way every plugin's `*Records.ts` is:
 // directly against `SqlSchema`, one `layerMemory` and one `layerSql`.

@@ -1,6 +1,6 @@
 // @awthaq/scim — ScimApi
 //
-// spec/behaviors/30-scim.md, BEH-EA-241 through 248; RFC 7643 (schemas) and
+// spec/behaviors/30-scim.md, BEH-EA-246 through 253; RFC 7643 (schemas) and
 // RFC 7644 (protocol). This plugin's own contract: one group, `scim`, mounted at
 // `/scim/v2`, every endpoint behind `ScimAuthentication` — a bearer token that
 // names one SCIM *connection* (an organization's own directory sync), never a

@@ -306,6 +306,9 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
+      '@awthaq/jwt':
+        specifier: workspace:*
+        version: link:../jwt
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
@@ -319,6 +322,15 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
+      '@awthaq/test':
+        specifier: workspace:*
+        version: link:../test
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+      '@effect/sql-sqlite-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)
@@ -334,28 +346,52 @@ importers:
       '@awthaq/api':
         specifier: workspace:*
         version: link:../api
+      '@awthaq/client':
+        specifier: workspace:*
+        version: link:../client
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
+      '@awthaq/migrate-better-auth':
+        specifier: workspace:*
+        version: link:../migrate-better-auth
+      '@awthaq/migrate-firebase':
+        specifier: workspace:*
+        version: link:../migrate-firebase
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
-      '@awthaq/qadi':
+      '@awthaq/roles':
         specifier: workspace:*
-        version: link:../qadi
+        version: link:../roles
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
       '@awthaq/sql':
         specifier: workspace:*
         version: link:../sql
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+      '@effect/sql-pg':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+      '@effect/sql-sqlite-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
+      '@awthaq/password':
+        specifier: workspace:*
+        version: link:../password
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)
+      '@qadi/core':
+        specifier: ^0.7.0
+        version: 0.7.0
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -557,6 +593,9 @@ importers:
 
   packages/migrate-firebase:
     dependencies:
+      '@awthaq/core':
+        specifier: workspace:*
+        version: link:../core
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports

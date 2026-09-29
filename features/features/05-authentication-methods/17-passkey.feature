@@ -85,10 +85,10 @@ Feature: Passkey and WebAuthn
       Then a session is issued through the same core "Sessions" capability every sign-in method uses
 
     @REQ-EA-362
-    Scenario: The passkey plugin does not set the session cookie itself
+    Scenario: The passkey plugin delivers the session only through the shared SessionDelivery helper
       Given a successfully verified authentication assertion
       When "authenticateVerify" returns its "SessionView"
-      Then the session cookie is set by core "Sessions", not by any cookie-setting code in the passkey plugin
+      Then the session is delivered through the shared "SessionDelivery" helper as the "__Host-session" cookie
 
     @REQ-EA-363
     Scenario: A passkey-issued session behaves identically to a password- or OAuth-issued session

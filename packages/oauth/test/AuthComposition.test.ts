@@ -11,7 +11,7 @@ describe("Auth.make([OAuth])", () => {
     const auth = Auth.make([OAuth.OAuth]);
     assert.strictEqual(auth.api.identifier, "auth");
     assert.deepStrictEqual(auth.manifest.plugins, [
-      { id: "oauth", apiVersion: 1, tables: [], dependsOn: [] },
+      { id: "oauth", apiVersion: 1, tables: [], dependsOn: [], groups: ["oauth", "oauth.exchange"] },
     ]);
   });
 });

@@ -14,7 +14,13 @@ describe("Auth.make([Password])", () => {
     const auth = Auth.make([Password.Password]);
     assert.strictEqual(auth.api.identifier, "auth");
     assert.deepStrictEqual(auth.manifest.plugins, [
-      { id: "password", apiVersion: 1, tables: [], dependsOn: [] },
+      {
+        id: "password",
+        apiVersion: 1,
+        tables: [],
+        dependsOn: [],
+        groups: ["password", "password.account"],
+      },
     ]);
   });
 });

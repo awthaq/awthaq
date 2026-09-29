@@ -3298,7 +3298,7 @@ describe("OAuth", () => {
   });
 });
 
-describe("EP-004: per-organization connections (BEH-EA-230)", () => {
+describe("EP-004: per-organization connections (BEH-EA-235)", () => {
   const connectionId = "org:org-1:conn-1";
   const userinfoRoutes = {
     "/token": { access_token: "at-1" },

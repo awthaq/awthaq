@@ -1,6 +1,6 @@
 // @awthaq/scim — ScimConnections
 //
-// spec/behaviors/30-scim.md, BEH-EA-241. A SCIM *connection* is one organization's
+// spec/behaviors/30-scim.md, BEH-EA-246. A SCIM *connection* is one organization's
 // directory-sync credential: the bearer token its identity provider presents. This
 // module is the write side (`ScimConnectionStore`: create / list / revoke — an
 // application or an administrator surface calls it) and the read side
@@ -107,7 +107,7 @@ export const layerStore = Layer.effect(
 );
 
 /**
- * BEH-EA-241: bearer authentication for the `scim` group. Requires `ScimRecords`,
+ * BEH-EA-246: bearer authentication for the `scim` group. Requires `ScimRecords`,
  * `OrganizationRecords` and `Crypto`.
  */
 export const ScimAuthenticationLive = Layer.effect(

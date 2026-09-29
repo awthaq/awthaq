@@ -1,4 +1,4 @@
-// EP-001/BEH-EA-229 (ADR-EA-018): `Organization.tenantMiddleware` resolves the
+// EP-001/BEH-EA-234 (ADR-EA-018): `Organization.tenantMiddleware` resolves the
 // application's `TenantResolver` once per request and provides `TenantContext`
 // for the handler's fiber. Exercised over a real Node HTTP server, the way
 // `packages/server/test/BodyLimit.test.ts` exercises the other global router
@@ -69,7 +69,7 @@ const tenantSeenBy = (headers: Record<string, string>, path = "/whoami") =>
     return { status: response.status, body: yield* response.json };
   });
 
-describe("Organization.tenantMiddleware (BEH-EA-229)", () => {
+describe("Organization.tenantMiddleware (BEH-EA-234)", () => {
   it.effect("provides the resolved organization as the ambient tenant", () =>
     Effect.gen(function* () {
       const records = yield* serveWith(Organization.tenantMiddleware);
@@ -121,7 +121,7 @@ describe("Organization.tenantMiddleware (BEH-EA-229)", () => {
   );
 });
 
-// ---- EP-007/BEH-EA-231: the tenant's configuration layers ride the request ----------------------
+// ---- EP-007/BEH-EA-236: the tenant's configuration layers ride the request ----------------------
 
 /** The application's own tenant settings (a database table in real life). */
 const limits = new Map<string, number>();
@@ -149,7 +149,7 @@ const limitInForce = HttpRouter.add(
   }),
 );
 
-describe("Organization.tenantMiddlewareWithConfig (BEH-EA-231)", () => {
+describe("Organization.tenantMiddlewareWithConfig (BEH-EA-236)", () => {
   it.effect("each tenant's request runs under that tenant's own configuration", () =>
     Effect.gen(function* () {
       const records = Context.get(

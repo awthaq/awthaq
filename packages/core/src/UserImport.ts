@@ -38,6 +38,12 @@ export interface ImportCredential {
   readonly issuer?: string;
   /** The source system's hash, stored verbatim (TTE-005: the caller mints the `PhcHash` explicitly). */
   readonly credentialHash?: Redacted.Redacted<PasswordHasher.PhcHash>;
+  /**
+   * BAM-008: a federated provider's tokens carried over from the source (better-auth's `account` row),
+   * encrypted at rest by the accounts repository. Omitted for a password credential and for a source
+   * that exports none.
+   */
+  readonly tokens?: Accounts.ProviderTokenSet;
 }
 
 export interface ImportUserInput {
@@ -127,6 +133,7 @@ export const importUser = (input: ImportUserInput) =>
               ...(credential.credentialHash === undefined
                 ? {}
                 : { credentialHash: credential.credentialHash }),
+              ...(credential.tokens === undefined ? {} : { tokens: credential.tokens }),
             })
             // Checked absent just above, so a violation here is a concurrent import of the
             // same credential — not a state this row can resolve.

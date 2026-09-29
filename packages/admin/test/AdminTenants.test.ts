@@ -1,4 +1,4 @@
-// EP-003 (ADR-EA-018, BEH-EA-232): the superadmin tenant-administration plugin,
+// EP-003 (ADR-EA-018, BEH-EA-237): the superadmin tenant-administration plugin,
 // composed the way an application does — `Organization` beside `AdminTenants` —
 // and driven domain-level, like `Admin.test.ts`.
 import { Api } from "@awthaq/api";
@@ -82,7 +82,7 @@ const superadminOnly: Partial<Admin.AdminConfigShape> = {
   canAdministerTenants: ({ admin }) => Effect.succeed(admin.id === "superadmin-1"),
 };
 
-describe("AdminTenants (BEH-EA-232)", () => {
+describe("AdminTenants (BEH-EA-237)", () => {
   it.effect("every operation is denied by default, and the denial is audited", () =>
     Effect.gen(function* () {
       const tenants = yield* AdminTenants.AdminTenants;

@@ -1,6 +1,6 @@
 // @awthaq/organization — TenantMiddleware
 //
-// EP-001/EP-007/BEH-EA-229/231 (ADR-EA-018): `Organization.tenantMiddleware`, the opt-in
+// EP-001/EP-007/BEH-EA-234/231 (ADR-EA-018): `Organization.tenantMiddleware`, the opt-in
 // global router middleware that turns "which organization is this request for"
 // (the application's `TenantResolver`) into the ambient `TenantContext` for
 // the rest of the request's fiber. Nothing installs it automatically: an
@@ -20,7 +20,7 @@
 //   on Postgres with `TenantScope.enableRls()` the whole request is confined to its
 //   tenant at the database — one transaction per tenanted request, hence separate.
 // - `…WithConfig(TenantConfig)` also provides that tenant's configuration layers
-//   for the request (BEH-EA-231, ADR-EA-005's `LayerMap.Service` seam). `TenantConfig`
+//   for the request (BEH-EA-236, ADR-EA-005's `LayerMap.Service` seam). `TenantConfig`
 //   is the application's own `LayerMap.Service` keyed by tenant id, whose `lookup`
 //   returns the tenant's `Organization.config(...)`/… layers; a plugin that decides
 //   its configuration per operation (`Organization` does) then behaves per tenant

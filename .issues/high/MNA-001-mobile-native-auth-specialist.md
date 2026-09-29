@@ -3,7 +3,7 @@ ID: "MNA-001"
 Title: "No native client can ever obtain its first session token"
 Level: high
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:283"
 Auditor: "mobile-native-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `api` · `password` · reported by **Mobile/Native Auth Specialist** (`mobile-native-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [Native/mobile app session bootstrap (non-cookie delivery)](../../.scratch/resolve-ready-for-human-findings/issues/17-native-mobile-session-bootstrap.md) — Resolved via an opt-in `X-Awthaq-Token-Delivery: bearer` request header that makes `password`/`passkey` session-minting responses return the raw token in the body instead of `Set-Cookie`, mutually exclusive with cookie mode and non-breaking for existing browser clients. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `native-token-delivery`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:383`. Fix: Implement ticket 17's opt-in bearer delivery for every session-minting response. (effort M). Full dossier: `.plan/slices/07-password-mfa.md`.
+
+**Resolved (2026-09-29):** Opt-in bearer delivery (ticket 17). @awthaq/api: TOKEN_DELIVERY_HEADER ('x-awthaq-token-delivery'), InvalidTokenDelivery (400), SessionDto.token (optional). @awthaq/server: new SessionDelivery.ts (mode(request) validates the header before anything is minted; deliver(mode, issued) = SessionCookie.set for cookie, or body token + Cache-Control no-store for bearer, never both). Password signUp/signIn/changePassword and Passkey authenticateVerify route through it (endpoints declare InvalidTokenDelivery). Tests (red first: 3 of 4 new AuthHttp tests failed against the old handlers): packages/password/test/AuthHttp.test.ts (bearer sign-up returns token + no Set-Cookie + token authenticates change-password; cookie default unchanged, no body token; unknown value 400 and no account minted), packages/passkey/test/AuthHttp.test.ts. Gates: typecheck 0 errors, pnpm run test 1833 passed, test:bdd, spec:verify:strict, oxlint. Docs: password/passkey README 'Native clients', BEH-EA-066/113/131 amended. Deferred: TwoFactor/MagicLink/EmailOtp are empty placeholder packages (no session-minting handler to route yet); admin impersonate keeps its dedicated impersonation cookie. CSRF exemption for the delivery header not added (documented bootstrap instead, per dossier).

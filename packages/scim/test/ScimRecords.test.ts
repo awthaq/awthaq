@@ -1,4 +1,4 @@
-// BEH-EA-241/242: `ScimRecords`, one contract suite over both layers. `layerSql` is
+// BEH-EA-246/242: `ScimRecords`, one contract suite over both layers. `layerSql` is
 // migrated through the plugin's own real `migrations` (and, under `pnpm run test:pg`,
 // runs on Postgres), so the two unique rules — a user's `userName` and a resource's
 // `externalId`, each per connection and kind — are real database constraints.

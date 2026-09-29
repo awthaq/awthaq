@@ -1,6 +1,6 @@
 // @awthaq/admin — AdminTenantsApi
 //
-// EP-003 (wayfinder ticket 19 §3, ADR-EA-018, BEH-EA-232): the platform
+// EP-003 (wayfinder ticket 19 §3, ADR-EA-018, BEH-EA-237): the platform
 // administrator's tenant-administration contract. One group, `admin.tenants` — a
 // dotted sub-id of the admin plugin family, so it is admin-tier by construction
 // (AR-003: any segment named `admin`) and rides `Api.AdminAuthentication` like

@@ -12,11 +12,11 @@ import {
   AuthEvents,
   AuthPlugin,
   Accounts,
+  ConfigDescriptor,
   Hooks,
   HookPoint,
   MailDispatch,
   RateLimits,
-  SessionCookie,
   Sessions,
   Users,
   Verification,
@@ -30,7 +30,7 @@ import {
   RateLimiter,
   SqlTransaction,
 } from "@awthaq/ports";
-import { Session } from "@awthaq/server";
+import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -386,12 +386,6 @@ const requestUserAgent = (request: HttpServerRequest.HttpServerRequest) =>
     onSome: (userAgent) => ({ userAgent }),
   });
 
-// RSC-005: the mapping is `@awthaq/server`'s `Session.toSessionDto`; the typed
-// wrapper also keeps `SessionContract` in scope so declaration emit can name
-// `SessionDto` in the handler group's inferred type (TS2883 otherwise).
-const sessionResponse = (view: Sessions.SessionView): SessionContract.SessionDto =>
-  Session.toSessionDto(view);
-
 /**
  * Resolves `Password` once here, in the group-builder generator itself —
  * not inside each handler body — the same `HttpApiBuilder.group` pattern
@@ -420,6 +414,8 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.SignUpPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
+        // MNA-001: validated before anything is minted.
+        const delivery = yield* SessionDelivery.mode(request);
         const resolvedAddress = yield* clientAddress.resolve(request);
         const signUpInput = {
           ...payload,
@@ -432,8 +428,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
           return yield* password.signUpConcealed(signUpInput);
         }
         const issued = yield* password.signUp(signUpInput);
-        yield* SessionCookie.set(issued.session, issued.token);
-        return sessionResponse(issued.session);
+        // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        return response;
       }),
 
       signIn: Effect.fnUntraced(function* ({
@@ -443,6 +440,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.SignInPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
+        const delivery = yield* SessionDelivery.mode(request);
         // AGA-001/NHS-003: resolved through the application-provided
         // `ClientAddress` port rather than `request.remoteAddress`
         // directly, so a trusted-proxy-aware composition gets a real
@@ -453,8 +451,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
           ...requestUserAgent(request),
         });
-        yield* SessionCookie.set(issued.session, issued.token);
-        return sessionResponse(issued.session);
+        // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        return response;
       }),
 
       requestReset: Effect.fnUntraced(function* ({
@@ -542,6 +541,7 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
             ),
           );
         }
+        const delivery = yield* SessionDelivery.mode(request);
         const resolvedAddress = yield* clientAddress.resolve(request);
         const issued = yield* password.changePassword({
           userId: Users.UserId(principal.ref.id),
@@ -551,8 +551,9 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
           ...requestUserAgent(request),
         });
-        yield* SessionCookie.set(issued.session, issued.token);
-        return sessionResponse(issued.session);
+        // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        return response;
       }),
 
       reauthenticate: Effect.fnUntraced(function* ({
@@ -584,6 +585,40 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
   // BEH-EA-044: a password credential is an ordinary `accounts` row — this
   // plugin owns no table of its own, so there is nothing to declare here.
   tables: [],
+  // ECS-008/BEH-EA-229: the policy knobs `doctor` audits and `config list` prints.
+  config: [
+    ConfigDescriptor.make(PasswordConfig, {
+      audit: (value, environment) => [
+        ...(value.minLength < 8
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "password-min-length",
+                `the minimum password length is ${value.minLength} (NIST SP 800-63B asks for at least 8)`,
+              ),
+            ]
+          : []),
+        ...(environment.production && value.breachCheck === false
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "password-breach-check-off",
+                "screening new passwords against the breached-password corpus is disabled",
+              ),
+            ]
+          : []),
+        ...(environment.production && !value.requireVerifiedEmail
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "password-unverified-sign-in",
+                "sign-in does not require a verified email address",
+              ),
+            ]
+          : []),
+      ],
+    }),
+  ],
 }) {
   /**
    * BEH-EA-001/008 (`AuthPlugin.ts`'s own doc comment): a plugin's `layer`

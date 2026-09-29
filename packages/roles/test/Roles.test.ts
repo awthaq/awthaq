@@ -52,6 +52,18 @@ describe("Roles (SubjectResolver override)", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("ECS-006: holders lists exactly the users holding the role", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const userA = Users.UserId("88888888-8888-8888-8888-888888888888");
+      const userB = Users.UserId("99999999-9999-9999-9999-999999999999");
+      yield* roles.assign(userA, "owner");
+      yield* roles.assign(userB, "editor");
+      assert.deepStrictEqual(yield* roles.holders("owner"), [userA]);
+      assert.deepStrictEqual(yield* roles.holders("nobody"), []);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("BEH-EA-137: a user with no assigned roles still resolves id-only", () =>
     Effect.gen(function* () {
       const resolver = yield* QadiSubjectResolver.SubjectResolver;

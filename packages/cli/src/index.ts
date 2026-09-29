@@ -1,10 +1,19 @@
-// @awthaq/cli — Tools
+// @awthaq/cli — the awthaq command line
 //
-// doctor, plugin list --graph, routes, migration status|apply, openapi, seed admin, import — reads the plugin manifest, never runs the application.
-//
-// Planned first module: cli.ts (spec/behaviors/26-cli.md, BEH-EA-201–208)
+// doctor, config list, plugin list --graph, routes, migration status|apply, openapi,
+// seed admin, import, login|logout|whoami — reads the plugin manifest, never serves the
+// application (spec/behaviors/26-cli.md, BEH-EA-201–208 and 225–229; ADR-EA-027).
 // See spec/overview.md for the full package map.
-//
-// Empty placeholder — awthaq is pre-implementation. No exported symbols yet.
 
-export {};
+export * as Cli from "./Cli.ts";
+export * as CliErrors from "./CliErrors.ts";
+export * as Config from "./Config.ts";
+export * as ConfigList from "./ConfigList.ts";
+export * as Database from "./Database.ts";
+export * as Doctor from "./Doctor.ts";
+export * as Migration from "./Migration.ts";
+export * as Openapi from "./Openapi.ts";
+export * as Output from "./Output.ts";
+export * as Plugin from "./Plugin.ts";
+export * as Routes from "./Routes.ts";
+export * as Seed from "./Seed.ts";

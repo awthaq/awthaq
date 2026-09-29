@@ -11,7 +11,7 @@
 // application's own frontend is the one place a user-facing "something
 // went wrong" redirect belongs, not this plugin.
 
-import { Api } from "@awthaq/api";
+import { Api, SessionContract } from "@awthaq/api";
 import { Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -109,6 +109,19 @@ export class AccountExists extends Schema.TaggedError<AccountExists>()(
   { httpApiStatus: 409 },
 ) {}
 
+/**
+ * MNA-003: a native-mode authorize request the server cannot honour as asked —
+ * a `code_challenge` that is not an S256 digest (43 base64url characters), or
+ * one sent without `mode=native`. Rejected rather than dropped: silently
+ * discarding a binding the client thinks it has would hand the exchange code
+ * to anyone who can read the redirect.
+ */
+export class InvalidNativeRequest extends Schema.TaggedError<InvalidNativeRequest>()(
+  "InvalidNativeRequest",
+  {},
+  { httpApiStatus: 400 },
+) {}
+
 export const AuthorizeParams = Schema.Struct({ provider: Schema.String });
 export type AuthorizeParams = typeof AuthorizeParams.Type;
 
@@ -120,6 +133,18 @@ export const AuthorizeQuery = Schema.Struct({
    * authenticated caller (checked in the handler, not the contract).
    */
   link: Schema.optional(Schema.String),
+  /**
+   * MNA-003 (wayfinder ticket 17): `native` returns the flow to a deep link with a
+   * one-time exchange code instead of a session cookie (which a native app's
+   * system browser jar can never hand over). Absent: the browser flow, unchanged.
+   */
+  mode: Schema.optional(Schema.Literal("native")),
+  /**
+   * MNA-003: optional PKCE-style binding for the exchange code (RFC 8252 §8.1,
+   * private-use-scheme interception): `base64url(SHA-256(verifier))` of a secret
+   * the app keeps and presents at redemption as `codeVerifier`. Native mode only.
+   */
+  code_challenge: Schema.optional(Schema.String),
 });
 export type AuthorizeQuery = typeof AuthorizeQuery.Type;
 
@@ -149,7 +174,13 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
       // for `?link=true` from an anonymous caller — `OptionalAuthentication`
       // itself never fails (BEH-EA-029/068's own doc comment), it only
       // ever resolves `CurrentPrincipal`, defaulting to anonymous.
-      error: [ProviderNotFound, ProviderUnavailable, Api.Unauthenticated, Api.RateLimited],
+      error: [
+        ProviderNotFound,
+        ProviderUnavailable,
+        Api.Unauthenticated,
+        Api.RateLimited,
+        InvalidNativeRequest,
+      ],
     }),
   )
   .add(
@@ -175,4 +206,29 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
   )
   .middleware(Api.OptionalAuthentication);
 
-export const OAuthApi = HttpApi.make("auth").add(OAuthGroup);
+export const ExchangePayload = Schema.Struct({
+  /** The `code` query parameter the native redirect carried. */
+  code: Schema.String,
+  /** Required exactly when the authorize request sent a `code_challenge`. */
+  codeVerifier: Schema.optional(Schema.String),
+});
+export type ExchangePayload = typeof ExchangePayload.Type;
+
+/**
+ * MNA-003: the JSON redemption of a native exchange code — the one place the
+ * session token leaves the server for an OAuth sign-in that is not a cookie.
+ * Deliberately outside the `oauth` group's `OptionalAuthentication`, and with
+ * no `CsrfProtection`: it is anonymous, a browser never calls it, and the
+ * unguessable single-use code in the body is the whole authorization (CSRF
+ * defends ambient credentials, of which this request has none). Answers the
+ * same `SessionDto` (with `token`) as password/passkey bearer delivery.
+ */
+export const OAuthExchangeGroup = HttpApiGroup.make("oauth.exchange").add(
+  HttpApiEndpoint.post("token", "/oauth/token", {
+    payload: ExchangePayload,
+    success: SessionContract.SessionDto,
+    error: [OAuthCallbackFailed, Api.RateLimited],
+  }),
+);
+
+export const OAuthApi = HttpApi.make("auth").add(OAuthGroup).add(OAuthExchangeGroup);

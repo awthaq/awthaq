@@ -21,7 +21,7 @@ Enterprise IT/identity teams who provision and deprovision employee accounts cen
 ## Status
 | Property | Value |
 |---|---|
-| Status | Implemented — `@awthaq/scim` ([ADR-EA-023](../decisions/023-enterprise-federation-packages.md), [BEH-EA-241 through 248](../behaviors/30-scim.md)) |
+| Status | Implemented — `@awthaq/scim` ([ADR-EA-023](../decisions/023-enterprise-federation-packages.md), [BEH-EA-246 through 253](../behaviors/30-scim.md)) |
 | Priority | P4 |
 | Enabler(s) | E5 — Identity-provider-as-server |
 | Breaking? | Additive: SCIM would add its own endpoints and its own user-provisioning entry point on top of the existing `Users` service without changing any Planned-MVP or Planned-Phase2 contract; the caveat is that E5 (identity-provider-as-server) is a separable subsystem whose shape is undecided, so "additive" describes the API surface, not the design effort. |
@@ -58,9 +58,9 @@ The mapping and lifecycle questions below the "What is missing" heading were lar
 
 - **Resource id.** The SCIM resource `id` is the awthaq `UserId` (an identifier, never a capability — INV-EA-018).
 - **`externalId`.** The directory's `externalId` is persisted in a table owned by the `scim` package — `scim_resource(scimConnectionId, kind, resourceId, name, externalId)`, which is also the record of *which users and groups a connection provisioned* (the plan named it `scim_external_id`; `externalId` is optional in SCIM, so the row is per provisioned resource, not per external id) — deliberately not as an `Accounts` link and not as a column on `Users`, so no SCIM-specific concept leaks into `@awthaq/core` (ticket 08).
-- **`active: false` is suspension, not deletion.** It maps to `Users.setStatus(userId, "suspended")` composed with `Sessions.revokeAll(userId, "suspended")`; `active: true` maps to `setStatus(userId, "active")`. The `UserSuspended` sign-in gate (`Users.assertCanSignIn`, BEH-EA-046) then refuses every sign-in path while every Account, the identity and the session history remain (ticket 09, SCP-001). This also answers "how a SCIM-deactivated user interacts with already-issued sessions": they are revoked at deactivation, and no new one can be issued.
-- **`DELETE /Users/:id` is a different act.** It unlinks the `scim_external_id` mapping and then, by configuration, either erases the user (`Users.delete`, BEH-EA-046's cascade, running the `BeforeUserDelete` erasure taps) or suspends it; the observable postconditions differ from a deactivation (a deleted user's row, accounts and history are gone).
-- **Email-less directory users.** A directory record without an email creates an `Anonymous` or `Phone` identity user (BEH-EA-041), never a synthetic address; `createOrGet` (SCP-003) makes a retried `POST /Users` idempotent.
+- **`active: false` is suspension, not deletion.** It maps to `Users.setStatus(userId, "suspended")` composed with `Sessions.revokeAll(userId, "suspended")`; `active: true` maps to `setStatus(userId, "active")`. The `UserSuspended` sign-in gate (`Users.assertCanSignIn`, BEH-EA-46) then refuses every sign-in path while every Account, the identity and the session history remain (ticket 09, SCP-001). This also answers "how a SCIM-deactivated user interacts with already-issued sessions": they are revoked at deactivation, and no new one can be issued.
+- **`DELETE /Users/:id` is a different act.** It unlinks the `scim_external_id` mapping and then, by configuration, either erases the user (`Users.delete`, BEH-EA-46's cascade, running the `BeforeUserDelete` erasure taps) or suspends it; the observable postconditions differ from a deactivation (a deleted user's row, accounts and history are gone).
+- **Email-less directory users.** A directory record without an email creates an `Anonymous` or `Phone` identity user (BEH-EA-41), never a synthetic address; `createOrGet` (SCP-003) makes a retried `POST /Users` idempotent.
 
 See the design records: `.scratch/resolve-ready-for-human-findings/issues/08-saml-scim-roadmap-scope.md` and `.../09-userrecord-model-extension.md`.
 

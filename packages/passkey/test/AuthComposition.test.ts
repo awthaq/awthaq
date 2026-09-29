@@ -15,6 +15,12 @@ describe("Auth.make([Passkey])", () => {
         apiVersion: 1,
         tables: ["passkey_credential", "passkey_challenge", "passkey_user_handle"],
         dependsOn: [],
+        groups: [
+          "passkey",
+          "passkey.authenticate",
+          "passkey.credentials",
+          "passkey.reauthenticate",
+        ],
       },
     ]);
   });

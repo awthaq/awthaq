@@ -1,4 +1,4 @@
-// BEH-EA-242 through 245 (spec/behaviors/30-scim.md): SCIM Users — provisioning,
+// BEH-EA-247 through 250 (spec/behaviors/30-scim.md): SCIM Users — provisioning,
 // ownership, immutability, deactivation and deletion — driven at the domain level over
 // the same layer graph an application builds (`support.ts`).
 import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
@@ -33,7 +33,7 @@ const patch = (
     return yield* scim.patchUser(connection, id, { Operations: operations });
   });
 
-describe("SCIM Users: provisioning and ownership (BEH-EA-242)", () => {
+describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
   it.effect("POST creates the user, links it to the connection and joins the organization", () =>
     Effect.gen(function* () {
       const { connection, organizationId } = yield* seedConnection();
@@ -234,7 +234,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-242)", () => {
   );
 });
 
-describe("SCIM Users: userName is immutable, other attributes update (BEH-EA-243)", () => {
+describe("SCIM Users: userName is immutable, other attributes update (BEH-EA-248)", () => {
   it.effect("re-sending the same userName is fine; changing it is 400 mutability, on PUT and PATCH", () =>
     Effect.gen(function* () {
       const { connection } = yield* seedConnection();
@@ -302,7 +302,7 @@ describe("SCIM Users: userName is immutable, other attributes update (BEH-EA-243
   );
 });
 
-describe("SCIM Users: active is suspension (BEH-EA-244)", () => {
+describe("SCIM Users: active is suspension (BEH-EA-249)", () => {
   it.effect("active:false suspends the user and revokes every live session at once", () =>
     Effect.gen(function* () {
       const { connection } = yield* seedConnection();
@@ -392,7 +392,7 @@ describe("SCIM Users: active is suspension (BEH-EA-244)", () => {
   );
 });
 
-describe("SCIM Users: DELETE (BEH-EA-245)", () => {
+describe("SCIM Users: DELETE (BEH-EA-250)", () => {
   it.effect("by default DELETE deactivates: the user, its accounts and history remain", () =>
     Effect.gen(function* () {
       const { connection } = yield* seedConnection();
@@ -434,7 +434,7 @@ describe("SCIM Users: DELETE (BEH-EA-245)", () => {
 
 // A bearer token is only ever a hash at rest — the connection store's own guarantee, asserted next to
 // the resource tests because it is what every request above authenticates with.
-describe("SCIM connections (BEH-EA-241)", () => {
+describe("SCIM connections (BEH-EA-246)", () => {
   it.effect("the token is shown once and only its hash is stored", () =>
     Effect.gen(function* () {
       const { token } = yield* seedConnection();

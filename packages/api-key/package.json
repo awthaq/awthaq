@@ -2,7 +2,7 @@
   "name": "@awthaq/api-key",
   "version": "0.1.0",
   "private": true,
-  "description": "Long-lived API keys resolving to service principals.",
+  "description": "Long-lived API keys and client_credentials service identity: hashed-at-rest keys, rotation with a grace window, short-lived service JWTs.",
   "license": "MIT",
   "files": [
     "lib",
@@ -27,12 +27,16 @@
   "dependencies": {
     "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
+    "@awthaq/jwt": "workspace:*",
     "@awthaq/ports": "workspace:*",
     "@awthaq/server": "workspace:*",
     "@awthaq/sql": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@awthaq/test": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

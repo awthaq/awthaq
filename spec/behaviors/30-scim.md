@@ -12,9 +12,9 @@
 > | Change History | 1.0 (2026-09-29): Initial release, implementing [MOD-EA-012](../models/12-scim.md) as `@awthaq/scim` (CWM-002, AOMS-009; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) |
 ---
 
-> `@awthaq/scim` composes as `Auth.make([Organization, Scim])` (`Scim` `dependsOn: [Organization]`), serves `/scim/v2` per RFC 7644, and stands on the user status of [BEH-EA-046](06-domain-users-accounts.md) and `Sessions.revokeAll`. Everything below is what a directory service (Okta, Entra ID, OneLogin) relies on, plus the safety rules that keep an organization's directory from reaching accounts it did not create.
+> `@awthaq/scim` composes as `Auth.make([Organization, Scim])` (`Scim` `dependsOn: [Organization]`), serves `/scim/v2` per RFC 7644, and stands on the user status of [BEH-EA-46](06-domain-users-accounts.md) and `Sessions.revokeAll`. Everything below is what a directory service (Okta, Entra ID, OneLogin) relies on, plus the safety rules that keep an organization's directory from reaching accounts it did not create.
 
-## BEH-EA-241: A SCIM connection authenticates by a hashed, revocable bearer token and scopes everything it reads
+## BEH-EA-246: A SCIM connection authenticates by a hashed, revocable bearer token and scopes everything it reads
 
 ```text
 REQUIREMENT: Every `/scim/v2` request MUST carry `Authorization: Bearer
@@ -24,7 +24,7 @@ REQUIREMENT: Every `/scim/v2` request MUST carry `Authorization: Bearer
              bits), looked up by that hash and compared in constant time. An
              absent, malformed, unknown or revoked token, and the token of a
              connection whose organization is missing or suspended
-             ([BEH-EA-232](28-tenancy.md)), MUST all answer the same 401. No
+             ([BEH-EA-237](28-tenancy.md)), MUST all answer the same 401. No
              cookie is ever trusted, which is why no CSRF check applies.
              Every resource lookup MUST be keyed by the calling connection: a
              token for connection A can neither read nor change connection B's
@@ -33,9 +33,9 @@ REQUIREMENT: Every `/scim/v2` request MUST carry `Authorization: Bearer
 
 The token is a bearer credential for a machine, so it is treated like one: hashed at rest (a database read discloses nothing an IdP could present), revocable without deleting what it provisioned, and never accepted in a way that distinguishes "wrong" from "revoked".
 
-_Previous: [BEH-EA-240](29-saml-sp.md#beh-ea-240-the-nameid-links-to-an-account-through-the-connection-never-by-email-alone) | Next: [BEH-EA-242](30-scim.md#beh-ea-242-a-connection-acts-only-on-the-users-it-provisioned-and-never-adopts-an-existing-account)_
+_Previous: [BEH-EA-245](29-saml-sp.md#beh-ea-245-the-nameid-links-to-an-account-through-the-connection-never-by-email-alone) | Next: [BEH-EA-247](30-scim.md#beh-ea-247-a-connection-acts-only-on-the-users-it-provisioned-and-never-adopts-an-existing-account)_
 
-## BEH-EA-242: A connection acts only on the users it provisioned, and never adopts an existing account
+## BEH-EA-247: A connection acts only on the users it provisioned, and never adopts an existing account
 
 ```text
 REQUIREMENT: `POST /Users` MUST create the user (an `Email` identity from the
@@ -54,9 +54,9 @@ REQUIREMENT: `POST /Users` MUST create the user (an `Email` identity from the
 
 This is the rule that keeps SCIM safe on a global identity directory ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md) Decision 4): if a directory could name any user, one organization's token could claim, then deactivate, another organization's account by email.
 
-_Previous: [BEH-EA-241](30-scim.md#beh-ea-241-a-scim-connection-authenticates-by-a-hashed-revocable-bearer-token-and-scopes-everything-it-reads) | Next: [BEH-EA-243](30-scim.md#beh-ea-243-username-is-immutable-and-the-other-attributes-update-per-put-and-patch)_
+_Previous: [BEH-EA-246](30-scim.md#beh-ea-246-a-scim-connection-authenticates-by-a-hashed-revocable-bearer-token-and-scopes-everything-it-reads) | Next: [BEH-EA-248](30-scim.md#beh-ea-248-username-is-immutable-and-the-other-attributes-update-per-put-and-patch)_
 
-## BEH-EA-243: `userName` is immutable and the other attributes update per `PUT` and `PATCH`
+## BEH-EA-248: `userName` is immutable and the other attributes update per `PUT` and `PATCH`
 
 ```text
 REQUIREMENT: A `PUT` or `PATCH` that would change a provisioned user's
@@ -72,9 +72,9 @@ REQUIREMENT: A `PUT` or `PATCH` that would change a provisioned user's
 
 An IdP-driven email change would be an account-takeover path (change the address, then reset the password to it), so identity attributes are fixed at creation; everything else a directory legitimately maintains is writable.
 
-_Previous: [BEH-EA-242](30-scim.md#beh-ea-242-a-connection-acts-only-on-the-users-it-provisioned-and-never-adopts-an-existing-account) | Next: [BEH-EA-244](30-scim.md#beh-ea-244-active-is-suspension-that-ends-every-session-and-only-its-own-suspension-is-lifted)_
+_Previous: [BEH-EA-247](30-scim.md#beh-ea-247-a-connection-acts-only-on-the-users-it-provisioned-and-never-adopts-an-existing-account) | Next: [BEH-EA-249](30-scim.md#beh-ea-249-active-is-suspension-that-ends-every-session-and-only-its-own-suspension-is-lifted)_
 
-## BEH-EA-244: `active` is suspension that ends every session, and only its own suspension is lifted
+## BEH-EA-249: `active` is suspension that ends every session, and only its own suspension is lifted
 
 ```text
 REQUIREMENT: `active: false` MUST be `Users.setStatus(userId, "suspended")`
@@ -92,13 +92,13 @@ REQUIREMENT: `active: false` MUST be `Users.setStatus(userId, "suspended")`
 
 Offboarding is the case SCIM exists for: an application that leaves a terminated employee's sessions alive fails it. And a directory sync must never be able to undo a security decision made outside it.
 
-_Previous: [BEH-EA-243](30-scim.md#beh-ea-243-username-is-immutable-and-the-other-attributes-update-per-put-and-patch) | Next: [BEH-EA-245](30-scim.md#beh-ea-245-delete-deactivates-by-default-and-erases-when-configured)_
+_Previous: [BEH-EA-248](30-scim.md#beh-ea-248-username-is-immutable-and-the-other-attributes-update-per-put-and-patch) | Next: [BEH-EA-250](30-scim.md#beh-ea-250-delete-deactivates-by-default-and-erases-when-configured)_
 
-## BEH-EA-245: `DELETE` deactivates by default and erases when configured
+## BEH-EA-250: `DELETE` deactivates by default and erases when configured
 
 ```text
 REQUIREMENT: `DELETE /Users/:id` MUST, by default, behave as `active: false`
-             (BEH-EA-244): the user, its accounts and history remain, and the
+             (BEH-EA-249): the user, its accounts and history remain, and the
              resource stays readable as inactive. When `ScimConfig.deleteBehavior`
              is `"erase"`, it MUST revoke every session, remove the mapping and
              delete the user through `Users.delete` (so the `BeforeUserDelete`
@@ -108,9 +108,9 @@ REQUIREMENT: `DELETE /Users/:id` MUST, by default, behave as `active: false`
 
 The two observable postconditions differ on purpose (a deleted user's row, accounts and history are gone), which is why erasure is opt-in.
 
-_Previous: [BEH-EA-244](30-scim.md#beh-ea-244-active-is-suspension-that-ends-every-session-and-only-its-own-suspension-is-lifted) | Next: [BEH-EA-246](30-scim.md#beh-ea-246-groups-are-organization-teams-and-a-connection-only-changes-the-users-it-provisioned)_
+_Previous: [BEH-EA-249](30-scim.md#beh-ea-249-active-is-suspension-that-ends-every-session-and-only-its-own-suspension-is-lifted) | Next: [BEH-EA-251](30-scim.md#beh-ea-251-groups-are-organization-teams-and-a-connection-only-changes-the-users-it-provisioned)_
 
-## BEH-EA-246: Groups are organization teams, and a connection only changes the users it provisioned
+## BEH-EA-251: Groups are organization teams, and a connection only changes the users it provisioned
 
 ```text
 REQUIREMENT: A SCIM Group MUST be an organization team of the connection's
@@ -127,9 +127,9 @@ REQUIREMENT: A SCIM Group MUST be an organization team of the connection's
 
 Teams also have hierarchy and roles the SCIM model has no words for; the directory sees a flat group of the users it owns, and everything else about the team stays the organization's.
 
-_Previous: [BEH-EA-245](30-scim.md#beh-ea-245-delete-deactivates-by-default-and-erases-when-configured) | Next: [BEH-EA-247](30-scim.md#beh-ea-247-the-wire-format-follows-rfc-7644-content-types-filters-paging-errors-and-discovery)_
+_Previous: [BEH-EA-250](30-scim.md#beh-ea-250-delete-deactivates-by-default-and-erases-when-configured) | Next: [BEH-EA-252](30-scim.md#beh-ea-252-the-wire-format-follows-rfc-7644-content-types-filters-paging-errors-and-discovery)_
 
-## BEH-EA-247: The wire format follows RFC 7644: content types, filters, paging, errors and discovery
+## BEH-EA-252: The wire format follows RFC 7644: content types, filters, paging, errors and discovery
 
 ```text
 REQUIREMENT: Responses MUST be `application/scim+json`; a request body MUST be
@@ -148,9 +148,9 @@ REQUIREMENT: Responses MUST be `application/scim+json`; a request body MUST be
 
 Not supported, and reported as such: `/Bulk`, `sortBy`, `/Me`, ETag concurrency and compound filters.
 
-_Previous: [BEH-EA-246](30-scim.md#beh-ea-246-groups-are-organization-teams-and-a-connection-only-changes-the-users-it-provisioned) | Next: [BEH-EA-248](30-scim.md#beh-ea-248-provisioning-lifecycle-changes-are-published-as-events)_
+_Previous: [BEH-EA-251](30-scim.md#beh-ea-251-groups-are-organization-teams-and-a-connection-only-changes-the-users-it-provisioned) | Next: [BEH-EA-253](30-scim.md#beh-ea-253-provisioning-lifecycle-changes-are-published-as-events)_
 
-## BEH-EA-248: Provisioning lifecycle changes are published as events
+## BEH-EA-253: Provisioning lifecycle changes are published as events
 
 ```text
 REQUIREMENT: The plugin MUST publish `auth.scim.userProvisioned`,
@@ -165,4 +165,4 @@ REQUIREMENT: The plugin MUST publish `auth.scim.userProvisioned`,
 
 The audit actor is the connection, not a user: the connection id rides in the event payload, and no user id is recorded as the actor.
 
-_Previous: [BEH-EA-247](30-scim.md#beh-ea-247-the-wire-format-follows-rfc-7644-content-types-filters-paging-errors-and-discovery)_
+_Previous: [BEH-EA-252](30-scim.md#beh-ea-252-the-wire-format-follows-rfc-7644-content-types-filters-paging-errors-and-discovery)_

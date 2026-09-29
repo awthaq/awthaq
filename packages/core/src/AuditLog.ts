@@ -89,6 +89,12 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.organization.teamMemberRoleUpdated":
     case "auth.organization.teamMemberRemoved":
     case "auth.organization.permissionDenied":
+    case "auth.apiKey.created":
+    case "auth.apiKey.revoked":
+    case "auth.apiKey.rotated":
+    case "auth.apiKey.clientRegistered":
+    case "auth.apiKey.clientRevoked":
+    case "auth.apiKey.clientSecretRotated":
       return Option.some(event.userId);
     case "auth.admin.impersonationStarted":
     case "auth.admin.impersonationDenied":
@@ -124,6 +130,11 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.scim.userReactivated":
     case "auth.scim.userDeleted":
     case "auth.scim.groupChanged":
+    // ECS-006/ECS-002: a CLI run has no session, so no actor; the seeded target is in the payload.
+    case "auth.admin.seeded":
+    case "auth.admin.seedRefused":
+    case "auth.import.completed":
+    case "auth.import.failed":
     case "auth.organization.updated":
     case "auth.organization.deleted":
     case "auth.organization.invitationCreated":

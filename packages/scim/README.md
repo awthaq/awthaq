@@ -1,6 +1,6 @@
 # @awthaq/scim
 
-Inbound **SCIM 2.0** (RFC 7643/7644) provisioning: an organization's identity provider (Okta, Entra ID, OneLogin) creates, updates and deactivates its users and groups over `/scim/v2`, and **deactivation ends their sessions at once**. Specified in [`spec/behaviors/30-scim.md`](../../spec/behaviors/30-scim.md) (BEH-EA-241 through 248) and [`spec/models/12-scim.md`](../../spec/models/12-scim.md); the scope decision is [ADR-EA-023](../../spec/decisions/023-enterprise-federation-packages.md).
+Inbound **SCIM 2.0** (RFC 7643/7644) provisioning: an organization's identity provider (Okta, Entra ID, OneLogin) creates, updates and deactivates its users and groups over `/scim/v2`, and **deactivation ends their sessions at once**. Specified in [`spec/behaviors/30-scim.md`](../../spec/behaviors/30-scim.md) (BEH-EA-246 through 253) and [`spec/models/12-scim.md`](../../spec/models/12-scim.md); the scope decision is [ADR-EA-023](../../spec/decisions/023-enterprise-federation-packages.md).
 
 ```ts
 const auth = Auth.make([Organization.Organization, Scim.Scim]); // Scim dependsOn [Organization]

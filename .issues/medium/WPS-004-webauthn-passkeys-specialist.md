@@ -3,7 +3,7 @@ ID: "WPS-004"
 Title: "Plugin sets the session cookie itself, contradicting BEH-EA-131 and un-skipped scenario REQ-EA-362"
 Level: medium
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:317"
 Auditor: "webauthn-passkeys-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `compliance` · `passkey` · reported by **WebAuthn/Passkeys Implementation Specialist** (`webauthn-passkeys-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-delivery`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:362`. Fix: Introduce one shared session-delivery helper (owned by @awthaq/api/server, implementing ticket 17's cookie-or-bearer choice) and route every session-minting handler through it; amend BEH-EA-131 accordingly. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
 
 **Plan note (2026-09-29, P08):** left open. P08 (passkey) kept its own `securitySetCookie` in the `authenticateVerify` handler untouched (`packages/passkey/src/Passkey.ts`, handler group `passkey.authenticate`); moving it to the shared session-delivery abstraction belongs to P16/`session-delivery`. When that lands, the passkey handler only needs to swap its cookie call for the shared helper. P08 also made `authenticateVerify`'s handler receive the resolved client address (via `ClientAddress`), which is the natural place for the delivery context.
+
+**Resolved (2026-09-29):** Session delivery is one shared helper: @awthaq/server SessionDelivery (mode + deliver, see MNA-001). Password (signUp/signIn/changePassword) and Passkey (authenticateVerify) no longer call SessionCookie.set themselves (grep: no plugin src writes the session cookie directly except admin's impersonation-kind cookie). BEH-EA-131 reworded ('MUST deliver only through the shared SessionDelivery helper'); features REQ-EA-362 scenario/step text updated to match (still asserts the __Host-session cookie in default mode). Test: packages/passkey/test/AuthHttp.test.ts 'WPS-004: authenticate/verify with X-Awthaq-Token-Delivery: bearer returns the token and sets no cookie' (unknown value 400 without consuming the ceremony). Gates as MNA-001.

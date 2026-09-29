@@ -53,10 +53,10 @@ export class Saml extends AuthPlugin.Service<Saml, {
 No worked example drafted yet. Neither `archive/design/usage-examples-v4.md` nor `archive/design/usage-qadi.md` carries a SAML section as of this revision.
 
 ## The contract (`SamlApi`)
-Two endpoints under the `saml` group ([BEH-EA-004](../behaviors/01-plugin-contract.md)):
+Two endpoints under the `saml` group ([BEH-EA-4](../behaviors/01-plugin-contract.md)):
 
 - `GET /auth/saml/metadata?connection=<id>` — the SP metadata XML for one connection (entity id, the ACS URL, `WantAssertionsSigned="true"`, the SP's own signing certificate when AuthnRequests are signed).
-- `POST /auth/saml/acs` — the Assertion Consumer Service: `SAMLResponse` (and `RelayState`) as a form post. Success mints a session exactly like every other sign-in path (`Users.assertCanSignIn` first, [BEH-EA-046](../behaviors/06-domain-users-accounts.md)); every validation failure is one uniform `SamlAssertionRejected` (no oracle on *which* check failed).
+- `POST /auth/saml/acs` — the Assertion Consumer Service: `SAMLResponse` (and `RelayState`) as a form post. Success mints a session exactly like every other sign-in path (`Users.assertCanSignIn` first, [BEH-EA-46](../behaviors/06-domain-users-accounts.md)); every validation failure is one uniform `SamlAssertionRejected` (no oracle on *which* check failed).
 
 SP-initiated login starts from the `Sso` dispatcher ([ADR-EA-023](../decisions/023-enterprise-federation-packages.md) Decision 4) or `Saml.authnRequest(connectionId)`, which reserves the request id (see below) and returns the redirect.
 
@@ -94,7 +94,7 @@ interface SamlSignerShape {
 The contract is what makes signature wrapping (XSW) unrepresentable: `verifyResponse` returns data extracted from *the element the verified signature covers*, never from "an Assertion somewhere in the document"; exclusive C14N is internal; an algorithm outside the allow-list (RSA-SHA256 or stronger, no SHA-1) is a `SamlVerificationError`; a certificate outside its `notBefore`/`notAfter` window is not trusted, so an IdP rotating its signing key can publish both certificates for the overlap.
 
 ## What is missing
-The `@awthaq/saml` package itself and the `SamlSigner` implementation. The behavior each step of the validation chain owes — size cap, structural parse, assertion cardinality, signature over the processed element, issuer, audience/recipient/destination, time window, single-consume request id, account link — is fixed in [`../behaviors/29-saml-sp.md`](../behaviors/29-saml-sp.md) (BEH-EA-233 through 240), including the canonicalization and signature-wrapping defenses, so the implementation has a normative target before it exists. IdP-initiated (unsolicited) responses are refused by default. See `research/03-auth-landscape.md` for the demand evidence.
+The `@awthaq/saml` package itself and the `SamlSigner` implementation. The behavior each step of the validation chain owes — size cap, structural parse, assertion cardinality, signature over the processed element, issuer, audience/recipient/destination, time window, single-consume request id, account link — is fixed in [`../behaviors/29-saml-sp.md`](../behaviors/29-saml-sp.md) (BEH-EA-238 through 245), including the canonicalization and signature-wrapping defenses, so the implementation has a normative target before it exists. IdP-initiated (unsolicited) responses are refused by default. See `research/03-auth-landscape.md` for the demand evidence.
 
 ## Verification
 None yet — no test exists.

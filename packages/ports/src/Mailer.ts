@@ -70,6 +70,12 @@ export interface MailerShape {
    */
   readonly send: (message: MailMessage) => Effect.Effect<void, MailDeliveryFailed>;
   readonly sent: Effect.Effect<ReadonlyArray<MailMessage>>;
+  /**
+   * ECS-005/BEH-EA-201: set by the implementations that must never reach production
+   * (`layerNoop`, `layerMemory`) so `awthaq doctor --build` can flag one left in a
+   * production composition. A real provider leaves it unset.
+   */
+  readonly development?: true;
 }
 
 export class Mailer extends Context.Service<Mailer, MailerShape>()("awthaq/ports/Mailer") {}
@@ -92,6 +98,7 @@ export const layerNoop: Layer.Layer<Mailer> = Layer.succeed(
         ),
       ),
     sent: Effect.succeed([]),
+    development: true,
   }),
 );
 
@@ -103,6 +110,7 @@ export const layerMemory: Layer.Layer<Mailer> = Layer.effect(
     return Mailer.of({
       send: (message) => Ref.update(messages, (existing) => [...existing, message]),
       sent: Ref.get(messages),
+      development: true,
     });
   }),
 );

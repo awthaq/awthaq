@@ -26,6 +26,7 @@ describe("Auth.make([Organization])", () => {
           "organization_oauth_connection_domain",
         ],
         dependsOn: [],
+        groups: ["organization"],
       },
     ]);
   });

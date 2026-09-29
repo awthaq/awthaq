@@ -3,7 +3,7 @@ ID: "MAPS-004"
 Title: "Auth scheme chain is a closed two-key record - no seam for new credentials"
 Level: medium
 Category: "architecture"
-Status: ready-for-human
+Status: resolved
 Package: "api"
 Source: "packages/api/src/Api.ts:118"
 Auditor: "microservices-auth-propagation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `api` · reported by **Microservices Auth Propagation Specialist** (`microservices-auth-propagation-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Introduce a declarative, ordered scheme registry (e.g. a Slot-style Context.Refe
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bearer-credential-extensibility`. Evidence at HEAD ec065a7: `packages/api/src/Api.ts:110`. Fix: Generalize decision 33's single BearerCredentialResolver into an ordered, plugin-contributed registry of bearer resolvers, so jwt and api-key (and later SCIM) can each claim bearer credentials without editing @awthaq/api or @awthaq/server. (effort M). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option (a) per plan; user may revisit. The registry landed with MAPS-001 (Authentication.CredentialResolvers/CredentialResolversLive/contribute/resolveClaimed, ADR-EA-012 aggregating registry ordered by order then id, frozen at first read, duplicate ids refused); @awthaq/jwt contributes 'jwt' (bearer carrier) and @awthaq/api-key contributes 'apikey.service-token' (bearer) and 'apikey.key' (apiKey carrier) with Layers alone — no edit to @awthaq/api's Authentication or the server. Refinement: the registry serves two carriers (bearer, apiKey) and the x-api-key scheme sits on a new Api.MachineAuthentication (option (c) rejected for Api.Authentication because it would expose every user-tier group to API keys); Api.Authentication's three-key security record and BEH-EA-072 ordering are unchanged (test pins both). Tests: packages/server/test/CredentialResolvers.test.ts ('two contributions: first claims() match resolves', 'failing claimed credential -> Unauthenticated, later not tried', 'no match falls through to Sessions.verify'). spec/models/07 no longer says 'a third scheme'.

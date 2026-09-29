@@ -1,6 +1,6 @@
 // @awthaq/organization — OrganizationConnections
 //
-// EP-004/CWM-001 (wayfinder ticket 18, ADR-EA-018, BEH-EA-230): per-organization
+// EP-004/CWM-001 (wayfinder ticket 18, ADR-EA-018, BEH-EA-235): per-organization
 // OAuth/OIDC connections — the WorkOS "connection per organization" model — as
 // *data*, additive to `@awthaq/oauth`'s static provider array (which stays
 // exactly as is for Google/GitHub-style consumer sign-in).
@@ -179,7 +179,7 @@ const buildSet = (organizationId: string) =>
   });
 
 /**
- * BEH-EA-230: a `LayerMap.Service` keyed by organization id. Requires
+ * BEH-EA-235: a `LayerMap.Service` keyed by organization id. Requires
  * `ConnectionRecords` and `Encryption`; provide `OrganizationConnections.layer`.
  */
 export class OrganizationConnections extends LayerMap.Service<OrganizationConnections>()(
@@ -192,7 +192,7 @@ export class OrganizationConnections extends LayerMap.Service<OrganizationConnec
   },
 ) {}
 
-/** Installs the resolver `@awthaq/oauth` consults after its static registry (BEH-EA-230). */
+/** Installs the resolver `@awthaq/oauth` consults after its static registry (BEH-EA-235). */
 export const oauthConnections = Layer.effect(
   OAuthConnections.OAuthConnectionResolver,
   Effect.gen(function* () {

@@ -48,6 +48,7 @@ import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -92,6 +93,32 @@ const HeaderSchema = Schema.Struct({
   kid: Schema.optional(Schema.String),
   typ: Schema.optional(Schema.String),
 });
+
+/**
+ * MAPS-001/MAPS-004: the JOSE header `typ` of a compact JWT, read without
+ * verifying anything, or `None` for a credential that is not three
+ * dot-separated segments with a JSON header. Only public structure is looked
+ * at, so a bearer-credential contribution can claim "a principal token"
+ * (`at+jwt`) versus "a service token" before any signature check runs and
+ * without an opaque session token ever being mistaken for either.
+ */
+export const peekTyp = (token: string): Option.Option<string> => {
+  const [header, payload, signature, ...rest] = token.split(".");
+  if (
+    header === undefined ||
+    header === "" ||
+    payload === undefined ||
+    signature === undefined ||
+    rest.length > 0
+  ) {
+    return Option.none();
+  }
+  return Encoding.decodeBase64UrlString(header).pipe(
+    Option.getSuccess,
+    Option.flatMap(Schema.decodeUnknownOption(Schema.fromJsonString(HeaderSchema))),
+    Option.flatMapNullishOr((decoded) => decoded.typ),
+  );
+};
 
 interface AlgorithmSpec {
   /** `kty` a JWK for this algorithm must carry. */

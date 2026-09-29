@@ -1,4 +1,4 @@
-// BEH-EA-241 and 247 (spec/behaviors/30-scim.md), over real HTTP: bearer
+// BEH-EA-246 and 247 (spec/behaviors/30-scim.md), over real HTTP: bearer
 // authentication, content types, the RFC 7644 wire shapes and error bodies, and the
 // discovery documents — through `HttpRouter.toWebHandler`, the way a directory
 // service's HTTP client would reach the plugin.
@@ -85,7 +85,7 @@ const json = async (response: Response): Promise<Record<string, unknown>> => {
   return typeof value === "object" && value !== null ? Object.fromEntries(Object.entries(value)) : {};
 };
 
-describe("SCIM over HTTP: authentication (BEH-EA-241)", () => {
+describe("SCIM over HTTP: authentication (BEH-EA-246)", () => {
   it.effect("a request without a token, with a wrong token, or with a malformed token is 401", () =>
     Effect.gen(function* () {
       const { handler } = buildApp();
@@ -148,7 +148,7 @@ describe("SCIM over HTTP: authentication (BEH-EA-241)", () => {
   );
 });
 
-describe("SCIM over HTTP: what the token is checked against (BEH-EA-241)", () => {
+describe("SCIM over HTTP: what the token is checked against (BEH-EA-246)", () => {
   it.effect("only the token's hash is stored, and the hash is what authenticates", () =>
     Effect.gen(function* () {
       const { inside } = buildApp();
@@ -195,7 +195,7 @@ describe("SCIM over HTTP: what the token is checked against (BEH-EA-241)", () =>
   );
 });
 
-describe("SCIM over HTTP: wire format (BEH-EA-247)", () => {
+describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
   it.effect("responses are application/scim+json; bodies are accepted as scim+json or plain json", () =>
     Effect.gen(function* () {
       const { handler, inside } = buildApp();

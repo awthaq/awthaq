@@ -433,6 +433,8 @@ export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate"
         Users.UserSuspended,
         Api.RateLimited,
         Hooks.TwoFactorRequired,
+        // MNA-001: an unrecognised `X-Awthaq-Token-Delivery` value.
+        Api.InvalidTokenDelivery,
       ],
     }),
   )

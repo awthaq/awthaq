@@ -1,6 +1,6 @@
 // @awthaq/scim — Scim
 //
-// spec/behaviors/30-scim.md, BEH-EA-241 through 248; spec/models/12-scim.md;
+// spec/behaviors/30-scim.md, BEH-EA-246 through 253; spec/models/12-scim.md;
 // ADR-EA-023. `Auth.make([Organization, Scim])` composes: `Scim` `dependsOn:
 // [Organization]` — a SCIM connection belongs to one organization, a provisioned
 // user becomes a member of it, and a SCIM Group is one of its teams.
@@ -542,7 +542,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       // ---- lifecycle ---------------------------------------------------------------------------
 
       /**
-       * BEH-EA-245: `active` is suspension. Deactivating suspends and ends every session; reactivating
+       * BEH-EA-250: `active` is suspension. Deactivating suspends and ends every session; reactivating
        * lifts only a suspension this connection made. Returns the user as it stands afterwards.
        */
       const applyActive = Effect.fnUntraced(function* (

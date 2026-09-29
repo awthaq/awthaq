@@ -1,6 +1,6 @@
 // @awthaq/admin — AdminTenants
 //
-// EP-003 (wayfinder ticket 19 §3, ADR-EA-018, BEH-EA-232): the platform
+// EP-003 (wayfinder ticket 19 §3, ADR-EA-018, BEH-EA-237): the platform
 // administrator's tenant-administration surface — list and read organizations,
 // suspend and reinstate them — as an opt-in second plugin:
 // `Auth.make([Organization, Admin, AdminTenants])`. `Admin` itself stays free of

@@ -2217,7 +2217,7 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
   );
 });
 
-// ---- EP-007 (ADR-EA-018, BEH-EA-231): per-tenant configuration in one composition ------------
+// ---- EP-007 (ADR-EA-018, BEH-EA-236): per-tenant configuration in one composition ------------
 
 describe("Per-tenant configuration (EP-007)", () => {
   /** The application's own map: tenant id -> that tenant's `Organization.config(...)`. */

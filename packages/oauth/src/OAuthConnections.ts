@@ -5,7 +5,7 @@
 // static registry. This plugin never imports the organization plugin (plugins
 // do not depend on one another's stratum): the resolver is a port-shaped
 // callback, and `@awthaq/organization` provides one backed by its
-// `organization_oauth_connection` table (BEH-EA-230).
+// `organization_oauth_connection` table (BEH-EA-235).
 //
 // A `Context.Reference` with a default (ADR-EA-011): nothing has to provide it,
 // an unprovided read is "no connections", and the static providers behave

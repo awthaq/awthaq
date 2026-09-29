@@ -53,3 +53,5 @@ When api-key and two-factor land, store only digests of key material (mirror Ses
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence medium); workstream `apikey-machine-identity`. Duplicate of `OCM-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/api-key/src/index.ts:8`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `OCM-002-oauth2-client-credentials-m2m-specialist` — closed by its fix (see that issue's Resolved comment).

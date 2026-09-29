@@ -36,7 +36,7 @@ REQUIREMENT: `Sessions.issue` MUST accept an optional `actingAs` reference;
 
 **Self-act-as is refused in the primitive (IDS-008).** `Sessions.issue` (both layers) MUST die with `InvalidActingAs` when `actingAs` names the session's own user (`type: "user"`, `id === userId`) — a programming error in the producing plugin, so a defect, leaving `issue`'s public error channel unchanged. The nesting rule ([BEH-EA-214](27-admin-impersonation.md#beh-ea-214-self-impersonation-and-nested-impersonation-are-refused)) needs the *caller's* session, which `issue` never sees, so it stays with the producer; `Admin.impersonate` is the reference implementation.
 
-_Previous: [BEH-EA-208](26-cli.md#beh-ea-208-the-cli-reads-the-manifest-it-never-runs-the-application) | Next: [BEH-EA-210](27-admin-impersonation.md#beh-ea-210-a-session-carrying-actingas-never-idle-refreshes)_
+_Previous: [BEH-EA-229](26-cli.md#beh-ea-229-plugins-declare-their-configuration-statically-and-config-list-prints-it-redacted) | Next: [BEH-EA-210](27-admin-impersonation.md#beh-ea-210-a-session-carrying-actingas-never-idle-refreshes)_
 
 ## BEH-EA-210: A session carrying `actingAs` never idle-refreshes
 
@@ -423,4 +423,4 @@ REQUIREMENT: `Admin` MUST publish `auth.admin.actionDenied { adminUserId,
 
 Denials, changes and revocations are exactly the events a security review reconstructs "who did what to whom" from; making them `AuthEvent`s (rather than logs) puts them on the durable audit path BEH-EA-100 already guarantees, with no per-plugin persistence.
 
-_Previous: [BEH-EA-223](27-admin-impersonation.md#beh-ea-223-an-admin-manages-a-users-own-sessions-never-an-impersonation-episodes) | Next: [BEH-EA-225](28-tenancy.md#beh-ea-225-the-tenant-is-an-ambient-reference-that-defaults-to-none)_
+_Previous: [BEH-EA-223](27-admin-impersonation.md#beh-ea-223-an-admin-manages-a-users-own-sessions-never-an-impersonation-episodes) | Next: [BEH-EA-230](28-tenancy.md#beh-ea-230-the-tenant-is-an-ambient-reference-that-defaults-to-none)_

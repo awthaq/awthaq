@@ -1,4 +1,4 @@
-// BEH-EA-246 (spec/behaviors/30-scim.md): SCIM Groups are organization teams, and a
+// BEH-EA-251 (spec/behaviors/30-scim.md): SCIM Groups are organization teams, and a
 // connection only ever sees and changes the users it provisioned.
 import { AuditLog, Users } from "@awthaq/core";
 import { TeamRecords } from "@awthaq/organization";
@@ -27,7 +27,7 @@ const patchGroup = (
 
 const memberIds = (group: ScimApi.GroupResource) => group.members.map((member) => member.value).sort();
 
-describe("SCIM Groups (BEH-EA-246)", () => {
+describe("SCIM Groups (BEH-EA-251)", () => {
   it.effect("POST creates an organization team with its provisioned members", () =>
     Effect.gen(function* () {
       const { connection, organizationId } = yield* seedConnection();

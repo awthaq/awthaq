@@ -21,6 +21,8 @@ One `.feature` file per `spec/behaviors/NN-*.md` file (27 total), grouped into 1
 | `08-tooling/`                        | testing-harness, cli                                                                       | 193–208        |
 | `09-admin-and-impersonation/`        | admin-impersonation                                                                        | 209–220        |
 
+One exception: `05-authentication-methods/28-device-authorization.feature` (`@skip @unwired`, DAG-007) specifies a plugin that has no behavior file or `BEH-EA` range yet, so its `Rule:`s are tagged `@MOD-EA-013` and trace to [`spec/models/13-device-authorization.md`](../spec/models/13-device-authorization.md); it gets `BEH-EA` ids when a milestone schedules the plugin.
+
 Inside each `.feature` file: one `Rule:` per `BEH-EA-NNN` (tagged `@BEH-EA-NNN`), one or more `Scenario:`/`Scenario Outline:` per rule covering its requirement clauses and the edge cases the source prose names. See [`STYLE.md`](STYLE.md) for the full authoring contract, and [`traceability.md`](traceability.md) for the complete `REQ-EA-NNN` → `BEH-EA-NNN` → scenario manifest.
 
 ## Authorization is out of scope here
