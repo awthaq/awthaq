@@ -24,6 +24,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Cookies from "effect/unstable/http/Cookies";
 import * as Etag from "effect/unstable/http/Etag";
+import * as Headers from "effect/unstable/http/Headers";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
@@ -762,6 +763,38 @@ describe("AuthHttp (BEH-EA-087's ManagedRuntime escape hatch)", () => {
       );
       assert.strictEqual(session.userId, userId);
       yield* Effect.promise(() => runtime.dispose());
+    }),
+  );
+});
+
+describe("AuthHttp.layerRedactedHeaders (MAPS-008)", () => {
+  it.effect("redacts the rotated-token header and x-jwt-token alongside Effect's defaults", () =>
+    Effect.gen(function* () {
+      const names = yield* Headers.CurrentRedactedNames;
+      const redacted = Headers.redact(
+        Headers.fromInput({
+          [Api.ROTATED_TOKEN_HEADER]: "rotated-secret",
+          "x-jwt-token": "jwt-secret",
+          authorization: "Bearer secret",
+          "x-request-id": "not-secret",
+        }),
+        names,
+      );
+      assert.isTrue(Redacted.isRedacted(redacted[Api.ROTATED_TOKEN_HEADER]));
+      assert.isTrue(Redacted.isRedacted(redacted["x-jwt-token"]));
+      assert.isTrue(Redacted.isRedacted(redacted["authorization"]));
+      assert.strictEqual(redacted["x-request-id"], "not-secret");
+    }).pipe(Effect.provide(AuthHttp.layerRedactedHeaders)),
+  );
+
+  it.effect("without the layer the rotated token would be logged verbatim", () =>
+    Effect.gen(function* () {
+      const names = yield* Headers.CurrentRedactedNames;
+      const redacted = Headers.redact(
+        Headers.fromInput({ [Api.ROTATED_TOKEN_HEADER]: "rotated-secret" }),
+        names,
+      );
+      assert.strictEqual(redacted[Api.ROTATED_TOKEN_HEADER], "rotated-secret");
     }),
   );
 });

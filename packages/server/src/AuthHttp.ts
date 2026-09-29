@@ -18,6 +18,9 @@
 // whatever `Layer` `AuthHttp.routes` (and an application's own handlers)
 // produce; see `test/AuthHttp.test.ts` for both exercised end to end.
 
+import { Api } from "@awthaq/api";
+import * as Layer from "effect/Layer";
+import * as Headers from "effect/unstable/http/Headers";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
 
@@ -30,3 +33,18 @@ export const routes: typeof HttpApiBuilder.layer = HttpApiBuilder.layer;
  * read from the one `HttpApi` value a caller passes to each.
  */
 export const docs: typeof HttpApiScalar.layer = HttpApiScalar.layer;
+
+/**
+ * MAPS-008: Effect's default redacted header names (`authorization`,
+ * `cookie`, `set-cookie`, `x-api-key`) do not include the rotated session
+ * token (`Api.ROTATED_TOKEN_HEADER`, a long-lived secret) or `x-jwt-token`, so
+ * any request logger or tracer built on `Headers.CurrentRedactedNames` would
+ * log them verbatim. Provide this layer wherever HTTP requests/responses are
+ * logged or traced; a host-supplied logger that does not read that reference
+ * must redact these names itself.
+ */
+export const layerRedactedHeaders = Layer.succeed(Headers.CurrentRedactedNames, [
+  ...Headers.CurrentRedactedNames.defaultValue(),
+  Api.ROTATED_TOKEN_HEADER,
+  "x-jwt-token",
+]);
