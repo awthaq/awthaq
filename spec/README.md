@@ -87,6 +87,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `028-*.md` | ADR-EA-028 | Infrastructure Failures Are One Typed StoreUnavailable, Not Defects |
 | `032-*.md` | ADR-EA-032 | Observability Reuses Effect's HTTP Middleware, Adds Business-Logic Spans and a Fixed Field Vocabulary, and Ships Metric Definitions Without a Backend |
 | `033-*.md` | ADR-EA-033 | Hook Registries Belong to the Composition, and a Tap Requires Its Point |
+| `034-*.md` | ADR-EA-034 | Before 1.0 Breaking Changes Are Allowed, Each With a Changeset That Carries a Migration Note |
 | `029-*.md` | ADR-EA-029 | Events Carry Identifiers, Not Personal Data, and the Audit Trail Is Pseudonymized on Erasure |
 | `030-*.md` | ADR-EA-030 | Events Cross Process Boundaries by Tailing the Audit Log, Not by Widening the Bus |
 | `031-*.md` | ADR-EA-031 | Erasure Is a Core Domain Service over an Aggregating Registry, and Retention Is a Separate, Opt-In Sweep |

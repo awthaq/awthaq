@@ -1,0 +1,58 @@
+# MW-005 (decision A, recommended): publish one canary leaf, `@awthaq/ports`, to
+# prove the whole pipeline (OIDC trusted publishing, provenance, attw against the
+# registry copy) before any plugin API is committed to. The leaf has no plugin
+# surface, and a `0.0.0-canary.<sha>` version under the `canary` dist-tag promises
+# nothing.
+#
+# DORMANT. It does nothing until all of these exist, which no agent can create:
+#   1. a git remote for this repository;
+#   2. the @awthaq npm organisation;
+#   3. a trusted publisher on npmjs.com for `@awthaq/ports` naming this workflow
+#      file (canary.yml) and the `npm-canary` environment;
+#   4. `@awthaq/ports` made publishable (drop `"private": true` from its manifest);
+#   5. the repository variable AWTHAQ_CANARY_ENABLED set to `true`.
+# `workflow_dispatch` only, so it can never run from a pull request or a push.
+name: Canary
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  canary:
+    if: vars.AWTHAQ_CANARY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # A protected environment (required reviewers) is the human gate on publishing.
+    environment: npm-canary
+    permissions:
+      contents: read
+      # OIDC trusted publishing: no NPM_TOKEN secret exists or is read here.
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22.12.0"
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+      # npm >= 11.5.1 is required for OIDC trusted publishing; Node 22.12 bundles 10.x.
+      - run: npm install --global npm@11.5.1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # Fails with an actionable message while the package is still private.
+      - run: node scripts/release-dry-run.mjs --package @awthaq/ports
+      - name: Publish the canary
+        working-directory: packages/ports
+        env:
+          CANARY_SHA: ${{ github.sha }}
+        run: |
+          npm pkg set "version=0.0.0-canary.${CANARY_SHA::7}"
+          # `pnpm pack` rewrites `workspace:`/`catalog:` specifiers; `npm publish`
+          # then does the OIDC exchange and attaches provenance.
+          pnpm pack --pack-destination "$RUNNER_TEMP"
+          npm publish "$RUNNER_TEMP"/awthaq-ports-*.tgz --tag canary --access public --provenance

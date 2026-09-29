@@ -26,9 +26,18 @@ pnpm test
 pnpm test:bdd
 ```
 
-`pnpm check` runs the full local gate (typecheck, lint, format check,
-circular-import check, coverage, BDD suite, and spec traceability
-verification) — the same checks CI runs on every pull request.
+`pnpm check` runs the full local gate: the package-roster drift check
+(`workspace:check`), typecheck, the packed-package smoke test, lint, knip,
+format check, the circular-import check (value and type-level cycles),
+README and error-tag checks, coverage against its thresholds, the BDD
+suite, and spec traceability verification. It is the same set CI runs on
+every pull request.
+
+Adding a package: create `packages/<name>/` and run `pnpm workspace:sync`,
+which regenerates the `tsconfig` path and reference lists and the changeset
+version group from `packages/*/package.json`. `pnpm workspace:check` (part of
+`pnpm check`) fails when any of them, or the root README's package list, has
+drifted.
 
 ## Making a change
 
@@ -58,18 +67,39 @@ grep -rnE 'rc\.[0-9]+' packages --include='*.ts' --include='*.tsx' | grep -v -e 
 ## Commit and changeset conventions
 
 This repository uses [Changesets](https://github.com/changesets/changesets)
-to manage versioning and changelogs across the workspace. If your change
-affects the published behavior of any `@awthaq/*` package, add a
-changeset describing it:
+to manage versioning and changelogs across the workspace. All packages are
+one fixed version group. A pull request that changes anything under
+`packages/` needs a changeset; CI runs `changeset status` and fails without
+one:
 
 ```sh
 pnpm changeset
 ```
 
 Follow the prompts to select the affected package(s) and describe the
-change from a consumer's perspective — this text becomes the changelog
-entry. A pull request that only touches internal tooling, tests, or
-documentation generally doesn't need one.
+change from a consumer's perspective: this text becomes the changelog
+entry. A change with no release impact (tooling, tests, documentation)
+answers with `pnpm changeset --empty`.
+
+### Versioning and deprecation policy (ADR-EA-034)
+
+Three things are the public surface: the `Schema` shapes that cross a
+package boundary or the wire, the `HttpApi` contract (paths, status codes,
+error tags), and the `Layer`/`Service` signatures. A change is *additive*
+(new optional field, endpoint, member or export), *compatible* (a fix no
+correct caller observes) or *breaking* (anything else, including a new
+requirement on a layer that composed before).
+
+- **Before 1.0, breaking changes are allowed in any release.** Each one has
+  a changeset whose body includes a `Migration:` section: what a consumer
+  must change, and the ADR-EA/BEH-EA ids involved. There is no deprecation
+  window and no runtime warning; product value wins over API stability while
+  there are no consumers.
+- **From 1.0, a break needs a major version**, after the behavior has been
+  marked `@deprecated` in JSDoc (with its replacement) and logged once with
+  `Effect.logWarning` at layer build for at least one minor release.
+- **An `effect` release-candidate bump that changes a public type counts as
+  breaking**, and is announced the same way.
 
 ## Pull requests
 
