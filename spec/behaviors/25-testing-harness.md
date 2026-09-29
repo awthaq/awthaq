@@ -48,7 +48,7 @@ REQUIREMENT: A whole-pipeline HTTP test asserting time-dependent behavior
              to assert an eight-day expiry without taking eight days.
 ```
 
-`usage-examples-v4.md` §22.1 shows this directly for session idle expiry. `TestClock` is what makes every duration-based invariant in the spec — session lifetimes (file 07), verification token TTLs (file 08), passkey challenge expiry (file 17), rate-limit windows (file 14) — testable in milliseconds of wall-clock time rather than requiring the test runner to actually wait out the real duration.
+(PV-262 as shipped: `HttpApiTest.groups` has no seam for a cookie header, so a `TestAuth.signInAs` session cannot ride it; a test that needs the session dispatches through `TestAuth.layer`'s own router, as `TestAuth.ts` documents.) `usage-examples-v4.md` §22.1 shows this directly for session idle expiry. `TestClock` is what makes every duration-based invariant in the spec — session lifetimes (file 07), verification token TTLs (file 08), passkey challenge expiry (file 17), rate-limit windows (file 14) — testable in milliseconds of wall-clock time rather than requiring the test runner to actually wait out the real duration.
 
 _Previous: [BEH-EA-193](25-testing-harness.md#beh-ea-193-testauthlayer-is-the-whole-pipeline-over-memory) | Next: [BEH-EA-195](25-testing-harness.md#beh-ea-195-layermock-for-partial-doubles)_
 

@@ -63,9 +63,8 @@ Feature: The Effect Client
   @BEH-EA-171
   Rule: Bearer mode is a separate contract variant
 
-    # @skip: blocked by PV-262: no { csrf: false } contract variant exists (Auth.make has no CSRF
-    # opt-out; decision 24 chose a server-side bearer exemption instead, MNA-008, see the
-    # AuthClient.ts header); BEH-EA-171 needs amending
+    # @skip: superseded (PV-262, decision 24 / MNA-008): the { csrf: false } contract variant is retired;
+    # the bearer exemption is server-side (REQ-EA-689) and BEH-EA-171 says so
     @skip
     @REQ-EA-482
     Scenario: A contract compiled with csrf false carries no CsrfProtection middleware on any group
@@ -73,7 +72,7 @@ Feature: The Effect Client
       When the groups of "NativeApi" are inspected
       Then none of them carry "CsrfProtection" middleware
 
-    # @skip: blocked by PV-262: there is no NativeApi contract variant; a bearer client is built
+    # @skip: superseded (PV-262): there is no NativeApi contract variant; a bearer client is built
     # against the cookie-mode contract and the server exempts bearer requests (MNA-008). Bearer
     # transport is covered by packages/client/test/AuthClient.test.ts
     @skip
@@ -83,8 +82,8 @@ Feature: The Effect Client
       When "HttpApiClient.make" builds a bearer-mode client against "NativeApi", providing only "transformClient" for the bearer token
       Then the client composes without any "CsrfProtection" client Layer being provided
 
-    # @skip: blocked by PV-262: the scenario's premise (a separate { csrf: false } contract to build
-    # the bearer client against) does not exist; see REQ-EA-482
+    # @skip: superseded (PV-262): the scenario's premise (a separate { csrf: false } contract to build
+    # the bearer client against) is retired; see REQ-EA-482
     @skip
     @REQ-EA-484
     Scenario: A bearer client is built against the csrf-false contract rather than padding the cookie-mode contract with a no-op layer

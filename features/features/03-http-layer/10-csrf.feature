@@ -152,9 +152,9 @@ Feature: CSRF Protection
   @BEH-EA-079
   Rule: A client may opt out of CSRF by choosing a bearer-only contract variant
 
-    # @skip: `Auth.api(..., { csrf: false })` is not built (packages/client/src/AuthClient.ts header;
-    # decision 24 chose the Authorization-header exemption below instead, MNA-008); covered by
-    # packages/server/test/Csrf.test.ts (bearer POST) | blocked by the BEH-EA-079 contract variant.
+    # @skip: superseded (PV-262): `Auth.api(..., { csrf: false })` is not built (packages/client/src/AuthClient.ts
+    # header; decision 24 chose the Authorization-header exemption below instead, MNA-008); the shipped
+    # behavior is REQ-EA-689 and packages/server/test/Csrf.test.ts (bearer POST).
     @skip
     @REQ-EA-219
     Scenario: Requests against the csrf:false contract succeed on unsafe methods with no CSRF header at all
@@ -162,7 +162,7 @@ Feature: CSRF Protection
       When the client sends an unsafe "POST" request with no CSRF header and no double-submit cookie
       Then the request succeeds without any CSRF check being applied
 
-    # @skip: same as REQ-EA-219 — there is no `csrf: false` contract to inspect until the variant is built.
+    # @skip: superseded with REQ-EA-219 (PV-262): there is no `csrf: false` contract to inspect.
     @skip
     @REQ-EA-220
     Scenario: The csrf:false contract's groups carry no CsrfProtection middleware at all

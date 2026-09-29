@@ -65,11 +65,13 @@ const client = yield* HttpApiClient.make(NativeApi, {
 ```
 
 ```text
-REQUIREMENT: A bearer-mode client MUST be built against a contract compiled
-             with `{ csrf: false }`, whose groups carry no `CsrfProtection`
-             middleware; a bearer client MUST NOT provide a `CsrfProtection`
-             client Layer merely to satisfy the cookie-mode contract's type.
+REQUIREMENT: A bearer-mode client MUST NOT need a cookie jar or a CSRF
+             double-submit pair: a request carrying a non-empty `Authorization`
+             header is exempt from CSRF minting and enforcement alike, because a
+             bearer credential is never ambient browser trust.
 ```
+
+**Superseded in part (PV-262, decision 24 / MNA-008).** The `{ csrf: false }` contract variant this behavior originally specified is not built and is retired: `Auth.make` has no CSRF opt-out. The requirement above is what shipped instead: the exemption is server-side (`CsrfProtectionLive` skips a request carrying `Authorization`, BEH-EA-079 as shipped, REQ-EA-689), and a bearer client is built against the ordinary cookie-mode contract with `transformClient` attaching the token (`packages/client/test/AuthClient.test.ts`). Because that contract still declares `CsrfProtection`, the client type still asks for a `CsrfProtection` client layer (BEH-EA-170); a bearer client supplies the ordinary one, which has nothing to do for it. REQ-EA-482..484 describe the retired variant and stay skipped, marked superseded.
 
 `usage-examples-v4.md` §11.3 shows this is a genuinely different contract, not a configuration flag on the same one: bearer credentials carry no ambient browser trust for CSRF to defend against, so the type-level requirement that makes sense for cookie mode (BEH-EA-170) would be meaningless noise on a bearer client — `{ csrf: false }` removes the requirement from the contract itself rather than asking every native client to provide a middleware that does nothing.
 
@@ -88,7 +90,7 @@ REQUIREMENT: The set of error tags an i18n catalog must cover MUST be a type
              type without a corresponding hand-maintained list to update.
 ```
 
-`usage-examples-v4.md` §11.2 shows this consumed directly: a `messages` catalog `satisfies Partial<Record<AuthErrorCode, ...>>` gets a compile error the moment a contract adds an error tag the catalog has not yet translated. This is the same idea as PRD §16's "error codes derive from the contract for i18n catalogs" — the catalog cannot silently fall behind the contract, because the type checker is the thing keeping them in sync, not a changelog entry a translator might miss.
+`usage-examples-v4.md` §11.2 shows this consumed directly: a `messages` catalog `satisfies Record<AuthErrorCode, ...>` gets a compile error the moment a contract adds an error tag the catalog has not yet translated. (PV-262: it must be the total `Record`; `satisfies Partial<Record<...>>` accepts a missing key, so an untranslated tag would not fail to type-check.) This is the same idea as PRD §16's "error codes derive from the contract for i18n catalogs" — the catalog cannot silently fall behind the contract, because the type checker is the thing keeping them in sync, not a changelog entry a translator might miss.
 
 _Previous: [BEH-EA-171](22-client-effect.md#beh-ea-171-bearer-mode-is-a-separate-contract-variant) | Next: [BEH-EA-173](22-client-effect.md#beh-ea-173-urlbuilder-for-typed-redirect-links)_
 
@@ -106,7 +108,7 @@ REQUIREMENT: A link to an endpoint that is not itself invoked as a request
              parameters by hand.
 ```
 
-`usage-examples-v4.md` §7.1 shows the direct use case: generating the `/auth/oauth/google/authorize` link a "Sign in with Google" button points at. `urlBuilder` shares the same schema-encoding logic as the request-issuing client, so a parameter that would fail to encode correctly in a real request also fails the same way here, at the same compile-time and runtime checks, rather than silently producing a malformed URL a real request call would have caught.
+`usage-examples-v4.md` §7.1 shows the direct use case: generating the `/auth/oauth/google/authorize` link a "Sign in with Google" button points at. (PV-262 as shipped: the authorize endpoint's query parameter is `callbackURL`, not `redirect`; an unknown query key is dropped by the encoder.) `urlBuilder` shares the same schema-encoding logic as the request-issuing client, so a parameter that would fail to encode correctly in a real request also fails the same way here, at the same compile-time and runtime checks, rather than silently producing a malformed URL a real request call would have caught.
 
 _Previous: [BEH-EA-172](22-client-effect.md#beh-ea-172-error-codes-are-derived-from-the-contract) | Next: [BEH-EA-174](22-client-effect.md#beh-ea-174-session-helpers-are-the-hand-written-remainder)_
 
@@ -114,7 +116,7 @@ _Previous: [BEH-EA-172](22-client-effect.md#beh-ea-172-error-codes-are-derived-f
 
 ```ts
 authClient.session.get()                     // Session | null
-authClient.session.hydrate(initialSession)   // SSR seeding, first non-null wins
+authClient.session.hydrate(initialSession)   // SSR seeding, first non-null wins (a `Session`, never `null`: PV-262)
 ```
 
 ```text
@@ -163,7 +165,7 @@ REQUIREMENT: A Promise-returning convenience wrapper offered for non-Effect
              implemented client with its own request or decision logic.
 ```
 
-`usage-qadi.md` §14 shows the qadi analog directly — `makeQadi` wraps "the same Layer as the server" rather than reimplementing evaluation for Promise callers. Applied to `@awthaq/client`, an optional Promise wrapper (research/11-client-frontend.md's Q39 "promise wrappers, if the user opts in") must be a thin `Effect.runPromise` shim over the one generated client, so a non-Effect caller and an Effect caller are guaranteed to see identical behavior — the same "one evaluation path" discipline `usage-qadi.md` §16 states for authorization applies here to the client transport itself.
+(PV-262 as shipped: awthaq's facade is `AuthClient.toPromiseFacade`, not qadi's `makeQadi`.) `usage-qadi.md` §14 shows the qadi analog directly — `makeQadi` wraps "the same Layer as the server" rather than reimplementing evaluation for Promise callers. Applied to `@awthaq/client`, an optional Promise wrapper (research/11-client-frontend.md's Q39 "promise wrappers, if the user opts in") must be a thin `Effect.runPromise` shim over the one generated client, so a non-Effect caller and an Effect caller are guaranteed to see identical behavior — the same "one evaluation path" discipline `usage-qadi.md` §16 states for authorization applies here to the client transport itself.
 
 **Implementation (EHA-005).** `toPromiseFacade(client)` rejects with the endpoint's tagged contract error (typed nowhere — a rejection is untyped in TypeScript); `toPromiseFacade(client, { mode: "result" })` is the error-honest variant: every method resolves a `Result<A, E>` with `E` the endpoint's contract error union (`Effect.result` over the same generated method, still just `Effect.runPromise`), so a non-Effect caller narrows `result.failure._tag` exhaustively. Defects (transport/decoding) reject in both modes.
 

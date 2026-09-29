@@ -123,11 +123,14 @@ const NativeApi = Auth.api(plugins.map((p) => p.contract), { csrf: false })   //
 ```
 
 ```text
-REQUIREMENT: `Auth.api(..., { csrf: false })` MUST produce a contract whose
-             groups carry no `CsrfProtection` middleware at all, rather than
-             a contract that carries the middleware but is configured to
-             skip it at runtime.
+REQUIREMENT: A native (bearer-token) client MUST be able to make unsafe
+             requests with no CSRF header and no double-submit cookie: a request
+             carrying a non-empty `Authorization` header is exempt from CSRF
+             minting and enforcement, while an empty `Authorization` header is
+             not.
 ```
+
+**Superseded in part (PV-262, decision 24 / MNA-008).** The `Auth.api(..., { csrf: false })` contract variant this behavior originally specified is not built and is retired; the exemption is a runtime rule of `CsrfProtectionLive` instead (REQ-EA-689, `packages/server/test/Csrf.test.ts`). The trade-off the original text argued against (a check that is present in the type but skipped at runtime) is accepted deliberately: a header a cross-site page cannot set without a CORS preflight is what makes the skip safe. REQ-EA-219/220 describe the retired variant and stay skipped, marked superseded.
 
 `archive/design/usage-examples-v4.md` §11.3 documents this as the native-client path: because bearer-token clients (mobile apps, CLIs, service-to-service callers) have no cookie jar and no double-submit cookie to echo, the design removes `CsrfProtection` from the contract entirely for that variant rather than adding a runtime bypass flag to the middleware itself — a bypassable check is a weaker design than no check being present in the type at all, since only the latter is visible in `auth.api`'s own type.
 
