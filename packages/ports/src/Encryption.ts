@@ -87,6 +87,15 @@ const decodeEnvelope = (encoded: string): Envelope | undefined => {
 };
 
 /**
+ * CSG-006: whether `stored` has this module's envelope shape (base64url JSON
+ * with `v`/`kid`/`iv`/`ciphertext`) — a shape test only, no key is consulted.
+ * Lets a column that adopts encryption after it already holds plaintext tell
+ * "legacy plaintext, encrypt on next write" from "an envelope that fails
+ * authentication", which must never be read as plaintext.
+ */
+export const looksLikeEnvelope = (stored: string): boolean => decodeEnvelope(stored) !== undefined;
+
+/**
  * A malformed envelope (not this module's own JSON shape) or a failed
  * AES-GCM authentication check (tampered ciphertext, wrong AAD, or wrong
  * key) — WebCrypto's own `decrypt` reports both as the same opaque
