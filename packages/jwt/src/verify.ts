@@ -6,8 +6,10 @@
 // Deliberately, checkably free of any import from `@awthaq/core`,
 // `@awthaq/server`, `./Jwt.ts`, or `./KeyRing.ts`: the only local
 // import is `./JwtCodec.ts` (already, independently, free of every one of
-// those — see that file's own header comment), plus `effect` itself and
-// `effect/unstable/http`'s `HttpClient` for JWKS retrieval. Confirmed by
+// those — see that file's own header comment), plus `effect` itself,
+// `effect/unstable/http`'s `HttpClient` for JWKS retrieval, and
+// `@awthaq/ports`' `RefreshingCache` (ECF-002; that package is
+// `sideEffects: false`, so a bundler drops everything but the cache). Confirmed by
 // hand: `grep -E "@awthaq/(core|server)|\./Jwt\.ts|\./KeyRing\.ts"
 // packages/jwt/src/verify.ts` prints nothing.
 //
@@ -25,10 +27,19 @@
 // on by design (ticket 03/05 of this effort's own wayfinder tracker
 // already settled this as a documented limitation of the lite path, not a
 // gap to fill).
+//
+// Caching (ECF-002/JJS-002/KRS-010): the fetched key set is served for
+// `cacheTtl` (default 10 minutes, so a key the issuer removes stops
+// verifying without a restart), concurrent cold reads share one fetch, and a
+// token naming an unknown `kid` triggers at most one forced refetch per
+// `minRefetchInterval` (default 30 seconds) however many such tokens arrive.
+// Size `cacheTtl` against the issuer's `keyGracePeriod`: a retired key stays
+// in the issuer's JWKS for the grace period, so a removed key is honoured for
+// at most `cacheTtl` past its removal.
 
+import { RefreshingCache } from "@awthaq/ports";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
@@ -39,6 +50,10 @@ export interface VerifierOptions {
   readonly issuer: string;
   readonly audience: string;
   readonly algorithm: JwtCodec.Algorithm;
+  /** How long a fetched JWKS is served before the next verification refetches it. Default 10 minutes. */
+  readonly cacheTtl?: Duration.Input;
+  /** Minimum gap between forced refetches triggered by an unknown `kid` (also how long a failed fetch is replayed). Default 30 seconds. */
+  readonly minRefetchInterval?: Duration.Input;
 }
 
 export interface Verifier {
@@ -76,22 +91,18 @@ const toVerificationKeys = (
 export const makeVerifier = (options: VerifierOptions) =>
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;
-    const cache = yield* Ref.make<Option.Option<ReadonlyArray<JwtCodec.VerificationKey>>>(
-      Option.none(),
-    );
-
     const fetchKeys = httpClient.get(options.jwksUrl).pipe(
       Effect.flatMap(HttpIncomingMessage.schemaBodyJson(JwksDocumentSchema)),
       Effect.map(toVerificationKeys),
-      Effect.tap((keys) => Ref.set(cache, Option.some(keys))),
       Effect.catch(() =>
         Effect.fail(new JwtCodec.JwtInvalidError({ reason: "jwks fetch failed" })),
       ),
     );
 
-    const currentKeys = Ref.get(cache).pipe(
-      Effect.flatMap(Option.match({ onSome: Effect.succeed, onNone: () => fetchKeys })),
-    );
+    const keys = yield* RefreshingCache.make(fetchKeys, {
+      ttl: options.cacheTtl ?? "10 minutes",
+      minRefetchInterval: options.minRefetchInterval ?? "30 seconds",
+    });
 
     const verifyAgainst = (token: string, keys: ReadonlyArray<JwtCodec.VerificationKey>) =>
       JwtCodec.verify({
@@ -104,11 +115,12 @@ export const makeVerifier = (options: VerifierOptions) =>
 
     const verify: Verifier["verify"] = (token) =>
       Effect.gen(function* () {
-        const keys = yield* currentKeys;
-        return yield* verifyAgainst(token, keys).pipe(
+        const current = yield* keys.get;
+        return yield* verifyAgainst(token, current).pipe(
           Effect.catchIf(
             (error) => error.reason === "unknown kid",
-            () => Effect.flatMap(fetchKeys, (refetched) => verifyAgainst(token, refetched)),
+            () =>
+              Effect.flatMap(keys.refreshOnMiss, (refetched) => verifyAgainst(token, refetched)),
           ),
         );
       });

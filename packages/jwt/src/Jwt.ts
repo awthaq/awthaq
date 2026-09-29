@@ -62,7 +62,7 @@ import * as Result from "effect/Result";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { IntrospectionResponse, JwksResponse, JwtApi, TokenResponse } from "./JwtApi.ts";
+import { IntrospectionResponse, JwtApi, TokenResponse } from "./JwtApi.ts";
 import { JwtConfig } from "./JwtConfig.ts";
 import * as JwtCodec from "./JwtCodec.ts";
 import * as KeyRing from "./KeyRing.ts";
@@ -147,8 +147,16 @@ export const JwtHandlers = Layer.mergeAll(
     "jwt",
     Effect.fnUntraced(function* (handlers) {
       const jwt = yield* Jwt;
+      const config = yield* JwtConfig;
+      const cacheControl = `public, max-age=${Math.floor(Duration.toSeconds(config.jwksMaxAge))}`;
       return handlers.handleAll({
-        jwks: () => Effect.map(jwt.jwks, (document) => new JwksResponse(document)),
+        // ECF-002/KRS-010: a returned `HttpServerResponse` bypasses the
+        // success-schema encode, so the body is the plain JWKS document and
+        // the header tells verifiers how long they may cache it.
+        jwks: () =>
+          Effect.map(jwt.jwks, (document) =>
+            HttpServerResponse.jsonUnsafe(document, { headers: { "cache-control": cacheControl } }),
+          ),
       });
     }),
   ),

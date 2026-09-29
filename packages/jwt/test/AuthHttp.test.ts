@@ -179,6 +179,17 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
     }),
   );
 
+  // ECF-002/KRS-010: the served JWKS tells verifiers how long they may cache it.
+  it.effect(
+    "GET /jwt/jwks carries Cache-Control max-age (JwtConfig.jwksMaxAge, default 10 minutes)",
+    () =>
+      Effect.gen(function* () {
+        const { handler } = buildHandler();
+        const response = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/jwt/jwks`)));
+        assert.strictEqual(response.headers.get("cache-control"), "public, max-age=600");
+      }),
+  );
+
   it("GET /jwt/token requires authentication", async () => {
     const { handler } = buildHandler();
     const response = await handler(new Request(`${ORIGIN}/jwt/token`));

@@ -29,6 +29,8 @@ export interface JwtConfigShape {
   readonly ttl: Duration.Duration;
   readonly keyRotationInterval: Duration.Duration;
   readonly keyGracePeriod: Duration.Duration;
+  /** `Cache-Control: max-age` on the served JWKS (ECF-002/KRS-010): how long a verifier may reuse a fetched key set. */
+  readonly jwksMaxAge: Duration.Duration;
   readonly definePayload: (principal: Api.Principal) => Effect.Effect<Record<string, unknown>>;
 }
 
@@ -46,5 +48,6 @@ export const config = (
     ttl: options.ttl ?? Duration.minutes(15),
     keyRotationInterval: options.keyRotationInterval ?? Duration.days(90),
     keyGracePeriod: options.keyGracePeriod ?? Duration.days(30),
+    jwksMaxAge: options.jwksMaxAge ?? Duration.minutes(10),
     definePayload: options.definePayload ?? emptyPayload,
   });
