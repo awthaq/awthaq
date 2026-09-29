@@ -83,6 +83,7 @@ export const makeTestLayer = (
     readonly httpClient?: Layer.Layer<HttpClient.HttpClient>;
     readonly config?: Partial<Password.PasswordConfigShape>;
     readonly mailer?: Layer.Layer<Mailer.Mailer>;
+    readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
     readonly hasher?: Layer.Layer<PasswordHasher.PasswordHasher, never, Crypto.Crypto>;
   } = {},
 ) =>
@@ -94,7 +95,7 @@ export const makeTestLayer = (
       Layer.mergeAll(
         options.hasher ?? PasswordHasher.layerArgon2id,
         options.mailer ?? Mailer.layerMemory,
-        RateLimiter.layerPermissive,
+        options.limiter ?? RateLimiter.layerPermissive,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
     ),
     Layer.provideMerge(RateLimits.layer),

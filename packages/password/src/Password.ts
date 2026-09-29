@@ -33,6 +33,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as PasswordApi from "./PasswordApi.ts";
+import * as PasswordRateLimits from "./PasswordRateLimits.ts";
 
 export interface PasswordConfigShape {
   readonly minLength: number;
@@ -49,6 +50,13 @@ export interface PasswordConfigShape {
    * the floor still takes longer, and stays distinguishable until rehashed.
    */
   readonly signInTimingFloor: "calibrated" | "off" | Duration.Duration;
+  /**
+   * TMS-006: maps an address to the per-email rate-limit bucket it is
+   * counted in (sign-up, sign-in, reset, resend). The default lower-cases and
+   * strips a `+tag`, so subaddressed aliases share one budget; delivery still
+   * uses the literal address. Override for providers with other conventions.
+   */
+  readonly rateLimitEmailKey: (email: string) => string;
 }
 
 const defaultPasswordConfig: PasswordConfigShape = {
@@ -57,6 +65,7 @@ const defaultPasswordConfig: PasswordConfigShape = {
   resetTtl: Duration.hours(1),
   rehashOnLogin: true,
   signInTimingFloor: "calibrated",
+  rateLimitEmailKey: PasswordRateLimits.defaultEmailRateKey,
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -135,6 +144,8 @@ export interface PasswordShape {
    */
   readonly resendVerification: (input: {
     readonly email: string;
+    /** MLO-003: same per-source dimension as `requestReset`'s own `ip`. */
+    readonly ip?: string;
   }) => Effect.Effect<void, Api.RateLimited>;
   /** BEH-EA-117: consumes the reset token and sets the new password in one call, then revokes every other session. */
   readonly confirmReset: (input: {
@@ -194,99 +205,6 @@ export interface PasswordShape {
 
 const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-
-/**
- * `RateLimits.RateLimitKey`'s own `input` is untyped (`unknown`) — one
- * registry list covers every endpoint's differently-shaped payload — so
- * pulling `email` back out needs a real narrowing check rather than a type
- * assertion (this repo forbids `as`/`as unknown as`/`as any` in library
- * source). Empty string on a shape mismatch is a defect elsewhere, not a
- * condition this key derivation needs its own error channel for.
- */
-const emailFromRateLimitInput = (input: unknown): string =>
-  typeof input === "object" && input !== null && "email" in input && typeof input.email === "string"
-    ? input.email
-    : "";
-
-/** Same narrowing shape as `emailFromRateLimitInput`, for `signIn`'s per-IP rule (RBS-001/CSD-002). */
-const ipFromRateLimitInput = (input: unknown): string =>
-  typeof input === "object" && input !== null && "ip" in input && typeof input.ip === "string"
-    ? input.ip
-    : "unknown";
-
-/**
- * Shipping-gap map (.scratch/shipping-gaps), ticket 12: one rule per
- * rate-limited endpoint — mirrors `usage-examples-v4.md` §16's own worked
- * `signin:${email}` example for `signIn`'s numbers exactly. Every rule
- * here keys on identity/email, never IP: this codebase has no client-IP-
- * extraction mechanism anywhere yet (no handler threads a request's
- * origin into a domain capability today), and building one speculatively
- * for this one rate-limit key would be exactly the kind of unrequested
- * infrastructure this codebase's own standing preference warns against.
- * IP-based keying (ticket 02's own "sign-in keys on both identity and
- * IP") is real follow-on work, not silently dropped — tracked, not built
- * here.
- */
-const RATE_LIMITS = {
-  signUp: { limit: 5, window: Duration.hours(1) },
-  // AGA-001/NHS-003: same reasoning as `signInByIp` below — bounds mass
-  // account creation from one source independently of the (freely
-  // chosen) email each attempt names.
-  signUpByIp: { limit: 20, window: Duration.hours(1) },
-  signIn: { limit: 5, window: Duration.minutes(15) },
-  // RBS-001/CSD-002: the per-account budget above is keyed on an
-  // attacker-controlled email — an attacker can burn a victim's 5
-  // attempts to lock them out, and distributed spraying across many
-  // distinct addresses never trips it at all. This second, per-IP rule
-  // bounds spraying independently of which account is targeted; looser
-  // than the per-account limit so one shared office NAT can't lock out
-  // every real user behind it.
-  signInByIp: { limit: 30, window: Duration.minutes(15) },
-  requestReset: { limit: 5, window: Duration.minutes(15) },
-  // AGA-001/NHS-003: mirrors `signInByIp` — bounds one source spraying
-  // reset requests across many distinct, unrelated emails.
-  requestResetByIp: { limit: 30, window: Duration.minutes(15) },
-  confirmReset: { limit: 5, window: Duration.minutes(15) },
-  // Shipping-gap map (.scratch/shipping-gaps), ticket 14.
-  changePassword: { limit: 5, window: Duration.minutes(15) },
-  // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15:
-  // mirrors `changePassword`'s own numbers — the identical
-  // authenticated-password-recheck shape.
-  reauthenticate: { limit: 5, window: Duration.minutes(15) },
-  // Upstream-hardening map, ticket 04: tighter than the generic 5-per-15-
-  // min default — resend-verification abuse is an inbox-flooding
-  // harassment vector against the *target*, not an account-takeover one.
-  resendVerification: { limit: 3, window: Duration.minutes(15) },
-  // APS-003: `verifyEmail` had no rule at all — an unlimited flood of
-  // wrong guesses against `/verify-email` is hopeless against a 256-bit
-  // token, but each failed `consume` still publishes `auth.token.replay`
-  // (now a lossy, non-suspending publish — BEH-EA-098 — but still
-  // pointless churn/log-spam to leave completely unbounded). Same numbers
-  // as `confirmReset`, the closest structural sibling (also a bare
-  // token-consume endpoint).
-  verifyEmail: { limit: 5, window: Duration.minutes(15) },
-  // Mirrors `signInByIp`/`requestResetByIp`: bounds one source spraying
-  // guesses across many distinct, unrelated tokens/accounts.
-  verifyEmailByIp: { limit: 30, window: Duration.minutes(15) },
-} as const satisfies Record<string, { readonly limit: number; readonly window: Duration.Duration }>;
-
-/**
- * EOTS-007: the fixed labels a breach of `rule` is reported under — the
- * `RATE_LIMITS` entry's name, never the (email/IP-bearing) bucket key.
- */
-const ruleMeta = (rule: {
-  readonly limit: number;
-  readonly window: Duration.Duration;
-}): RateLimits.EnforceMeta => {
-  const name =
-    Object.entries(RATE_LIMITS).find(([, candidate]) => candidate === rule)?.[0] ?? "unknown";
-  return {
-    group: "password",
-    endpoint: name.replace(/ByIp$/, ""),
-    rule: name,
-    dimension: name.endsWith("ByIp") ? "ip" : "identity",
-  };
-};
 
 /**
  * The mailed reset/verification link's token embeds `Verification`'s own
@@ -461,10 +379,16 @@ export const PasswordHandlers = HttpApiBuilder.group(
 
       resendVerification: Effect.fnUntraced(function* ({
         payload,
+        request,
       }: {
         payload: PasswordApi.ResendVerificationPayload;
+        request: HttpServerRequest.HttpServerRequest;
       }) {
-        yield* password.resendVerification(payload);
+        const resolvedAddress = yield* clientAddress.resolve(request);
+        yield* password.resendVerification({
+          ...payload,
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+        });
       }),
 
       confirmReset: Effect.fnUntraced(function* ({
@@ -580,109 +504,20 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
       const afterSignIn = yield* Hooks.AfterSignIn;
 
-      /**
-       * Ticket 12: registers this plugin's own limits into the
-       * introspectable registry (BEH-EA-107/110/111) — declarative,
-       * matching the `limit`/`window` each `rateLimit(...)` call below
-       * actually enforces (`RATE_LIMITS` is the single source of truth
-       * both sides draw from). A `RateLimitScopeViolation` here is only
-       * reachable if `group` below ever named something other than this
-       * plugin's own `"password"` contract group — a coding defect in
-       * this file, not a condition any caller composing `Password` could
-       * trigger, hence `Effect.orDie` rather than adding it to this
-       * plugin's own public error surface.
-       */
+      // RBS-006: one typed definition per rule feeds both this registry
+      // (BEH-EA-107/110/111 introspection) and the enforcement calls below,
+      // so `registered()` reports exactly the keys enforced. A
+      // `RateLimitScopeViolation` is only reachable if a rule named a group
+      // other than this plugin's own `"password"` — a coding defect in this
+      // package, not a condition a caller composing `Password` could trigger,
+      // hence `Effect.orDie` rather than widening the public error surface.
+      const rules = PasswordRateLimits.makeRules(config.rateLimitEmailKey);
       yield* Effect.all(
-        (
-          [
-            {
-              endpoint: "signUp",
-              key: (input) => `password:signup:${(input as { readonly email: string }).email}`,
-              ...RATE_LIMITS.signUp,
-            },
-            {
-              // AGA-001/NHS-003: a second, independent rule for the same
-              // endpoint, mirroring `signIn`'s own IP rule below.
-              endpoint: "signUp",
-              key: (input) => `password:signup:ip:${ipFromRateLimitInput(input)}`,
-              ...RATE_LIMITS.signUpByIp,
-            },
-            {
-              endpoint: "signIn",
-              key: (input) => `password:signin:${(input as { readonly email: string }).email}`,
-              ...RATE_LIMITS.signIn,
-            },
-            {
-              // RBS-001/CSD-002: a second, independent rule for the same
-              // endpoint — the registry has no one-rule-per-endpoint
-              // constraint, and `OAuth.ts`'s own `callback` rule already
-              // establishes the "declare a `key: \"ip\"` rule alongside a
-              // manually-keyed `rateLimit(...)` call" pattern this follows.
-              endpoint: "signIn",
-              key: (input) => `password:signin:ip:${ipFromRateLimitInput(input)}`,
-              ...RATE_LIMITS.signInByIp,
-            },
-            {
-              endpoint: "requestReset",
-              key: (input) =>
-                `password:reset-request:${(input as { readonly email: string }).email}`,
-              ...RATE_LIMITS.requestReset,
-            },
-            {
-              // AGA-001/NHS-003: a second, independent rule for the same
-              // endpoint, mirroring `signIn`'s own IP rule above.
-              endpoint: "requestReset",
-              key: (input) => `password:reset-request:ip:${ipFromRateLimitInput(input)}`,
-              ...RATE_LIMITS.requestResetByIp,
-            },
-            {
-              endpoint: "confirmReset",
-              // Keyed on the token's own decoded identifier at enforcement
-              // time, not a payload field — this description is necessarily
-              // approximate.
-              key: (input) => `password:reset-confirm:${JSON.stringify(input)}`,
-              ...RATE_LIMITS.confirmReset,
-            },
-            {
-              endpoint: "changePassword",
-              // Keyed on `CurrentPrincipal`'s own userId at enforcement
-              // time (the authenticated caller), not a payload field.
-              key: (input) => `password:change-password:${JSON.stringify(input)}`,
-              ...RATE_LIMITS.changePassword,
-            },
-            {
-              endpoint: "reauthenticate",
-              // Keyed on `CurrentPrincipal`'s own userId at enforcement
-              // time, mirroring `changePassword`'s own posture.
-              key: (input) => `password:reauthenticate:${JSON.stringify(input)}`,
-              ...RATE_LIMITS.reauthenticate,
-            },
-            {
-              endpoint: "resendVerification",
-              key: (input) => `password:resend-verification:${emailFromRateLimitInput(input)}`,
-              ...RATE_LIMITS.resendVerification,
-            },
-            {
-              endpoint: "verifyEmail",
-              // Keyed on the token's own decoded identifier at enforcement
-              // time, not a payload field — mirrors `confirmReset`'s own
-              // identical description-is-approximate posture.
-              key: (input) => `password:verify-email:${JSON.stringify(input)}`,
-              ...RATE_LIMITS.verifyEmail,
-            },
-            {
-              endpoint: "verifyEmail",
-              key: (input) => `password:verify-email:ip:${ipFromRateLimitInput(input)}`,
-              ...RATE_LIMITS.verifyEmailByIp,
-            },
-          ] satisfies ReadonlyArray<{
-            readonly endpoint: string;
-            readonly key: RateLimits.RateLimitKey;
-            readonly limit: number;
-            readonly window: Duration.Duration;
-          }>
-        ).map((rule): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
-          rateLimitsRegistry.register(Password, { group: "password", ...rule }),
+        // The callback's return type is annotated to break the inference
+        // cycle through `Password.layer` (its own initializer names `Password`).
+        PasswordRateLimits.registryEntries(rules).map(
+          (entry): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
+            rateLimitsRegistry.register(Password, entry),
         ),
       ).pipe(Effect.orDie);
 
@@ -725,19 +560,24 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             });
 
       /**
-       * Ticket 12: every call site below passes its own `key`/`limit`/
-       * `window` from `RATE_LIMITS`, and maps the port's own domain
-       * `RateLimitExceeded` (`@awthaq/ports`) onto the wire-level
-       * `Api.RateLimited` — the same class `PasswordShape`'s own error
-       * unions declare and `PasswordApi`'s endpoints carry, so no separate
-       * mapping is needed again at the HTTP handler layer.
+       * Ticket 12: enforces one `rules.*` definition against its own
+       * secret-free key input, mapping the port's domain `RateLimitExceeded`
+       * (`@awthaq/ports`) onto the wire-level `Api.RateLimited` — the same
+       * class `PasswordShape`'s own error unions declare and `PasswordApi`'s
+       * endpoints carry, so no separate mapping is needed again at the HTTP
+       * handler layer.
        */
-      const rateLimit = (
-        key: string,
-        rule: { readonly limit: number; readonly window: Duration.Duration },
+      const rateLimit = <I>(
+        rule: PasswordRateLimits.PasswordRule<I>,
+        input: I,
       ): Effect.Effect<void, Api.RateLimited> =>
         // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
-        RateLimits.enforce({ key, limit: rule.limit, window: rule.window, meta: ruleMeta(rule) }).pipe(
+        RateLimits.enforce({
+          key: rule.keyOf(input),
+          limit: rule.limit,
+          window: rule.window,
+          meta: PasswordRateLimits.metaOf(rule),
+        }).pipe(
           Effect.provideService(RateLimiter.RateLimiter, limiter),
           Effect.provideService(AuthEvents.AuthEvents, events),
           Effect.catchTag(
@@ -773,8 +613,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const signUp: PasswordShape["signUp"] = Effect.fnUntraced(function* (input) {
         // AGA-001/NHS-003: per-IP first, cheaper to enforce, bounds mass
         // account creation from one source before the per-email check.
-        yield* rateLimit(`password:signup:ip:${input.ip ?? "unknown"}`, RATE_LIMITS.signUpByIp);
-        yield* rateLimit(`password:signup:${input.email.toLowerCase()}`, RATE_LIMITS.signUp);
+        yield* rateLimit(rules.signUpByIp, input);
+        yield* rateLimit(rules.signUp, input);
         const hints = yield* checkPolicy(httpClient, crypto, input.password, config);
         if (hints.length > 0) {
           return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
@@ -857,8 +697,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // enforce (no DB lookup) and bounds a distributed spray across
         // many distinct emails before the per-account check below ever
         // sees them.
-        yield* rateLimit(`password:signin:ip:${input.ip ?? "unknown"}`, RATE_LIMITS.signInByIp);
-        yield* rateLimit(`password:signin:${input.email.toLowerCase()}`, RATE_LIMITS.signIn);
+        yield* rateLimit(rules.signInByIp, input);
+        yield* rateLimit(rules.signIn, input);
         // TSS-006: the whole credential check is held to `timingFloorMillis`.
         const { userOpt, accountOpt, hashOpt, verified } = yield* withTimingFloor(
           Effect.gen(function* () {
@@ -949,14 +789,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const requestReset: PasswordShape["requestReset"] = Effect.fnUntraced(function* (input) {
         // AGA-001/NHS-003: per-IP first, bounds one source spraying
         // reset requests across many distinct, unrelated emails.
-        yield* rateLimit(
-          `password:reset-request:ip:${input.ip ?? "unknown"}`,
-          RATE_LIMITS.requestResetByIp,
-        );
-        yield* rateLimit(
-          `password:reset-request:${input.email.toLowerCase()}`,
-          RATE_LIMITS.requestReset,
-        );
+        yield* rateLimit(rules.requestResetByIp, input);
+        yield* rateLimit(rules.requestReset, input);
         const userOpt = yield* users.findByEmail(input.email);
         // TSS-001/EEM-001/MLO-001: BEH-EA-064 requires the response to be
         // uniform whether or not `email` resolves to an account — status
@@ -1002,10 +836,9 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
 
       const resendVerification: PasswordShape["resendVerification"] = Effect.fnUntraced(
         function* (input) {
-          yield* rateLimit(
-            `password:resend-verification:${input.email.toLowerCase()}`,
-            RATE_LIMITS.resendVerification,
-          );
+          // MLO-003: per-source first, like the sibling email flows.
+          yield* rateLimit(rules.resendVerificationByIp, input);
+          yield* rateLimit(rules.resendVerification, input);
           const userOpt = yield* users.findByEmail(input.email);
           // TSS-002: same forkDetach+ignore posture as `requestReset`
           // above — without it this branch is the only one paying for a
@@ -1051,7 +884,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // for free at this point, and ties the limit to the specific
         // account the token names, matching `signIn`/`requestReset`'s own
         // identity-keyed posture without a second lookup.
-        yield* rateLimit(`password:reset-confirm:${identifier}`, RATE_LIMITS.confirmReset);
+        yield* rateLimit(rules.confirmReset, { identifier });
         const userId = Users.UserId(identifier.slice(RESET_PREFIX.length));
 
         // ARF-002: the policy (including the breach check's network call)
@@ -1135,10 +968,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // APS-003: per-IP first — guards against a flood of garbage
         // tokens before even attempting to decode one, mirroring
         // `signIn`/`requestReset`'s own IP-then-identity ordering.
-        yield* rateLimit(
-          `password:verify-email:ip:${input.ip ?? "unknown"}`,
-          RATE_LIMITS.verifyEmailByIp,
-        );
+        yield* rateLimit(rules.verifyEmailByIp, input);
         const decoded = decodeVerificationToken(Redacted.value(input.token));
         if (Option.isNone(decoded)) {
           return yield* Effect.fail(new PasswordApi.TokenConsumed());
@@ -1152,7 +982,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // `confirmReset`'s identical posture — already available for
         // free at this point, ties the limit to the specific account the
         // token names.
-        yield* rateLimit(`password:verify-email:${identifier}`, RATE_LIMITS.verifyEmail);
+        yield* rateLimit(rules.verifyEmail, { identifier });
         const userId = Users.UserId(identifier.slice(VERIFY_PREFIX.length));
 
         // RRC-002: same class of bug `ARF-001` closes for `confirmReset` —
@@ -1196,7 +1026,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // Keyed on `userId` directly — this endpoint is authenticated, so
         // (unlike `signIn`/`requestReset`) there's no need to look up an
         // email first.
-        yield* rateLimit(`password:change-password:${input.userId}`, RATE_LIMITS.changePassword);
+        yield* rateLimit(rules.changePassword, input);
         const accountOpt = yield* accounts.findByProviderSubject(
           Accounts.PASSWORD_PROVIDER_ID,
           input.userId,
@@ -1256,7 +1086,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const reauthenticate: PasswordShape["reauthenticate"] = Effect.fnUntraced(function* (input) {
         // Keyed on `userId` directly — this endpoint is authenticated,
         // mirroring `changePassword`'s own posture.
-        yield* rateLimit(`password:reauthenticate:${input.userId}`, RATE_LIMITS.reauthenticate);
+        yield* rateLimit(rules.reauthenticate, input);
         const accountOpt = yield* accounts.findByProviderSubject(
           Accounts.PASSWORD_PROVIDER_ID,
           input.userId,
