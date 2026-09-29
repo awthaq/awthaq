@@ -1,4 +1,4 @@
-// THS-001 step 9/5, TTE-008 (BEH-EA-258, INV-EA-005): the guarantees the type system carries. These are
+// THS-001 step 9/5, TTE-008 (BEH-EA-261, INV-EA-005): the guarantees the type system carries. These are
 // compile-time checks — `tsc -p tsconfig.test.json` is the assertion — with a token runtime test so
 // the file is a suite.
 import { Users } from "@awthaq/core";

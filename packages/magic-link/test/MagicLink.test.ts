@@ -1,4 +1,4 @@
-// BAM-007, MLO-005, MLO-002, ARF-005 Fix A (BEH-EA-264 to BEH-EA-267): the MagicLink plugin at the
+// BAM-007, MLO-005, MLO-002, ARF-005 Fix A (BEH-EA-267 to BEH-EA-270): the MagicLink plugin at the
 // domain level — real in-memory stores, the real mail dispatcher, the real `@awthaq/two-factor`
 // gates for the MFA divert.
 import { AuditLog, HookPoint, Hooks, Sessions, Users, Verification } from "@awthaq/core";
@@ -31,7 +31,7 @@ const requestAndRead = (email: string) =>
     return yield* link;
   });
 
-describe("MagicLink.requestLink (BEH-EA-265)", () => {
+describe("MagicLink.requestLink (BEH-EA-268)", () => {
   it.effect(
     "answers identically for a known and an unknown address, and with sign-up off mails only the known one",
     () =>
@@ -106,7 +106,7 @@ describe("MagicLink.requestLink (BEH-EA-265)", () => {
   );
 });
 
-describe("MagicLink.verify (BEH-EA-266)", () => {
+describe("MagicLink.verify (BEH-EA-269)", () => {
   it.effect(
     "signs an existing user in, marks the mailbox verified, records amr [email]; a replay fails MagicLinkConsumed",
     () =>

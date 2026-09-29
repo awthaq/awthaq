@@ -1,6 +1,6 @@
 // @awthaq/magic-link — EmailOtp
 //
-// SOS-001, BCR-005, SOS-004, MLO-002 (BEH-EA-268 to BEH-EA-271, wayfinder ticket 05 §3): the shared
+// SOS-001, BCR-005, SOS-004, MLO-002 (BEH-EA-271 to BEH-EA-274, wayfinder ticket 05 §3): the shared
 // channel-OTP substrate — a short numeric code mailed to an address, traded for a session. It is
 // the same channel credential as `MagicLink` (see `Channel.ts`) with a different artifact: where a
 // link is 256 bits nobody can guess, a six-digit code is a million possibilities, so everything
@@ -148,12 +148,12 @@ export interface IssuedSession {
 }
 
 export interface EmailOtpShape {
-  /** BEH-EA-269: always resolves (or is rate limited) — never says whether an account exists or a code was mailed. */
+  /** BEH-EA-272: always resolves (or is rate limited) — never says whether an account exists or a code was mailed. */
   readonly requestCode: (input: {
     readonly email: string;
     readonly ip?: string | undefined;
   }) => Effect.Effect<void, Api.RateLimited>;
-  /** BEH-EA-270: trades a code for a session. */
+  /** BEH-EA-273: trades a code for a session. */
   readonly verify: (
     input: {
       readonly email: string;
@@ -229,7 +229,7 @@ export const EmailOtpHandlers = HttpApiBuilder.group(
 export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("emailOtp", {
   apiVersion: 1,
   contract: EmailOtpApi.EmailOtpApi,
-  // BEH-EA-271: no table — the codes are `Verification` rows (`verification_tokens`, core's).
+  // BEH-EA-274: no table — the codes are `Verification` rows (`verification_tokens`, core's).
   tables: [],
 }) {
   static readonly layer = AuthPlugin.layer(EmailOtp, {

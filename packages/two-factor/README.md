@@ -2,7 +2,7 @@
 
 The TOTP two-factor plugin: enrolment (`/two-factor/enable`, `/confirm`), the sign-in challenge (`/two-factor/verify`), single-use recovery codes (`/verify-recovery`, `/recovery-codes/regenerate`), `/two-factor/status` and `/two-factor/disable`. RFC 6238 codes (HMAC-SHA1 over `Crypto`, six digits, thirty-second steps, one step of drift), a replay guard on the last accepted step, secrets encrypted at rest through the `Encryption` port (AAD `two_factor_secret:<userId>`, lazy re-encryption on key rotation), recovery codes hashed with `PasswordHasher`. Mounted under the shared `"auth"` id, group `"twoFactor"`.
 
-See [`spec/behaviors/31-two-factor.md`](../../spec/behaviors/31-two-factor.md) (BEH-EA-257–239), [ADR-EA-020](../../spec/decisions/020-two-factor-state.md) and [ADR-EA-021](../../spec/decisions/021-sms-otp-restricted-plugin.md).
+See [`spec/behaviors/31-two-factor.md`](../../spec/behaviors/31-two-factor.md) (BEH-EA-260–239), [ADR-EA-020](../../spec/decisions/020-two-factor-state.md) and [ADR-EA-021](../../spec/decisions/021-sms-otp-restricted-plugin.md).
 
 ## Composition is fail-closed
 

@@ -1,6 +1,6 @@
 // @awthaq/two-factor — Challenge
 //
-// THS-001 step 5, TTE-008, THS-007 (BEH-EA-259; ADR-EA-020 decision 2): the pre-session state of a
+// THS-001 step 5, TTE-008, THS-007 (BEH-EA-262; ADR-EA-020 decision 2): the pre-session state of a
 // sign-in that passed its first factor and now owes a second, as a small state machine the type
 // system enforces.
 //
