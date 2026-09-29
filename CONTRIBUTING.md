@@ -17,7 +17,7 @@ the place to update alongside the code.
 
 ## Getting started
 
-Requirements: Node.js 22.12+, [pnpm](https://pnpm.io) 11.20+.
+Requirements: Node.js 22.13+ (pnpm 11.20 requires it; the published packages still support 22.12), [pnpm](https://pnpm.io) 11.20+.
 
 ```sh
 pnpm install

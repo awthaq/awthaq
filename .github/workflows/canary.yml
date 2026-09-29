@@ -35,10 +35,10 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: "22.12.0"
+          node-version: "22.13.0"
           cache: pnpm
           registry-url: "https://registry.npmjs.org"
-      # npm >= 11.5.1 is required for OIDC trusted publishing; Node 22.12 bundles 10.x.
+      # npm >= 11.5.1 is required for OIDC trusted publishing; Node 22.13 bundles 10.x.
       - run: npm install --global npm@11.5.1
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
