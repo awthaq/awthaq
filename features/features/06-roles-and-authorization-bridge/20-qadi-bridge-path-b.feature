@@ -25,12 +25,7 @@ Feature: Qadi Bridge — Path B (Declared Permissions)
       Then both apply the identical hash-comparison and absolute/idle-expiry logic over Sessions
       And SubjectExtractor's resolution and Authentication's resolution agree on whether the session is valid
 
-    # @skip: structural property of SubjectExtractor's source (no hand-written hash/expiry check of
-    #   its own); its observable half, that both resolutions agree on every credential state, is
-    #   REQ-EA-429, and the reuse is by construction (SubjectExtractor.ts calls
-    #   Authentication.resolvePrincipal; packages/qadi/test/SubjectExtractor.test.ts pins the
-    #   rotation case).
-    @skip
+    # A source tripwire (the property is structural): SubjectExtractor.ts must resolve every credential through Authentication.resolvePrincipal and carry no comparison or expiry logic of its own. The observable half is REQ-EA-429.
     @REQ-EA-430
     Scenario: SubjectExtractor must not hand-write its own independent hash-comparison or expiry check
       Given a SubjectExtractor implementation

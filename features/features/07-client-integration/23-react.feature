@@ -85,10 +85,7 @@ Feature: React Bindings
       When "alice" signs out and "sessionAtom" becomes "undefined"
       Then "subject" becomes "undefined" in that same render
 
-    # @skip: needs mounted React gates (Can): @testing-library/react and react-dom are not
-    # dependencies of features/; the registry-level half (subject clears with the session) is
-    # REQ-EA-507; gates are covered by packages/react/test/Providers.test.tsx
-    @skip
+    # Driven without a DOM (QadiClientHarness.ts): the real @qadi/react atoms in a real registry, and the real Can/useProjected rendered with react-dom/server.
     @REQ-EA-508
     Scenario: Every mounted gate closes at once when subject becomes undefined
       Given several "Can" gates mounted for "alice", each currently rendering an allowed action
@@ -100,10 +97,6 @@ Feature: React Bindings
   @BEH-EA-180
   Rule: A stale decision is not a decision
 
-    # @skip: qadi-owned gate behavior (Can pending): needs a rendered React tree, and @qadi/react is
-    # exercised by its own suite (../qadi/packages/react/test); @awthaq/react adds no wrapper
-    # (BEH-EA-184, packages/react/src/index.ts re-exports it verbatim)
-    @skip
     @REQ-EA-509
     Scenario: Can renders the pending state while a policy re-evaluation is in flight
       Given qadi's evaluator is re-evaluating "canDeleteProject" for "alice" against "resource"
@@ -111,9 +104,6 @@ Feature: React Bindings
       Then the "pending" state is rendered
       And the previous verdict is not rendered in its place
 
-    # @skip: qadi-owned gate behavior (no stale Allow while re-evaluating): needs a rendered React
-    # tree; covered by @qadi/react's own suite (../qadi/packages/react/test)
-    @skip
     @REQ-EA-510
     Scenario: A just-revoked permission does not render a stale allow while re-evaluating
       Given qadi's evaluator previously returned an Allow decision for "canDeleteProject" for "alice"
@@ -122,9 +112,6 @@ Feature: React Bindings
       Then the "pending" state is rendered instead of the stale Allow verdict
       And "DeleteButton" is not shown on the strength of the superseded decision
 
-    # @skip: qadi-owned hook (currentDecision): needs a rendered React tree; covered by
-    # @qadi/react's own suite (../qadi/packages/react/test)
-    @skip
     @REQ-EA-511
     Scenario: Reading authorization state through currentDecision reflects the same pending state as a gate
       Given a policy re-evaluation in flight for "alice"
@@ -136,9 +123,6 @@ Feature: React Bindings
   @BEH-EA-181
   Rule: useInvalidate re-decides every mounted gate
 
-    # @skip: qadi-owned hook (useInvalidate): needs a rendered React tree; covered by @qadi/react's
-    # own suite (../qadi/packages/react/test)
-    @skip
     @REQ-EA-512
     Scenario Outline: useInvalidate re-decides every mounted gate after a mutation that changes what the subject may do
       Given a mounted "Can" gate that previously decided "Deny" for "alice"
@@ -150,9 +134,6 @@ Feature: React Bindings
         | accepting an invite       |
         | being granted a role      |
 
-    # @skip: qadi-owned hook behavior (a gate without useInvalidate keeps its stale decision): needs
-    # a rendered React tree; covered by @qadi/react's own suite (../qadi/packages/react/test)
-    @skip
     @REQ-EA-513
     Scenario: Omitting useInvalidate leaves a mounted gate showing its stale decision until it remounts
       Given a mounted "Can" gate that previously decided "Deny" for "alice"
@@ -164,18 +145,12 @@ Feature: React Bindings
   @BEH-EA-182
   Rule: useProjected trims what a component can render
 
-    # @skip: qadi-owned hook (useProjected): needs a rendered React tree; covered by @qadi/react's
-    # own suite (../qadi/packages/react/test)
-    @skip
     @REQ-EA-514
     Scenario: useProjected returns only the fields the current decision grants
       Given qadi's evaluator would return an Allow decision for "canReadProject" against "resource", granting a subset of its fields
       When a component reads "useProjected(canReadProject, resource)"
       Then the returned view contains only the fields the decision grants
 
-    # @skip: qadi-owned hook (useProjected withholds the field from the data): needs a rendered
-    # React tree; server-side projection is wired in 24-nextjs-ssr.feature (REQ-EA-529/530)
-    @skip
     @REQ-EA-515
     Scenario: A withheld field is absent from useProjected's data, not merely hidden in JSX
       Given a field of "resource" that the current decision does not grant
@@ -229,9 +204,11 @@ Feature: React Bindings
   @BEH-EA-184
   Rule: One evaluation path across server, client, and tests
 
-    # @skip: qadi-owned evaluator routing (RequirePermission/guard/enforce/Can/useCan): the
-    # server-side pipeline is wired in 19-qadi-bridge-path-a.feature; the client half needs a
-    # rendered React tree; @qadi/react is covered by its own suite (../qadi/packages/react/test)
+    # @skip: one scenario over five surfaces owned by two runtimes. Server side, RequirePermission/guard/
+    # enforce are wired in 19-qadi-bridge-path-a.feature and 20-qadi-bridge-path-b.feature; client side, Can
+    # is shown to consult the evaluator (an evaluation id no shortcut could mint) by REQ-EA-521 below. What no
+    # test asserts is one policy going through all five and agreeing, which would need a browser and a server
+    # sharing one DecisionSink: not something the BDD harness composes today.
     @skip
     @REQ-EA-520
     Scenario: Every gate and helper resolves the same policy through the same qadi evaluator
@@ -240,9 +217,6 @@ Feature: React Bindings
       Then each of them resolves via a call to qadi's evaluator
       And none of them produces a decision without calling that evaluator
 
-    # @skip: qadi-owned gate behavior (no client-side role shortcut): needs a rendered React tree;
-    # covered by @qadi/react's own suite (../qadi/packages/react/test)
-    @skip
     @REQ-EA-521
     Scenario: A simple role-based policy is not special-cased as a client-side shortcut
       Given qadi's evaluator would return a Deny decision for a policy checking "hasRole(\"admin\")" against subject "alice"

@@ -613,6 +613,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   Then(
     "the plugin's own migrations do not modify the shared {string} table",
     function* (table: string) {
+      yield* Effect.void;
       assert.equal(table, "users");
       // The plugin ships no migration of its own; every migration the composition runs for it is the linker's.
       assert.deepEqual(Profile.migrations, []);
