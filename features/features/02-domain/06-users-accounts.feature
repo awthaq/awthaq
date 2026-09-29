@@ -1,10 +1,4 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @domain @users-accounts
-@skip @unwired
 Feature: Users and Accounts
 
   # BEH-EA-041 — spec/behaviors/06-domain-users-accounts.md
@@ -128,6 +122,9 @@ Feature: Users and Accounts
       Then the refusal is reported as an invalid request outcome
       And it is not reported as a system defect
 
+    # @skip: PV-221 — `Accounts.unlink` refuses the last Account unconditionally; no deployment policy
+    # (config, layer or option) exists to allow a zero-Account user, so there is nothing to wire.
+    @skip
     @REQ-EA-125
     Scenario: A deployment that explicitly allows zero-credential accounts permits the unlink
       Given a signed-in user "grace" with exactly one Account, "password"
@@ -190,18 +187,30 @@ Feature: Users and Accounts
   @BEH-EA-048
   Rule: A plugin-contributed field on User or Account defaults to client-writable unless the plugin declares otherwise
 
+    # @skip: the typed `userFields` extension point is not implemented (SAM-004; spec/behaviors/06
+    # BEH-EA-048 "Interim guidance") — nothing in shipped code contributes a field to User/Account, and
+    # `UpdateProfilePayload` is `{ name, image }`, so there is no plugin field to write or protect.
+    @skip
     @REQ-EA-133
     Scenario: A plugin-contributed field with no explicit write-gate is writable through the generic input path
       Given a plugin contributes a field "nickname" to "User" without declaring it non-writable
       When a client submits a generic update setting "nickname"
       Then the update is applied
 
+    # @skip: the typed `userFields` extension point is not implemented (SAM-004; spec/behaviors/06
+    # BEH-EA-048 "Interim guidance") — nothing in shipped code contributes a field to User/Account, and
+    # `UpdateProfilePayload` is `{ name, image }`, so there is no plugin field to write or protect.
+    @skip
     @REQ-EA-134
     Scenario: A plugin that declares a contributed field non-writable prevents client writes to it
       Given a plugin contributes a field "billingTier" to "User" and declares it non-writable in its own schema
       When a client submits a generic update setting "billingTier"
       Then the update to "billingTier" is not applied
 
+    # @skip: the typed `userFields` extension point is not implemented (SAM-004; spec/behaviors/06
+    # BEH-EA-048 "Interim guidance") — nothing in shipped code contributes a field to User/Account, and
+    # `UpdateProfilePayload` is `{ name, image }`, so there is no plugin field to write or protect.
+    @skip
     @REQ-EA-135
     Scenario: The base system provides no default protection for a plugin field that omits the write-gate
       Given a plugin contributes a system-authority field "isElevated" to "User" without declaring it non-writable
