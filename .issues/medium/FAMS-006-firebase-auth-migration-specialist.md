@@ -3,7 +3,7 @@ ID: "FAMS-006"
 Title: "Provider-subject mismatches in imported links silently JIT-duplicate accounts"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:686"
 Auditor: "firebase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `oauth` · reported by **Firebase Auth Migration Specialist** (`firebase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Document the exact import recipe: providerId must equal the effect-auth oauth pr
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `oauth-account-linking-policy`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:719`. Fix: Document the exact federated-identity import recipe now. Defer the dry-run tool to the CLI import work. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Code half: OAuth.accountAnchorFor(providerConfig, subject) (already committed with the linking batch, tested against callback's lookup). Doc half: packages/oauth/README.md 'Importing federated identities' recipe (providerId = provider id, subject = IdP sub -- Firebase providerUserInfo[].rawId not uid, issuer = configured issuer) with a Google/Apple/GitHub table. The dry-run tool (awthaq import --dry-run) remains tracked with the CLI import work (BEH-EA-207, slice 09).

@@ -3,7 +3,7 @@ ID: "OIT-009"
 Title: "id_token test suite omits alg confusion, kid rotation, azp/array-aud, and userinfo sub mismatch"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/test/OAuth.test.ts:784"
 Auditor: "oidc-id-token-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `oauth` · reported by **OIDC ID Token Specialist** (`oidc-id-token-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Add scenarios: header alg HS256/none rejected; token whose kid is absent from a 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `oauth-oidc-claims-integrity`. Evidence at HEAD ec065a7: `packages/oauth/test/OAuth.test.ts:1056`. Fix: Add the remaining negative scenarios. Most arrive as the red-first tests of OIT-001 and OIT-003, and alg confusion is added standalone. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Negative scenarios added to the OIDC id_token describe: alg HS256 signed with the RSA modulus as HMAC key and alg:none are rejected (pins: both already failed at the RS256 gate), plus array aud/azp (OIT-003), userinfo sub mismatch (OIT-001) and kid rotation (fd8e5e9) already covered. Gates as MA-002.

@@ -3,7 +3,7 @@
 >
 > | Property | Value |
 > |---|---|
-> | Document ID | EFAUTH-APP-04 |
+> | Document ID | EFAUTH-APP-05 |
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
@@ -21,7 +21,7 @@ the database re-evaluates on every row. It exercises
 [BEH-EA-162](../behaviors/21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership)
 (organization relationships),
 [BEH-EA-166](../behaviors/21-qadi-resolvers-obligations.md#beh-ea-166-sql-pushdown-and-its-limit)
-(SQL pushdown) and [ADR-EA-017](../decisions/017-global-roles-vs-organization-roles.md).
+(SQL pushdown) and [ADR-EA-025](../decisions/025-global-roles-vs-organization-roles.md).
 
 ## 1. Method: catalog first, then translate
 
@@ -44,7 +44,7 @@ the database re-evaluates on every row. It exercises
 | `exists (select 1 from memberships where org_id = t.org_id and user_id = auth.uid())` | `hasRelationship("member", { depth: 2 })` with `Organization.relationships` and your `ResourceOrganizationLookup` (project → organization) | `depth >= 1` walks through the lookup you provide; unresolved → `RelationshipResolveError`, never a silent deny |
 | `... and role = 'admin'` | `hasRelationship("has-role:admin")` (alias `"admin"`) | Any built-in, static-custom or dynamic organization role: `has-role:<name>` |
 | a per-org permission ("editors may update") | `hasRelationship("member:update")` — `<resource>:<action>` | Answered from the same effective statements the organization plugin's own endpoints gate on |
-| `auth.jwt() ->> 'role' = 'service_role'` / platform staff | `hasRole("platform:support")` via `@awthaq/roles` | Global, tenant-blind authority ([ADR-EA-017](../decisions/017-global-roles-vs-organization-roles.md)) |
+| `auth.jwt() ->> 'role' = 'service_role'` / platform staff | `hasRole("platform:support")` via `@awthaq/roles` | Global, tenant-blind authority ([ADR-EA-025](../decisions/025-global-roles-vs-organization-roles.md)) |
 | `auth.jwt() -> 'app_metadata' ->> 'plan'` (a token claim) | a subject attribute: an `AttributeResolver` (built-in `userAttr("emailVerified")`, or your own `plan`) read with `hasAttribute` | **Token claims authenticate; they do not authorize.** awthaq does not project JWT claims into `AuthSubject` — re-home the fact into `Roles` (roles), organization relations (membership), or an attribute resolver, and read it from the live session |
 | `auth.role() = 'anon'` | qadi's `anonymous` subject (every policy denies) | Use `OptionalAuthentication` + a `PublicEndpoint`/policy that allows it |
 | `column-level` `USING` on selected fields | `FieldOptions` on the policy (`visibleFields`) and `enforceProjected` | Field visibility is part of the decision, not a separate view |

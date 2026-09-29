@@ -3,7 +3,7 @@ ID: "OIT-008"
 Title: "All id_token failure reasons collapse into one reason-free error, discarding JwtVerificationError's typed reason"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:263"
 Auditor: "oidc-id-token-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `oauth` · reported by **OIDC ID Token Specialist** (`oidc-id-token-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Keep OAuthCallbackFailed wire-opaque but thread a discriminated reason into the 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-oidc-claims-integrity`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:348`. Fix: Keep the wire error opaque, and carry a discriminated internal reason for logs and spans. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New CallbackFailure.ts: CallbackFailureReason union + callbackFailed(reason, detail?) (logs 'oauth callback failed: <reason>' at warn with reason annotated, annotates the current span oauth.failure_reason, then fails with the unchanged field-less OAuthCallbackFailed) and providerFailure(stage, error) (503 vs 400 classification + reason logging); every OAuthCallbackFailed site in OAuth.ts/IdToken.ts now goes through them, passing Jwt.ts reasons as detail. No fields added to the wire error. Test: wrong nonce logs 'oauth callback failed: nonce' while JSON of the error is exactly {"_tag":"OAuthCallbackFailed"} (red before: no log). Also added a no-subject guard (a profile with an empty/missing subject fails closed). Gates as MA-002.

@@ -73,7 +73,8 @@ const Migrated = Layer.effectDiscard(
         familyId TEXT NOT NULL,
         supersededBy TEXT,
         supersededAt TEXT,
-        reusedAt TEXT
+        reusedAt TEXT,
+        amr TEXT NOT NULL DEFAULT '[]'
       )
     `;
   }),

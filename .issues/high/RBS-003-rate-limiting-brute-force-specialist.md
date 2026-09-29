@@ -3,7 +3,7 @@ ID: "RBS-003"
 Title: "Memory store never evicts buckets whose keys are attacker-controlled — unauthenticated memory-DoS"
 Level: high
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/RateLimiter.ts:124"
 Auditor: "rate-limiting-brute-force-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `security` · `ports` · reported by **Rate Limiting & Brute-Force Defense Specialist** (`rate-limiting-brute-force-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/ports/src/RateLimiter.ts:124` matches the evidence exactly; `layerStoreMemory`'s `Ref.modify` only ever overwrites `HashMap.set(state, key, next)`, with no eviction/sweep logic anywhere in the file, and every enforced key does embed attacker-controlled input (`Password.ts:517`, `Password.ts:629`, `OAuth.ts` IP key). This is the only rate-limiter store shipped in the repo. Fix (opportunistic sweep or LRU cap) is well-scoped. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `ratelimit-memory-eviction`. Evidence at HEAD ec065a7: `packages/ports/src/RateLimiter.ts:114`. Fix: Bound layerStoreMemory: periodic expiry sweep + hard cap, with an observable size. (effort M). Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
+
+**Resolved (2026-09-29):** Bounded RateLimiter.layerStoreMemory (packages/ports/src/RateLimiter.ts): new layerStoreMemoryWith({maxBuckets, sweepInterval}) with a scoped sweeper fiber (Effect.sleep+forever+forkScoped) dropping expired buckets, a hard cap (default 100_000) that on insert drops expired then evicts the earliest-resetAt buckets in a batch (retain 90%), and RateLimiterMemoryStats {size} provided alongside. layerStoreMemory = defaults (1 minute sweep). Tests in packages/ports/test/RateLimiter.test.ts (5 new; red first: layerStoreMemoryWith/RateLimiterMemoryStats did not exist). BEH-EA-105 addendum in spec/behaviors/14-rate-limiting.md. Gates: typecheck (only pre-existing packages/react TS2883 errors), test 827 pass, bdd 104 pass, spec:verify:strict 19/19, oxlint clean for touched files (pre-existing ClientAddress/HttpApiTypes errors only).

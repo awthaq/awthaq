@@ -8,6 +8,11 @@
 // the README's own single-plugin Postgres quickstart (that one stays
 // exactly as `shipping-gaps` ticket 29 shipped it).
 //
+// TRBS-005: this composition is single-process by construction — every
+// memory layer here is a per-process `Ref`, so a session revoked on one
+// instance is not revoked on another and state is lost on restart. Use the
+// `layerSql` variants for anything multi-instance.
+//
 // Run it:
 //   node --experimental-strip-types index.ts
 import {
@@ -25,7 +30,7 @@ import { AuditLog, Auth, AuthEvents, Verification } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
-import { Authentication, Csrf } from "@awthaq/server";
+import { Authentication, BodyLimit, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import { EvaluationServicesNone, role } from "@qadi/core";
 import { RequirePermissionLive } from "@qadi/http";
@@ -146,7 +151,9 @@ const audited = AuthorizationAudit.auditAuthorizationAnnotations(built.api);
 // 4. A real listening server — the same `HttpRouter.serve` +
 //    `NodeHttpServer.layer` pair the README's own quickstart uses, not an
 //    in-process test client.
-const ServerLive = HttpRouter.serve(AppLayer).pipe(
+//    `BodyLimit.layer` bounds every request body (256 KiB by default, 413
+//    beyond it) — without it Effect's server reads bodies with no cap.
+const ServerLive = HttpRouter.serve(BodyLimit.layer.pipe(Layer.provideMerge(AppLayer))).pipe(
   Layer.provide(NodeHttpServer.layer(createServer, { port: 3001 })),
 );
 

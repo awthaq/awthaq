@@ -30,6 +30,7 @@
 // comment) and so should be indistinguishable to whatever is watching that
 // event too.
 
+import { Hmac } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -46,13 +47,13 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as AuthEvents from "./AuthEvents.ts";
+import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
 export type VerificationTokenId = string & Brand.Brand<"VerificationTokenId">;
 export const VerificationTokenId = Brand.nominal<VerificationTokenId>();
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+const { toHex } = Hmac;
 
 /**
  * BEH-EA-059/INV-EA-010: every failed consumption — expired, unknown, or
@@ -143,6 +144,14 @@ interface TokenRow {
 const isExpired = (row: TokenRow, now: DateTime.Utc): boolean =>
   DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.expiresAt);
 
+/**
+ * TRBS-005: single-process, test-grade storage. State is one per-process
+ * `Ref`: it is not shared across instances (a revocation on one instance does
+ * not propagate to another), it is lost on restart, and it grows without bound
+ * until a retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV
+ * layer, ADR-EA-014) for any multi-instance deployment. `AuthEvents`' in-process
+ * `PubSub` has the same process boundary.
+ */
 export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthEvents.AuthEvents> =
   Layer.effect(
     Verification,
@@ -169,7 +178,14 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           expiresAt: DateTime.addDuration(now, input.ttl),
           payload: input.payload,
         };
-        yield* Ref.update(state, (s) => HashMap.set(s, input.identifier, row));
+        // TMS-004: an unconsumed token was never removed; prune expired rows once the map is large.
+        yield* Ref.update(state, (s) =>
+          HashMap.set(
+            pruneExpiredAbove(s, now, (r) => r.expiresAt),
+            input.identifier,
+            row,
+          ),
+        );
         return {
           token: {
             id,
@@ -247,9 +263,14 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           ) {
             return [false, s] as const;
           }
+          // TMS-004: expired reservations are otherwise never removed.
           return [
             true,
-            HashMap.set(s, input.identifier, DateTime.addDuration(now, input.ttl)),
+            HashMap.set(
+              pruneExpiredAbove(s, now, (expiresAt) => expiresAt),
+              input.identifier,
+              DateTime.addDuration(now, input.ttl),
+            ),
           ] as const;
         });
       });

@@ -3,7 +3,7 @@ ID: "ESS-003"
 Title: "Token-exchange response cast; id_token type never validated"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:211"
 Auditor: "effect-schema-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `oauth` · reported by **Effect Schema Specialist** (`effect-schema-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -58,3 +58,5 @@ Decode the response with Schema.Struct({ access_token: Schema.optional(Schema.St
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-provider-response-decoding`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:250`. Fix: Decode token-endpoint and userinfo responses with Schema at the boundary, shared by OAuth.ts and OAuthTokenAccess.ts, and delete the casts. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/oauth/src/ProviderResponses.ts (TokenResponseSchema with expires_in number|NumberFromString, UserinfoSchema) shared by OAuth.exchangeCode, the userinfo call and OAuthTokenAccess.refresh via HttpIncomingMessage.schemaBodyJson; all response casts deleted (also the FlowPayload guard -> FlowPayloadSchema decode, tuple 'as const' in the registry/rate-limit, Jwt.decode's tuple cast). Tests: expires_in numeric string (red: expiry was dropped) plus pins for numeric id_token, array token body, array userinfo body, refresh non-string access_token. Gates: tsc -b + tsconfig.test.json, vitest 837 pass, test:bdd, spec:verify:strict, oxlint packages/oauth.

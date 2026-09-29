@@ -1,10 +1,10 @@
-# ADR-EA-017: Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority
+# ADR-EA-025: Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority
 
 > **Document Control**
 >
 > | Property | Value |
 > |---|---|
-> | Document ID | EFAUTH-ADR-017 |
+> | Document ID | EFAUTH-ADR-025 |
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented (documentation and guidance; no new mechanism) |

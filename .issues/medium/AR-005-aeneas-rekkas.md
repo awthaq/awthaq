@@ -3,7 +3,7 @@ ID: "AR-005"
 Title: "Rate limiting is per-process and identity-keyed only; the quickstart ships it disabled"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/RateLimiter.ts:111"
 Auditor: "aeneas-rekkas"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `ports` · reported by **Aeneas Rekkas — Founder/CEO of Ory** (`aeneas-rekkas`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Ship a RateLimiterStore over the existing SQL port (the atomic increment contrac
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `ratelimit-distributed-store`. Already fixed by commit 349e220. Evidence at HEAD ec065a7: `README.md:216`. Fix: Close when RBS-004 and NHS-005 land; no additional code. (effort S). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Closed by RBS-004 (shared SQL store, fail-open policy) and NHS-005 (quickstart enforces limits); IP dimension already fixed by a3b7255/349e220. No extra code.

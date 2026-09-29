@@ -3,7 +3,7 @@ ID: "SMS-002"
 Title: "Key rotation is a data-losing dead end: single-key env provider plus Effect.orDie on decrypt"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:199"
 Auditor: "secrets-management-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `correctness` · `sql` · reported by **Secrets Management Specialist** (`secrets-management-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — Repositories.ts:199 (`Effect.orDie` on decrypt) matches verbatim, `KeyProvider.ts`'s `layerEnv` fails `UnknownKeyId` for any non-current kid, and OAuth.ts:552-566 already converts the identical `DecryptionFailed`/`UnknownKeyId` pair into a typed `OAuthCallbackFailed` — a directly reusable pattern for `decryptToken`. A multi-key env provider is a natural extension of `KeyProvider`'s already-kid-based interface. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-encrypted-token-read-path`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:223`. Fix: Replace `Effect.orDie` on decrypt with a typed, per-row failure policy. Point token reads surface a typed error; identity/list reads degrade the unreadable column to null and log. Token-only writes stop decrypting the old value. Add lazy re-encryption once KRS-002's multi-key provider and `staleKid` result land (ticket 22). (effort L). Full dossier: `.plan/slices/05-sql.md`.
+
+**Resolved (2026-09-29):** packages/sql/src/Repositories.ts: no decrypt-path orDie remains. New AccountTokenUndecryptable error; findById/findByProviderSubject/listByUser/insert/update degrade an unreadable column to null and logWarning (accountId/field/reason, never ciphertext); new strict findTokensById surfaces the typed error; new targeted writes updatePasswordHash and updateProviderTokens never read/decrypt old token columns; lazy re-encryption on read (staleKid Some -> re-encrypt + CAS UPDATE per column) gated by AccountsRepositoryConfig.reencryptOnRead (default true). packages/core/src/Accounts.ts: updateCredentialHash/updateProviderTokens use the targeted writes; findProviderTokens maps AccountTokenUndecryptable to new typed ProviderTokensUnreadable; packages/oauth/src/OAuthTokenAccess.ts maps it to OAuthTokenUnavailable (re-consent). Tests: packages/sql/test/AccountsTokenReadPath.test.ts (11) + core Accounts.test.ts 'findProviderTokens fails ProviderTokensUnreadable'. Deviation: instead of making findById strict I kept findById identity-degrading and added findTokensById as the strict path so core's many identity reads need no change. ADR is ADR-EA-019 (spec/decisions/019), not 017 as the dossier assumed (017 is reserved for the JWT rotation ADR / CLI ADR).

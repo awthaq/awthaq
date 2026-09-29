@@ -3,7 +3,7 @@ ID: "DRS-006"
 Title: "Cross-table transactions assume one logical database; the SqlTransaction default can silently mean no transaction"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:682"
 Auditor: "data-residency-sharding-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `oauth` · reported by **Data Residency & Sharding Specialist** (`data-residency-sharding-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Document the colocation invariant explicitly ('users and their accounts always s
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `persistence-colocation-invariant`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:795`. Fix: Write the colocation invariant into the spec. No runtime assertion (that would be speculative infra). (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Spec-only, as planned: new INV-EA-017 in spec/invariants.md (users/accounts/sessions/verification_tokens share one transaction domain; any partitioning must co-locate a user with its accounts; cites OAuth JIT create+link and Password.confirmReset/BEH-EA-058), a pointer from BEH-EA-035, a spec/traceability.md row (plus test rows for the new oauth/core/server test files), and an extended SqlTransaction.layerNoop doc comment (packages/ports) stating its atomicity is per-Ref only. No runtime assertion (speculative infra). INV-EA-017 may collide with another program's new invariant number (orchestrator: renumber). spec:verify:strict passes. Also recorded in spec/README (BEH-EA-122) and packages/oauth/README the N16 SameSite=Strict landing-request limitation.

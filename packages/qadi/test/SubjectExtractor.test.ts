@@ -6,9 +6,13 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
+import * as Cookies from "effect/unstable/http/Cookies";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { SubjectExtractor as QadiSubjectExtractor } from "@qadi/http";
 import * as SubjectExtractor from "../src/SubjectExtractor.ts";
 
@@ -93,6 +97,39 @@ describe("SubjectExtractor (Path B adapter)", () => {
       }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect(
+    "APS-006: an __Host-impersonation cookie shadows __Host-session and resolves the impersonated user; an ordinary session planted there is ignored",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const users = yield* Users.Users;
+        const extractor = yield* QadiSubjectExtractor;
+        const admin = yield* users.create({ email: "aps006-admin@example.com", name: "Admin" });
+        const target = yield* users.create({ email: "aps006-target@example.com", name: "Target" });
+        const own = yield* sessions.issue({ userId: admin.id });
+        const impersonation = yield* sessions.issue({
+          userId: target.id,
+          actingAs: { type: "user", id: admin.id },
+        });
+        const extract = (cookie: string) =>
+          extractor.extract(
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/whatever", { headers: { cookie } }),
+            ),
+          );
+
+        const shadowed = yield* extract(
+          `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(impersonation.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+        );
+        assert.strictEqual(shadowed.id, `user:${target.id}`);
+
+        const planted = yield* extract(
+          `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(own.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+        );
+        assert.strictEqual(planted.id, `user:${admin.id}`);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("BEH-EA-153: an unknown session resolves to anonymous, never a failure", () =>
     Effect.gen(function* () {
       const extractor = yield* QadiSubjectExtractor;
@@ -130,9 +167,12 @@ describe("SubjectExtractor (Path B adapter)", () => {
         // Path A: Api.Authentication's own resolution, against the raw
         // (pre-rotation) credential — this is the call that actually
         // rotates the secret, exactly as it would inside AuthenticationLive.
-        const principal = yield* Authentication.resolvePrincipal(sessions, resolver, token).pipe(
-          Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-        );
+        const principal = yield* Authentication.resolvePrincipal(
+          sessions,
+          resolver,
+          token,
+          "cookie",
+        ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request));
         assert.strictEqual(principal.ref.id, user.id);
 
         // Path B: SubjectExtractorLive, independently, on the SAME request
@@ -142,6 +182,49 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const subject = yield* extractor.extract(request);
         assert.strictEqual(subject.id, `user:${user.id}`);
       }).pipe(
+        Effect.provide(Layer.mergeAll(Authentication.PrincipalResolverLive, ShortLivedTestLayer)),
+      ),
+  );
+
+  it.effect(
+    "PIL-005: a Path-B-only route delivers the rotated secret on its response (Set-Cookie)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const users = yield* Users.Users;
+          const extractor = yield* QadiSubjectExtractor;
+          const user = yield* users.create({ email: "path-b-only@example.com", name: "PathB" });
+          const { token } = yield* sessions.issue({ userId: user.id });
+          yield* TestClock.adjust(Duration.millis(200));
+
+          const request = HttpServerRequest.fromWeb(
+            new Request("http://localhost/whatever", {
+              headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+            }),
+          );
+          const subject = yield* extractor.extract(request);
+          assert.strictEqual(subject.id, `user:${user.id}`);
+
+          // Pre-response handlers run when the request's response is written.
+          let written: HttpServerResponse.HttpServerResponse | undefined;
+          yield* HttpEffect.toHandled(
+            Effect.succeed(HttpServerResponse.empty()),
+            (_request, response) =>
+              Effect.sync(() => {
+                written = response;
+              }),
+          ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request));
+          const rotated =
+            written === undefined
+              ? Option.none()
+              : Cookies.getValue(written.cookies, Sessions.SESSION_COOKIE_NAME);
+          assert.isTrue(Option.isSome(rotated));
+          if (Option.isNone(rotated)) return;
+          assert.notStrictEqual(rotated.value, Redacted.value(token));
+          yield* sessions.verify(Redacted.make(rotated.value));
+        }),
+      ).pipe(
         Effect.provide(Layer.mergeAll(Authentication.PrincipalResolverLive, ShortLivedTestLayer)),
       ),
   );

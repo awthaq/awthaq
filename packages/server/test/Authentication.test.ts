@@ -1,9 +1,15 @@
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-065 through BEH-EA-072.
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
+import * as Cookies from "effect/unstable/http/Cookies";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -19,6 +25,7 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiTest from "effect/unstable/httpapi/HttpApiTest";
+import * as OpenApi from "effect/unstable/httpapi/OpenApi";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -123,9 +130,11 @@ const UnreliableSessions: Layer.Layer<Sessions.Sessions> = Layer.succeed(Session
   issue: () => Effect.die("not used in this test"),
   verify: () => Effect.fail(outage),
   revoke: () => Effect.die("not used in this test"),
+  revokeOwned: () => Effect.die("not used in this test"),
   revokeOthers: () => Effect.die("not used in this test"),
   revokeAll: () => Effect.die("not used in this test"),
   list: () => Effect.die("not used in this test"),
+  findOwned: () => Effect.die("not used in this test"),
   isLive: () => Effect.die("not used in this test"),
   reauthenticate: () => Effect.die("not used in this test"),
 });
@@ -233,6 +242,55 @@ describe("Authentication", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  // APS-006: impersonation sessions travel under their own cookie so the
+  // admin's own `__Host-session` is never overwritten.
+  it.effect(
+    "APS-006: a session carrying actingAs authenticates from the __Host-impersonation cookie and shadows __Host-session",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const own = yield* sessions.issue({ userId: Users.UserId("admin-1") });
+        const impersonation = yield* sessions.issue({
+          userId,
+          actingAs: { type: "user", id: "admin-1" },
+        });
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+        const result = yield* client.required.whoAmI({
+          headers: {
+            cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(impersonation.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+          },
+        });
+        assert.strictEqual(result, userId);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "APS-006: an ordinary session planted in __Host-impersonation never authenticates and the chain falls through to __Host-session",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const own = yield* sessions.issue({ userId: Users.UserId("admin-1") });
+        const planted = yield* sessions.issue({ userId });
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+
+        const alone = yield* client.required
+          .whoAmI({
+            headers: {
+              cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(planted.token)}`,
+            },
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(alone._tag, "Unauthenticated");
+
+        const fallsThrough = yield* client.required.whoAmI({
+          headers: {
+            cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(planted.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+          },
+        });
+        assert.strictEqual(fallsThrough, "admin-1");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
   // .scratch/jwt/issues/16-automatic-response-mirroring.md: `PostAuthResponseHook`
   // defaults to a no-op (every test above already proves this — none of
   // them override it, and all pass unchanged). This is the one test
@@ -267,6 +325,44 @@ describe("Authentication", () => {
           Layer.provide(TappedHook),
           Layer.provideMerge(Sessions.layerMemory),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
+          Layer.provideMerge(AuthEvents.layer),
+          Layer.provideMerge(AuditLog.layerMemory),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provideMerge(TestServices),
+        ),
+      ),
+    );
+  });
+
+  // PDR-003: a hook can tell a cookie-authenticated request from a bearer one.
+  it.effect("PostAuthResponseHook.decorate receives the authenticating scheme", () => {
+    const schemes = Effect.runSync(Ref.make<ReadonlyArray<string>>([]));
+    const TappedHook = Layer.succeed(Authentication.PostAuthResponseHook, {
+      decorate: (
+        _principal: Api.Principal,
+        response: HttpServerResponse.HttpServerResponse,
+        context: { readonly scheme: "cookie" | "bearer" | "impersonation" },
+      ) => Ref.update(schemes, (seen) => [...seen, context.scheme]).pipe(Effect.as(response)),
+    });
+    return Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const { token } = yield* sessions.issue({ userId });
+      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      yield* client.required.whoAmI({
+        headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+      });
+      yield* client.required.whoAmI({
+        headers: { authorization: `Bearer ${Redacted.value(token)}` },
+      });
+      assert.deepStrictEqual(yield* Ref.get(schemes), ["cookie", "bearer"]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
+          Layer.provideMerge(Authentication.AuthenticationLive),
+          Layer.provideMerge(Authentication.OptionalAuthenticationLive),
+          Layer.provide(Authentication.PrincipalResolverLive),
+          Layer.provide(TappedHook),
+          Layer.provideMerge(Sessions.layerMemory),
           Layer.provideMerge(AuthEvents.layer),
           Layer.provideMerge(AuditLog.layerMemory),
           Layer.provide(NodeCrypto.layer),
@@ -331,11 +427,473 @@ describe("Authentication", () => {
         const exit = yield* Authentication.resolveSession(
           yield* Sessions.Sessions,
           Redacted.make("some-id.some-secret"),
+          "cookie",
         ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request), Effect.exit);
         assert.isTrue(Exit.isFailure(exit));
         if (!Exit.isFailure(exit)) return;
         assert.isTrue(Cause.hasDies(exit.cause));
         assert.isFalse(Cause.hasFails(exit.cause));
       }).pipe(Effect.provide(UnreliableSessions)),
+  );
+});
+
+// PIL-005/TS-003/NHS-006/MAPS-008: real serving path. Pre-response handlers
+// only run under `HttpEffect.toHandled`, so these tests drive the router the
+// way a real server does and inspect the response actually written.
+class Boom extends Schema.TaggedError<Boom>()("Boom", {}, { httpApiStatus: 404 }) {}
+
+const RotationApi = HttpApi.make("rotation").add(
+  HttpApiGroup.make("g")
+    .add(HttpApiEndpoint.get("ok", "/ok", { success: Schema.String }))
+    .add(HttpApiEndpoint.get("boom", "/boom", { success: Schema.String, error: Boom }))
+    .middleware(Api.Authentication),
+);
+
+const RotationHandlers = HttpApiBuilder.group(RotationApi, "g", (handlers) =>
+  handlers.handle("ok", () => Effect.succeed("ok")).handle("boom", () => Effect.fail(new Boom())),
+);
+
+const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
+  Layer.provide(RotationHandlers),
+  Layer.provideMerge(Authentication.AuthenticationLive),
+  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provideMerge(Sessions.layerMemory),
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provide(NodeCrypto.layer),
+  Layer.provideMerge(TestServices),
+  Layer.provideMerge(HttpRouter.layer),
+);
+
+const serve = (path: string, headers: Record<string, string>) =>
+  Effect.gen(function* () {
+    const router = yield* HttpRouter.HttpRouter;
+    let written: HttpServerResponse.HttpServerResponse | undefined;
+    yield* HttpEffect.toHandled(router.asHttpEffect(), (_request, response) =>
+      Effect.sync(() => {
+        written = response;
+      }),
+    ).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(new Request(`http://localhost${path}`, { headers })),
+      ),
+    );
+    if (written === undefined) return yield* Effect.die("no response was written");
+    return written;
+  });
+
+const cookieOf = (response: HttpServerResponse.HttpServerResponse) =>
+  Cookies.getValue(response.cookies, Sessions.SESSION_COOKIE_NAME);
+
+// IC-007/BO-005/AGA-004: the rotated cookie is rendered through the shared
+// `SessionCookie` config — recomputed Max-Age, mode attributes, configured name.
+const rotationLayerWith = (cookieConfig: Layer.Layer<never>) =>
+  HttpApiBuilder.layer(RotationApi).pipe(
+    Layer.provide(RotationHandlers),
+    Layer.provideMerge(Authentication.AuthenticationLive),
+    Layer.provide(Authentication.PrincipalResolverLive),
+    Layer.provideMerge(Sessions.layerMemory),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(cookieConfig),
+    Layer.provideMerge(TestServices),
+    Layer.provideMerge(HttpRouter.layer),
+  );
+
+describe("Session cookie policy on rotation (IC-007, BO-005, AGA-004)", () => {
+  it.effect(
+    "BO-005: a rotated cookie's Max-Age is recomputed from the remaining absolute lifetime",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(2));
+          const response = yield* serve("/ok", {
+            cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+          });
+          const cookie = Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME);
+          assert.isTrue(Option.isSome(cookie));
+          if (Option.isNone(cookie)) return;
+          assert.deepStrictEqual(
+            cookie.value.options?.maxAge,
+            Duration.subtract(Duration.days(30), Duration.hours(2)),
+          );
+          assert.strictEqual(cookie.value.options?.sameSite, "strict");
+        }),
+      ).pipe(Effect.provide(RotationLayer)),
+  );
+
+  it.effect("AGA-004: HostEmbedded rotates __Host-session with SameSite=None; Partitioned", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(2));
+        const response = yield* serve("/ok", {
+          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+        });
+        const cookie = Cookies.get(response.cookies, "__Host-session");
+        assert.isTrue(Option.isSome(cookie));
+        if (Option.isNone(cookie)) return;
+        assert.strictEqual(cookie.value.options?.sameSite, "none");
+        assert.isTrue(cookie.value.options?.partitioned);
+        assert.isTrue(cookie.value.options?.secure);
+      }),
+    ).pipe(
+      Effect.provide(rotationLayerWith(SessionCookie.config({ mode: SessionCookie.HostEmbedded }))),
+    ),
+  );
+
+  it.effect("IC-007: SecureDomain reads and rotates __Secure-session with the Domain", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        // Presented under the configured name, the session resolves...
+        const ok = yield* serve("/ok", { cookie: `__Secure-session=${Redacted.value(token)}` });
+        assert.strictEqual(ok.status, 200);
+        // ...and the default name is no longer read.
+        const wrongName = yield* serve("/ok", {
+          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+        });
+        assert.strictEqual(wrongName.status, 401);
+        yield* TestClock.adjust(Duration.hours(2));
+        const rotated = yield* serve("/ok", {
+          cookie: `__Secure-session=${Redacted.value(token)}`,
+        });
+        const cookie = Cookies.get(rotated.cookies, "__Secure-session");
+        assert.isTrue(Option.isSome(cookie));
+        if (Option.isNone(cookie)) return;
+        assert.strictEqual(cookie.value.options?.domain, "example.com");
+        assert.strictEqual(cookie.value.options?.sameSite, "lax");
+      }),
+    ).pipe(
+      Effect.provide(
+        rotationLayerWith(
+          SessionCookie.config({
+            mode: SessionCookie.SecureDomain({ domain: "example.com", sameSite: "lax" }),
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
+describe("Authentication rotation delivery (PIL-005)", () => {
+  it.effect(
+    "a handler failing with a typed error after a rotating verify still carries the rotated cookie",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(2));
+          const response = yield* serve("/boom", {
+            cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+          });
+          assert.strictEqual(response.status, 404);
+          const rotated = cookieOf(response);
+          assert.isTrue(Option.isSome(rotated));
+          if (Option.isNone(rotated)) return;
+          assert.notStrictEqual(rotated.value, Redacted.value(token));
+          // The delivered secret is the live one — the old one no longer verifies.
+          yield* sessions.verify(Redacted.make(rotated.value));
+          assert.strictEqual(response.headers["cache-control"], "no-store");
+        }),
+      ).pipe(Effect.provide(RotationLayer)),
+  );
+
+  it.effect("a successful response carries the rotated cookie exactly once", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(2));
+        const response = yield* serve("/ok", {
+          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+        });
+        assert.strictEqual(response.status, 200);
+        assert.strictEqual(Object.keys(response.cookies.cookies).length, 1);
+        assert.isTrue(Option.isSome(cookieOf(response)));
+      }),
+    ).pipe(Effect.provide(RotationLayer)),
+  );
+
+  it.effect("bearer rotation sets the rotated-token header and Cache-Control: no-store", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(2));
+        const response = yield* serve("/ok", { authorization: `Bearer ${Redacted.value(token)}` });
+        assert.strictEqual(response.status, 200);
+        const rotated = response.headers[Api.ROTATED_TOKEN_HEADER];
+        assert.isDefined(rotated);
+        assert.notStrictEqual(rotated, Redacted.value(token));
+        assert.strictEqual(response.headers["cache-control"], "no-store");
+        assert.isTrue(Option.isNone(cookieOf(response)));
+        yield* sessions.verify(Redacted.make(rotated ?? ""));
+      }),
+    ).pipe(Effect.provide(RotationLayer)),
+  );
+
+  it.effect("no rotation, no delivery: a fresh session's response is left untouched", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* serve("/ok", {
+          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+        });
+        assert.isTrue(Option.isNone(cookieOf(response)));
+        assert.isUndefined(response.headers["cache-control"]);
+      }),
+    ).pipe(Effect.provide(RotationLayer)),
+  );
+});
+
+describe("Authentication per-request cache (TS-003/NHS-006)", () => {
+  const countingSessions = (verifies: Ref.Ref<number>): Layer.Layer<Sessions.Sessions> =>
+    Layer.succeed(Sessions.Sessions, {
+      issue: () => Effect.die("not used in this test"),
+      verify: () =>
+        Ref.update(verifies, (n) => n + 1).pipe(
+          Effect.andThen(Effect.sleep(Duration.millis(10))),
+          Effect.andThen(
+            Effect.fail(new Sessions.SessionNotFound({ message: "awthaq: no such session" })),
+          ),
+        ),
+      revoke: () => Effect.die("not used in this test"),
+      revokeOwned: () => Effect.die("not used in this test"),
+      revokeOthers: () => Effect.die("not used in this test"),
+      revokeAll: () => Effect.die("not used in this test"),
+      list: () => Effect.die("not used in this test"),
+      findOwned: () => Effect.die("not used in this test"),
+      isLive: () => Effect.die("not used in this test"),
+      reauthenticate: () => Effect.die("not used in this test"),
+    });
+
+  const sessionsWith = (verifies: Ref.Ref<number>) =>
+    Effect.gen(function* () {
+      return yield* Sessions.Sessions;
+    }).pipe(Effect.provide(countingSessions(verifies)));
+
+  it.effect("two concurrent resolveSession calls for one request call verify exactly once", () =>
+    Effect.gen(function* () {
+      const verifies = yield* Ref.make(0);
+      const sessions = yield* sessionsWith(verifies);
+      const request = HttpServerRequest.fromWeb(new Request("http://localhost/x"));
+      const credential = Redacted.make("some-id.some-secret");
+      const call = Authentication.resolveSession(sessions, credential, "cookie").pipe(Effect.flip);
+      const fiber = yield* Effect.all([call, call, call], { concurrency: "unbounded" }).pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust(Duration.millis(20));
+      yield* Fiber.join(fiber);
+      assert.strictEqual(yield* Ref.get(verifies), 1);
+    }),
+  );
+
+  it.effect("a re-wrapped request (request.modify) shares the original's verification", () =>
+    Effect.gen(function* () {
+      const verifies = yield* Ref.make(0);
+      const sessions = yield* sessionsWith(verifies);
+      const request = HttpServerRequest.fromWeb(new Request("http://localhost/x"));
+      const prefixed = request.modify({ url: "/y" });
+      const credential = Redacted.make("some-id.some-secret");
+      const resolve = (r: HttpServerRequest.HttpServerRequest) =>
+        Authentication.resolveSession(sessions, credential, "cookie").pipe(
+          Effect.provideService(HttpServerRequest.HttpServerRequest, r),
+          Effect.flip,
+        );
+      const first = yield* resolve(request).pipe(Effect.forkChild);
+      yield* TestClock.adjust(Duration.millis(20));
+      yield* Fiber.join(first);
+      yield* resolve(prefixed);
+      assert.strictEqual(yield* Ref.get(verifies), 1);
+    }),
+  );
+
+  it.effect("an interrupted first resolver does not wedge a second caller", () =>
+    Effect.gen(function* () {
+      const verifies = yield* Ref.make(0);
+      const sessions = yield* sessionsWith(verifies);
+      const request = HttpServerRequest.fromWeb(new Request("http://localhost/x"));
+      const credential = Redacted.make("some-id.some-secret");
+      const resolve = Authentication.resolveSession(sessions, credential, "cookie").pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+        Effect.flip,
+      );
+      const first = yield* resolve.pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(first);
+      const second = yield* resolve.pipe(Effect.forkChild);
+      yield* TestClock.adjust(Duration.millis(20));
+      const failure = yield* Fiber.join(second);
+      assert.strictEqual(failure._tag, "Unauthenticated");
+      assert.strictEqual(yield* Ref.get(verifies), 2);
+    }),
+  );
+});
+
+// EHA-006/NHS-010: the contract and the wire.
+describe("Authentication contract (EHA-006, NHS-010)", () => {
+  it("NHS-010: the security middlewares declare their keys in order impersonation, cookie, bearer (APS-006)", () => {
+    const order = ["impersonation", "cookie", "bearer"];
+    assert.deepStrictEqual(Object.keys(Api.Authentication.security), order);
+    assert.deepStrictEqual(Object.keys(Api.AdminAuthentication.security), order);
+    assert.deepStrictEqual(Object.keys(Api.OptionalAuthentication.security), order);
+  });
+
+  it("EHA-006: the OpenAPI document lists a 401 for Authentication endpoints but none for OptionalAuthentication", () => {
+    const spec = OpenApi.fromApi(TestApi);
+    const required = spec.paths["/who-am-i"]?.get?.responses ?? {};
+    const optional = spec.paths["/who-am-i-optional"]?.get?.responses ?? {};
+    assert.property(required, "401");
+    assert.notProperty(optional, "401");
+  });
+
+  it.effect(
+    "EHA-006: OptionalAuthentication tries the cookie, then the bearer, then anonymous, in that order",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+        // A garbage cookie does not stop a valid bearer.
+        const viaBearer = yield* client.optional.whoAmI({
+          headers: {
+            cookie: `${Sessions.SESSION_COOKIE_NAME}=garbage`,
+            authorization: `Bearer ${Redacted.value(token)}`,
+          },
+        });
+        assert.strictEqual(viaBearer, userId);
+        // Both invalid: anonymous, never a failure.
+        const anonymous = yield* client.optional.whoAmI({
+          headers: {
+            cookie: `${Sessions.SESSION_COOKIE_NAME}=garbage`,
+            authorization: "Bearer garbage",
+          },
+        });
+        assert.strictEqual(anonymous, "Anonymous");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+});
+
+describe("Authentication challenges (JR-007)", () => {
+  const challengeOf = (path: string, headers: Record<string, string>) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const response = yield* serve(path, headers);
+        return { status: response.status, challenge: response.headers["www-authenticate"] };
+      }),
+    ).pipe(Effect.provide(RotationLayer));
+
+  it.effect("no credential: 401 with the realm challenge", () =>
+    Effect.gen(function* () {
+      const result = yield* challengeOf("/ok", {});
+      assert.strictEqual(result.status, 401);
+      assert.strictEqual(result.challenge, 'Bearer realm="awthaq"');
+    }),
+  );
+
+  it.effect("an invalid bearer: 401 with error=invalid_token", () =>
+    Effect.gen(function* () {
+      const result = yield* challengeOf("/ok", { authorization: "Bearer not-a-real-token" });
+      assert.strictEqual(result.status, 401);
+      assert.strictEqual(result.challenge, 'Bearer realm="awthaq", error="invalid_token"');
+    }),
+  );
+
+  it.effect("an invalid cookie only: 401 with the realm challenge", () =>
+    Effect.gen(function* () {
+      const result = yield* challengeOf("/ok", {
+        cookie: `${Sessions.SESSION_COOKIE_NAME}=garbage`,
+      });
+      assert.strictEqual(result.status, 401);
+      assert.strictEqual(result.challenge, 'Bearer realm="awthaq"');
+    }),
+  );
+
+  it.effect("a handler's own typed error carries no challenge", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* serve("/boom", {
+          authorization: `Bearer ${Redacted.value(token)}`,
+        });
+        assert.strictEqual(response.status, 404);
+        assert.isUndefined(response.headers["www-authenticate"]);
+      }),
+    ).pipe(Effect.provide(RotationLayer)),
+  );
+});
+
+// APS-007/THS-003: the principal carries how the session was authenticated;
+// the opt-in resolver adds emailVerified.
+describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
+  const factsLayer = Layer.mergeAll(
+    Authentication.PrincipalResolverLive,
+    Sessions.layerMemory,
+    Users.layerMemory,
+  ).pipe(
+    Layer.provideMerge(Hooks.HooksLive),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provide(NodeCrypto.layer),
+  );
+
+  it.effect(
+    "the default resolver copies amr from the session and leaves emailVerified absent",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const resolver = yield* Authentication.PrincipalResolver;
+        const { session } = yield* sessions.issue({ userId, amr: ["pwd", "otp"] });
+        const principal = yield* resolver.resolve(session);
+        assert.strictEqual(principal._tag, "User");
+        if (principal._tag !== "User") return;
+        assert.deepStrictEqual(principal.amr, ["pwd", "otp"]);
+        assert.isUndefined(principal.emailVerified);
+      }).pipe(Effect.provide(factsLayer)),
+  );
+
+  it.effect("layerWithUserFacts sets emailVerified=false for a fresh, unverified user", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const sessions = yield* Sessions.Sessions;
+      const resolver = yield* Authentication.PrincipalResolver;
+      const user = yield* users.create({ email: "facts@example.com", name: "Facts" });
+      const { session } = yield* sessions.issue({ userId: user.id, amr: ["pwd"] });
+      const principal = yield* resolver.resolve(session);
+      assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
+    }).pipe(
+      Effect.provide(
+        Authentication.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
+      ),
+    ),
+  );
+
+  it.effect(
+    "layerWithUserFacts resolves a session whose user vanished as unverified, never a defect",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const resolver = yield* Authentication.PrincipalResolver;
+        const { session } = yield* sessions.issue({
+          userId: Users.UserId("99999999-9999-9999-9999-999999999999"),
+        });
+        const principal = yield* resolver.resolve(session);
+        assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
+      }).pipe(
+        Effect.provide(
+          Authentication.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
+        ),
+      ),
   );
 });

@@ -24,7 +24,7 @@ import * as RolesAdmin from "../src/RolesAdmin.ts";
 import * as RolesAdminApi from "../src/RolesAdminApi.ts";
 
 const ORIGIN = "http://localhost:3000";
-const CSRF_SECRET = "roles-admin-test-csrf-secret";
+const CSRF_SECRET = "roles-admin-test-csrf-secret-padded-to-thirty-two-bytes";
 
 const editor = role({ name: "editor", permissions: [permission("project", "read")] });
 const support = role({ name: "platform:support", permissions: [RolesAdminApi.rolesRead] });
@@ -56,8 +56,9 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 );
 
 const CSRF_TOKEN = (() => {
-  const token = randomBytes(32).toString("hex");
-  return `${token}.${createHmac("sha256", CSRF_SECRET).update(token).digest("hex")}`;
+  // `<iat>.<random>.<hmac(iat.random)>` (CDS-006).
+  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
+  return `${signed}.${createHmac("sha256", CSRF_SECRET).update(signed).digest("hex")}`;
 })();
 
 // Path B: the guard resolves the subject itself (the `Roles` resolver flattens the roles),

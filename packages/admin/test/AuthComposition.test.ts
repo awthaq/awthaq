@@ -13,7 +13,7 @@ describe("Auth.make([Admin])", () => {
       {
         id: "admin",
         apiVersion: 1,
-        tables: ["admin_impersonation"],
+        tables: ["admin_impersonation", "admin_impersonation_chain"],
         dependsOn: [],
       },
     ]);

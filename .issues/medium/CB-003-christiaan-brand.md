@@ -3,7 +3,7 @@ ID: "CB-003"
 Title: "clientDataJSON crossOrigin flag is dropped end-to-end, accepting cross-origin iframe ceremonies"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:101"
 Auditor: "christiaan-brand"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `passkey` · reported by **Christiaan Brand — W3C WebAuthn Specification Co-editor** (`christiaan-brand`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Add `crossOrigin: Schema.optional(Schema.Boolean)` to ClientDataSchema and fail 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `passkey-ceremony-policy`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:113`. Fix: Reject cross-origin ceremonies in the plugin pre-check for all three ceremonies unless an explicit embedded-origin policy is configured. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Cross-origin ceremonies: ClientDataSchema reads crossOrigin/topOrigin; new PasskeyConfig.allowedTopOrigins (default []); one shared checkOrigin refuses crossOrigin:true unless topOrigin is allowed, for registration, sign-in (collapsed to InvalidCredentials) and step-up; expectedTopOrigin is forwarded to the port when configured. Tests: PasskeyCeremony.test.ts (register, register without topOrigin, authenticate, reauthenticate rejected; allowed top origin accepted and forwarded; none forwarded otherwise) and ports WebAuthn.test.ts (expectedTopOrigin). BEH-EA-133 updated. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

@@ -4,6 +4,7 @@
 // the exact same `JwtCodec.verify` path a locally-signed token goes
 // through — no special-casing. Also confirms `SigningKeyRecords` never
 // gets `privateKeyJwk` populated for a remote-backed key.
+import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -54,6 +55,7 @@ describe("remote signing", () => {
         const token = yield* JwtCodec.sign({
           kid,
           alg: "EdDSA",
+          typ: "at+jwt",
           signer,
           claims: {
             sub: "user-1",
@@ -67,7 +69,8 @@ describe("remote signing", () => {
         const claims = yield* JwtCodec.verify({
           token,
           keys: [{ kid, alg: "EdDSA", publicKeyJwk }],
-          algorithm: "EdDSA",
+          algorithms: ["EdDSA"],
+          expectedTyp: "at+jwt",
           issuer: "https://issuer.test",
           audience: "https://issuer.test",
         });
@@ -103,6 +106,7 @@ describe("remote signing", () => {
             // R is the static union across every branch, not just the one
             // actually taken), so both still need providing here.
             Layer.provideMerge(SigningKeyRecords.layerMemory),
+            Layer.provideMerge(SqlTransaction.layerNoop),
             Layer.provideMerge(JwtConfig.config({ issuer: "https://issuer.test" })),
             Layer.provideMerge(NodeCrypto.layer),
           ),

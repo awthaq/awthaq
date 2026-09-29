@@ -4,17 +4,20 @@
 // Implements the `Authentication`/`OptionalAuthentication` declarations from
 // `@awthaq/api`'s `Api.ts` against `@awthaq/core`'s `Sessions`.
 
-import { Sessions } from "@awthaq/core";
+import { SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
-import * as Ref from "effect/Ref";
 import type { unhandled } from "effect/Types";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
+import * as Cookies from "effect/unstable/http/Cookies";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
@@ -38,27 +41,53 @@ export class PrincipalResolver extends Context.Service<PrincipalResolver, Princi
  * resolved `UserPrincipal` unconditionally, closing the loop BEH-EA-142
  * (`@awthaq/qadi`'s `SubjectResolver`) already anticipates — omitted
  * entirely, not `undefined`, when the session carries none
- * (`exactOptionalPropertyTypes`).
+ * (`exactOptionalPropertyTypes`). The one mapping both resolvers share.
  */
+const userPrincipalOf = (session: Sessions.SessionView): Api.UserPrincipal =>
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: session.userId }),
+    sessionId: session.id,
+    ...(Option.isSome(session.actingAs)
+      ? {
+          actingAs: new Api.PrincipalRef({
+            type: session.actingAs.value.type,
+            id: session.actingAs.value.id,
+          }),
+        }
+      : {}),
+    // APS-007/THS-003: how the session was authenticated (empty when the
+    // issuing path recorded none), never a guess.
+    amr: session.amr,
+  });
+
 export const PrincipalResolverLive: Layer.Layer<PrincipalResolver> = Layer.succeed(
   PrincipalResolver,
-  {
-    resolve: (session) =>
-      Effect.succeed(
-        new Api.UserPrincipal({
-          ref: new Api.PrincipalRef({ type: "user", id: session.userId }),
-          sessionId: session.id,
-          ...(Option.isSome(session.actingAs)
-            ? {
-                actingAs: new Api.PrincipalRef({
-                  type: session.actingAs.value.type,
-                  id: session.actingAs.value.id,
-                }),
-              }
-            : {}),
-        }),
-      ),
-  },
+  { resolve: (session) => Effect.succeed(userPrincipalOf(session)) },
+);
+
+/**
+ * APS-007: opt-in resolver that also exposes `emailVerified` on the principal,
+ * at the cost of one `Users.findById` per request (hence not the default). A
+ * missing user (deleted between verify and here) resolves as unverified —
+ * fail-closed, never a defect. Everything else is `PrincipalResolverLive`'s
+ * mapping.
+ */
+export const PrincipalResolverWithUserFactsLive = Layer.effect(
+  PrincipalResolver,
+  Effect.gen(function* () {
+    const users = yield* Users.Users;
+    return {
+      resolve: (session: Sessions.SessionView) =>
+        users.findById(session.userId).pipe(
+          Effect.map((user) => user.emailVerified),
+          Effect.catchTag("UserNotFound", () => Effect.succeed(false)),
+          Effect.map(
+            (emailVerified) =>
+              new Api.UserPrincipal({ ...userPrincipalOf(session), emailVerified }),
+          ),
+        ),
+    };
+  }),
 );
 
 /**
@@ -76,9 +105,18 @@ export const PrincipalResolverLive: Layer.Layer<PrincipalResolver> = Layer.succe
  * response); this middleware never adds its own recovery for it.
  */
 export interface PostAuthResponseHookShape {
+  /**
+   * PDR-003: `context.scheme` names the credential that authenticated the
+   * request, so a hook can treat a cookie-authenticated browser request
+   * differently from a bearer-authenticated API client (e.g. `@awthaq/jwt`'s
+   * `mirrorResponses: "bearer"`). `"impersonation"` is a cookie-delivered
+   * episode (`__Host-impersonation`), so a hook keyed on `"bearer"` treats it
+   * like `"cookie"`.
+   */
   readonly decorate: (
     principal: Api.Principal,
     response: HttpServerResponse.HttpServerResponse,
+    context: { readonly scheme: "cookie" | "bearer" | "impersonation" },
   ) => Effect.Effect<HttpServerResponse.HttpServerResponse>;
 }
 
@@ -86,6 +124,9 @@ export const PostAuthResponseHook = Context.Reference<PostAuthResponseHookShape>
   "awthaq/server/PostAuthResponseHook",
   { defaultValue: () => ({ decorate: (_principal, response) => Effect.succeed(response) }) },
 );
+
+/** APS-006: the three credential carriers `Api.Authentication`'s security record declares, in chain order. */
+type Scheme = "impersonation" | "cookie" | "bearer";
 
 /** What a resolved session carries once verified — including whether `verify` rotated its secret this call. */
 export interface ResolvedSession {
@@ -105,37 +146,99 @@ export interface ResolvedSession {
  * `SessionNotFound` instead of the harmless no-op it was before rotation
  * existed.
  *
- * Keyed by the ambient `HttpServerRequest`'s own identity, not a new
- * per-request service: Effect v4 has no `FiberRef` (everything moved to
- * `Context.Reference`, whose own `defaultValue()` is memoized once,
- * globally, on the reference itself — unsuitable for per-request state
- * without a new middleware explicitly re-providing it every request,
- * ahead of both bridges, which is exactly the ordering problem this
- * ticket exists to route around). `HttpServerRequest` is already the one
- * thing both bridges have ambient access to, is provided once per
- * request by the router (confirmed via `effect`'s own `HttpRouter.ts`/
- * `HttpApiBuilder.ts`), and is mutated in place rather than replaced
- * (`@qadi/http`'s own `RequirePermission.ts` writes `request.payload`
- * directly) — so its identity is stable for a request's whole lifetime
- * and naturally garbage-collected once that request completes, with no
- * explicit cleanup this module has to perform.
+ * Keyed by the request's underlying `request.source`, not the
+ * `HttpServerRequest` wrapper (NHS-006): `HttpRouter`'s prefix mounts hand
+ * a route a *new* wrapper via `request.modify` (`sliceRequestUrl`) that
+ * keeps the same `source`, so code outside and inside a mounted route would
+ * otherwise see two identities and fork the cache. This is the very idiom
+ * Effect's own per-request state uses (`requestPreResponseHandlers` in
+ * `unstable/http/internal/preResponseHandler.ts` is a module-level
+ * `WeakMap` keyed on `request.source`; Effect v4 has no `FiberRef`, ELC-007),
+ * so the entry is garbage-collected with the request and needs no cleanup.
+ *
+ * TS-003: each credential's slot is a `Deferred` created in one synchronous
+ * get-or-create step (JS is single-threaded, so it is atomic), so
+ * `Sessions.verify` runs at most once per (request, credential) under any
+ * interleaving — a `Ref` + `yield*` between get and set could let two fibers
+ * each register their own memo and verify (and rotate) twice.
  */
 const sessionResolutionCache = new WeakMap<
-  HttpServerRequest.HttpServerRequest,
-  Ref.Ref<HashMap.HashMap<string, Effect.Effect<ResolvedSession, Api.Unauthenticated>>>
+  object,
+  Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated>>
 >();
 
-/** The current request's cache `Ref`, creating and registering an empty one on first access. */
-const perRequestCache = (request: HttpServerRequest.HttpServerRequest) =>
-  Option.fromNullishOr(sessionResolutionCache.get(request)).pipe(
-    Option.match({
-      onSome: Effect.succeed,
-      onNone: () =>
-        Ref.make(HashMap.empty<string, Effect.Effect<ResolvedSession, Api.Unauthenticated>>()).pipe(
-          Effect.tap((ref) => Effect.sync(() => sessionResolutionCache.set(request, ref))),
+/**
+ * Atomically finds or creates the current request's slot for `raw`. `owner`
+ * is true for exactly the one caller that created the slot and must therefore
+ * run `verify` and complete it.
+ */
+const claimResolution = (request: HttpServerRequest.HttpServerRequest, raw: string) =>
+  Effect.sync(() => {
+    const perRequest =
+      sessionResolutionCache.get(request.source) ??
+      new Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated>>();
+    sessionResolutionCache.set(request.source, perRequest);
+    const existing = perRequest.get(raw);
+    if (existing !== undefined) return { deferred: existing, owner: false, perRequest };
+    const deferred = Deferred.makeUnsafe<ResolvedSession, Api.Unauthenticated>();
+    perRequest.set(raw, deferred);
+    return { deferred, owner: true, perRequest };
+  });
+
+/**
+ * PIL-005/NHS-007: delivers a rotated secret on whatever response the
+ * request ends up with — registered as a pre-response handler by the one
+ * `verify` call that rotated, so it runs for every route style (Path A's
+ * middleware, Path B's `RequirePermission`) and every handler outcome,
+ * including a typed-error response (a `flatMap` on the handler's success, as
+ * this used to be, never sees `HandlerError`, so the rotated secret was lost
+ * and the client silently logged out — there is no grace window,
+ * upstream-hardening ticket 01).
+ *
+ * Delivery splits by how the request authenticated: `cookie` gets the
+ * `Set-Cookie` write `OAuth.ts` already uses after `issue` (a browser's jar
+ * is only updated by `Set-Cookie`); `bearer` gets `Api.ROTATED_TOKEN_HEADER`,
+ * the only way a raw-secret bearer client can learn its token rotated. Both
+ * carry `Cache-Control: no-store` (MAPS-008) — the response holds a
+ * long-lived secret. A handler that already wrote the session cookie itself
+ * (a fresh sign-in's `issue`, a sign-out's expiry) wins: the rotated secret
+ * belongs to a session that handler replaced or ended. An encoding failure is
+ * logged and the response returned undecorated, never defected — delivery
+ * must not turn a successful response into a 500 (NHS-007).
+ */
+const rotationDelivery =
+  (
+    scheme: Scheme,
+    session: Sessions.SessionView,
+    token: Redacted.Redacted<string>,
+  ): HttpEffect.PreResponseHandler =>
+  (_request, response) => {
+    const noStore = HttpServerResponse.setHeader(response, "cache-control", "no-store");
+    if (scheme === "bearer") {
+      return Effect.succeed(
+        HttpServerResponse.setHeader(noStore, Api.ROTATED_TOKEN_HEADER, Redacted.value(token)),
+      );
+    }
+    // IC-007/BO-005: rendered through the shared `SessionCookie` config, so a
+    // rotation carries the configured attributes and a `Max-Age` recomputed
+    // from the session's remaining absolute lifetime.
+    return SessionCookie.render(
+      session,
+      token,
+      scheme === "impersonation" ? "impersonation" : "session",
+    ).pipe(
+      Effect.flatMap((cookie) =>
+        Option.isSome(Cookies.get(response.cookies, cookie.name))
+          ? Effect.succeed(response)
+          : HttpServerResponse.setCookie(noStore, cookie.name, cookie.value, cookie.options),
+      ),
+      Effect.catch((error) =>
+        Effect.logWarning("awthaq: could not deliver the rotated session cookie", error).pipe(
+          Effect.as(response),
         ),
-    }),
-  );
+      ),
+    );
+  };
 
 /**
  * BEH-EA-069/070: shared by both `Authentication` and `OptionalAuthentication`
@@ -143,30 +246,39 @@ const perRequestCache = (request: HttpServerRequest.HttpServerRequest) =>
  * when the request carries neither, never a decode failure) and an invalid
  * or expired session are both reported as `Unauthenticated`, uniformly.
  *
- * Upstream-hardening ticket 01: exposes `rotated` alongside the resolved
- * `session` so a caller that owns an actual HTTP response (this module's
- * own `AuthenticationLive`/`OptionalAuthenticationLive`) can deliver a
- * rotated token; `resolvePrincipal` below is the principal-only wrapper
- * for callers that don't.
+ * `HttpServerRequest` is a hard requirement in `R` (ELC-007): a caller that
+ * does not provide it fails to type-check, so nothing degrades silently to
+ * per-call verification. The memo's lifetime is the underlying request's, as
+ * Effect's own pre-response handlers are (see `sessionResolutionCache`).
+ *
+ * Upstream-hardening ticket 01/PIL-005: a `verify` that rotated the secret
+ * registers its own delivery (`rotationDelivery`) with the request, so
+ * `scheme` — how this credential was presented — is required here even for
+ * callers that never see the response (`resolvePrincipal`, Path B).
  *
  * Ticket 03: memoized per request (see `sessionResolutionCache` above),
  * keyed on the raw presented credential — a second call in the same
- * request with the identical credential reuses the first call's outcome
- * (`Effect.cached` memoizes the `Exit`, so a failure is reused exactly
- * like a success) rather than hitting `Sessions.verify` again.
+ * request with the identical credential awaits the first call's outcome
+ * (a failure is reused exactly like a success) rather than hitting
+ * `Sessions.verify` again.
+ *
+ * PCS-006: a deliberate staleness budget — a session revoked mid-request
+ * keeps resolving for the remainder of that same request (bounded by the
+ * request's lifetime; a streaming response or long upload inherits the
+ * window). Invalidating the memo on revoke-of-current is deliberately not
+ * done (BEH-EA-070).
  */
 export const resolveSession = (
   sessions: Sessions.SessionsShape,
   credential: Redacted.Redacted<string>,
+  scheme: Scheme,
 ) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const cache = yield* perRequestCache(request);
     const raw = Redacted.value(credential);
-    const existing = HashMap.get(yield* Ref.get(cache), raw);
-    if (Option.isSome(existing)) {
-      return yield* existing.value;
-    }
+    if (raw === "") return yield* Effect.fail(new Api.Unauthenticated());
+    const { deferred, owner, perRequest } = yield* claimResolution(request, raw);
+    if (!owner) return yield* Deferred.await(deferred);
     // NHS-002/EEM-003: `verify`'s three failure tags used to collapse
     // uniformly to `Unauthenticated` via a blanket `Effect.mapError` — a
     // backing-store outage (`PlatformError`) answered 401 on every
@@ -181,72 +293,79 @@ export const resolveSession = (
     // expired session) maps to `Unauthenticated`; ordering matters here —
     // `catchTag` must run before `mapError`, or the die would itself get
     // mapped away.
-    const memoized = yield* Effect.cached(
-      raw === ""
-        ? Effect.fail(new Api.Unauthenticated())
-        : sessions
-            .verify(Redacted.make(raw))
-            .pipe(
-              Effect.catchTag("PlatformError", Effect.die),
-              Effect.mapError(() => new Api.Unauthenticated()),
-            ),
+    const verified = sessions.verify(Redacted.make(raw)).pipe(
+      Effect.catchTag("PlatformError", Effect.die),
+      Effect.mapError(() => new Api.Unauthenticated()),
+      Effect.tap(({ session, rotated }) =>
+        Option.isSome(rotated)
+          ? HttpEffect.appendPreResponseHandler(rotationDelivery(scheme, session, rotated.value))
+          : Effect.void,
+      ),
     );
-    yield* Ref.update(cache, HashMap.set(raw, memoized));
-    return yield* memoized;
+    yield* verified.pipe(
+      Effect.onInterrupt(() => Effect.sync(() => perRequest.delete(raw))),
+      Deferred.into(deferred),
+    );
+    return yield* Deferred.await(deferred);
   });
 
 /**
  * Exported (not module-private) so `@awthaq/qadi`'s `SubjectExtractor.ts`
  * (BEH-EA-153) can call the identical hash-comparison/expiry logic this
  * middleware uses, rather than reimplementing it against the raw request —
- * BEH-EA-153 requires exactly that reuse. Discards `rotated`: a caller with
- * no response to deliver a rotated token through has nowhere to put it.
+ * BEH-EA-153 requires exactly that reuse. A rotated secret is still
+ * delivered (PIL-005): `resolveSession` registers the delivery on the
+ * request itself, so this principal-only wrapper needs no response.
  */
 export const resolvePrincipal = (
   sessions: Sessions.SessionsShape,
   resolver: PrincipalResolverShape,
   credential: Redacted.Redacted<string>,
+  scheme: Scheme,
 ) =>
-  resolveSession(sessions, credential).pipe(
+  resolveSession(sessions, credential, scheme).pipe(
     Effect.flatMap(({ session }) => resolver.resolve(session)),
   );
 
 /**
- * Upstream-hardening ticket 01: `set-auth-token` alone would never rotate
- * anything for a browser — only `Set-Cookie` updates a browser's own
- * cookie jar. Delivery therefore splits by how the request authenticated:
- * `cookie` gets the same `Set-Cookie` write `OAuth.ts` already uses after
- * `issue`; `bearer` gets a `set-auth-token` response header, upstream's
- * own mechanism and the only way a bearer client (presenting the raw
- * secret directly, not through a plugin like `@awthaq/jwt`) can learn its
- * token rotated. A no-op when `verify` didn't rotate this call.
+ * IC-007: the `cookie` scheme's decoded credential is keyed on the *default*
+ * cookie name (the contract is static), so a deployment whose configured name
+ * differs (`SecureDomain`'s `__Secure-session`) is read off the request by the
+ * configured name instead. Identical to the scheme's own credential otherwise.
  */
-const deliverRotation = (
-  scheme: "cookie" | "bearer",
-  rotated: Option.Option<Redacted.Redacted<string>>,
-  response: HttpServerResponse.HttpServerResponse,
-) => {
-  if (Option.isNone(rotated)) {
-    return Effect.succeed(response);
-  }
-  const token = Redacted.value(rotated.value);
-  return scheme === "cookie"
-    ? HttpServerResponse.setCookie(
-        response,
-        Sessions.SESSION_COOKIE_NAME,
-        token,
-        Sessions.SESSION_COOKIE_ATTRIBUTES,
-      ).pipe(Effect.orDie)
-    : Effect.succeed(HttpServerResponse.setHeader(response, "set-auth-token", token));
-};
+const cookieCredential = (
+  schemeCredential: Redacted.Redacted<string>,
+  kind: SessionCookie.CookieKind = "session",
+) =>
+  Effect.gen(function* () {
+    const name = SessionCookie.cookieName(yield* SessionCookie.SessionCookieConfig, kind);
+    const defaultName =
+      kind === "impersonation" ? Api.IMPERSONATION_COOKIE_NAME : Api.SESSION_COOKIE_NAME;
+    if (name === defaultName) return schemeCredential;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    return Redacted.make(request.cookies[name] ?? "");
+  });
+
+/** JR-007: the `realm` of every `WWW-Authenticate` challenge this middleware emits. */
+const CHALLENGE_REALM = "awthaq";
+
+/**
+ * APS-006: an `__Host-impersonation` cookie is only ever an impersonation
+ * session — an ordinary session presented there (planted by an attacker who
+ * holds one, or a stale value) must not authenticate; failing here lets the
+ * chain fall through to `cookie`.
+ */
+const requireImpersonationSession = (scheme: Scheme, resolved: ResolvedSession) =>
+  scheme === "impersonation" && Option.isNone(resolved.session.actingAs)
+    ? Effect.fail(new Api.Unauthenticated())
+    : Effect.succeed(resolved);
 
 /**
  * BEH-EA-065 through 067/070: fails `Unauthenticated` only once every
- * declared scheme has. Ticket 01: `cookie` and `bearer` each resolve
- * through the shared `resolveSession`/`resolver.resolve` core, then apply
- * their own rotation-delivery step (`deliverRotation`) — no longer one
- * literal `handle` shared between both slots, since delivery is genuinely
- * scheme-specific.
+ * declared scheme has. `cookie` and `bearer` each resolve through the shared
+ * `resolveSession`/`resolver.resolve` core with their own `scheme`, which a
+ * rotating `verify` uses to register its delivery (PIL-005) — see
+ * `rotationDelivery`.
  */
 export const AuthenticationLive: Layer.Layer<
   Api.Authentication,
@@ -258,7 +377,7 @@ export const AuthenticationLive: Layer.Layer<
     const sessions = yield* Sessions.Sessions;
     const resolver = yield* PrincipalResolver;
     const authenticate = (
-      scheme: "cookie" | "bearer",
+      scheme: Scheme,
       httpEffect: Effect.Effect<
         HttpServerResponse.HttpServerResponse,
         unhandled,
@@ -266,8 +385,9 @@ export const AuthenticationLive: Layer.Layer<
       >,
       credential: Redacted.Redacted<string>,
     ) =>
-      resolveSession(sessions, credential).pipe(
-        Effect.flatMap(({ session, rotated }) =>
+      resolveSession(sessions, credential, scheme).pipe(
+        Effect.flatMap((resolved) => requireImpersonationSession(scheme, resolved)),
+        Effect.flatMap(({ session }) =>
           resolver.resolve(session).pipe(
             Effect.flatMap((principal) =>
               Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
@@ -280,15 +400,12 @@ export const AuthenticationLive: Layer.Layer<
                   // override at THIS layer's own build time an
                   // unresolvable circular build order. Resolved per
                   // request instead, from whatever the request's own full
-                  // ambient context already has. Rotation delivery runs
-                  // first — always-on core session-security machinery,
-                  // orthogonal to the plugin decoration seam below.
-                  deliverRotation(scheme, rotated, response).pipe(
-                    Effect.flatMap((withRotation) =>
-                      Effect.flatMap(PostAuthResponseHook, (hook) =>
-                        hook.decorate(principal, withRotation),
-                      ),
-                    ),
+                  // ambient context already has. Rotation delivery is not
+                  // here: it rides the request's pre-response handler
+                  // (PIL-005), so it also covers responses this success
+                  // path never sees.
+                  Effect.flatMap(PostAuthResponseHook, (hook) =>
+                    hook.decorate(principal, response, { scheme }),
                   ),
                 ),
               ),
@@ -297,14 +414,72 @@ export const AuthenticationLive: Layer.Layer<
         ),
       );
     const handle: HttpApiMiddleware.HttpApiMiddlewareSecurity<
-      { readonly cookie: typeof Api.SessionCookie; readonly bearer: typeof Api.BearerToken },
+      {
+        readonly impersonation: typeof Api.ImpersonationCookie;
+        readonly cookie: typeof Api.SessionCookie;
+        readonly bearer: typeof Api.BearerToken;
+      },
       Api.CurrentPrincipal,
       typeof Api.Unauthenticated,
       never
-    >["cookie"] = (httpEffect, { credential }) => authenticate("cookie", httpEffect, credential);
+    >["cookie"] = (httpEffect, { credential }) =>
+      cookieCredential(credential).pipe(
+        Effect.flatMap((resolved) => authenticate("cookie", httpEffect, resolved)),
+      );
+    // APS-006: declared first — an impersonation cookie shadows the caller's
+    // own session cookie; only a session carrying `actingAs` authenticates
+    // here, anything else falls through to `cookie`.
+    const impersonation: typeof handle = (httpEffect, { credential }) =>
+      cookieCredential(credential, "impersonation").pipe(
+        Effect.flatMap((resolved) => authenticate("impersonation", httpEffect, resolved)),
+      );
     const bearer: typeof handle = (httpEffect, { credential }) =>
-      authenticate("bearer", httpEffect, credential);
-    return { cookie: handle, bearer };
+      authenticate("bearer", httpEffect, credential).pipe(
+        // JR-007: `bearer` is the last declared scheme, so an `Unauthenticated`
+        // here is the middleware's final failure — answer it with an RFC
+        // 7235/6750 challenge alongside the unchanged typed JSON body.
+        // `invalid_token` only when a bearer credential was actually
+        // presented; otherwise the bare realm challenge (RFC 6750 §3.1: an
+        // absent credential carries no error code). A handler's own errors
+        // reach here wrapped, never as `Unauthenticated`, so they get none.
+        Effect.tapError((error) =>
+          Predicate.isTagged(error, "Unauthenticated")
+            ? HttpEffect.appendPreResponseHandler((_request, response) =>
+                Effect.succeed(
+                  response.status === 401
+                    ? HttpServerResponse.setHeader(
+                        response,
+                        "www-authenticate",
+                        Redacted.value(credential) === ""
+                          ? `Bearer realm="${CHALLENGE_REALM}"`
+                          : `Bearer realm="${CHALLENGE_REALM}", error="invalid_token"`,
+                      )
+                    : response,
+                ),
+              )
+            : Effect.void,
+        ),
+      );
+    return { impersonation, cookie: handle, bearer };
+  }),
+);
+
+/**
+ * AR-003: the default admin-tier scheme is `Authentication` itself — the identical
+ * handlers behind a second tag, so declaring the admin groups behind
+ * `Api.AdminAuthentication` changes nothing for a co-hosted deployment. Override this
+ * layer (provide your own `Api.AdminAuthentication`) to put the admin surface behind a
+ * different credential; a deployment that serves only `adminApi` and overrides it needs
+ * no `Api.Authentication` at all.
+ */
+export const AdminAuthenticationLive: Layer.Layer<
+  Api.AdminAuthentication,
+  never,
+  Api.Authentication
+> = Layer.effect(
+  Api.AdminAuthentication,
+  Effect.gen(function* () {
+    return yield* Api.Authentication;
   }),
 );
 
@@ -324,7 +499,7 @@ export const OptionalAuthenticationLive: Layer.Layer<
     const sessions = yield* Sessions.Sessions;
     const resolver = yield* PrincipalResolver;
     const authenticate = (
-      scheme: "cookie" | "bearer",
+      scheme: Scheme,
       httpEffect: Effect.Effect<
         HttpServerResponse.HttpServerResponse,
         unhandled,
@@ -332,20 +507,17 @@ export const OptionalAuthenticationLive: Layer.Layer<
       >,
       credential: Redacted.Redacted<string>,
     ) =>
-      resolveSession(sessions, credential).pipe(
-        Effect.flatMap(({ session, rotated }) =>
+      resolveSession(sessions, credential, scheme).pipe(
+        Effect.flatMap((resolved) => requireImpersonationSession(scheme, resolved)),
+        Effect.flatMap(({ session }) =>
           resolver.resolve(session).pipe(
             Effect.flatMap((principal) =>
               Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
                 Effect.flatMap((response) =>
                   // Per request, not captured at build time — see the
                   // identical note on `AuthenticationLive` above.
-                  deliverRotation(scheme, rotated, response).pipe(
-                    Effect.flatMap((withRotation) =>
-                      Effect.flatMap(PostAuthResponseHook, (hook) =>
-                        hook.decorate(principal, withRotation),
-                      ),
-                    ),
+                  Effect.flatMap(PostAuthResponseHook, (hook) =>
+                    hook.decorate(principal, response, { scheme }),
                   ),
                 ),
               ),
@@ -353,24 +525,70 @@ export const OptionalAuthenticationLive: Layer.Layer<
           ),
         ),
       );
-    const cookie: HttpApiMiddleware.HttpApiMiddlewareSecurity<
-      { readonly cookie: typeof Api.SessionCookie; readonly bearer: typeof Api.BearerToken },
-      Api.CurrentPrincipal,
-      typeof Api.Unauthenticated,
-      never
-    >["cookie"] = (httpEffect, { credential }) => authenticate("cookie", httpEffect, credential);
-    const bearer: typeof cookie = (httpEffect, { credential }) =>
-      authenticate("bearer", httpEffect, credential).pipe(
-        // The anonymous fallback below is a *recovery* from resolution
-        // failure, never a success `authenticate` itself produced —
-        // `PostAuthResponseHook`/rotation delivery are only ever
-        // consulted above, on the genuine success path, so an
-        // anonymous/no-credential caller never gets a decorated (e.g.
-        // `@awthaq/jwt`-minted) response.
+    // EHA-006/NHS-010: `Api.OptionalAuthentication` declares no error type, so
+    // no handler may fail with `Unauthenticated` — the first-declared handler
+    // (`impersonation`, APS-006) resolves the impersonation cookie, then the
+    // session cookie, then the bearer credential itself, then defaults to
+    // `anonymousPrincipal`. The anonymous fallback no longer depends on which
+    // scheme happens to be declared last. (Effect looks Live handlers up by
+    // key and iterates the declaration's `security` record, so `cookie` and
+    // `bearer` below are never reached in practice; each carries the rest of
+    // its own chain because every declared scheme needs a handler.)
+    const anonymous = (
+      httpEffect: Effect.Effect<
+        HttpServerResponse.HttpServerResponse,
+        unhandled,
+        Api.CurrentPrincipal
+      >,
+    ) => Effect.provideService(httpEffect, Api.CurrentPrincipal, Api.anonymousPrincipal);
+    // The session cookie, then the bearer credential, then anonymous.
+    const cookieChain = (
+      httpEffect: Effect.Effect<
+        HttpServerResponse.HttpServerResponse,
+        unhandled,
+        Api.CurrentPrincipal
+      >,
+      credential: Redacted.Redacted<string>,
+    ) =>
+      cookieCredential(credential).pipe(
+        Effect.flatMap((resolved) => authenticate("cookie", httpEffect, resolved)),
         Effect.catchTag("Unauthenticated", () =>
-          Effect.provideService(httpEffect, Api.CurrentPrincipal, Api.anonymousPrincipal),
+          HttpApiBuilder.securityDecode(Api.BearerToken).pipe(
+            Effect.flatMap((bearerCredential) =>
+              authenticate("bearer", httpEffect, bearerCredential),
+            ),
+            // The anonymous fallback is a *recovery* from resolution failure,
+            // never a success `authenticate` itself produced —
+            // `PostAuthResponseHook` is only ever consulted on the genuine
+            // success path, so an anonymous/no-credential caller never gets
+            // a decorated (e.g. `@awthaq/jwt`-minted) response.
+            Effect.catchTag("Unauthenticated", () => anonymous(httpEffect)),
+          ),
         ),
       );
-    return { cookie, bearer };
+    const cookie: HttpApiMiddleware.HttpApiMiddlewareSecurity<
+      {
+        readonly impersonation: typeof Api.ImpersonationCookie;
+        readonly cookie: typeof Api.SessionCookie;
+        readonly bearer: typeof Api.BearerToken;
+      },
+      Api.CurrentPrincipal,
+      never,
+      never
+    >["cookie"] = (httpEffect, { credential }) => cookieChain(httpEffect, credential);
+    const impersonation: typeof cookie = (httpEffect, { credential }) =>
+      cookieCredential(credential, "impersonation").pipe(
+        Effect.flatMap((resolved) => authenticate("impersonation", httpEffect, resolved)),
+        Effect.catchTag("Unauthenticated", () =>
+          HttpApiBuilder.securityDecode(Api.SessionCookie).pipe(
+            Effect.flatMap((sessionCredential) => cookieChain(httpEffect, sessionCredential)),
+          ),
+        ),
+      );
+    const bearer: typeof cookie = (httpEffect, { credential }) =>
+      authenticate("bearer", httpEffect, credential).pipe(
+        Effect.catchTag("Unauthenticated", () => anonymous(httpEffect)),
+      );
+    return { impersonation, cookie, bearer };
   }),
 );

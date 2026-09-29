@@ -3,7 +3,7 @@ ID: "KRS-006"
 Title: "KeyRing only notices rotations visible to its own process; external rotateNow is invisible to busy servers"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/KeyRing.ts:192"
 Auditor: "key-rotation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `jwt` · reported by **Key Rotation Specialist** (`key-rotation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Add a store-driven invalidation (compare the store's current kid on rotateIfDue,
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jwt-key-rotation-integrity`. Evidence at HEAD ec065a7: `packages/jwt/src/KeyRing.ts:186`. Fix: Bound snapshot staleness with a max-age refresh and refresh once (rate-limited) on an unknown kid so peer/external rotations converge. (effort M). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** KeyRing snapshot records loadedAt and JwtConfig.keyCacheMaxAge (default 5 min) makes current/verifiable refresh a stale snapshot; Jwt.verifyWith forces one rate-limited (JwtConfig.keyMinRefreshInterval, default 30 s; ports RefreshingCache.refreshOnMiss) KeyRing.refresh on an unknown kid and retries once. Test: packages/jwt/test/KeyRing.test.ts 'an out-of-band rotateNow on the shared store is picked up by a busy KeyRing within keyCacheMaxAge' (memory and SQL suites, two KeyRings over one store + TestClock).

@@ -57,3 +57,5 @@ Clamp parsed parameters to sane ceilings in parseScryptHash (e.g. ln <= 24, r <=
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `password-hasher-verify-hardening`. Duplicate of `ACS-006` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:276`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ACS-006-applied-cryptography-specialist` — closed by its fix (see that issue's Resolved comment).

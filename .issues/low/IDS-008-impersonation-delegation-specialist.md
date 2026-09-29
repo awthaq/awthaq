@@ -3,7 +3,7 @@ ID: "IDS-008"
 Title: "Chain-depth and self-act-as invariants live only in the Admin plugin, not in Sessions.issue"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:142"
 Auditor: "impersonation-delegation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `core` · reported by **Impersonation & Delegation Specialist** (`impersonation-delegation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Push the two cheap invariants into Sessions.issue (reject actingAs.id === userId
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-verify-hardening`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:173`. Fix: Enforce the self-act-as invariant inside Sessions.issue (both layers) as a typed defect, and document that the nesting check needs the caller's session and stays with the producer. (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/core/src/Sessions.ts: new InvalidActingAs tagged error; both issue implementations die with it (refuseSelfActingAs) when actingAs {type:'user', id === userId}; issue's E channel unchanged; nesting check documented as producer-owned on SessionsShape.issue.actingAs (Admin.impersonate reference). Spec: BEH-EA-209 paragraph. Test: core/test/Sessions.test.ts 'BEH-EA-209: issue refuses actingAs naming the session's own userId' in both suites (red by construction: the InvalidActingAs symbol and the check did not exist). Admin.impersonate's typed refusal still fires first (admin tests green).

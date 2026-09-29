@@ -65,9 +65,10 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 );
 
 const CSRF_TOKEN: string = (() => {
-  const token = randomBytes(32).toString("hex");
-  const signature = createHmac("sha256", CSRF_SECRET).update(token).digest("hex");
-  return `${token}.${signature}`;
+  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The handler under test runs on the real clock here (a web handler).
+  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
+  const signature = createHmac("sha256", CSRF_SECRET).update(signed).digest("hex");
+  return `${signed}.${signature}`;
 })();
 
 /** Appends the double-submit CSRF cookie to an existing `cookie` header value, if any. */

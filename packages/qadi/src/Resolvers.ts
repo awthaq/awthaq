@@ -259,13 +259,14 @@ const reauthHandler: ObligationHandler<
     const sessions = yield* Sessions.Sessions;
     const userId = Users.UserId(principal.ref.id);
     const sessionId = Sessions.SessionId(principal.sessionId);
-    const items = yield* sessions.list(userId, sessionId);
-    const current = items.find((item) => item.id === sessionId);
-    if (current === undefined) {
+    // TIR-003: a keyed lookup, not `list` + `find` (a paginated list could
+    // omit the caller's own current session).
+    const current = yield* sessions.findOwned(userId, sessionId);
+    if (Option.isNone(current)) {
       return yield* Effect.fail(new Api.ReauthRequired({ maxAgeSeconds }));
     }
     const now = yield* DateTime.now;
-    if (Sessions.isStale(current.authenticatedAt, maxAgeSeconds, now)) {
+    if (Sessions.isStale(current.value.authenticatedAt, maxAgeSeconds, now)) {
       return yield* Effect.fail(new Api.ReauthRequired({ maxAgeSeconds }));
     }
   });

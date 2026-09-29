@@ -3,7 +3,7 @@ ID: "AGA-004"
 Title: "No cookie carries CHIPS Partitioned; embedded deployments cannot authenticate"
 Level: medium
 Category: "security"
-Status: ready-for-human
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:124"
 Auditor: "api-gateway-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `core` · reported by **API Gateway Auth Specialist** (`api-gateway-auth-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Add an opt-in embedded mode that issues the session (and CSRF) cookie as Secure;
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-cookie-policy`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:151`. Fix: Deliver the `HostEmbedded` mode of IC-007's SessionCookieConfig (SameSite=None; Partitioned; __Host- kept) for session and CSRF cookies. (effort S). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option B per plan; user may revisit. HostEmbedded mode of IC-007's SessionCookieConfig: __Host- kept, SameSite=None; Partitioned for the session cookie (SessionCookie.renderAt) and the __Host-csrf cookie (Csrf.ts now uses SessionCookie.csrfCookieOptions from the ambient config). Default output unchanged. Tests: server Authentication.test.ts (HostEmbedded rotation cookie: SameSite=none, partitioned, secure) and Csrf.test.ts (default mints SameSite=strict; HostEmbedded mints none + partitioned). Spec BEH-EA-055 documents the trade-off (CSRF double-submit is the only cross-site defence).

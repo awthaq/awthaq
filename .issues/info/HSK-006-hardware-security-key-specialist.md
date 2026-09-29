@@ -3,7 +3,7 @@ ID: "HSK-006"
 Title: "\"indirect\" attestation conveyance is absent from the type"
 Level: info
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/WebAuthn.ts:73"
 Auditor: "hardware-security-key-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `api` · `ports` · reported by **Hardware Security Key (FIDO U2F/CTAP) Specialist** (`hardware-security-key-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Add "indirect" to AttestationConveyance (and to BEH-EA-135's text) when attestat
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `webauthn-attestation-policy`. Evidence at HEAD ec065a7: `packages/ports/src/WebAuthn.ts:73`. Fix: Add 'indirect' to AttestationConveyance. (effort S). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** AttestationConveyance now includes 'indirect'; registrationOptions passes 'none' to the library for it and sets attestation:'indirect' on the returned options (no cast). Test: ports WebAuthn.test.ts 'HSK-006: registrationOptions with attestation indirect returns attestation indirect'. BEH-EA-135 updated. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

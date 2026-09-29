@@ -3,7 +3,7 @@ ID: "JR-005"
 Title: "Impersonation is full-authority identity assumption: no scoped-delegation primitive exists, and the act claim deviates from RFC 8693"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/Admin.ts:226"
 Auditor: "justin-richer"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `admin` · reported by **Justin Richer — OAuth2/OIDC Contributor, Co-author of "OAuth 2 in Action"** (`justin-richer`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Keep impersonation as-is for support flows, but consider an `actingAs`-scoped pe
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `jwt-act-claim`. Evidence at HEAD ec065a7: `packages/admin/src/Admin.ts:290`. Fix: Emit an RFC 8693-compliant `act` claim (`act.sub`) while keeping type/id as private extensions. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Jwt.ts principalClaims now emits act { sub: <actor id>, awthaq_actor_type } (RFC 8693 4.1); the Jwt.test 'populates act' expectation updated; packages/jwt/test/JwtIntrospection.test.ts 'an impersonation session's minted JWT carries act.sub = the admin's id, non-impersonation tokens no act'; packages/admin/README.md documents full-authority impersonation and the qadi policy over actingAs (BEH-EA-142). No verify.ts decoder of act exists (act rides as an extra claim).

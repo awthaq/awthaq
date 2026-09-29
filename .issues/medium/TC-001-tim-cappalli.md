@@ -3,7 +3,7 @@ ID: "TC-001"
 Title: "Anonymous authenticate/options response leaks account existence via allowCredentials"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:513"
 Auditor: "tim-cappalli"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `passkey` · reported by **Tim Cappalli — WebAuthn / Passkeys Standards Contributor** (`tim-cappalli`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Either stop varying the response by account existence (always return empty allow
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-enumeration-safety`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:723`. Fix: Keep username-first but make its response indistinguishable for unknown emails via deterministic decoy descriptors, and rate-limit the endpoint. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Options half of BEH-EA-136: authenticateOptions with an email answers deterministic HMAC(enumerationSecret, email, i) decoy allowCredentials (k=1+(h[0] mod 2), 43-char ids, transports mix) for an unknown email or a known user with no credentials; lookups run unconditionally (findByEmail + listByUser against a sentinel id); per-IP/per-email rate limits (see WPS-005); new PasskeyConfig.enumerationSecret (random per process with a build-time warning when unset). Tests: PasskeyEnumeration.test.ts (non-empty, stable, case-insensitive, differs per email/secret, known-user-without-credentials, shape matches a real user's). Red before: allowCredentials was []. BEH-EA-136 updated. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

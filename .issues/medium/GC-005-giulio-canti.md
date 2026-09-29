@@ -3,7 +3,7 @@ ID: "GC-005"
 Title: "Sessions.revoke shape forces a check-then-act composition in the shell"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Session.ts:102"
 Auditor: "giulio-canti"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `server` · reported by **Giulio Canti — Creator of fp-ts and io-ts** (`giulio-canti`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Add an owning variant to SessionsShape (e.g. `revokeOwned(userId, id)` failing `
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-handler-hardening`. Evidence at HEAD ec065a7: `packages/server/src/Session.ts:99`. Fix: Add an owning revoke to the Sessions algebra, so ownership and enumeration-safety are enforced in the domain operation. This also fixes the 200-row list cap that wrongly 404s owned sessions. (effort M). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New Sessions.revokeOwned(userId, id) (layerMemory: one Ref.modify checking row.userId; layerSql: SessionsRepository.deleteOwned = DELETE ... WHERE id AND userId RETURNING id, atomic). Fails SessionNotFound for unknown and foreign ids alike (BEH-EA-086). server Session.ts revoke is a single revokeOwned call; bare revoke kept for signOut/admin. No auth.session.revoked event exists on revoke today, so none is published (TIR-008/ESA-006 own event publication). Tests: core (owned revokes; foreign fails and stays live; unknown fails; layerSql beyond page 1), sql deleteOwned test, server 'POST /session/revoke revokes an owned session even when list omits it'.

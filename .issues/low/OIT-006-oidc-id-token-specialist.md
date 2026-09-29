@@ -3,7 +3,7 @@ ID: "OIT-006"
 Title: "Nonce check is conditional on the flow having a nonce; verifier does not enforce presence for oidc"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:275"
 Auditor: "oidc-id-token-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `oauth` · reported by **OIDC ID Token Specialist** (`oidc-id-token-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Pass provider.kind (or a boolean requiresNonce) into verifyIdToken and fail when
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-oidc-claims-integrity`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:356`. Fix: Make the nonce mandatory for oidc verification, and schema-decode the flow payload instead of the cast-based guard. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** FlowPayloadSchema decode (done with ESS-003) plus: the nonce is mandatory for oidc -- IdToken.verify takes nonce: string, the callback fails 'missing-nonce' when an oidc flow payload has none, and an id_token without a nonce claim is rejected. Tests: hand-issued Verification entry with no nonce fails closed (red before: verified without a nonce), id_token without nonce claim rejected. Gates as MA-002.

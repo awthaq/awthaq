@@ -3,7 +3,7 @@ ID: "MA-002"
 Title: "Ambient Date.now() inside an Effect bypasses the Clock, breaking TestClock determinism"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:273"
 Auditor: "michael-arnaldi"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `oauth` · reported by **Michael Arnaldi — Creator of Effect** (`michael-arnaldi`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Replace with `now <- DateTime.now` and compare epoch millis, matching Sessions.t
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-oidc-claims-integrity`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:356`. Fix: Read time once per verification from the Effect Clock and use it for exp/iat/nbf and the JWKS cache age. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** id_token verification now lives in new packages/oauth/src/IdToken.ts and reads Clock.currentTimeMillis once per verification, shared by exp/iat/nbf and the JWKS cache age (fetchedAt written from the Clock too); grep Date.now packages/oauth/src is empty. Tests (OAuth.test.ts): 'an id_token becomes expired when the TestClock advances past exp' and 'the JWKS cache refetches only after the TestClock passes the 15 minute TTL' (both impossible against Date.now); the pre-existing 'expired id_token' test now uses a Clock-relative exp (it was red against Clock). Gates: tsc -b, tsconfig.test.json, vitest 936 pass (one unrelated password-hashing timeout under machine load, green on rerun), test:bdd 106, spec:verify:strict, oxlint packages/oauth, pnpm circular.

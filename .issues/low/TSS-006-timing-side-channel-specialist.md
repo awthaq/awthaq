@@ -3,7 +3,7 @@ ID: "TSS-006"
 Title: "Dummy-hash uniformity degrades under parameter migration: verify runs at the stored hash's cost, not the configured cost"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/PasswordHasher.ts:144"
 Auditor: "timing-side-channel-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `ports` · reported by **Timing / Side-Channel Specialist** (`timing-side-channel-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Either clamp verify's effective cost (e.g. verify against the stored hash, then 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `password-hasher-verify-hardening`. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:276`. Fix: Add a calibrated minimum-duration floor to signIn's credential check and document the residual. (effort M). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/password/src/Password.ts: PasswordConfig.signInTimingFloor = 'calibrated' (default) | Duration | 'off'. At layer build (after hasher.hash has warmed the KDF) the calibrated mode times one dummy-hash verify and sets the floor to 1.25x; withTimingFloor holds signIn's credential check (lookup + verify, success and failure alike, via Effect.exit + Effect.sleep on Clock so TestClock-safe) and changePassword/reauthenticate's verify to at least the floor. Under TestClock a calibrated floor measures 0 so existing tests are unaffected. Tests (packages/password/test/Password.test.ts, red first: sign-in finished before the floor): explicit 100ms floor with an instant fake hasher holds the fiber until the clock advances; 'off' returns immediately. BEH-EA-114 spec paragraph documents the floor and the residual (costlier-than-floor hashes stay distinguishable until rehashed). Deferred: no real-latency calibration test (wall-clock dependent). Cost: one extra dummy verify per Password layer build. Gates: typecheck (pre-existing react TS2883 only), test 866, bdd 104, spec:verify 19/19. Note: Password.test's APS-003/RBS-001 per-IP throttle tests (30+ argon2 ops, 5s vitest default) occasionally time out when the machine is loaded by parallel typecheck/tests; not caused by these changes (seen before TSS-006 too).

@@ -6,7 +6,7 @@
 // a check: `roles:read` to look, `roles:manage` to change (manage implies read).
 // Those are permissions the application grants through its own `Roles` catalog
 // (`role({ name: "platform:admin", permissions: [rolesManage] })`), which is exactly
-// how a platform-authority capability should be handed out (ADR-EA-017).
+// how a platform-authority capability should be handed out (ADR-EA-025).
 
 import { Api } from "@awthaq/api";
 import { anyOf, hasPermission, permission } from "@qadi/core";

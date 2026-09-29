@@ -23,7 +23,7 @@ import * as Template from "../src/Template.ts";
 import * as TemplateApi from "../src/TemplateApi.ts";
 
 const ORIGIN = "http://localhost:3000";
-const CSRF_SECRET = "template-test-csrf-secret";
+const CSRF_SECRET = "template-test-csrf-secret-padded-to-thirty-two-bytes";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -51,8 +51,9 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 );
 
 const CSRF_TOKEN = (() => {
-  const token = randomBytes(32).toString("hex");
-  return `${token}.${createHmac("sha256", CSRF_SECRET).update(token).digest("hex")}`;
+  // `<iat>.<random>.<hmac(iat.random)>` (CDS-006).
+  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
+  return `${signed}.${createHmac("sha256", CSRF_SECRET).update(signed).digest("hex")}`;
 })();
 
 // A real database, migrated with the plugin's own migrations — no hand-written DDL.

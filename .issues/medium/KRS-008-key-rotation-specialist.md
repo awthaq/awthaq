@@ -3,7 +3,7 @@ ID: "KRS-008"
 Title: "No rotation runbook in spec/decisions and the model doc contradicts the shipped implementation"
 Level: medium
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/08-jwt-bearer.md:80"
 Auditor: "key-rotation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `—` · reported by **Key Rotation Specialist** (`key-rotation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Add a spec/decisions record for signing-key rotation (sequence, window sizing vs
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jwt-key-rotation-runbook`. Evidence at HEAD ec065a7: `spec/models/08-jwt-bearer.md:80`. Fix: Add ADR-EA-017 'JWT signing-key rotation' (routine vs emergency, grace sizing vs max token TTL, multi-process visibility), give emergency rotation a real retire-immediately knob in code, and rewrite spec/models/08-jwt-bearer.md to the shipped Jwt plugin (absorbing MAPS-009's dependsOn:[] divergence and VB-007's remaining typ/audience deltas). (effort M). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ADR-EA-017 added (spec/decisions/017-jwt-signing-key-rotation.md; indexed + traceability + spec/README): routine vs emergency rotation, grace sizing vs max token TTL, multi-process visibility, operator runbook. Code: KeyRing.rotateNow({ gracePeriod }) (Duration.zero retires the old key at once) and KeyRing.revoke(kid) (N12: cuts an already-rotated key's grace period; SigningKeyRecords.retire only shortens), JwtConfig.config rejects keyGracePeriod < ttl. spec/models/08-jwt-bearer.md rewritten to the shipped Jwt plugin (dependsOn [], lite-verifier limitation, typ/audience separation shipped, Bearer still planned); packages/jwt/README.md rewritten. Tests: KeyRing.test.ts 'rotateNow with a zero gracePeriod drops the old kid immediately', 'revoke cuts an already-rotated key's grace period to now...', 'revoke of the current key mints a replacement and retires it at once', 'JwtConfig validation dies when keyGracePeriod is shorter than ttl'. Note: ADR number 017 may collide with the CLI ADR the P17 dossier also assumes; the orchestrator should renumber one.

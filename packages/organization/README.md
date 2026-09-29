@@ -30,4 +30,4 @@ Anything else, or an id that names no organization/team, answers `"Unknown"`. `r
 
 Erasure: `Organization.beforeUserDeleteErasure` (provide once, application-wide) sweeps a deleted user's memberships and active-context rows.
 
-Global roles versus organization roles: [ADR-EA-017](../../spec/decisions/017-global-roles-vs-organization-roles.md).
+Global roles versus organization roles: [ADR-EA-025](../../spec/decisions/025-global-roles-vs-organization-roles.md).

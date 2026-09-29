@@ -72,6 +72,19 @@ export class LastAccountRefusal extends Data.TaggedError("LastAccountRefusal")<{
 }> {}
 
 /**
+ * SMS-002: the stored provider tokens for an account cannot be decrypted —
+ * their key was retired from the keyset or the ciphertext is corrupt. Not a
+ * defect: the caller (e.g. `@awthaq/oauth`'s token access) should treat the
+ * account as needing re-consent, and the next successful OAuth sign-in
+ * overwrites the unreadable value.
+ */
+export class ProviderTokensUnreadable extends Data.TaggedError("ProviderTokensUnreadable")<{
+  readonly id: AccountId;
+  readonly field: "accessToken" | "refreshToken" | "idToken";
+  readonly reason: "DecryptionFailed" | "UnknownKeyId";
+}> {}
+
+/**
  * BE-002 (.issues/high): a federated provider's exchanged token pair, kept
  * out of `AccountRecord` for the same reason `credentialHash` is — an
  * ordinary "list my linked accounts" read must never carry a live
@@ -85,6 +98,14 @@ export class LastAccountRefusal extends Data.TaggedError("LastAccountRefusal")<{
 export interface ProviderTokenSet {
   readonly accessToken: Redacted.Redacted<string>;
   readonly refreshToken: Option.Option<Redacted.Redacted<string>>;
+  /**
+   * BAM-008: the OIDC `id_token` the provider returned, kept (encrypted at
+   * rest like the other two tokens) so a better-auth account import has a
+   * destination for it and a future RP-initiated logout can send it as
+   * `id_token_hint`. `None` for a plain OAuth2 provider, or when a refresh
+   * response carried none and none was stored.
+   */
+  readonly idToken: Option.Option<Redacted.Redacted<string>>;
   readonly accessTokenExpiresAt: Option.Option<DateTime.Utc>;
   readonly refreshTokenExpiresAt: Option.Option<DateTime.Utc>;
   readonly scope: Option.Option<string>;
@@ -147,7 +168,7 @@ export interface AccountsShape {
    */
   readonly findProviderTokens: (
     id: AccountId,
-  ) => Effect.Effect<Option.Option<ProviderTokenSet>, AccountNotFound>;
+  ) => Effect.Effect<Option.Option<ProviderTokenSet>, AccountNotFound | ProviderTokensUnreadable>;
   /**
    * BE-002: every successful OAuth sign-in against an already-linked
    * account writes a fresh token set here — the re-authentication branch
@@ -197,6 +218,14 @@ const emptyState: State = {
   providerTokens: HashMap.empty(),
 };
 
+/**
+ * TRBS-005: single-process, test-grade storage. State is one per-process
+ * `Ref`: it is not shared across instances (a revocation on one instance does
+ * not propagate to another), it is lost on restart, and it grows without bound
+ * until a retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV
+ * layer, ADR-EA-014) for any multi-instance deployment. `AuthEvents`' in-process
+ * `PubSub` has the same process boundary.
+ */
 export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.effect(
   Accounts,
   Effect.gen(function* () {
@@ -432,6 +461,7 @@ const tokenSetToRow = (
 ): {
   readonly accessToken: string | null;
   readonly refreshToken: string | null;
+  readonly idToken: string | null;
   readonly accessTokenExpiresAt: DateTime.Utc | null;
   readonly refreshTokenExpiresAt: DateTime.Utc | null;
   readonly scope: string | null;
@@ -441,6 +471,7 @@ const tokenSetToRow = (
     ? {
         accessToken: null,
         refreshToken: null,
+        idToken: null,
         accessTokenExpiresAt: null,
         refreshTokenExpiresAt: null,
         scope: null,
@@ -449,6 +480,7 @@ const tokenSetToRow = (
     : {
         accessToken: Redacted.value(tokens.accessToken),
         refreshToken: Option.getOrNull(Option.map(tokens.refreshToken, Redacted.value)),
+        idToken: Option.getOrNull(Option.map(tokens.idToken, Redacted.value)),
         accessTokenExpiresAt: Option.getOrNull(tokens.accessTokenExpiresAt),
         refreshTokenExpiresAt: Option.getOrNull(tokens.refreshTokenExpiresAt),
         scope: Option.getOrNull(tokens.scope),
@@ -461,6 +493,7 @@ const rowToProviderTokenSet = (row: SqlModels.Account): Option.Option<ProviderTo
     Option.map((accessToken): ProviderTokenSet => ({
       accessToken: Redacted.make(accessToken),
       refreshToken: Option.fromNullOr(row.refreshToken).pipe(Option.map(Redacted.make)),
+      idToken: Option.fromNullOr(row.idToken).pipe(Option.map(Redacted.make)),
       accessTokenExpiresAt: Option.fromNullOr(row.accessTokenExpiresAt),
       refreshTokenExpiresAt: Option.fromNullOr(row.refreshTokenExpiresAt),
       scope: Option.fromNullOr(row.scope),
@@ -582,91 +615,55 @@ export const layerSql: Layer.Layer<
         Effect.map((row) => Option.fromNullOr(row.passwordHash).pipe(Option.map(Redacted.make))),
       );
 
-    // `passwordHash`/`accessToken`/`refreshToken`/the four BE-002 token-
-    // metadata columns are all included together in the generic `update`
-    // (only the non-sensitive identity fields are `FieldExcept`-excluded)
-    // — so writing a fresh `passwordHash` still has to read the row first
-    // and pass the rest straight through, the same pattern
-    // `Users.layerSql.updateProfile` uses for `email`.
-    //
-    // PPS-001: wrapped in `sql.withTransaction`, mirroring `unlink`'s own
-    // precedent above — unwrapped, a concurrent `unlink`/account-deletion
-    // racing between this read and its write could see the final `UPDATE`
-    // silently apply to nothing (or the read itself die on a row that
-    // vanished mid-flight). `existing.providerId`/`existing.userId` (this
-    // read's own, decrypted result) are passed straight through as `repo
-    // .update`'s AAD, so `AccountsRepositoryLive.update` no longer needs
-    // its own second, redundant `findById` just to recover them.
-    const updateCredentialHash: AccountsShape["updateCredentialHash"] = Effect.fnUntraced(
-      function* (id, hash) {
-        const performUpdate = Effect.gen(function* () {
-          const existing = yield* repo.findById(id).pipe(
-            Effect.catchTags({
-              NoSuchElementError: () =>
-                Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
-              SchemaError: Effect.die,
-              SqlError: Effect.die,
-            }),
-          );
-          const update = yield* SqlModels.Account.update
-            .makeEffect({
-              id,
-              passwordHash: Redacted.value(hash),
-              accessToken: existing.accessToken,
-              refreshToken: existing.refreshToken,
-              accessTokenExpiresAt: existing.accessTokenExpiresAt,
-              refreshTokenExpiresAt: existing.refreshTokenExpiresAt,
-              scope: existing.scope,
-              tokenType: existing.tokenType,
-            })
-            .pipe(Effect.orDie);
-          yield* repo
-            .update(update, { providerId: existing.providerId, userId: existing.userId })
-            .pipe(Effect.orDie);
-        });
-        yield* sql.withTransaction(performUpdate).pipe(Effect.catchTag("SqlError", Effect.die));
-      },
-    );
-
-    const findProviderTokens: AccountsShape["findProviderTokens"] = (id) =>
-      repo.findById(id).pipe(
+    // SMS-002: a targeted `UPDATE ... SET "passwordHash"` — it neither reads
+    // nor rewrites the token columns, so an undecryptable token can never make
+    // a password change fail (or be silently wiped by a pass-through write).
+    const updateCredentialHash: AccountsShape["updateCredentialHash"] = (id, hash) =>
+      repo.updatePasswordHash(id, Redacted.value(hash)).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
             Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
+        Effect.asVoid,
+      );
+
+    const findProviderTokens: AccountsShape["findProviderTokens"] = (id) =>
+      repo.findTokensById(id).pipe(
+        Effect.catchTags({
+          NoSuchElementError: () =>
+            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+          AccountTokenUndecryptable: (error) =>
+            Effect.fail(
+              new ProviderTokensUnreadable({ id, field: error.field, reason: error.reason }),
+            ),
+          SchemaError: Effect.die,
+          SqlError: Effect.die,
+        }),
         Effect.map(rowToProviderTokenSet),
       );
 
-    // Mirrors `updateCredentialHash` exactly, in reverse: reads the row
-    // first so `passwordHash` (also update-eligible, also not this write's
-    // concern) survives unchanged.
-    const updateProviderTokens: AccountsShape["updateProviderTokens"] = Effect.fnUntraced(
-      function* (id, tokens) {
-        const performUpdate = Effect.gen(function* () {
-          const existing = yield* repo.findById(id).pipe(
-            Effect.catchTags({
-              NoSuchElementError: () =>
-                Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
-              SchemaError: Effect.die,
-              SqlError: Effect.die,
-            }),
-          );
-          const update = yield* SqlModels.Account.update
-            .makeEffect({
-              id,
-              passwordHash: existing.passwordHash,
-              ...tokenSetToRow(tokens),
-            })
-            .pipe(Effect.orDie);
-          yield* repo
-            .update(update, { providerId: existing.providerId, userId: existing.userId })
-            .pipe(Effect.orDie);
-        });
-        yield* sql.withTransaction(performUpdate).pipe(Effect.catchTag("SqlError", Effect.die));
-      },
-    );
+    // SMS-002: a targeted write of the whole token group. It needs the row's
+    // `providerId`/`userId` only as encryption AAD (a plain, token-free read),
+    // never the old token values.
+    const updateProviderTokens: AccountsShape["updateProviderTokens"] = (id, tokens) =>
+      repo.findById(id).pipe(
+        Effect.flatMap((existing) =>
+          repo.updateProviderTokens(
+            id,
+            { providerId: existing.providerId, userId: existing.userId },
+            tokenSetToRow(tokens),
+          ),
+        ),
+        Effect.catchTags({
+          NoSuchElementError: () =>
+            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+          SchemaError: Effect.die,
+          SqlError: Effect.die,
+        }),
+        Effect.asVoid,
+      );
 
     return {
       link,

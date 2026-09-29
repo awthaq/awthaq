@@ -26,10 +26,12 @@
 
 export * as ClientAddress from "./ClientAddress.ts";
 export * as Encryption from "./Encryption.ts";
+export * as Hmac from "./Hmac.ts";
 export * as KeyProvider from "./KeyProvider.ts";
 export * as LegacySessionBridge from "./LegacySessionBridge.ts";
 export * as Mailer from "./Mailer.ts";
 export * as PasswordHasher from "./PasswordHasher.ts";
 export * as RateLimiter from "./RateLimiter.ts";
+export * as RefreshingCache from "./RefreshingCache.ts";
 export * as SqlTransaction from "./SqlTransaction.ts";
 export * as WebAuthn from "./WebAuthn.ts";

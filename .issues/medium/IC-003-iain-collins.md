@@ -3,7 +3,7 @@ ID: "IC-003"
 Title: "Zero OAuth provider presets — every app hand-assembles issuer/endpoints/mapProfile"
 Level: medium
 Category: "dx"
-Status: ready-for-human
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuthProvider.ts:5"
 Auditor: "iain-collins"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `oauth` · reported by **Iain Collins — Creator of NextAuth.js** (`iain-collins`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Ship the common vendors as pure data presets built on the existing oidc/oauth2 f
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-provider-presets`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuthProvider.ts:5`. Fix: Ship data-only vendor presets built on `oidc`/`oauth2` (zero new mechanism) in an `@awthaq/oauth/presets` subpath, plus an Auth.js provider-id → preset mapping table. (effort L). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option B per plan; user may revisit. New @awthaq/oauth/presets subpath (package.json exports './presets' + src/presets/{index,Claims,google,github,microsoft,gitlab,discord}.ts): data-only presets over OAuthProvider.oidc/oauth2 taking {clientId, clientSecret, scopes?, id?, mapProfile?} (microsoft needs tenant id, gitlab takes baseUrl). Cast-free claim accessors; GitHub numeric id -> string subject, GitHub/Entra never report emailVerified, GitHub uses client_secret_post. Also: token requests now send Accept: application/json (GitHub answers form-encoded otherwise). Apple deliberately NOT shipped (its name/email scopes need response_mode=form_post = a POST callback this GET-only contract cannot receive) -- recorded in presets/index.ts, BEH-EA-127 and the README; a stale/moved issuer fails at boot via the exact-issuer match (tested). Tests: OAuthPresets.test.ts (each preset resolves against a recorded discovery doc/explicit endpoints and maps a recorded vendor claim sample; stale issuer and Entra 'common' die at boot; overrides). package:smoke passes for oauth (the pre-existing 'client' attw failure is unrelated). OAuthProvider.ts header rewritten; README presets + Auth.js id mapping table (README committed with the claims batch). Gates: tsc -b, tsconfig.test.json, vitest 918 pass, test:bdd 106, spec:verify:strict, oxlint packages/oauth, pnpm circular.

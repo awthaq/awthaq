@@ -3,7 +3,7 @@ ID: "NHS-007"
 Title: "Rotation delivery can defect an otherwise-successful authenticated response"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Authentication.ts:222"
 Auditor: "node-http-server-integration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `server` · reported by **Node HTTP Server Integration Specialist** (`node-http-server-integration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Treat rotation-delivery failure as non-fatal (log and continue with the undecora
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `session-rotation-delivery`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:233`. Fix: Folded into PIL-005: rotation delivery moves into a pre-response handler that recovers encoding failures (log and continue) instead of orDie. Header-stripping guidance ships with MNA-005's docs. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Folded into PIL-005: delivery is a pre-response handler that recovers CookiesError via logWarning and returns the undecorated response instead of orDie.

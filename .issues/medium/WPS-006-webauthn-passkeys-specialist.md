@@ -3,7 +3,7 @@ ID: "WPS-006"
 Title: "Cloned-authenticator detection is log-only; PasskeyCounterAnomaly is declared but never emitted"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:589"
 Auditor: "webauthn-passkeys-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `passkey` · reported by **WebAuthn/Passkeys Implementation Specialist** (`webauthn-passkeys-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Persist anomaly state (a flagged column updated in recordUsage) so policy can ac
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `passkey-counter-anomaly-policy`. Already fixed by commit 6bd3f1d. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:796`. Fix: Persist anomaly state on the credential and let policy act on it; raise PasskeyCounterAnomaly under the strict policy (CB-004). (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Anomaly state persisted and acted on: migrations add counterAnomalyAt/counterAnomalyCount to passkey_credential; PasskeyCredentials.flagCounterAnomaly (memory+sql), record fields, DTO counterAnomalyAt; a flagged credential needs UV on every later sign-in (PasskeyUserVerificationRequired); reject policy per CB-004. Tests: PasskeyCredentials.test.ts (both layers), PasskeyCounterAnomaly.test.ts, PasskeyRealPort.test.ts; BDD REQ-EA-381 checks the flag via GET /passkey/credentials. PasskeyApi.PasskeyCounterAnomaly doc updated (now raised under reject). Spec BEH-EA-131/136. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

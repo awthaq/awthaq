@@ -107,6 +107,8 @@ REQUIREMENT: The same composed `Routes` Layer MUST be servable through
 
 `archive/design/usage-examples-v4.md` §3.1–§3.3 demonstrate both paths against the identical `Routes` value: a standalone Node server via `HttpRouter.serve`, and a Next.js route handler or Hono catch-all route via `HttpRouter.toWebHandler` — the plugin composition, the contract, and the handlers are unaffected by which of the two a deployment chooses.
 
+Both serving paths are **bounded by default** (NHS-004). Effect's server reads request bodies with no cap unless `HttpIncomingMessage.MaxBodySize` is set, so an unauthenticated caller could otherwise make the process buffer an arbitrarily large body before any handler, CSRF check or rate limit ran. `@awthaq/server`'s `BodyLimit.layer` is a global `HttpRouter` middleware, merged into the same layer list as `AuthHttp.routes(...)`, that provides `MaxBodySize` (default 256 KiB; `BodyLimit.config({ maxBytes })` overrides it per deployment) and answers `413` `PayloadTooLarge` (`{ "_tag": "PayloadTooLarge", "message": ... }`) to any request whose declared `content-length` exceeds the cap, before the handler runs. On a Node server the body reader also cuts off a chunked body with no `content-length` at the cap, by dropping the connection (no 413 can be written to a destroyed socket). On `HttpRouter.toWebHandler` the runtime does not consult `MaxBodySize`, so the `content-length` check is the bound there; a chunked body without `content-length` is left to the host's own limits.
+
 ## BEH-EA-086: Error responses are enumeration-safe uniformly across the HTTP surface
 
 ```text

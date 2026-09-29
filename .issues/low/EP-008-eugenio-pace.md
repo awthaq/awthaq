@@ -56,3 +56,5 @@ Keep `__Host-` as the default but document the constraint in the overview, and i
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `session-cookie-policy`. Duplicate of `IC-007` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:151`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `IC-007-iain-collins` — closed by its fix (see that issue's Resolved comment).

@@ -15,16 +15,25 @@ import {
   Hooks,
   HookPoint,
   RateLimits,
+  SessionCookie,
   Sessions,
   Users,
   Verification,
 } from "@awthaq/core";
-import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import {
+  ClientAddress,
+  Hmac,
+  Mailer,
+  PasswordHasher,
+  RateLimiter,
+  SqlTransaction,
+} from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Headers from "effect/unstable/http/Headers";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -39,6 +48,16 @@ export interface PasswordConfigShape {
   readonly breachCheck: boolean | { readonly onUnavailable: "allow" | "reject" };
   readonly resetTtl: Duration.Duration;
   readonly rehashOnLogin: boolean;
+  /**
+   * TSS-006: the minimum time `signIn`'s credential check (lookup plus
+   * verify) takes, so an account whose stored hash is cheaper than the
+   * configured cost (a legacy bcrypt row awaiting rehash) cannot be told
+   * apart from an unknown email by latency. `"calibrated"` (the default)
+   * times the boot-time dummy verify and pads to 1.25 times that; a
+   * `Duration` fixes the floor; `"off"` disables it. A hash costlier than
+   * the floor still takes longer, and stays distinguishable until rehashed.
+   */
+  readonly signInTimingFloor: "calibrated" | "off" | Duration.Duration;
 }
 
 const defaultPasswordConfig: PasswordConfigShape = {
@@ -46,6 +65,7 @@ const defaultPasswordConfig: PasswordConfigShape = {
   breachCheck: false,
   resetTtl: Duration.hours(1),
   rehashOnLogin: true,
+  signInTimingFloor: "calibrated",
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -74,6 +94,8 @@ export interface PasswordShape {
      * independently of the (attacker-chosen) email each attempt names.
      */
     readonly ip?: string;
+    /** CSD-003: recorded on the issued session (device list, forensics); capped by `Sessions.issue`. */
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     | PasswordApi.WeakPassword
@@ -104,6 +126,8 @@ export interface PasswordShape {
      * as a single shared "unknown origin" bucket, never as unthrottled.
      */
     readonly ip?: string;
+    /** CSD-003: recorded on the issued session; see `signUp`'s own `userAgent`. */
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     | Api.InvalidCredentials
@@ -150,7 +174,8 @@ export interface PasswordShape {
    */
   /**
    * PIL-002/RRS-001/SMS-001: BEH-EA-053 — every privilege-changing
-   * operation mints a fresh session and deletes the row it supersedes.
+   * operation mints a fresh session and tombstones the row it supersedes
+   * (atomically with the insert — ESR-002/RRS-004).
    * `currentSessionId` names the caller's own session so it can be
    * rotated (superseded, not merely kept) while every *other* session for
    * this user is revoked outright, closing the classic "attacker holds a
@@ -162,6 +187,9 @@ export interface PasswordShape {
     readonly currentSessionId: Sessions.SessionId;
     readonly currentPassword: Redacted.Redacted<string>;
     readonly newPassword: Redacted.Redacted<string>;
+    /** CSD-003: the superseding session records the caller's request context too. */
+    readonly ip?: string;
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited
@@ -181,8 +209,7 @@ export interface PasswordShape {
   }) => Effect.Effect<void, PasswordApi.WrongPassword | Api.RateLimited>;
 }
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+const { toHex } = Hmac;
 
 /**
  * `RateLimits.RateLimitKey`'s own `input` is untyped (`unknown`) — one
@@ -258,6 +285,24 @@ const RATE_LIMITS = {
   // guesses across many distinct, unrelated tokens/accounts.
   verifyEmailByIp: { limit: 30, window: Duration.minutes(15) },
 } as const satisfies Record<string, { readonly limit: number; readonly window: Duration.Duration }>;
+
+/**
+ * EOTS-007: the fixed labels a breach of `rule` is reported under — the
+ * `RATE_LIMITS` entry's name, never the (email/IP-bearing) bucket key.
+ */
+const ruleMeta = (rule: {
+  readonly limit: number;
+  readonly window: Duration.Duration;
+}): RateLimits.EnforceMeta => {
+  const name =
+    Object.entries(RATE_LIMITS).find(([, candidate]) => candidate === rule)?.[0] ?? "unknown";
+  return {
+    group: "password",
+    endpoint: name.replace(/ByIp$/, ""),
+    rule: name,
+    dimension: name.endsWith("ByIp") ? "ip" : "identity",
+  };
+};
 
 /**
  * The mailed reset/verification link's token embeds `Verification`'s own
@@ -341,6 +386,19 @@ const checkPolicy = (
     return hints;
   });
 
+/** CSD-003: the `request` context `Sessions.issue` records — omitted keys, not `undefined` (`exactOptionalPropertyTypes`). */
+const sessionRequest = (input: { readonly ip?: string; readonly userAgent?: string }) => ({
+  ...(input.ip !== undefined ? { ip: input.ip } : {}),
+  ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
+});
+
+/** CSD-003: the caller's `User-Agent` header, when present. */
+const requestUserAgent = (request: HttpServerRequest.HttpServerRequest) =>
+  Option.match(Headers.get(request.headers, "user-agent"), {
+    onNone: () => ({}),
+    onSome: (userAgent) => ({ userAgent }),
+  });
+
 /** The response to `signUp`/`signIn` — the just-created/just-verified session is always `current`. */
 const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto =>
   new SessionContract.SessionDto({
@@ -349,6 +407,7 @@ const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto
     lastActiveAt: DateTime.formatIso(session.lastActiveAt),
     expiresAt: DateTime.formatIso(session.absoluteExpiresAt),
     userAgent: Option.getOrNull(session.userAgent),
+    amr: session.amr,
     current: true,
   });
 
@@ -383,12 +442,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
         const issued = yield* password.signUp({
           ...payload,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...requestUserAgent(request),
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return toSessionDto(issued.session);
       }),
 
@@ -407,12 +463,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
         const issued = yield* password.signIn({
           ...payload,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...requestUserAgent(request),
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return toSessionDto(issued.session);
       }),
 
@@ -462,10 +515,13 @@ export const PasswordHandlers = HttpApiBuilder.group(
 
       changePassword: Effect.fnUntraced(function* ({
         payload,
+        request,
       }: {
         payload: PasswordApi.ChangePasswordPayload;
+        request: HttpServerRequest.HttpServerRequest;
       }) {
         const principal = yield* Api.CurrentPrincipal;
+        const resolvedAddress = yield* clientAddress.resolve(request);
         // `changePassword`'s own `Authentication` middleware already
         // refused an unauthenticated request; a non-`User` principal
         // reaching it is a wiring defect, mirroring `Session.ts`'s own
@@ -482,12 +538,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
           currentSessionId: Sessions.SessionId(principal.sessionId),
           currentPassword: payload.currentPassword,
           newPassword: payload.newPassword,
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...requestUserAgent(request),
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return toSessionDto(issued.session);
       }),
 
@@ -662,12 +716,43 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // hasher produced, so `hasher.verify` always does the same real
       // work whether or not a matching account/credential actually
       // exists.
-      const dummyHash = Redacted.make(yield* hasher.hash(Redacted.make("awthaq/password/dummy")));
+      const dummyPassword = Redacted.make("awthaq/password/dummy");
+      const dummyHash = Redacted.make(yield* hasher.hash(dummyPassword));
+
+      // TSS-006: `hasher.hash` above has already warmed the KDF (WASM
+      // instantiation), so this timing is the steady-state verify cost.
+      const timingFloorMillis = yield* Effect.gen(function* () {
+        if (config.signInTimingFloor === "off") return 0;
+        if (Duration.isDuration(config.signInTimingFloor)) {
+          return Duration.toMillis(config.signInTimingFloor);
+        }
+        const start = DateTime.toEpochMillis(yield* DateTime.now);
+        yield* hasher.verify(dummyPassword, Redacted.value(dummyHash));
+        return 1.25 * (DateTime.toEpochMillis(yield* DateTime.now) - start);
+      });
+
+      /**
+       * TSS-006: runs `effect` (success or failure alike) and holds its
+       * result back until at least `timingFloorMillis` has elapsed, so a
+       * cheap-hash path is not faster than the dummy-hash path.
+       */
+      const withTimingFloor = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        timingFloorMillis <= 0
+          ? effect
+          : Effect.gen(function* () {
+              const start = DateTime.toEpochMillis(yield* DateTime.now);
+              const exit = yield* Effect.exit(effect);
+              const elapsed = DateTime.toEpochMillis(yield* DateTime.now) - start;
+              if (elapsed < timingFloorMillis) {
+                yield* Effect.sleep(Duration.millis(timingFloorMillis - elapsed));
+              }
+              return yield* exit;
+            });
 
       /**
        * Ticket 12: every call site below passes its own `key`/`limit`/
        * `window` from `RATE_LIMITS`, and maps the port's own domain
-       * `RateLimited` (`@awthaq/ports`) onto the wire-level
+       * `RateLimitExceeded` (`@awthaq/ports`) onto the wire-level
        * `Api.RateLimited` — the same class `PasswordShape`'s own error
        * unions declare and `PasswordApi`'s endpoints carry, so no separate
        * mapping is needed again at the HTTP handler layer.
@@ -676,14 +761,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         key: string,
         rule: { readonly limit: number; readonly window: Duration.Duration },
       ): Effect.Effect<void, Api.RateLimited> =>
-        limiter
-          .consume({ key, limit: rule.limit, window: rule.window })
-          .pipe(
-            Effect.catchTag(
-              "RateLimited",
-              (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
-            ),
-          );
+        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
+        RateLimits.enforce({ key, limit: rule.limit, window: rule.window, meta: ruleMeta(rule) }).pipe(
+          Effect.provideService(RateLimiter.RateLimiter, limiter),
+          Effect.provideService(AuthEvents.AuthEvents, events),
+          Effect.catchTag(
+            "RateLimitExceeded",
+            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
+          ),
+        );
 
       /**
        * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s
@@ -756,17 +842,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                   credentialHash: Redacted.make(hash),
                 })
                 .pipe(Effect.orDie);
-              const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+              const issued = yield* sessions
+                .issue({ userId: user.id, request: sessionRequest(input), amr: ["pwd"] })
+                .pipe(Effect.orDie);
               return { user, issued };
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
         yield* events.publish({ _tag: "auth.user.created", userId: user.id });
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: user.id,
-        });
 
         // BEH-EA-113: dispatched, never awaited — response latency must
         // not depend on mail-provider latency, and per
@@ -798,20 +881,27 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // sees them.
         yield* rateLimit(`password:signin:ip:${input.ip ?? "unknown"}`, RATE_LIMITS.signInByIp);
         yield* rateLimit(`password:signin:${input.email.toLowerCase()}`, RATE_LIMITS.signIn);
-        const userOpt = yield* users.findByEmail(input.email);
-        const accountOpt = yield* Option.match(userOpt, {
-          onNone: () => Effect.succeed(Option.none<Accounts.AccountRecord>()),
-          onSome: (user) => accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
-        });
-        const hashOpt = yield* Option.match(accountOpt, {
-          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
-          onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
-        });
-        // BEH-EA-114: this call happens on every attempt, real or not —
-        // see `dummyHash`'s own comment.
-        const verified = yield* hasher.verify(
-          input.password,
-          Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+        // TSS-006: the whole credential check is held to `timingFloorMillis`.
+        const { userOpt, accountOpt, hashOpt, verified } = yield* withTimingFloor(
+          Effect.gen(function* () {
+            const userOpt = yield* users.findByEmail(input.email);
+            const accountOpt = yield* Option.match(userOpt, {
+              onNone: () => Effect.succeed(Option.none<Accounts.AccountRecord>()),
+              onSome: (user) =>
+                accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
+            });
+            const hashOpt = yield* Option.match(accountOpt, {
+              onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
+              onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
+            });
+            // BEH-EA-114: this call happens on every attempt, real or not —
+            // see `dummyHash`'s own comment.
+            const verified = yield* hasher.verify(
+              input.password,
+              Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+            );
+            return { userOpt, accountOpt, hashOpt, verified };
+          }),
         );
         if (
           Option.isNone(userOpt) ||
@@ -863,16 +953,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         if (point._tag === "Diverted") {
           return yield* Effect.fail(point.value);
         }
-        const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        const issued = yield* sessions
+          .issue({ userId: user.id, request: sessionRequest(input), amr: ["pwd"] })
+          .pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.user.signedIn",
           userId: user.id,
           strategy: "password",
-        });
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: user.id,
         });
         yield* afterSignIn.run({ userId: user.id, strategy: "password" });
         return issued;
@@ -1021,7 +1108,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // `revokeAll` primitive, retiring the empty-string-id
               // `revokeOthers` trick this call site used to stand in for
               // it.
-              yield* sessions.revokeAll(userId);
+              // ESA-006/TIR-008: `Sessions.revokeAll` itself publishes the
+              // `auth.session.revoked` (reason `passwordReset`) — after this
+              // transaction's own write, like every other revocation.
+              yield* sessions.revokeAll(userId, "passwordReset");
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
@@ -1029,11 +1119,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // committed — mirroring `signUp`'s own `auth.user.created`
         // placement, never inside the transaction itself.
         yield* events.publish({ _tag: "auth.password.resetCompleted", userId });
-        yield* events.publish({
-          _tag: "auth.session.revoked",
-          userId,
-          reason: "passwordReset",
-        });
       });
 
       const verifyEmail: PasswordShape["verifyEmail"] = Effect.fnUntraced(function* (input) {
@@ -1110,10 +1195,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // this endpoint is authenticated (no enumeration concern), but
         // there is no reason to let a caller with no password credential
         // at all distinguish "wrong password" from "no password set" by
-        // timing, so the real hasher call always runs regardless.
-        const verified = yield* hasher.verify(
-          input.currentPassword,
-          Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+        // timing, so the real hasher call always runs regardless (TSS-006:
+        // held to the same timing floor as `signIn`).
+        const verified = yield* withTimingFloor(
+          hasher.verify(
+            input.currentPassword,
+            Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+          ),
         );
         if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
           return yield* Effect.fail(new PasswordApi.WrongPassword());
@@ -1134,20 +1222,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // row with a freshly minted one. Reversing this order would leave
         // `revokeOthers` nothing to `keep` (the superseded id no longer
         // exists once `issue` has run).
-        yield* sessions.revokeOthers(input.userId, input.currentSessionId);
-        yield* events.publish({
-          _tag: "auth.session.revoked",
-          userId: input.userId,
-          reason: "passwordChanged",
-        });
+        yield* sessions.revokeOthers(input.userId, input.currentSessionId, "passwordChanged");
         const issued = yield* sessions
-          .issue({ userId: input.userId, supersedes: input.currentSessionId })
+          .issue({
+            userId: input.userId,
+            supersedes: input.currentSessionId,
+            request: sessionRequest(input),
+            amr: ["pwd"],
+          })
           .pipe(Effect.orDie);
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: input.userId,
-        });
         return issued;
       });
 
@@ -1167,15 +1250,17 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // check — this endpoint is authenticated (no enumeration
         // concern), but there is no reason to let a caller with no
         // password credential at all distinguish "wrong password" from
-        // "no password set" by timing.
-        const verified = yield* hasher.verify(
-          input.currentPassword,
-          Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+        // "no password set" by timing (TSS-006: same timing floor).
+        const verified = yield* withTimingFloor(
+          hasher.verify(
+            input.currentPassword,
+            Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
+          ),
         );
         if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
           return yield* Effect.fail(new PasswordApi.WrongPassword());
         }
-        yield* sessions.reauthenticate(input.currentSessionId).pipe(
+        yield* sessions.reauthenticate(input.currentSessionId, ["pwd"]).pipe(
           Effect.catchTag("SessionNotFound", () =>
             // `changePassword`'s own `Authentication` middleware already
             // proved this exact session live moments ago — a

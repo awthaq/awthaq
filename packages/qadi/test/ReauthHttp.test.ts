@@ -8,7 +8,7 @@
 // decodes it — the very schema asserted against below — telling a reauth demand
 // (with its window) apart from a plain permission denial.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -17,7 +17,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
@@ -72,12 +71,8 @@ const LoginHandlers = HttpApiBuilder.group(TestApi, "login", (handlers) =>
       const user = yield* users
         .create({ email: "reauth@example.com", name: "Reauth" })
         .pipe(Effect.orDie);
-      const { token } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
-      yield* HttpApiBuilder.securitySetCookie(
-        Api.SessionCookie,
-        Redacted.value(token),
-        Sessions.SESSION_COOKIE_ATTRIBUTES,
-      );
+      const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+      yield* SessionCookie.set(session, token);
     }),
   }),
 );

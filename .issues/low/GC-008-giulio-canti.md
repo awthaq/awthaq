@@ -3,7 +3,7 @@ ID: "GC-008"
 Title: "Untagged plain Error defect in the session handler breaks the catchable-error convention"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Session.ts:67"
 Auditor: "giulio-canti"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `server` · reported by **Giulio Canti — Creator of fp-ts and io-ts** (`giulio-canti`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Declare a small Data.TaggedError (e.g. SessionListInvariant) in server or core a
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `session-handler-hardening`. Evidence at HEAD ec065a7: `packages/server/src/Session.ts:60`. Fix: Replace plain-Error defects in @awthaq/server with one tagged defect class. The repo-wide sweep is out of scope for this slice. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/server/src/internal/Defects.ts HandlerInvariantViolation (Data.TaggedError, invariant NonUserPrincipal|AuthenticatedUserMissing); used by CurrentUser.ts and Account.ts (updateProfile, deleteUser); the Session.ts:67 site disappeared with EHA-009 (its only remaining die was replaced by the typed 401). packages/server/src contains no new Error( any more. The ~70 other die(new Error(...)) sites across packages are NOT swept here (follow-up for the orchestrator). Test: 'a non-User principal reaching a required-auth group dies with HandlerInvariantViolation'.

@@ -3,7 +3,7 @@ ID: "SMS-002"
 Title: "Session list returns expired sessions and nothing ever reaps dead rows"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:383"
 Auditor: "session-management-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `sql` · reported by **Session Management Specialist** (`session-management-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Add an expiry predicate (idleExpiresAt > now AND absoluteExpiresAt > now) to lis
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-list-liveness-and-pagination`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:435`. Fix: Filter expired rows out of the device list in both layers. Delegate physical deletion to ticket 30's `Retention.sweep` (CSG-003, cross-slice) rather than inventing a second reaper. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Expiry filtered out of the device list in both layers: SessionsRepository.listByUser now takes the caller clock 'now' and applies absoluteExpiresAt > now AND idleExpiresAt > now; layerMemory.list applies the same isLiveAt predicate. Tests: core Sessions.test.ts idle-expired/absolute-expired not listed (both layers) and sql Repositories.test.ts 'SMS-002: listByUser omits absolute-expired, idle-expired and tombstoned rows'. Physical deletion of dead rows is deliberately not done here: it stays with CSG-003's Retention.sweep (still open, other program).

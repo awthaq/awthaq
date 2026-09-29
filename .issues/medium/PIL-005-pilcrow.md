@@ -3,7 +3,7 @@ ID: "PIL-005"
 Title: "Path-B-only routes discard secret rotation, forcing hourly re-logins"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Authentication.ts:186"
 Auditor: "pilcrow"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `server` · reported by **pilcrow (pilcrowOnPaper) — Creator of Lucia Auth** (`pilcrow`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Either deliver rotation from Path B via the existing PostAuthResponseHook seam, 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-rotation-delivery`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:202`. Fix: Deliver rotated secrets from inside the memoized verify via `HttpEffect.appendPreResponseHandler`, so every path delivers: Path A, Path B, and responses whose handler failed with a typed error. (effort M). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Rotation delivery moved into the memoized verify's owner branch as an HttpEffect.appendPreResponseHandler (rotationDelivery in Authentication.ts): runs for Path A, Path B (qadi SubjectExtractor now passes scheme; resolveSession/resolvePrincipal take a required scheme) and typed-error responses; deleted deliverRotation. Bearer gets Api.ROTATED_TOKEN_HEADER + Cache-Control: no-store, cookie gets Set-Cookie + no-store; a handler that already wrote the session cookie (sign-in issue, sign-out expiry) wins; encoding failure logs a warning and returns the response undecorated. Spec: BEH-EA-052 rotation-delivery paragraph, BEH-EA-153 cross-reference. Tests: server Authentication.test.ts (typed-error 404 keeps rotated Set-Cookie, exactly-once cookie, bearer header+no-store, no-rotation no-op) and qadi SubjectExtractor.test.ts (Path-B-only route delivers Set-Cookie); 5 of them proven red on the pre-change code. Gates green.

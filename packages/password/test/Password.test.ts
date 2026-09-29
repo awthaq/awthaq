@@ -186,7 +186,12 @@ const letForkedFibersRun = Effect.gen(function* () {
 const signUpAndVerify = (
   password: Password.PasswordShape,
   mailer: Mailer.MailerShape,
-  input: { readonly email: string; readonly password: Redacted.Redacted<string> },
+  input: {
+    readonly email: string;
+    readonly password: Redacted.Redacted<string>;
+    readonly ip?: string;
+    readonly userAgent?: string;
+  },
 ) =>
   Effect.gen(function* () {
     const issued = yield* password.signUp(input);
@@ -277,6 +282,69 @@ describe("Password", () => {
           Redacted.value(Option.getOrThrow(hashBefore)),
           Redacted.value(Option.getOrThrow(hashAfter)),
         );
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // THS-003: how the session was authenticated.
+  it.effect("THS-003: signUp, signIn and changePassword sessions carry amr [pwd]", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const mailer = yield* Mailer.Mailer;
+      const signedUp = yield* signUpAndVerify(password, mailer, {
+        email,
+        password: strongPassword,
+      });
+      assert.deepStrictEqual(signedUp.session.amr, ["pwd"]);
+      const signedIn = yield* password.signIn({ email, password: strongPassword });
+      assert.deepStrictEqual(signedIn.session.amr, ["pwd"]);
+      const changed = yield* password.changePassword({
+        userId: signedUp.session.userId,
+        currentSessionId: signedIn.session.id,
+        currentPassword: strongPassword,
+        newPassword: Redacted.make("another strong passphrase"),
+      });
+      assert.deepStrictEqual(changed.session.amr, ["pwd"]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // CSD-003: request context recorded on every session-minting path.
+  it.effect(
+    "CSD-003: signUp, signIn and changePassword record ip and userAgent on the session",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const sessions = yield* Sessions.Sessions;
+        const context = { ip: "203.0.113.7", userAgent: "Agent/1.0" };
+
+        const signedUp = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+          ...context,
+        });
+        assert.deepStrictEqual(signedUp.session.ipAddress, Option.some(context.ip));
+        assert.deepStrictEqual(signedUp.session.userAgent, Option.some(context.userAgent));
+
+        const signedIn = yield* password.signIn({
+          email,
+          password: strongPassword,
+          ip: "198.51.100.9",
+          userAgent: "Agent/2.0",
+        });
+        const verified = yield* sessions.verify(signedIn.token);
+        assert.deepStrictEqual(verified.session.ipAddress, Option.some("198.51.100.9"));
+        assert.deepStrictEqual(verified.session.userAgent, Option.some("Agent/2.0"));
+
+        const changed = yield* password.changePassword({
+          userId: signedUp.session.userId,
+          currentSessionId: signedIn.session.id,
+          currentPassword: strongPassword,
+          newPassword: Redacted.make("a different strong passphrase"),
+          ip: "192.0.2.1",
+          userAgent: "Agent/3.0",
+        });
+        assert.deepStrictEqual(changed.session.ipAddress, Option.some("192.0.2.1"));
+        assert.deepStrictEqual(changed.session.userAgent, Option.some("Agent/3.0"));
       }).pipe(Effect.provide(TestLayer)),
   );
 
@@ -1017,6 +1085,17 @@ describe("Password", () => {
           .signIn({ email, password: Redacted.make("wrong password") })
           .pipe(Effect.flip);
         assert.strictEqual(throttled._tag, "RateLimited");
+
+        // EOTS-007: the breach is observable, and the audit payload carries
+        // the rule that fired but never the email the bucket was keyed on.
+        const auditLog = yield* AuditLog.AuditLog;
+        const breaches = yield* auditLog.list({ eventTag: "auth.rateLimit.exceeded" });
+        assert.strictEqual(breaches.length, 1);
+        assert.isFalse(JSON.stringify(breaches[0]?.payload).includes(email));
+        assert.strictEqual(
+          JSON.stringify(breaches[0]?.payload).includes('"rule":"signIn"'),
+          true,
+        );
       }).pipe(
         // A real, enforcing limiter for this one test — every other test
         // in this file uses `RateLimiter.layerPermissive` via `TestLayer`'s
@@ -1335,5 +1414,60 @@ describe("Password", () => {
           ),
         ),
       ),
+  );
+});
+
+describe("Password signIn timing floor (TSS-006)", () => {
+  // A hasher that verifies instantly, standing in for a legacy hash cheaper than the
+  // configured cost: without a floor, its sign-in returns sooner than an argon2 one.
+  const InstantHasher = Layer.succeed(
+    PasswordHasher.PasswordHasher,
+    PasswordHasher.PasswordHasher.of({
+      hash: () => Effect.succeed("instant-hash"),
+      verify: () => Effect.succeed(false),
+      needsRehash: () => false,
+    }),
+  );
+
+  const layerWith = (timingFloor: Partial<Password.PasswordConfigShape>) =>
+    Password.Password.layer.pipe(
+      Layer.provideMerge(AuthenticationLive),
+      Layer.provide(CsrfProtectionLive),
+      Layer.provideMerge(CoreLive),
+      Layer.provideMerge(
+        Layer.mergeAll(InstantHasher, Mailer.layerMemory, RateLimiter.layerPermissive).pipe(
+          Layer.provideMerge(NodeCrypto.layer),
+        ),
+      ),
+      Layer.provideMerge(RateLimits.layer),
+      Layer.provide(NoBreachHttpClient),
+      Layer.provide(SqlTransaction.layerNoop),
+      Layer.provide(ClientAddress.layerDirect),
+      Layer.provide(Password.config(timingFloor)),
+    );
+
+  it.effect("a sign-in completes no sooner than the floor, even when verify is instant", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const fiber = yield* Effect.forkChild(
+        password.signIn({ email: "nobody@example.com", password: strongPassword }).pipe(Effect.flip),
+        { startImmediately: true },
+      );
+      yield* TestClock.adjust(Duration.millis(60));
+      assert.isUndefined(fiber.pollUnsafe());
+      yield* TestClock.adjust(Duration.millis(60));
+      const failure = yield* Fiber.join(fiber);
+      assert.strictEqual(failure._tag, "InvalidCredentials");
+    }).pipe(Effect.provide(layerWith({ signInTimingFloor: Duration.millis(100) }))),
+  );
+
+  it.effect("signInTimingFloor: off restores the unpadded behaviour", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const failure = yield* password
+        .signIn({ email: "nobody@example.com", password: strongPassword })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "InvalidCredentials");
+    }).pipe(Effect.provide(layerWith({ signInTimingFloor: "off" }))),
   );
 });

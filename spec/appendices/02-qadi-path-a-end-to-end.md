@@ -283,7 +283,7 @@ The organization plugin ships its own relationship resolver
 policies with one line rather than writing a resolver from scratch.
 
 **Platform authority versus tenant authority
-([ADR-EA-017](../decisions/017-global-roles-vs-organization-roles.md)).**
+([ADR-EA-025](../decisions/025-global-roles-vs-organization-roles.md)).**
 `hasPermission`/`hasRole` read the *global* `Roles` assignment — authority that
 does not depend on which tenant a request touches (a platform support agent).
 "Is this user an admin of *this* organization" is a `hasRelationship`, answered

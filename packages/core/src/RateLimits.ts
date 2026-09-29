@@ -3,7 +3,7 @@
 // spec/behaviors/14-rate-limiting.md, BEH-EA-107/108/110/111 — the
 // domain-stratum half of rate limiting: which of a plugin's own endpoints
 // it may throttle, and how those rules are aggregated and ordered for
-// introspection. The port itself (`RateLimiter`, `RateLimited`, the
+// introspection. The port itself (`RateLimiter`, `RateLimitExceeded`, the
 // fixed-window memory store) lives in `@awthaq/ports`'s
 // `RateLimiter.ts` — see that module's own header comment for why the two
 // halves are split this way.
@@ -45,12 +45,15 @@
 // (BEH-EA-111's own example) is `@awthaq/cli`'s job, not built yet;
 // `registered` is this module's own introspection primitive for it to call.
 
+import { RateLimiter } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Ref from "effect/Ref";
+import * as AuthEvents from "./AuthEvents.ts";
 import type * as AuthPlugin from "./AuthPlugin.ts";
 
 /** BEH-EA-108: the built-in bucket-key strategies, plus an escape hatch for a plugin author who has already reasoned through the risk a fixed string key would otherwise carry (a caller-chosen value collectively locking out a NATed office, or an attacker-controlled bucket). */
@@ -62,6 +65,8 @@ export interface RuleInput {
   readonly key: RateLimitKey;
   readonly limit: number;
   readonly window: Duration.Input;
+  /** RBS-009: opt-in exponential penalty for repeat breaches. Off by default. */
+  readonly escalation?: RateLimiter.Escalation;
   readonly order?: number;
 }
 
@@ -156,3 +161,65 @@ export const rule = (
   Layer.effectDiscard(
     Effect.flatMap(RateLimitsRegistry, (registry) => registry.register(owner, input)),
   );
+
+/** EOTS-007: the metric every breach increments, tagged with the rule that fired (never a key). */
+export const exceededCounter = Metric.counter("awthaq.ratelimit.exceeded", {
+  description: "Requests rejected by a rate-limit rule",
+  incremental: true,
+});
+
+/** EOTS-007: which rule a breach belongs to. Every field is a fixed label, so none of it can carry caller input. */
+export interface EnforceMeta {
+  readonly group: string;
+  readonly endpoint: string;
+  readonly rule: string;
+  readonly dimension: "identity" | "ip" | "principal" | "custom";
+}
+
+export interface EnforceInput {
+  readonly key: string;
+  readonly limit: number;
+  readonly window: Duration.Input;
+  readonly escalation?: RateLimiter.Escalation;
+  readonly meta: EnforceMeta;
+}
+
+/**
+ * EOTS-007: the one place a rate-limit breach is made observable. Consumes
+ * from the `RateLimiter` port and, when it refuses, publishes
+ * `auth.rateLimit.exceeded`, logs a warning and increments
+ * `exceededCounter`, all annotated with `meta` only. The bucket key (an
+ * email, an IP) is never published, logged or used as a metric attribute
+ * (BEH-EA-108). The port's own `RateLimitExceeded` is re-raised unchanged so
+ * each plugin still maps it onto its own wire error.
+ */
+export const enforce = (input: EnforceInput) =>
+  Effect.gen(function* () {
+    const limiter = yield* RateLimiter.RateLimiter;
+    const events = yield* AuthEvents.AuthEvents;
+    return yield* limiter
+      .consume({
+        key: input.key,
+        limit: input.limit,
+        window: input.window,
+        escalation: input.escalation,
+      })
+      .pipe(
+        Effect.tapError((error) =>
+          Effect.all(
+            [
+              events.publish({
+                _tag: "auth.rateLimit.exceeded",
+                ...input.meta,
+                retryAfterMillis: error.retryAfterMillis,
+              }),
+              Effect.logWarning("awthaq: rate limit exceeded").pipe(
+                Effect.annotateLogs({ ...input.meta, retryAfterMillis: error.retryAfterMillis }),
+              ),
+              Metric.update(Metric.withAttributes(exceededCounter, { ...input.meta }), 1),
+            ],
+            { discard: true },
+          ),
+        ),
+      );
+  });

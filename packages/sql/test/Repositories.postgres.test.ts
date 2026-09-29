@@ -12,6 +12,7 @@ import * as PgClient from "@effect/sql-pg/PgClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -176,6 +177,7 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
           yield* Models.User.insert.makeEffect({ email: "sess-cols@example.com", name: "S" }),
         );
         const now = yield* DateTime.now;
+        const future = DateTime.addDuration(now, Duration.days(1));
         const make = () =>
           sessions.insert(
             Models.Session.insert.make({
@@ -183,8 +185,8 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
               secretHash: "h",
               ipAddress: null,
               userAgent: null,
-              absoluteExpiresAt: now,
-              idleExpiresAt: Model.Override(now),
+              absoluteExpiresAt: future,
+              idleExpiresAt: Model.Override(future),
               actingAsType: null,
               actingAsId: null,
               familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
@@ -197,17 +199,17 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
         yield* make();
         yield* make();
 
-        const page = yield* sessions.listByUser(user.id, undefined, 10);
+        const page = yield* sessions.listByUser(user.id, now, undefined, 10);
         assert.strictEqual(page.items.length, 3);
         assert.isTrue(Option.isNone(page.nextCursor));
 
         yield* sessions.deleteAllForUserExcept(user.id, keep.id);
-        const afterExcept = yield* sessions.listByUser(user.id, undefined, 10);
+        const afterExcept = yield* sessions.listByUser(user.id, now, undefined, 10);
         assert.strictEqual(afterExcept.items.length, 1);
         assert.strictEqual(afterExcept.items[0]?.id, keep.id);
 
         yield* sessions.deleteAllByUser(user.id);
-        const afterAll = yield* sessions.listByUser(user.id, undefined, 10);
+        const afterAll = yield* sessions.listByUser(user.id, now, undefined, 10);
         assert.strictEqual(afterAll.items.length, 0);
       }).pipe(Effect.provide(RepositoriesLive)),
   );

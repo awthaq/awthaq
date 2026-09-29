@@ -3,7 +3,7 @@ ID: "ALF-005"
 Title: "Zero tamper-evidence on the one durable audit table — history is rewritable by anyone with SQL access"
 Level: medium
 Category: "security"
-Status: ready-for-human
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/ImpersonationRecords.ts:243"
 Auditor: "audit-logging-forensics-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `admin` · reported by **Audit Logging & Forensics Specialist** (`audit-logging-forensics-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Minimum viable tamper-evidence for a same-DB table: maintain a per-row hash chai
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `admin-audit-integrity`. Evidence at HEAD ec065a7: `packages/admin/src/ImpersonationRecords.ts:242`. Fix: Ship DB-level immutability triggers plus a shared HMAC hash-chain for durable audit tables (admin_impersonation, audit_log). (effort L). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option C now + A via a shared primitive (B, an external sink port, left for when a consumer exists); user may revisit. New @awthaq/core AuditChain (canonicalize, link = HMAC-SHA256(key, prevHash|payload) or unkeyed SHA-256 when no AuditChain.config key, verify -> first broken index; tests in core/test/AuditChain.test.ts). @awthaq/admin: migrations create_admin_impersonation_chain (append-only ledger table, added to plugin tables) and add_admin_impersonation_immutability_triggers (SQLite: reject DELETE and any UPDATE other than closing an open episode on admin_impersonation, reject all UPDATE/DELETE on the ledger; Postgres: equivalent plpgsql guard incl. TRUNCATE); ImpersonationRecords create/endEpisode/closeExpired append started/ended links in one transaction (pg advisory lock serialises writers) in layerSql, mirrored in layerMemory; verifyChain returns the first anomaly (chain-broken / row-missing / row-mismatch / row-unledgered with ledger seq + episode id). Layers now require AuditChain.layer (tests/World provide it). Tests red first (ImpersonationRecords.test.ts): raw UPDATE/DELETE rejected by trigger, ended row not rewritable, ledger immutable, verifyChain detects a rewritten row with the trigger dropped and names the episode/seq, deleted row, rewritten ledger link, smuggled unledgered row; verifyChain clean across create/end/closeExpired in both layers. Spec BEH-EA-215 amended. DEFERRED (not done, stays a follow-up): applying AuditChain to core audit_log (packages/core AuditLog.ts + packages/sql CoreMigrations, owned by other programs) and BEH-EA-100/13-events amendment; the Postgres trigger DDL is written but untested (no Postgres in this repo's tests); truncation of the newest links needs a host-side exported head-hash anchor. Gates: tsc -b (minus pre-existing packages/react TS2883) + tsconfig.test clean, pnpm test 855 pass, test:bdd 107, spec:verify:strict 19/19, oxlint clean.

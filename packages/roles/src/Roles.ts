@@ -12,7 +12,7 @@
 // on `ApiKeyPrincipal`/`ServicePrincipal` — is documented once, in
 // `@awthaq/qadi`'s `SubjectResolver.ts`, not repeated here).
 //
-// **Global, not tenant-scoped (ADR-EA-017, MTI-007).** `Roles` answers "is
+// **Global, not tenant-scoped (ADR-EA-025, MTI-007).** `Roles` answers "is
 // this user a *platform* admin/support/operator" — `AuthSubject.roles`/
 // `permissions`, `hasRole`/`hasPermission`. "Is this user an admin of *this
 // organization*" is `@awthaq/organization`'s `OrganizationQadi.relationships`

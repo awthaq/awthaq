@@ -3,7 +3,7 @@ ID: "ESR-002"
 Title: "Session supersede path commits delete and insert as two unwrapped statements"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:433"
 Auditor: "effect-sql-repository-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Effect SQL Repository Specialist** (`effect-sql-repository-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Wrap the delete+insert pair in `sql.withTransaction`, or invert the order (inser
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `session-supersede-atomicity`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:671`. Fix: Make issue(supersedes) one atomic unit in both layers: SQL tombstone+insert inside one transaction; memory tombstone+insert inside one Ref.modify. (effort M). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Sessions.ts: layerSql wraps tombstone+insert in sql.withTransaction (SqlClient added to layerSql's R, like Accounts.layerSql; SqlError -> die); layerMemory computes the ancestor lookup, familyId, tombstone and new row in one Ref.modify; packages/sql Repositories.ts tombstone now guarded by "supersededAt" IS NULL so concurrent supersedes cannot fork a family. Docs: SessionsShape.issue, Password.ts comment, BEH-EA-053 retitled/reworded (tombstoned atomically), 07-sessions.feature Rule text, ADR-EA-016 rev 1.3. Tests (core/test/Sessions.test.ts): 'BEH-EA-053: a failing insert during issue(supersedes) leaves the superseded session live and untombstoned' (layerSql, fault-injecting repository) and 'ESR-002: two concurrent issue(supersedes: same id) never fork the family' (both layers); both proven red on the old Sessions.ts. Gates green.

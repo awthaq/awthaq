@@ -33,7 +33,17 @@ export class SqlTransaction extends Context.Service<SqlTransaction, SqlTransacti
   "awthaq/ports/SqlTransaction",
 ) {}
 
-/** For an in-memory composition — every write already lands atomically in its own `Ref.modify`, so there is nothing this port needs to wrap. */
+/**
+ * For an in-memory composition — every write already lands atomically in its
+ * own `Ref.modify`, so there is nothing this port needs to wrap.
+ *
+ * DRS-006/INV-EA-017: its atomicity holds *per `Ref`* only — a multi-table
+ * transaction (OAuth's just-in-time create-and-link, say) can still orphan a
+ * user in a memory composition if the second write dies. Acceptable for
+ * development and tests, never for production; and a real `layerSql`
+ * transaction is likewise only atomic across tables in one logical database,
+ * which is why the core identity tables must share a transaction domain.
+ */
 export const layerNoop: Layer.Layer<SqlTransaction> = Layer.succeed(
   SqlTransaction,
   SqlTransaction.of({ withTransaction: (effect) => effect }),

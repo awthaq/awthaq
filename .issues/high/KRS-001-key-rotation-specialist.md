@@ -3,7 +3,7 @@ ID: "KRS-001"
 Title: "JWT private signing keys stored as plaintext JSON in the database"
 Level: high
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/SigningKeyRecords.ts:224"
 Auditor: "key-rotation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `security` · `jwt` · reported by **Key Rotation Specialist** (`key-rotation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/jwt/src/SigningKeyRecords.ts:224` (`onSome: (redacted) => JSON.stringify(Redacted.value(redacted)),`) matches verbatim, and the column is confirmed to be persisted as a plain string (`privateKeyJwk: Schema.NullOr(Schema.String)`, lines 143/171). `Redacted` is confirmed to be an in-memory-only concealment type (unwrapped here before persistence). The contrast with encrypted OAuth secrets is confirmed real: `packages/oauth/src/OAuth.ts:110,413` shows `codeVerifier`/`nonce` already routed through the `Encryption` service. Applying that same, already-proven-in-repo `Encryption` pattern to `privateKeyJwk` is a well-scoped, mechanical fix. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jwt-signing-key-at-rest-encryption`. Evidence at HEAD ec065a7: `packages/jwt/src/SigningKeyRecords.ts:221`. Fix: Encrypt `privateKeyJwk` at rest through the existing `@awthaq/ports` Encryption port (AAD bound to the row's kid) and decode both JWK columns with Schema instead of `JSON.parse`. (effort M). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`.
+
+**Resolved (2026-09-29):** packages/jwt/src/SigningKeyRecords.ts layerSql: privateKeyJwk is now an @awthaq/ports Encryption envelope (AAD jwt_signing_key:<kid>:privateKeyJwk), both JWK columns decoded via Schema.fromJsonString instead of JSON.parse (no casts), undecryptable/malformed rows die with a clear message; layerSql now requires SqlClient | Encryption (inferred, no annotation); layerMemory unchanged (documented). packages/jwt/package.json: @awthaq/ports moved to dependencies (lockfile updated); packages/jwt/README.md rewritten. Tests (packages/jwt/test/KeyRing.test.ts, red first: privateKeyJwk was plaintext JWK JSON and a swapped ciphertext was accepted): 'never stores the private JWK in plaintext', 'a privateKeyJwk ciphertext copied onto another kid's row fails to decrypt'. Gates: typecheck, full vitest, oxlint packages/jwt clean. No legacy-plaintext shim (pre-release).

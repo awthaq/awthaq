@@ -23,8 +23,18 @@
 // header comment for how it correlates its two anonymous calls instead.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Accounts, Hooks, Migrations, Sessions, Users } from "@awthaq/core";
-import { WebAuthn } from "@awthaq/ports";
+import {
+  AuthEvents,
+  AuthPlugin,
+  Accounts,
+  Hooks,
+  Migrations,
+  RateLimits,
+  SessionCookie,
+  Sessions,
+  Users,
+} from "@awthaq/core";
+import { ClientAddress, RateLimiter, WebAuthn } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -36,25 +46,110 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Headers from "effect/unstable/http/Headers";
+import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ChallengeStore from "./ChallengeStore.ts";
+import { hmacSha256 } from "./Hmac.ts";
 import * as PasskeyApi from "./PasskeyApi.ts";
 import * as PasskeyCredentials from "./PasskeyCredentials.ts";
+import * as PasskeyUserHandles from "./PasskeyUserHandles.ts";
 
 /** BEH-EA-044-style reserved provider id, this plugin's own concern (BEH-EA-004: confined to its own scope). */
 const PASSKEY_PROVIDER_ID = "passkey";
 
+/**
+ * HSK-002: what a registration's attestation must satisfy. Conveyance
+ * (`PasskeyConfigShape.attestation`) is only a *request* — it decides nothing
+ * by itself. With a policy, `register/verify` rejects (as
+ * `PasskeyAttestationRejected`) a registration that carries no attestation,
+ * a self-signed one (unless `rejectSelfAttestation: false`), or whose
+ * authenticator model (AAGUID) is not in `trustedAaguids`.
+ *
+ * What this is **not**: FIDO Metadata Service (MDS3) validation, which stays
+ * deferred (BEH-EA-135). An AAGUID is only as trustworthy as the attestation
+ * carrying it — for a `certificate` attestation the wrapped library checks the
+ * statement's signature, and validates the certificate chain against a root
+ * store only if the host has installed one in `@simplewebauthn/server`'s
+ * (process-global) settings service. Without roots, `trustedAaguids` is a
+ * model *allow-list*, not proof of provenance.
+ */
+export interface AttestationPolicy {
+  /** Authenticator models (canonical `8-4-4-4-12` AAGUIDs, case-insensitive) a registration may come from. */
+  readonly trustedAaguids: ReadonlyArray<string>;
+  /** Defaults to `true`: a self-attestation says nothing about the authenticator model, so it cannot satisfy an allow-list. */
+  readonly rejectSelfAttestation?: boolean;
+}
+
 export interface PasskeyConfigShape {
   readonly rpId: string;
   readonly rpName: string;
-  /** BEH-EA-133: exact `(scheme, host, port)` tuples — never a bare host. */
+  /**
+   * BEH-EA-133: exact `(scheme, host, port)` tuples — never a bare host.
+   * MNA-007: a native Android app's assertions carry an
+   * `android:apk-key-hash:<base64url SHA-256 of the signing certificate>`
+   * origin instead of a web one — list it here verbatim (and publish the
+   * matching Digital Asset Links statement for `rpId`). Such an origin is an
+   * exact-match origin exempt from the web rpId-suffix check; the RP-ID
+   * binding itself is still enforced by the authenticator data's `rpIdHash`.
+   */
   readonly origins: ReadonlyArray<string>;
-  /** BEH-EA-135: defaults to `"none"`. */
+  /**
+   * CB-003: top-level origins a ceremony may run *embedded* under (a
+   * cross-origin iframe). A ceremony whose client data reports
+   * `crossOrigin: true` is refused unless its `topOrigin` is listed here;
+   * the default `[]` refuses every embedded ceremony.
+   */
+  readonly allowedTopOrigins: ReadonlyArray<string>;
+  /** BEH-EA-135: defaults to `"none"`. Conveyance ≠ verification — see `attestationPolicy`. */
   readonly attestation: WebAuthn.AttestationConveyance;
+  /** HSK-002: absent ⇒ no trust decision is made on attestation, and `Passkey.layer` warns when `attestation` asks for one anyway. */
+  readonly attestationPolicy?: AttestationPolicy;
   readonly authenticatorSelection: WebAuthn.AuthenticatorSelection;
-  /** Ticket 07: defaults to `true`, per this spec's own "richness over complexity" decision. */
+  /**
+   * Ticket 07: defaults to `true`, per this spec's own "richness over complexity" decision.
+   *
+   * HSK-007: Conditional Create always requests `residentKey: "required"` (a
+   * discoverable credential is also what makes autofill possible), so U2F-only
+   * and early-CTAP2 security keys — which cannot store one — cannot complete
+   * it. A fleet of such keys should set this to `false`.
+   *
+   * CB-009: Chrome's Conditional Create cannot produce UV=1, so it is
+   * implicitly disabled whenever `authenticatorSelection.userVerification` is
+   * `"required"` — `registerOptionsConditional` answers
+   * `PasskeyConditionalCreateDisabled` rather than issue options that could
+   * only yield a credential the policy would refuse.
+   */
   readonly conditionalCreate: boolean;
+  /**
+   * TC-003: how long the *browser* lets a ceremony run, sent as the options'
+   * `timeout`. Must not exceed the server's challenge TTL
+   * (`ChallengeStore.CHALLENGE_TTL`, five minutes, fixed by BEH-EA-132) —
+   * `Passkey.layer` refuses to build otherwise — so the browser's prompt never
+   * outlives the challenge it answers. Defaults to 4m30s.
+   */
+  readonly ceremonyTimeout: Duration.Duration;
+  /** TC-003: WebAuthn L3 `hints` sent with every options response (which kind of authenticator to prompt for). */
+  readonly hints?: ReadonlyArray<WebAuthn.CeremonyHint>;
+  /** TC-003: client extension inputs requested on registration/authentication (absent ⇒ the wrapped library's defaults, `credProps` on registration). */
+  readonly extensions?: WebAuthn.CeremonyExtensions;
+  /**
+   * CB-004/WPS-006: what a signature-counter regression (a possibly cloned
+   * authenticator) does. `"flag"` (default, wayfinder ticket 08's "log +
+   * step-up, not an instant kill"): publish `auth.passkey.counterAnomaly`,
+   * flag the credential, still complete the ceremony — the flagged credential
+   * then needs user verification on every later use. `"reject"`: additionally
+   * fail the ceremony with `PasskeyCounterAnomaly`.
+   */
+  readonly counterAnomalyPolicy: "flag" | "reject";
+  /**
+   * TC-001: keys the deterministic decoy `allowCredentials` an unknown email
+   * receives. Absent ⇒ a random per-process secret is generated at layer
+   * build (with a warning): decoys are then stable only within one process, so
+   * a multi-instance deployment should set one shared secret.
+   */
+  readonly enumerationSecret?: Redacted.Redacted<string>;
   /**
    * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
    * (BPAS-001): a baked-in, fail-closed freshness gate on enrollment —
@@ -74,10 +169,13 @@ const defaultPasskeyConfig: PasskeyConfigShape = {
   rpId: "localhost",
   rpName: "awthaq",
   origins: ["http://localhost:3000"],
+  allowedTopOrigins: [],
   attestation: "none",
   authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
   conditionalCreate: true,
   reauthMaxAgeSeconds: Duration.minutes(5),
+  ceremonyTimeout: Duration.seconds(270),
+  counterAnomalyPolicy: "flag",
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -114,23 +212,22 @@ const ClientDataSchema = Schema.Struct({
   type: Schema.String,
   challenge: Schema.String,
   origin: Schema.String,
+  /** CB-003: reported by the browser for a ceremony run inside a cross-origin iframe. */
+  crossOrigin: Schema.optionalKey(Schema.Boolean),
+  topOrigin: Schema.optionalKey(Schema.String),
 });
 
+type ClientData = typeof ClientDataSchema.Type;
+
 /**
- * Reads only `origin`/`challenge`/`type` out of the browser's
- * `clientDataJSON` — plain base64url + JSON decoding, not attestation or
- * signature verification (BEH-EA-129's own prohibition is about the
- * latter, never about reading a JSON field). Used to look up the right
+ * Reads only `origin`/`challenge`/`type` (and the cross-origin members) out of
+ * the browser's `clientDataJSON` — plain base64url + JSON decoding, not
+ * attestation or signature verification (BEH-EA-129's own prohibition is about
+ * the latter, never about reading a JSON field). Used to look up the right
  * `ChallengeStore` scope and to pre-check origin/rpId before ever calling
  * the `WebAuthn` port.
  */
-const decodeClientData = (
-  clientDataJSON: string,
-): Option.Option<{
-  readonly type: string;
-  readonly challenge: string;
-  readonly origin: string;
-}> => {
+const decodeClientData = (clientDataJSON: string): Option.Option<ClientData> => {
   const decoded = Encoding.decodeBase64Url(clientDataJSON);
   if (Result.isFailure(decoded)) return Option.none();
   let parsed: unknown;
@@ -152,6 +249,58 @@ const originMatchesRpId = (origin: string, rpId: string): boolean => {
   }
 };
 
+/** MNA-007: the origin a native Android app's assertions carry (`android:apk-key-hash:<base64url SHA-256 of the signing cert>`). */
+const ANDROID_APK_KEY_HASH_ORIGIN_PREFIX = "android:apk-key-hash:";
+
+/**
+ * The one origin policy every ceremony applies (BEH-EA-133, MNA-007, CB-003):
+ * 1. the ceremony's origin is an exact member of `origins`;
+ * 2. a ceremony run cross-origin (`crossOrigin: true`, i.e. inside an
+ *    iframe) must name a `topOrigin` the host explicitly allows — the wrapped
+ *    library only rejects this for authentication, and only when the browser
+ *    reports `topOrigin`, so registration and step-up would otherwise accept
+ *    an embedded ceremony;
+ * 3. a web origin's host is `rpId` or a subdomain of it (never a bare host
+ *    match); an `android:apk-key-hash:` origin is exempt from that web-only
+ *    check — it is accepted only by being listed verbatim in `origins`.
+ */
+const checkOrigin = (
+  clientData: ClientData,
+  config: PasskeyConfigShape,
+): Effect.Effect<void, PasskeyApi.PasskeyOriginMismatch | PasskeyApi.PasskeyRpIdMismatch> => {
+  if (!config.origins.includes(clientData.origin)) {
+    return Effect.fail(new PasskeyApi.PasskeyOriginMismatch());
+  }
+  if (
+    clientData.crossOrigin === true &&
+    (clientData.topOrigin === undefined || !config.allowedTopOrigins.includes(clientData.topOrigin))
+  ) {
+    return Effect.fail(new PasskeyApi.PasskeyOriginMismatch());
+  }
+  if (clientData.origin.startsWith(ANDROID_APK_KEY_HASH_ORIGIN_PREFIX)) return Effect.void;
+  if (!originMatchesRpId(clientData.origin, config.rpId)) {
+    return Effect.fail(new PasskeyApi.PasskeyRpIdMismatch());
+  }
+  return Effect.void;
+};
+
+/** CB-003: only forwarded to the port when the host allows any embedded ceremony at all. */
+const topOriginExpectation = (
+  config: PasskeyConfigShape,
+): { readonly expectedTopOrigin?: ReadonlyArray<string> } =>
+  config.allowedTopOrigins.length === 0 ? {} : { expectedTopOrigin: config.allowedTopOrigins };
+
+/** HSK-003: the authenticator transports this plugin stores and echoes back into `excludeCredentials`/`allowCredentials`; anything else a browser reports is dropped. */
+const KNOWN_TRANSPORTS: ReadonlyArray<string> = [
+  "ble",
+  "cable",
+  "hybrid",
+  "internal",
+  "nfc",
+  "smart-card",
+  "usb",
+];
+
 const toRegistrationResponseJSON = (
   input: PasskeyApi.RegistrationCredentialInput,
 ): Parameters<WebAuthn.WebAuthnShape["verifyRegistration"]>[0]["response"] => ({
@@ -160,6 +309,13 @@ const toRegistrationResponseJSON = (
   response: {
     clientDataJSON: input.response.clientDataJSON,
     attestationObject: input.response.attestationObject,
+    ...(input.response.transports === undefined
+      ? {}
+      : {
+          transports: input.response.transports.filter((transport) =>
+            KNOWN_TRANSPORTS.includes(transport),
+          ),
+        }),
   },
   clientExtensionResults: {},
   type: "public-key",
@@ -182,6 +338,90 @@ const toAuthenticationResponseJSON = (
 
 const toBase64Url = (bytes: Uint8Array): string => Encoding.encodeBase64Url(bytes);
 
+/**
+ * TSS-004: a fixed, well-formed COSE ES256 public key nobody holds the private
+ * half of (generated once, offline). An assertion naming an unknown credential
+ * id is verified against it and the result discarded, so the unknown-credential
+ * path performs the same signature verification a known credential's does —
+ * the way `@awthaq/password`'s `dummyHash` equalizes an unknown email.
+ */
+const DECOY_COSE_PUBLIC_KEY =
+  "pQECAyYgASFYIDUd8pj_isGtVhaCN1Bo9s3jMUGZnyfu_woIMrJon1KjIlggExq74U54Cegms_CY6g320bYfldpa89-O72ccIzqVy9s";
+
+const decoyPublicKey = (): Uint8Array<ArrayBuffer> => {
+  const decoded = Encoding.decodeBase64Url(DECOY_COSE_PUBLIC_KEY);
+  return Result.isSuccess(decoded) ? new Uint8Array(decoded.success) : new Uint8Array();
+};
+
+/**
+ * TC-001: shapes a decoy descriptor set can take, picked deterministically per
+ * email — the mix of transports real credentials report (a synced passkey, a
+ * roaming key, both).
+ */
+const DECOY_TRANSPORT_SETS: ReadonlyArray<ReadonlyArray<string>> = [
+  ["internal", "hybrid"],
+  ["internal"],
+  ["usb", "nfc"],
+  ["usb"],
+];
+
+/**
+ * TSS-004/TC-001/WPS-005: the anonymous authenticate ceremony's rules. Three
+ * rules, all per-source or per-target — a per-IP budget on each of
+ * `authenticateOptions`/`authenticateVerify` (mints server state / does
+ * signature work for anyone) and a per-email budget on the username-first
+ * options call (the enumeration-probing surface). `RateLimits.enforce` is the
+ * one place a breach becomes observable (EOTS-007).
+ */
+const RATE_LIMITS = {
+  authenticateOptionsByIp: {
+    endpoint: "authenticateOptions",
+    dimension: "ip",
+    limit: 60,
+    window: Duration.minutes(15),
+  },
+  // Username-first is one call per attempt, so this is looser than a
+  // password's per-account budget but still bounds probing one address.
+  authenticateOptionsByEmail: {
+    endpoint: "authenticateOptions",
+    dimension: "identity",
+    limit: 10,
+    window: Duration.minutes(15),
+  },
+  authenticateVerifyByIp: {
+    endpoint: "authenticateVerify",
+    dimension: "ip",
+    limit: 60,
+    window: Duration.minutes(15),
+  },
+} as const satisfies Record<
+  string,
+  {
+    readonly endpoint: string;
+    readonly dimension: "ip" | "identity";
+    readonly limit: number;
+    readonly window: Duration.Duration;
+  }
+>;
+
+type RateLimitRuleName = keyof typeof RATE_LIMITS;
+
+const ruleMeta = (name: RateLimitRuleName): RateLimits.EnforceMeta => ({
+  group: "passkey.authenticate",
+  endpoint: RATE_LIMITS[name].endpoint,
+  rule: name,
+  dimension: RATE_LIMITS[name].dimension,
+});
+
+/** `RateLimits.RateLimitKey`'s `input` is untyped, so pulling `email` back out needs a real narrowing check, not a cast. */
+const emailFromRateLimitInput = (input: unknown): string =>
+  typeof input === "object" && input !== null && "email" in input && typeof input.email === "string"
+    ? input.email
+    : "";
+
+/** TC-001: no user has this id, so listing its (empty) credentials costs what a real user's listing does. */
+const DECOY_USER_ID = Users.UserId("awthaq-decoy-user");
+
 const registrationScope = (sessionId: string): string => `passkey.register:${sessionId}`;
 const conditionalScope = (sessionId: string): string => `passkey.register.conditional:${sessionId}`;
 const authenticateScope = (ceremonyId: string): string => `passkey.authenticate:${ceremonyId}`;
@@ -196,9 +436,24 @@ const toCredentialDto = (
     name: record.name,
     deviceType: record.deviceType,
     backedUp: record.backedUp,
+    transports: record.transports,
+    aaguid: record.aaguid,
     createdAt: DateTime.formatIso(record.createdAt),
     lastUsedAt: DateTime.formatIso(record.lastUsedAt),
+    counterAnomalyAt: Option.match(record.counterAnomalyAt, {
+      onNone: () => null,
+      onSome: DateTime.formatIso,
+    }),
   });
+
+/** BPAS-006/TC-004: what the browser's Signals API needs for one user. */
+export interface PasskeySignals {
+  readonly rpId: string;
+  readonly userId: string;
+  readonly name: string;
+  readonly displayName: string;
+  readonly allAcceptedCredentialIds: ReadonlyArray<string>;
+}
 
 const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto =>
   new SessionContract.SessionDto({
@@ -207,6 +462,7 @@ const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto
     lastActiveAt: DateTime.formatIso(session.lastActiveAt),
     expiresAt: DateTime.formatIso(session.absoluteExpiresAt),
     userAgent: Option.getOrNull(session.userAgent),
+    amr: session.amr,
     current: true,
   });
 
@@ -219,12 +475,15 @@ export interface PasskeyShape {
   readonly registerOptions: (
     userId: Users.UserId,
     sessionId: string,
-  ) => Effect.Effect<unknown, PasskeyApi.PasskeyReauthRequired>;
+  ) => Effect.Effect<
+    PasskeyApi.PublicKeyCredentialCreationOptions,
+    PasskeyApi.PasskeyReauthRequired
+  >;
   readonly registerOptionsConditional: (
     userId: Users.UserId,
     sessionId: string,
   ) => Effect.Effect<
-    unknown,
+    PasskeyApi.PublicKeyCredentialCreationOptions,
     PasskeyApi.PasskeyConditionalCreateDisabled | PasskeyApi.PasskeyReauthRequired
   >;
   readonly registerVerify: (
@@ -238,6 +497,8 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyRpIdMismatch
     | PasskeyApi.PasskeyVerificationFailed
     | PasskeyApi.PasskeyUserVerificationRequired
+    | PasskeyApi.PasskeyAttestationRejected
+    | PasskeyApi.PasskeyAlreadyRegistered
     | PasskeyApi.PasskeyReauthRequired
   >;
   /**
@@ -249,7 +510,7 @@ export interface PasskeyShape {
   readonly reauthenticateOptions: (
     userId: Users.UserId,
     sessionId: string,
-  ) => Effect.Effect<unknown>;
+  ) => Effect.Effect<PasskeyApi.PublicKeyCredentialRequestOptions>;
   readonly reauthenticateVerify: (
     userId: Users.UserId,
     sessionId: string,
@@ -262,22 +523,37 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyVerificationFailed
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCredentialNotFound
+    | PasskeyApi.PasskeyCounterAnomaly
   >;
-  readonly authenticateOptions: (
-    email: string | undefined,
-  ) => Effect.Effect<{ readonly ceremonyId: string; readonly options: unknown }>;
+  readonly authenticateOptions: (input: {
+    readonly email?: string | undefined;
+    /** TC-001/WPS-005: the caller's address (via the `ClientAddress` port) for the per-source budget; `undefined` shares one "unknown origin" bucket, never unthrottled. */
+    readonly ip?: string | undefined;
+  }) => Effect.Effect<
+    {
+      readonly ceremonyId: string;
+      readonly options: PasskeyApi.PublicKeyCredentialRequestOptions;
+    },
+    Api.RateLimited
+  >;
   readonly authenticateVerify: (
-    input: PasskeyApi.AuthenticateVerifyPayload,
+    input: PasskeyApi.AuthenticateVerifyPayload & { readonly ip?: string | undefined },
+    /** CSD-003: extra request context recorded on the issued session (its `User-Agent`; capped by `Sessions.issue`). The address is `input.ip`. */
+    context?: { readonly userAgent?: string },
   ) => Effect.Effect<
     IssuedSession,
     | Api.InvalidCredentials
+    | Api.RateLimited
     | PasskeyApi.PasskeyChallengeInvalid
     | PasskeyApi.PasskeyUserVerificationRequired
+    | PasskeyApi.PasskeyCounterAnomaly
     | Hooks.TwoFactorRequired
   >;
   readonly listCredentials: (
     userId: Users.UserId,
   ) => Effect.Effect<ReadonlyArray<PasskeyCredentials.PasskeyCredentialRecord>>;
+  /** BPAS-006/TC-004: the rpId, stable user handle and accepted credential ids a browser's Signals API call needs. */
+  readonly signals: (userId: Users.UserId) => Effect.Effect<PasskeySignals>;
   readonly renameCredential: (
     userId: Users.UserId,
     id: string,
@@ -346,25 +622,39 @@ export const PasskeyHandlers = Layer.mergeAll(
     "passkey.authenticate",
     Effect.fnUntraced(function* (handlers) {
       const passkey = yield* Passkey;
+      const clientAddress = yield* ClientAddress.ClientAddress;
       return handlers.handleAll({
         authenticateOptions: Effect.fnUntraced(function* ({
           payload,
+          request,
         }: {
           payload: PasskeyApi.AuthenticateOptionsPayload;
+          request: HttpServerRequest.HttpServerRequest;
         }) {
-          return yield* passkey.authenticateOptions(payload.email);
+          // Resolved through the application-provided `ClientAddress` port
+          // (AGA-001/NHS-003), like `@awthaq/password`'s own sign-in.
+          const resolvedAddress = yield* clientAddress.resolve(request);
+          return yield* passkey.authenticateOptions({
+            email: payload.email,
+            ip: Option.getOrUndefined(resolvedAddress),
+          });
         }),
         authenticateVerify: Effect.fnUntraced(function* ({
           payload,
+          request,
         }: {
           payload: PasskeyApi.AuthenticateVerifyPayload;
+          request: HttpServerRequest.HttpServerRequest;
         }) {
-          const issued = yield* passkey.authenticateVerify(payload);
-          yield* HttpApiBuilder.securitySetCookie(
-            Api.SessionCookie,
-            Redacted.value(issued.token),
-            Sessions.SESSION_COOKIE_ATTRIBUTES,
+          // CSD-003: address via the application-provided `ClientAddress`
+          // port (trusted-proxy aware), user agent from the header.
+          const resolvedAddress = yield* clientAddress.resolve(request);
+          const userAgent = Headers.get(request.headers, "user-agent");
+          const issued = yield* passkey.authenticateVerify(
+            { ...payload, ip: Option.getOrUndefined(resolvedAddress) },
+            Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
           );
+          yield* SessionCookie.set(issued.session, issued.token);
           return toSessionDto(issued.session);
         }),
       });
@@ -376,12 +666,17 @@ export const PasskeyHandlers = Layer.mergeAll(
     Effect.fnUntraced(function* (handlers) {
       const passkey = yield* Passkey;
       return handlers.handleAll({
-        list: Effect.fnUntraced(function* () {
+        listCredentials: Effect.fnUntraced(function* () {
           const principal = yield* currentUserPrincipal;
           const records = yield* passkey.listCredentials(Users.UserId(principal.ref.id));
           return records.map(toCredentialDto);
         }),
-        rename: Effect.fnUntraced(function* ({
+        signals: Effect.fnUntraced(function* () {
+          const principal = yield* currentUserPrincipal;
+          const signals = yield* passkey.signals(Users.UserId(principal.ref.id));
+          return new PasskeyApi.PasskeySignalsDto(signals);
+        }),
+        renameCredential: Effect.fnUntraced(function* ({
           params,
           payload,
         }: {
@@ -396,7 +691,7 @@ export const PasskeyHandlers = Layer.mergeAll(
           );
           return toCredentialDto(record);
         }),
-        remove: Effect.fnUntraced(function* ({
+        removeCredential: Effect.fnUntraced(function* ({
           params,
         }: {
           params: PasskeyApi.CredentialIdParams;
@@ -455,6 +750,11 @@ export const PasskeyHandlers = Layer.mergeAll(
  * `ChallengeStore.ts`'s own queries already reference every column
  * unquoted, so Postgres's automatic lowercase-folding is what keeps
  * migration and query consistent here.
+ *
+ * Appended since (migrations are identified by position — never reorder):
+ * WPS-005's `expiresAt` index (so reclaiming expired challenges stays a range
+ * scan), WPS-006's two counter-anomaly columns, and BPAS-003's per-user
+ * handle table.
  */
 const passkeyMigrations: Migrations.Migrations = [
   {
@@ -530,12 +830,69 @@ const passkeyMigrations: Migrations.Migrations = [
       });
     }),
   },
+  {
+    name: "create_passkey_challenge_expires_at_index",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`CREATE INDEX passkey_challenge_expires_at ON passkey_challenge(expiresAt)`,
+        sqlite: () =>
+          sql`CREATE INDEX passkey_challenge_expires_at ON passkey_challenge(expiresAt)`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+  {
+    name: "add_passkey_credential_counter_anomaly_at",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`ALTER TABLE passkey_credential ADD COLUMN counterAnomalyAt TIMESTAMPTZ`,
+        sqlite: () => sql`ALTER TABLE passkey_credential ADD COLUMN counterAnomalyAt TEXT`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+  {
+    name: "add_passkey_credential_counter_anomaly_count",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () =>
+          sql`ALTER TABLE passkey_credential ADD COLUMN counterAnomalyCount INTEGER NOT NULL DEFAULT 0`,
+        sqlite: () =>
+          sql`ALTER TABLE passkey_credential ADD COLUMN counterAnomalyCount INTEGER NOT NULL DEFAULT 0`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+  {
+    name: "create_passkey_user_handle",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE passkey_user_handle (
+            userId TEXT PRIMARY KEY,
+            webauthnUserId TEXT NOT NULL UNIQUE,
+            createdAt TIMESTAMPTZ NOT NULL
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE passkey_user_handle (
+            userId TEXT PRIMARY KEY,
+            webauthnUserId TEXT NOT NULL UNIQUE,
+            createdAt TEXT NOT NULL
+          )`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
 ];
 
 export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passkey", {
   apiVersion: 1,
   contract: PasskeyApi.PasskeyApi,
-  tables: ["passkey_credential", "passkey_challenge"],
+  tables: ["passkey_credential", "passkey_challenge", "passkey_user_handle"],
   migrations: passkeyMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Passkey, {
@@ -548,22 +905,128 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const webAuthn = yield* WebAuthn.WebAuthn;
       const challengeStore = yield* ChallengeStore.ChallengeStore;
       const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+      const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
       const config = yield* PasskeyConfig;
       const crypto = yield* Crypto.Crypto;
+      const limiter = yield* RateLimiter.RateLimiter;
+      const rateLimitsRegistry = yield* RateLimits.RateLimitsRegistry;
       // AOMS-006/BCR-004 (wayfinder ticket 03): the MFA divert point a
       // future `TwoFactor` plugin taps.
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
       const afterSignIn = yield* Hooks.AfterSignIn;
 
+      // ---- layer-build validation and operator warnings --------------------
+
+      // TC-003: the browser's prompt must not outlive the challenge it answers.
+      if (
+        Duration.toMillis(config.ceremonyTimeout) > Duration.toMillis(ChallengeStore.CHALLENGE_TTL)
+      ) {
+        return yield* Effect.die(
+          new Error(
+            "awthaq: PasskeyConfig.ceremonyTimeout must not exceed the challenge TTL (five minutes, BEH-EA-132)",
+          ),
+        );
+      }
+      // HSK-002: conveyance is a request, not a verification.
+      if (config.attestation !== "none" && config.attestationPolicy === undefined) {
+        yield* Effect.logWarning(
+          `awthaq: PasskeyConfig.attestation is "${config.attestation}" but no attestationPolicy is set — attestation is requested but nothing is verified or enforced (conveyance is not verification). Set attestationPolicy.trustedAaguids to make it binding.`,
+        );
+      }
+      // WPS-009/BEH-EA-132: a stateless store bounds replay by TTL only.
+      if (!challengeStore.guarantees.singleUse) {
+        yield* Effect.logWarning(
+          "awthaq: the configured ChallengeStore does not guarantee single-use challenges (BEH-EA-132's statefulness requirement) — a captured challenge stays replayable until its TTL. Prefer ChallengeStore.layerMemory or layerSql.",
+        );
+      }
+      // TC-001: decoys are keyed by a secret so they are unguessable and stable per email.
+      const enumerationSecret =
+        config.enumerationSecret ??
+        (yield* Effect.gen(function* () {
+          yield* Effect.logWarning(
+            "awthaq: PasskeyConfig.enumerationSecret is not set — a random per-process secret is used for the decoy allowCredentials of unknown emails, so decoys differ across instances/restarts. Set one shared secret for multi-instance deployments.",
+          );
+          return Redacted.make(toBase64Url(yield* crypto.randomBytes(32).pipe(Effect.orDie)));
+        }));
+      const enumerationKey = new TextEncoder().encode(Redacted.value(enumerationSecret));
+      const decoyCredential = { id: "awthaq-decoy-credential", publicKey: decoyPublicKey() };
+
+      /**
+       * Registers this plugin's own limits into the introspectable registry
+       * (BEH-EA-107/110/111) — declarative, matching the `limit`/`window` each
+       * `rateLimit(...)` call below actually enforces (`RATE_LIMITS` is the
+       * single source of truth both sides draw from). A
+       * `RateLimitScopeViolation` is only reachable if `group` below ever
+       * named something other than this plugin's own contract group — a
+       * coding defect here, hence `Effect.orDie`.
+       */
+      // The explicit return-type annotation on the `.map` callback is the
+      // narrow, necessary exception `@awthaq/password`'s and `@awthaq/oauth`'s
+      // own rule registration already document: passing this class into
+      // anything typed `AuthPlugin.Any` from inside its own `static readonly
+      // layer` initializer is a real TS circularity.
+      yield* Effect.all(
+        (
+          [
+            {
+              endpoint: RATE_LIMITS.authenticateOptionsByIp.endpoint,
+              key: "ip",
+              limit: RATE_LIMITS.authenticateOptionsByIp.limit,
+              window: RATE_LIMITS.authenticateOptionsByIp.window,
+            },
+            {
+              endpoint: RATE_LIMITS.authenticateOptionsByEmail.endpoint,
+              key: (input) =>
+                `passkey:authenticate-options:${emailFromRateLimitInput(input).toLowerCase()}`,
+              limit: RATE_LIMITS.authenticateOptionsByEmail.limit,
+              window: RATE_LIMITS.authenticateOptionsByEmail.window,
+            },
+            {
+              endpoint: RATE_LIMITS.authenticateVerifyByIp.endpoint,
+              key: "ip",
+              limit: RATE_LIMITS.authenticateVerifyByIp.limit,
+              window: RATE_LIMITS.authenticateVerifyByIp.window,
+            },
+          ] satisfies ReadonlyArray<{
+            readonly endpoint: string;
+            readonly key: RateLimits.RateLimitKey;
+            readonly limit: number;
+            readonly window: Duration.Duration;
+          }>
+        ).map((rule): Effect.Effect<void, RateLimits.RateLimitScopeViolation> =>
+          rateLimitsRegistry.register(Passkey, { group: "passkey.authenticate", ...rule }),
+        ),
+        { discard: true },
+      ).pipe(Effect.orDie);
+
+      const rateLimit = (
+        name: RateLimitRuleName,
+        key: string,
+      ): Effect.Effect<void, Api.RateLimited> =>
+        // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
+        RateLimits.enforce({
+          key,
+          limit: RATE_LIMITS[name].limit,
+          window: RATE_LIMITS[name].window,
+          meta: ruleMeta(name),
+        }).pipe(
+          Effect.provideService(RateLimiter.RateLimiter, limiter),
+          Effect.provideService(AuthEvents.AuthEvents, events),
+          Effect.catchTag(
+            "RateLimitExceeded",
+            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
+          ),
+        );
+
       /**
        * Ticket 15 (BPAS-001): the shared freshness gate `registerOptions`/
        * `registerOptionsConditional`/`registerVerify` all apply before
-       * doing anything else — `Sessions.list` + `find` mirrors
-       * `@awthaq/qadi`'s own `reauthHandler`, the closest existing
-       * precedent for "read the caller's own current `SessionListItem`."
-       * A session absent from its own owner's list (already
-       * revoked/tombstoned) fails closed the same as a stale one — there
-       * is no live session left to have proven anything recently.
+       * doing anything else — `Sessions.findOwned` (TIR-003: a keyed
+       * lookup, never a `list` + `find` that a 200-row page cap could
+       * blind) mirrors `@awthaq/qadi`'s own `reauthHandler`. A session
+       * that is not live for its owner (already revoked/tombstoned/
+       * expired) fails closed the same as a stale one — there is no live
+       * session left to have proven anything recently.
        */
       const requireFreshSession = (
         userId: Users.UserId,
@@ -571,67 +1034,106 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       ): Effect.Effect<void, PasskeyApi.PasskeyReauthRequired> =>
         Effect.gen(function* () {
           const maxAgeSeconds = Duration.toSeconds(config.reauthMaxAgeSeconds);
-          const items = yield* sessions.list(userId, Sessions.SessionId(sessionId));
-          const current = items.find((item) => item.id === sessionId);
-          if (current === undefined) {
+          const current = yield* sessions.findOwned(userId, Sessions.SessionId(sessionId));
+          if (Option.isNone(current)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds }));
           }
           const now = yield* DateTime.now;
-          if (Sessions.isStale(current.authenticatedAt, maxAgeSeconds, now)) {
+          if (Sessions.isStale(current.value.authenticatedAt, maxAgeSeconds, now)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds }));
           }
         });
 
+      /** TC-003: the knobs every options generator sets explicitly. */
+      const ceremonyKnobs = {
+        timeout: config.ceremonyTimeout,
+        ...(config.hints === undefined ? {} : { hints: config.hints }),
+        ...(config.extensions === undefined ? {} : { extensions: config.extensions }),
+      };
+
+      /** BPAS-003: one stable per-user handle in every registration's options; `credentials.create` stores exactly it. */
+      const creationOptions = Effect.fnUntraced(function* (
+        userId: Users.UserId,
+        scope: string,
+        authenticatorSelection: WebAuthn.AuthenticatorSelection,
+      ) {
+        const user = yield* users.findById(userId).pipe(Effect.orDie);
+        const existing = yield* credentials.listByUser(userId);
+        const challenge = yield* challengeStore.issue(scope);
+        const webauthnUserId = yield* handles.getOrCreate(userId);
+        const options = yield* webAuthn.registrationOptions({
+          rpId: config.rpId,
+          rpName: config.rpName,
+          challenge: Redacted.value(challenge),
+          userId: webauthnUserId,
+          userName: user.email,
+          userDisplayName: user.name,
+          excludeCredentials: existing.map((row) => ({ id: row.id, transports: row.transports })),
+          attestation: config.attestation,
+          authenticatorSelection,
+          ...ceremonyKnobs,
+        });
+        return yield* Schema.decodeUnknownEffect(
+          PasskeyApi.PublicKeyCredentialCreationOptionsSchema,
+        )(options).pipe(Effect.orDie);
+      });
+
+      const requestOptions = Effect.fnUntraced(function* (
+        input: WebAuthn.AuthenticationOptionsInput,
+      ) {
+        const options = yield* webAuthn.authenticationOptions(input);
+        return yield* Schema.decodeUnknownEffect(
+          PasskeyApi.PublicKeyCredentialRequestOptionsSchema,
+        )(options).pipe(Effect.orDie);
+      });
+
       const registerOptions: PasskeyShape["registerOptions"] = Effect.fnUntraced(
         function* (userId, sessionId) {
           yield* requireFreshSession(userId, sessionId);
-          const user = yield* users.findById(userId).pipe(Effect.orDie);
-          const existing = yield* credentials.listByUser(userId);
-          const challenge = yield* challengeStore.issue(registrationScope(sessionId));
-          const webauthnUserId = toBase64Url(yield* crypto.randomBytes(32).pipe(Effect.orDie));
-          return yield* webAuthn.registrationOptions({
-            rpId: config.rpId,
-            rpName: config.rpName,
-            challenge: Redacted.value(challenge),
-            userId: webauthnUserId,
-            userName: user.email,
-            userDisplayName: user.name,
-            excludeCredentials: existing.map((row) => ({ id: row.id, transports: row.transports })),
-            attestation: config.attestation,
-            authenticatorSelection: config.authenticatorSelection,
-          });
+          return yield* creationOptions(
+            userId,
+            registrationScope(sessionId),
+            config.authenticatorSelection,
+          );
         },
       );
 
       const registerOptionsConditional: PasskeyShape["registerOptionsConditional"] =
         Effect.fnUntraced(function* (userId, sessionId) {
           yield* requireFreshSession(userId, sessionId);
-          if (!config.conditionalCreate) {
+          // CB-009: Conditional Create cannot produce UV=1, so it is unavailable
+          // whenever the RP requires user verification.
+          if (
+            !config.conditionalCreate ||
+            config.authenticatorSelection.userVerification === "required"
+          ) {
             return yield* Effect.fail(new PasskeyApi.PasskeyConditionalCreateDisabled());
           }
-          const user = yield* users.findById(userId).pipe(Effect.orDie);
-          const existing = yield* credentials.listByUser(userId);
-          const challenge = yield* challengeStore.issue(conditionalScope(sessionId));
-          const webauthnUserId = toBase64Url(yield* crypto.randomBytes(32).pipe(Effect.orDie));
-          return yield* webAuthn.registrationOptions({
-            rpId: config.rpId,
-            rpName: config.rpName,
-            challenge: Redacted.value(challenge),
-            userId: webauthnUserId,
-            userName: user.email,
-            userDisplayName: user.name,
-            excludeCredentials: existing.map((row) => ({ id: row.id, transports: row.transports })),
-            attestation: config.attestation,
-            // BEH-EA-relaxed: Chrome's Conditional Create flow produces
-            // UP=0/UV=0 — a `residentKey: "required"` discoverable
-            // credential is also what makes autofill possible at all.
-            authenticatorSelection: {
-              ...config.authenticatorSelection,
-              residentKey: "required",
-              userVerification: "discouraged",
-            },
+          // BEH-EA-relaxed: Chrome's Conditional Create flow produces
+          // UP=0/UV=0 — a `residentKey: "required"` discoverable
+          // credential is also what makes autofill possible at all.
+          return yield* creationOptions(userId, conditionalScope(sessionId), {
+            ...config.authenticatorSelection,
+            residentKey: "required",
+            userVerification: "discouraged",
           });
         });
+
+      /**
+       * HSK-002: whether a verified registration's attestation satisfies the
+       * configured policy (vacuously, when none is configured).
+       */
+      const attestationAcceptable = (verified: WebAuthn.VerifiedRegistration): boolean => {
+        const policy = config.attestationPolicy;
+        if (policy === undefined) return true;
+        // No statement at all: nothing to base any trust in the claimed model on.
+        if (verified.attestationType === "none") return false;
+        if (verified.attestationType === "self" && (policy.rejectSelfAttestation ?? true)) {
+          return false;
+        }
+        const aaguid = verified.aaguid.toLowerCase();
+        return policy.trustedAaguids.some((trusted) => trusted.toLowerCase() === aaguid);
+      };
 
       const registerVerify: PasskeyShape["registerVerify"] = Effect.fnUntraced(
         function* (userId, sessionId, input) {
@@ -642,34 +1144,18 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           }
           const clientData = clientDataOpt.value;
 
-          if (!config.origins.includes(clientData.origin)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyOriginMismatch());
-          }
-          if (!originMatchesRpId(clientData.origin, config.rpId)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyRpIdMismatch());
-          }
+          yield* checkOrigin(clientData, config);
 
-          const consumedOrdinary = yield* challengeStore.consume(
-            registrationScope(sessionId),
+          // WPS-003: the payload names its ceremony, and only that ceremony's
+          // scope is consumed — probing both destroyed a sibling's still-valid
+          // challenge (BEH-EA-132 deletes the addressed one on every attempt).
+          const conditional = input.ceremony === "conditional";
+          const consumed = yield* challengeStore.consume(
+            conditional ? conditionalScope(sessionId) : registrationScope(sessionId),
             clientData.challenge,
           );
-          // CB-001 (.issues/high): enforcement must follow the RP's own
-          // conveyed `userVerification` policy (WebAuthn §7.1), the same
-          // config-gated check `authenticateVerify` already applies below —
-          // an unconditional `= consumedOrdinary` rejected any UV=0
-          // response even under the default `"preferred"` config, which
-          // itself tells authenticators UV is optional.
-          let enforceUserVerification =
-            consumedOrdinary && config.authenticatorSelection.userVerification === "required";
-          if (!consumedOrdinary) {
-            const consumedConditional = yield* challengeStore.consume(
-              conditionalScope(sessionId),
-              clientData.challenge,
-            );
-            if (!consumedConditional) {
-              return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
-            }
-            enforceUserVerification = false;
+          if (!consumed) {
+            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
           }
 
           const verified = yield* webAuthn
@@ -678,6 +1164,10 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               expectedChallenge: clientData.challenge,
               expectedOrigin: config.origins,
               expectedRpId: config.rpId,
+              // CB-002: an ordinary (user-initiated) registration MUST show
+              // user presence; only Conditional Create, which Chrome performs
+              // without a user gesture, is allowed UP=0.
+              requireUserPresence: !conditional,
             })
             .pipe(
               Effect.catchTag("PasskeyVerificationFailed", () =>
@@ -685,23 +1175,44 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               ),
             );
 
-          if (enforceUserVerification && !verified.userVerified) {
+          // CB-001 (.issues/high): enforcement follows the RP's own conveyed
+          // `userVerification` policy (WebAuthn §7.1). CB-009: the same policy
+          // binds Conditional Create too, so the UV exemption can never
+          // outlive a "required" policy (`registerOptionsConditional` already
+          // refuses to issue that ceremony under it).
+          if (
+            config.authenticatorSelection.userVerification === "required" &&
+            !verified.userVerified
+          ) {
             return yield* Effect.fail(new PasskeyApi.PasskeyUserVerificationRequired());
           }
 
-          const webauthnUserId = toBase64Url(yield* crypto.randomBytes(32).pipe(Effect.orDie));
-          const record = yield* credentials.create({
-            id: verified.credentialId,
-            userId,
-            webauthnUserId,
-            publicKey: verified.publicKey,
-            counter: verified.counter,
-            deviceType: verified.credentialDeviceType,
-            backedUp: verified.credentialBackedUp,
-            transports: verified.transports,
-            aaguid: verified.aaguid,
-            name: friendlyCredentialName(verified.aaguid),
-          });
+          if (!attestationAcceptable(verified)) {
+            return yield* Effect.fail(new PasskeyApi.PasskeyAttestationRejected());
+          }
+
+          // BPAS-003: exactly the handle the options ceremony sent — the
+          // authenticator bound this same per-user value.
+          const webauthnUserId = yield* handles.getOrCreate(userId);
+          const record = yield* credentials
+            .create({
+              id: verified.credentialId,
+              userId,
+              webauthnUserId,
+              publicKey: verified.publicKey,
+              counter: verified.counter,
+              deviceType: verified.credentialDeviceType,
+              backedUp: verified.credentialBackedUp,
+              transports: verified.transports,
+              aaguid: verified.aaguid,
+              name: friendlyCredentialName(verified.aaguid),
+            })
+            .pipe(
+              // WPS-010: nothing is linked to `Accounts` for a duplicate.
+              Effect.catchTag("PasskeyCredentialAlreadyExists", () =>
+                Effect.fail(new PasskeyApi.PasskeyAlreadyRegistered()),
+              ),
+            );
           // BEH-EA-134: an ordinary `Accounts` link — the existing
           // cross-plugin last-credential invariant (`LastAccountRefusal`)
           // applies to this credential type automatically from here on.
@@ -712,8 +1223,51 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         },
       );
 
+      /**
+       * TC-001: deterministic decoy descriptors for an email with no usable
+       * credentials — `k = 1 + (h[0] mod 2)` ids, each the HMAC of
+       * `(secret, email, i)` (so stable per email, unguessable without the
+       * secret), with a transports mix picked from the same digest. Shaped
+       * like a registered user's `allowCredentials`, so the options response
+       * does not reveal which emails exist.
+       */
+      const decoyDescriptors = (email: string) =>
+        Effect.gen(function* () {
+          const normalized = email.toLowerCase();
+          const seed = yield* hmacSha256(
+            crypto,
+            enumerationKey,
+            new TextEncoder().encode(`passkey.decoy:${normalized}`),
+          );
+          const count = 1 + ((seed[0] ?? 0) % 2);
+          return yield* Effect.forEach(
+            Array.from({ length: count }, (_, i) => i),
+            (i) =>
+              Effect.gen(function* () {
+                const digest = yield* hmacSha256(
+                  crypto,
+                  enumerationKey,
+                  new TextEncoder().encode(`passkey.decoy:${normalized}:${i}`),
+                );
+                const transports =
+                  DECOY_TRANSPORT_SETS[(digest[1] ?? 0) % DECOY_TRANSPORT_SETS.length] ?? [];
+                return { id: toBase64Url(digest), transports };
+              }),
+          );
+        });
+
       const authenticateOptions: PasskeyShape["authenticateOptions"] = Effect.fnUntraced(
-        function* (email) {
+        function* ({ email, ip }) {
+          yield* rateLimit(
+            "authenticateOptionsByIp",
+            `passkey:authenticate-options:ip:${ip ?? "unknown"}`,
+          );
+          if (email !== undefined) {
+            yield* rateLimit(
+              "authenticateOptionsByEmail",
+              `passkey:authenticate-options:${email.toLowerCase()}`,
+            );
+          }
           const ceremonyId = toBase64Url(yield* crypto.randomBytes(16).pipe(Effect.orDie));
           const challenge = yield* challengeStore.issue(authenticateScope(ceremonyId));
           let allowCredentials: ReadonlyArray<{
@@ -721,26 +1275,67 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             readonly transports?: ReadonlyArray<string>;
           }> = [];
           if (email !== undefined) {
+            // The same lookups run whether or not the email exists, so the
+            // work (and the shape of the answer) does not tell the two apart.
             const userOpt = yield* users.findByEmail(email);
-            if (Option.isSome(userOpt)) {
-              const owned = yield* credentials.listByUser(userOpt.value.id);
-              allowCredentials = owned.map((row) => ({ id: row.id, transports: row.transports }));
-            }
+            const owned = yield* credentials.listByUser(
+              Option.isSome(userOpt) ? userOpt.value.id : DECOY_USER_ID,
+            );
+            allowCredentials =
+              owned.length > 0
+                ? owned.map((row) => ({ id: row.id, transports: row.transports }))
+                : yield* decoyDescriptors(email);
           }
-          const options = yield* webAuthn.authenticationOptions({
+          const options = yield* requestOptions({
             rpId: config.rpId,
             challenge: Redacted.value(challenge),
             allowCredentials,
             ...(config.authenticatorSelection.userVerification === undefined
               ? {}
               : { userVerification: config.authenticatorSelection.userVerification }),
+            ...ceremonyKnobs,
           });
           return { ceremonyId, options };
         },
       );
 
+      /**
+       * CB-004/WPS-006: the counter-regression policy shared by
+       * `authenticateVerify` and `reauthenticateVerify`. A regression
+       * (`newCounter <= stored`, except the normal `0 === 0` of an
+       * authenticator that never reports a counter) is published, flagged on
+       * the credential, and — only under `counterAnomalyPolicy: "reject"` —
+       * fails the ceremony. Never advances the stored counter (see
+       * `PasskeyCredentials.recordUsage`).
+       */
+      const applyCounterPolicy = (
+        stored: PasskeyCredentials.PasskeyCredentialRecord,
+        verified: WebAuthn.VerifiedAuthentication,
+      ): Effect.Effect<void, PasskeyApi.PasskeyCounterAnomaly> =>
+        Effect.gen(function* () {
+          const regressed =
+            verified.newCounter <= stored.counter &&
+            !(verified.newCounter === 0 && stored.counter === 0);
+          if (!regressed) return;
+          yield* events.publish({
+            _tag: "auth.passkey.counterAnomaly",
+            userId: stored.userId,
+            credentialId: stored.id,
+          });
+          yield* credentials.flagCounterAnomaly(stored.id).pipe(Effect.orDie);
+          if (config.counterAnomalyPolicy === "reject") {
+            return yield* Effect.fail(new PasskeyApi.PasskeyCounterAnomaly());
+          }
+        });
+
       const authenticateVerify: PasskeyShape["authenticateVerify"] = Effect.fnUntraced(
-        function* (input) {
+        function* (input, context) {
+          // Per-source budget first: cheap to enforce, bounds signature work
+          // and challenge probing from one address.
+          yield* rateLimit(
+            "authenticateVerifyByIp",
+            `passkey:authenticate-verify:ip:${input.ip ?? "unknown"}`,
+          );
           const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
           if (Option.isNone(clientDataOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
@@ -758,8 +1353,26 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // BEH-EA-136: from here on, every failure collapses into the same
           // `Api.InvalidCredentials` an unknown password-sign-in email
           // already answers — see `PasskeyApi.ts`'s own header comment.
+          // MNA-007/CB-003: the same origin policy the registration ceremonies apply.
+          yield* checkOrigin(clientData, config).pipe(
+            Effect.mapError(() => new Api.InvalidCredentials()),
+          );
+
           const storedOpt = yield* credentials.findById(input.credential.id);
           if (Option.isNone(storedOpt)) {
+            // TSS-004: still pay for one signature verification (against a
+            // decoy key, result discarded) so this path costs what a known
+            // credential's bad signature does.
+            yield* webAuthn
+              .verifyAuthentication({
+                response: toAuthenticationResponseJSON(input.credential),
+                expectedChallenge: clientData.challenge,
+                expectedOrigin: config.origins,
+                expectedRpId: config.rpId,
+                ...topOriginExpectation(config),
+                credential: decoyCredential,
+              })
+              .pipe(Effect.exit);
             return yield* Effect.fail(new Api.InvalidCredentials());
           }
           const stored = storedOpt.value;
@@ -770,10 +1383,11 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               expectedChallenge: clientData.challenge,
               expectedOrigin: config.origins,
               expectedRpId: config.rpId,
+              ...topOriginExpectation(config),
               credential: {
                 id: stored.id,
                 publicKey: new Uint8Array(stored.publicKey),
-                counter: stored.counter,
+                transports: stored.transports,
               },
             })
             .pipe(
@@ -782,27 +1396,28 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               ),
             );
 
+          // BPAS-003: a discoverable credential's assertion carries the user
+          // handle its authenticator bound at registration — it must be the
+          // one this credential was registered under.
           if (
-            config.authenticatorSelection.userVerification === "required" &&
+            input.credential.response.userHandle !== undefined &&
+            input.credential.response.userHandle !== stored.webauthnUserId
+          ) {
+            return yield* Effect.fail(new Api.InvalidCredentials());
+          }
+
+          if (
+            (config.authenticatorSelection.userVerification === "required" ||
+              // WPS-006: a credential flagged for a counter anomaly needs UV on
+              // every later use — the concrete "step-up" of BEH-EA-131's policy.
+              Option.isSome(stored.counterAnomalyAt)) &&
             !verified.userVerified
           ) {
             return yield* Effect.fail(new PasskeyApi.PasskeyUserVerificationRequired());
           }
 
-          // BEH-EA-131: "log + step-up, not an instant kill" — never fails
-          // the ceremony itself. `0 === 0` is the normal, expected case for
-          // an authenticator that never reports a counter at all (most
-          // cloud-synced passkeys), not an anomaly.
-          const counterRegressed =
-            verified.newCounter <= stored.counter &&
-            !(verified.newCounter === 0 && stored.counter === 0);
-          if (counterRegressed) {
-            yield* events.publish({
-              _tag: "auth.passkey.counterAnomaly",
-              userId: stored.userId,
-              credentialId: stored.id,
-            });
-          }
+          // BEH-EA-131: "log + step-up, not an instant kill" by default.
+          yield* applyCounterPolicy(stored, verified);
           yield* credentials
             .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
             .pipe(Effect.orDie);
@@ -829,7 +1444,18 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           if (point._tag === "Diverted") {
             return yield* Effect.fail(point.value);
           }
-          const issued = yield* sessions.issue({ userId: stored.userId }).pipe(Effect.orDie);
+          const issued = yield* sessions
+            .issue({
+              userId: stored.userId,
+              request: {
+                ...(input.ip !== undefined ? { ip: input.ip } : {}),
+                ...(context?.userAgent !== undefined ? { userAgent: context.userAgent } : {}),
+              },
+              // THS-003: a hardware-bound key, plus user verification when the
+              // authenticator performed it.
+              amr: verified.userVerified ? ["hwk", "user"] : ["hwk"],
+            })
+            .pipe(Effect.orDie);
           yield* events.publish({
             _tag: "auth.user.signedIn",
             userId: stored.userId,
@@ -842,6 +1468,18 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 
       const listCredentials: PasskeyShape["listCredentials"] = (userId) =>
         credentials.listByUser(userId);
+
+      const signals: PasskeyShape["signals"] = Effect.fnUntraced(function* (userId) {
+        const user = yield* users.findById(userId).pipe(Effect.orDie);
+        const owned = yield* credentials.listByUser(userId);
+        return {
+          rpId: config.rpId,
+          userId: yield* handles.getOrCreate(userId),
+          name: user.email,
+          displayName: user.name,
+          allAcceptedCredentialIds: owned.map((row) => row.id),
+        };
+      });
 
       const renameCredential: PasskeyShape["renameCredential"] = (userId, id, name) =>
         credentials
@@ -890,7 +1528,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         function* (userId, sessionId) {
           const owned = yield* credentials.listByUser(userId);
           const challenge = yield* challengeStore.issue(reauthenticateScope(sessionId));
-          return yield* webAuthn.authenticationOptions({
+          return yield* requestOptions({
             rpId: config.rpId,
             challenge: Redacted.value(challenge),
             allowCredentials: owned.map((row) => ({ id: row.id, transports: row.transports })),
@@ -899,6 +1537,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             // merely possession, unlike ordinary `authenticateOptions`
             // which defers to `config.authenticatorSelection`.
             userVerification: "required",
+            ...ceremonyKnobs,
           });
         },
       );
@@ -911,12 +1550,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           }
           const clientData = clientDataOpt.value;
 
-          if (!config.origins.includes(clientData.origin)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyOriginMismatch());
-          }
-          if (!originMatchesRpId(clientData.origin, config.rpId)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyRpIdMismatch());
-          }
+          yield* checkOrigin(clientData, config);
 
           const consumed = yield* challengeStore.consume(
             reauthenticateScope(sessionId),
@@ -944,10 +1578,11 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               expectedChallenge: clientData.challenge,
               expectedOrigin: config.origins,
               expectedRpId: config.rpId,
+              ...topOriginExpectation(config),
               credential: {
                 id: stored.id,
                 publicKey: new Uint8Array(stored.publicKey),
-                counter: stored.counter,
+                transports: stored.transports,
               },
             })
             .pipe(
@@ -956,35 +1591,39 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
               ),
             );
 
+          // BPAS-003: same handle cross-check as `authenticateVerify`.
+          if (
+            input.credential.response.userHandle !== undefined &&
+            input.credential.response.userHandle !== stored.webauthnUserId
+          ) {
+            return yield* Effect.fail(new PasskeyApi.PasskeyVerificationFailed());
+          }
+
           if (!verified.userVerified) {
             return yield* Effect.fail(new PasskeyApi.PasskeyUserVerificationRequired());
           }
 
           // BEH-EA-131: same "log + step-up, not an instant kill" posture as `authenticateVerify`.
-          const counterRegressed =
-            verified.newCounter <= stored.counter &&
-            !(verified.newCounter === 0 && stored.counter === 0);
-          if (counterRegressed) {
-            yield* events.publish({
-              _tag: "auth.passkey.counterAnomaly",
-              userId: stored.userId,
-              credentialId: stored.id,
-            });
-          }
+          yield* applyCounterPolicy(stored, verified);
           yield* credentials
             .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
             .pipe(Effect.orDie);
 
-          yield* sessions.reauthenticate(Sessions.SessionId(sessionId)).pipe(
-            Effect.catchTag("SessionNotFound", () =>
-              // `passkey.reauthenticate`'s own `Authentication` middleware
-              // already proved this exact session live moments ago — see
-              // `Password.ts`'s own identical `reauthenticate` comment.
-              Effect.die(
-                new Error(`awthaq: reauthenticate's own current session vanished: ${sessionId}`),
+          yield* sessions
+            .reauthenticate(
+              Sessions.SessionId(sessionId),
+              verified.userVerified ? ["hwk", "user"] : ["hwk"],
+            )
+            .pipe(
+              Effect.catchTag("SessionNotFound", () =>
+                // `passkey.reauthenticate`'s own `Authentication` middleware
+                // already proved this exact session live moments ago — see
+                // `Password.ts`'s own identical `reauthenticate` comment.
+                Effect.die(
+                  new Error(`awthaq: reauthenticate's own current session vanished: ${sessionId}`),
+                ),
               ),
-            ),
-          );
+            );
         },
       );
 
@@ -995,6 +1634,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         authenticateOptions,
         authenticateVerify,
         listCredentials,
+        signals,
         renameCredential,
         removeCredential,
         reauthenticateOptions,
@@ -1008,11 +1648,12 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
  * CSG-001/DRS-002 (.issues/high): a real tap on the core
  * `Hooks.BeforeUserDelete` veto point (CSG-002, already wired into
  * `Users.ts`'s own `delete_` for both layers) that sweeps this plugin's
- * own `passkey_credential` rows for the deleted user. `PasskeyCredentials`
- * is resolved once at layer-build time so the tap handler itself carries
- * no further service requirement, matching `VetoTap`'s own fixed-`R`
- * signature. Fires from inside `Users.delete_`, which
- * `@awthaq/server`'s `Account.ts` already calls from within its own
+ * own `passkey_credential` rows — and, since BPAS-003, the user's stable
+ * WebAuthn handle — for the deleted user. `PasskeyCredentials`/
+ * `PasskeyUserHandles` are resolved once at layer-build time so the tap
+ * handler itself carries no further service requirement, matching
+ * `VetoTap`'s own fixed-`R` signature. Fires from inside `Users.delete_`,
+ * which `@awthaq/server`'s `Account.ts` already calls from within its own
  * `SqlTransaction` — this tap's own write joins that same transaction.
  *
  * **A separate export, not merged into `Passkey.layer` itself:**
@@ -1030,12 +1671,15 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 export const beforeUserDeleteErasure: Layer.Layer<
   never,
   never,
-  PasskeyCredentials.PasskeyCredentials
+  PasskeyCredentials.PasskeyCredentials | PasskeyUserHandles.PasskeyUserHandles
 > = Layer.unwrap(
   Effect.gen(function* () {
     const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+    const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
     return Hooks.BeforeUserDelete.tap((input) =>
-      credentials.deleteAllByUser(Users.UserId(input.id)).pipe(Effect.as(input)),
+      credentials
+        .deleteAllByUser(Users.UserId(input.id))
+        .pipe(Effect.andThen(handles.deleteByUser(Users.UserId(input.id))), Effect.as(input)),
     );
   }),
 );
