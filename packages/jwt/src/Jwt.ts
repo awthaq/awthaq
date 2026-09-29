@@ -49,7 +49,7 @@
 // logic.
 
 import { Api } from "@awthaq/api";
-import { AuthPlugin, Errors, Migrations, Sessions, Users } from "@awthaq/core";
+import { AuthPlugin, Errors, Migrations, Sessions, Tenant, Users } from "@awthaq/core";
 import { Defects, RefreshingCache } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as Arr from "effect/Array";
@@ -66,7 +66,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { IntrospectionResponse, JwtApi, TokenResponse } from "./JwtApi.ts";
-import { JwtConfig } from "./JwtConfig.ts";
+import { JwtConfig, type JwtConfigShape } from "./JwtConfig.ts";
 import * as JwtCodec from "./JwtCodec.ts";
 import * as KeyRing from "./KeyRing.ts";
 import * as RevocationStore from "./RevocationStore.ts";
@@ -233,16 +233,22 @@ export const JwtHandlers = Layer.mergeAll(
     "jwt",
     Effect.fnUntraced(function* (handlers) {
       const jwt = yield* Jwt;
-      const config = yield* JwtConfig;
-      const cacheControl = `public, max-age=${Math.floor(Duration.toSeconds(config.jwksMaxAge))}`;
+      // EP-007: the cache lifetime advertised is the one in force for the request.
+      const builtConfig = yield* JwtConfig;
+      const configNow = Tenant.configInForce(JwtConfig, builtConfig);
       return handlers.handleAll({
         // ECF-002/KRS-010: a returned `HttpServerResponse` bypasses the
         // success-schema encode, so the body is the plain JWKS document and
         // the header tells verifiers how long they may cache it.
         jwks: () =>
-          Effect.map(jwt.jwks, (document) =>
-            HttpServerResponse.jsonUnsafe(document, { headers: { "cache-control": cacheControl } }),
-          ),
+          Effect.gen(function* () {
+            const config = yield* configNow;
+            const cacheControl = `public, max-age=${Math.floor(Duration.toSeconds(config.jwksMaxAge))}`;
+            const document = yield* jwt.jwks;
+            return HttpServerResponse.jsonUnsafe(document, {
+              headers: { "cache-control": cacheControl },
+            });
+          }),
       });
     }),
   ),
@@ -315,12 +321,15 @@ const PostAuthResponseHookLive = Layer.effect(
   Authentication.PostAuthResponseHook,
   Effect.gen(function* () {
     const jwt = yield* Jwt;
-    const config = yield* JwtConfig;
+    // EP-007: whether and how responses are mirrored is decided per response (see `Jwt.layer`).
+    const builtConfig = yield* JwtConfig;
+    const configNow = Tenant.configInForce(JwtConfig, builtConfig);
     type HookContext = Parameters<Authentication.PostAuthResponseHookShape["decorate"]>[2];
     const mirrorHeader = (
       principal: Api.Principal,
       response: HttpServerResponse.HttpServerResponse,
       context: HookContext,
+      config: JwtConfigShape,
     ) =>
       config.mirrorResponses === "off" ||
       (config.mirrorResponses === "bearer" && context.scheme !== "bearer")
@@ -343,6 +352,7 @@ const PostAuthResponseHookLive = Layer.effect(
       principal: Api.Principal,
       response: HttpServerResponse.HttpServerResponse,
       context: HookContext,
+      config: JwtConfigShape,
     ) => {
       const mirror = config.sessionCookie;
       return mirror === false || context.scheme !== "cookie"
@@ -372,8 +382,10 @@ const PostAuthResponseHookLive = Layer.effect(
       response,
       context,
     ) =>
-      mirrorHeader(principal, response, context).pipe(
-        Effect.flatMap((decorated) => mirrorCookie(principal, decorated, context)),
+      Effect.flatMap(configNow, (config) =>
+        mirrorHeader(principal, response, context, config).pipe(
+          Effect.flatMap((decorated) => mirrorCookie(principal, decorated, context, config)),
+        ),
       );
     return { decorate };
   }),
@@ -530,7 +542,13 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
     AuthPlugin.layer(Jwt, {
       handlers: JwtHandlers,
       make: Effect.gen(function* () {
+        // EP-007 (ADR-EA-018 Decision 8): the token policy — issuer, audience, ttl,
+        // `definePayload` — is decided per operation, so a tenant's `Jwt.config(...)` provided in
+        // the calling fiber applies to that request; with none, the build-time value applies
+        // exactly as before. The signing-key ring (algorithm, rotation, grace, cache) is one
+        // deployment-wide store and stays boot-scoped.
         const config = yield* JwtConfig;
+        const configNow = Tenant.configInForce(JwtConfig, config);
         const ref = yield* KeyRing.KeyRing;
         const remoteSigner = yield* JwtCodec.RemoteSigner;
         const crypto = yield* Crypto.Crypto;
@@ -580,6 +598,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
           },
         ) =>
           Effect.gen(function* () {
+            const config = yield* configNow;
             const key = yield* currentKey;
             const audience = options.audience ?? config.audience;
             if (typeof audience !== "string" && !Arr.isReadonlyArrayNonEmpty(audience)) {
@@ -623,7 +642,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
 
         const sign: JwtShape["sign"] = (principal, options) =>
           Effect.gen(function* () {
-            const extra = yield* config.definePayload(principal);
+            const extra = yield* (yield* configNow).definePayload(principal);
             // `principalClaims` wins over `definePayload`'s extras — a
             // config-supplied payload function may add claims, never
             // override the ones this plugin itself is responsible for.
@@ -666,6 +685,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
           },
         ) => {
           const attempt = Effect.gen(function* () {
+            const config = yield* configNow;
             const keys = yield* verifiableKeys;
             return yield* JwtCodec.verify({
               token,
@@ -692,21 +712,25 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
         // Principal tokens only (`typ: "at+jwt"`, a `sub` is mandatory):
         // what `sign`, `POST /jwt/token` and response mirroring mint.
         const verify: JwtShape["verify"] = (token) =>
-          verifyWith(token, {
-            typ: PRINCIPAL_TYP,
-            audience: config.audience,
-            requireSubject: true,
-          });
+          Effect.flatMap(configNow, (config) =>
+            verifyWith(token, {
+              typ: PRINCIPAL_TYP,
+              audience: config.audience,
+              requireSubject: true,
+            }),
+          );
 
         // JJS-007/VB-005: its own function, not `verify` under another name —
         // a different token class (`typ`), no mandatory `sub`, and a
         // per-call audience matching `signJWT`'s.
         const verifyJWT: JwtShape["verifyJWT"] = (token, options) =>
-          verifyWith(token, {
-            typ: options?.typ ?? GENERAL_TYP,
-            audience: options?.audience ?? config.audience,
-            requireSubject: false,
-          });
+          Effect.flatMap(configNow, (config) =>
+            verifyWith(token, {
+              typ: options?.typ ?? GENERAL_TYP,
+              audience: options?.audience ?? config.audience,
+              requireSubject: false,
+            }),
+          );
 
         /**
          * `sid`'s owning session is still a live row, per `Sessions.isLive`
@@ -749,6 +773,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
 
         const introspect: JwtShape["introspect"] = (token) =>
           Effect.gen(function* () {
+            const config = yield* configNow;
             const outcome = yield* Effect.result(
               // RFC 7662 introspection answers "is this token live" for either
               // token class; only `verify`/`verifyLive` are principal-only.

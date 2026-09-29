@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-018 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, DRS-005, SAM-006, CSG-009; wayfinder ticket 18) |
+> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, DRS-005, SAM-006, CSG-009; wayfinder ticket 18); 1.1 (2026-09-29): per-tenant configuration adopted by password, sessions, oauth, passkey, jwt and admin (EP-007) |
 
 ---
 
@@ -45,7 +45,7 @@ RLS is defence in depth, not the primary authorization control ([ADR-EA-009](009
 
 **7. Per-organization OAuth connections are data.** `@awthaq/organization` owns `organization_oauth_connection` (client secret encrypted through the existing `Encryption`/`KeyProvider` ports), and `OrganizationConnections` is a `LayerMap.Service` keyed by organization id that builds an `OAuthProvider` from a stored row with the same `OAuthProvider.resolve` the static providers use. `@awthaq/oauth` consults the static registry first, then a port-shaped `connections` resolver, so it never imports the organization plugin. Role and entitlement mapping stays in qadi (ADR-EA-009).
 
-**8. Per-tenant configuration** follows ADR-EA-005/006. A plugin decides its `Context.Reference` config per operation rather than once at layer build: a value provided in the *calling fiber* overrides for that operation, and with none provided the build-time value applies — a hybrid, because a plain per-operation read would silently ignore every `Layer.provide(Plugin.config(...))` (the composition idiom, which puts the config in the layer-build context only, not the request's). An application-defined `TenantConfig` `LayerMap.Service` keyed by tenant id supplies each tenant's configuration layers (merged with `Tenant.configApplied(tenantId)`, which gives `LayerMap` the non-`never` output its constructors require), and `Organization.tenantMiddlewareWithConfig` provides them per request. `@awthaq/organization` adopts the rule now; the other plugins follow (EP-007 stays open for them).
+**8. Per-tenant configuration** follows ADR-EA-005/006. A plugin decides its `Context.Reference` config per operation rather than once at layer build: a value provided in the *calling fiber* overrides for that operation, and with none provided the build-time value applies — a hybrid, because a plain per-operation read would silently ignore every `Layer.provide(Plugin.config(...))` (the composition idiom, which puts the config in the layer-build context only, not the request's). An application-defined `TenantConfig` `LayerMap.Service` keyed by tenant id supplies each tenant's configuration layers (merged with `Tenant.configApplied(tenantId)`, which gives `LayerMap` the non-`never` output its constructors require), and `Organization.tenantMiddlewareWithConfig` provides them per request. `Tenant.configInForce(reference, built)` in `@awthaq/ports` is the one-line helper every plugin uses. `@awthaq/organization`, `@awthaq/password`, `@awthaq/core` `Sessions`, `@awthaq/oauth`, `@awthaq/passkey`, `@awthaq/jwt` and `@awthaq/admin` adopt the rule (EP-007). What a plugin derives once at boot from its *built* value stays boot-scoped and is documented at the read: Password's rate-limit rules, identifier-digest key and calibrated timing-floor measurement; OAuth's `baseUrl`, `nativeRedirectURLs`, provider registry and retry policy; Passkey's boot validations and decoy secret; Jwt's signing-key ring (algorithm, rotation, grace, cache). Admin's gates are read per operation too, so a tenant may tighten its own `canImpersonate`/`canManageUsers`; the deny-all default is unchanged.
 
 **9. Organization-level tenancy fields** are the plugin's own: a config-validated `homeRegion` (`OrganizationConfig.regions` is the residency vocabulary; the organization→shard mapping is data, `homeRegionOf(record)` the pure helper — DRS-007), per-organization quota overrides with a finite default `organizationLimit` (EP-006), invitations conferring membership only on a verified address by default (EP-010), and organization suspension as the superadmin tenant-administration primitive (EP-003).
 

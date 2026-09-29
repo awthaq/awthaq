@@ -802,7 +802,12 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       const events = yield* AuthEvents.AuthEvents;
       const records = yield* ImpersonationRecords.ImpersonationRecords;
       const users = yield* Users.Users;
-      const adminConfig = yield* AdminConfig;
+      // EP-007 (ADR-EA-018 Decision 8): every gate and the impersonation ceiling are read per
+      // operation — a tenant's `Admin.config(...)` provided in the calling fiber applies to that
+      // request (a tenant may tighten its own `canImpersonate`, say); with none, the build-time
+      // value applies exactly as before, still deny-all by default.
+      const builtAdminConfig = yield* AdminConfig;
+      const configNow = Tenant.configInForce(AdminConfig, builtAdminConfig);
       // EP-009: captured at build, like every other configuration read — a request-time read would
       // see only the router's own context, not the overrides the composed layer was built under.
       const builtIn = yield* Effect.context<never>();
@@ -836,6 +841,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         target: Option.Option<Users.UserId>,
         gate: "canManageUsers" | "canBanUsers" = "canManageUsers",
       ) {
+        const adminConfig = yield* configNow;
         const allowed = yield* adminConfig[gate]({
           admin: subjectOf(caller),
           target: Option.map(target, subjectOfUserId),
@@ -1013,6 +1019,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         targetUserId,
         reason,
       }) {
+        const adminConfig = yield* configNow;
         // BEH-EA-214/218: validation refusals never reach the gate and never
         // publish `impersonationDenied`.
         if (caller.ref.id === targetUserId) {
@@ -1120,11 +1127,16 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
        * predicate is not an error here — it just leaves the confinement in place.
        */
       const tenantScopeFor = (caller: Api.UserPrincipal) =>
-        adminConfig
-          .canAdministerTenants({ admin: subjectOf(caller), organizationId: Option.none() })
-          .pipe(Effect.map((crossTenant): ImpersonationRecords.TenantScope => ({ anyTenant: crossTenant })));
+        Effect.flatMap(configNow, (adminConfig) =>
+          adminConfig
+            .canAdministerTenants({ admin: subjectOf(caller), organizationId: Option.none() })
+            .pipe(
+              Effect.map((crossTenant): ImpersonationRecords.TenantScope => ({ anyTenant: crossTenant })),
+            ),
+        );
 
       const forceStop: AdminShape["forceStop"] = Effect.fnUntraced(function* (caller, sessionId) {
+        const adminConfig = yield* configNow;
         yield* sweepExpired;
         const scope = yield* tenantScopeFor(caller);
         // IDS-001: the row is the only proof `sessionId` is an impersonation
@@ -1164,6 +1176,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       });
 
       const list: AdminShape["list"] = Effect.fnUntraced(function* (caller, input) {
+        const adminConfig = yield* configNow;
         // IDS-004: lazy reconciliation — an expired episode is never reported active.
         yield* sweepExpired;
         const admin = subjectOf(caller);

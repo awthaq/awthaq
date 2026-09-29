@@ -20,6 +20,7 @@ import {
   Observability,
   RateLimits,
   Sessions,
+  Tenant,
   Users,
   Verification,
   VerificationLink,
@@ -425,7 +426,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const password = yield* Password;
     const clientAddress = yield* ClientAddress.ClientAddress;
-    const config = yield* PasswordConfig;
+    // EP-007: the enumeration posture is per tenant too — decided in the request's own fiber.
+    const builtConfig = yield* PasswordConfig;
+    const configNow = Tenant.configInForce(PasswordConfig, builtConfig);
 
     return handlers.handleAll({
       signUp: Effect.fnUntraced(function* ({
@@ -445,7 +448,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
         };
         // TMS-005: `conceal` answers 202 with no session for a fresh and an
         // existing address alike (ADR-EA-026).
-        if (config.signUpEnumeration === "conceal") {
+        if ((yield* configNow).signUpEnumeration === "conceal") {
           return yield* password.signUpConcealed(signUpInput);
         }
         const issued = yield* password.signUp(signUpInput);
@@ -650,7 +653,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const hasher = yield* PasswordHasher.PasswordHasher;
       const mailer = yield* Mailer.Mailer;
       const events = yield* AuthEvents.AuthEvents;
-      const config = yield* PasswordConfig;
+      // EP-007 (ADR-EA-018 Decision 8): the policy in force is decided per operation, so a
+      // tenant's `Password.config(...)` provided in the calling fiber applies to that request;
+      // with none, the build-time value applies exactly as before. What is derived once at boot
+      // from the *built* value stays boot-scoped: the rate-limit rules and their email-key
+      // function, the identifier-digest key, and the calibrated timing-floor measurement.
+      const builtConfig = yield* PasswordConfig;
+      const configNow = Tenant.configInForce(PasswordConfig, builtConfig);
       const crypto = yield* Crypto.Crypto;
       const httpClient = yield* HttpClient.HttpClient;
       const limiter = yield* RateLimiter.RateLimiter;
@@ -664,14 +673,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // for the failure event. Computed identically for a real and a
       // nonexistent account, so it is no existence oracle; keyed so it cannot
       // be dictionary-reversed from the audit table.
-      const digestKey = Option.isSome(config.identifierDigestKey)
-        ? new TextEncoder().encode(Redacted.value(config.identifierDigestKey.value))
+      const digestKey = Option.isSome(builtConfig.identifierDigestKey)
+        ? new TextEncoder().encode(Redacted.value(builtConfig.identifierDigestKey.value))
         : yield* crypto.randomBytes(32).pipe(Effect.orDie);
       const identifierDigest = (email: string) =>
         Hmac.hmacSha256(
           crypto,
           digestKey,
-          new TextEncoder().encode(`signin-identifier:${config.rateLimitEmailKey(email)}`),
+          new TextEncoder().encode(`signin-identifier:${builtConfig.rateLimitEmailKey(email)}`),
         ).pipe(Effect.map(Hmac.toHex), Effect.orDie);
       /**
        * EOTS-001/ticket 27 §2: the hash check is its own span (`awthaq.password.verify`),
@@ -732,7 +741,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // other than this plugin's own `"password"` — a coding defect in this
       // package, not a condition a caller composing `Password` could trigger,
       // hence `Effect.orDie` rather than widening the public error surface.
-      const rules = PasswordRateLimits.makeRules(config.rateLimitEmailKey);
+      const rules = PasswordRateLimits.makeRules(builtConfig.rateLimitEmailKey);
       yield* Effect.all(
         // The callback's return type is annotated to break the inference
         // cycle through `Password.layer` (its own initializer names `Password`).
@@ -752,33 +761,41 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
 
       // TSS-006: `hasher.hash` above has already warmed the KDF (WASM
       // instantiation), so this timing is the steady-state verify cost.
-      const timingFloorMillis = yield* Effect.gen(function* () {
-        if (config.signInTimingFloor === "off") return 0;
-        if (Duration.isDuration(config.signInTimingFloor)) {
-          return Duration.toMillis(config.signInTimingFloor);
-        }
+      // EP-007: measured even when the built value fixes the floor, because a tenant's
+      // configuration may ask for `"calibrated"`; skipped only when the built value is `"off"`
+      // (an air-gapped/test posture that never calibrates).
+      const calibratedFloorMillis = yield* Effect.gen(function* () {
+        if (builtConfig.signInTimingFloor === "off") return 0;
         const start = DateTime.toEpochMillis(yield* DateTime.now);
         yield* hasher.verify(dummyPassword, Redacted.value(dummyHash));
         return 1.25 * (DateTime.toEpochMillis(yield* DateTime.now) - start);
       });
+      const timingFloorFor = (floor: PasswordConfigShape["signInTimingFloor"]) => {
+        if (floor === "off") return 0;
+        if (Duration.isDuration(floor)) return Duration.toMillis(floor);
+        return calibratedFloorMillis;
+      };
 
       /**
        * TSS-006: runs `effect` (success or failure alike) and holds its
-       * result back until at least `timingFloorMillis` has elapsed, so a
+       * result back until at least the floor in force has elapsed, so a
        * cheap-hash path is not faster than the dummy-hash path.
        */
       const withTimingFloor = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        timingFloorMillis <= 0
-          ? effect
-          : Effect.gen(function* () {
-              const start = DateTime.toEpochMillis(yield* DateTime.now);
-              const exit = yield* Effect.exit(effect);
-              const elapsed = DateTime.toEpochMillis(yield* DateTime.now) - start;
-              if (elapsed < timingFloorMillis) {
-                yield* Effect.sleep(Duration.millis(timingFloorMillis - elapsed));
-              }
-              return yield* exit;
-            });
+        Effect.flatMap(configNow, (config) => {
+          const timingFloorMillis = timingFloorFor(config.signInTimingFloor);
+          return timingFloorMillis <= 0
+            ? effect
+            : Effect.gen(function* () {
+                const start = DateTime.toEpochMillis(yield* DateTime.now);
+                const exit = yield* Effect.exit(effect);
+                const elapsed = DateTime.toEpochMillis(yield* DateTime.now) - start;
+                if (elapsed < timingFloorMillis) {
+                  yield* Effect.sleep(Duration.millis(timingFloorMillis - elapsed));
+                }
+                return yield* exit;
+              });
+        });
 
       /**
        * Ticket 12: enforces one `rules.*` definition against its own
@@ -808,8 +825,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         );
 
       /** Issues a verify-email token and mails it; dispatched, never awaited. */
-      const dispatchVerificationMail = (user: Users.UserRecord) =>
-        mailDispatcher.dispatch(
+      const dispatchVerificationMail = Effect.fnUntraced(function* (user: Users.UserRecord) {
+        // Read here, in the request's fiber: the dispatched work runs detached from it (EP-007).
+        const config = yield* configNow;
+        return yield* mailDispatcher.dispatch(
           { template: "verify-email", userId: user.id },
           Effect.gen(function* () {
             const issued = yield* VerificationLink.issue(
@@ -830,6 +849,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             });
           }),
         );
+      });
 
       /**
        * The checks `signUp` and `signUpConcealed` share, in the same order:
@@ -840,6 +860,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         readonly password: Redacted.Redacted<string>;
         readonly ip?: string;
       }) {
+        const config = yield* configNow;
         // AGA-001/NHS-003: per-IP first, cheaper to enforce, bounds mass
         // account creation from one source before the per-email check.
         yield* rateLimit(rules.signUpByIp, input);
@@ -983,13 +1004,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       );
 
       const signIn: PasswordShape["signIn"] = Effect.fnUntraced(function* (input) {
+        const config = yield* configNow;
         // RBS-001/CSD-002: the per-IP budget runs first — cheaper to
         // enforce (no DB lookup) and bounds a distributed spray across
         // many distinct emails before the per-account check below ever
         // sees them.
         yield* rateLimit(rules.signInByIp, input);
         yield* rateLimit(rules.signIn, input);
-        // TSS-006: the whole credential check is held to `timingFloorMillis`.
+        // TSS-006: the whole credential check is held to the timing floor in force.
         const { userOpt, accountOpt, hashOpt, verified } = yield* withTimingFloor(
           Effect.gen(function* () {
             const userOpt = yield* users.findByEmail(input.email);
@@ -1094,6 +1116,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       });
 
       const requestReset: PasswordShape["requestReset"] = Effect.fnUntraced(function* (input) {
+        const config = yield* configNow;
         // AGA-001/NHS-003: per-IP first, bounds one source spraying
         // reset requests across many distinct, unrelated emails.
         yield* rateLimit(rules.requestResetByIp, input);
@@ -1174,6 +1197,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       );
 
       const confirmReset: PasswordShape["confirmReset"] = Effect.fnUntraced(function* (input) {
+        const config = yield* configNow;
         // ARF-007: a token of another purpose (a verify-email token) or a
         // malformed one is refused before it is rate-limited or consumed.
         const decoded = VerificationLink.decode(Redacted.value(input.token), RESET_PURPOSE);
@@ -1331,6 +1355,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       });
 
       const changePassword: PasswordShape["changePassword"] = Effect.fnUntraced(function* (input) {
+        const config = yield* configNow;
         // Keyed on `userId` directly — this endpoint is authenticated, so
         // (unlike `signIn`/`requestReset`) there's no need to look up an
         // email first.

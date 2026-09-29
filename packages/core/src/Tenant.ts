@@ -11,3 +11,4 @@ export const withTenant = Tenant.withTenant;
 export const withoutTenant = Tenant.withoutTenant;
 export const TenantConfigApplied = Tenant.TenantConfigApplied;
 export const configApplied = Tenant.configApplied;
+export const configInForce = Tenant.configInForce;

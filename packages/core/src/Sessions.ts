@@ -658,11 +658,15 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
     Effect.gen(function* () {
       const state = yield* Ref.make(HashMap.empty<SessionId, SessionRow>());
       const crypto = yield* Crypto.Crypto;
-      const config = yield* SessionConfig;
+      // EP-007 (ADR-EA-018 Decision 8): lifetimes are decided per operation — a tenant's
+      // `SessionConfig` provided in the calling fiber wins; with none, the build-time value applies.
+      const builtConfig = yield* SessionConfig;
+      const configNow = Tenant.configInForce(SessionConfig, builtConfig);
       const events = yield* AuthEvents.AuthEvents;
       const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
       const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
+        const config = yield* configNow;
         yield* refuseSelfActingAs(input);
         const id = SessionId(yield* crypto.randomUUIDv7);
         const secret = toHex(yield* crypto.randomBytes(32));
@@ -814,6 +818,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
       });
 
       const verify: SessionsShape["verify"] = Effect.fnUntraced(function* (token) {
+        const config = yield* configNow;
         const raw = Redacted.value(token);
         const separator = raw.indexOf(".");
         if (separator < 0) {
@@ -1168,11 +1173,14 @@ export const layerSql: Layer.Layer<
     const repo = yield* SqlRepositories.SessionsRepository;
     const sql = yield* SqlClient.SqlClient;
     const crypto = yield* Crypto.Crypto;
-    const config = yield* SessionConfig;
+    // EP-007: see `layerMemory`.
+    const builtConfig = yield* SessionConfig;
+    const configNow = Tenant.configInForce(SessionConfig, builtConfig);
     const events = yield* AuthEvents.AuthEvents;
     const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
     const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
+      const config = yield* configNow;
       yield* refuseSelfActingAs(input);
       // Generated here, not left to `Model.UuidV7Insert`'s own
       // constructor-default: `familyId` needs this row's own `id` before
@@ -1311,6 +1319,7 @@ export const layerSql: Layer.Layer<
     });
 
     const verify: SessionsShape["verify"] = Effect.fnUntraced(function* (token) {
+      const config = yield* configNow;
       const raw = Redacted.value(token);
       const separator = raw.indexOf(".");
       if (separator < 0) {

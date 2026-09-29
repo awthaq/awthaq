@@ -15,7 +15,7 @@
 // `requireOrganization` gate and qadi relationships); this plugin only flips it.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Defects, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, Defects, Tenant, Users } from "@awthaq/core";
 import { Organization, OrganizationRecords } from "@awthaq/organization";
 import { makeSubject } from "@qadi/core";
 import * as DateTime from "effect/DateTime";
@@ -175,7 +175,9 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
     make: Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
       const orgs = yield* OrganizationRecords.OrganizationRecords;
-      const adminConfig = yield* AdminConfig;
+      // EP-007: the tenant-administration gate is read per operation (see `Admin.layer`).
+      const builtAdminConfig = yield* AdminConfig;
+      const configNow = Tenant.configInForce(AdminConfig, builtAdminConfig);
 
       /** Gate first, existence second — a caller who fails the gate cannot probe which ids exist. */
       const authorize = Effect.fnUntraced(function* (
@@ -183,6 +185,7 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
         action: string,
         organizationId: Option.Option<string>,
       ) {
+        const adminConfig = yield* configNow;
         const allowed = yield* adminConfig.canAdministerTenants({
           admin: makeSubject({ id: caller.ref.id }),
           organizationId,

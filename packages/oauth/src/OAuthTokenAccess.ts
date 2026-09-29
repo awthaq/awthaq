@@ -14,7 +14,7 @@
 // resolves, and a port in `@awthaq/ports` cannot depend on a plugin
 // package.
 
-import { Accounts, Errors } from "@awthaq/core";
+import { Accounts, Errors, Tenant } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -153,7 +153,9 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const accounts = yield* Accounts.Accounts;
     const httpClient = yield* HttpClient.HttpClient;
+    // EP-007: the exchange deadline is the tenant's when one is provided in the calling fiber.
     const config_ = yield* OAuthConfig.OAuthConfig;
+    const configNow = Tenant.configInForce(OAuthConfig.OAuthConfig, config_);
     // NAM-004: the one shared, already-resolved registry — the same instance
     // `OAuth.layer` reads, so discovery is fetched once per process.
     const providers = yield* OAuthProviders.OAuthProviders;
@@ -221,6 +223,7 @@ export const layer: Layer.Layer<
               }),
           ),
         );
+        const config = yield* configNow;
         const refreshed = yield* refresh(
           httpClient,
           accounts,
@@ -228,7 +231,7 @@ export const layer: Layer.Layer<
           provider,
           tokens.refreshToken.value,
           tokens.idToken,
-          config_.httpTimeouts.tokenExchange,
+          config.httpTimeouts.tokenExchange,
         );
         return yield* use(refreshed);
       });
