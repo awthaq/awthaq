@@ -817,10 +817,19 @@ importers:
       '@qadi/core':
         specifier: ^0.7.0
         version: 0.7.0
+      '@qadi/http':
+        specifier: ^0.7.0
+        version: 0.7.0
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
+      '@awthaq/server':
+        specifier: workspace:*
+        version: link:../server
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)
