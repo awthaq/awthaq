@@ -719,22 +719,22 @@ importers:
       '@awthaq/client':
         specifier: workspace:*
         version: link:../client
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116
+    devDependencies:
       '@effect/atom-react':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(react@19.3.0)(scheduler@0.27.0)
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)
       '@qadi/core':
         specifier: ^0.7.0
         version: 0.7.0
       '@qadi/react':
         specifier: ^0.7.0
         version: 0.7.0(react@19.3.0)(scheduler@0.27.0)
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.0-rc.116
-    devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)
       '@testing-library/react':
         specifier: 'catalog:'
         version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)

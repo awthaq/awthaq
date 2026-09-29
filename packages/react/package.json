@@ -27,13 +27,13 @@
   "dependencies": {
     "@awthaq/api": "workspace:*",
     "@awthaq/client": "workspace:*",
-    "@effect/atom-react": "catalog:",
-    "@qadi/core": "^0.7.0",
-    "@qadi/react": "^0.7.0",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect/atom-react": "catalog:",
     "@effect/vitest": "catalog:",
+    "@qadi/core": "^0.7.0",
+    "@qadi/react": "^0.7.0",
     "@testing-library/react": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
@@ -44,6 +44,9 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
+    "@effect/atom-react": "catalog:",
+    "@qadi/core": "^0.7.0",
+    "@qadi/react": "^0.7.0",
     "react": ">=19.3.0"
   },
   "engines": {
