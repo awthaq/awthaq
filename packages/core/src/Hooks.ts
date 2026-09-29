@@ -98,7 +98,14 @@ export class TwoFactorRequired extends Schema.TaggedError<TwoFactorRequired>()(
   { userId: Schema.String, challengeId: Schema.String },
   { httpApiStatus: 401 },
 ) {}
-const SessionIssueContext = Schema.Struct({ userId: Schema.String, strategy: Schema.String });
+// THS-001/AOMS-003: `amr` is how the first factor authenticated (RFC 8176 values, e.g. `["pwd"]`), so
+// a second-factor tap can record `[...amr, "otp", "mfa"]` on the session it mints once the second
+// factor passes, without guessing the first factor from the strategy name.
+const SessionIssueContext = Schema.Struct({
+  userId: Schema.String,
+  strategy: Schema.String,
+  amr: Schema.optionalKey(Schema.Array(Schema.String)),
+});
 const SessionIssueDiverted = Schema.Union([TwoFactorRequired]);
 export class BeforeSessionIssue extends HookPoint.divert<BeforeSessionIssue>()(
   "auth.session.beforeIssue",
@@ -115,6 +122,24 @@ const UserDeleteInput = Schema.Struct({ id: Schema.String, email: Schema.optiona
 export class BeforeUserDelete extends HookPoint.veto<BeforeUserDelete>()(
   "auth.user.beforeDelete",
   UserDeleteInput,
+) {}
+
+/**
+ * ARF-005 (wayfinder ticket 05, Fix B): veto — consulted by `@awthaq/password`'s `confirmReset`
+ * inside its transaction, after the emailed token is consumed and before the credential is
+ * rewritten and the user's sessions revoked. Possession of the mailbox alone must not be able to
+ * downgrade an account protected by a stronger factor: `@awthaq/two-factor`'s
+ * `credentialResetGate` taps this and aborts (`TWO_FACTOR_REQUIRED`) unless a valid second-factor
+ * code accompanies the reset. `secondFactorCode` is what the caller presented, if anything; the
+ * amended value is ignored (a reset cannot change whose credential is being reset).
+ */
+const CredentialResetInput = Schema.Struct({
+  userId: Schema.String,
+  secondFactorCode: Schema.optionalKey(Schema.Redacted(Schema.String)),
+});
+export class BeforeCredentialReset extends HookPoint.veto<BeforeCredentialReset>()(
+  "auth.credential.beforeReset",
+  CredentialResetInput,
 ) {}
 
 /**
@@ -151,6 +176,7 @@ export const HooksLive = Layer.mergeAll(
   BeforeSignIn.layer,
   AfterSignIn.layer,
   BeforeSessionIssue.layer,
+  BeforeCredentialReset.layer,
   BeforeUserDelete.layer,
   AfterUserAttributesChanged.layer,
   // CSG-001: the erasure registry rides here too — every composition already

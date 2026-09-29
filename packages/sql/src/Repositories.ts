@@ -1625,6 +1625,9 @@ export interface VerificationRepositoryShape {
     readonly expiresAt: DateTime.Utc;
     readonly createdAt: DateTime.Utc;
     readonly payload: unknown;
+    /** SOS-004: the attempt budget, `null` for none; `attempts` restarts at 0 on every (re)issue. */
+    readonly maxAttempts: number | null;
+    readonly attempts: number;
   }) => Effect.Effect<VerificationToken, Cause.NoSuchElementError | RepositoryError>;
   /**
    * ADR-EA-016/BEH-EA-058/062: the one atomic statement `consume` is built
@@ -1642,6 +1645,16 @@ export interface VerificationRepositoryShape {
     readonly valueHash: string;
     readonly now: DateTime.Utc;
   }) => Effect.Effect<Option.Option<VerificationToken>, RepositoryError>;
+  /**
+   * SOS-004: a wrong presentation against the live row for `identifier`: `attempts + 1`, and
+   * the row is consumed (burned) once that reaches `maxAttempts` — one atomic statement, so
+   * concurrent guesses cannot overshoot the budget. A row with no budget, an expired one and an
+   * unknown identifier are untouched.
+   */
+  readonly recordFailedAttempt: (input: {
+    readonly identifier: string;
+    readonly now: DateTime.Utc;
+  }) => Effect.Effect<void, RepositoryError>;
   /** BCR-003: sweeps every token (live or already-consumed) naming this user — the cascade `Account.ts`'s `deleteUser` needs. */
   readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
   /**
@@ -1702,11 +1715,13 @@ export const VerificationRepositoryLive: Layer.Layer<
         expiresAt: models.wire.dateTime,
         createdAt: models.wire.dateTime,
         payload: Schema.fromJsonString(Schema.Unknown),
+        maxAttempts: Schema.NullOr(Schema.Number),
+        attempts: Schema.Number,
       }),
       Result: models.VerificationToken,
       execute: (request) => sql`
-        INSERT INTO verification_tokens (id, identifier, "userId", "valueHash", "expiresAt", "consumedAt", "createdAt", payload)
-        VALUES (${request.id}, ${request.identifier}, ${request.userId}, ${request.valueHash}, ${request.expiresAt}, NULL, ${request.createdAt}, ${request.payload})
+        INSERT INTO verification_tokens (id, identifier, "userId", "valueHash", "expiresAt", "consumedAt", "createdAt", payload, "maxAttempts", attempts)
+        VALUES (${request.id}, ${request.identifier}, ${request.userId}, ${request.valueHash}, ${request.expiresAt}, NULL, ${request.createdAt}, ${request.payload}, ${request.maxAttempts}, ${request.attempts})
         ON CONFLICT(identifier) WHERE "consumedAt" IS NULL
         DO UPDATE SET
           id = excluded.id,
@@ -1715,6 +1730,8 @@ export const VerificationRepositoryLive: Layer.Layer<
           "expiresAt" = excluded."expiresAt",
           "createdAt" = excluded."createdAt",
           payload = excluded.payload,
+          "maxAttempts" = excluded."maxAttempts",
+          attempts = excluded.attempts,
           "consumedAt" = NULL
         RETURNING *
       `,
@@ -1773,6 +1790,24 @@ export const VerificationRepositoryLive: Layer.Layer<
     const tryConsume: VerificationRepositoryShape["tryConsume"] = (input) =>
       tryConsumeQuery(input).pipe(traced("VerificationTokens.tryConsume"));
 
+    // SOS-004: both right-hand sides read the pre-update `attempts`, so `attempts + 1 >= maxAttempts`
+    // burns the row in the same statement that counts the miss.
+    const recordFailedAttemptQuery = SqlSchema.void({
+      Request: Schema.Struct({ identifier: Schema.String, now: models.wire.dateTime }),
+      execute: (request) => sql`
+        UPDATE verification_tokens
+        SET attempts = attempts + 1,
+            "consumedAt" = CASE WHEN attempts + 1 >= "maxAttempts" THEN ${request.now} ELSE "consumedAt" END
+        WHERE identifier = ${request.identifier}
+          AND "consumedAt" IS NULL
+          AND "expiresAt" > ${request.now}
+          AND "maxAttempts" IS NOT NULL
+      `,
+    });
+
+    const recordFailedAttempt: VerificationRepositoryShape["recordFailedAttempt"] = (input) =>
+      recordFailedAttemptQuery(input).pipe(traced("VerificationTokens.recordFailedAttempt"));
+
     return {
       models,
       insert: repo.insert,
@@ -1782,6 +1817,7 @@ export const VerificationRepositoryLive: Layer.Layer<
       findByIdentifier,
       upsertLive,
       tryConsume,
+      recordFailedAttempt,
       deleteAllByUser,
       deleteExpiredBefore,
     };

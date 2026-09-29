@@ -33,10 +33,14 @@ const asCaller = (input: {
   readonly id: string;
   readonly sessionId: string;
   readonly actingAs?: { readonly type: string; readonly id: string };
+  readonly amr?: ReadonlyArray<string>;
+  readonly authenticatedAt?: number;
 }): Api.UserPrincipal =>
   new Api.UserPrincipal({
     ref: new Api.PrincipalRef({ type: "user", id: input.id }),
     sessionId: input.sessionId,
+    ...(input.amr === undefined ? {} : { amr: input.amr }),
+    ...(input.authenticatedAt === undefined ? {} : { authenticatedAt: input.authenticatedAt }),
     ...(input.actingAs === undefined ? {} : { actingAs: new Api.PrincipalRef(input.actingAs) }),
   });
 
@@ -79,6 +83,34 @@ describe("Jwt sign/verify", () => {
       assert.strictEqual(claims["iss"], "https://issuer.test");
       assert.strictEqual(claims["aud"], "https://issuer.test");
       assert.isUndefined(claims["act"]);
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  // AOMS-012: downstream verifiers can tell how the session was authenticated from the token alone.
+  it.effect("carries amr and auth_time for a User principal that has them", () =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+      const token = yield* jwt.sign(
+        asCaller({
+          id: "user-1",
+          sessionId: "session-1",
+          amr: ["pwd", "otp", "mfa"],
+          authenticatedAt: 1_700_000_000,
+        }),
+      );
+      const claims = yield* jwt.verify(token);
+      assert.deepStrictEqual(claims["amr"], ["pwd", "otp", "mfa"]);
+      assert.strictEqual(claims["auth_time"], 1_700_000_000);
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect("omits amr and auth_time when the session recorded none", () =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+      const token = yield* jwt.sign(asCaller({ id: "user-1", sessionId: "session-1" }));
+      const claims = yield* jwt.verify(token);
+      assert.isFalse("amr" in claims);
+      assert.isFalse("auth_time" in claims);
     }).pipe(Effect.provide(buildLayer())),
   );
 

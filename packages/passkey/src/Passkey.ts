@@ -62,6 +62,21 @@ import * as PasskeyApi from "./PasskeyApi.ts";
 import * as PasskeyCredentials from "./PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "./PasskeyUserHandles.ts";
 
+/**
+ * HSK-005/THS-003 (BEH-EA-231): how a verified assertion authenticated the user, as RFC 8176
+ * method references — `hwk` for a device-bound (`singleDevice`) credential, `swk` for a synced
+ * (`multiDevice`) one, plus `user` when the authenticator performed user verification. This is
+ * what lets a policy require a hardware-bound key (`amr contains "hwk"`) or user verification,
+ * and what `Assurance` maps onto aal2/aal3.
+ */
+const passkeyAmr = (verified: {
+  readonly credentialDeviceType: "singleDevice" | "multiDevice";
+  readonly userVerified: boolean;
+}): ReadonlyArray<Sessions.AuthMethod> => {
+  const key: Sessions.AuthMethod = verified.credentialDeviceType === "singleDevice" ? "hwk" : "swk";
+  return verified.userVerified ? [key, "user"] : [key];
+};
+
 /** BEH-EA-044-style reserved provider id, this plugin's own concern (BEH-EA-004: confined to its own scope). */
 const PASSKEY_PROVIDER_ID = "passkey";
 
@@ -1524,9 +1539,11 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // BCR-004/THS-002: same canonical MFA attachment point
           // `@awthaq/password`'s own `signIn` consults, right before this
           // flow's own `sessions.issue`.
+          const amr = passkeyAmr(verified);
           const point = yield* beforeSessionIssue.run({
             userId: stored.userId,
             strategy: "passkey",
+            amr,
           });
           if (point._tag === "Diverted") {
             return yield* Effect.fail(point.value);
@@ -1538,9 +1555,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
                 ...(input.ip !== undefined ? { ip: input.ip } : {}),
                 ...(context?.userAgent !== undefined ? { userAgent: context.userAgent } : {}),
               },
-              // THS-003: a hardware-bound key, plus user verification when the
-              // authenticator performed it.
-              amr: verified.userVerified ? ["hwk", "user"] : ["hwk"],
+              // THS-003/HSK-005: the kind of key (hardware-bound or synced), plus user
+              // verification when the authenticator performed it.
+              amr,
             })
             .pipe(Effect.orDie);
           yield* events.publish({
@@ -1725,10 +1742,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             .pipe(Effect.orDie);
 
           yield* sessions
-            .reauthenticate(
-              Sessions.SessionId(sessionId),
-              verified.userVerified ? ["hwk", "user"] : ["hwk"],
-            )
+            .reauthenticate(Sessions.SessionId(sessionId), passkeyAmr(verified))
             .pipe(
               Effect.catchTag("Sessions/NotFound", () =>
                 // `passkey.reauthenticate`'s own `Authentication` middleware

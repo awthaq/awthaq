@@ -29,6 +29,12 @@ export class UserPrincipal extends Schema.TaggedClass<UserPrincipal>()("User", {
    * session before its mailbox is verified.
    */
   amr: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * AAPS-006/AOMS-012: when the session last proved a credential (`Sessions.SessionView.authenticatedAt`),
+   * as epoch seconds — the OIDC `auth_time` convention, so the same number feeds a policy's recency
+   * check and a JWT's `auth_time` claim.
+   */
+  authenticatedAt: Schema.optional(Schema.Number),
   /** APS-007: present only under the opt-in `PrincipalResolverWithUserFactsLive` (it costs one user lookup per request). */
   emailVerified: Schema.optional(Schema.Boolean),
 }) {}

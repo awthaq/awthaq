@@ -412,6 +412,19 @@ const verificationTokenFields = {
     Model.FieldExcept(["update", "jsonUpdate"]),
   ),
   valueHash: Model.Field({ select: Schema.String, insert: Schema.String }),
+  /**
+   * SOS-004: the per-token attempt budget (`NULL` = none, the default 256-bit token) and
+   * how many wrong presentations have been spent. Select/insert only: they change through
+   * `VerificationRepository.recordFailedAttempt`'s one atomic statement, never a generic update.
+   */
+  maxAttempts: Model.Field({
+    select: Schema.NullOr(Schema.Number),
+    insert: Schema.NullOr(Schema.Number).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  }),
+  attempts: Model.Field({
+    select: Schema.Number,
+    insert: Schema.Number.pipe(Schema.withConstructorDefault(Effect.succeed(0))),
+  }),
   payload: Model.Field({
     select: Schema.fromJsonString(Schema.Unknown),
     insert: Schema.fromJsonString(Schema.Unknown).pipe(

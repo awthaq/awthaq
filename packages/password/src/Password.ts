@@ -247,9 +247,16 @@ export interface PasswordShape {
   readonly confirmReset: (input: {
     readonly token: Redacted.Redacted<string>;
     readonly password: Redacted.Redacted<string>;
+    /** ARF-005: a TOTP or recovery code — needed only when a `BeforeCredentialReset` tap (the two-factor plugin) demands one. */
+    readonly secondFactorCode?: Redacted.Redacted<string>;
   }) => Effect.Effect<
     void,
-    PasswordApi.TokenConsumed | PasswordApi.WeakPassword | Api.RateLimited | Errors.StoreUnavailable
+    | PasswordApi.TokenConsumed
+    | PasswordApi.WeakPassword
+    | PasswordApi.SecondFactorRequired
+    | HookPoint.HookAborted
+    | Api.RateLimited
+    | Errors.StoreUnavailable
   >;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 08: consumes the
@@ -723,6 +730,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const afterSignUp = yield* Hooks.AfterSignUp;
       const beforeSignIn = yield* Hooks.BeforeSignIn;
       const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
+      // ARF-005: consulted by `confirmReset` inside its transaction (the two-factor plugin taps it).
+      const beforeCredentialReset = yield* Hooks.BeforeCredentialReset;
       const afterSignIn = yield* Hooks.AfterSignIn;
 
       // RBS-006: one typed definition per rule feeds both this registry
@@ -1062,7 +1071,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // centralized inside `Sessions.issue` itself (which is also
         // called for admin impersonation and same-session token rotation,
         // neither of which is "a first factor just succeeded").
-        const point = yield* beforeSessionIssue.run({ userId: user.id, strategy: "password" });
+        const point = yield* beforeSessionIssue.run({
+          userId: user.id,
+          strategy: "password",
+          amr: ["pwd"],
+        });
         if (point._tag === "Diverted") {
           return yield* Effect.fail(point.value);
         }
@@ -1201,6 +1214,32 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 return yield* Effect.fail(new PasswordApi.TokenConsumed());
               }
               const userId = consumed.userId.value;
+
+              // ARF-005 (BEH-EA-232): mailbox possession alone must not rewrite the credential of
+              // an account a second factor protects. The veto runs inside this transaction, after
+              // the token is consumed and before anything is changed, so a refusal rolls the
+              // consume back (SQL) and nothing is written. `TWO_FACTOR_REQUIRED` gets its own typed
+              // error clients can branch on; any other code is the generic `HookAborted`.
+              yield* beforeCredentialReset
+                .run({
+                  userId,
+                  ...(input.secondFactorCode === undefined
+                    ? {}
+                    : { secondFactorCode: input.secondFactorCode }),
+                })
+                .pipe(
+                  Effect.catchTag("HookAbort", (abort) =>
+                    Effect.fail(
+                      abort.code === "TWO_FACTOR_REQUIRED"
+                        ? new PasswordApi.SecondFactorRequired()
+                        : new HookPoint.HookAborted({
+                            point: Hooks.BeforeCredentialReset.id,
+                            code: abort.code,
+                            message: abort.message,
+                          }),
+                    ),
+                  ),
+                );
 
               const account = yield* accounts
                 .findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId)

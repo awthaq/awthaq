@@ -561,4 +561,20 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
+  // SOS-004: an optional per-token attempt budget, so a short (numeric) value cannot be guessed
+  // within its TTL. `maxAttempts` is NULL for the default 256-bit token (no budget); `attempts`
+  // counts wrong presentations against the live row, which is burned when they reach the budget.
+  migration(26, "add_verification_tokens_attempt_budget", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`ALTER TABLE verification_tokens ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`.pipe(
+          Effect.andThen(sql`ALTER TABLE verification_tokens ADD COLUMN "maxAttempts" INTEGER`),
+        ),
+      sqlite: () =>
+        sql`ALTER TABLE verification_tokens ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`.pipe(
+          Effect.andThen(sql`ALTER TABLE verification_tokens ADD COLUMN maxAttempts INTEGER`),
+        ),
+      orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
 ]);

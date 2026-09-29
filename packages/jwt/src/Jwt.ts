@@ -185,6 +185,11 @@ const principalClaims = (principal: Api.Principal): Record<string, unknown> =>
     ? {
         sub: principal.ref.id,
         sid: principal.sessionId,
+        // AOMS-012: RFC 8176 `amr` and OIDC `auth_time`, so a downstream verifier can tell a
+        // password login from a federated or passkey one (and how fresh) from the token alone.
+        // Omitted, not empty, when the session recorded none.
+        ...(principal.amr !== undefined && principal.amr.length > 0 ? { amr: principal.amr } : {}),
+        ...(principal.authenticatedAt !== undefined ? { auth_time: principal.authenticatedAt } : {}),
         ...(principal.actingAs !== undefined
           ? // JR-005: RFC 8693 §4.1 identifies the actor by `sub`; the actor's
             // principal type rides along as a private (non-registered) member.
@@ -205,6 +210,9 @@ const UserTokenClaims = Schema.Struct({
   act: Schema.optional(
     Schema.Struct({ sub: Schema.String, awthaq_actor_type: Schema.optional(Schema.String) }),
   ),
+  // AOMS-012: assurance travels with the token, so a stateless re-entry resolves to the same facts.
+  amr: Schema.optional(Schema.Array(Schema.String)),
+  auth_time: Schema.optional(Schema.Number),
 });
 
 const claimsToPrincipal = (claims: Record<string, unknown>) =>
@@ -214,6 +222,8 @@ const claimsToPrincipal = (claims: Record<string, unknown>) =>
         new Api.UserPrincipal({
           ref: new Api.PrincipalRef({ type: "user", id: decoded.sub }),
           sessionId: decoded.sid,
+          ...(decoded.amr === undefined ? {} : { amr: decoded.amr }),
+          ...(decoded.auth_time === undefined ? {} : { authenticatedAt: decoded.auth_time }),
           ...(decoded.act !== undefined
             ? {
                 actingAs: new Api.PrincipalRef({

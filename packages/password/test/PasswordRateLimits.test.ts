@@ -19,6 +19,7 @@ const recordingLimiter = (keys: Ref.Ref<ReadonlyArray<string>>) =>
     RateLimiter.RateLimiter,
     RateLimiter.RateLimiter.of({
       consume: (input) => Ref.update(keys, (existing) => [...existing, input.key]),
+      check: () => Effect.void,
     }),
   );
 

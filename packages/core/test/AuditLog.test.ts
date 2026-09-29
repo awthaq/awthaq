@@ -323,6 +323,23 @@ const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.EventOf<T
     failed: 1,
     unmapped: 0,
   },
+  "auth.twoFactor.enabled": { _tag: "auth.twoFactor.enabled", userId },
+  "auth.twoFactor.disabled": { _tag: "auth.twoFactor.disabled", userId },
+  "auth.twoFactor.verified": {
+    _tag: "auth.twoFactor.verified",
+    userId,
+    method: "totp",
+    purpose: "signIn",
+  },
+  "auth.twoFactor.challengeFailed": {
+    _tag: "auth.twoFactor.challengeFailed",
+    userId,
+    method: "recovery",
+    purpose: "credentialReset",
+  },
+  "auth.twoFactor.recoveryCodeUsed": { _tag: "auth.twoFactor.recoveryCodeUsed", userId, remaining: 9 },
+  "auth.twoFactor.recoveryCodesRegenerated": { _tag: "auth.twoFactor.recoveryCodesRegenerated", userId },
+  "auth.twoFactor.locked": { _tag: "auth.twoFactor.locked", userId },
   "auth.apiKey.created": { _tag: "auth.apiKey.created", userId, keyId: "key-1" },
   "auth.apiKey.revoked": { _tag: "auth.apiKey.revoked", userId, keyId: "key-1" },
   "auth.apiKey.rotated": {
