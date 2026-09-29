@@ -4,13 +4,11 @@
 # surface, and a `0.0.0-canary.<sha>` version under the `canary` dist-tag promises
 # nothing.
 #
-# DORMANT. It does nothing until all of these exist, which no agent can create:
-#   1. a git remote for this repository;
-#   2. the @awthaq npm organisation;
-#   3. a trusted publisher on npmjs.com for `@awthaq/ports` naming this workflow
-#      file (canary.yml) and the `npm-canary` environment;
-#   4. `@awthaq/ports` made publishable (drop `"private": true` from its manifest);
-#   5. the repository variable AWTHAQ_CANARY_ENABLED set to `true`.
+# GATED. It does nothing unless the repository variable AWTHAQ_CANARY_ENABLED is
+# `true`, and publishing needs a human to approve the `npm-canary` environment.
+# One-time setup outside this repository: the @awthaq npm organisation and a trusted
+# publisher on npmjs.com for `@awthaq/ports` naming this workflow file (canary.yml),
+# repository `awthaq/awthaq` and the `npm-canary` environment.
 # `workflow_dispatch` only, so it can never run from a pull request or a push.
 name: Canary
 
