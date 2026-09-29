@@ -18,8 +18,6 @@
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import * as AuditChain from "./AuditChain.ts";
 import * as ConfigDescriptor from "./ConfigDescriptor.ts";
 import * as MailDispatch from "./MailDispatch.ts";
 import * as SessionCookie from "./SessionCookie.ts";
@@ -90,18 +88,6 @@ export const core: ReadonlyArray<Owned> = owned("core", [
   }),
   ConfigDescriptor.make(SessionCookie.SessionCookieConfig, { audit: cookieAudit }),
   ConfigDescriptor.make(MailDispatch.MailDispatchConfig),
-  ConfigDescriptor.make(AuditChain.AuditChainConfig, {
-    audit: (value, environment) =>
-      environment.production && Option.isNone(value.key)
-        ? [
-            ConfigDescriptor.finding(
-              "warning",
-              "audit-chain-unkeyed",
-              "the audit hash chain has no key: an attacker with database write access can recompute it",
-            ),
-          ]
-        : [],
-  }),
 ]);
 
 /** Renders every descriptor's value as read from `context` (a default when the context never set it). */

@@ -127,6 +127,17 @@ describe("EffectiveConfig", () => {
     ),
   );
 
+  it.effect("scrubs the password out of a connection string even when the field is not declared sensitive", () =>
+    Effect.gen(function* () {
+      const Url = Context.Reference<{ readonly url: string }>("test/UrlConfig", {
+        defaultValue: () => ({ url: "postgres://app:hunter2-canary@db.internal/app" }),
+      });
+      const context = yield* contextOf(Layer.empty);
+      const [item] = EffectiveConfig.read(context, EffectiveConfig.owned("app", [ConfigDescriptor.make(Url)]));
+      assert.strictEqual(item?.entries[0]?.value, "postgres://app:<redacted>@db.internal/app");
+    }),
+  );
+
   it.effect("the core session cookie descriptor flags a relaxed SameSite only in production", () =>
     Effect.gen(function* () {
       const context = yield* contextOf(

@@ -82,9 +82,16 @@ const isPlainObject = (value: unknown): value is Readonly<Record<string, unknown
   return proto === Object.prototype || proto === null;
 };
 
+/**
+ * ECS-005: a connection string carries its password (`postgres://app:hunter2@host/db`). A
+ * descriptor that does not declare the field sensitive still never prints that password.
+ */
+const scrubCredentials = (value: string) =>
+  value.replace(/^([a-z][a-z0-9+.-]*:\/\/[^/:@\s]*):[^@/\s]*@/i, `$1:${REDACTED}@`);
+
 const leaf = (path: string, value: string, sensitive: boolean): Entry => ({
   path,
-  value: sensitive ? REDACTED : value,
+  value: sensitive ? REDACTED : scrubCredentials(value),
   sensitive,
 });
 

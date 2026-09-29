@@ -22,6 +22,7 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import {
+  AuditChain,
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
@@ -581,7 +582,22 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
   contract: AdminApi.AdminApi,
   tables: ["admin_impersonation", "admin_impersonation_chain"],
   migrations: adminMigrations,
-  config: [ConfigDescriptor.make(AdminConfig)],
+  // The impersonation audit rows are hash-chained (`AuditChain`); the chain's key is this plugin's concern.
+  config: [
+    ConfigDescriptor.make(AdminConfig),
+    ConfigDescriptor.make(AuditChain.AuditChainConfig, {
+      audit: (value, environment) =>
+        environment.production && Option.isNone(value.key)
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "audit-chain-unkeyed",
+                "the impersonation audit hash chain has no key: an attacker with database write access can recompute it",
+              ),
+            ]
+          : [],
+    }),
+  ],
 }) {
   static readonly layer = AuthPlugin.layer(Admin, {
     handlers: AdminHandlers,
