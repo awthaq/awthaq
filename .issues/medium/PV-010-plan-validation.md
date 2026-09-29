@@ -33,3 +33,5 @@ Planned under: TS-001-tim-smart → sql-dialect-neutral-models (P09).
 _Triage notes and discussion append here._
 
 **Resolved (2026-09-29):** Field types (`Models.dialectFields`/`resolveDialect`, mechanical row-schema moves) landed in the first P09 pass; on the merged tree the stores' Postgres DDL, queries and trigger bodies are identifier-quoted as well, and every plugin record-store suite (admin, jwt, organization incl. team hierarchy/roles/active context, passkey incl. user handles, roles, qadi claims, migrate-better-auth) passes on a real Postgres 16 via `pnpm run test:pg` (`TestSql.layer`; 329 tests / 18 files). See TS-001-tim-smart's follow-up for the upstream `regclass` migrator defect found on the way.
+
+**Resolved (2026-09-29):** fixed under TS-001-tim-smart (P09: makeModels(dialect), plugin stores quoted and run on Postgres); see that issue's Resolved comment for files, tests and gates.

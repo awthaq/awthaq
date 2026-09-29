@@ -31,3 +31,5 @@ Planned under: P02 / IC-007 cookie decision.
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Plan note (2026-09-29):** investigated under P02 (recorded in BEH-EA-122 and packages/oauth/README.md, not fixed). The IC-007 `SessionCookieConfig` now offers the `Lax`-capable modes; switching the OAuth callback's session cookie to a Lax mode or a same-site bounce page remains a product choice. Left open.
