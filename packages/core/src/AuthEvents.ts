@@ -97,7 +97,9 @@ export type SessionRevocationReason =
   | "userDeleted"
   | "impersonationStopped"
   | "admin"
-  | "reuseDetected";
+  | "reuseDetected"
+  /** SMS-003: evicted by `SessionConfig.maxConcurrent` when the user's newest session was issued. */
+  | "limitEvicted";
 
 /**
  * TIR-008/ESA-006: published by `Sessions`' own revocation primitives

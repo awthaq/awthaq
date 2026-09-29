@@ -66,11 +66,29 @@ const UNKNOWN_SESSION_HASH = "0".repeat(64);
 const secretMatches = (presentedHash: string, storedHash: string): boolean =>
   Hmac.constantTimeEqualString(presentedHash, storedHash);
 
+/**
+ * SMS-003: an opt-in cap on one user's simultaneously live sessions. Absent by
+ * default — BEH-EA-047 forbids an implied base-model limit; this is a
+ * deployment policy. `evictOldest` ends the least-recently-active surplus
+ * session(s) in the same atomic step as the issue that would exceed `limit`,
+ * publishing `auth.session.revoked` (`limitEvicted`) for each, so `issue`'s
+ * error channel is unchanged. Impersonation (`actingAs`) sessions neither
+ * count toward nor trigger the cap — an admin's support session must never end
+ * the target's own sessions.
+ */
+export interface ConcurrentSessionPolicy {
+  /** At least 1. */
+  readonly limit: number;
+  readonly onExceed: "evictOldest";
+}
+
 /** BEH-EA-051: `SessionConfig` — absolute/idle expiry and the idle-refresh throttle. */
 export interface SessionConfig {
   readonly absolute: Duration.Duration;
   readonly idle: Duration.Duration;
   readonly touchEvery: Duration.Duration;
+  /** SMS-003: opt-in concurrent-session cap; absent = uncapped (the default). */
+  readonly maxConcurrent?: ConcurrentSessionPolicy;
 }
 
 /**
@@ -401,6 +419,27 @@ const newestActivityFirst = (
  */
 export const LIST_LIMIT = 1000;
 
+/**
+ * SMS-003: which of a user's existing live, non-impersonation sessions the
+ * about-to-be-issued one evicts — the least-recently-active surplus so that
+ * (existing - evicted) + 1 <= limit. Pure, shared by both layers.
+ */
+const evictionOrder = (
+  limit: number,
+  existing: ReadonlyArray<{ readonly id: string; readonly lastActiveAt: DateTime.Utc }>,
+): ReadonlyArray<string> => {
+  const surplus = existing.length + 1 - Math.max(1, limit);
+  if (surplus <= 0) return [];
+  return [...existing]
+    .sort(
+      (a, b) =>
+        DateTime.toEpochMillis(a.lastActiveAt) - DateTime.toEpochMillis(b.lastActiveAt) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    )
+    .slice(0, surplus)
+    .map((row) => row.id);
+};
+
 /** ESA-006: the one `auth.session.issued` both layers publish. */
 const publishIssued = (
   events: AuthEvents.AuthEventsShape,
@@ -505,9 +544,14 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         // alarm and a family revocation). RRS-003: tombstoned, not deleted —
         // the ancestor's own `familyId` is what this row inherits; a row with
         // no live `supersedes` ancestor founds a fresh family, `familyId = id`.
-        const row = yield* Ref.modify(
+        const { row, evicted } = yield* Ref.modify(
           state,
-          (s): readonly [SessionRow, HashMap.HashMap<SessionId, SessionRow>] => {
+          (
+            s,
+          ): readonly [
+            { readonly row: SessionRow; readonly evicted: ReadonlyArray<SessionRow> },
+            HashMap.HashMap<SessionId, SessionRow>,
+          ] => {
             const ancestor =
               input.supersedes === undefined
                 ? Option.none()
@@ -543,9 +587,37 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
                   supersededAt: Option.some(now),
                 }),
             });
-            return [created, HashMap.set(withAncestor, id, created)] as const;
+            // SMS-003: the cap is enforced in this same modify — count the
+            // user's other live, non-impersonation sessions and drop the
+            // least-recently-active surplus alongside the insert.
+            const policy = input.actingAs === undefined ? config.maxConcurrent : undefined;
+            const existing =
+              policy === undefined
+                ? []
+                : Array.from(HashMap.values(withAncestor)).filter(
+                    (r) =>
+                      r.userId === input.userId && isLiveAt(now, r) && Option.isNone(r.actingAs),
+                  );
+            const evictedIds = new Set<string>(
+              policy === undefined ? [] : evictionOrder(policy.limit, existing),
+            );
+            const evictedRows = existing.filter((r) => evictedIds.has(r.id));
+            const kept = HashMap.filter(withAncestor, (r) => !evictedIds.has(r.id));
+            return [
+              { row: created, evicted: evictedRows },
+              HashMap.set(kept, id, created),
+            ] as const;
           },
         );
+        for (const gone of evicted) {
+          yield* events.publish({
+            _tag: "auth.session.revoked",
+            userId: gone.userId,
+            sessionId: gone.id,
+            scope: "one",
+            reason: "limitEvicted",
+          });
+        }
         yield* publishIssued(events, row, row.familyId, row.actingAs);
         return { session: toView(row), token: Redacted.make(`${id}.${secret}`) };
       });
@@ -963,11 +1035,39 @@ export const layerSql: Layer.Layer<
             reusedAt: null,
           })
           .pipe(Effect.orDie);
-        return yield* repo.insert(insert).pipe(Effect.orDie);
+        const inserted = yield* repo.insert(insert).pipe(Effect.orDie);
+        // SMS-003: enforced in this same transaction — list the user's other
+        // live, non-impersonation sessions (oldest activity first) and delete
+        // the surplus. Under Postgres' default isolation two racing issues can
+        // each see room and transiently exceed the cap by one; the next issue
+        // evicts back to `limit`.
+        const policy = input.actingAs === undefined ? config.maxConcurrent : undefined;
+        const evicted: Array<string> = [];
+        if (policy !== undefined) {
+          const live = yield* repo.listLiveIds(input.userId, now).pipe(Effect.orDie);
+          for (const goneId of evictionOrder(
+            policy.limit,
+            live.filter((r) => r.id !== id),
+          )) {
+            yield* repo.delete(SessionId(goneId)).pipe(Effect.orDie);
+            evicted.push(goneId);
+          }
+        }
+        return { inserted, evicted };
       });
-      const row = yield* input.supersedes === undefined
+      const { inserted: row, evicted } = yield* input.supersedes === undefined &&
+      config.maxConcurrent === undefined
         ? persist
         : sql.withTransaction(persist).pipe(Effect.catchTag("SqlError", Effect.die));
+      for (const goneId of evicted) {
+        yield* events.publish({
+          _tag: "auth.session.revoked",
+          userId: input.userId,
+          sessionId: goneId,
+          scope: "one",
+          reason: "limitEvicted",
+        });
+      }
       const view = toSessionView(row);
       yield* publishIssued(events, view, row.familyId, view.actingAs);
       return { session: view, token: Redacted.make(`${row.id}.${secret}`) };

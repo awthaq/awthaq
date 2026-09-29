@@ -962,6 +962,109 @@ const eventsSuite = (
   });
 };
 
+// SMS-003: the opt-in concurrent-session cap.
+const cappedConfig = Layer.succeed(Sessions.SessionConfig, {
+  absolute: Duration.days(30),
+  idle: Duration.days(7),
+  touchEvery: Duration.hours(1),
+  maxConcurrent: { limit: 2, onExceed: "evictOldest" },
+});
+
+const CappedMemoryLayer = Sessions.layerMemory.pipe(
+  Layer.provide(Layer.mergeAll(NodeCrypto.layer, cappedConfig)),
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+);
+
+const CappedSqlLayer = Sessions.layerSql.pipe(
+  Layer.provide(Repositories.SessionsRepositoryLive),
+  Layer.provide(Layer.mergeAll(NodeCrypto.layer, cappedConfig)),
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(Migrated),
+);
+
+const capSuite = (
+  name: string,
+  cappedLayer: Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
+  uncappedLayer: Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
+): void => {
+  describe(name, () => {
+    it.effect(
+      "SMS-003: maxConcurrent {limit: 2, evictOldest} — a 3rd session evicts the least-recently-active and publishes auth.session.revoked (limitEvicted)",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const events = yield* AuthEvents.AuthEvents;
+          const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+          yield* Effect.forkChild(
+            events.stream.pipe(
+              Stream.filter((event) => event._tag === "auth.session.revoked"),
+              Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
+            ),
+            { startImmediately: true },
+          );
+          const a = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.millis(10));
+          const b = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.millis(10));
+          // Touch `a` so `b` is now the least recently active — eviction is by
+          // activity, not creation order.
+          yield* TestClock.adjust(Duration.hours(2));
+          yield* sessions.verify(a.token);
+          const c = yield* sessions.issue({ userId });
+
+          const live = yield* sessions.list(userId);
+          assert.deepStrictEqual(
+            new Set(live.map((row) => row.id)),
+            new Set([a.session.id, c.session.id]),
+          );
+          assert.strictEqual(live.length, 2);
+          const failure = yield* sessions.verify(b.token).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "SessionNotFound");
+
+          for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+          const revoked = yield* Ref.get(seen);
+          assert.deepStrictEqual(revoked, [
+            {
+              _tag: "auth.session.revoked",
+              userId,
+              sessionId: b.session.id,
+              scope: "one",
+              reason: "limitEvicted",
+            },
+          ]);
+        }).pipe(Effect.provide(cappedLayer)),
+    );
+
+    it.effect("SMS-003: an actingAs session neither counts toward nor triggers the cap", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const b = yield* sessions.issue({ userId });
+        yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-1" } });
+        yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-2" } });
+        // Both ordinary sessions survive: impersonation never evicted them.
+        yield* sessions.verify(a.token);
+        yield* sessions.verify(b.token);
+      }).pipe(Effect.provide(cappedLayer)),
+    );
+
+    it.effect("BEH-EA-047: the default config never evicts", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const issued = [];
+        for (let i = 0; i < 5; i++) issued.push(yield* sessions.issue({ userId }));
+        assert.strictEqual((yield* sessions.list(userId)).length, 5);
+      }).pipe(Effect.provide(uncappedLayer)),
+    );
+  });
+};
+
+capSuite("Sessions concurrent cap (layerMemory)", CappedMemoryLayer, MemoryLayerWithEvents);
+capSuite("Sessions concurrent cap (layerSql)", CappedSqlLayer, SqlLayerWithEvents);
+
 eventsSuite("Sessions lifecycle events (layerMemory)", MemoryLayerWithEvents);
 eventsSuite("Sessions lifecycle events (layerSql)", SqlLayerWithEvents);
 

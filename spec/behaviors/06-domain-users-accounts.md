@@ -110,6 +110,8 @@ REQUIREMENT: The base domain model MUST NOT cap the number of Accounts one
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §3.2 and §4.2 document the identical cardinality choice — no base-system cap on linked providers, no base-system cap on concurrent sessions — and awthaq's plan matches it directly: a User with a password credential, two OAuth providers, and a passkey is an ordinary, fully-supported state, as is a user signed in simultaneously on a laptop, a phone, and a CI service account acting on their behalf.
 
+**The opt-in cap is that deployment capability (SMS-003).** `SessionConfig.maxConcurrent` (`{ limit, onExceed: "evictOldest" }`) is absent by default, so nothing above changes. When configured, `Sessions.issue` — in the same atomic step as the insert (one `Ref.modify` in `layerMemory`, one transaction in `layerSql`) — ends the least-recently-active surplus of the user's live sessions so that no more than `limit` remain, and publishes `auth.session.revoked` with reason `limitEvicted` for each ([BEH-EA-101](13-events.md)); `issue`'s error channel is unchanged. Impersonation (`actingAs`) sessions neither count toward nor trigger the cap, so an admin's support session can never end the target's own sessions. A `refuse` policy would need a typed, user-facing error in `issue`'s channel and is not part of v1.
+
 ## BEH-EA-048: A plugin-contributed field on `User` or `Account` defaults to client-writable unless the plugin declares otherwise
 
 ```text

@@ -391,6 +391,19 @@ export interface SessionsRepositoryShape {
    */
   readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
   /**
+   * SMS-003: the user's live (not tombstoned, past neither expiry at `now`),
+   * non-impersonation sessions' ids and last activity — what a concurrent-
+   * session cap counts and evicts from. Impersonation (`actingAs`) rows are
+   * excluded: an admin's support session never counts against the target.
+   */
+  readonly listLiveIds: (
+    userId: UserId,
+    now: DateTime.Utc,
+  ) => Effect.Effect<
+    ReadonlyArray<{ readonly id: string; readonly lastActiveAt: DateTime.Utc }>,
+    RepositoryError
+  >;
+  /**
    * GC-005: deletes session `id` only when it belongs to `userId`, in one
    * statement — ownership is enforced atomically, not by a preceding lookup.
    * `true` when a row was deleted (owned and present), `false` for an unknown
@@ -535,6 +548,23 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
       const deleteAllByUser: SessionsRepositoryShape["deleteAllByUser"] = (userId) =>
         sql`DELETE FROM sessions WHERE "userId" = ${userId}`.pipe(Effect.asVoid);
 
+      const liveIdsQuery = SqlSchema.findAll({
+        Request: Schema.Struct({ userId: UserId, now: Schema.DateTimeUtcFromString }),
+        Result: Schema.Struct({ id: Schema.String, lastActiveAt: Schema.DateTimeUtcFromString }),
+        execute: (request) => sql`
+          SELECT id, "lastActiveAt" FROM sessions
+          WHERE "userId" = ${request.userId}
+            AND "supersededAt" IS NULL
+            AND "actingAsId" IS NULL
+            AND "absoluteExpiresAt" > ${request.now}
+            AND "idleExpiresAt" > ${request.now}
+          ORDER BY "lastActiveAt" ASC, id ASC
+        `,
+      });
+
+      const listLiveIds: SessionsRepositoryShape["listLiveIds"] = (userId, now) =>
+        liveIdsQuery({ userId, now });
+
       const deleteOwned: SessionsRepositoryShape["deleteOwned"] = (id, userId) =>
         sql`DELETE FROM sessions WHERE id = ${id} AND "userId" = ${userId} RETURNING id`.pipe(
           Effect.map((rows) => rows.length > 0),
@@ -598,6 +628,7 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         deleteAllForUserExcept,
         deleteAllByUser,
         deleteOwned,
+        listLiveIds,
         tombstone,
         markReused,
         revokeFamily,
