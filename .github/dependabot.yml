@@ -20,6 +20,15 @@ updates:
       qadi:
         patterns:
           - "@qadi/*"
+    ignore:
+      # `@types/node` follows the supported Node floor (22), not the newest runtime: 26's
+      # `webcrypto.KeyUsage` (`decapsulateBits`) does not fit the TypeScript DOM lib.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # 0.9 ships its own DOM types, incompatible with the `lib.dom` ones `xml-crypto` uses;
+      # moving it needs an `xml-crypto` release that does, not casts in signature verification.
+      - dependency-name: "@xmldom/xmldom"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     open-pull-requests-limit: 10
 
   - package-ecosystem: "github-actions"
