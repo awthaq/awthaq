@@ -36,6 +36,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import type * as Result from "effect/Result";
 import * as Context from "effect/Context";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -255,6 +256,18 @@ export type PromiseFacade<A> = A extends AnyClientMethod
     : A;
 
 /**
+ * EHA-005: like {@link PromiseFacade}, but every method resolves a
+ * `Result<A, E>` — `E` the method's own error union — instead of rejecting.
+ */
+export type ResultFacade<A> = A extends AnyClientMethod
+  ? (
+      ...args: Parameters<A>
+    ) => Promise<Result.Result<Effect.Success<ReturnType<A>>, Effect.Error<ReturnType<A>>>>
+  : A extends Readonly<Record<string, unknown>>
+    ? { readonly [K in keyof A]: ResultFacade<A[K]> }
+    : A;
+
+/**
  * BEH-EA-176: wraps an already-built client (every method's own `R` already
  * discharged to `never` — the ordinary shape once `baseUrl`/`HttpClient`/any
  * required client middleware have been provided) so a non-Effect caller gets
@@ -271,14 +284,37 @@ export type PromiseFacade<A> = A extends AnyClientMethod
  * itself against — the same overload-vs-implementation split
  * `@awthaq/core`'s `Auth.make` already uses for the identical reason
  * (that module's own doc comment explains it in more depth).
+ *
+ * EHA-005 — two modes, the same generated methods either way:
+ *
+ * - default: a Promise per call that **rejects** with the endpoint's tagged
+ *   contract error (`switch (error._tag)` in a `catch`, cf. `ErrorCodes<Api>`),
+ *   but whose *type* says nothing about it — a rejection is untyped in
+ *   TypeScript;
+ * - `{ mode: "result" }` ({@link ResultFacade}): a Promise that always
+ *   **resolves** to a `Result<A, E>`, `E` being the endpoint's contract error
+ *   union, so a non-Effect caller narrows `result.failure._tag` with
+ *   exhaustiveness checking.
+ *
+ * In both modes a defect (a network or decoding failure the contract does not
+ * declare) still rejects.
  */
 export function toPromiseFacade<A extends Readonly<Record<string, unknown>>>(
   client: A,
 ): PromiseFacade<A>;
-export function toPromiseFacade(client: Readonly<Record<string, unknown>>): unknown {
+export function toPromiseFacade<A extends Readonly<Record<string, unknown>>>(
+  client: A,
+  options: { readonly mode: "result" },
+): ResultFacade<A>;
+export function toPromiseFacade(
+  client: Readonly<Record<string, unknown>>,
+  options?: { readonly mode?: "promise" | "result" },
+): unknown {
+  const run = (effect: Effect.Effect<unknown, unknown, never>) =>
+    Effect.runPromise(options?.mode === "result" ? Effect.result(effect) : effect);
   const wrap = (value: unknown): unknown => {
     if (typeof value === "function") {
-      return (...args: ReadonlyArray<unknown>) => Effect.runPromise(value(...args));
+      return (...args: ReadonlyArray<unknown>) => run(value(...args));
     }
     if (value !== null && typeof value === "object") {
       return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, wrap(nested)]));

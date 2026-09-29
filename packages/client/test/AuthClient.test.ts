@@ -8,6 +8,7 @@ import { afterEach, assert, describe, it } from "@effect/vitest";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 import * as AuthClient from "../src/AuthClient.ts";
 
@@ -132,6 +133,68 @@ describe("toPromiseFacade (BEH-EA-176)", () => {
     await facade.password.signIn().then(
       () => assert.fail("expected the promise to reject"),
       (error) => assert.instanceOf(error, BoomFailure),
+    );
+  });
+});
+
+class OtherFailure extends Data.TaggedError("OtherFailure")<{ readonly code: number }> {}
+
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type Expect<T extends true> = T;
+
+describe("toPromiseFacade result mode (EHA-005)", () => {
+  const fakeClient = {
+    password: {
+      signIn: (input: { readonly email: string }) =>
+        input.email === "boom@example.com"
+          ? Effect.fail(new BoomFailure({ reason: "wrong password" }))
+          : input.email === "other@example.com"
+            ? Effect.fail(new OtherFailure({ code: 7 }))
+            : Effect.succeed({ userId: input.email }),
+    },
+    version: "1.0.0",
+  };
+
+  it("resolves a Success carrying the value", async () => {
+    const facade = AuthClient.toPromiseFacade(fakeClient, { mode: "result" });
+    const result = await facade.password.signIn({ email: "a@example.com" });
+    assert.isTrue(Result.isSuccess(result));
+    assert.deepStrictEqual(Result.isSuccess(result) ? result.success : undefined, {
+      userId: "a@example.com",
+    });
+    assert.strictEqual(facade.version, "1.0.0");
+  });
+
+  it("resolves a Failure carrying the typed contract error instead of rejecting", async () => {
+    const facade = AuthClient.toPromiseFacade(fakeClient, { mode: "result" });
+    const result = await facade.password.signIn({ email: "boom@example.com" });
+    assert.isTrue(Result.isFailure(result));
+    if (Result.isFailure(result)) {
+      // Exhaustive over the error union: adding a variant breaks this switch at compile time.
+      switch (result.failure._tag) {
+        case "BoomFailure":
+          assert.strictEqual(result.failure.reason, "wrong password");
+          break;
+        case "OtherFailure":
+          assert.fail("unexpected variant");
+      }
+    }
+  });
+
+  it("the failure type is exactly the endpoint's error union", () => {
+    const facade = AuthClient.toPromiseFacade(fakeClient, { mode: "result" });
+    type Resolved = Awaited<ReturnType<typeof facade.password.signIn>>;
+    type Failure = Resolved extends Result.Result<infer _A, infer E> ? E : never;
+    const check: Expect<Equal<Failure, BoomFailure | OtherFailure>> = true;
+    assert.isTrue(check);
+  });
+
+  it("the default mode still rejects (BEH-EA-176 unchanged)", async () => {
+    const facade = AuthClient.toPromiseFacade(fakeClient);
+    await facade.password.signIn({ email: "other@example.com" }).then(
+      () => assert.fail("expected the promise to reject"),
+      (error) => assert.instanceOf(error, OtherFailure),
     );
   });
 });
