@@ -37,7 +37,9 @@ export const clientAuthentication = (
 ) => {
   const fields: Record<string, string> = { ...grant, client_id: provider.clientId };
   const secret = Option.map(provider.clientSecret, Redacted.value);
-  const headers: Record<string, string> = {};
+  // RFC 6749 §5.1 token responses are JSON; some providers (GitHub) answer
+  // form-encoded unless asked, so the request says what it can decode.
+  const headers: Record<string, string> = { accept: "application/json" };
   if (Option.isSome(secret)) {
     if (provider.tokenEndpointAuthMethod === "client_secret_basic") {
       const credentials = `${formUrlEncode(provider.clientId)}:${formUrlEncode(secret.value)}`;

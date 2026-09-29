@@ -174,7 +174,7 @@ const generatePkce = (
  */
 export const accountAnchorFor = (provider: OAuthProvider.OAuthProviderConfig, subject: string) =>
   Effect.gen(function* () {
-    const issuer = provider.issuer === undefined ? undefined : yield* provider.issuer;
+    const issuer = provider.issuer === undefined ? undefined : yield* OAuthProvider.liftConfig(provider.issuer);
     return { providerId: provider.id, subject, ...(issuer === undefined ? {} : { issuer }) };
   });
 

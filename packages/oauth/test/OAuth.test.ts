@@ -913,6 +913,45 @@ describe("OAuth", () => {
     );
   });
 
+  describe("non-secret provider fields accept plain strings (BO-009)", () => {
+    it.effect("oidc({ issuer, discoveryUrl, clientId }) given plain strings resolves", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { location } = yield* oauth.authorize("okta", { callbackURL: undefined, link: undefined });
+        assert.strictEqual(new URL(location).searchParams.get("client_id"), "plain-client-id");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [
+              OAuthProvider.oidc({
+                id: "okta",
+                issuer: "https://okta.example.com/oauth2/default",
+                discoveryUrl: "https://okta.example.com/.well-known/openid-configuration",
+                clientId: "plain-client-id",
+                clientSecret: Config.succeed(Redacted.make("okta-secret")),
+                scopes: ["openid"],
+                mapProfile: (claims) => ({ subject: String(claims["sub"]) }),
+              }),
+            ],
+            httpRoutes: { ".well-known/openid-configuration": oktaDiscovery },
+          }),
+        ),
+      ),
+    );
+
+    it("a plain-string clientSecret is rejected by the type (BEH-EA-126: secrets are Config.Redacted only)", () => {
+      OAuthProvider.oauth2({
+        id: "leaky",
+        clientId: "abc",
+        // @ts-expect-error a secret must be a Config<Redacted>, never a bare string.
+        clientSecret: "hunter2",
+        scopes: [],
+        endpoints: { authorizationEndpoint: "https://x.example.com/a", tokenEndpoint: "https://x.example.com/t" },
+        mapProfile: () => ({ subject: "x" }),
+      });
+    });
+  });
+
   describe("boot-time provider configuration validation (ESS-002/OAP-005/JR-009)", () => {
     /** The rendered defect message of a boot that must die, or `undefined` if it booted. */
     const bootDefect = (
@@ -1374,12 +1413,14 @@ describe("OAuth", () => {
     /** What one token request looked like on the wire. */
     interface SeenRequest {
       readonly authorization: string | undefined;
+      readonly accept: string | undefined;
       readonly form: URLSearchParams;
     }
     const recordingTokenRoute = (seen: Array<SeenRequest>) => (request: HttpClientRequest.HttpClientRequest) => {
       const body = request.body;
       seen.push({
         authorization: request.headers["authorization"],
+        accept: request.headers["accept"],
         form: new URLSearchParams(
           body._tag === "Uint8Array" ? new TextDecoder().decode(body.body) : "",
         ),
@@ -1430,6 +1471,8 @@ describe("OAuth", () => {
         );
         assert.isFalse(seen[0]?.form.has("client_secret"));
         assert.strictEqual(seen[0]?.form.get("client_id"), "okta-client-id");
+        // Token requests ask for JSON (GitHub answers form-encoded otherwise).
+        assert.strictEqual(seen[0]?.accept, "application/json");
       }).pipe(Effect.provide(layerAdvertising(["client_secret_basic"], seen)));
     });
 

@@ -2,13 +2,13 @@
 //
 // spec/behaviors/16-oauth.md, BEH-EA-121, BEH-EA-126, BEH-EA-127.
 // spec/models/02-oauth-oidc.md's `OAuthProvider.oidc({...})` sketch, made
-// runnable. Two factories only — `oidc`/`oauth2` — not per-vendor presets
-// (`google()`/`github()`/`apple()`): nothing in BEH-EA-121 through 128
-// requires a shipped Google/GitHub/Apple integration, only the mechanism
+// runnable. Two factories — `oidc`/`oauth2` — are the whole mechanism
 // (structural PKCE, the documented `quirks.skipPkce` escape hatch, generic
-// discovery). A real deployment builds `google`/`github`/`apple` values by
-// calling `oidc`/`oauth2` with that provider's own issuer/endpoints, the
-// same way this plugin's own tests do with synthetic ids ("okta", "acme").
+// discovery); nothing in BEH-EA-121 through 128 needs more. IC-003's vendor
+// presets (`google`/`github`/`microsoft`/`gitlab`/`discord`, in the
+// `@awthaq/oauth/presets` subpath) are *data only* on top of them — they call
+// these two factories with a vendor's issuer/endpoints/claim mapping, so the
+// factories remain the escape hatch for any provider not listed.
 
 import * as Config from "effect/Config";
 import * as Data from "effect/Data";
@@ -81,12 +81,12 @@ export interface OAuthProviderConfig {
    * validation read it), absent for a plain `"oauth2"` provider with no
    * `id_token` at all (e.g. GitHub).
    */
-  readonly issuer?: Config.Config<string>;
+  readonly issuer?: string | Config.Config<string>;
   /** BEH-EA-127: when given, `discoveryUrl`'s fetched `issuer` MUST exact-match `issuer` above. */
-  readonly discoveryUrl?: Config.Config<string>;
+  readonly discoveryUrl?: string | Config.Config<string>;
   /** Required when `discoveryUrl` is absent. */
   readonly endpoints?: OAuthEndpoints;
-  readonly clientId: Config.Config<string>;
+  readonly clientId: string | Config.Config<string>;
   /** BEH-EA-126: read via `Config.Redacted` — absent only for a fully public client. */
   readonly clientSecret?: Config.Config<Redacted.Redacted<string>>;
   readonly scopes: ReadonlyArray<string>;
@@ -104,6 +104,15 @@ export interface OAuthProviderConfig {
   readonly discovery?: OAuthDiscoveryPolicy;
   readonly mapProfile: (claims: Record<string, unknown>) => OAuthProfile;
 }
+
+/**
+ * BO-009: a non-secret field may be a plain string (no `Config.succeed(...)`
+ * ceremony for a literal) or a `Config` read from the environment. The
+ * secret is deliberately *not* lifted this way: `clientSecret` stays
+ * `Config<Redacted>` only, so a literal secret cannot type-check (BEH-EA-126).
+ */
+export const liftConfig = (value: string | Config.Config<string>): Config.Config<string> =>
+  typeof value === "string" ? Config.succeed(value) : value;
 
 type FactoryInput = Omit<OAuthProviderConfig, "kind" | "pkce">;
 
@@ -183,7 +192,7 @@ export const resolve = (
   options: { readonly discoveryTimeout: Duration.Duration },
 ): Effect.Effect<ResolvedProvider, DiscoveryUnavailable> =>
   Effect.gen(function* () {
-    const clientId = yield* config.clientId.pipe(Effect.orDie);
+    const clientId = yield* liftConfig(config.clientId).pipe(Effect.orDie);
     const clientSecret =
       config.clientSecret === undefined
         ? Option.none()
@@ -191,7 +200,7 @@ export const resolve = (
     const configuredIssuer =
       config.issuer === undefined
         ? Option.none()
-        : Option.some(yield* config.issuer.pipe(Effect.orDie));
+        : Option.some(yield* liftConfig(config.issuer).pipe(Effect.orDie));
 
     if (config.kind === "oidc" && Option.isNone(configuredIssuer)) {
       return yield* Effect.die(
@@ -233,7 +242,7 @@ export const resolve = (
     let advertisedAuthMethods: ReadonlyArray<string> | undefined;
 
     if (config.discoveryUrl !== undefined) {
-      const discoveryUrl = yield* config.discoveryUrl.pipe(Effect.orDie);
+      const discoveryUrl = yield* liftConfig(config.discoveryUrl).pipe(Effect.orDie);
       const document = yield* httpClient.get(discoveryUrl).pipe(
         Effect.flatMap(ProviderHttp.decodeBody(DiscoveryDocumentSchema)),
         Effect.timeout(options.discoveryTimeout),

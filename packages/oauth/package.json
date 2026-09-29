@@ -17,6 +17,12 @@
       "bun": "./src/index.ts",
       "import": "./lib/index.js",
       "default": "./lib/index.js"
+    },
+    "./presets": {
+      "types": "./lib/presets/index.d.ts",
+      "bun": "./src/presets/index.ts",
+      "import": "./lib/presets/index.js",
+      "default": "./lib/presets/index.js"
     }
   },
   "scripts": {
