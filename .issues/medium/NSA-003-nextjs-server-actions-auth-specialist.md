@@ -3,7 +3,7 @@ ID: "NSA-003"
 Title: "README page recipe drops the force-dynamic guard that every spec recipe includes"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/README.md:79"
 Auditor: "nextjs-server-actions-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `next` · reported by **Next.js Server Actions Auth Specialist** (`nextjs-server-actions-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Add `export const dynamic = "force-dynamic"` (or an explicit caching section exp
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `next-server-action-facade`. Evidence at HEAD ec065a7: `packages/next/README.md:79`. Fix: Add the guard and a short caching note to the page recipe. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** README page recipe now has export const dynamic = 'force-dynamic', the redirect import and a short caching note.

@@ -3,7 +3,7 @@ ID: "NSA-008"
 Title: "Server-action recipe dispatches a synthetic request with no forwarded context (cookies, origin, client metadata)"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/README.md:100"
 Auditor: "nextjs-server-actions-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `next` · reported by **Next.js Server Actions Auth Specialist** (`nextjs-server-actions-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Show forwarding the action's cookie/origin headers (and Headers.get for ip/user-
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `next-server-action-facade`. Evidence at HEAD ec065a7: `packages/next/README.md:100`. Fix: Forward the action's context in the dispatch path (implemented inside BO-002's in-process client) and fix the README until that lands. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Implemented inside BO-002's client (cookie, UA, x-forwarded-for forwarding + CSRF echo with bootstrap retry) and the README recipe now succeeds against a CSRF-guarded group (test-backed). Cross-slice note unchanged: handlers should pass request ip/userAgent into Sessions.issue (password/passkey/oauth slice, not done here).

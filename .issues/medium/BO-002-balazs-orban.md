@@ -3,7 +3,7 @@ ID: "BO-002"
 Title: "No adapter surface: no route handlers, signIn, or signOut — README's own server-action example contains a placeholder"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/README.md:105"
 Auditor: "balazs-orban"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `next` · reported by **Balázs Orbán — Lead Maintainer, Auth.js** (`balazs-orban`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Ship an Auth.handlers-style helper (or a documented, reusable toWebHandler runti
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `next-server-action-facade`. Evidence at HEAD ec065a7: `packages/next/README.md:99`. Fix: Ship a typed, in-process server-action client: `HttpApiClient` over the app's own composed api whose transport dispatches to the app's web handler, forwards the action request's cookies/CSRF/origin/UA, and harvests Set-Cookie into Next's jar — so `client.password.signIn({...})` works for ANY composed plugin set. Respects the existing next-package decision (no runtime construction owned by the package: the app passes its handler/runtime). (effort L). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/next/src/ServerActionClient.ts: makeServerActionClient (Effect) / serverActionClient (Promise, default rejecting or mode:'result' typed Result via toPromiseFacade) — HttpApiClient over the app's own composed api with an in-process HttpClient transport that dispatches to the app's web handler, forwards Cookie/User-Agent/X-Forwarded-For, shares one cookie state with AuthClient.csrfClientLayer (echo + bootstrap retry), records each response's Set-Cookie and passes it through withNextCookies. A compile-time gate refuses the Promise form for apis needing client middleware beyond CsrfProtection (would be skipped silently, NF-11-1 style). No ManagedRuntime constructed. @awthaq/client added to next deps/tsconfig; parseSetCookie exported internally. Tests: ServerActionClient.test.ts against a real HttpRouter.toWebHandler + real CsrfProtectionLive (sign-in cookie lands in jar; cold-start retry; UA/XFF/cookies reach the handler; typed CsrfRejected in result mode; Effect form). README placeholder recipe replaced. Note: a valid-CSRF-cookie call and a cold one both succeed (the retry masks a missing echo), by design.

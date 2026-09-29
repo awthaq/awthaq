@@ -52,3 +52,5 @@ Add an opt-in convenience layer (not a replacement): a globalThis-pinning helper
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `next-server-action-facade`. Duplicate of `BO-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/next/README.md:100`. Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `BO-002-balazs-orban` — closed by its fix (see that issue's Resolved comment).

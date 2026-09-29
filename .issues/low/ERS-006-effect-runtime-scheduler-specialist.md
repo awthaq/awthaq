@@ -3,7 +3,7 @@ ID: "ERS-006"
 Title: "Next README dispose recipe drops the dispose promise and never drains in-flight work"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/README.md:40"
 Auditor: "effect-runtime-scheduler-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `next` · reported by **Effect Runtime & Scheduler Specialist** (`effect-runtime-scheduler-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ Track in-flight runPromise calls with a counter (or have the recipe wrap them), 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `next-server-action-facade`. Evidence at HEAD ec065a7: `packages/next/README.md:38`. Fix: Fix the recipe (the decision keeps runtime pinning as README-only, so the fix is documentation). (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** README runtime recipe: dispose is awaited with a 10s Promise.race bound, then process.exit(0); no 'void made.dispose()' remains; signal handlers only registered inside make() (HMR-safe); note on in-flight fibers not being children of the runtime scope and the optional counter.
