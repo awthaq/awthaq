@@ -1,6 +1,6 @@
 // @awthaq/magic-link — MagicLink
 //
-// BAM-007, MLO-005, MLO-002 (BEH-EA-267 to BEH-EA-270, wayfinder ticket 05 §2 Fix A): passwordless
+// BAM-007, MLO-005, MLO-002 (BEH-EA-264 to BEH-EA-267, wayfinder ticket 05 §2 Fix A): passwordless
 // sign-in by a single-use emailed link, built on the `Verification` substrate — no table of its own.
 //
 // - **Request** (`POST /magic-link/request`): rate limited per source and per (normalised) address,
@@ -147,12 +147,12 @@ export interface IssuedSession {
 }
 
 export interface MagicLinkShape {
-  /** BEH-EA-268: always resolves (or is rate limited) — never says whether an account exists. */
+  /** BEH-EA-265: always resolves (or is rate limited) — never says whether an account exists. */
   readonly requestLink: (input: {
     readonly email: string;
     readonly ip?: string | undefined;
   }) => Effect.Effect<void, Api.RateLimited>;
-  /** BEH-EA-269: the only way to consume a link. */
+  /** BEH-EA-266: the only way to consume a link. */
   readonly verify: (
     input: { readonly token: Redacted.Redacted<string>; readonly ip?: string | undefined },
     context?: { readonly userAgent?: string | undefined },
@@ -224,7 +224,7 @@ export const MagicLinkHandlers = HttpApiBuilder.group(
 export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("magicLink", {
   apiVersion: 1,
   contract: MagicLinkApi.MagicLinkApi,
-  // BEH-EA-270: no table — the links are `Verification` rows (`verification_tokens`, core's).
+  // BEH-EA-267: no table — the links are `Verification` rows (`verification_tokens`, core's).
   tables: [],
 }) {
   static readonly layer = AuthPlugin.layer(MagicLink, {

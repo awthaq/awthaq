@@ -1,4 +1,4 @@
-// ARF-005 (wayfinder ticket 05, Fix B), BEH-EA-259: `confirmReset` consults the
+// ARF-005 (wayfinder ticket 05, Fix B), BEH-EA-256: `confirmReset` consults the
 // `BeforeCredentialReset` veto inside its transaction, after the emailed token is consumed and
 // before the credential is rewritten and the sessions revoked — so mailbox possession alone
 // cannot downgrade an account a second factor protects. `@awthaq/two-factor`'s

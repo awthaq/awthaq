@@ -63,7 +63,7 @@ import * as PasskeyCredentials from "./PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "./PasskeyUserHandles.ts";
 
 /**
- * HSK-005/THS-003 (BEH-EA-258): how a verified assertion authenticated the user, as RFC 8176
+ * HSK-005/THS-003 (BEH-EA-255): how a verified assertion authenticated the user, as RFC 8176
  * method references — `hwk` for a device-bound (`singleDevice`) credential, `swk` for a synced
  * (`multiDevice`) one, plus `user` when the authenticator performed user verification. This is
  * what lets a policy require a hardware-bound key (`amr contains "hwk"`) or user verification,

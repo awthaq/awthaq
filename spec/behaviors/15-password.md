@@ -185,9 +185,9 @@ ESS-006/EHA-007: the static half of the policy lives in the contract: every emai
 
 _Previous: [BEH-EA-119](15-password.md#beh-ea-119-breach-check-is-fail-open-by-default-fail-closed-by-config) | Next: [BEH-EA-121](16-oauth.md#beh-ea-121-pkce-s256-is-structural-not-optional)_
 
-## BEH-EA-259: A credential reset consults BeforeCredentialReset before anything is rewritten
+## BEH-EA-256: A credential reset consults BeforeCredentialReset before anything is rewritten
 
-> **See:** [BEH-EA-093](12-hooks.md#beh-ea-093-a-divert-tap-returns-a-typed-alternative-outcome-the-caller-must-handle), [BEH-EA-261](31-two-factor.md#beh-ea-261-a-sign-in-with-a-confirmed-second-factor-is-diverted-and-no-session-exists-until-it-passes)
+> **See:** [BEH-EA-093](12-hooks.md#beh-ea-093-a-divert-tap-returns-a-typed-alternative-outcome-the-caller-must-handle), [BEH-EA-258](31-two-factor.md#beh-ea-258-a-sign-in-with-a-confirmed-second-factor-is-diverted-and-no-session-exists-until-it-passes)
 
 ```ts
 POST /password/confirm-reset { token, password, secondFactorCode? } -> 204 | TokenConsumed | WeakPassword | SecondFactorRequired | HookAborted | RateLimited

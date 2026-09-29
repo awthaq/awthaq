@@ -69,7 +69,7 @@ export class EmailNotVerified extends Schema.TaggedError<EmailNotVerified>()(
 ) {}
 
 /**
- * ARF-005 (BEH-EA-259): the account has a second factor and the reset request carried none — the
+ * ARF-005 (BEH-EA-256): the account has a second factor and the reset request carried none — the
  * `Hooks.BeforeCredentialReset` veto refused with code `TWO_FACTOR_REQUIRED`. `401`, like
  * `Hooks.TwoFactorRequired` at sign-in: the emailed link was valid, but that alone no longer
  * suffices; clients branch on `_tag` and resubmit with `secondFactorCode`. Any other veto code

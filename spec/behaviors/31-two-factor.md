@@ -12,9 +12,9 @@
 > | Change History | 1.0 (2026-09-29): Initial release (THS-001, AOMS-003, ARF-005, BCR-002, BCR-006, BCR-010, THS-004, THS-005, THS-007; wayfinder ticket 05), replacing [MOD-EA-006](../models/06-two-factor-totp.md)'s non-normative sketch |
 ---
 
-> Status: the `@awthaq/two-factor` plugin is implemented and tested (`packages/two-factor/test/`). The decisions behind it are [ADR-EA-020](../decisions/020-two-factor-state.md); the credential-reset veto it taps is [BEH-EA-259](15-password.md#beh-ea-259-a-credential-reset-consults-beforecredentialreset-before-anything-is-rewritten). SMS is deliberately not part of it ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
+> Status: the `@awthaq/two-factor` plugin is implemented and tested (`packages/two-factor/test/`). The decisions behind it are [ADR-EA-020](../decisions/020-two-factor-state.md); the credential-reset veto it taps is [BEH-EA-256](15-password.md#beh-ea-256-a-credential-reset-consults-beforecredentialreset-before-anything-is-rewritten). SMS is deliberately not part of it ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
 
-## BEH-EA-260: TOTP is RFC 6238, computed by a pure module checked against the published vectors
+## BEH-EA-257: TOTP is RFC 6238, computed by a pure module checked against the published vectors
 
 ```ts
 Totp.hotp(crypto, key, counter, digits): Effect<string>
@@ -38,9 +38,9 @@ REQUIREMENT: The time-based one-time password MUST be RFC 6238 over RFC 4226
 
 The module has no plugin, store or clock in it: HMAC-SHA-1 is built from `Crypto.digest` (RFC 2104), like `@awthaq/ports`' HMAC-SHA-256, so it runs wherever the composition's `Crypto` layer does. It is sequenced first because nothing else can be verified without it. base32 (RFC 4648, unpadded) is the alphabet an authenticator's manual-entry field takes; decoding tolerates case, spaces, hyphens and padding. `otpauthUri` is the Key Uri Format link a QR code carries.
 
-_Next: [BEH-EA-261](31-two-factor.md#beh-ea-261-a-sign-in-with-a-confirmed-second-factor-is-diverted-and-no-session-exists-until-it-passes)_
+_Next: [BEH-EA-258](31-two-factor.md#beh-ea-258-a-sign-in-with-a-confirmed-second-factor-is-diverted-and-no-session-exists-until-it-passes)_
 
-## BEH-EA-261: A sign-in with a confirmed second factor is diverted, and no session exists until it passes
+## BEH-EA-258: A sign-in with a confirmed second factor is diverted, and no session exists until it passes
 
 ```ts
 TwoFactor.sessionGate                // taps Hooks.BeforeSessionIssue
@@ -63,9 +63,9 @@ REQUIREMENT: Every first-factor flow that consults `BeforeSessionIssue`
 
 Hook points freeze at first use (BEH-EA-024), so the taps cannot be folded into the plugin's own layer; the markers are what keep a forgotten gate from being a silent MFA bypass (type-system-first plugins, ADR-EA-020 decision 5). The divert passes the first factor's `amr` (`Hooks.BeforeSessionIssue`'s context), so the session finally minted records how *both* factors were proven. `bypassStrategies` (default none) lets an application declare, say, `["passkey"]` — a user-verified passkey is already multi-factor — and is the only way a first factor skips the divert. Infrastructure failures inside the divert die (the divert has no error channel): failing closed, a `500` rather than a session.
 
-_Previous: [BEH-EA-260](31-two-factor.md#beh-ea-260-totp-is-rfc-6238-computed-by-a-pure-module-checked-against-the-published-vectors) | Next: [BEH-EA-262](31-two-factor.md#beh-ea-262-the-challenge-is-a-single-use-verification-row-consumed-before-the-code-is-checked)_
+_Previous: [BEH-EA-257](31-two-factor.md#beh-ea-257-totp-is-rfc-6238-computed-by-a-pure-module-checked-against-the-published-vectors) | Next: [BEH-EA-259](31-two-factor.md#beh-ea-259-the-challenge-is-a-single-use-verification-row-consumed-before-the-code-is-checked)_
 
-## BEH-EA-262: The challenge is a single-use Verification row, consumed before the code is checked
+## BEH-EA-259: The challenge is a single-use Verification row, consumed before the code is checked
 
 ```ts
 POST /two-factor/verify           { challengeId, code }          -> SessionDto | InvalidTwoFactorCode { challengeId? } | SecondFactorLocked
@@ -90,9 +90,9 @@ REQUIREMENT: The challenge MUST be a `Verification` row under the identifier
 
 The type system carries the state machine (TTE-008): `consumeChallenge` yields a `ConsumedChallenge`, `SecondFactor.check*` a branded `FactorProof`, and `Challenge.verified` joins the two — for the *same* user, else a defect — into the `VerifiedChallenge` that `finalizeSignIn`, the one place the plugin calls `Sessions.issue`, accepts. `finalizeSignIn` re-runs the sign-in gate (`Users.assertCanSignIn`: a user suspended in the minutes since the first factor gets no session), records `amr = [...first factor, "otp", "mfa"]` (AOMS-003), publishes `auth.user.signedIn` for the first factor's strategy and runs `AfterSignIn`. `/verify` is rate limited per source (`verifyByIp`).
 
-_Previous: [BEH-EA-261](31-two-factor.md#beh-ea-261-a-sign-in-with-a-confirmed-second-factor-is-diverted-and-no-session-exists-until-it-passes) | Next: [BEH-EA-263](31-two-factor.md#beh-ea-263-enrolling-disabling-and-regenerating-need-a-fresh-session-and-the-secret-is-encrypted-at-rest)_
+_Previous: [BEH-EA-258](31-two-factor.md#beh-ea-258-a-sign-in-with-a-confirmed-second-factor-is-diverted-and-no-session-exists-until-it-passes) | Next: [BEH-EA-260](31-two-factor.md#beh-ea-260-enrolling-disabling-and-regenerating-need-a-fresh-session-and-the-secret-is-encrypted-at-rest)_
 
-## BEH-EA-263: Enrolling, disabling and regenerating need a fresh session, and the secret is encrypted at rest
+## BEH-EA-260: Enrolling, disabling and regenerating need a fresh session, and the secret is encrypted at rest
 
 ```ts
 POST /two-factor/enable                      -> { secret, otpauthUri }          // once
@@ -118,9 +118,9 @@ REQUIREMENT: `enable`, `disable` and `regenerate` MUST require a session
 
 The base32 secret is returned exactly once, by `enable`; the plaintext lives only in that response. A read under a retired encryption key re-encrypts the secret under the current one (lazy re-encryption), so a key can eventually be dropped. All five endpoints sit behind `Api.Authentication` and `CsrfProtection`; the management endpoints are rate limited per account (`manageByUser`).
 
-_Previous: [BEH-EA-262](31-two-factor.md#beh-ea-262-the-challenge-is-a-single-use-verification-row-consumed-before-the-code-is-checked) | Next: [BEH-EA-264](31-two-factor.md#beh-ea-264-recovery-codes-are-hashed-single-use-shown-once-and-replaced-atomically)_
+_Previous: [BEH-EA-259](31-two-factor.md#beh-ea-259-the-challenge-is-a-single-use-verification-row-consumed-before-the-code-is-checked) | Next: [BEH-EA-261](31-two-factor.md#beh-ea-261-recovery-codes-are-hashed-single-use-shown-once-and-replaced-atomically)_
 
-## BEH-EA-264: Recovery codes are hashed, single-use, shown once and replaced atomically
+## BEH-EA-261: Recovery codes are hashed, single-use, shown once and replaced atomically
 
 ```ts
 interface TwoFactorRecoveryCodesShape {
@@ -147,9 +147,9 @@ REQUIREMENT: `confirm` MUST mint ten recovery codes of ten characters from a
 
 Codes are shown grouped (`ABCDE-FGHJK`) and normalised (upper-cased, separators stripped) before hashing or comparing; a string that cannot be a code is refused without running a password hash. A code is accepted wherever a TOTP is (sign-in, credential reset, disable, regenerate), and never both a success and a silent replay: a spent code fails the ordinary way.
 
-_Previous: [BEH-EA-263](31-two-factor.md#beh-ea-263-enrolling-disabling-and-regenerating-need-a-fresh-session-and-the-secret-is-encrypted-at-rest) | Next: [BEH-EA-265](31-two-factor.md#beh-ea-265-a-totp-step-is-accepted-at-most-once-even-concurrently)_
+_Previous: [BEH-EA-260](31-two-factor.md#beh-ea-260-enrolling-disabling-and-regenerating-need-a-fresh-session-and-the-secret-is-encrypted-at-rest) | Next: [BEH-EA-262](31-two-factor.md#beh-ea-262-a-totp-step-is-accepted-at-most-once-even-concurrently)_
 
-## BEH-EA-265: A TOTP step is accepted at most once, even concurrently
+## BEH-EA-262: A TOTP step is accepted at most once, even concurrently
 
 ```ts
 interface TwoFactorSecretsShape {
@@ -172,9 +172,9 @@ REQUIREMENT: A verified TOTP MUST advance `two_factor_secret.lastUsedStep`
 
 Both stores (`layerMemory` in one `Ref.modify`, `layerSql` in one conditional `UPDATE ... RETURNING`) behave identically, against SQLite and Postgres. `lastUsedStep` is an `INTEGER` — a step is `floor(epochSeconds / 30)`, under 2³¹ for two thousand years — so it decodes as a plain number on both dialects.
 
-_Previous: [BEH-EA-264](31-two-factor.md#beh-ea-264-recovery-codes-are-hashed-single-use-shown-once-and-replaced-atomically) | Next: [BEH-EA-266](31-two-factor.md#beh-ea-266-one-failure-budget-per-account-locks-the-second-factor-and-every-outcome-is-audited)_
+_Previous: [BEH-EA-261](31-two-factor.md#beh-ea-261-recovery-codes-are-hashed-single-use-shown-once-and-replaced-atomically) | Next: [BEH-EA-263](31-two-factor.md#beh-ea-263-one-failure-budget-per-account-locks-the-second-factor-and-every-outcome-is-audited)_
 
-## BEH-EA-266: One failure budget per account locks the second factor, and every outcome is audited
+## BEH-EA-263: One failure budget per account locks the second factor, and every outcome is audited
 
 ```ts
 RateLimiter.check(input): Effect<void, RateLimitExceeded>   // read half: never counts
@@ -195,6 +195,6 @@ REQUIREMENT: Failed presentations of a TOTP code or a recovery code — for any
              `auth.twoFactor.*` event, identifiers only.
 ```
 
-`RateLimiter.check` is the read half of a limit that only failures spend: it fails with the same `RateLimitExceeded` `consume` would once the bucket holds `limit` or more, without counting the call. Together with the per-challenge attempts of BEH-EA-262 and the per-source limit it bounds guessing per sign-in, per account and per origin (ADR-EA-020 decision 3). Account erasure removes the secret and every recovery code; the data-subject export reports whether a factor exists and how many codes remain, never a secret or a hash.
+`RateLimiter.check` is the read half of a limit that only failures spend: it fails with the same `RateLimitExceeded` `consume` would once the bucket holds `limit` or more, without counting the call. Together with the per-challenge attempts of BEH-EA-259 and the per-source limit it bounds guessing per sign-in, per account and per origin (ADR-EA-020 decision 3). Account erasure removes the secret and every recovery code; the data-subject export reports whether a factor exists and how many codes remain, never a secret or a hash.
 
-_Previous: [BEH-EA-265](31-two-factor.md#beh-ea-265-a-totp-step-is-accepted-at-most-once-even-concurrently)_
+_Previous: [BEH-EA-262](31-two-factor.md#beh-ea-262-a-totp-step-is-accepted-at-most-once-even-concurrently)_

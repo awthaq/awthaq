@@ -1256,7 +1256,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               }
               const userId = consumed.userId.value;
 
-              // ARF-005 (BEH-EA-259): mailbox possession alone must not rewrite the credential of
+              // ARF-005 (BEH-EA-256): mailbox possession alone must not rewrite the credential of
               // an account a second factor protects. The veto runs inside this transaction, after
               // the token is consumed and before anything is changed, so a refusal rolls the
               // consume back (SQL) and nothing is written. `TWO_FACTOR_REQUIRED` gets its own typed

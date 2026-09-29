@@ -20,11 +20,11 @@ An SMS-delivered one-time code is the factor users ask for and the one NIST SP 8
 
 ## Decision
 
-1. **The substrate ships; the SMS plugin does not (yet).** `@awthaq/magic-link`'s `EmailOtp` is the channel-OTP substrate (BEH-EA-274 to 274): six digits minted inside `Verification`, hashed at rest, a per-code attempt budget, a resend window, per-source and per-address rate limits. SMS is *a channel over that substrate*, not a new mechanism.
+1. **The substrate ships; the SMS plugin does not (yet).** `@awthaq/magic-link`'s `EmailOtp` is the channel-OTP substrate (BEH-EA-268 to 271): six digits minted inside `Verification`, hashed at rest, a per-code attempt budget, a resend window, per-source and per-address rate limits. SMS is *a channel over that substrate*, not a new mechanism.
 2. **When SMS ships it is a separate plugin, `@awthaq/sms-otp`, explicitly degraded.** Never bundled into `two-factor` or `email-otp`; TOTP and passkeys stay the documented first choice.
 3. **It can never be an account's only factor.** Enrolment is refused unless the account already has a confirmed non-restricted factor, and disabling the last non-restricted factor is refused while SMS remains — enforced at enrol time, not documented.
 4. **The operator must acknowledge the restriction.** The plugin's configuration requires `acknowledgeRestricted: true`; without it the layer fails to build with a typed configuration error, so restricted status is a decision someone made, not a default.
-5. **It is recorded as `sms`, never `otp`.** The session's `amr` (RFC 8176) names the method, so `Assurance` (SOS-005, BEH-EA-258) can rank it: `sms` alone never raises a session above aal1, `pwd + sms` reaches aal2 only with the `restricted` flag set, and `Assurance.satisfies` ignores a restricted factor unless the caller opts in. `AuthMethod` already includes `sms` so no plugin needs a core change.
+5. **It is recorded as `sms`, never `otp`.** The session's `amr` (RFC 8176) names the method, so `Assurance` (SOS-005, BEH-EA-255) can rank it: `sms` alone never raises a session above aal1, `pwd + sms` reaches aal2 only with the `restricted` flag set, and `Assurance.satisfies` ignores a restricted factor unless the caller opts in. `AuthMethod` already includes `sms` so no plugin needs a core change.
 6. **Its use is a distinguishable audit event**, `auth.factor.smsUsed` (added to the event registry when the plugin ships), so an application can see and alert on restricted-factor usage.
 7. **A SIM-swap risk check is a documented extension point, not shipped.** An optional `SimSwapRiskCheck` port, consulted before a code is sent, lets an application plug in a carrier or fraud API; no implementation is provided.
 

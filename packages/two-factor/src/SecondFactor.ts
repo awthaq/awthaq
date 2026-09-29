@@ -1,6 +1,6 @@
 // @awthaq/two-factor — SecondFactor
 //
-// THS-001 steps 2 and 5-8, THS-004/005/007, BCR-002/006 (BEH-EA-260 to BEH-EA-266): the domain
+// THS-001 steps 2 and 5-8, THS-004/005/007, BCR-002/006 (BEH-EA-257 to BEH-EA-263): the domain
 // service behind both the HTTP plugin (`TwoFactor`) and the two hook gates. It owns everything
 // about *a user's second factor* — enrolling it, checking a presented code against it, its recovery
 // codes, the failure budget and the sign-in challenge — and nothing about HTTP or sessions, so the

@@ -1,6 +1,6 @@
 // @awthaq/magic-link — EmailOtpApi
 //
-// SOS-001 (BEH-EA-271 to BEH-EA-274): the email-OTP contract — one public group, `emailOtp`. `request`
+// SOS-001 (BEH-EA-268 to BEH-EA-271): the email-OTP contract — one public group, `emailOtp`. `request`
 // mails a short numeric code and answers `202` identically for every address (an unknown address, an
 // address inside its resend window, a mail that was never sent look the same); `verify` trades the
 // code for a session. Every failure of the code itself — wrong, expired, burned by too many guesses,

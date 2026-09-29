@@ -165,7 +165,7 @@ REQUIREMENT: Verifying a presented session secret MUST compare
 _Previous: [BEH-EA-048](06-domain-users-accounts.md#beh-ea-048-a-plugin-contributed-field-on-user-or-account-defaults-to-client-writable-unless-the-plugin-declares-otherwise)_
 _Next: [BEH-EA-057](08-verification-tokens.md#beh-ea-057-a-verification-token-is-scoped-to-one-purpose)_
 
-## BEH-EA-258: A session's authentication facts reach the policy layer as attributes
+## BEH-EA-255: A session's authentication facts reach the policy layer as attributes
 
 > **See:** [ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md), [ADR-EA-012](../decisions/012-slots-exclusive-registries-aggregate.md)
 

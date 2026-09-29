@@ -46,4 +46,4 @@ _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-assurance-channel`. Evidence at HEAD ec065a7: `packages/qadi/src/index.ts:3`. Fix: Add the assurance vocabulary on top of AAPS-006's amr channel so SMS can be policy-ranked below TOTP/passkey before any SMS plugin ships. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
 
-**Resolved (2026-09-29):** Assurance vocabulary on the amr channel: Assurance.assuranceLevel/assurance/satisfies and isRestrictedFactor (sms ranks below totp/passkey and never reaches aal2 alone), Sessions.AuthMethod includes sms before any SMS plugin exists. Tests: packages/core/test/Assurance.test.ts. BEH-EA-258, ADR-EA-021.
+**Resolved (2026-09-29):** Assurance vocabulary on the amr channel: Assurance.assuranceLevel/assurance/satisfies and isRestrictedFactor (sms ranks below totp/passkey and never reaches aal2 alone), Sessions.AuthMethod includes sms before any SMS plugin exists. Tests: packages/core/test/Assurance.test.ts. BEH-EA-255, ADR-EA-021.

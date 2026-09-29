@@ -53,7 +53,7 @@ describe("SubjectResolver (default)", () => {
     }),
   );
 
-  // AAPS-006/SOS-005/HSK-005 (BEH-EA-258): how the session was authenticated reaches the policy layer.
+  // AAPS-006/SOS-005/HSK-005 (BEH-EA-255): how the session was authenticated reaches the policy layer.
   it.effect(
     "a session's amr, authenticatedAt and derived aal land on the subject's attributes",
     () =>

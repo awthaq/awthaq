@@ -1,6 +1,6 @@
 // @awthaq/two-factor — TwoFactor
 //
-// THS-001 steps 6, 9-11; AOMS-003, ARF-005 (BEH-EA-260 to BEH-EA-266, wayfinder ticket 05 §1-§2).
+// THS-001 steps 6, 9-11; AOMS-003, ARF-005 (BEH-EA-257 to BEH-EA-263, wayfinder ticket 05 §1-§2).
 // The plugin: TOTP two-factor authentication with hashed recovery codes, attached to the divert
 // point ticket 03 seeded (`Hooks.BeforeSessionIssue`) and the reset veto ticket 05 §2 adds
 // (`Hooks.BeforeCredentialReset`).
@@ -88,7 +88,7 @@ export interface Enrollment {
 }
 
 export interface TwoFactorShape {
-  /** BEH-EA-263: needs a fresh session; stores a pending secret and returns it once. */
+  /** BEH-EA-260: needs a fresh session; stores a pending secret and returns it once. */
   readonly enable: (
     userId: Users.UserId,
     sessionId: string,
@@ -99,7 +99,7 @@ export interface TwoFactorShape {
     | Api.RateLimited
     | Errors.StoreUnavailable
   >;
-  /** BEH-EA-263/264: confirms with a first valid code, activates the factor and returns the recovery codes once. */
+  /** BEH-EA-260/261: confirms with a first valid code, activates the factor and returns the recovery codes once. */
   readonly confirm: (
     userId: Users.UserId,
     code: Redacted.Redacted<string>,
@@ -111,7 +111,7 @@ export interface TwoFactorShape {
     | TwoFactorApi.SecondFactorLocked
     | Api.RateLimited
   >;
-  /** BEH-EA-262: completes a diverted sign-in with a TOTP code and mints the session. */
+  /** BEH-EA-259: completes a diverted sign-in with a TOTP code and mints the session. */
   readonly verify: (
     input: {
       readonly challengeId: Redacted.Redacted<string>;
@@ -120,7 +120,7 @@ export interface TwoFactorShape {
     },
     context?: { readonly userAgent?: string },
   ) => Effect.Effect<IssuedSession, VerifyError>;
-  /** BEH-EA-264: completes a diverted sign-in with a recovery code (spent). */
+  /** BEH-EA-261: completes a diverted sign-in with a recovery code (spent). */
   readonly verifyRecovery: (
     input: {
       readonly challengeId: Redacted.Redacted<string>;
@@ -129,13 +129,13 @@ export interface TwoFactorShape {
     },
     context?: { readonly userAgent?: string },
   ) => Effect.Effect<IssuedSession, VerifyError>;
-  /** BEH-EA-263: needs a fresh session and a valid TOTP or recovery code; removes the factor. */
+  /** BEH-EA-260: needs a fresh session and a valid TOTP or recovery code; removes the factor. */
   readonly disable: (
     userId: Users.UserId,
     sessionId: string,
     code: Redacted.Redacted<string>,
   ) => Effect.Effect<void, ManageError>;
-  /** BEH-EA-264/BCR-002: replaces the recovery-code set atomically; needs a fresh session and a valid code. */
+  /** BEH-EA-261/BCR-002: replaces the recovery-code set atomically; needs a fresh session and a valid code. */
   readonly regenerateRecoveryCodes: (
     userId: Users.UserId,
     sessionId: string,
@@ -165,7 +165,7 @@ type ManageError =
 // ---- the hook gates ------------------------------------------------------------------------------
 
 /**
- * BEH-EA-261 (ticket 05 §1): taps `Hooks.BeforeSessionIssue`. When the user has a *confirmed* second
+ * BEH-EA-258 (ticket 05 §1): taps `Hooks.BeforeSessionIssue`. When the user has a *confirmed* second
  * factor (and the first factor's strategy is not in `bypassStrategies`), the divert answers
  * `TwoFactorRequired { userId, challengeId }` and no session is minted until `/two-factor/verify`
  * succeeds. A pending, unconfirmed secret never diverts — an abandoned `enable` cannot lock anyone out.
@@ -196,7 +196,7 @@ export const sessionGate = Layer.unwrap(
 );
 
 /**
- * BEH-EA-259 (ticket 05 §2 Fix B): taps `Hooks.BeforeCredentialReset`. For an account with a confirmed
+ * BEH-EA-256 (ticket 05 §2 Fix B): taps `Hooks.BeforeCredentialReset`. For an account with a confirmed
  * second factor a password reset must carry a valid TOTP or recovery code: none aborts
  * `TWO_FACTOR_REQUIRED` (which `Password` surfaces as `SecondFactorRequired`), a wrong one
  * `SECOND_FACTOR_INVALID`, a spent budget `SECOND_FACTOR_LOCKED`. The tap runs inside `confirmReset`'s
@@ -482,7 +482,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
         );
 
       /**
-       * BEH-EA-263: enrolling, disabling and regenerating need a session that proved a credential
+       * BEH-EA-260: enrolling, disabling and regenerating need a session that proved a credential
        * recently, so a hijacked cookie cannot quietly swap the victim's second factor. A session that
        * is not live for its owner fails closed the same as a stale one.
        */
@@ -539,7 +539,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
       });
 
       /**
-       * BEH-EA-262 (ticket 05 §1, plus the retry UX the plan adds): consume the challenge BEFORE
+       * BEH-EA-259 (ticket 05 §1, plus the retry UX the plan adds): consume the challenge BEFORE
        * checking the code, so `auth.token.replay` fires on every bad, expired or reused challenge. A
        * wrong code re-issues a fresh challenge carrying `attempt + 1` — a consumed challenge is never
        * re-used — until `maxAttemptsPerChallenge` are spent, after which the client restarts the sign-in.

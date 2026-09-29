@@ -2,8 +2,8 @@
 
 Passwordless sign-in over the `Verification` substrate. Two plugins in one package, sharing one channel-credential step (`Channel`) and declaring no table of their own:
 
-- `MagicLink.MagicLink` — a single-use emailed link. `POST /magic-link/request` (always `202`) and `POST /magic-link/verify`. See [`spec/behaviors/32-magic-link.md`](../../spec/behaviors/32-magic-link.md) (BEH-EA-267–243).
-- `EmailOtp.EmailOtp` — a six-digit emailed code, hashed at rest, with a per-code attempt budget and a resend window. `POST /email-otp/request` and `POST /email-otp/verify`. See [`spec/behaviors/33-email-otp.md`](../../spec/behaviors/33-email-otp.md) (BEH-EA-271–247).
+- `MagicLink.MagicLink` — a single-use emailed link. `POST /magic-link/request` (always `202`) and `POST /magic-link/verify`. See [`spec/behaviors/32-magic-link.md`](../../spec/behaviors/32-magic-link.md) (BEH-EA-264–243).
+- `EmailOtp.EmailOtp` — a six-digit emailed code, hashed at rest, with a per-code attempt budget and a resend window. `POST /email-otp/request` and `POST /email-otp/verify`. See [`spec/behaviors/33-email-otp.md`](../../spec/behaviors/33-email-otp.md) (BEH-EA-268–247).
 
 Both mount under the shared `"auth"` id (groups `"magicLink"` and `"emailOtp"`), require `Verification`, `Mailer`, `RateLimiter` and the core services, and run the same finishing step as every first factor: find or create the user (only with `allowSignUp`), mark the mailbox verified, run the sign-in gate, the `BeforeSignIn` veto and the MFA divert. A user with a confirmed second factor (`@awthaq/two-factor`) is diverted to `TwoFactorRequired` instead of receiving a session.
 

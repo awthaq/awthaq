@@ -1,6 +1,6 @@
 // @awthaq/two-factor — RecoveryCodes
 //
-// THS-001 step 8 (BEH-EA-264): minting, displaying and normalising recovery codes — the pure half;
+// THS-001 step 8 (BEH-EA-261): minting, displaying and normalising recovery codes — the pure half;
 // hashing goes through the `PasswordHasher` port and single-use through the store.
 //
 // A code is `length` characters from a 32-symbol alphabet that leaves out the look-alikes

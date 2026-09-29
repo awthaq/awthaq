@@ -58,4 +58,4 @@ _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `verification-otp-substrate`. Evidence at HEAD ec065a7: `packages/core/src/Verification.ts:186`. Fix: Add a lastUsedStep compare-and-set to the TOTP secret row in the two-factor design and implementation. (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
 
-**Resolved (2026-09-29):** lastUsedStep compare-and-set on the two_factor_secret row (advanceLastUsedStep; confirm seeds it): a replayed or older step is refused; 12 concurrent submissions of one step advance exactly once. Tests: TwoFactorStore.test.ts (memory + SQLite), Totp.test.ts. BEH-EA-265.
+**Resolved (2026-09-29):** lastUsedStep compare-and-set on the two_factor_secret row (advanceLastUsedStep; confirm seeds it): a replayed or older step is refused; 12 concurrent submissions of one step advance exactly once. Tests: TwoFactorStore.test.ts (memory + SQLite), Totp.test.ts. BEH-EA-262.

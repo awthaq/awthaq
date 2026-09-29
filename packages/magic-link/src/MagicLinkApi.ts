@@ -1,6 +1,6 @@
 // @awthaq/magic-link — MagicLinkApi
 //
-// BAM-007, MLO-005 (BEH-EA-267 to BEH-EA-270): the magic-link contract — one public group, `magicLink`,
+// BAM-007, MLO-005 (BEH-EA-264 to BEH-EA-267): the magic-link contract — one public group, `magicLink`,
 // two endpoints, **both POST**. There is deliberately no GET route: a mail scanner, a link
 // previewer or a browser prefetch dereferences every URL in a message, and a link that signs a
 // person in on GET is consumed (and a session minted) by the scanner before the person clicks.

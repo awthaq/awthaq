@@ -45,7 +45,7 @@ const isPermissionKey = (scope: string): scope is PermissionKey => {
 };
 
 /**
- * AAPS-006/SOS-005/HSK-005 (BEH-EA-258): the attributes every `User` subject carries, from the
+ * AAPS-006/SOS-005/HSK-005 (BEH-EA-255): the attributes every `User` subject carries, from the
  * resolved principal — `actingAs` (BEH-EA-142) when impersonating, plus how the session was
  * authenticated: `amr` (RFC 8176 method references, `[]` when the issuing path recorded none —
  * the floor, never a guess), `authenticatedAt` (epoch seconds, absent when unknown), `aal` (the
