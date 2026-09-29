@@ -3,7 +3,7 @@ ID: "PV-007"
 Title: "Hook tap() layers carry no requirement on their hook point — INV-EA-005/BEH-EA-094 compile-time guarantee is not enforced"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/HookPoint.ts"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `MEDIUM` · `architecture` · `core` · found during the 2026-09-29 plan validation (not in the original audit)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -31,3 +31,5 @@ Planned under: ELC-001 → hook-registry-per-composition (P10).
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29):** fixed under ELC-001 (P10: hook taps carry a requirement on their hook point; per-composition registries).
