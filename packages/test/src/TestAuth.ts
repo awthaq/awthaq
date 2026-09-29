@@ -236,6 +236,7 @@ export function layer<
 >(
   built: Auth.Built<P, Extra>,
   services: Layer.Layer<MR, ME, MRIn>,
+  options?: LayerOptions,
 ): Layer.Layer<
   | Layer.Success<typeof MemoryPorts>
   | Layer.Success<typeof GuardLive>
@@ -254,12 +255,18 @@ export function layer<
 export function layer(
   built: Auth.Built<ReadonlyArray<AuthPlugin.Any>, HttpApiGroup.Constraint>,
   services: Layer.Layer<unknown, unknown, unknown>,
+  options?: LayerOptions,
 ): Layer.Layer<never, unknown, unknown> {
   // MW-002: `built.api` always carries core's session/account groups, so their
   // handlers are part of every test pipeline (the same layer `AuthHttp.coreHandlers` gives a host).
   // The plugins' own services stay in the output (`provideMerge`), so a test can
   // `yield* Password.Password` from the same composition it serves over HTTP.
-  return AuthHttp.routes(built.api, {}).pipe(
+  // BEH-EA-084: the docs page (when asked for) is mounted on the same router, over the same api.
+  const docs =
+    options?.docsPath === undefined
+      ? Layer.empty
+      : AuthHttp.docs(built.api, { path: options.docsPath });
+  return Layer.merge(AuthHttp.routes(built.api, { openapiPath: options?.openapiPath }), docs).pipe(
     Layer.provide(AuthHttp.coreHandlers),
     Layer.provideMerge(built.layer),
     Layer.provide(services),
@@ -270,6 +277,15 @@ export function layer(
     Layer.provideMerge(HttpServer.layerServices),
     Layer.provideMerge(HttpRouter.layer),
   );
+}
+
+/**
+ * P20a (BEH-EA-084): serve the generated OpenAPI document at `openapiPath` and the Scalar docs
+ * page at `docsPath`, next to the routes they describe — off by default, like `AuthHttp.routes`.
+ */
+export interface LayerOptions {
+  readonly openapiPath?: `/${string}` | undefined;
+  readonly docsPath?: `/${string}` | undefined;
 }
 
 export interface SignedInSession {

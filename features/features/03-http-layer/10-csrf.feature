@@ -1,10 +1,4 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @http-layer @csrf
-@skip @unwired
 Feature: CSRF Protection
 
   # BEH-EA-073 — spec/behaviors/10-csrf.md
@@ -87,9 +81,10 @@ Feature: CSRF Protection
 
   # BEH-EA-076 — spec/behaviors/10-csrf.md; see also INV-EA-011.
   # Compile-time contract: the enforcing mechanism is the TypeScript
-  # compiler, not a runtime step. These scenarios record the intended
-  # developer-facing outcome; the eventual verification artifact is a
-  # type-level test (definitions-of-done.md gate 5).
+  # compiler, not a runtime step. The type-level assertions live in
+  # features/step-definitions/CsrfClientTypes.ts and are checked by `tsc`
+  # (the `typecheck` gate); the Then steps here read them, and REQ-EA-214
+  # also drives a real call through the client the type describes.
   @BEH-EA-076 @compile-time
   Rule: `requiredForClient: true` is enforced at the type level, not merely documented
 
@@ -152,18 +147,32 @@ Feature: CSRF Protection
   @BEH-EA-079
   Rule: A client may opt out of CSRF by choosing a bearer-only contract variant
 
+    # @skip: `Auth.api(..., { csrf: false })` is not built (packages/client/src/AuthClient.ts header;
+    # decision 24 chose the Authorization-header exemption below instead, MNA-008); covered by
+    # packages/server/test/Csrf.test.ts (bearer POST) | blocked by the BEH-EA-079 contract variant.
+    @skip
     @REQ-EA-219
     Scenario: Requests against the csrf:false contract succeed on unsafe methods with no CSRF header at all
       Given a native client built against "Auth.api(..., { csrf: false })"
       When the client sends an unsafe "POST" request with no CSRF header and no double-submit cookie
       Then the request succeeds without any CSRF check being applied
 
+    # @skip: same as REQ-EA-219 — there is no `csrf: false` contract to inspect until the variant is built.
+    @skip
     @REQ-EA-220
     Scenario: The csrf:false contract's groups carry no CsrfProtection middleware at all
       Given a contract produced by "Auth.api(..., { csrf: false })"
       When the contract's groups are inspected
       Then none of them declare the "CsrfProtection" middleware
       And this is a structural absence from the contract, not a runtime flag that skips an otherwise-declared check
+
+    # MNA-008/decision 24 §2: what shipped for native clients — a request carrying an
+    # Authorization header is exempt from CSRF minting and enforcement alike.
+    Scenario: An unsafe request carrying an Authorization header needs no CSRF pair
+      Given a native client with a bearer token and no cookie jar
+      When it sends an unsafe "POST" request carrying an "Authorization" header and no CSRF header or double-submit cookie
+      Then the request passes without any CSRF check being applied to it, and no "__Host-csrf" cookie is minted for it
+      And an unsafe "POST" request with an empty "Authorization" header and no CSRF pair is still rejected
 
   # BEH-EA-080 — spec/behaviors/10-csrf.md
   @BEH-EA-080

@@ -1,10 +1,4 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @http-layer @http-error-mapping
-@skip @unwired
 Feature: HTTP Serving and Error Mapping
 
   # BEH-EA-081 — spec/behaviors/11-http-error-mapping.md; see also
@@ -36,10 +30,18 @@ Feature: HTTP Serving and Error Mapping
       Then it already satisfies the service "HttpApiBuilder.layer(auth.api)" requires for the "password" group
       And no additional adaptation of "Password"'s handler Layer is needed
 
+    # @skip: names "TwoFactor", whose package is an empty placeholder until P15 builds it; the same
+    # property is asserted with a shipped-shape plugin by the next scenario | blocked by two-factor plugin.
+    @skip
     @REQ-EA-226
     Scenario: This holds regardless of which other plugins are installed alongside it
       Given a plugin "Password" whose handlers were authored before any other plugin was chosen
       When "Password" is composed alongside newly-added plugins "TwoFactor" and "OAuth"
+      Then "Password"'s handler Layer continues to satisfy its own group's requirement unchanged
+
+    Scenario: A plugin's group service is unchanged when another plugin is composed alongside it
+      Given a plugin "Password" whose handlers were authored before any other plugin was chosen
+      When "Password" is composed alongside a newly-added plugin "Invite"
       Then "Password"'s handler Layer continues to satisfy its own group's requirement unchanged
 
   # BEH-EA-083 — spec/behaviors/11-http-error-mapping.md
