@@ -385,6 +385,7 @@ const subjectResolverMake = Effect.gen(function* () {
       return Effect.gen(function* () {
         const userId = Users.UserId(principal.ref.id);
         const names = yield* roles.listRoleNames(userId);
+        const noRoles: ReadonlyArray<Role> = [];
         const matched = yield* Effect.forEach(names, (name) => {
           const found = catalog.get(name);
           // RRM-003: still dropped (fail closed) but no longer silent — drift
@@ -393,7 +394,7 @@ const subjectResolverMake = Effect.gen(function* () {
             ? Effect.logWarning("awthaq.roles.unknownAssignedRole", {
                 userId,
                 roleName: name,
-              }).pipe(Effect.as([] as ReadonlyArray<Role>))
+              }).pipe(Effect.as(noRoles))
             : Effect.succeed([found]);
         }).pipe(Effect.map((groups) => groups.flat()));
         const subject = fromRoles({ id: `user:${userId}`, roles: matched });

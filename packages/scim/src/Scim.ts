@@ -854,7 +854,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         const owned = yield* Effect.filter(rows, (row) =>
           Effect.map(records.find(connection.id, "User", row.userId), Option.isSome),
         );
-        return owned.map((row) => row.userId as string);
+        return owned.map((row): string => row.userId);
       });
 
       const groupResource = Effect.fnUntraced(function* (

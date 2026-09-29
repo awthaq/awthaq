@@ -125,7 +125,10 @@ const ipv4ToInt = (ip: string): number | undefined => {
   return result >>> 0;
 };
 
-const ipv6ToBigInt = (ip: string): bigint | undefined => {
+// IPv6 addresses are compared as eight 16-bit groups rather than as one
+// 128-bit BigInt: the lint config forbids BigInt literals, and a per-group
+// prefix comparison needs no wide integer at all.
+const ipv6ToGroups = (ip: string): ReadonlyArray<number> | undefined => {
   const doubleColonCount = ip.split("::").length - 1;
   if (doubleColonCount > 1) return undefined;
   const [head, tail] = ip.includes("::") ? ip.split("::") : [ip, undefined];
@@ -136,12 +139,27 @@ const ipv6ToBigInt = (ip: string): bigint | undefined => {
   if (missing < 0) return undefined;
   const groups = [...headParts, ...Array<string>(tail !== undefined ? missing : 0).fill("0"), ...tailParts];
   if (groups.length !== 8) return undefined;
-  let result = 0n;
+  const values: Array<number> = [];
   for (const group of groups) {
     if (!/^[0-9a-fA-F]{1,4}$/.test(group)) return undefined;
-    result = (result << 16n) | BigInt(Number.parseInt(group, 16));
+    values.push(Number.parseInt(group, 16));
   }
-  return result;
+  return values;
+};
+
+/** True when the first `prefix` bits of both group lists agree. */
+const groupsShareMask = (
+  address: ReadonlyArray<number>,
+  network: ReadonlyArray<number>,
+  prefix: number,
+): boolean => {
+  for (let index = 0; index < address.length; index++) {
+    const bits = Math.min(16, Math.max(0, prefix - index * 16));
+    if (bits === 0) return true;
+    const mask = (0xffff << (16 - bits)) & 0xffff;
+    if (((address[index] ?? 0) & mask) !== ((network[index] ?? 0) & mask)) return false;
+  }
+  return true;
 };
 
 const isInCidr = (address: string, cidr: string): boolean => {
@@ -151,13 +169,12 @@ const isInCidr = (address: string, cidr: string): boolean => {
   const prefix = Number(cidr.slice(separator + 1));
   if (!Number.isInteger(prefix)) return false;
   if (address.includes(":") || network.includes(":")) {
-    const addressBits = ipv6ToBigInt(address);
-    const networkBits = ipv6ToBigInt(network);
-    if (addressBits === undefined || networkBits === undefined || prefix < 0 || prefix > 128) {
+    const addressGroups = ipv6ToGroups(address);
+    const networkGroups = ipv6ToGroups(network);
+    if (addressGroups === undefined || networkGroups === undefined || prefix < 0 || prefix > 128) {
       return false;
     }
-    const mask = prefix === 0 ? 0n : (~0n << BigInt(128 - prefix)) & ((1n << 128n) - 1n);
-    return (addressBits & mask) === (networkBits & mask);
+    return groupsShareMask(addressGroups, networkGroups, prefix);
   }
   const addressBits = ipv4ToInt(address);
   const networkBits = ipv4ToInt(network);

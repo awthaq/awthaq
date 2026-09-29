@@ -19,6 +19,25 @@
     "effect/no-js-extension-imports": "error",
     "effect/no-opaque-instance-fields": "error"
   },
+  "overrides": [
+    {
+      // The root scripts are plain Node ESM: a relative import there must name the real
+      // `.mjs` file (there is no build step or `.mts` to rewrite it), so the rule that
+      // steers TypeScript sources away from `.js` specifiers has nothing to say about them.
+      "files": ["scripts/**/*.mjs"],
+      "rules": {
+        "effect/no-js-extension-imports": "off"
+      }
+    },
+    {
+      // The no-type-assertion rule (AH-004): `as`, `as unknown as` and `as any` are
+      // forbidden in library source (`as const` stays allowed). Tests keep narrow casts.
+      "files": ["packages/*/src/**/*.ts", "packages/*/src/**/*.tsx"],
+      "rules": {
+        "typescript/consistent-type-assertions": ["error", { "assertionStyle": "never" }]
+      }
+    }
+  ],
   "ignorePatterns": [
     "**/node_modules/**",
     "packages/*/lib/**",

@@ -10,7 +10,7 @@ import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 import * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity";
 import { describe, expect, it } from "@effect/vitest";
-import * as Core from "../src/index.ts";
+import * as Core from "../src/HttpApiTypes.ts";
 
 describe("HttpApiTypes (MA-003)", () => {
   it("re-exports each httpapi module's own values verbatim, not a wrapper", () => {

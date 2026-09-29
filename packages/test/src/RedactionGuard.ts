@@ -25,6 +25,7 @@
 // The guard never prints a secret: a `Leak` names the channel, the path inside
 // the value and the canary's *label*.
 
+import { Defects } from "@awthaq/ports";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -173,10 +174,9 @@ const makeGuard = (recorder: Recorder): RedactionGuardShape => {
   return {
     watch: (label, secret) =>
       secret.length < MIN_CANARY_LENGTH
-        ? Effect.die(
-            new Error(
-              `awthaq/test: canary "${label}" is shorter than ${MIN_CANARY_LENGTH} characters and would match by accident`,
-            ),
+        ? Defects.invalidConfiguration(
+            "RedactionGuard.watch",
+            `awthaq/test: canary "${label}" is shorter than ${MIN_CANARY_LENGTH} characters and would match by accident`,
           )
         : Effect.sync(() => {
             recorder.canaries.set(label, secret);

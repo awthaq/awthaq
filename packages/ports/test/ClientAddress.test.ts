@@ -142,6 +142,24 @@ describe("ClientAddress.layerTrustedProxy — X-Forwarded-For, CIDR allowlist", 
       ),
     ),
   );
+
+  // Prefix lengths that are not a multiple of 16 split a 16-bit group: /33
+  // keeps the first bit of the third group, so 2001:db8:8000:: is outside
+  // 2001:db8::/33 while 2001:db8:7fff:: is inside it.
+  it.effect("honours IPv6 prefixes that fall inside a 16-bit group", () =>
+    Effect.gen(function* () {
+      const clientAddress = yield* ClientAddress.ClientAddress;
+      const resolved = yield* clientAddress.resolve(
+        requestWith({
+          remoteAddress: "2001:db8:7fff::1",
+          headers: { "x-forwarded-for": "2001:db8:8000::1, 2001:db8:7fff::1" },
+        }),
+      );
+      assert.deepStrictEqual(resolved, Option.some("2001:db8:8000::1"));
+    }).pipe(
+      Effect.provide(ClientAddress.layerTrustedProxy({ strategy: { _tag: "cidr", trusted: ["2001:db8::/33"] } })),
+    ),
+  );
 });
 
 describe("ClientAddress.layerTrustedProxy — Forwarded header", () => {
