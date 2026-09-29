@@ -4,15 +4,15 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-27 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-13 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-13): Initial release, replacing [MOD-EA-015](../models/15-admin-impersonation.md)'s non-normative sketch (CCR-EA-004) |
+> | Change History | 1.0 (2026-09-13): Initial release, replacing [MOD-EA-015](../models/15-admin-impersonation.md)'s non-normative sketch (CCR-EA-004) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, IDS-009, CCR-EA-006) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
+> Implemented in `@awthaq/admin` (`Admin.ts`, `AdminApi.ts`, `ImpersonationRecords.ts`, `AdminTenants.ts`; tests `packages/admin/test`); BEH-EA-209 through 211 also extend `@awthaq/core`'s `Sessions` (`packages/core/test/Sessions.test.ts`) and `@awthaq/server`'s `Authentication`; the Gherkin scenarios in `features/features/09-admin-and-impersonation/27-admin-impersonation.feature` are wired; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
 
 ## BEH-EA-209: `actingAs` becomes a real, generic field on session issuance
 

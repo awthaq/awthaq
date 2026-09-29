@@ -1,7 +1,7 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 #
 # DAG-007: the `DeviceAuthorization` plugin (RFC 8628) has no code and no
 # BEH-EA range yet, so these scenarios trace to its model,

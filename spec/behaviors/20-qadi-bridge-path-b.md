@@ -4,15 +4,15 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-20 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-015, clarified that `SubjectExtractor` reuses `Authentication`'s session-verification logic rather than reimplementing it, and added the INV-EA-013 callout to BEH-EA-156 (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-015, clarified that `SubjectExtractor` reuses `Authentication`'s session-verification logic rather than reimplementing it, and added the INV-EA-013 callout to BEH-EA-156 (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
+> Implemented in `@awthaq/qadi` (`SubjectExtractor.ts`; tests `packages/qadi/test/SubjectExtractor.test.ts`); the `RequirePermission` refusal itself is `@qadi/http`'s; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
 
 ## BEH-EA-153: `SubjectExtractor` runs session resolution on the raw request
 

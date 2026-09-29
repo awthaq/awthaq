@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-012 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
-> | Status | Accepted — design; implementation deferred |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Grounded "Alternatives considered" in NestJS's documented global-provider merge behavior instead of a self-referential PRD citation (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Grounded "Alternatives considered" in NestJS's documented global-provider merge behavior instead of a self-referential PRD citation (CCR-EA-002) <br> 1.2 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
 
 ---
 
@@ -33,5 +33,3 @@ Two distinct extension mechanisms exist, chosen by whether an extension point's 
 **Negative**: Plugin authors and, more importantly, authors of *new* extension points (core maintainers extending the plugin surface) must correctly classify each new point as a slot or a registry up front; misclassifying an inherently exclusive concern as a registry would silently reintroduce the override-conflict hazard this ADR exists to prevent, since registries by design accept unlimited contributions without conflict checking.
 
 **Trade-off accepted**: The project accepts the ongoing design discipline of classifying every extension point correctly (rather than defaulting to one universal merge rule) in exchange for exclusivity guarantees where they matter (subject resolution, session-view extension) and unrestricted aggregation where multiple contributions are the intended, desired behavior (hooks, events, rate limits, session claims).
-
-Not yet implemented — see spec/roadmap.md for milestone.

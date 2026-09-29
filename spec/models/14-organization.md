@@ -4,17 +4,17 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-14 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped to Shipped-Unpublished; "What is missing" and "Verification" rewritten against `packages/organization` (AOMS-011, CCR-EA-006) |
 ---
 
 ## What it is
 
-A plan for an `Organization` plugin that gives an application multi-tenant
+The `Organization` plugin gives an application multi-tenant
 membership: an organization entity, membership rows linking users to
 organizations, an invitation flow for adding new members, and — distinct from
 those CRUD concerns — a `RelationshipResolver` it contributes to qadi so that
@@ -47,7 +47,7 @@ resolver from.
 
 | Property | Value |
 |---|---|
-| Status | Planned-Phase2 |
+| Status | Shipped-Unpublished (`packages/organization`) |
 | Priority | P1 |
 | Enabler(s) | E3 — Principal-type extension (a membership/invitation domain needs its own tables and repositories, the same shape of enabler API Keys and JWT/Bearer draw on); see also `00-adoption-matrix.md` §6 for the open question on whether a dedicated enabler category is needed for relationship-resolver wiring specifically. |
 | Breaking? | Additive: no existing plugin, port, or slot is redefined. `Organization` is a new plugin contributing new tables (`organization`, `organization_membership`, `organization_invitation`, exact names undecided) and a new `RelationshipResolver` contribution; it does not reopen any Planned-MVP contract. |
@@ -130,20 +130,7 @@ further worked example of the plugin's own contract.
 
 ## What is missing
 
-No port or table schema has been decided: `organization`,
-`organization_membership`, and `organization_invitation` above are inferred
-from `archive/PRD.md` §17's parenthetical ("membership, invitations,
-relationship resolver"), not fixed by any design document. There is no
-`OrganizationApi` contract, no decision on invitation-flow behavior (token
-shape, expiry, re-invitation, revocation), no decision on whether membership
-carries its own per-organization role beyond what the `Roles` plugin already
-resolves, and — critically for `09-sso.md`'s dependency on this plugin — no
-decision on how a `RelationshipResolver` contribution is wired into the
-`QadiLive` layer alongside the fail-closed resolver defaults
-`archive/design/usage-qadi.md` §6 names (`UserAttributes`, `OrgRelationships`,
-`TermsHistory` replacing `CustomPredicateNone`, `SignatureHistoryNone`, and
-so on). None of this has an allocated `BEH-EA` id; this plugin has no
-behaviors file.
+The entities, invitation flow, per-organization roles, teams, the `OrganizationApi` contract and the qadi `RelationshipResolver` contribution (`OrganizationQadi`) are built. Still undecided or unbuilt: the plugin has no `BEH-EA` range of its own (its behavior is specified by its tests and `.scratch/organization/spec.md`; only the tenancy half is normative, in [`behaviors/28-tenancy.md`](../behaviors/28-tenancy.md)), which is a specification gap; and SSO ([MOD-EA-009](09-sso.md)), which depends on this plugin, is not built.
 
 ## Tenancy
 
@@ -156,7 +143,7 @@ A tenant is an organization row ([ADR-EA-018](../decisions/018-tenancy-is-an-org
 
 ## Verification
 
-None yet — no test exists.
+`packages/organization/test/*` (`Organization.test.ts`, `OrganizationSql.test.ts`, `PermissionEngine.test.ts`, `TeamRecords.test.ts`, `OrganizationQadi.test.ts`, `OrganizationHooks.test.ts`, `TenantMiddleware.test.ts`, erasure and export, `AuthHttp.test.ts`, `AuthComposition.test.ts`); the tenancy behaviors are traced in [`spec/traceability.md`](../traceability.md) §5.
 
 _Related: [MOD-EA-009 — SSO](09-sso.md) (depends on this plugin as a hard
 dependency, per its own `dependsOn: [Sessions, Users, Organization]`), 

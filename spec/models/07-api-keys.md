@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-07 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): `@awthaq/api-key` implemented — API keys, `client_credentials` clients and service tokens, rotation, the `x-api-key` transport (ADR-EA-022; OCM-001/OCM-002/OCM-005/MAPS-003) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): `@awthaq/api-key` implemented — API keys, `client_credentials` clients and service tokens, rotation, the `x-api-key` transport (ADR-EA-022; OCM-001/OCM-002/OCM-005/MAPS-003) <br> 1.2 (2026-09-29): Status vocabulary aligned with the adoption matrix (OCM-008, AOMS-011) |
 ---
 
 ## What it is
@@ -43,7 +43,7 @@ bearer token is just such a key, scoped `scim:*` (SCP-002).
 
 | Property | Value |
 |---|---|
-| Status | Planned-Phase2 (built: `@awthaq/api-key`) |
+| Status | Shipped-Unpublished (`packages/api-key`) |
 | Priority | P1 |
 | Enabler(s) | E3 — Principal-type extension |
 | Breaking? | Additive: `ApiKeyPrincipal`/`ServicePrincipal` were already members of the `Principal` union (now carrying `scopes`), and the machine tier is a separate middleware, so no existing group can receive one. |

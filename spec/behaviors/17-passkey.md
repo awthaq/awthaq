@@ -4,15 +4,15 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-17 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Amended BEH-EA-130/131's requirements with the user-presence and config-gated user-verification policy; added BEH-EA-255 (registration requires a fresh session), BEH-EA-256 (Conditional Create) and BEH-EA-257 (one stable random user handle), which the shipped code already enforced; banner replaced with implementation pointers (BPAS-007, CCR-EA-006) |
 ---
 
-> Status: the `@awthaq/passkey` plugin, the `WebAuthn` port (`@awthaq/ports`, `layerSimpleWebAuthn` over `@simplewebauthn/server`) and the browser layer (`@awthaq/client`'s `passkeyClient`) are implemented and tested against every behavior below; the requirements state what the shipped code enforces. Known remaining gaps are listed in `packages/passkey/README.md` ("Limits").
+> Status: implemented in `packages/passkey` (`Passkey.ts`, `ChallengeStore.ts`, `PasskeyApi.ts`, `PasskeyCredentials.ts`, `PasskeyUserHandles.ts`; tests `packages/passkey/test`, `packages/ports/test/WebAuthn.test.ts`; the Gherkin scenarios are wired). The `@awthaq/passkey` plugin, the `WebAuthn` port (`@awthaq/ports`, `layerSimpleWebAuthn` over `@simplewebauthn/server`) and the browser layer (`@awthaq/client`'s `passkeyClient`) are implemented and tested against every behavior below; the requirements state what the shipped code enforces. Known remaining gaps are listed in `packages/passkey/README.md` ("Limits").
 
 ## BEH-EA-129: WebAuthn is a port, wrapped, not reimplemented
 
@@ -53,7 +53,11 @@ REQUIREMENT: `registerVerify` MUST persist the credential's public key,
              counter, device type, backup-state flag, transports and AAGUID
              only after `WebAuthn.verifyRegistration` succeeds against the
              challenge issued for that ceremony; it MUST NOT persist on a
-             client-asserted success alone.
+             client-asserted success alone. An ordinary registration MUST
+             require the authenticator's user-presence flag, and user
+             verification MUST be enforced when, and only when, the
+             deployment's conveyed `authenticatorSelection.userVerification`
+             is `"required"` (WebAuthn §7.1).
 ```
 
 The credential record is what every later authentication ceremony trusts, so its fields must come from the server's own verification of the attestation object, not from anything the browser claims about itself. `usage-examples-v4.md` §8 shows the two-call shape (`registerOptions` then `registerVerify`) that keeps the challenge-bound verification step between option generation and persistence.
@@ -81,6 +85,10 @@ REQUIREMENT: A verified authentication assertion MUST create a session
              shared `SessionDelivery` helper (cookie by default, or the body
              `token` under `X-Awthaq-Token-Delivery: bearer`, BEH-EA-066);
              the passkey plugin MUST NOT write the session cookie itself.
+             User verification MUST be required of the assertion when the
+             conveyed `authenticatorSelection.userVerification` is
+             `"required"`, and of every later use of a credential flagged for
+             a signature-counter anomaly.
 ```
 
 Routing every credential-issuing path through one `Sessions` service is what keeps session behavior (idle/absolute expiry, sliding refresh, new-session-on-sign-in) uniform across password, OAuth and passkey sign-in without three separate implementations to keep in sync — a plugin contributes the *authentication*, core owns the *session*.
@@ -190,4 +198,71 @@ A separate tag per failure keeps the client's error handling exhaustive and type
 
 The anonymous `authenticate` ceremony sits wholly inside this envelope, options included (TC-001, TSS-004): an unknown email (or a known user with no credentials) receives deterministic HMAC-keyed decoy `allowCredentials` shaped like a registered user's (`enumerationSecret`), an unknown credential id still costs one signature verification against a decoy key, and both endpoints are rate-limited. Beyond the original closed list, `register/verify` also reports `PasskeyAttestationRejected` and `PasskeyAlreadyRegistered` (authenticated, no identifier to enumerate), and `PasskeyCounterAnomaly` is raised under `counterAnomalyPolicy: "reject"` (BEH-EA-131), reachable only after a valid signature from a registered credential.
 
-_Previous: [BEH-EA-135](17-passkey.md#beh-ea-135-attestation-defaults-to-none) | Next: [BEH-EA-137](18-roles-subject-resolver.md#beh-ea-137-the-subjectresolver-slot-defaults-to-identity-only)_
+_Previous: [BEH-EA-135](17-passkey.md#beh-ea-135-attestation-defaults-to-none) | Next: [BEH-EA-255](17-passkey.md#beh-ea-255-passkey-registration-requires-a-fresh-session)_
+
+## BEH-EA-255: Passkey registration requires a fresh session
+
+```ts
+yield* client.passkey.registerOptions()          // PasskeyReauthRequired when the session is stale
+yield* client.passkey.registerVerify({ payload: { credential } })
+```
+
+```text
+REQUIREMENT: `registerOptions`, `registerOptionsConditional` and `registerVerify`
+             MUST each require that the calling session was authenticated
+             within `PasskeyConfig.reauthMaxAgeSeconds`, and MUST fail with
+             `PasskeyReauthRequired` naming that window otherwise; a session
+             that is not live for its owner (revoked, expired, or belonging to
+             another user) MUST fail the same way, never succeed.
+```
+
+A passkey is a new way to sign in to the account, so enrolling one is as sensitive as changing the password: a session hijacked an hour ago must not be able to plant a credential that outlives it. The check is the same freshness rule the `reauth` obligation (BEH-EA-165) applies, read from the session's `authenticatedAt` (`Sessions.isStale`), and it runs on both the options call and the verify call so a challenge obtained while fresh cannot be redeemed after the window closes. `PasskeyReauthRequired` carries the window so a client can drive the step-up ceremony (`passkey.reauthenticate`) and retry.
+
+_Previous: [BEH-EA-136](17-passkey.md#beh-ea-136-typed-errors-are-enumeration-safe) | Next: [BEH-EA-256](17-passkey.md#beh-ea-256-conditional-create-is-a-separate-config-gated-ceremony-with-its-own-challenge-scope)_
+
+## BEH-EA-256: Conditional Create is a separate, config-gated ceremony with its own challenge scope
+
+```ts
+const options = yield* client.passkey.registerOptionsConditional()   // PasskeyConditionalCreateDisabled when off
+yield* client.passkey.registerVerify({ payload: { credential, ceremony: "conditional" } })
+```
+
+```text
+REQUIREMENT: Conditional Create (browser-initiated passkey enrolment after a
+             password sign-in, which performs no user gesture) MUST be
+             available only when `PasskeyConfig.conditionalCreate` is on and
+             `authenticatorSelection.userVerification` is not `"required"`,
+             and MUST otherwise fail with `PasskeyConditionalCreateDisabled`.
+             It MUST issue its challenge under its own scope
+             (`passkey.register.conditional:<sessionId>`), MUST force
+             `residentKey: "required"` and `userVerification: "discouraged"`,
+             and MUST accept a registration with user presence and user
+             verification unset only for a challenge consumed from that scope;
+             an ordinary registration MUST still require user presence, and
+             completing one ceremony MUST NOT consume the other's challenge.
+```
+
+Chrome's Conditional Create produces UP=0/UV=0 by design, and a discoverable (resident) credential is what makes autofill possible at all, which is why the ceremony forces those two options and why it cannot coexist with a deployment that requires user verification (it could never satisfy BEH-EA-130's UV rule). The exemption is scoped to the ceremony rather than to the deployment: the payload names its ceremony (`ceremony: "modal" | "conditional"`, absent means modal) and only that scope's challenge is consumed, so a relaxed registration can only be completed by a challenge that was issued as relaxed. The requirement refines BEH-EA-130's user-presence rule and BEH-EA-132's single-use challenge rule for the one ceremony that needs an exception.
+
+_Previous: [BEH-EA-255](17-passkey.md#beh-ea-255-passkey-registration-requires-a-fresh-session) | Next: [BEH-EA-257](17-passkey.md#beh-ea-257-a-user-has-one-stable-random-webauthn-user-handle)_
+
+## BEH-EA-257: A user has one stable, random WebAuthn user handle
+
+```ts
+// creation options: user: { id: <the user's handle>, name, displayName }
+// assertion: response.userHandle must equal the handle stored with the credential
+```
+
+```text
+REQUIREMENT: The `user.id` placed in every registration's creation options
+             MUST be one random, opaque, non-personal value per user, minted
+             on first use from 32 random bytes and reused for every credential
+             that user enrols; it MUST be the value stored with each credential,
+             and an assertion carrying a `userHandle` that differs from the
+             credential's stored handle MUST fail like any other bad assertion.
+             The handle MUST be erased with the user.
+```
+
+A discoverable credential's assertion returns the handle it was created with, and a credential manager keys its whole per-account view on it, so re-randomizing it per ceremony (as a first implementation did, persisting a value the authenticator never bound) breaks discoverable sign-in and the signals surface. It is random rather than derived from the user id or email so the value an authenticator stores cannot be used to identify the account elsewhere (`PasskeyUserHandles`, table `passkey_user_handle`).
+
+_Previous: [BEH-EA-256](17-passkey.md#beh-ea-256-conditional-create-is-a-separate-config-gated-ceremony-with-its-own-challenge-scope) | Next: [BEH-EA-137](18-roles-subject-resolver.md#beh-ea-137-the-subjectresolver-slot-defaults-to-identity-only)_

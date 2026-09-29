@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-09 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): BEH-EA-066's native-client paragraph restated as shipped behaviour — opt-in bearer delivery (MNA-001), `set-auth-token` rotation, CSRF bootstrap (MNA-009) <br> 1.2 (2026-09-29): bearer/`x-api-key` credential-resolver registry (MAPS-001/MAPS-004/NAM-001), `MachineAuthentication` tier with the `apiKey` scheme (OCM-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): BEH-EA-066's native-client paragraph restated as shipped behaviour — opt-in bearer delivery (MNA-001), `set-auth-token` rotation, CSRF bootstrap (MNA-009) <br> 1.2 (2026-09-29): bearer/`x-api-key` credential-resolver registry (MAPS-001/MAPS-004/NAM-001), `MachineAuthentication` tier with the `apiKey` scheme (OCM-002) <br> 1.3 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 
 ---
 
-> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §10/§14 and `archive/design/usage-examples-v4.md` §4 — not code that has shipped.
+> Implemented in `@awthaq/server` (`packages/server/src/Authentication.ts`; tests `packages/server/test/Authentication.test.ts`, `CredentialResolvers.test.ts`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/PRD.md` §10/§14 and `archive/design/usage-examples-v4.md` §4.
 
 ## BEH-EA-065: The `Authentication` middleware tries a cookie handler first, in its declared security record
 

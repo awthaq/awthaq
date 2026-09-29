@@ -1,7 +1,7 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @authentication-methods @oauth
 Feature: OAuth and OIDC
@@ -59,7 +59,7 @@ Feature: OAuth and OIDC
       When the same callback is replayed with the same "state" value
       Then the replayed callback fails, rather than re-running the token exchange
 
-    @REQ-EA-333
+    @REQ-EA-684
     Scenario: A user denying consent at the provider gets the typed denial outcome
       Given an OAuth flow initiated for provider "google"
       When the provider redirects back with the authorization error "access_denied"
@@ -113,7 +113,7 @@ Feature: OAuth and OIDC
       When the callback is handled
       Then the "google" Account is automatically linked to the existing account
 
-    @REQ-EA-339
+    @REQ-EA-685
     Scenario: A trusted provider never auto-links into a local account whose email is unverified
       Given "oauth({ providers: [google()], linking: { trustedProviders: [\"google\"] } })"
       And a "google" callback whose verified email matches an existing, unlinked account whose own email is unverified

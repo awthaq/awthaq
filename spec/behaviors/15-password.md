@@ -4,15 +4,15 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-15 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-113's research citation to the precise Q48 finding it refers to (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-113's research citation to the precise Q48 finding it refers to (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
+> Implemented in `@awthaq/password` (`packages/password/src`; tests `packages/password/test`, wired scenarios in `features/`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
 
 ## BEH-EA-113: Sign-up issues a pending user and a verification mail
 
