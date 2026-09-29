@@ -21,5 +21,6 @@ export const google = (input: PresetInput) =>
           email: stringClaim(claims, "email"),
           emailVerified: booleanClaim(claims, "email_verified"),
           name: stringClaim(claims, "name"),
+          image: stringClaim(claims, "picture"),
         })),
   });

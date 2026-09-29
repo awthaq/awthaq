@@ -56,7 +56,8 @@ export interface UserSignedInEvent {
 export interface UserSignInFailedEvent {
   readonly _tag: "auth.user.signInFailed";
   readonly strategy: string;
-  readonly reason: "invalidCredentials" | "emailNotVerified";
+  // SCP-001: `suspended` — the credential was right but `Users.assertCanSignIn` refused.
+  readonly reason: "invalidCredentials" | "emailNotVerified" | "suspended";
 }
 
 /**
@@ -97,6 +98,8 @@ export type SessionRevocationReason =
   | "userDeleted"
   | "impersonationStopped"
   | "admin"
+  /** SCP-001/BAM-005: every session of a user ended because the account was suspended/banned. */
+  | "suspended"
   | "reuseDetected"
   /** SMS-003: evicted by `SessionConfig.maxConcurrent` when the user's newest session was issued. */
   | "limitEvicted";
@@ -199,6 +202,26 @@ export interface AdminActionDeniedEvent {
 /** BAM-005: published by `@awthaq/admin`'s `updateUser`, after the profile change is persisted. */
 export interface AdminUserUpdatedEvent {
   readonly _tag: "auth.admin.userUpdated";
+  readonly adminUserId: UserId;
+  readonly userId: UserId;
+}
+
+/**
+ * BAM-005/SCP-001: published by `@awthaq/admin`'s `banUser`, after `Users.setStatus("suspended")`
+ * and `Sessions.revokeAll(userId, "suspended")` both completed. `reason`/`until` are the
+ * operator's note and the optional expiry (ISO instant), `null` when not given.
+ */
+export interface AdminUserBannedEvent {
+  readonly _tag: "auth.admin.userBanned";
+  readonly adminUserId: UserId;
+  readonly userId: UserId;
+  readonly reason: string | null;
+  readonly until: string | null;
+}
+
+/** BAM-005: published by `@awthaq/admin`'s `unbanUser`, after `Users.setStatus("active")`. */
+export interface AdminUserUnbannedEvent {
+  readonly _tag: "auth.admin.userUnbanned";
   readonly adminUserId: UserId;
   readonly userId: UserId;
 }
@@ -475,6 +498,8 @@ export type AuthEvent =
   | AdminImpersonationDeniedEvent
   | AdminActionDeniedEvent
   | AdminUserUpdatedEvent
+  | AdminUserBannedEvent
+  | AdminUserUnbannedEvent
   | AdminSessionRevokedEvent
   | OrganizationCreatedEvent
   | OrganizationUpdatedEvent

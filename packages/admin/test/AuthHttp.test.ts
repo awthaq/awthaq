@@ -145,7 +145,10 @@ const buildHandler = (
           const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
           return yield* Effect.gen(function* () {
             const users = yield* Users.Users;
-            const created = yield* users.create({ email: `${name}@example.com`, name });
+            const created = yield* users.create({
+              identity: { _tag: "Email", email: `${name}@example.com` },
+              name,
+            });
             return created.id;
           }).pipe(Effect.provide(context));
         }),
@@ -556,6 +559,96 @@ describe("AuthHttp + Admin (real HTTP)", () => {
           (yield* send("DELETE", `/admin/users/${targetId}/sessions`)).status,
           204,
         );
+      }),
+  );
+
+  it.effect(
+    "BAM-005/SCP-001: ban and unban over real HTTP — own predicate, the banned user's session dies, unban restores",
+    () =>
+      Effect.gen(function* () {
+        // `canManageUsers` alone does not grant banning.
+        const manageOnly = buildHandler({ canManageUsers: allow });
+        const manageOnlyCookie = yield* Effect.promise(() =>
+          manageOnly.issueSessionCookieHeader("admin-1"),
+        );
+        const someone = yield* Effect.promise(() => manageOnly.seedUser("someone"));
+        const refused = yield* Effect.promise(() =>
+          post(manageOnly.handler, `/admin/users/${someone}/ban`, {}, { cookie: manageOnlyCookie }),
+        );
+        assert.strictEqual(refused.status, 403);
+
+        const { handler, issueSessionCookieHeader, seedUser } = buildHandler({
+          canManageUsers: allow,
+          canBanUsers: allow,
+        });
+        const adminCookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+        const targetId = yield* Effect.promise(() => seedUser("target-1"));
+        const targetCookie = yield* Effect.promise(() => issueSessionCookieHeader(targetId));
+        const asTarget = () =>
+          Effect.promise(() =>
+            handler(new Request(`${ORIGIN}/admin/users`, { headers: { cookie: targetCookie } })),
+          );
+        assert.strictEqual((yield* asTarget()).status, 200);
+
+        // A malformed expiry is refused before anything happens.
+        const badUntil = yield* Effect.promise(() =>
+          post(
+            handler,
+            `/admin/users/${targetId}/ban`,
+            { until: "tomorrow" },
+            { cookie: adminCookie },
+          ),
+        );
+        assert.strictEqual(badUntil.status, 400);
+        assert.strictEqual((yield* asTarget()).status, 200);
+
+        const banned = yield* Effect.promise(() =>
+          post(
+            handler,
+            `/admin/users/${targetId}/ban`,
+            { reason: "abuse", until: "2999-01-01T00:00:00.000Z" },
+            { cookie: adminCookie },
+          ),
+        );
+        assert.strictEqual(banned.status, 200);
+        const bannedBody = (yield* Effect.promise(() => banned.json())) as {
+          status: string;
+          statusReason: string | null;
+          suspendedUntil: string | null;
+          identity: { _tag: string };
+        };
+        assert.strictEqual(bannedBody.status, "suspended");
+        assert.strictEqual(bannedBody.statusReason, "abuse");
+        assert.strictEqual(bannedBody.suspendedUntil, "2999-01-01T00:00:00.000Z");
+        assert.strictEqual(bannedBody.identity._tag, "Email");
+        // Every session of the target ended with the ban.
+        assert.strictEqual((yield* asTarget()).status, 401);
+
+        // The admin still resolves the banned user and reactivates them.
+        const stillThere = yield* Effect.promise(() =>
+          handler(
+            new Request(`${ORIGIN}/admin/users/${targetId}`, { headers: { cookie: adminCookie } }),
+          ),
+        );
+        assert.strictEqual(stillThere.status, 200);
+        const unbanned = yield* Effect.promise(() =>
+          post(handler, `/admin/users/${targetId}/unban`, {}, { cookie: adminCookie }),
+        );
+        assert.strictEqual(unbanned.status, 200);
+        assert.strictEqual(
+          ((yield* Effect.promise(() => unbanned.json())) as { status: string }).status,
+          "active",
+        );
+
+        // An administrator cannot ban themselves; an unknown id is a 404 past the gate.
+        const self = yield* Effect.promise(() =>
+          post(handler, "/admin/users/admin-1/ban", {}, { cookie: adminCookie }),
+        );
+        assert.strictEqual(self.status, 400);
+        const ghost = yield* Effect.promise(() =>
+          post(handler, "/admin/users/ghost/ban", {}, { cookie: adminCookie }),
+        );
+        assert.strictEqual(ghost.status, 404);
       }),
   );
 

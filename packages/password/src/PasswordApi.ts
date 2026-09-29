@@ -9,7 +9,7 @@
 // schemas, errors, and contract `HttpApi`").
 
 import { Api, EmailContract, SessionContract } from "@awthaq/api";
-import { HookPoint, Hooks } from "@awthaq/core";
+import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -185,7 +185,14 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // an unverified account. Wayfinder ticket 03 (BCR-004/THS-002):
       // `Hooks.TwoFactorRequired` when a `Hooks.BeforeSessionIssue` tap
       // (a future `TwoFactor` plugin) diverts.
-      error: [Api.InvalidCredentials, EmailNotVerified, Api.RateLimited, Hooks.TwoFactorRequired],
+      // SCP-001: `Users.UserSuspended` when `Users.assertCanSignIn` refuses.
+      error: [
+        Api.InvalidCredentials,
+        EmailNotVerified,
+        Users.UserSuspended,
+        Api.RateLimited,
+        Hooks.TwoFactorRequired,
+      ],
     }),
   )
   .add(

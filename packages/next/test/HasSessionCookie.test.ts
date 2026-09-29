@@ -52,7 +52,10 @@ describe("hasSessionCookie (BEH-EA-188)", () => {
         Effect.gen(function* () {
           const users = yield* Users.Users;
           const sessions = yield* Sessions.Sessions;
-          const user = yield* users.create({ email: "stale@example.com", name: "Stale" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "stale@example.com" },
+            name: "Stale",
+          });
           const { token } = yield* sessions.issue({ userId: user.id });
           return token;
         }),

@@ -39,7 +39,7 @@ const enroll = (email: string) =>
     const passkey = yield* Passkey.Passkey;
     const users = yield* Users.Users;
     const sessions = yield* Sessions.Sessions;
-    const user = yield* users.create({ email, name: "Real Port" });
+    const user = yield* users.create({ identity: { _tag: "Email", email }, name: "Real Port" });
     const issued = yield* sessions.issue({ userId: user.id });
     const options = yield* passkey.registerOptions(user.id, issued.session.id);
     const response = buildRegistrationResponse({
@@ -188,7 +188,10 @@ describe("Passkey over the real WebAuthn port", () => {
         const passkey = yield* Passkey.Passkey;
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ email: "real-none@example.com", name: "None" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "real-none@example.com" },
+          name: "None",
+        });
         const issued = yield* sessions.issue({ userId: user.id });
         const options = yield* passkey.registerOptions(user.id, issued.session.id);
         const response = buildRegistrationResponse({
@@ -220,7 +223,10 @@ describe("Passkey over the real WebAuthn port", () => {
       const passkey = yield* Passkey.Passkey;
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const user = yield* users.create({ email: "real-up@example.com", name: "UP" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "real-up@example.com" },
+        name: "UP",
+      });
       const issued = yield* sessions.issue({ userId: user.id });
       const options = yield* passkey.registerOptions(user.id, issued.session.id);
       const response = buildRegistrationResponse({

@@ -46,7 +46,7 @@ describe("ARF-007: cross-purpose tokens", () => {
 
         yield* password.verifyEmail({ token: verifyToken });
         const user = yield* users.findByEmail(email);
-        assert.isTrue(Option.getOrThrow(user).emailVerified);
+        assert.isTrue(Users.isEmailVerified(Option.getOrThrow(user)));
       }).pipe(Effect.provide(makeTestLayer())),
   );
 
@@ -104,7 +104,7 @@ describe("ARF-002: policy before consume", () => {
       const accounts = yield* Accounts.Accounts;
       const hasher = yield* PasswordHasher.PasswordHasher;
       // Seeded directly: this layer's own signUp is screened too and would refuse.
-      const user = yield* users.create({ email, name: "Ada" });
+      const user = yield* users.create({ identity: { _tag: "Email", email }, name: "Ada" });
       yield* accounts.link({
         userId: user.id,
         providerId: Accounts.PASSWORD_PROVIDER_ID,
@@ -140,7 +140,10 @@ describe("ARF-004: credential-less accounts", () => {
         const users = yield* Users.Users;
         const accounts = yield* Accounts.Accounts;
         const mailer = yield* Mailer.Mailer;
-        const oauthOnly = yield* users.create({ email: "oauth@example.com", name: "Oauth" });
+        const oauthOnly = yield* users.create({
+          identity: { _tag: "Email", email: "oauth@example.com" },
+          name: "Oauth",
+        });
         yield* accounts.link({ userId: oauthOnly.id, providerId: "github", subject: "gh-1" });
 
         yield* password.requestReset({ email: "oauth@example.com" });
@@ -159,7 +162,10 @@ describe("ARF-004: credential-less accounts", () => {
       const password = yield* Password.Password;
       const users = yield* Users.Users;
       const verification = yield* Verification.Verification;
-      const oauthOnly = yield* users.create({ email: "oauth@example.com", name: "Oauth" });
+      const oauthOnly = yield* users.create({
+        identity: { _tag: "Email", email: "oauth@example.com" },
+        name: "Oauth",
+      });
       // A token minted before this fix shipped (the old requestReset issued
       // one to every existing user, credential or not).
       const identifier = `reset-password:${oauthOnly.id}`;
@@ -193,7 +199,7 @@ describe("ARF-008: a reset proves mailbox control", () => {
       yield* password.confirmReset({ token, password: newPassword });
 
       const user = yield* users.findByEmail(email);
-      assert.isTrue(Option.getOrThrow(user).emailVerified);
+      assert.isTrue(Users.isEmailVerified(Option.getOrThrow(user)));
       const signedIn = yield* password.signIn({ email, password: newPassword });
       assert.isDefined(signedIn.token);
     }).pipe(Effect.provide(makeTestLayer())),

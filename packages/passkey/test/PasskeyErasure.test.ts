@@ -70,7 +70,10 @@ describe("Passkey.beforeUserDeleteErasure", () => {
       const users = yield* Users.Users;
       const credentials = yield* PasskeyCredentials.PasskeyCredentials;
       const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
-      const user = yield* users.create({ email: "erase@example.com", name: "Erase" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "erase@example.com" },
+        name: "Erase",
+      });
       yield* credentials.create(credentialInput("cred-erase-1", user.id));
       yield* credentials.create(credentialInput("cred-erase-2", user.id));
       const handleBefore = yield* handles.getOrCreate(user.id);

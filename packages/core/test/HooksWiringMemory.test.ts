@@ -32,7 +32,10 @@ describe("Users.layerMemory delete hook (BEH-EA-095)", () => {
   it.effect("a veto tap can abort a delete outright, surfaced as HookAborted", () =>
     Effect.gen(function* () {
       const users = yield* Users.Users;
-      const created = yield* users.create({ email: "keep@example.com", name: "Keep" });
+      const created = yield* users.create({
+        identity: { _tag: "Email", email: "keep@example.com" },
+        name: "Keep",
+      });
 
       // JH-001/PERS-001: BEH-EA-090's own MUST — the veto abort reaches
       // the caller as the typed `HookAborted`, naming this point's own id

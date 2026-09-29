@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-12 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): record the identity and lifecycle decisions of wayfinder tickets 08/09 (SCP-005) |
 ---
 
 ## What it is
@@ -52,6 +52,17 @@ export class Scim extends AuthPlugin.Service<Scim, {
 
 ## Worked example
 No worked example drafted yet. Neither `archive/design/usage-examples-v4.md` nor `archive/design/usage-qadi.md` carries a SCIM section as of this revision.
+
+## Decisions already made (wayfinder tickets 08 and 09)
+The mapping and lifecycle questions below the "What is missing" heading were largely settled by the identity model, and are recorded here so a future `Scim` implementation does not re-open them:
+
+- **Resource id.** The SCIM resource `id` is the awthaq `UserId` (an identifier, never a capability — INV-EA-018).
+- **`externalId`.** The directory's `externalId` is persisted in a table owned by the `scim` package, `scim_external_id(scimConnectionId, externalId, userId)` — deliberately not as an `Accounts` link and not as a column on `Users`, so no SCIM-specific concept leaks into `@awthaq/core` (ticket 08).
+- **`active: false` is suspension, not deletion.** It maps to `Users.setStatus(userId, "suspended")` composed with `Sessions.revokeAll(userId, "suspended")`; `active: true` maps to `setStatus(userId, "active")`. The `UserSuspended` sign-in gate (`Users.assertCanSignIn`, BEH-EA-046) then refuses every sign-in path while every Account, the identity and the session history remain (ticket 09, SCP-001). This also answers "how a SCIM-deactivated user interacts with already-issued sessions": they are revoked at deactivation, and no new one can be issued.
+- **`DELETE /Users/:id` is a different act.** It unlinks the `scim_external_id` mapping and then, by configuration, either erases the user (`Users.delete`, BEH-EA-046's cascade, running the `BeforeUserDelete` erasure taps) or suspends it; the observable postconditions differ from a deactivation (a deleted user's row, accounts and history are gone).
+- **Email-less directory users.** A directory record without an email creates an `Anonymous` or `Phone` identity user (BEH-EA-041), never a synthetic address; `createOrGet` (SCP-003) makes a retried `POST /Users` idempotent.
+
+See the design records: `.scratch/resolve-ready-for-human-findings/issues/08-saml-scim-roadmap-scope.md` and `.../09-userrecord-model-extension.md`.
 
 ## What is missing
 This is the least-designed row in the whole matrix. Beyond the one-line mention in `archive/PRD.md` §17 and the landscape evidence in `research/03-auth-landscape.md`, there is no `ScimApi` contract, no decision on how SCIM's resource/schema model maps onto the `Users`/`Organization` tables, no authentication design for the bearer token a directory service would present, and no answer to how a SCIM-deactivated user interacts with already-issued sessions. `research/03-auth-landscape.md` documents that SCIM is universally a paid, Phase-3, "after SSO" capability across the competitive field, which supports the Phase 3 placement and P4 priority here, but it does not propose an awthaq-specific design.

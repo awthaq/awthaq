@@ -21,7 +21,7 @@
 // calling the provider's API on the user's behalf never handles a raw
 // token directly.
 
-import { Api } from "@awthaq/api";
+import { AccountContract, Api } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
@@ -103,6 +103,8 @@ const expireStateCookie = HttpEffect.appendPreResponseHandler((_request, respons
   }).pipe(Effect.orDie),
 );
 const FLOW_TTL = Duration.minutes(10);
+/** NAM-009: the same bounded http(s) rule the client-writable `image` field has (`AccountContract.ImageUrl`). */
+const isImageUrl = Schema.is(AccountContract.ImageUrl);
 const FLOW_PREFIX = "oauth.flow:";
 
 const toBase64Url = (bytes: Uint8Array): string => {
@@ -170,7 +172,8 @@ const generatePkce = (
  */
 export const accountAnchorFor = (provider: OAuthProvider.OAuthProviderConfig, subject: string) =>
   Effect.gen(function* () {
-    const issuer = provider.issuer === undefined ? undefined : yield* OAuthProvider.liftConfig(provider.issuer);
+    const issuer =
+      provider.issuer === undefined ? undefined : yield* OAuthProvider.liftConfig(provider.issuer);
     return { providerId: provider.id, subject, ...(issuer === undefined ? {} : { issuer }) };
   });
 
@@ -299,7 +302,8 @@ const toProviderTokenSet = (tokens: TokenSet, now: DateTime.Utc): Accounts.Provi
       ? Option.none()
       : Option.some(Redacted.make(tokens.refreshToken)),
   // BAM-008: kept (encrypted at rest by the repository) for import parity and `id_token_hint`.
-  idToken: tokens.idToken === undefined ? Option.none() : Option.some(Redacted.make(tokens.idToken)),
+  idToken:
+    tokens.idToken === undefined ? Option.none() : Option.some(Redacted.make(tokens.idToken)),
   accessTokenExpiresAt:
     tokens.expiresIn === undefined
       ? Option.none()
@@ -477,6 +481,7 @@ export interface OAuthShape {
     | OAuthApi.OAuthCallbackFailed
     | OAuthApi.OAuthAuthorizationDenied
     | OAuthApi.AccountExists
+    | Users.UserSuspended
     | Api.RateLimited
     | Hooks.TwoFactorRequired
   >;
@@ -564,8 +569,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
        * `HttpServerRequest.remoteAddress`) shares one bucket, never
        * unthrottled.
        */
-      const { authorize: AUTHORIZE_RATE_LIMIT, callback: CALLBACK_RATE_LIMIT } =
-        config_.rateLimits;
+      const { authorize: AUTHORIZE_RATE_LIMIT, callback: CALLBACK_RATE_LIMIT } = config_.rateLimits;
       // The explicit return-type annotation below is a narrow, necessary
       // exception, not a style choice: passing `OAuth` (this class) into
       // anything typed `AuthPlugin.Any` (which itself requires a `layer`
@@ -902,7 +906,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                 const autoLink =
                   trustedProviders.includes(providerId) &&
                   profile.emailVerified === true &&
-                  existing.value.emailVerified;
+                  Users.isEmailVerified(existing.value);
                 if (!autoLink) {
                   return yield* Effect.fail(
                     new OAuthApi.AccountExists({
@@ -941,8 +945,22 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
               const created = yield* sqlTransaction
                 .withTransaction(
                   Effect.gen(function* () {
+                    // FAMS-002: a profile with no email creates an Anonymous
+                    // user (upgradeable through `Users.promoteIdentity`) — the
+                    // synthetic `${providerId}:${subject}` placeholder email
+                    // this used to fabricate is gone.
                     const user = yield* users
-                      .create({ email: profile.email ?? `${providerId}:${profile.subject}`, name })
+                      .create({
+                        identity:
+                          profile.email === undefined
+                            ? { _tag: "Anonymous" }
+                            : { _tag: "Email", email: profile.email },
+                        name,
+                        // NAM-009: an http(s) avatar only — see `OAuthProfile.image`.
+                        ...(profile.image !== undefined && isImageUrl(profile.image)
+                          ? { image: profile.image }
+                          : {}),
+                      })
                       .pipe(
                         Effect.catchTag("EmailAlreadyExists", () =>
                           // A concurrent sign-up claimed the address between
@@ -954,7 +972,10 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                           ).pipe(
                             Effect.flatMap((winner) =>
                               Option.isSome(winner)
-                                ? conflictingProviders(winner.value.id, profile.emailVerified === true)
+                                ? conflictingProviders(
+                                    winner.value.id,
+                                    profile.emailVerified === true,
+                                  )
                                 : Effect.succeed([]),
                             ),
                             Effect.flatMap(
@@ -962,6 +983,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                             ),
                           ),
                         ),
+                        // FAMS-002: no phone identity is created here.
+                        Effect.catchTag("PhoneAlreadyExists", Effect.die),
                         Effect.catchTag("PlatformError", Effect.die),
                       );
                     // AOMS-007: a *trusted* provider's `email_verified` claim
@@ -1012,6 +1035,12 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           // session, the caller's existing one is untouched.
           return { callbackURL: flow.callbackURL, session: undefined };
         }
+
+        // SCP-001/BAM-005: THE shared sign-in gate — the provider proved the
+        // identity; a suspended user still gets no session.
+        yield* users
+          .findById(targetUserId)
+          .pipe(Effect.orDie, Effect.flatMap(Users.assertCanSignIn));
 
         // BCR-004/THS-002: same canonical MFA attachment point
         // `@awthaq/password`'s own `signIn` consults, right before this

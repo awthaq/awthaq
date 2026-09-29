@@ -69,7 +69,7 @@ const LoginHandlers = HttpApiBuilder.group(TestApi, "login", (handlers) =>
       const sessions = yield* Sessions.Sessions;
       const users = yield* Users.Users;
       const user = yield* users
-        .create({ email: "reauth@example.com", name: "Reauth" })
+        .create({ identity: { _tag: "Email", email: "reauth@example.com" }, name: "Reauth" })
         .pipe(Effect.orDie);
       const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
       yield* SessionCookie.set(session, token);

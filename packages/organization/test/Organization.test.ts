@@ -506,59 +506,64 @@ describe("Organization", () => {
 
   // EEM-002: the inviter is authenticated, so a mail outage is surfaced —
   // with the invitation kept pending so a resend can succeed later.
-  it.effect("invite fails with InvitationDeliveryFailed when mail fails; resend succeeds once mail recovers", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+  it.effect(
+    "invite fails with InvitationDeliveryFailed when mail fails; resend succeeds once mail recovers",
+    () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
 
-      const failure = yield* organization
-        .invite(owner, org.id, { email: "invitee@example.com", role: ["member"] })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "InvitationDeliveryFailed");
+        const failure = yield* organization
+          .invite(owner, org.id, { email: "invitee@example.com", role: ["member"] })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "InvitationDeliveryFailed");
 
-      const pending = yield* organization.listInvitationsForOrganization(owner, org.id);
-      assert.strictEqual(pending.length, 1);
-      assert.strictEqual(pending[0]?.status, "pending");
-      assert.strictEqual(pending[0]?.id, failure._tag === "InvitationDeliveryFailed" ? failure.invitationId : "");
+        const pending = yield* organization.listInvitationsForOrganization(owner, org.id);
+        assert.strictEqual(pending.length, 1);
+        assert.strictEqual(pending[0]?.status, "pending");
+        assert.strictEqual(
+          pending[0]?.id,
+          failure._tag === "InvitationDeliveryFailed" ? failure.invitationId : "",
+        );
 
-      const resent = yield* organization.invite(owner, org.id, {
-        email: "invitee@example.com",
-        role: ["member"],
-        resend: true,
-      });
-      assert.strictEqual(resent.id, pending[0]?.id);
-      assert.strictEqual(resent.status, "pending");
-    }).pipe(
-      Effect.provide(
-        buildLayer(
-          {},
-          Layer.effect(
-            Mailer.Mailer,
-            Effect.gen(function* () {
-              const attempts = yield* Ref.make(0);
-              return Mailer.Mailer.of({
-                send: (message) =>
-                  Ref.getAndUpdate(attempts, (n) => n + 1).pipe(
-                    Effect.flatMap((n) =>
-                      n === 0
-                        ? Effect.fail(
-                            new Mailer.MailDeliveryFailed({
-                              template: message.template,
-                              reason: "provider down",
-                              retryable: true,
-                            }),
-                          )
-                        : Effect.void,
+        const resent = yield* organization.invite(owner, org.id, {
+          email: "invitee@example.com",
+          role: ["member"],
+          resend: true,
+        });
+        assert.strictEqual(resent.id, pending[0]?.id);
+        assert.strictEqual(resent.status, "pending");
+      }).pipe(
+        Effect.provide(
+          buildLayer(
+            {},
+            Layer.effect(
+              Mailer.Mailer,
+              Effect.gen(function* () {
+                const attempts = yield* Ref.make(0);
+                return Mailer.Mailer.of({
+                  send: (message) =>
+                    Ref.getAndUpdate(attempts, (n) => n + 1).pipe(
+                      Effect.flatMap((n) =>
+                        n === 0
+                          ? Effect.fail(
+                              new Mailer.MailDeliveryFailed({
+                                template: message.template,
+                                reason: "provider down",
+                                retryable: true,
+                              }),
+                            )
+                          : Effect.void,
+                      ),
                     ),
-                  ),
-                sent: Effect.succeed([]),
-              });
-            }),
+                  sent: Effect.succeed([]),
+                });
+              }),
+            ),
           ),
         ),
       ),
-    ),
   );
 
   it.effect("full invite -> accept round trip creates a real membership", () =>
@@ -568,9 +573,12 @@ describe("Organization", () => {
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
 
-      const invitee = yield* users.create({ email: "invitee@example.com", name: "Invitee" });
+      const invitee = yield* users.create({
+        identity: { _tag: "Email", email: "invitee@example.com" },
+        name: "Invitee",
+      });
       const invitation = yield* organization.invite(owner, org.id, {
-        email: invitee.email,
+        email: Option.getOrThrow(Users.emailOf(invitee)),
         role: ["member"],
       });
 
@@ -594,9 +602,12 @@ describe("Organization", () => {
       const users = yield* Users.Users;
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const invitee = yield* users.create({ email: "invitee@example.com", name: "Invitee" });
+      const invitee = yield* users.create({
+        identity: { _tag: "Email", email: "invitee@example.com" },
+        name: "Invitee",
+      });
       const invitation = yield* organization.invite(owner, org.id, {
-        email: invitee.email,
+        email: Option.getOrThrow(Users.emailOf(invitee)),
         role: ["member"],
       });
 
@@ -709,10 +720,13 @@ describe("Organization", () => {
         const users = yield* Users.Users;
         const owner = asCaller("owner-1");
         const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        const invitee = yield* users.create({ email: "invitee@example.com", name: "Invitee" });
+        const invitee = yield* users.create({
+          identity: { _tag: "Email", email: "invitee@example.com" },
+          name: "Invitee",
+        });
 
         const invitation = yield* organization.invite(owner, org.id, {
-          email: invitee.email,
+          email: Option.getOrThrow(Users.emailOf(invitee)),
           role: ["member"],
         });
         yield* organization.acceptInvitation(
@@ -722,7 +736,10 @@ describe("Organization", () => {
         );
 
         const failure = yield* organization
-          .invite(owner, org.id, { email: invitee.email, role: ["member"] })
+          .invite(owner, org.id, {
+            email: Option.getOrThrow(Users.emailOf(invitee)),
+            role: ["member"],
+          })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "AlreadyMember");
         const stored = yield* organization.getInvitation(owner, invitation.id);
@@ -736,9 +753,12 @@ describe("Organization", () => {
       const users = yield* Users.Users;
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const invitee = yield* users.create({ email: "invitee@example.com", name: "Invitee" });
+      const invitee = yield* users.create({
+        identity: { _tag: "Email", email: "invitee@example.com" },
+        name: "Invitee",
+      });
       const invitation = yield* organization.invite(owner, org.id, {
-        email: invitee.email,
+        email: Option.getOrThrow(Users.emailOf(invitee)),
         role: ["member"],
       });
 
@@ -760,7 +780,10 @@ describe("Organization", () => {
         email: "invitee@example.com",
         role: ["member"],
       });
-      const someoneElse = yield* users.create({ email: "someone-else@example.com", name: "X" });
+      const someoneElse = yield* users.create({
+        identity: { _tag: "Email", email: "someone-else@example.com" },
+        name: "X",
+      });
 
       const failure = yield* organization
         .acceptInvitation(
@@ -1592,10 +1615,13 @@ describe("Organization", () => {
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
       const team = yield* organization.createTeam(owner, org.id, "Engineering");
-      const invitee = yield* users.create({ email: "invitee@example.com", name: "Invitee" });
+      const invitee = yield* users.create({
+        identity: { _tag: "Email", email: "invitee@example.com" },
+        name: "Invitee",
+      });
 
       const invitation = yield* organization.invite(owner, org.id, {
-        email: invitee.email,
+        email: Option.getOrThrow(Users.emailOf(invitee)),
         role: ["member"],
         teamId: team.id,
       });
@@ -1651,14 +1677,20 @@ describe("Organization", () => {
         const users = yield* Users.Users;
         const owner = asCaller("owner-1");
         const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        const existing = yield* users.create({ email: "member@example.com", name: "Member" });
+        const existing = yield* users.create({
+          identity: { _tag: "Email", email: "member@example.com" },
+          name: "Member",
+        });
         yield* organization.addMember({
           organizationId: org.id,
           userId: existing.id,
           role: ["member"],
         });
         const failure = yield* organization
-          .invite(owner, org.id, { email: existing.email, role: ["admin"] })
+          .invite(owner, org.id, {
+            email: Option.getOrThrow(Users.emailOf(existing)),
+            role: ["admin"],
+          })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "AlreadyMember");
         const listed = yield* organization.listInvitationsForOrganization(owner, org.id);
@@ -1674,9 +1706,12 @@ describe("Organization", () => {
           const users = yield* Users.Users;
           const owner = asCaller("owner-1");
           const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-          const invitee = yield* users.create({ email: "invitee@example.com", name: "Invitee" });
+          const invitee = yield* users.create({
+            identity: { _tag: "Email", email: "invitee@example.com" },
+            name: "Invitee",
+          });
           const invitation = yield* organization.invite(owner, org.id, {
-            email: invitee.email,
+            email: Option.getOrThrow(Users.emailOf(invitee)),
             role: ["admin"],
           });
           // Added directly (e.g. SCIM) after the invitation went out.
@@ -1823,15 +1858,21 @@ describe("Organization", () => {
       const mailer = yield* Mailer.Mailer;
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const invitee = yield* users.create({ email: "invitee@example.com", name: "Invitee" });
-      const stranger = yield* users.create({ email: "stranger@example.com", name: "Stranger" });
+      const invitee = yield* users.create({
+        identity: { _tag: "Email", email: "invitee@example.com" },
+        name: "Invitee",
+      });
+      const stranger = yield* users.create({
+        identity: { _tag: "Email", email: "stranger@example.com" },
+        name: "Stranger",
+      });
       yield* organization.addMember({
         organizationId: org.id,
         userId: Users.UserId("plain-1"),
         role: ["member"],
       });
       const invitation = yield* organization.invite(owner, org.id, {
-        email: invitee.email,
+        email: Option.getOrThrow(Users.emailOf(invitee)),
         role: ["member"],
       });
       return {

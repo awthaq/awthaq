@@ -156,6 +156,17 @@ export interface UsersRepositoryShape {
     id: UserId,
   ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
   readonly findByEmail: (email: string) => Effect.Effect<Option.Option<User>, RepositoryError>;
+  /** FAMS-002: `phone` is compared as stored (callers normalize to E.164 first). */
+  readonly findByPhone: (phone: string) => Effect.Effect<Option.Option<User>, RepositoryError>;
+  /**
+   * SCP-003: `INSERT ... ON CONFLICT DO NOTHING RETURNING *` — `None` when any
+   * unique index (email, phone) already holds the value. Unlike `insert` +
+   * catching `UniqueViolation`, this does not abort an enclosing Postgres
+   * transaction, so an idempotent import can keep going after a duplicate.
+   */
+  readonly insertIfAbsent: (
+    input: UserInsert,
+  ) => Effect.Effect<Option.Option<User>, RepositoryError>;
   /**
    * BEH-EA-042: `emailVerified` is excluded from `update`/`jsonUpdate` (see
    * `Models.ts`), so flipping it needs its own repository operation rather
@@ -163,6 +174,39 @@ export interface UsersRepositoryShape {
    */
   readonly verifyEmail: (
     id: UserId,
+  ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
+  /** FAMS-002: `phoneVerified`'s only writer, mirroring `verifyEmail`. */
+  readonly verifyPhone: (
+    id: UserId,
+  ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
+  /**
+   * FAMS-002: sets an identity on a row that has none (an Anonymous user) —
+   * `None` when the row is missing *or already has an email/phone*. A duplicate
+   * surfaces as `SqlError`'s `UniqueViolation`.
+   */
+  readonly promoteIdentity: (
+    id: UserId,
+    identity:
+      | { readonly _tag: "Email"; readonly email: string }
+      | { readonly _tag: "Phone"; readonly phone: string },
+  ) => Effect.Effect<Option.Option<User>, RepositoryError>;
+  /**
+   * BAM-009: replaces an email and clears `emailVerified` in one statement —
+   * the only write that may lower it. `None` when the row is missing or has no
+   * email identity.
+   */
+  readonly changeEmail: (
+    id: UserId,
+    email: string,
+  ) => Effect.Effect<Option.Option<User>, RepositoryError>;
+  /** SCP-001: `status`, its reason and expiry have no other writer. */
+  readonly setStatus: (
+    id: UserId,
+    state: {
+      readonly status: "active" | "suspended";
+      readonly reason: string | null;
+      readonly until: DateTime.Utc | null;
+    },
   ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
   readonly delete: (id: UserId) => Effect.Effect<void, RepositoryError>;
   /**
@@ -264,6 +308,39 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
         traced("Users.findByEmail"),
       );
 
+    const findByPhoneQuery = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: models.User,
+      execute: (phone) => sql`SELECT * FROM users WHERE phone = ${phone}`,
+    });
+
+    const findByPhone: UsersRepositoryShape["findByPhone"] = (phone) =>
+      findByPhoneQuery(phone).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
+          }),
+        ),
+        traced("Users.findByPhone"),
+      );
+
+    const insertIfAbsentQuery = SqlSchema.findAll({
+      Request: models.User.insert,
+      Result: models.User,
+      execute: (request) =>
+        sql`INSERT INTO users ${sql.insert(request)} ON CONFLICT DO NOTHING RETURNING *`,
+    });
+
+    const insertIfAbsent: UsersRepositoryShape["insertIfAbsent"] = (input) =>
+      concealMetadata(input.id, input.metadata).pipe(
+        Effect.flatMap((metadata) => insertIfAbsentQuery({ ...input, metadata })),
+        Effect.flatMap(([row]) =>
+          row === undefined ? Effect.succeedNone : revealUser(row).pipe(Effect.map(Option.some)),
+        ),
+        traced("Users.insertIfAbsent"),
+      );
+
     const usersPage = SqlSchema.findAll({
       Request: Schema.Struct({
         cursorCreatedAt: models.wire.nullableDateTime,
@@ -329,6 +406,110 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
         traced("Users.verifyEmail", { id }),
       );
 
+    const verifyPhoneQuery = SqlSchema.findOne({
+      Request: Schema.Struct({
+        id: UserId,
+        verified: models.wire.boolean,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET "phoneVerified" = ${r.verified}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} RETURNING *`,
+    });
+
+    const verifyPhone: UsersRepositoryShape["verifyPhone"] = (id) =>
+      DateTime.now.pipe(
+        Effect.flatMap((updatedAt) => verifyPhoneQuery({ id, verified: true, updatedAt })),
+        Effect.flatMap(revealUser),
+        traced("Users.verifyPhone", { id }),
+      );
+
+    // Both promote statements guard on "no identity yet" in the WHERE clause,
+    // so two racing promotions cannot both win.
+    const promoteEmailQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        id: UserId,
+        email: Schema.String,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET email = ${r.email}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} AND email IS NULL AND phone IS NULL RETURNING *`,
+    });
+
+    const promotePhoneQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        id: UserId,
+        phone: Schema.String,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET phone = ${r.phone}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} AND email IS NULL AND phone IS NULL RETURNING *`,
+    });
+
+    const promoteIdentity: UsersRepositoryShape["promoteIdentity"] = (id, identity) =>
+      DateTime.now.pipe(
+        Effect.flatMap((updatedAt) =>
+          identity._tag === "Email"
+            ? promoteEmailQuery({ id, email: identity.email, updatedAt })
+            : promotePhoneQuery({ id, phone: identity.phone, updatedAt }),
+        ),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
+          }),
+        ),
+        traced("Users.promoteIdentity", { id }),
+      );
+
+    const changeEmailQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        id: UserId,
+        email: Schema.String,
+        unverified: models.wire.boolean,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET email = ${r.email}, "emailVerified" = ${r.unverified}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} AND email IS NOT NULL RETURNING *`,
+    });
+
+    const changeEmail: UsersRepositoryShape["changeEmail"] = (id, email) =>
+      DateTime.now.pipe(
+        Effect.flatMap((updatedAt) =>
+          changeEmailQuery({ id, email, unverified: false, updatedAt }),
+        ),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (row) => revealUser(row).pipe(Effect.map(Option.some)),
+          }),
+        ),
+        traced("Users.changeEmail", { id }),
+      );
+
+    const setStatusQuery = SqlSchema.findOne({
+      Request: Schema.Struct({
+        id: UserId,
+        status: Schema.Literals(["active", "suspended"]),
+        reason: Schema.NullOr(Schema.String),
+        until: models.wire.nullableDateTime,
+        updatedAt: models.wire.dateTime,
+      }),
+      Result: models.User,
+      execute: (r) =>
+        sql`UPDATE users SET status = ${r.status}, "statusReason" = ${r.reason}, "suspendedUntil" = ${r.until}, "updatedAt" = ${r.updatedAt} WHERE id = ${r.id} RETURNING *`,
+    });
+
+    const setStatus: UsersRepositoryShape["setStatus"] = (id, state) =>
+      DateTime.now.pipe(
+        Effect.flatMap((updatedAt) => setStatusQuery({ id, ...state, updatedAt })),
+        Effect.flatMap(revealUser),
+        traced("Users.setStatus", { id }),
+      );
+
     return {
       models,
       insert,
@@ -336,7 +517,13 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
       findById,
       delete: repo.delete,
       findByEmail,
+      findByPhone,
+      insertIfAbsent,
       verifyEmail,
+      verifyPhone,
+      promoteIdentity,
+      changeEmail,
+      setStatus,
       listPage,
     };
   });
