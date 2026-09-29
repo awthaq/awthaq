@@ -19,7 +19,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Hmac, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -182,8 +182,7 @@ export interface PasswordShape {
   }) => Effect.Effect<void, PasswordApi.WrongPassword | Api.RateLimited>;
 }
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+const { toHex } = Hmac;
 
 /**
  * `RateLimits.RateLimitKey`'s own `input` is untyped (`unknown`) — one

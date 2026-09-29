@@ -1,8 +1,12 @@
 // spec/behaviors/10-csrf.md, BEH-EA-073 through BEH-EA-080.
 import { Api } from "@awthaq/api";
+import { Hmac } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { createHmac, randomBytes } from "node:crypto";
+import * as Cause from "effect/Cause";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
@@ -190,5 +194,50 @@ describe("CsrfProtection", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "CsrfRejected");
     }).pipe(Effect.provide(TestLayer)),
+  );
+});
+
+// SMS-004/ACS-007: the Config-backed layer.
+describe("Csrf.layerConfig", () => {
+  const configLayer = (env: Record<string, string>) =>
+    Csrf.layerConfig.pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))));
+
+  const read = (env: Record<string, string>) =>
+    Effect.gen(function* () {
+      return yield* Csrf.CsrfConfig;
+    }).pipe(Effect.provide(configLayer(env)));
+
+  it.effect("reads AWTHAQ_CSRF_SECRET and AWTHAQ_CSRF_ALLOWED_ORIGINS", () =>
+    Effect.gen(function* () {
+      const config = yield* read({
+        AWTHAQ_CSRF_SECRET: "s".repeat(32),
+        AWTHAQ_CSRF_ALLOWED_ORIGINS: "https://a.example,https://b.example",
+      });
+      assert.strictEqual(Redacted.value(config.secret), "s".repeat(32));
+      assert.deepStrictEqual(config.allowedOrigins, ["https://a.example", "https://b.example"]);
+    }),
+  );
+
+  it.effect("defaults allowedOrigins to none", () =>
+    Effect.gen(function* () {
+      const config = yield* read({ AWTHAQ_CSRF_SECRET: "s".repeat(32) });
+      assert.deepStrictEqual(config.allowedOrigins, []);
+    }),
+  );
+
+  it.effect("a missing secret fails with a ConfigError", () =>
+    Effect.gen(function* () {
+      const failure = yield* read({}).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "ConfigError");
+    }),
+  );
+
+  it.effect("a short secret dies with WeakSigningSecret", () =>
+    Effect.gen(function* () {
+      const exit = yield* read({ AWTHAQ_CSRF_SECRET: "too-short" }).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(exit));
+      if (!Exit.isFailure(exit)) return;
+      assert.instanceOf(Cause.squash(exit.cause), Hmac.WeakSigningSecret);
+    }),
   );
 });

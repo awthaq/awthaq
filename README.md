@@ -215,6 +215,7 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 | `Mailer` | a one-line `console.log` stand-in | bring your own (`Mailer.Mailer.of({ send })`, any provider) |
 | `RateLimiter` | `layerPermissive` (no real limiting) | `layer` over `layerStoreMemory`, or your own `RateLimiterStore` |
 | `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEY`) | a KMS-backed `KeyProvider` (implement the port directly) |
+| `Csrf.CsrfConfig` | `Csrf.layerConfig` (`AWTHAQ_CSRF_SECRET`, at least 32 bytes; optional `AWTHAQ_CSRF_ALLOWED_ORIGINS`, comma-separated) | `Layer.succeed(Csrf.CsrfConfig, { secret, allowedOrigins })` with a secret loaded from your own secret store |
 
 `Sessions.SessionConfig` (absolute/idle expiry, idle-refresh throttle) and `Password.config({...})` (breach checking, off by default) are `Context.Reference`s with defaults — override either with `Layer.succeed`/`Password.config(...)` only if the defaults documented in `packages/core/src/Sessions.ts`/`packages/password/src/Password.ts` don't fit.
 

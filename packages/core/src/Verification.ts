@@ -30,6 +30,7 @@
 // comment) and so should be indistinguishable to whatever is watching that
 // event too.
 
+import { Hmac } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -51,8 +52,7 @@ import { UserId } from "./Users.ts";
 export type VerificationTokenId = string & Brand.Brand<"VerificationTokenId">;
 export const VerificationTokenId = Brand.nominal<VerificationTokenId>();
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+const { toHex } = Hmac;
 
 /**
  * BEH-EA-059/INV-EA-010: every failed consumption — expired, unknown, or

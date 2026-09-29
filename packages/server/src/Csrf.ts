@@ -15,13 +15,15 @@
 // would be 403'd on sign-out/revoke/delete-user.
 
 import { Api } from "@awthaq/api";
+import { Hmac } from "@awthaq/ports";
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import * as Headers from "effect/unstable/http/Headers";
@@ -41,67 +43,42 @@ export class CsrfConfig extends Context.Service<CsrfConfig, CsrfConfigShape>()(
   "awthaq/server/CsrfConfig",
 ) {}
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-
-const constantTimeEqual = (a: string, b: string): boolean => {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0);
-  return diff === 0;
-};
-
-const concatBytes = (a: Uint8Array, b: Uint8Array): Uint8Array => {
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
-};
-
-const SHA256_BLOCK_SIZE = 64;
-
 /**
- * BEH-EA-075: HMAC-SHA256 (RFC 2104) built directly from `Crypto.digest`,
- * since the platform-neutral `Crypto` service exposes only plain digests,
- * not a keyed-MAC primitive.
+ * SMS-004: the Config-backed `CsrfConfig`, mirroring `KeyProvider.layerEnv` —
+ * the obvious path never puts a literal secret in source.
+ * `AWTHAQ_CSRF_SECRET` (required, at least 32 UTF-8 bytes — a present but
+ * weak secret dies with `WeakSigningSecret` at boot, ACS-007) and
+ * `AWTHAQ_CSRF_ALLOWED_ORIGINS` (optional, comma-separated, defaults to none).
+ * A missing secret surfaces as a `Config.ConfigError`, the same way any
+ * absent config value does.
  */
-const hmacSha256: (
-  crypto: Crypto.Crypto,
-  key: Uint8Array,
-  message: Uint8Array,
-) => Effect.Effect<Uint8Array, PlatformError.PlatformError> = Effect.fnUntraced(
-  function* (crypto, key, message) {
-    let blockKey = key.length > SHA256_BLOCK_SIZE ? yield* crypto.digest("SHA-256", key) : key;
-    if (blockKey.length < SHA256_BLOCK_SIZE) {
-      const padded = new Uint8Array(SHA256_BLOCK_SIZE);
-      padded.set(blockKey);
-      blockKey = padded;
-    }
-    const ipad = new Uint8Array(SHA256_BLOCK_SIZE);
-    const opad = new Uint8Array(SHA256_BLOCK_SIZE);
-    for (let i = 0; i < SHA256_BLOCK_SIZE; i++) {
-      const keyByte = blockKey[i] ?? 0;
-      ipad[i] = keyByte ^ 0x36;
-      opad[i] = keyByte ^ 0x5c;
-    }
-    const inner = yield* crypto.digest("SHA-256", concatBytes(ipad, message));
-    return yield* crypto.digest("SHA-256", concatBytes(opad, inner));
-  },
+export const layerConfig = Layer.effect(
+  CsrfConfig,
+  Effect.gen(function* () {
+    const secret = yield* Config.Redacted("AWTHAQ_CSRF_SECRET");
+    yield* Hmac.requireMinSecretBytes(secret);
+    const allowedOrigins = yield* Config.Array(Schema.String, "AWTHAQ_CSRF_ALLOWED_ORIGINS").pipe(
+      Config.withDefault([]),
+    );
+    return { secret, allowedOrigins };
+  }),
 );
 
+// BEH-EA-075/ACS-005: HMAC-SHA256 and the constant-time comparison are the
+// shared `@awthaq/ports` `Hmac` primitives, not copies.
 const sign = (crypto: Crypto.Crypto, secret: Redacted.Redacted<string>, token: string) =>
-  hmacSha256(
+  Hmac.hmacSha256(
     crypto,
     new TextEncoder().encode(Redacted.value(secret)),
     new TextEncoder().encode(token),
-  ).pipe(Effect.map(toHex));
+  ).pipe(Effect.map(Hmac.toHex));
 
 /** BEH-EA-075: `<token>.<hmac-signature>` — the whole string is both the cookie value and the required header echo. */
 const mint = Effect.fnUntraced(function* (
   crypto: Crypto.Crypto,
   secret: Redacted.Redacted<string>,
 ) {
-  const token = toHex(yield* crypto.randomBytes(32));
+  const token = Hmac.toHex(yield* crypto.randomBytes(32));
   const signature = yield* sign(crypto, secret, token);
   return `${token}.${signature}`;
 });
@@ -116,7 +93,7 @@ const isValid = Effect.fnUntraced(function* (
   const token = cookieValue.slice(0, separator);
   const signature = cookieValue.slice(separator + 1);
   const expected = yield* sign(crypto, secret, token);
-  return constantTimeEqual(signature, expected);
+  return Hmac.constantTimeEqualString(signature, expected);
 });
 
 /**
@@ -188,7 +165,7 @@ export const CsrfProtectionLive: Layer.Layer<
           !cookieIsValid ||
           existingCookie === undefined ||
           Option.isNone(header) ||
-          !constantTimeEqual(header.value, existingCookie)
+          !Hmac.constantTimeEqualString(header.value, existingCookie)
         ) {
           return yield* Effect.fail(new Api.CsrfRejected());
         }

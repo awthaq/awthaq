@@ -33,6 +33,7 @@
 // challenge's raw bytes (see that module's own header comment on why a
 // bare string is never treated as UTF-8 text there).
 
+import { Hmac } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -190,9 +191,6 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
 
 // ---- layerCookie --------------------------------------------------------
 
-/** BEH-EA-075's own `Csrf.ts` HMAC — copied rather than imported: this plugin does not depend on `@awthaq/server`, and the primitive is small enough that duplicating it costs less than the cross-stratum dependency would. */
-const SHA256_BLOCK_SIZE = 64;
-
 const concatBytes = (...parts: ReadonlyArray<Uint8Array>): Uint8Array => {
   const total = parts.reduce((sum, part) => sum + part.length, 0);
   const out = new Uint8Array(total);
@@ -204,35 +202,12 @@ const concatBytes = (...parts: ReadonlyArray<Uint8Array>): Uint8Array => {
   return out;
 };
 
+/** ACS-005: the one shared RFC 2104 HMAC (`@awthaq/ports`' `Hmac`) — a `PlatformError` from the digest is a defect here, as it was in the copy this replaces. */
 const hmacSha256 = (
   crypto: Crypto.Crypto,
   key: Uint8Array,
   message: Uint8Array,
-): Effect.Effect<Uint8Array> =>
-  Effect.gen(function* () {
-    let blockKey = key.length > SHA256_BLOCK_SIZE ? yield* crypto.digest("SHA-256", key) : key;
-    if (blockKey.length < SHA256_BLOCK_SIZE) {
-      const padded = new Uint8Array(SHA256_BLOCK_SIZE);
-      padded.set(blockKey);
-      blockKey = padded;
-    }
-    const ipad = new Uint8Array(SHA256_BLOCK_SIZE);
-    const opad = new Uint8Array(SHA256_BLOCK_SIZE);
-    for (let i = 0; i < SHA256_BLOCK_SIZE; i++) {
-      const keyByte = blockKey[i] ?? 0;
-      ipad[i] = keyByte ^ 0x36;
-      opad[i] = keyByte ^ 0x5c;
-    }
-    const inner = yield* crypto.digest("SHA-256", concatBytes(ipad, message));
-    return yield* crypto.digest("SHA-256", concatBytes(opad, inner));
-  }).pipe(Effect.orDie);
-
-const constantTimeEqual = (a: Uint8Array, b: Uint8Array): boolean => {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
-  return diff === 0;
-};
+): Effect.Effect<Uint8Array> => Hmac.hmacSha256(crypto, key, message).pipe(Effect.orDie);
 
 export interface ChallengeCookieConfigShape {
   /** Signs every issued value; never defaulted, the same posture `@awthaq/server`'s `CsrfConfig.secret` takes. */
@@ -274,6 +249,8 @@ export const layerCookie: Layer.Layer<
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
     const config = yield* ChallengeCookieConfig;
+    // ACS-007: no composition may sign challenges with a guessable key.
+    yield* Hmac.requireMinSecretBytes(config.secret);
     const secretBytes = new TextEncoder().encode(Redacted.value(config.secret));
 
     const sign = (scope: ChallengeScope, payload: Uint8Array) =>
@@ -295,7 +272,7 @@ export const layerCookie: Layer.Layer<
       const payload = bytes.slice(0, PAYLOAD_BYTES);
       const signature = bytes.slice(PAYLOAD_BYTES);
       const expected = yield* sign(scope, payload);
-      if (!constantTimeEqual(signature, expected)) return false;
+      if (!Hmac.constantTimeEqualBytes(signature, expected)) return false;
       const now = yield* DateTime.now;
       return DateTime.toEpochMillis(now) < unpackExpiryMillis(payload.slice(RANDOM_BYTES));
     });

@@ -51,3 +51,5 @@ Enforce a documented minimum (32 bytes) at layer construction for both secret-be
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `hmac-secret-hygiene`. Evidence at HEAD ec065a7: `packages/server/src/Csrf.ts:24`. Fix: Enforce a 32-byte minimum on HMAC signing secrets at layer construction, dying loudly like KeyProvider.layerEnv. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29):** Hmac.requireMinSecretBytes/WeakSigningSecret are implemented (packages/ports/src/Hmac.ts) and enforced by Csrf.layerConfig, but NOT yet wired into CsrfProtectionLive / ChallengeStore.layerCookie construction: doing so makes ~20 existing test fixtures (secrets of 29-31 bytes across admin/jwt/organization/passkey/password/server tests and features/step-definitions) die at build, and other in-flight branches add new short-secret fixtures, so it is landed as its own separable commit at the end of this program run.

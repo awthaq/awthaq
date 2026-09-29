@@ -7,7 +7,7 @@
 // `Migrations.ts` documents for the persistence stratum generally.
 
 import { Api } from "@awthaq/api";
-import { LegacySessionBridge } from "@awthaq/ports";
+import { Hmac, LegacySessionBridge } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -32,8 +32,7 @@ import { UserId } from "./Users.ts";
 export type SessionId = string & Brand.Brand<"SessionId">;
 export const SessionId = Brand.nominal<SessionId>();
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+const { toHex } = Hmac;
 
 /** BEH-EA-050: the one hash both `Layer`s persist in place of the plaintext secret. */
 const hashSecret = (
@@ -43,20 +42,6 @@ const hashSecret = (
   crypto.digest("SHA-256", new TextEncoder().encode(secret)).pipe(Effect.map(toHex));
 
 /**
- * BEH-EA-056: both operands are the fixed-length output of the same digest
- * algorithm, so a byte-length mismatch (should never occur in practice, but
- * is checked first so the loop below never runs over mismatched lengths) is
- * itself not a security-relevant timing signal — only the loop over
- * equal-length operands needs to run in constant time.
- */
-const constantTimeEqual = (a: Uint8Array, b: Uint8Array): boolean => {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
-  return diff === 0;
-};
-
-/**
  * PIL-007: the hash an unknown session id is compared against, so a miss does
  * the same hash + constant-time compare work as a known id with a wrong
  * secret. Never equals any real `hashSecret` output (SHA-256 of a secret
@@ -64,8 +49,10 @@ const constantTimeEqual = (a: Uint8Array, b: Uint8Array): boolean => {
  */
 const UNKNOWN_SESSION_HASH = "0".repeat(64);
 
+// BEH-EA-056/ACS-005: both operands are the fixed-length hex output of the
+// same digest, compared in constant time by the shared `Hmac` primitive.
 const secretMatches = (presentedHash: string, storedHash: string): boolean =>
-  constantTimeEqual(new TextEncoder().encode(presentedHash), new TextEncoder().encode(storedHash));
+  Hmac.constantTimeEqualString(presentedHash, storedHash);
 
 /** BEH-EA-051: `SessionConfig` — absolute/idle expiry and the idle-refresh throttle. */
 export interface SessionConfig {
