@@ -7,4 +7,5 @@
 
 export * as Admin from "./Admin.ts";
 export * as AdminApi from "./AdminApi.ts";
+export * as ImpersonationOwnerNotice from "./ImpersonationOwnerNotice.ts";
 export * as ImpersonationRecords from "./ImpersonationRecords.ts";

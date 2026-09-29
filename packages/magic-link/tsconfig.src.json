@@ -1,6 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts"
+  ],
   "compilerOptions": {
     "composite": true,
     "noEmit": false,
@@ -8,12 +10,21 @@
     "rootDir": "./src",
     "tsBuildInfoFile": "./.tsbuildinfo",
     "paths": {
-      "@/*": ["./src/*"],
-      "@awthaq/server": ["../server/src/index.ts"],
-      "@awthaq/core": ["../core/src/index.ts"],
-      "@awthaq/sql": ["../sql/src/index.ts"],
-      "@awthaq/ports": ["../ports/src/index.ts"],
-      "@awthaq/api": ["../api/src/index.ts"]
+      "@/*": [
+        "./src/*"
+      ],
+      "@awthaq/server": [
+        "../server/src/index.ts"
+      ],
+      "@awthaq/core": [
+        "../core/src/index.ts"
+      ],
+      "@awthaq/ports": [
+        "../ports/src/index.ts"
+      ],
+      "@awthaq/api": [
+        "../api/src/index.ts"
+      ]
     }
   },
   "references": [
@@ -22,9 +33,6 @@
     },
     {
       "path": "../core/tsconfig.src.json"
-    },
-    {
-      "path": "../sql/tsconfig.src.json"
     },
     {
       "path": "../ports/tsconfig.src.json"
