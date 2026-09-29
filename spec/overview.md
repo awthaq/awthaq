@@ -103,7 +103,10 @@ Each table below is a planned surface, not a shipped one. "Source" is the intend
 | `Users` | `Context.Service` | `Users.ts` |
 | `Accounts` | `Context.Service` | `Accounts.ts` |
 | `Verification` | `Context.Service` | `Verification.ts` |
-| `AuthEvents` | `Context.Service` (bounded `PubSub`) | `AuthEvents.ts` |
+| `AuthEvents` | `Context.Service` (bounded `PubSub`; in-process, at-most-once — `AuditLog` is the durable record and `EventRelay` the cross-process outbox, ADR-EA-030) | `AuthEvents.ts` |
+| `EventRelay`, `EventTransport`, `RelayCursorStore` | opt-in outbox relay over the audit log, transport port, persisted position | `EventRelay.ts` |
+| `Erasure`, `DataExport` | account erasure and data-subject export over aggregating registries plugins contribute to (ADR-EA-031) | `Erasure.ts`, `DataExport.ts` |
+| `Retention`, `SecuritySignals` | opt-in retention sweep and breach-signal detector | `Retention.ts`, `SecuritySignals.ts` |
 | `BeforeSignUp`, `BeforeSignIn`, `BeforeSessionIssue`, `AfterSignUp`, `AfterSignIn`, `BeforeUserDelete` | hook points (`HookPoint.Service`) | `Hooks.ts` |
 
 **Edge and origin.** Persistence depends only on `effect`'s `SqlClient`, so where code runs is decided by the client provided. Edge runtimes (Workers, Vercel Edge) do stateless work — verifying a signed JWT (`@awthaq/jwt`), presence checks — and need no database; origin (Node) owns everything backed by a `SqlClient` (sessions, users, credentials, migrations), unless an HTTP-capable sqlite-dialect driver (libSQL) is used. The driver matrix and its tested/untested status is in `packages/sql/README.md`, "Runtimes & drivers" (ERAS-006).

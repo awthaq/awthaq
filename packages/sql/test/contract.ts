@@ -65,6 +65,7 @@ export const repositoriesLayer = <E>(
     Repositories.VerificationRepositoryLive,
     Repositories.VerificationReservationsRepositoryLive,
     Repositories.AuditLogRepositoryLive,
+    Repositories.RelayCursorRepositoryLive,
   ).pipe(Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 };
 
@@ -962,6 +963,20 @@ export const contractCases = (
           assert.strictEqual(yield* reservations.deleteExpiredBefore(cutoff, 100), 1);
           assert.strictEqual(yield* reservations.deleteExpiredBefore(cutoff, 100), 0);
         }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    // CWM-004: the event relay's persisted position.
+    it.effect("RelayCursor: get is empty until set, set upserts, and names are independent", () =>
+      Effect.gen(function* () {
+        const cursors = yield* Repositories.RelayCursorRepository;
+        const t0 = DateTime.makeUnsafe("2026-04-01T00:00:00.000Z");
+        assert.isTrue(Option.isNone(yield* cursors.get("billing")));
+        yield* cursors.set("billing", "event-1", t0);
+        yield* cursors.set("siem", "event-9", t0);
+        yield* cursors.set("billing", "event-2", DateTime.addDuration(t0, Duration.minutes(1)));
+        assert.deepStrictEqual(yield* cursors.get("billing"), Option.some("event-2"));
+        assert.deepStrictEqual(yield* cursors.get("siem"), Option.some("event-9"));
+      }).pipe(Effect.provide(RepositoriesLive)),
     );
 
     it.effect("BAM-008: idToken round-trips through the repository and is ciphertext at rest", () =>

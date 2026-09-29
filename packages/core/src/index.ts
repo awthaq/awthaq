@@ -34,6 +34,7 @@ export * as AuthRequestContext from "./AuthRequestContext.ts";
 export * as ConstantTime from "./ConstantTime.ts";
 export * as DataExport from "./DataExport.ts";
 export * as Erasure from "./Erasure.ts";
+export * as EventRelay from "./EventRelay.ts";
 export * as HookPoint from "./HookPoint.ts";
 export * as Hooks from "./Hooks.ts";
 // MA-003: re-exported, not wrapped — see this file's own header comment

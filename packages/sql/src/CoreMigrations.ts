@@ -468,4 +468,26 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // CWM-004: the event relay's persisted position — one row per named relay holding the
+  // id of the last audit event it delivered (`auth_audit_log.id`, a time-ordered uuidv7),
+  // so a restart resumes instead of redelivering the whole log or skipping ahead.
+  migration(22, "create_auth_relay_cursor", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`
+        CREATE TABLE auth_relay_cursor (
+          name TEXT PRIMARY KEY,
+          "lastEventId" TEXT NOT NULL,
+          "updatedAt" TIMESTAMPTZ NOT NULL
+        )`,
+      sqlite: () =>
+        sql`
+        CREATE TABLE auth_relay_cursor (
+          name TEXT PRIMARY KEY,
+          "lastEventId" TEXT NOT NULL,
+          "updatedAt" TEXT NOT NULL
+        )`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);

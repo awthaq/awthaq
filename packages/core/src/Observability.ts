@@ -105,6 +105,18 @@ export const sessionVerifyDuration = Metric.histogram("awthaq_session_verify_dur
   boundaries: Metric.exponentialBoundaries({ start: 0.001, factor: 2, count: 16 }),
 });
 
+/** CWM-004: events an `EventRelay` handed to its transport, tagged by relay name. */
+export const relayDelivered = Metric.counter("awthaq_relay_delivered_total", {
+  description: "Audit events delivered to an EventTransport by an EventRelay, tagged by relay",
+  incremental: true,
+});
+
+/** CWM-004: a relay delivery attempt the transport failed (it is retried), tagged by relay name. */
+export const relayFailures = Metric.counter("awthaq_relay_failures_total", {
+  description: "EventRelay delivery attempts the transport failed, tagged by relay",
+  incremental: true,
+});
+
 /** CSG-008: an incident raised by `SecuritySignals`, tagged by rule. */
 export const securityIncidents = Metric.counter("awthaq_security_incident_total", {
   description: "Security incidents raised by SecuritySignals, tagged by rule",

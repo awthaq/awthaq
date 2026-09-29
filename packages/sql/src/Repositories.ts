@@ -1878,3 +1878,67 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
       return { insert, list, page, listReferencing, rewrite, deleteOccurredBefore };
     }),
   );
+
+// ---- RelayCursor ------------------------------------------------------------
+
+/**
+ * CWM-004: the event relay's persisted position, one row per named relay (`name`), holding
+ * the id of the last audit event it delivered.
+ */
+export interface RelayCursorRepositoryShape {
+  readonly get: (name: string) => Effect.Effect<Option.Option<string>, RepositoryError>;
+  /** Upserts the position; `now` is the caller's clock reading (so `TestClock` controls it). */
+  readonly set: (
+    name: string,
+    lastEventId: string,
+    now: DateTime.Utc,
+  ) => Effect.Effect<void, RepositoryError>;
+}
+
+export class RelayCursorRepository extends Context.Service<
+  RelayCursorRepository,
+  RelayCursorRepositoryShape
+>()("awthaq/sql/RelayCursorRepository") {}
+
+export const RelayCursorRepositoryLive: Layer.Layer<
+  RelayCursorRepository,
+  never,
+  SqlClient.SqlClient
+> = Layer.effect(
+  RelayCursorRepository,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const models = makeModels(yield* resolveDialect(sql));
+
+    const getQuery = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: Schema.Struct({ lastEventId: Schema.String }),
+      execute: (name) => sql`SELECT "lastEventId" FROM auth_relay_cursor WHERE name = ${name}`,
+    });
+
+    const setQuery = SqlSchema.void({
+      Request: Schema.Struct({
+        name: Schema.String,
+        lastEventId: Schema.String,
+        updatedAt: models.wire.dateTime,
+      }),
+      execute: (r) => sql`
+        INSERT INTO auth_relay_cursor (name, "lastEventId", "updatedAt")
+        VALUES (${r.name}, ${r.lastEventId}, ${r.updatedAt})
+        ON CONFLICT (name) DO UPDATE
+          SET "lastEventId" = excluded."lastEventId", "updatedAt" = excluded."updatedAt"
+      `,
+    });
+
+    const get: RelayCursorRepositoryShape["get"] = (name) =>
+      getQuery(name).pipe(
+        Effect.map(Option.map((row) => row.lastEventId)),
+        traced("RelayCursor.get"),
+      );
+
+    const set: RelayCursorRepositoryShape["set"] = (name, lastEventId, now) =>
+      setQuery({ name, lastEventId, updatedAt: now }).pipe(traced("RelayCursor.set"));
+
+    return { get, set };
+  }),
+);
