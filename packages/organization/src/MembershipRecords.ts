@@ -66,6 +66,7 @@ export interface MembershipRecordsShape {
     readonly organizationId: string;
     readonly role: ReadonlyArray<string>;
   }) => Effect.Effect<MembershipRecord, MembershipRecordAlreadyExists>;
+  /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findByUserAndOrg: (
     userId: Users.UserId,
     organizationId: string,

@@ -271,6 +271,21 @@ To rotate: add a new entry, point `AWTHAQ_ENCRYPTION_KEY_ID` at it, and keep the
 
 `Sessions.SessionConfig` (absolute/idle expiry, idle-refresh throttle) and `Password.config({...})` (breach screening, on by default and fail-open; `signUpEnumeration`, `requireVerifiedEmail`, ...) are `Context.Reference`s with defaults — override either with `Layer.succeed`/`Password.config(...)` only if the defaults documented in `packages/core/src/Sessions.ts`/`packages/password/src/Password.ts` don't fit.
 
+### Running more than one replica
+
+Every `layerMemory` in this repository (`Users`, `Accounts`, `Sessions`, `Verification`, `AuditLog`, `RevocationStore`, `SigningKeyRecords`, `ChallengeStore`, `RateLimiter.layerMemory`) is one `Ref` per process, so a second instance behind a load balancer would see a different world. To run replicas, the following must be identical or shared across all of them:
+
+| What | How to share it |
+|---|---|
+| Domain state: users, accounts, sessions, verification tokens, the audit log | The `layerSql` variants over one database (`Users.layerSql`, `Accounts.layerSql`, `Sessions.layerSql`, `Verification.layerSql`, `AuditLog.layerSql`); a session revoked on one replica is then revoked on all |
+| Encryption keyset (provider tokens, `users.metadata`) | The same `AWTHAQ_ENCRYPTION_KEYS` and `AWTHAQ_ENCRYPTION_KEY_ID` on every replica, or one KMS-backed `KeyProvider`; rotate by adding the new entry everywhere before pointing `AWTHAQ_ENCRYPTION_KEY_ID` at it (`spec/decisions/019-encryption-key-rotation.md`) |
+| CSRF secret | The same `Csrf.CsrfConfig` secret (at least 32 bytes) and `allowedOrigins`; a token minted by one replica must verify on another |
+| JWT signing keys, token denylist | `SigningKeyRecords.layerSql` and `RevocationStore.layerSql` (keys live in the database; private key material at rest is encrypted through `Encryption`), the same `JwtConfig`; rotation follows `spec/decisions/017-jwt-signing-key-rotation.md` |
+| Rate limits | `RateLimiter.layer` over `RateLimiterStoreSql.layerStoreSql`; `RateLimiter.layerMemory` limits per replica, so the effective budget is multiplied by the replica count |
+| Passkey ceremonies | `ChallengeStore.layerSql` (or the signed `layerCookie`), never `layerMemory`: the begin and finish requests may land on different replicas |
+
+Two things are deliberately per process: `AuthEvents` subscribers (the in-process event bus; the durable record is the `AuditLog` table) and, when you configure one, a read replica (opt-in per read and guarded by a causal token, `spec/decisions/024-read-replica-routing.md`). The password-hashing worker pool is sized per replica (`AUTH_PASSWORD_HASH_WORKER_POOL_SIZE`).
+
 ### Cross-origin SPAs (CORS)
 
 awthaq ships no CORS by default: a browser on another origin cannot read any response (same-origin, default-deny). To serve a separate SPA origin, merge `AuthHttp.cors()` into the same layer list as `AuthHttp.routes(...)`. Its allowlist is `CsrfConfig.allowedOrigins`, the value CSRF's `Origin` check already uses, so the two cannot drift:

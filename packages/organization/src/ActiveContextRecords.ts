@@ -77,6 +77,7 @@ export interface ActiveContextRecordsShape {
     sessionId: string,
     userId: Users.UserId,
   ) => Effect.Effect<ActiveContextRecord>;
+  /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findBySessionId: (
     sessionId: string,
   ) => Effect.Effect<Option.Option<ActiveContextRecord>>;
