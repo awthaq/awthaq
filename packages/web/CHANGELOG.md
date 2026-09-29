@@ -1,4 +1,4 @@
-# @awthaq/next
+# @awthaq/web
 
 ## 0.2.0
 
@@ -12,21 +12,19 @@
 
 ### Patch Changes
 
+- Updated dependencies
+- Updated dependencies [d7351b7]
 - Updated dependencies [8dd72b6]
 - Updated dependencies [3514b28]
+- Updated dependencies [cb155d4]
+- Updated dependencies [f831b6c]
+- Updated dependencies [e073887]
 - Updated dependencies
+- Updated dependencies [4688890]
 - Updated dependencies
-- Updated dependencies [b771d36]
+- Updated dependencies [4cd6174]
+- Updated dependencies
+  - @awthaq/core@0.2.0
   - @awthaq/server@0.2.0
+  - @awthaq/client@0.2.0
   - @awthaq/api@0.2.0
-  - @awthaq/jwt@0.2.0
-  - @awthaq/web@0.2.0
-
-## 0.1.0
-
-### Patch Changes
-
-- @awthaq/api@0.1.0
-  - @awthaq/core@0.1.0
-  - @awthaq/react@0.1.0
-  - @awthaq/server@0.1.0

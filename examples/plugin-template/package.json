@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/example-plugin-template",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "A minimal, test-exercised template plugin: copy it and docs/plugin-authoring.md to start a plugin. Every convention in one small package.",
   "type": "module",

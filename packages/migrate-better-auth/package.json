@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/migrate-better-auth",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Bridge still-live better-auth sessions into freshly issued awthaq sessions during a cutover, without forcing a mass re-login.",
   "license": "MIT",

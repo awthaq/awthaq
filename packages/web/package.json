@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Framework-neutral web-adapter core: cookie-jar bridge, database-verified session read and rotation, presence check, and the in-process CSRF-echoing client. The base a Next, Astro or SvelteKit adapter shares.",
   "license": "MIT",

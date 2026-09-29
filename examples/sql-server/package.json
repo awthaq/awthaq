@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/example-sql-server",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Runnable example: Password over a real, migrated SQL backend, SQLite file by default and Postgres when DATABASE_URL is set, through a real listening HTTP server.",
   "type": "module",

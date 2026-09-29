@@ -1,4 +1,4 @@
-# @awthaq/organization
+# @awthaq/webhooks
 
 ## 0.2.0
 
@@ -42,14 +42,3 @@
   - @awthaq/api@0.2.0
   - @awthaq/ports@0.2.0
   - @awthaq/sql@0.2.0
-  - @awthaq/oauth@0.2.0
-
-## 0.1.0
-
-### Patch Changes
-
-- @awthaq/api@0.1.0
-  - @awthaq/core@0.1.0
-  - @awthaq/ports@0.1.0
-  - @awthaq/server@0.1.0
-  - @awthaq/sql@0.1.0

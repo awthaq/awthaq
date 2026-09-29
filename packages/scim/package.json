@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/scim",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Inbound SCIM 2.0 (RFC 7644) provisioning: an identity provider creates, updates and deactivates an organization's users and groups, and deactivation ends their sessions.",
   "license": "MIT",

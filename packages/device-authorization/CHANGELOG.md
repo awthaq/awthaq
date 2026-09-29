@@ -1,8 +1,8 @@
-# @awthaq/api-key
+# @awthaq/device-authorization
 
 ## 0.2.0
 
-### Patch Changes
+### Minor Changes
 
 - 3514b28: The OAuth 2.0 device authorization grant (RFC 8628) ships as `@awthaq/device-authorization`, and `awthaq login` uses it (DAG-002, DAG-004, DAG-005; BEH-EA-299 to BEH-EA-307).
   
@@ -11,13 +11,9 @@
   - `@awthaq/core`: two audit events, `auth.deviceAuthorization.approved` and `.denied`.
   - `@awthaq/two-factor`: the session gate no longer diverts an `amr` that already records `mfa` (only this plugin's own completed challenge writes it), so a device approved from a session that proved a second factor is not asked again.
   - `@awthaq/api`: `Api.BackChannel`, an annotation for credential-in-the-request endpoints called by non-browser clients (`apikey.token`, the device `code`/`token` pair): they deliberately carry no `CsrfProtection`, and `awthaq doctor` no longer flags them as unprotected mutating endpoints (`@awthaq/api-key` annotates its token group).
-- 4688890: Plugins declare their rate-limit rules and required ports statically, and `awthaq plugin list` prints them (PV-241).
-  
-  - `@awthaq/core`: `AuthPlugin.Service`'s `rateLimits` (each rule's `group` is confined to the plugin's own contract groups by the compiler; `AuthPlugin.declareRateLimits`, `RateLimits.registerDeclared` and `RateLimits.declarationDrift` keep the declaration and the registry from drifting) and `AuthPlugin.layer`'s `ports` (port classes that join the layer's `RIn`; a required `.../ports/...` service that is not declared fails to type-check). Both reach `Auth.make(...).manifest` as `rateLimits` and `ports`, and as the class statics `Plugin.rateLimits` / `Plugin.ports`.
-  - `@awthaq/cli`: `plugin list --rules` prints the declared rules; `plugin list --graph` now prints each plugin's required ports and where its declared taps sit in each hook chain (BEH-EA-202, BEH-EA-111).
-  - Every shipped plugin that requires ports now declares them; password, oauth, passkey, api-key, magic-link (and email-otp) and two-factor declare their rate-limit rules. `@awthaq/api-key` also registers its per-client token budget, which was enforced but not listed.
-  
-  Migration: a plugin that calls `AuthPlugin.layer` and requires an `@awthaq/ports` service (`Mailer`, `RateLimiter`, `PasswordHasher`, ...) must add `ports: [...]` naming it, or it no longer type-checks (the message lists the missing keys). A hand-built `Manifest` value (a test fixture) needs `rateLimits: []` and `ports: []`. BEH-EA-111, BEH-EA-202.
+
+### Patch Changes
+
 - Updated dependencies
 - Updated dependencies [d7351b7]
 - Updated dependencies [8dd72b6]
@@ -36,14 +32,3 @@
   - @awthaq/api@0.2.0
   - @awthaq/ports@0.2.0
   - @awthaq/sql@0.2.0
-  - @awthaq/jwt@0.2.0
-
-## 0.1.0
-
-### Patch Changes
-
-- @awthaq/api@0.1.0
-  - @awthaq/core@0.1.0
-  - @awthaq/ports@0.1.0
-  - @awthaq/server@0.1.0
-  - @awthaq/sql@0.1.0

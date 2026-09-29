@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/next",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Next.js adapter: database-verified getSession, optimistic proxy.ts cookie check, Set-Cookie bridging for server actions.",
   "license": "MIT",

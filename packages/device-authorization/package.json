@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/device-authorization",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "OAuth 2.0 Device Authorization Grant (RFC 8628): a CLI, TV or set-top box signs in by having the user approve a short code on a second, signed-in device; the poll mints a normal bearer session.",
   "license": "MIT",
