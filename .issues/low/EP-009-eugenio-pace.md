@@ -47,3 +47,5 @@ Have `Auth.make` return a machine-readable effective-config manifest (every Cont
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `cli-doctor-hardening`. Duplicate of `ECS-008` — closed by that issue's fix. Evidence at HEAD ec065a7: `spec/decisions/006-runtime-config-separate-from-installation.md:33`. Full dossier: `.plan/slices/12-spec.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ECS-008-effect-cli-specialist` — closed by its fix (see that issue's Resolved comment).

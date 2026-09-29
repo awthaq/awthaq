@@ -3,7 +3,7 @@ ID: "CTA-001"
 Title: "CLI package has zero auth surface and its planned command set contains no login command"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "cli"
 Source: "packages/cli/src/index.ts:8"
 Auditor: "cli-tool-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `cli` · reported by **CLI Tool Auth Specialist** (`cli-tool-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [CLI login flow design vs. the BEH-EA-208 network-boundary prohibition](../../.scratch/resolve-ready-for-human-findings/issues/06-cli-login-vs-beh-ea-208.md) — add `login`/`logout`/`whoami` to the CLI's planned command set, staying in `@awthaq/cli` (not `@awthaq/client`); ship the token-based path (`--token`/`AWTHAQ_TOKEN`) now, gate the interactive device-flow path on the `DeviceAuthorization` plugin. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-session-commands`. Evidence at HEAD ec065a7: `packages/cli/src/index.ts:3`. Fix: Add the login/logout/whoami command family to @awthaq/cli per decision 06 (token path now, device flow later). (effort L). Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
+
+**Resolved (2026-09-29):** login/logout/whoami (packages/cli/src/Session.ts, CredentialStore.ts) per decision 06: outbound-only client of a running server over @awthaq/client's generated HttpApiClient with bearerTransformClient (a server-rotated token is persisted); login --token / AWTHAQ_TOKEN + AWTHAQ_BASE_URL is the non-interactive path, validated against GET /session and stored only when accepted; logout clears and revokes server-side best-effort; whoami exits 8 when not logged in or rejected. Proof: packages/cli/test/Session.test.ts against a real auth server on a real socket (core session group, real bearer authentication and CSRF) — no session command calls net.Server.listen. Deferred as decided: the interactive device flow needs the DeviceAuthorization plugin (P16 only specified it), so `awthaq login` without a token fails with DeviceAuthorizationUnavailable (exit 9) naming it. API-key tokens (OCM-002) are not special-cased: a bearer credential the server accepts works. Closes DAG-002 and CTA-005.

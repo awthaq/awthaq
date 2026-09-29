@@ -3,7 +3,7 @@ ID: "ECS-003"
 Title: "BEH-EA-208 'never runs the application' boundary contradicts its own examples"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/features/08-tooling/26-cli.feature:254"
 Auditor: "effect-cli-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `—` · reported by **Effect CLI Specialist** (`effect-cli-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Narrow the invariant to what is true - no HTTP listener, no request served - and
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-contract`. Evidence at HEAD ec065a7: `spec/behaviors/26-cli.md:156`. Fix: Rewrite BEH-EA-208 to state the true invariant (no HTTP listener, no inbound request, no application serving) and partition commands into three classes with explicit Layer requirements: manifest-only, database-backed, and (per ticket 06) session/outbound-client. Apply together with ticket 06's pending 1.3 amendment so the REQUIREMENT is edited once. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** BEH-EA-208 rewritten in the same revision as CTA-002: the invariant is no listener / no inbound request / not serving the application; three classes with explicit Layer permissions; migration status is database-backed. 26-cli.feature REQ-EA-600/601/602 reworded and a database-backed-class scenario added; packages/cli/README.md and package metadata no longer claim every command runs without a database.

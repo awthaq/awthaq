@@ -3,7 +3,7 @@ ID: "BE-003"
 Title: "CLI is an empty placeholder — no schema/migration tooling exists"
 Level: high
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "cli"
 Source: "packages/cli/src/index.ts:8"
 Auditor: "bereket-engida"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `api` · `cli` · reported by **Bereket Engida — Creator of better-auth** (`bereket-engida`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-manifest-tooling`. Evidence at HEAD ec065a7: `packages/cli/src/index.ts:3`. Fix: Build the @awthaq/cli command tree per decision 07 (doctor, plugin list --graph, routes, migration status|apply, openapi, seed admin, import mechanism). (effort XL). Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
 
 **Plan note (2026-09-29, P09):** the migration id-space hazard this issue must respect is fixed in the libraries (N11): core migrations record in `effect_sql_migrations` (`CoreMigrations.coreMigrations`, ids 1-17), plugin migrations in `awthaq_plugin_migrations` (`Migrations.run(auth.migrations)`, `pluginMigrationsTable`), the SQL rate limiter in `awthaq_rate_limiter_migrations`. A CLI `migration apply` must run core first, then `Migrations.run(auth.migrations)` with the default table; never concatenate the two id spaces into one ledger. Plugin ids are positions in the dependency-ordered list, so appending plugins (not inserting mid-order) is safe on a migrated database. See `packages/sql/README.md` "Running migrations" and BEH-EA-038.
+
+**Resolved (2026-09-29):** @awthaq/cli built per decision 07 on effect/unstable/cli (ADR-EA-027): doctor (+ --build), config list, plugin list --graph (text/json/dot), routes, openapi, migration status|apply, seed admin, import, login|logout|whoami; awthaq.config.ts loader (bare composition, Effect, or defineConfig), bin entry, README. Runs against an app's config module without starting an HTTP server (packages/cli/test/*, and the built binary was exercised: routes, plugin list, doctor, migration apply/status on SQLite, exit codes 0/2/3/9). Checked hazards: plugin and core migrations use separate ledgers and go through Migrations.run; the Postgres regclass codec is registered on the CLI's own client; doctor warns on RateLimiter.layerPermissive and a development Mailer (--build), audits BodyLimit, cookie SameSite, etc.; CSRF secret >= 32 bytes and the encryption keyset surface as --build failures. Deferred (spec BEH-EA-202 says so): plugin list --graph prints order, dependsOn, groups and tables but not a plugin's required ports or hook-tap chain, which are not derivable without evaluating layers (hook introspection depends on per-composition hook registries, P10). Closes MW-006, ELC-008, ERS-008, RRM-011 with it.

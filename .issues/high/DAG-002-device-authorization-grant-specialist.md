@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [CLI login flow design vs. the BEH-EA-208 network-boundary prohibition](../../.scratch/resolve-ready-for-human-findings/issues/06-cli-login-vs-beh-ea-208.md) — `login`/`logout`/`whoami` land in `@awthaq/cli` itself, with a `CredentialStore` port (OS keychain, encrypted-file fallback) for local token storage; the device-flow path now has a documented consumer, gated on the `DeviceAuthorization` plugin shipping. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `cli-session-commands`. Duplicate of `CTA-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/cli/src/index.ts:3`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `CTA-001-cli-tool-auth-specialist` — closed by its fix (see that issue's Resolved comment).

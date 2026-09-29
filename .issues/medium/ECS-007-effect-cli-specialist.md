@@ -3,7 +3,7 @@ ID: "ECS-007"
 Title: "CLI argument validation not tied to the repo's Schema contracts"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/26-cli.md:131"
 Auditor: "effect-cli-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `—` · reported by **Effect CLI Specialist** (`effect-cli-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ State in file 26 that every CLI option/argument is a Schema-validated value - re
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-exit-code-and-arg-contract`. Evidence at HEAD ec065a7: `spec/behaviors/26-cli.md:131`. Fix: Make 'every CLI option/argument decodes through a Schema, reusing the HTTP contract's Schemas where one exists' normative, so invalid input fails as a typed usage error (exit 2). (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** BEH-EA-226: every CLI flag/argument decodes through a Schema (seed admin --email reuses EmailContract.Email; --from is Flag.Literals over the SourceAdapter registry names; --database-url, --base-url, --batch-size, --format have their own Schemas); decode failures are the usage class (exit 2) before any service is built. Tests: packages/cli/test/ExitCodes.test.ts ('seed admin --email not-an-email is a usage error before any service is built', malformed --database-url / --format) and Import.test.ts (unknown --from). No hand-rolled string parsing in packages/cli.

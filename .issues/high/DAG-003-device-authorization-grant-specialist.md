@@ -58,3 +58,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [CLI login flow design vs. the BEH-EA-208 network-boundary prohibition](../../.scratch/resolve-ready-for-human-findings/issues/06-cli-login-vs-beh-ea-208.md) — amend BEH-EA-208 to carve out `login`/`logout`/`whoami` as outbound-only network clients of a running server (never listeners, never inbound), and flag `spec/models/13-device-authorization.md` for a follow-up note pointing its poll's session issuance at Ticket 3's `BeforeSessionIssue` hook-point resolution. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `cli-session-login-carveout`. Duplicate of `CTA-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `spec/behaviors/26-cli.md:156`. Full dossier: `.plan/slices/12-spec.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `CTA-002-cli-tool-auth-specialist` — closed by its fix (see that issue's Resolved comment).

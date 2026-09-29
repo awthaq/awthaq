@@ -3,7 +3,7 @@ ID: "ECS-009"
 Title: "migration apply ships without the plan/drift guardrails deferred to the CLI"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/05-persistence-stratum.md:132"
 Auditor: "effect-cli-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Effect CLI Specialist** (`effect-cli-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Even before the full diff planner lands, require `migration apply` (or a sibling
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-migration-guardrails`. Evidence at HEAD ec065a7: `spec/behaviors/05-persistence-stratum.md:130`. Fix: Give the first shipped `migration apply` the minimum guardrails BEH-EA-039 promises the CLI owns: print the ordered pending plan, refuse on ledger drift (applied ids unknown to the linker, or out-of-order gaps), and make `status` fail loudly on divergence. (effort M). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** BEH-EA-204/039 guardrails: migration status is read-only and fails LedgerDrift (exit 7) on an applied id or name the linker does not know or a pending id sorting before an applied one; apply prints the ordered pending plan, refuses on drift, needs --yes, supports --dry-run and --allow-empty (exit 4 when nothing is pending). Both ledgers (effect_sql_migrations and awthaq_plugin_migrations) go through Migrator/Migrations.run; on Postgres the CLI client registers the client-scoped regclass codec (fails with exit 5 without it, proven on a real Postgres via packages/cli/test/Migration.postgres.test.ts, added to scripts/test-pg.sh). Proof: packages/cli/test/Migration.test.ts over SQLite.
