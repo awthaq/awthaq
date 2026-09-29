@@ -292,6 +292,52 @@ describe("AuthHttp + Session (real HTTP)", () => {
   );
 });
 
+describe("AuthHttp + Session: bearer clients (MNA-008, decision 24 §2)", () => {
+  it.effect("POST /session/sign-out with only a bearer token (no CSRF pair) answers 204", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* router.asHttpEffect().pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/session/sign-out", {
+                method: "POST",
+                headers: { authorization: `Bearer ${Redacted.value(token)}` },
+              }),
+            ),
+          ),
+        );
+        assert.strictEqual(response.status, 204);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("a cookie-authenticated POST without the CSRF pair is still rejected 403", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* router.asHttpEffect().pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/session/sign-out", {
+                method: "POST",
+                headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+              }),
+            ),
+          ),
+        );
+        assert.strictEqual(response.status, 403);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+});
+
 describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
   it.effect("PATCH /user updates the caller's own name; requires authentication", () =>
     Effect.scoped(

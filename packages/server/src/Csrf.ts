@@ -4,6 +4,15 @@
 // `@awthaq/api`'s `CsrfProtection` declaration: `Sec-Fetch-Site` first,
 // `Origin` fallback, backed by a signed double-submit `__Host-csrf` cookie —
 // all three compose (BEH-EA-075 "backs", not replaces, the site check).
+//
+// MNA-008 (decision 24 §2): a request carrying a non-empty `Authorization`
+// header is exempt from minting and enforcement alike. The double-submit and
+// site checks defend against a browser *automatically* attaching an ambient
+// credential (a cookie) to a forged cross-site request; a cross-site page
+// cannot set `Authorization` without a CORS preflight the server's own CORS
+// policy must separately allow, so an explicitly-bearer request was never in
+// CSRF's threat model. Without this, every cookie-less bearer/native client
+// would be 403'd on sign-out/revoke/delete-user.
 
 import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
@@ -145,6 +154,10 @@ export const CsrfProtectionLive: Layer.Layer<
     const middleware: HttpApiMiddleware.HttpApiMiddleware<never, typeof Api.CsrfRejected, never> =
       Effect.fnUntraced(function* (httpEffect) {
         const request = yield* HttpServerRequest.HttpServerRequest;
+        const authorization = Headers.get(request.headers, "authorization");
+        if (Option.isSome(authorization) && authorization.value.trim().length > 0) {
+          return yield* httpEffect;
+        }
         const existingCookie = request.cookies[Api.CSRF_COOKIE_NAME];
         const cookieIsValid =
           existingCookie !== undefined &&

@@ -39,6 +39,7 @@ const validCookieValue = (): string => {
 const RequestHeaders = {
   "sec-fetch-site": Schema.optional(Schema.String),
   origin: Schema.optional(Schema.String),
+  authorization: Schema.optional(Schema.String),
   cookie: Schema.optional(Schema.String),
   "x-csrf-token": Schema.optional(Schema.String),
 };
@@ -155,5 +156,39 @@ describe("CsrfProtection", () => {
         });
         assert.strictEqual(result, "ok");
       }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // MNA-008/decision 24 §2: a request authenticating through an explicit
+  // `Authorization` header is outside CSRF's threat model (a cross-site page
+  // cannot set it without a CORS preflight), so a cookie-less bearer/native
+  // client is not 403'd on unsafe methods.
+  it.effect("MNA-008: an unsafe request with an Authorization header needs no CSRF pair", () =>
+    Effect.gen(function* () {
+      const client = yield* HttpApiTest.groups(TestApi, ["protected"]);
+      const result = yield* client.protected.write({
+        headers: { authorization: "Bearer some-token" },
+      });
+      assert.strictEqual(result, "ok");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("MNA-008: an empty Authorization header grants no exemption", () =>
+    Effect.gen(function* () {
+      const client = yield* HttpApiTest.groups(TestApi, ["protected"]);
+      const failure = yield* client.protected
+        .write({ headers: { authorization: "   " } })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "CsrfRejected");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("MNA-008: a cookie-only unsafe request without the pair is still rejected", () =>
+    Effect.gen(function* () {
+      const client = yield* HttpApiTest.groups(TestApi, ["protected"]);
+      const failure = yield* client.protected
+        .write({ headers: { cookie: "__Host-session=abc.def" } })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "CsrfRejected");
+    }).pipe(Effect.provide(TestLayer)),
   );
 });

@@ -85,6 +85,16 @@ REQUIREMENT: `CsrfProtection` MUST enforce its checks only on state-changing
 
 `archive/design/usage-examples-v4.md` §1.1 shows an unauthenticated `GET /auth/session` succeeding with no CSRF header at all, while §1.2's `POST /auth/password/sign-up` requires one — the standard CSRF scoping rule (only requests that change state are worth protecting against forgery) applied consistently across every group that carries the middleware, so a read-only endpoint never needs a client to manage the CSRF header at all.
 
+**Bearer exemption (MNA-008, decision 24 §2).** A request carrying a non-empty `Authorization` header is exempt from both minting and enforcement, even on an unsafe method:
+
+```text
+REQUIREMENT: `CsrfProtection` MUST NOT reject, and MUST NOT mint a cookie
+             for, an unsafe request that carries a non-empty `Authorization`
+             header.
+```
+
+The double-submit and site checks exist to stop a browser *automatically* attaching an ambient credential (a cookie) to a forged cross-site request. A cross-site page cannot set `Authorization` without a CORS preflight the server's own policy must separately allow, so an explicitly-bearer request is outside CSRF's threat model, and a cookie-less native or server-to-server client must not be 403'd on sign-out, revoke or delete-user. A cookie-authenticated request with no `Authorization` header stays fully protected. (`Auth.make(..., { csrf })`, decision 24 §1, is still unimplemented and tracked with APS-001/PDR-002.)
+
 ## BEH-EA-078: A rejected CSRF check fails with a typed `CsrfRejected` error at `403`
 
 ```ts

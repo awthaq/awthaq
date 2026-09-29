@@ -3,7 +3,7 @@ ID: "MNA-008"
 Title: "__Host-csrf cookie set without Secure - same prefix violation class, currently latent"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Csrf.ts:155"
 Auditor: "mobile-native-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `server` · reported by **Mobile/Native Auth Specialist** (`mobile-native-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Add secure: true to the CSRF cookie attributes now, before any group wires CsrfP
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `csrf-hardening`. Evidence at HEAD ec065a7: `packages/server/src/Csrf.ts:153`. Fix: The Secure-attribute claim is invalid, but the consequence it predicts for bearer clients is live: implement decision 24 §2's bearer exemption in CsrfProtectionLive. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/server/src/Csrf.ts: CsrfProtectionLive skips minting and enforcement when the request carries a non-empty Authorization header (decision 24 §2); documented in the file header and spec/behaviors/10-csrf.md (BEH-EA-077 bearer-exemption sub-requirement). Tests: server/test/Csrf.test.ts (bearer POST with no pair passes -- was red; empty Authorization and cookie-only POST still 403) and server/test/AuthHttp.test.ts (bearer-only POST /session/sign-out answers 204; cookie-only still 403). The Secure-attribute half of the finding was invalid (securitySetCookie defaults secure: true). Gates green.
