@@ -39,6 +39,7 @@ export * as Hooks from "./Hooks.ts";
 export * from "./HttpApiTypes.ts";
 export * as MailDispatch from "./MailDispatch.ts";
 export * as Migrations from "./Migrations.ts";
+export * as Observability from "./Observability.ts";
 export * as RateLimits from "./RateLimits.ts";
 export * as SessionCookie from "./SessionCookie.ts";
 export * as Sessions from "./Sessions.ts";

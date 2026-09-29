@@ -1,10 +1,6 @@
 // CSG-001/DRS-002 (.issues/high): `MembershipRecords.deleteAllByUser` and
-// `Organization.beforeUserDeleteErasure`'s own tap wiring. A dedicated
-// file — `Hooks.BeforeUserDelete`'s tap registry is a module-level
-// singleton that freezes after its own first `run()` (BEH-EA-024), so
-// this suite's own `Users.delete` call must be the only one to ever touch
-// it in this module load, mirroring `@awthaq/core`'s own
-// `HooksWiringMemory.test.ts`.
+// `Organization.beforeUserDeleteErasure`'s own tap wiring, mirroring
+// `@awthaq/core`'s own `HooksWiringMemory.test.ts`.
 import { Hooks, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -38,10 +34,10 @@ describe("MembershipRecords.deleteAllByUser", () => {
 
 describe("Organization.beforeUserDeleteErasure", () => {
   const TestLayer = Users.layerMemory.pipe(
-    Layer.provide(Hooks.BeforeUserDelete.layer),
     Layer.provide(Organization.beforeUserDeleteErasure),
     Layer.provideMerge(MembershipRecords.layerMemory),
     Layer.provideMerge(ActiveContextRecords.layerMemory),
+    Layer.provideMerge(Hooks.BeforeUserDelete.layer),
     Layer.provide(NodeCrypto.layer),
   );
 

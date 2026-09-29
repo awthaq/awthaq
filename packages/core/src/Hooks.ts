@@ -105,10 +105,10 @@ export class AfterUserAttributesChanged extends HookPoint.observe<AfterUserAttri
  * Every point's own default (no-tap) layer, merged into one — an
  * application composing any of `Users`/`Password`/`OAuth`/`Passkey`
  * needs this once, the same way `OrganizationHooksLive` already covers
- * `@awthaq/organization`'s own points. A composition that also wants to
- * `.tap(...)` one merges that tap's own layer in alongside this (taps and
- * a point's own `.layer` are independent effects over the same shared,
- * module-scoped registry — see `HookPoint.ts`'s own header comment).
+ * `@awthaq/organization`'s own points. A tap's Layer requires its point
+ * (ELC-001), so a composition that `.tap(...)`s one provides this *to* the
+ * tap (`Tap.pipe(Layer.provideMerge(HooksLive))`): the registry lives in the
+ * point's built layer, per composition — see `HookPoint.ts`'s header.
  */
 export const HooksLive = Layer.mergeAll(
   BeforeSignUp.layer,

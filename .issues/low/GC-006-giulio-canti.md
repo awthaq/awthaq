@@ -55,3 +55,5 @@ Give each hook point its own counter in the factory closure (sequence only ever 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `hook-registry-per-composition`. Duplicate of `ELC-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/HookPoint.ts:178`. Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ELC-001-effect-layer-context-architect` — closed by its fix (see that issue's Resolved comment).

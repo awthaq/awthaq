@@ -201,6 +201,7 @@ describe("Auth.make", () => {
           { id: "ping", apiVersion: 1, tables: ["ping_state"], dependsOn: [] },
           { id: "pong", apiVersion: 1, tables: [], dependsOn: ["ping"] },
         ],
+        hooks: {},
       });
     }),
   );

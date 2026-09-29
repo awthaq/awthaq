@@ -39,7 +39,10 @@ A plugin that needs a mailer, a crypto source, a rate limiter or a transaction b
 
 - `HookPoint.veto` taps can amend the input or abort with `new HookPoint.HookAbort({ code })`; `observe` taps run afterwards and a failing observer can never fail the operation (BEH-EA-089 to 093).
 - Translate a veto abort where the point is run, into the typed `HookAborted` naming the point (BEH-EA-090). The template's `veto` helper is five lines; copy it.
-- The tap registry is a module-level singleton that **freezes at the first run of a point** (BEH-EA-024). Install every tap once, at composition time, for the whole process. A tap layer built after its point has already run fails with `HookPointFrozen`. In tests, that means one shared layer per test file, as `Template.test.ts` does.
+- The tap registry lives in the point's own built layer, so it is **per composition** (ELC-001), and it **freezes at the first run of a point** in that composition (BEH-EA-024). A tap layer built after its point has already run fails with `HookPointFrozen`; two compositions built from one module never share taps.
+- A tap's layer **requires its point**: `Point.tap(...)` is a `Layer<never, never, Point>`, so tapping a point nobody provides fails to compile (BEH-EA-094). Provide the point to the tap in the same layer graph: `Tap.pipe(Layer.provideMerge(NotesHooksLive))`.
+- A plugin can declare its taps statically with `AuthPlugin.layer(Self, { taps: [Point.declareTap(handler, { order })] })`. They run in dependency order, then `order`, then plugin id (BEH-EA-091), `Auth.make(...).manifest.hooks` prints that order without building anything (BEH-EA-096), and the point requirements join the plugin layer's `RIn`.
+- Tap outputs are checked against the point's schema (a veto tap's amended value, a divert tap's diverted value); observe taps run sequentially in resolved order, so keep them cheap.
 - Provide each point's own `.layer` once; `NotesHooksLive` merges them.
 
 ## Migrations

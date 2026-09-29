@@ -3,7 +3,7 @@ ID: "JH-002"
 Title: "observe taps are sorted by declared order then run unbounded-concurrent"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/HookPoint.ts:261"
 Auditor: "jared-hanson"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Jared Hanson — Creator of Passport.js** (`jared-hanson`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Run observe taps sequentially ({ concurrency: 1 }) like veto/divert — observer
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `hook-run-semantics`. Evidence at HEAD ec065a7: `packages/core/src/HookPoint.ts:278`. Fix: Run observe taps sequentially in resolved order (like veto/divert), and add an observer-failure metric next to the existing log line. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Observe taps run sequentially in resolved order (concurrency: unbounded dropped); failures are logged via the shared Observability.logObserverFailure and counted in awthaq_hook_observer_error_total{hook}. Tests: 'a later tap starts only after an earlier, slower one completes' (TestClock), 'a failing observer is counted'. spec BEH-EA-092 updated.

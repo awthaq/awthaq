@@ -67,8 +67,8 @@ const RecordsLive = Template.layerSql.pipe(
   Layer.provideMerge(Migrated),
 );
 
-// A veto tap is installed once per process (the tap registry freezes at the first run),
-// so it lives in the shared layer: the veto test below triggers it with a marker text.
+// The tap lives in the shared layer: the veto test below triggers it with a marker text.
+// It requires its point (ELC-001), so `NotesHooksLive` is provided after it below.
 const ForbiddenTap = Template.BeforeCreateNote.tap((input) =>
   input.text.includes("forbidden")
     ? Effect.fail(new HookPoint.HookAbort({ code: "TEXT_FORBIDDEN" }))
@@ -85,8 +85,8 @@ const AppLayer = Layer.mergeAll(
   Layer.provide(CsrfProtectionLive),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(RecordsLive),
-  Layer.provideMerge(Template.NotesHooksLive),
   Layer.provideMerge(ForbiddenTap),
+  Layer.provideMerge(Template.NotesHooksLive),
   Layer.provideMerge(TestServices),
   Layer.provideMerge(HttpRouter.layer),
 );

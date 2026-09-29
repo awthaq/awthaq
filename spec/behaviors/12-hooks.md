@@ -48,6 +48,8 @@ REQUIREMENT: A tap on a `kind: "veto"` hook point MUST be able to return a
              `code`.
 ```
 
+**As shipped (JH-004):** a veto tap's returned value is checked against the point's own `input` schema (and a divert tap's diverted value against its outcome schema) before it reaches the next tap or the guarded operation; a value that fails is a `HookTapOutputInvalid` defect naming the point and the tap's owner, never a value the operation acts on.
+
 `archive/design/usage-examples-v4.md` §14 is the worked example of this exact case — a company restricting sign-up to its own email domain by tapping `Hooks.beforeSignUp` — and shows the abort reaching the caller as a structured `{ code, message }` rather than a generic failure. This is designed to let a veto tap enforce a business rule (domain allow-listing, a custom eligibility check) without the plugin that defines the hook point needing to know about that rule in advance.
 
 ## BEH-EA-091: A veto tap may instead amend the value, and multiple taps on one point run in dependency order
@@ -77,6 +79,8 @@ REQUIREMENT: A failure raised by a tap on a `kind: "observe"` hook point
              MUST be caught, logged, and MUST NOT propagate to fail the
              operation the point observes.
 ```
+
+**As shipped (JH-002):** observe taps run inline, one after another in the resolved order (BEH-EA-091), so a later tap starts only after an earlier one completes and a slow tap adds latency to the observed operation — heavy work belongs in a forked fiber or an `AuthEvents` subscriber (BEH-EA-103). A failing tap is logged under the stable name `auth.hook.observer.error` (error level carries only a sanitized tag/message; the raw cause is debug level, EOTS-005) and counted in `awthaq_hook_observer_error_total`; later taps still run.
 
 `archive/design/usage-examples-v4.md` §14 states this guarantee in one line: "observe: cannot fail sign-in even if it throws." `archive/PRD.md` §18 extends the same isolation to event observers generally. Without this isolation, an unrelated third-party plugin's welcome-email tap failing (a `Mailer` outage, a template bug) would fail every sign-up in the system — the opposite of what an "after the fact, side-effecting" hook is meant to be.
 
@@ -112,7 +116,9 @@ REQUIREMENT: A `Layer` built from `SomePoint.tap(...)` where no installed
              missing port (BEH-EA-020).
 ```
 
-This restates BEH-EA-024 from the tap author's point of view: `archive/design/plugins-as-layers.md` §1 lists this exact row in its compiler-catches-this table, and the failure mode it replaces is a plugin author mistyping a hook-point key, or leaving a tap registered after the plugin that defined the point has been uninstalled, and getting a tap that silently never fires — indistinguishable, at runtime, from a tap that fires correctly zero times.
+This restates BEH-EA-024 from the tap author's point of view: **As shipped (ELC-001):** a point's tap registry belongs to the point's own built layer, and `SomePoint.tap(...)` returns a `Layer` that *requires* `SomePoint`; launching it without the point's layer is a compile error (`packages/core/test/HookPoint.types.test.ts`). Freezing (BEH-EA-024) is per composition: two compositions built from one module never share taps or a frozen state.
+
+`archive/design/plugins-as-layers.md` §1 lists this exact row in its compiler-catches-this table, and the failure mode it replaces is a plugin author mistyping a hook-point key, or leaving a tap registered after the plugin that defined the point has been uninstalled, and getting a tap that silently never fires — indistinguishable, at runtime, from a tap that fires correctly zero times.
 
 ## BEH-EA-095: A shared table's hook-mediated extension is the only way a plugin observes another plugin's core data without altering its table
 
@@ -145,6 +151,8 @@ REQUIREMENT: The fully resolved tap order for every hook point in a
              then plugin id) and printable by tooling, without executing
              any tap.
 ```
+
+**As shipped (JH-003/PERS-003):** `TapOptions.owner` names the contributing plugin, and one comparator (`HookPoint.compareTaps`: dependency level, then declared `order`, then plugin id; application taps last) orders both the runtime chain and the manifest. A plugin declares its taps statically with `AuthPlugin.layer(Self, { taps: [Point.declareTap(handler, { order })] })`; `Auth.make(...).manifest.hooks` prints every declared tap per point in resolved order without building any layer, and each point's service exposes `resolved` at runtime. The `awthaq plugin list --hooks` command itself belongs to the CLI (`manifest.hooks` is its data source).
 
 `archive/design/usage-examples-v4.md` §14 states this directly: "Resolved order is printable: `awthaq plugin list --hooks`." Because the ordering inputs (each plugin's `dependsOn`, each tap's declared `order`, each plugin's `id`) are all static facts read off the plugin classes (BEH-EA-006, BEH-EA-007), the CLI is designed to compute and display the resolved chain the same way it derives the migration order (BEH-EA-038), without needing a running application to observe it in.
 

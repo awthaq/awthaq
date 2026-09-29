@@ -35,13 +35,12 @@ const Migrated = Layer.effectDiscard(
 
 const TestLayer = Users.layerSql.pipe(
   Layer.provide(Repositories.UsersRepositoryLive),
-  Layer.provide(Hooks.BeforeUserDelete.layer),
   Layer.provide(
     Hooks.BeforeUserDelete.tap((input) =>
       input.email === "keep@example.com"
         ? Effect.fail(new HookPoint.HookAbort({ code: "LEGAL_HOLD" }))
         : Effect.succeed(input),
-    ),
+    ).pipe(Layer.provideMerge(Hooks.BeforeUserDelete.layer)),
   ),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),

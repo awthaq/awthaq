@@ -1652,22 +1652,18 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
  * which `@awthaq/server`'s `Account.ts` already calls from within its own
  * `SqlTransaction` — this tap's own write joins that same transaction.
  *
- * **A separate export, not merged into `Passkey.layer` itself:**
- * `Hooks.BeforeUserDelete` is a module-level singleton whose tap registry
- * freezes permanently after its first `run()` (BEH-EA-024) — a real,
- * empirically-confirmed constraint (CSG-002's own resolution comment).
- * `Passkey.layer` is built repeatedly across a real test suite (a fresh
- * `Layer` per test/file, all sharing one module load); merging the tap in
- * there means every build after the point's first run anywhere in the
- * same process dies with `HookPointFrozen`. A composition that wants this
- * erasure guarantee provides `Passkey.beforeUserDeleteErasure` once,
- * application-wide, the same opt-in posture `RateLimits.layer`/
- * `Slots.layer` already use for their own registries.
+ * **Still a separate export, pending the erasure registry** (CSG-001,
+ * wayfinder ticket 30): the original reason it could not join
+ * `Passkey.layer` — a module-level tap registry that froze process-wide — is
+ * gone (ELC-001: registries are per composition), but the taps are being
+ * replaced by a core `ErasureRegistry` entry rather than folded in.
  */
 export const beforeUserDeleteErasure: Layer.Layer<
   never,
   never,
-  PasskeyCredentials.PasskeyCredentials | PasskeyUserHandles.PasskeyUserHandles
+  | PasskeyCredentials.PasskeyCredentials
+  | PasskeyUserHandles.PasskeyUserHandles
+  | Hooks.BeforeUserDelete
 > = Layer.unwrap(
   Effect.gen(function* () {
     const credentials = yield* PasskeyCredentials.PasskeyCredentials;

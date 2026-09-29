@@ -1,9 +1,6 @@
 // CSG-001/DRS-002 (.issues/high): `PasskeyCredentials.deleteAllByUser` and
-// `Passkey.beforeUserDeleteErasure`'s own tap wiring. A dedicated file —
-// `Hooks.BeforeUserDelete`'s tap registry is a module-level singleton that
-// freezes after its own first `run()` (BEH-EA-024), so this suite's own
-// `Users.delete` call must be the only one to ever touch it in this module
-// load, mirroring `HooksWiringMemory.test.ts`'s identical reasoning.
+// `Passkey.beforeUserDeleteErasure`'s own tap wiring, mirroring
+// `@awthaq/core`'s own `HooksWiringMemory.test.ts`.
 import { Hooks, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -58,10 +55,10 @@ suiteDeleteAllByUser(
 
 describe("Passkey.beforeUserDeleteErasure", () => {
   const TestLayer = Users.layerMemory.pipe(
-    Layer.provide(Hooks.BeforeUserDelete.layer),
     Layer.provide(Passkey.beforeUserDeleteErasure),
     Layer.provideMerge(PasskeyCredentials.layerMemory),
     Layer.provideMerge(PasskeyUserHandles.layerMemory),
+    Layer.provideMerge(Hooks.BeforeUserDelete.layer),
     Layer.provide(NodeCrypto.layer),
   );
 

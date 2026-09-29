@@ -13,6 +13,7 @@ import type * as Record from "effect/Record";
 import type * as Scope from "effect/Scope";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import type * as HookPoint from "./HookPoint.ts";
 import type { Migrations } from "./Migrations.ts";
 
 /**
@@ -80,6 +81,14 @@ export interface Class<
   readonly tables: ReadonlyArray<`${Id}_${string}`>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
+  /** PERS-003: the taps this plugin declared statically (`AuthPlugin.layer`'s `taps` option), readable without building any layer. */
+  readonly taps: ReadonlyArray<DeclaredTap>;
+}
+
+/** PERS-003: a statically declared tap, as far as `Auth.make`'s manifest needs it. */
+export interface DeclaredTap {
+  readonly point: string;
+  readonly order: number;
 }
 
 /**
@@ -107,6 +116,8 @@ export interface Any {
   readonly tables: ReadonlyArray<string>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
+  /** PERS-003: optional so a hand-built plugin value (a test fixture) need not declare any. */
+  readonly taps?: ReadonlyArray<DeclaredTap>;
   readonly layer: Layer.Layer<never, unknown, unknown>;
 }
 
@@ -132,6 +143,11 @@ export type InstanceOf<P> = P extends Effect.Effect<unknown, unknown, infer Self
 const dependsOnByPlugin = new WeakMap<object, ReadonlyArray<Any>>();
 
 const noDependencies: ReadonlyArray<Any> = [];
+
+/** PERS-003: same side-table-plus-getter arrangement as `dependsOn`, for the same reason — the taps are only known once `AuthPlugin.layer` runs. */
+const tapsByPlugin = new WeakMap<object, ReadonlyArray<DeclaredTap>>();
+
+const noTaps: ReadonlyArray<DeclaredTap> = [];
 
 /**
  * BEH-EA-001 through BEH-EA-007: builds the plugin's compiled service key and
@@ -166,6 +182,7 @@ export const Service =
       tables: options.tables ?? [],
       migrations: options.migrations ?? [],
       dependsOn: noDependencies,
+      taps: noTaps,
     });
     // A regular (not arrow) function, so `this` is whatever the getter is
     // actually read off — `Pong`, say, when a subclass reads `Pong.dependsOn` —
@@ -180,8 +197,23 @@ export const Service =
         return dependsOnByPlugin.get(this) ?? noDependencies;
       },
     });
-    return withLiveDependsOn;
+    const withLiveTaps = Object.defineProperty(withLiveDependsOn, "taps", {
+      enumerable: true,
+      configurable: true,
+      get(this: object): ReadonlyArray<DeclaredTap> {
+        return tapsByPlugin.get(this) ?? noTaps;
+      },
+    });
+    return withLiveTaps;
   };
+
+/** PERS-003: the hook points a `taps` option's declarations tap — they join the plugin layer's `RIn`, exactly like a port. */
+export type TapPoints<Taps extends ReadonlyArray<HookPoint.TapDeclaration<unknown>>> =
+  Taps[number] extends infer Declaration
+    ? Declaration extends HookPoint.TapDeclaration<infer Point>
+      ? Point
+      : never
+    : never;
 
 /**
  * BEH-EA-008: `dependsOn` declares both migration ordering and a typed
@@ -228,17 +260,19 @@ export function layer<
   HE,
   HR,
   Deps extends ReadonlyArray<Any> = readonly [],
+  Taps extends ReadonlyArray<HookPoint.TapDeclaration<unknown>> = readonly [],
 >(
   plugin: Class<Self, Id, Shape, Groups>,
   options: {
     readonly dependsOn?: Deps;
+    readonly taps?: Taps;
     readonly make: Effect.Effect<Shape, E, R>;
     readonly handlers: Layer.Layer<HttpApiGroup.ToService<"auth", Groups>, HE, HR>;
   },
 ): Layer.Layer<
   Self | HttpApiGroup.ToService<"auth", Groups>,
   E | HE,
-  Exclude<R, Scope.Scope> | Exclude<HR, Self> | InstanceOf<Deps[number]>
+  Exclude<R, Scope.Scope> | Exclude<HR, Self> | InstanceOf<Deps[number]> | TapPoints<Taps>
 >;
 export function layer<
   Self,
@@ -248,13 +282,15 @@ export function layer<
   E,
   R,
   Deps extends ReadonlyArray<Any> = readonly [],
+  Taps extends ReadonlyArray<HookPoint.TapDeclaration<unknown>> = readonly [],
 >(
   plugin: Class<Self, Id, Shape, Groups>,
   options: {
     readonly dependsOn?: Deps;
+    readonly taps?: Taps;
     readonly make: Effect.Effect<Shape, E, R>;
   },
-): Layer.Layer<Self, E, Exclude<R, Scope.Scope> | InstanceOf<Deps[number]>>;
+): Layer.Layer<Self, E, Exclude<R, Scope.Scope> | InstanceOf<Deps[number]> | TapPoints<Taps>>;
 export function layer<
   Self,
   Id extends string,
@@ -265,15 +301,30 @@ export function layer<
   HE = never,
   HR = never,
   Deps extends ReadonlyArray<Any> = readonly [],
+  Taps extends ReadonlyArray<HookPoint.TapDeclaration<unknown>> = readonly [],
 >(
   plugin: Class<Self, Id, Shape, Groups>,
   options: {
     readonly dependsOn?: Deps;
+    readonly taps?: Taps;
     readonly make: Effect.Effect<Shape, E, R>;
     readonly handlers?: Layer.Layer<HttpApiGroup.ToService<"auth", Groups>, HE, HR>;
   },
 ) {
   dependsOnByPlugin.set(plugin, options.dependsOn ?? noDependencies);
+  const taps = options.taps ?? [];
+  tapsByPlugin.set(
+    plugin,
+    taps.map((declaration) => ({ point: declaration.point, order: declaration.order })),
+  );
   const own = Layer.effect<Self, Shape, E, R>(plugin, options.make);
-  return options.handlers ? Layer.provideMerge(options.handlers, own) : own;
+  const withHandlers = options.handlers ? Layer.provideMerge(options.handlers, own) : own;
+  if (taps.length === 0) return withHandlers;
+  // PERS-003: the plugin installs its own taps as its own owner, so the
+  // runtime chain orders them by this plugin's place in the composition.
+  const installed = taps.reduce<Layer.Layer<never, never, unknown>>(
+    (acc, declaration) => Layer.merge(acc, declaration.install(plugin)),
+    Layer.empty,
+  );
+  return Layer.merge(withHandlers, installed);
 }

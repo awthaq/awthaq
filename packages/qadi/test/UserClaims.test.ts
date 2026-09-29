@@ -185,7 +185,6 @@ describe("UserClaims composition", () => {
         }).pipe(
           Effect.provide(
             UserClaims.UserClaims.layer.pipe(
-              Layer.provideMerge(Hooks.AfterUserAttributesChanged.layer),
               Layer.provideMerge(
                 Hooks.AfterUserAttributesChanged.tap((input) =>
                   Effect.sync(() => {
@@ -193,6 +192,7 @@ describe("UserClaims composition", () => {
                   }),
                 ),
               ),
+              Layer.provideMerge(Hooks.AfterUserAttributesChanged.layer),
               Layer.provideMerge(CoreLive),
             ),
           ),

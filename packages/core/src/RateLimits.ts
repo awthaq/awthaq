@@ -37,11 +37,10 @@
 // composition itself.
 //
 // BEH-EA-111's "dependency order, then declared `order`, then rule id"
-// resolved-order rule has the same gap `HookPoint.ts`'s own header comment
-// documents for tap ordering, for the identical reason (a plugin's
-// topological position isn't known at the point its own `layer` calls
-// `rule`) — this module orders by declared `order` then registration
-// sequence instead. A real `awthaq plugin list --graph` CLI command
+// resolved-order rule is implemented for hook taps (`HookPoint.compareTaps`,
+// JH-003, which reads each owner's `dependsOn`); rules are not yet ordered
+// that way — this module orders by declared `order` then registration
+// sequence. A real `awthaq plugin list --graph` CLI command
 // (BEH-EA-111's own example) is `@awthaq/cli`'s job, not built yet;
 // `registered` is this module's own introspection primitive for it to call.
 

@@ -7,13 +7,13 @@
 // key. `DecisionCacheInvalidationLive` closes that for the state awthaq's own
 // plugins own by clearing the cache on every organization observe hook.
 //
-// **One layer build for the whole file.** `HookPoint` tap registries are
-// module-level singletons that freeze at their point's first `run()`
-// (BEH-EA-024), so `DecisionCacheInvalidationLive` may be built once per
-// process — exactly the "provide once, application-wide" rule its own doc
-// comment states. `layer(...)` from `@effect/vitest` builds `AppLive` once
-// and every test below shares it (each test uses its own organization/user
-// ids, so shared state cannot leak between them).
+// **One layer build for the whole file.** A hook point's registry freezes at
+// its first `run()` within a composition (BEH-EA-024), so
+// `DecisionCacheInvalidationLive` is built once per composition — exactly the
+// "provide once, application-wide" rule its own doc comment states.
+// `layer(...)` from `@effect/vitest` builds `AppLive` once and every test
+// below shares it (each test uses its own organization/user ids, so shared
+// state cannot leak between them).
 import { Api } from "@awthaq/api";
 import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
 import {

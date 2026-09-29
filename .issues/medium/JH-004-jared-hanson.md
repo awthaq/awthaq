@@ -3,7 +3,7 @@ ID: "JH-004"
 Title: "Hook input schemas are required but never decoded — no runtime check at the tap boundary"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/HookPoint.ts:29"
 Auditor: "jared-hanson"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `core` · reported by **Jared Hanson — Creator of Passport.js** (`jared-hanson`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Decode tap amendments against the point's own schema inside run() (one decode pe
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `hook-run-semantics`. Evidence at HEAD ec065a7: `packages/core/src/HookPoint.ts:29`. Fix: Validate every veto tap's returned value (and every divert tap's diverted value) against the point's own schema inside `run`, using `Schema.is` (a type guard over the already-passed schema — no decoding services, no type assertions). (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Veto tap outputs and divert tap outcomes are checked with Schema.is against the point's own schemas inside run; a mismatch is a HookTapOutputInvalid defect naming point and owner and the value never reaches the operation. observe/divert no longer 'void input' (the unused schema param is underscore-named as a type carrier). Tests use refinements the static type cannot see (Schema.isGreaterThan / NonEmptyString) so no casts are needed. spec BEH-EA-090 updated.

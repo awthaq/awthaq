@@ -3300,16 +3300,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
  * handler carries no further service requirement, matching `VetoTap`'s
  * own fixed-`R` signature.
  *
- * **A separate export, not merged into `Organization.layer` itself** —
- * see `@awthaq/passkey`'s own `beforeUserDeleteErasure` for why:
- * `Hooks.BeforeUserDelete`'s tap registry is a module-level singleton
- * that freezes permanently after its first `run()` (BEH-EA-024,
- * empirically confirmed per CSG-002's own resolution comment), so
- * merging a tap into a `Layer` rebuilt repeatedly across a test suite
- * would die with `HookPointFrozen` once the point has run anywhere in
- * the same process. A composition provides
- * `Organization.beforeUserDeleteErasure` once, application-wide — the
- * same opt-in posture `RateLimits.layer`/`Slots.layer` already use.
+ * **Still a separate export, pending the erasure registry** (CSG-001,
+ * wayfinder ticket 30): the original reason it could not join
+ * `Organization.layer` — a module-level tap registry that froze process-wide
+ * — is gone (ELC-001: registries are per composition), but the taps are being
+ * replaced by a core `ErasureRegistry` entry rather than folded in.
  *
  * Deliberately scoped to membership (plus, since DRS-008, the user's
  * `organization_active_context` rows) in this pass —
@@ -3322,7 +3317,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 export const beforeUserDeleteErasure: Layer.Layer<
   never,
   never,
-  MembershipRecords.MembershipRecords | ActiveContextRecords.ActiveContextRecords
+  | MembershipRecords.MembershipRecords
+  | ActiveContextRecords.ActiveContextRecords
+  | Hooks.BeforeUserDelete
 > = Layer.unwrap(
   Effect.gen(function* () {
     const membershipRecords = yield* MembershipRecords.MembershipRecords;

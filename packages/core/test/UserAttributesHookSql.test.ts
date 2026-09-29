@@ -33,13 +33,12 @@ const seen: Array<{ readonly userId: string; readonly attributes: ReadonlyArray<
 
 const TestLayer = Users.layerSql.pipe(
   Layer.provide(Repositories.UsersRepositoryLive),
-  Layer.provide(Hooks.HooksLive),
   Layer.provide(
     Hooks.AfterUserAttributesChanged.tap((input) =>
       Effect.sync(() => {
         seen.push(input);
       }),
-    ),
+    ).pipe(Layer.provideMerge(Hooks.HooksLive)),
   ),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),

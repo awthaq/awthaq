@@ -3,7 +3,7 @@ ID: "PERS-003"
 Title: "Hook tap ordering implements 2 of the 3 spec'd ordering keys and has no introspection"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/HookPoint.ts:157"
 Auditor: "policy-engine-rego-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Policy Engine / Rego Specialist** (`policy-engine-rego-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Thread plugin identity into tap registration (the header already sketches this) 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `hook-registry-per-composition`. Evidence at HEAD ec065a7: `packages/core/src/HookPoint.ts:180`. Fix: Make taps statically declarable on a plugin (the BEH-EA-024 illustration's `AuthPlugin.layer(Self, { make, taps: [...] })` shape) so Auth.make can print the resolved per-point order into its manifest without running anything; also expose the frozen order at runtime. (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** AuthPlugin.layer(Self, { taps: [Point.declareTap(handler, { order })] }) declares taps statically (Class/Any gain a taps getter; the points join the plugin layer's RIn via TapPoints); Auth.make(...).manifest.hooks prints the resolved per-point order using the same compareTaps without building any layer; each point's service exposes resolved. Tests: packages/core/test/AuthHookManifest.test.ts, HookPoint.test.ts ('resolved' without invoking taps). The 'awthaq plugin list --hooks' CLI printing is deferred to the CLI program (P17); manifest.hooks is its data source.

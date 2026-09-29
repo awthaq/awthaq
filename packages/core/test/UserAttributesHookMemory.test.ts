@@ -2,10 +2,7 @@
 // `Hooks.AfterUserAttributesChanged` — but only when a policy-readable
 // attribute really changed, so `@awthaq/qadi`'s `DecisionCacheInvalidationLive`
 // can flush an application-scoped decision cache exactly when `UserAttributes`
-// could answer differently. A dedicated file (the SQL twin is
-// `UserAttributesHookSql.test.ts`): a `HookPoint`'s tap registry is a
-// module-level singleton that freezes at its first `run()` (BEH-EA-024), so
-// each backend gets its own module.
+// could answer differently. The SQL twin is `UserAttributesHookSql.test.ts`.
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -16,13 +13,12 @@ import * as Users from "../src/Users.ts";
 const seen: Array<{ readonly userId: string; readonly attributes: ReadonlyArray<string> }> = [];
 
 const TestLayer = Users.layerMemory.pipe(
-  Layer.provide(Hooks.HooksLive),
   Layer.provide(
     Hooks.AfterUserAttributesChanged.tap((input) =>
       Effect.sync(() => {
         seen.push(input);
       }),
-    ),
+    ).pipe(Layer.provideMerge(Hooks.HooksLive)),
   ),
   Layer.provide(NodeCrypto.layer),
 );
