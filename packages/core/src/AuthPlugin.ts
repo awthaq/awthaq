@@ -36,6 +36,28 @@ export type GroupsFor<Id extends string> = HttpApiGroup.HttpApiGroup<
 >;
 /* oxlint-enable no-explicit-any */
 
+/**
+ * AR-003: a contract group is *admin-tier* when any dot-separated segment of
+ * its identifier is `admin` (`admin`, `admin.tenants`, `billing.admin`). BEH-EA-004
+ * already confines a group id to its plugin's id or a dotted sub-id, so the
+ * tier needs no extra declaration — it is read off the id, at the type level
+ * (`AdminTierId`, what `Auth.make`'s `Built<P>` splits `publicApi`/`adminApi`
+ * with) and at runtime (`isAdminTier`, what it composes them with), and the
+ * two definitions agree by construction.
+ */
+export type AdminTierId =
+  | "admin"
+  | `admin.${string}`
+  | `${string}.admin`
+  | `${string}.admin.${string}`;
+
+export const isAdminTier = (identifier: string): boolean => identifier.split(".").includes("admin");
+
+/* oxlint-disable no-explicit-any */
+/** AR-003: the admin-tier groups of a contract's group union (the `any, any` is `GroupsFor`'s own, for the same invariance reason). */
+export type AdminTierGroup = HttpApiGroup.HttpApiGroup<AdminTierId, any, any>;
+/* oxlint-enable no-explicit-any */
+
 /** BEH-EA-002: the compiled service key embeds the plugin's own `id`. */
 export type Key<Id extends string> = `awthaq/plugin/${Id}`;
 

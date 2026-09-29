@@ -330,6 +330,25 @@ export const AuthenticationLive: Layer.Layer<
 );
 
 /**
+ * AR-003: the default admin-tier scheme is `Authentication` itself — the identical
+ * handlers behind a second tag, so declaring the admin groups behind
+ * `Api.AdminAuthentication` changes nothing for a co-hosted deployment. Override this
+ * layer (provide your own `Api.AdminAuthentication`) to put the admin surface behind a
+ * different credential; a deployment that serves only `adminApi` and overrides it needs
+ * no `Api.Authentication` at all.
+ */
+export const AdminAuthenticationLive: Layer.Layer<
+  Api.AdminAuthentication,
+  never,
+  Api.Authentication
+> = Layer.effect(
+  Api.AdminAuthentication,
+  Effect.gen(function* () {
+    return yield* Api.Authentication;
+  }),
+);
+
+/**
  * BEH-EA-068/029: `cookie` still fails through to `bearer` on an absent or
  * invalid credential (BEH-EA-065/072's declaration-order chain) — only
  * `bearer`, the last scheme in the record, catches that failure and defaults

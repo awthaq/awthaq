@@ -134,6 +134,25 @@ export class Authentication extends HttpApiMiddleware.Service<
 }) {}
 
 /**
+ * AR-003/BEH-EA-071: the authentication scheme of the admin tier — every group whose id
+ * has an `admin` segment (`AuthPlugin.isAdminTier`) is declared behind this instead of
+ * `Authentication`. Same security record, same error, same `CurrentPrincipal`, so
+ * `@awthaq/server`'s default `AdminAuthenticationLive` simply delegates to
+ * `Authentication` and a co-hosted deployment behaves exactly as before. A host that
+ * runs the admin surface on its own listener swaps the layer (mTLS, a service
+ * principal, an internal SSO) without forking any contract: an override implements the
+ * same three handlers however it likes — e.g. `bearer` resolving a client-certificate
+ * identity — and still provides `CurrentPrincipal`.
+ */
+export class AdminAuthentication extends HttpApiMiddleware.Service<
+  AdminAuthentication,
+  { provides: CurrentPrincipal }
+>()("AdminAuthentication", {
+  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
+  error: Unauthenticated,
+}) {}
+
+/**
  * BEH-EA-029/068: declares the same `Unauthenticated` error `Authentication`
  * does — not because it can actually reach a caller (its own `@awthaq/server`
  * implementation always resolves `CurrentPrincipal`, defaulting to

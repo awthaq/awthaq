@@ -86,6 +86,11 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+// AR-003: the admin group sits behind `Api.AdminAuthentication`; the default just delegates.
+const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
+  Layer.provide(AuthenticationLive),
+);
+
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
   Layer.provide(NodeCrypto.layer),
@@ -129,7 +134,7 @@ const buildAppLayer = (
     AuthHttp.routes(AdminApi.AdminApi, { openapiPath: "/openapi.json" }).pipe(
       Layer.provide(Admin.Admin.layer),
       Layer.provide(Admin.config({ canImpersonate })),
-      Layer.provide(AuthenticationLive),
+      Layer.provide(AdminAuthenticationLive),
     ),
     AuthHttp.docs(AdminApi.AdminApi),
   ).pipe(

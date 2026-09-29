@@ -41,6 +41,11 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+// AR-003: the admin group sits behind `Api.AdminAuthentication`; the default just delegates.
+const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
+  Layer.provide(AuthenticationLive),
+);
+
 /**
  * `admin` also now declares `.middleware(Api.CsrfProtection)` — merged into
  * `Admin.Admin.layer` regardless of whether a test ever issues real HTTP
@@ -62,7 +67,7 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 const buildLayerWith = (config: Partial<Admin.AdminConfigShape>) =>
   Admin.Admin.layer.pipe(
     Layer.provide(Admin.config(config)),
-    Layer.provide(AuthenticationLive),
+    Layer.provide(AdminAuthenticationLive),
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(

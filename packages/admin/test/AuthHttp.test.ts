@@ -71,12 +71,17 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+// AR-003: the admin group sits behind `Api.AdminAuthentication`; the default just delegates.
+const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
+  Layer.provide(AuthenticationLive),
+);
+
 const buildAppLayer = (config: Partial<Admin.AdminConfigShape>) =>
   Layer.mergeAll(
     AuthHttp.routes(AdminApi.AdminApi, { openapiPath: "/openapi.json" }).pipe(
       Layer.provide(Admin.Admin.layer),
       Layer.provide(Admin.config(config)),
-      Layer.provide(AuthenticationLive),
+      Layer.provide(AdminAuthenticationLive),
     ),
     AuthHttp.docs(AdminApi.AdminApi),
   ).pipe(

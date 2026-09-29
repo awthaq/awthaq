@@ -167,7 +167,9 @@ export const AdminGroup = HttpApiGroup.make("admin")
   // declared last so it runs first (rejects a forgery before any
   // credential work) — see `@awthaq/api`'s `Session.ts` for the same
   // comment.
-  .middleware(Api.Authentication)
+  // AR-003: the admin tier's own scheme (default: `Authentication`'s handlers) — see
+  // `Api.AdminAuthentication` — so a host can firewall/re-authenticate this group alone.
+  .middleware(Api.AdminAuthentication)
   .middleware(Api.CsrfProtection);
 
 export const AdminApi = HttpApi.make("auth").add(AdminGroup);

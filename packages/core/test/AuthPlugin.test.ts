@@ -82,7 +82,11 @@ class Pong extends AuthPlugin.Service<Pong, PongShape>()("pong", {
 // (which only compares full plugin ids), catches this; only `composeApi`'s
 // own runtime check does.
 const AlphaApi = HttpApi.make("auth")
-  .add(HttpApiGroup.make("alpha").add(HttpApiEndpoint.get("alpha", "/alpha", { success: Schema.String })))
+  .add(
+    HttpApiGroup.make("alpha").add(
+      HttpApiEndpoint.get("alpha", "/alpha", { success: Schema.String }),
+    ),
+  )
   .add(
     HttpApiGroup.make("alpha.beta").add(
       HttpApiEndpoint.get("alphaBeta", "/alpha/beta", { success: Schema.String }),
@@ -132,6 +136,30 @@ class AlphaBeta extends AuthPlugin.Service<AlphaBeta, AlphaBetaShape>()("alpha.b
   });
 }
 
+// --- AR-003: an admin-tier group, split off by `Auth.make`'s `adminApi` -----
+
+const OpsApi = HttpApi.make("auth").add(
+  HttpApiGroup.make("ops.admin").add(
+    HttpApiEndpoint.get("status", "/ops/status", { success: Schema.String }),
+  ),
+);
+
+interface OpsShape {
+  readonly status: () => Effect.Effect<string>;
+}
+
+class Ops extends AuthPlugin.Service<Ops, OpsShape>()("ops", {
+  apiVersion: 1,
+  contract: OpsApi,
+}) {
+  static readonly layer = AuthPlugin.layer(Ops, {
+    make: Effect.succeed({ status: () => Effect.succeed("ok") }),
+    handlers: HttpApiBuilder.group(OpsApi, "ops.admin", (handlers) =>
+      handlers.handle("status", () => Effect.succeed("ok")),
+    ),
+  });
+}
+
 // --- BEH-EA-010: two plugins sharing an id refuses to type-check -----------
 
 class PingDuplicate extends AuthPlugin.Service<PingDuplicate, PingShape>()("ping", {
@@ -176,6 +204,31 @@ describe("Auth.make", () => {
       });
     }),
   );
+
+  it("AR-003: admin-tier groups are split into adminApi, the rest into publicApi, api keeps all", () => {
+    const auth = Auth.make([Ping, Ops]);
+    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["ops.admin", "ping"]);
+    assert.deepStrictEqual(Object.keys(auth.publicApi.groups), ["ping"]);
+    assert.deepStrictEqual(Object.keys(auth.adminApi.groups), ["ops.admin"]);
+
+    // The split is typed, not just runtime: only the tier's own groups are in each type.
+    type AdminGroupIds = keyof typeof auth.adminApi.groups;
+    type PublicGroupIds = keyof typeof auth.publicApi.groups;
+    const admin: AdminGroupIds = "ops.admin";
+    const pub: PublicGroupIds = "ping";
+    // @ts-expect-error - "ping" is public-tier, so it is not a group of the admin api
+    const notAdmin: AdminGroupIds = "ping";
+    // @ts-expect-error - "ops.admin" is admin-tier, so it is not a group of the public api
+    const notPublic: PublicGroupIds = "ops.admin";
+    assert.deepStrictEqual(
+      [admin, pub, notAdmin, notPublic],
+      ["ops.admin", "ping", "ping", "ops.admin"],
+    );
+
+    // A composition with no admin group has an empty admin tier (nothing to firewall).
+    assert.deepStrictEqual(Object.keys(Auth.make([Ping]).adminApi.groups), []);
+    assert.deepStrictEqual(Object.keys(Auth.make([Ops]).publicApi.groups), []);
+  });
 
   it("BEH-EA-016: a circular dependsOn is refused at runtime with the full cycle path", () => {
     // `dependsOn` is read-only from the outside (BEH-EA-007) — there is no

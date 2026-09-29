@@ -142,6 +142,8 @@ REQUIREMENT: An `HttpApi` group MUST be free to select a different
 
 `archive/design/usage-examples-v4.md` §4.3 documents machine-to-machine endpoints choosing `ApiKeyAuthentication` (an `x-api-key` header scheme resolving to `ServicePrincipal`) alongside ordinary application endpoints under `Authentication`, within one composed API — per-group middleware selection is designed to be independent groups making independent, explicit choices, not a single global authentication policy every endpoint shares.
 
+**Admin tier (AR-003).** A group is *admin-tier* when any dot-separated segment of its identifier is `admin` (`admin`, `admin.tenants`, `billing.admin`; `AuthPlugin.isAdminTier`, mirrored at the type level by `AdminTierId`). Admin-tier groups select their own scheme, `AdminAuthentication` (same security record and `CurrentPrincipal` as `Authentication`; `@awthaq/server`'s default `AdminAuthenticationLive` delegates to it, so a co-hosted deployment is unchanged). `Auth.make` additionally returns `publicApi` (every group except the admin tier) and `adminApi` (only the admin tier), each typed to exactly its groups, beside the unchanged `api` (all groups): a host that wants the admin surface on its own listener/port, behind its own authentication (mTLS, a service principal), serves `adminApi` there with its own `AdminAuthentication` layer and `publicApi` on the public listener — handlers still come from the one composed `layer`, and no contract is forked. `@awthaq/admin`'s `admin` group is the first admin-tier group.
+
 ## BEH-EA-072: The security record's declaration order is the entire strategy chain — no separate ordering mechanism exists
 
 ```text
