@@ -27,7 +27,7 @@ import {
   OrgRoleRecords,
   TeamRecords,
 } from "@awthaq/organization";
-import { Mailer } from "@awthaq/ports";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, layer } from "@effect/vitest";
@@ -92,6 +92,7 @@ const OrganizationLive = Organization.Organization.layer.pipe(
   Layer.provideMerge(records(OrgRoleRecords.layerMemory)),
   Layer.provideMerge(records(TeamRecords.layerMemory)),
   Layer.provideMerge(Mailer.layerMemory),
+  Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
 );
 

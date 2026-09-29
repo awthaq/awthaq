@@ -15,7 +15,7 @@
 
 import { Api } from "@awthaq/api";
 import { AuthEvents, AuthPlugin, HookPoint, Hooks, Migrations, Users } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -225,6 +225,7 @@ export interface OrganizationShape {
     MembershipRecords.MembershipRecord,
     | OrganizationApi.OrganizationNotFound
     | OrganizationApi.MembershipLimitReached
+    | OrganizationApi.AlreadyMember
     | OrganizationApi.UnknownOrgRole
     | HookPoint.HookAborted
   >;
@@ -257,6 +258,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationPermissionDenied
     | OrganizationApi.InvitationLimitReached
     | OrganizationApi.MembershipLimitReached
+    | OrganizationApi.AlreadyMember
     | OrganizationApi.TeamsDisabled
     | OrganizationApi.TeamNotFound
     | OrganizationApi.RolePermissionEscalation
@@ -273,6 +275,7 @@ export interface OrganizationShape {
     | OrganizationApi.InvitationExpired
     | OrganizationApi.InvitationEmailMismatch
     | OrganizationApi.MembershipLimitReached
+    | OrganizationApi.AlreadyMember
     | OrganizationApi.EmailVerificationRequired
     | OrganizationApi.TeamMemberLimitReached
     | HookPoint.HookAborted
@@ -451,6 +454,7 @@ export interface OrganizationShape {
     | OrganizationApi.TeamNotFound
     | OrganizationApi.MembershipNotFound
     | OrganizationApi.TeamMemberLimitReached
+    | OrganizationApi.AlreadyTeamMember
     | HookPoint.HookAborted
   >;
   readonly removeTeamMember: (
@@ -971,9 +975,11 @@ export const OrganizationHandlers = HttpApiBuilder.group(
  * automatic lowercase-folding is what keeps migration and query consistent
  * here. `organization_role`'s `UNIQUE(organizationId, role)` and
  * `organization_org.slug UNIQUE` are ported as-is from their own test
- * fixtures — no new uniqueness constraint is added beyond what each
- * table's own tests already exercise, since that's a design question
- * (BAM-002's own ask is DDL parity, not a fresh constraint audit).
+ * fixtures. The first eleven migrations are exactly that DDL parity
+ * (BAM-002's own ask, not a fresh constraint audit); everything after them
+ * is an incremental, never-edited-after-shipping change — MTI-003/OHS-003's
+ * `(userId, organizationId)` and `(teamId, userId)` UNIQUE indexes (each
+ * collapsing pre-existing duplicates first) and the later column additions.
  * `organizationId`/`userId`/`teamId`/`email`/`inviterId` indexes mirror
  * `CoreMigrations.ts`'s own `accounts_user_id`/`sessions_user_id`
  * precedent: added only where a column is a real, independent filter key
@@ -1246,6 +1252,29 @@ const organizationMigrations: Migrations.Migrations = [
       });
     }),
   },
+  // MTI-003: one membership per (user, organization). The statements are plain
+  // SQL both dialects share, so no `onDialectOrElse`. Duplicates that already
+  // exist are collapsed first (keeping the earliest row — uuidv7 ids sort by
+  // creation time) so the index can be created on live data.
+  {
+    name: "organization_membership_unique_user_org",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM organization_membership WHERE id NOT IN (SELECT MIN(id) FROM organization_membership GROUP BY userId, organizationId)`;
+      yield* sql`CREATE UNIQUE INDEX organization_membership_user_org ON organization_membership(userId, organizationId)`;
+    }),
+  },
+  // OHS-003: one membership per (team, user), and `memberCount` recomputed from
+  // the surviving rows so a previously over-counted team is repaired.
+  {
+    name: "organization_team_membership_unique_team_user",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM organization_team_membership WHERE id NOT IN (SELECT MIN(id) FROM organization_team_membership GROUP BY teamId, userId)`;
+      yield* sql`UPDATE organization_team SET memberCount = (SELECT COUNT(*) FROM organization_team_membership WHERE organization_team_membership.teamId = organization_team.id)`;
+      yield* sql`CREATE UNIQUE INDEX organization_team_membership_team_user ON organization_team_membership(teamId, userId)`;
+    }),
+  },
 ];
 
 // ---- plugin ---------------------------------------------------------------------
@@ -1279,6 +1308,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const teams = yield* TeamRecords.TeamRecords;
       const users = yield* Users.Users;
       const mailer = yield* Mailer.Mailer;
+      // OHS-002: the cascades below commit or roll back as one unit. `layerNoop`
+      // for an in-memory composition, `layerSql` over the real client otherwise.
+      const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const orgConfig = yield* OrganizationConfig;
       const beforeCreate = yield* OrganizationHooks.BeforeCreateOrganization;
       const afterCreate = yield* OrganizationHooks.AfterCreateOrganization;
@@ -1479,11 +1511,14 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
               Effect.fail(new OrganizationApi.OrganizationSlugTaken()),
             ),
           );
-        const membership = yield* members.create({
-          userId: callerId,
-          organizationId: record.id,
-          role: [orgConfig.creatorRole],
-        });
+        // A brand-new organization has no memberships, so this cannot collide.
+        const membership = yield* members
+          .create({
+            userId: callerId,
+            organizationId: record.id,
+            role: [orgConfig.creatorRole],
+          })
+          .pipe(Effect.catchTag("MembershipRecordAlreadyExists", Effect.die));
         yield* events.publish({
           _tag: "auth.organization.created",
           organizationId: record.id,
@@ -1573,17 +1608,28 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "delete",
           );
           yield* veto("organization.delete.before", beforeDelete.run({ organizationId }));
-          yield* members.removeAllForOrganization(organizationId);
-          yield* invitations.removeAllForOrganization(organizationId);
-          yield* teams.removeAllTeamsForOrganization(organizationId);
-          yield* orgRoles.removeAllForOrganization(organizationId);
-          yield* orgs
-            .delete(organizationId)
-            .pipe(
-              Effect.catchTag("OrganizationRecordNotFound", () =>
-                Effect.die(new Error("awthaq: organization vanished between check and write")),
-              ),
-            );
+          // OHS-002: the five-table cascade is one transaction — a failure at any
+          // step leaves every organization_* row untouched. Hooks and events stay
+          // outside it: they only run once the delete has committed.
+          yield* sqlTransaction
+            .withTransaction(
+              Effect.gen(function* () {
+                yield* members.removeAllForOrganization(organizationId);
+                yield* invitations.removeAllForOrganization(organizationId);
+                yield* teams.removeAllTeamsForOrganization(organizationId);
+                yield* orgRoles.removeAllForOrganization(organizationId);
+                yield* orgs
+                  .delete(organizationId)
+                  .pipe(
+                    Effect.catchTag("OrganizationRecordNotFound", () =>
+                      Effect.die(
+                        new Error("awthaq: organization vanished between check and write"),
+                      ),
+                    ),
+                  );
+              }),
+            )
+            .pipe(Effect.catchTag("SqlError", Effect.die));
           yield* events.publish({ _tag: "auth.organization.deleted", organizationId });
           yield* afterDelete.run({ organizationId });
         },
@@ -1757,7 +1803,17 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         // it bypasses the grant guard by design, but still only stores role
         // names the organization recognizes.
         yield* requireKnownRoles(yield* statementsByRole(organizationId), vetoed.role);
-        const membership = yield* members.create({ userId, organizationId, role: vetoed.role });
+        // MTI-003: never overwrite or duplicate an existing membership — a role
+        // change goes through `updateMemberRole` (and its canGrant guard).
+        const existing = yield* members.findByUserAndOrg(userId, organizationId);
+        if (Option.isSome(existing)) return yield* Effect.fail(new OrganizationApi.AlreadyMember());
+        const membership = yield* members
+          .create({ userId, organizationId, role: vetoed.role })
+          .pipe(
+            Effect.catchTag("MembershipRecordAlreadyExists", () =>
+              Effect.fail(new OrganizationApi.AlreadyMember()),
+            ),
+          );
         yield* events.publish({
           _tag: "auth.organization.memberAdded",
           organizationId,
@@ -1862,8 +1918,14 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             organizationId,
           );
 
-          if (Option.isSome(alreadyMember) && Option.isSome(existing)) {
-            yield* invitations.updateStatus(existing.value.id, "canceled").pipe(Effect.orDie);
+          // OHS-006: an existing member is never invited again (an invitation
+          // could otherwise overwrite or duplicate the membership on accept);
+          // any pending invitation for them is stale, so cancel it first.
+          if (Option.isSome(alreadyMember)) {
+            if (Option.isSome(existing)) {
+              yield* invitations.updateStatus(existing.value.id, "canceled").pipe(Effect.orDie);
+            }
+            return yield* Effect.fail(new OrganizationApi.AlreadyMember());
           }
 
           const expiresAt = yield* DateTime.now.pipe(
@@ -1955,6 +2017,15 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             return yield* Effect.fail(new OrganizationApi.EmailVerificationRequired());
           }
 
+          // OHS-006: accepting can never overwrite or duplicate a membership —
+          // the invitation is stale (the user was admitted another way), so it
+          // is canceled and the existing roles stay untouched.
+          const alreadyMember = yield* members.findByUserAndOrg(callerId, record.organizationId);
+          if (Option.isSome(alreadyMember)) {
+            yield* invitations.updateStatus(invitationId, "canceled").pipe(Effect.orDie);
+            return yield* Effect.fail(new OrganizationApi.AlreadyMember());
+          }
+
           const count = yield* members.countByOrganization(record.organizationId);
           if (count >= orgConfig.membershipLimit) {
             return yield* Effect.fail(new OrganizationApi.MembershipLimitReached());
@@ -1975,11 +2046,17 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             }
           }
 
-          const membership = yield* members.create({
-            userId: callerId,
-            organizationId: record.organizationId,
-            role: record.role,
-          });
+          const membership = yield* members
+            .create({
+              userId: callerId,
+              organizationId: record.organizationId,
+              role: record.role,
+            })
+            .pipe(
+              Effect.catchTag("MembershipRecordAlreadyExists", () =>
+                Effect.fail(new OrganizationApi.AlreadyMember()),
+              ),
+            );
           yield* invitations.updateStatus(invitationId, "accepted").pipe(Effect.orDie);
           yield* events.publish({
             _tag: "auth.organization.invitationAccepted",
@@ -1995,13 +2072,22 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           });
           if (Option.isSome(record.teamId)) {
             const teamId = record.teamId.value;
-            yield* teams.addTeamMember({ teamId, userId: callerId });
-            yield* events.publish({
-              _tag: "auth.organization.teamMemberAdded",
-              organizationId: record.organizationId,
-              teamId,
-              userId: callerId,
-            });
+            // OHS-003: the team half of accepting stays idempotent — a user who
+            // is already on the team is not double-counted.
+            const added = yield* teams
+              .addTeamMember({ teamId, userId: callerId })
+              .pipe(
+                Effect.as(true),
+                Effect.catchTag("TeamMembershipRecordAlreadyExists", () => Effect.succeed(false)),
+              );
+            if (added) {
+              yield* events.publish({
+                _tag: "auth.organization.teamMemberAdded",
+                organizationId: record.organizationId,
+                teamId,
+                userId: callerId,
+              });
+            }
           }
           yield* afterAccept.run({
             invitationId,
@@ -2324,13 +2410,17 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "organization.team.delete.before",
             beforeDeleteTeam.run({ organizationId, teamId }),
           );
-          yield* teams
-            .removeTeam(organizationId, teamId)
-            .pipe(
-              Effect.catchTag("TeamRecordNotFound", () =>
-                Effect.die(new Error("awthaq: team vanished between check and write")),
-              ),
-            );
+          yield* sqlTransaction
+            .withTransaction(
+              teams
+                .removeTeam(organizationId, teamId)
+                .pipe(
+                  Effect.catchTag("TeamRecordNotFound", () =>
+                    Effect.die(new Error("awthaq: team vanished between check and write")),
+                  ),
+                ),
+            )
+            .pipe(Effect.catchTag("SqlError", Effect.die));
           yield* events.publish({ _tag: "auth.organization.teamDeleted", organizationId, teamId });
           yield* afterDeleteTeam.run({ organizationId, teamId });
         },
@@ -2366,7 +2456,18 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             "organization.team.member.add.before",
             beforeAddTeamMember.run({ organizationId, teamId, userId: targetUserId }),
           );
-          const record = yield* teams.addTeamMember({ teamId, userId: targetUserId });
+          // OHS-003: a second add is refused — it would over-count `memberCount`.
+          const onTeam = yield* teams.findTeamMembership(teamId, targetUserId);
+          if (Option.isSome(onTeam)) {
+            return yield* Effect.fail(new OrganizationApi.AlreadyTeamMember());
+          }
+          const record = yield* teams
+            .addTeamMember({ teamId, userId: targetUserId })
+            .pipe(
+              Effect.catchTag("TeamMembershipRecordAlreadyExists", () =>
+                Effect.fail(new OrganizationApi.AlreadyTeamMember()),
+              ),
+            );
           yield* events.publish({
             _tag: "auth.organization.teamMemberAdded",
             organizationId,

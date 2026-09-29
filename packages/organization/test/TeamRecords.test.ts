@@ -11,8 +11,10 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Organization from "../src/Organization.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
 
@@ -126,6 +128,25 @@ const suite = (name: string, layer: Layer.Layer<TeamRecords.TeamRecords, unknown
       }).pipe(Effect.provide(layer)),
     );
 
+    // OHS-003: one membership per (teamId, userId); memberCount can never over-count.
+    it.effect(
+      "adding the same user to a team twice fails TeamMembershipRecordAlreadyExists and memberCount stays 1",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* TeamRecords.TeamRecords;
+          const team = yield* records.createTeam({ organizationId: orgId, name: "Engineering" });
+          yield* records.addTeamMember({ teamId: team.id, userId: Users.UserId("user-1") });
+          const failure = yield* records
+            .addTeamMember({ teamId: team.id, userId: Users.UserId("user-1") })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "TeamMembershipRecordAlreadyExists");
+          const after = yield* records.findTeamById(orgId, team.id);
+          assert.isTrue(Option.isSome(after));
+          if (Option.isSome(after)) assert.strictEqual(after.value.memberCount, 1);
+          assert.strictEqual((yield* records.listTeamMembers(team.id)).length, 1);
+        }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("listTeamsByUser returns only teams, within one org, the user belongs to", () =>
       Effect.gen(function* () {
         const records = yield* TeamRecords.TeamRecords;
@@ -145,3 +166,63 @@ const suite = (name: string, layer: Layer.Layer<TeamRecords.TeamRecords, unknown
 
 suite("TeamRecords (layerMemory)", MemoryLayer);
 suite("TeamRecords (layerSql)", SqlLayer);
+
+// OHS-002: each multi-statement layerSql op commits or rolls back as one unit.
+// A trigger makes one statement of the op fail for real, so the assertion is
+// about what the database holds afterwards, not about a mock.
+describe("TeamRecords (layerSql) atomicity", () => {
+  it.effect("removeTeam deletes the team and its memberships atomically", () =>
+    Effect.gen(function* () {
+      const records = yield* TeamRecords.TeamRecords;
+      const sql = yield* SqlClient.SqlClient;
+      const team = yield* records.createTeam({ organizationId: orgId, name: "Engineering" });
+      yield* records.addTeamMember({ teamId: team.id, userId: Users.UserId("user-1") });
+      yield* sql.unsafe(
+        `CREATE TRIGGER fail_team_membership_delete BEFORE DELETE ON organization_team_membership
+         BEGIN SELECT RAISE(ABORT, 'injected'); END`,
+      );
+      const exit = yield* Effect.exit(records.removeTeam(orgId, team.id));
+      assert.isTrue(Exit.isFailure(exit));
+      // The team row's own DELETE ran first; it must have been rolled back.
+      const rows = yield* sql`SELECT id FROM organization_team WHERE id = ${team.id}`;
+      assert.strictEqual(rows.length, 1);
+    }).pipe(Effect.provide(SqlLayer)),
+  );
+
+  it.effect("addTeamMember inserts the row and bumps memberCount atomically", () =>
+    Effect.gen(function* () {
+      const records = yield* TeamRecords.TeamRecords;
+      const sql = yield* SqlClient.SqlClient;
+      const team = yield* records.createTeam({ organizationId: orgId, name: "Engineering" });
+      yield* sql.unsafe(
+        `CREATE TRIGGER fail_team_count BEFORE UPDATE ON organization_team
+         BEGIN SELECT RAISE(ABORT, 'injected'); END`,
+      );
+      const exit = yield* Effect.exit(
+        records.addTeamMember({ teamId: team.id, userId: Users.UserId("user-1") }),
+      );
+      assert.isTrue(Exit.isFailure(exit));
+      const rows =
+        yield* sql`SELECT id FROM organization_team_membership WHERE teamId = ${team.id}`;
+      assert.strictEqual(rows.length, 0);
+    }).pipe(Effect.provide(SqlLayer)),
+  );
+
+  it.effect("removeAllTeamsForOrganization deletes memberships and teams atomically", () =>
+    Effect.gen(function* () {
+      const records = yield* TeamRecords.TeamRecords;
+      const sql = yield* SqlClient.SqlClient;
+      const team = yield* records.createTeam({ organizationId: "org-x", name: "X" });
+      yield* records.addTeamMember({ teamId: team.id, userId: Users.UserId("user-1") });
+      yield* sql.unsafe(
+        `CREATE TRIGGER fail_team_delete BEFORE DELETE ON organization_team
+         BEGIN SELECT RAISE(ABORT, 'injected'); END`,
+      );
+      const exit = yield* Effect.exit(records.removeAllTeamsForOrganization("org-x"));
+      assert.isTrue(Exit.isFailure(exit));
+      const rows =
+        yield* sql`SELECT id FROM organization_team_membership WHERE teamId = ${team.id}`;
+      assert.strictEqual(rows.length, 1);
+    }).pipe(Effect.provide(SqlLayer)),
+  );
+});

@@ -33,6 +33,14 @@ export class MembershipRecordNotFound extends Data.TaggedError("MembershipRecord
   readonly organizationId: string;
 }> {}
 
+/** MTI-003: `(userId, organizationId)` is unique — a second `create` for the same pair is refused, never an overwrite. */
+export class MembershipRecordAlreadyExists extends Data.TaggedError(
+  "MembershipRecordAlreadyExists",
+)<{
+  readonly userId: string;
+  readonly organizationId: string;
+}> {}
+
 export interface ListMembersInput {
   readonly limit?: number | undefined;
   readonly offset?: number | undefined;
@@ -45,7 +53,7 @@ export interface MembershipRecordsShape {
     readonly userId: Users.UserId;
     readonly organizationId: string;
     readonly role: ReadonlyArray<string>;
-  }) => Effect.Effect<MembershipRecord>;
+  }) => Effect.Effect<MembershipRecord, MembershipRecordAlreadyExists>;
   readonly findByUserAndOrg: (
     userId: Users.UserId,
     organizationId: string,
@@ -122,10 +130,22 @@ export const layerMemory = Layer.effect(
         role: input.role,
         createdAt: now,
       };
-      yield* Ref.update(state, (s) =>
-        HashMap.set(s, keyOf(input.userId, input.organizationId), record),
-      );
-      return record;
+      const key = keyOf(input.userId, input.organizationId);
+      return yield* Ref.modify(
+        state,
+        (s): readonly [Result.Result<MembershipRecord, MembershipRecordAlreadyExists>, State] =>
+          HashMap.has(s, key)
+            ? ([
+                Result.fail(
+                  new MembershipRecordAlreadyExists({
+                    userId: input.userId,
+                    organizationId: input.organizationId,
+                  }),
+                ),
+                s,
+              ] as const)
+            : ([Result.succeed(record), HashMap.set(s, key, record)] as const),
+      ).pipe(Effect.flatMap(Effect.fromResult));
     });
 
     const findByUserAndOrg: MembershipRecordsShape["findByUserAndOrg"] = (userId, organizationId) =>
@@ -298,6 +318,35 @@ export const layerSql = Layer.effect(
         `,
     });
 
+    // MTI-005: counts are COUNT(*) — never a full-row materialization. CAST keeps
+    // pg from returning a bigint string.
+    const CountRow = Schema.Struct({ count: Schema.Number });
+
+    const countByOrganizationQuery = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: CountRow,
+      execute: (organizationId) =>
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership WHERE organizationId = ${organizationId}`,
+    });
+
+    // `role` is a JSON array in a TEXT column; "contains the element owner" is
+    // dialect-specific JSON, so the query is branched like the migrations are.
+    const countOwnersQuery = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: CountRow,
+      execute: (organizationId) =>
+        sql.onDialectOrElse({
+          sqlite: () => sql`
+            SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership
+            WHERE organizationId = ${organizationId}
+              AND EXISTS (SELECT 1 FROM json_each(organization_membership.role) WHERE value = 'owner')`,
+          pg: () => sql`
+            SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership
+            WHERE organizationId = ${organizationId} AND role::jsonb @> '"owner"'::jsonb`,
+          orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for countOwners")),
+        }),
+    });
+
     const removeQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({ userId: Schema.String, organizationId: Schema.String }),
       Result: MembershipRow,
@@ -314,7 +363,20 @@ export const layerSql = Layer.effect(
         organizationId: input.organizationId,
         role: JSON.stringify(input.role),
         createdAt: now,
-      }).pipe(Effect.orDie);
+      }).pipe(
+        Effect.catchTag("SqlError", (error) =>
+          error.reason._tag === "UniqueViolation"
+            ? Effect.fail(
+                new MembershipRecordAlreadyExists({
+                  userId: input.userId,
+                  organizationId: input.organizationId,
+                }),
+              )
+            : Effect.die(error),
+        ),
+        Effect.catchTag("SchemaError", Effect.die),
+        Effect.catchTag("NoSuchElementError", Effect.die),
+      );
       return toRecord(row);
     });
 
@@ -340,14 +402,14 @@ export const layerSql = Layer.effect(
       );
 
     const countByOrganization: MembershipRecordsShape["countByOrganization"] = (organizationId) =>
-      listByOrganizationQuery(organizationId).pipe(
-        Effect.map((rows) => rows.length),
+      countByOrganizationQuery(organizationId).pipe(
+        Effect.map((row) => row.count),
         Effect.orDie,
       );
 
     const countOwners: MembershipRecordsShape["countOwners"] = (organizationId) =>
-      listByOrganizationQuery(organizationId).pipe(
-        Effect.map((rows) => rows.map(toRecord).filter((row) => row.role.includes("owner")).length),
+      countOwnersQuery(organizationId).pipe(
+        Effect.map((row) => row.count),
         Effect.orDie,
       );
 

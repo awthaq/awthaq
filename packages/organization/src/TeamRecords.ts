@@ -7,6 +7,14 @@
 // counter used to enforce capacity") maintained directly on
 // `addTeamMember`/`removeTeamMember` rather than recomputed via `COUNT`
 // every time.
+//
+// OHS-002: each `layerSql` operation that is inherently several statements
+// (`removeTeam`, `removeAllTeamsForOrganization`, `addTeamMember`,
+// `removeTeamMember`, `removeUserFromOrganizationTeams`) runs in one
+// `sql.withTransaction`, so it is atomic even when called directly; inside a
+// caller's own transaction (`Organization`'s cascades) it is a savepoint. This
+// is the bounded exception BEH-EA-035 documents for a plugin's own records
+// service — composing *two* records calls stays the domain service's job.
 
 import { Users } from "@awthaq/core";
 import * as Context from "effect/Context";
@@ -48,6 +56,14 @@ export class TeamMembershipRecordNotFound extends Data.TaggedError("TeamMembersh
   readonly userId: string;
 }> {}
 
+/** OHS-003: `(teamId, userId)` is unique — a second add is refused, so `memberCount` can never over-count. */
+export class TeamMembershipRecordAlreadyExists extends Data.TaggedError(
+  "TeamMembershipRecordAlreadyExists",
+)<{
+  readonly teamId: string;
+  readonly userId: string;
+}> {}
+
 export interface TeamRecordsShape {
   readonly createTeam: (input: {
     readonly organizationId: string;
@@ -57,6 +73,13 @@ export interface TeamRecordsShape {
     organizationId: string,
     id: string,
   ) => Effect.Effect<Option.Option<TeamRecord>>;
+  /**
+   * RZS-005: resolves a team from its id alone, for callers (the qadi
+   * `team-member` relation) that are handed only a resource id and must tell
+   * "no such team" apart from "not a member". Not tenant-scoped by design —
+   * it answers existence, never data, to the relationship resolver.
+   */
+  readonly findTeamByIdAnyOrg: (id: string) => Effect.Effect<Option.Option<TeamRecord>>;
   readonly listTeamsByOrganization: (
     organizationId: string,
   ) => Effect.Effect<ReadonlyArray<TeamRecord>>;
@@ -73,16 +96,26 @@ export interface TeamRecordsShape {
   ) => Effect.Effect<void, TeamRecordNotFound>;
   /** Used by `Organization.delete`'s own cascade. */
   readonly removeAllTeamsForOrganization: (organizationId: string) => Effect.Effect<void>;
-  /** Increments the owning team's `memberCount`. */
+  /** Increments the owning team's `memberCount`; atomic with the row insert under `layerSql`. */
   readonly addTeamMember: (input: {
     readonly teamId: string;
     readonly userId: Users.UserId;
-  }) => Effect.Effect<TeamMembershipRecord>;
+  }) => Effect.Effect<TeamMembershipRecord, TeamMembershipRecordAlreadyExists>;
   /** Decrements the owning team's `memberCount`. */
   readonly removeTeamMember: (
     teamId: string,
     userId: Users.UserId,
   ) => Effect.Effect<void, TeamMembershipRecordNotFound>;
+  /**
+   * CWM-003/N9: removes a user from every team of one organization (the
+   * user left or was removed from it), decrementing each `memberCount`.
+   * Returns the ids of the teams the user was actually on, so the caller can
+   * publish one `teamMemberRemoved` per row. Atomic under `layerSql`.
+   */
+  readonly removeUserFromOrganizationTeams: (
+    organizationId: string,
+    userId: Users.UserId,
+  ) => Effect.Effect<ReadonlyArray<string>>;
   readonly findTeamMembership: (
     teamId: string,
     userId: Users.UserId,
@@ -141,6 +174,9 @@ export const layerMemory = Layer.effect(
           ),
         ),
       );
+
+    const findTeamByIdAnyOrg: TeamRecordsShape["findTeamByIdAnyOrg"] = (id) =>
+      Ref.get(state).pipe(Effect.map((s) => HashMap.get(s.teams, id)));
 
     const listTeamsByOrganization: TeamRecordsShape["listTeamsByOrganization"] = (organizationId) =>
       Ref.get(state).pipe(
@@ -220,22 +256,36 @@ export const layerMemory = Layer.effect(
         userId: input.userId,
         createdAt: now,
       };
-      yield* Ref.update(state, (s) => {
-        const memberships = HashMap.set(
-          s.memberships,
-          membershipKeyOf(input.teamId, input.userId),
-          record,
-        );
-        const team = HashMap.get(s.teams, input.teamId);
-        const teams = Option.isSome(team)
-          ? HashMap.set(s.teams, input.teamId, {
-              ...team.value,
-              memberCount: team.value.memberCount + 1,
-            })
-          : s.teams;
-        return { teams, memberships };
-      });
-      return record;
+      const key = membershipKeyOf(input.teamId, input.userId);
+      return yield* Ref.modify(
+        state,
+        (
+          s,
+        ): readonly [Result.Result<TeamMembershipRecord, TeamMembershipRecordAlreadyExists>, State] => {
+          if (HashMap.has(s.memberships, key)) {
+            return [
+              Result.fail(
+                new TeamMembershipRecordAlreadyExists({
+                  teamId: input.teamId,
+                  userId: input.userId,
+                }),
+              ),
+              s,
+            ] as const;
+          }
+          const team = HashMap.get(s.teams, input.teamId);
+          const teams = Option.isSome(team)
+            ? HashMap.set(s.teams, input.teamId, {
+                ...team.value,
+                memberCount: team.value.memberCount + 1,
+              })
+            : s.teams;
+          return [
+            Result.succeed(record),
+            { teams, memberships: HashMap.set(s.memberships, key, record) },
+          ] as const;
+        },
+      ).pipe(Effect.flatMap(Effect.fromResult));
     });
 
     const removeTeamMember: TeamRecordsShape["removeTeamMember"] = (teamId, userId) =>
@@ -259,6 +309,35 @@ export const layerMemory = Layer.effect(
           ] as const;
         },
       ).pipe(Effect.flatMap(Effect.fromResult));
+
+    const removeUserFromOrganizationTeams: TeamRecordsShape["removeUserFromOrganizationTeams"] = (
+      organizationId,
+      userId,
+    ) =>
+      Ref.modify(state, (s): readonly [ReadonlyArray<string>, State] => {
+        const orgTeamIds = new Set(
+          Array.from(HashMap.values(s.teams))
+            .filter((row) => row.organizationId === organizationId)
+            .map((row) => row.id),
+        );
+        const removed = Array.from(HashMap.entries(s.memberships)).filter(
+          ([, row]) => row.userId === userId && orgTeamIds.has(row.teamId),
+        );
+        const memberships = removed.reduce(
+          (acc, [key]) => HashMap.remove(acc, key),
+          s.memberships,
+        );
+        const teams = removed.reduce((acc, [, row]) => {
+          const team = HashMap.get(acc, row.teamId);
+          return Option.isSome(team)
+            ? HashMap.set(acc, row.teamId, {
+                ...team.value,
+                memberCount: Math.max(0, team.value.memberCount - 1),
+              })
+            : acc;
+        }, s.teams);
+        return [removed.map(([, row]) => row.teamId), { teams, memberships }] as const;
+      });
 
     const findTeamMembership: TeamRecordsShape["findTeamMembership"] = (teamId, userId) =>
       Ref.get(state).pipe(
@@ -289,6 +368,7 @@ export const layerMemory = Layer.effect(
     return {
       createTeam,
       findTeamById,
+      findTeamByIdAnyOrg,
       listTeamsByOrganization,
       countTeamsByOrganization,
       updateTeam,
@@ -296,6 +376,7 @@ export const layerMemory = Layer.effect(
       removeAllTeamsForOrganization,
       addTeamMember,
       removeTeamMember,
+      removeUserFromOrganizationTeams,
       findTeamMembership,
       listTeamMembers,
       listTeamsByUser,
@@ -365,6 +446,20 @@ export const layerSql = Layer.effect(
       Result: TeamRow,
       execute: (r) =>
         sql`SELECT * FROM organization_team WHERE id = ${r.id} AND organizationId = ${r.organizationId}`,
+    });
+
+    const findTeamByIdAnyOrgQuery = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: TeamRow,
+      execute: (id) => sql`SELECT * FROM organization_team WHERE id = ${id}`,
+    });
+
+    // MTI-005: a COUNT(*), never a full-row materialization.
+    const countTeamsByOrganizationQuery = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: Schema.Struct({ count: Schema.Number }),
+      execute: (organizationId) =>
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_team WHERE organizationId = ${organizationId}`,
     });
 
     const listTeamsByOrganizationQuery = SqlSchema.findAll({
@@ -441,9 +536,18 @@ export const layerSql = Layer.effect(
         `,
     });
 
+    const listOrganizationTeamIdsOfUserQuery = SqlSchema.findAll({
+      Request: Schema.Struct({ organizationId: Schema.String, userId: Schema.String }),
+      Result: Schema.Struct({ teamId: Schema.String }),
+      execute: (r) => sql`
+          SELECT tm.teamId AS teamId FROM organization_team_membership tm
+          INNER JOIN organization_team t ON t.id = tm.teamId
+          WHERE t.organizationId = ${r.organizationId} AND tm.userId = ${r.userId}
+        `,
+    });
+
     const adjustMemberCount = (teamId: string, delta: number) =>
       sql`UPDATE organization_team SET memberCount = memberCount + ${delta} WHERE id = ${teamId}`.pipe(
-        Effect.orDie,
         Effect.asVoid,
       );
 
@@ -476,10 +580,13 @@ export const layerSql = Layer.effect(
     const countTeamsByOrganization: TeamRecordsShape["countTeamsByOrganization"] = (
       organizationId,
     ) =>
-      listTeamsByOrganizationQuery(organizationId).pipe(
-        Effect.map((rows) => rows.length),
+      countTeamsByOrganizationQuery(organizationId).pipe(
+        Effect.map((row) => row.count),
         Effect.orDie,
       );
+
+    const findTeamByIdAnyOrg: TeamRecordsShape["findTeamByIdAnyOrg"] = (id) =>
+      findTeamByIdAnyOrgQuery(id).pipe(Effect.map(Option.map(toTeamRecord)), Effect.orDie);
 
     const updateTeam: TeamRecordsShape["updateTeam"] = Effect.fnUntraced(
       function* (organizationId, id, name) {
@@ -492,47 +599,99 @@ export const layerSql = Layer.effect(
       },
     );
 
-    const removeTeam: TeamRecordsShape["removeTeam"] = Effect.fnUntraced(
-      function* (organizationId, id) {
-        const row = yield* deleteTeamQuery({ organizationId, id }).pipe(Effect.orDie);
-        if (Option.isNone(row)) return yield* Effect.fail(teamNotFound(id));
-        yield* sql`DELETE FROM organization_team_membership WHERE teamId = ${id}`.pipe(
-          Effect.orDie,
-        );
-      },
-    );
+    // OHS-002: every multi-statement op below runs in one `sql.withTransaction`, so
+    // a failure between its statements can never strand a half-applied change.
+    // Nested inside a caller's own transaction (`Organization`'s cascades) it
+    // becomes a savepoint, so a records op is atomic on its own *and* composes.
+    const removeTeam: TeamRecordsShape["removeTeam"] = (organizationId, id) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const row = yield* deleteTeamQuery({ organizationId, id });
+            if (Option.isNone(row)) return yield* Effect.fail(teamNotFound(id));
+            yield* sql`DELETE FROM organization_team_membership WHERE teamId = ${id}`;
+          }),
+        )
+        .pipe(Effect.catchTags({ SqlError: Effect.die, SchemaError: Effect.die }));
 
-    const removeAllTeamsForOrganization: TeamRecordsShape["removeAllTeamsForOrganization"] =
-      Effect.fnUntraced(function* (organizationId) {
-        yield* sql`
-          DELETE FROM organization_team_membership
-          WHERE teamId IN (SELECT id FROM organization_team WHERE organizationId = ${organizationId})
-        `.pipe(Effect.orDie);
-        yield* sql`DELETE FROM organization_team WHERE organizationId = ${organizationId}`.pipe(
-          Effect.orDie,
-        );
-      });
+    const removeAllTeamsForOrganization: TeamRecordsShape["removeAllTeamsForOrganization"] = (
+      organizationId,
+    ) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              DELETE FROM organization_team_membership
+              WHERE teamId IN (SELECT id FROM organization_team WHERE organizationId = ${organizationId})
+            `;
+            yield* sql`DELETE FROM organization_team WHERE organizationId = ${organizationId}`;
+          }),
+        )
+        .pipe(Effect.orDie);
 
     const addTeamMember: TeamRecordsShape["addTeamMember"] = Effect.fnUntraced(function* (input) {
       const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
       const now = yield* DateTime.now;
-      const row = yield* insertTeamMembership({
-        id,
-        teamId: input.teamId,
-        userId: input.userId,
-        createdAt: now,
-      }).pipe(Effect.orDie);
-      yield* adjustMemberCount(input.teamId, 1);
-      return toTeamMembershipRecord(row);
+      return yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const row = yield* insertTeamMembership({
+              id,
+              teamId: input.teamId,
+              userId: input.userId,
+              createdAt: now,
+            });
+            yield* adjustMemberCount(input.teamId, 1);
+            return toTeamMembershipRecord(row);
+          }),
+        )
+        .pipe(
+          Effect.catchTag("SqlError", (error) =>
+            error.reason._tag === "UniqueViolation"
+              ? Effect.fail(
+                  new TeamMembershipRecordAlreadyExists({
+                    teamId: input.teamId,
+                    userId: input.userId,
+                  }),
+                )
+              : Effect.die(error),
+          ),
+          Effect.catchTag("SchemaError", Effect.die),
+          Effect.catchTag("NoSuchElementError", Effect.die),
+        );
     });
 
-    const removeTeamMember: TeamRecordsShape["removeTeamMember"] = Effect.fnUntraced(
-      function* (teamId, userId) {
-        const row = yield* deleteTeamMembershipQuery({ teamId, userId }).pipe(Effect.orDie);
-        if (Option.isNone(row)) return yield* Effect.fail(teamMembershipNotFound(teamId, userId));
-        yield* adjustMemberCount(teamId, -1);
-      },
-    );
+    const removeTeamMember: TeamRecordsShape["removeTeamMember"] = (teamId, userId) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const row = yield* deleteTeamMembershipQuery({ teamId, userId });
+            if (Option.isNone(row)) {
+              return yield* Effect.fail(teamMembershipNotFound(teamId, userId));
+            }
+            yield* adjustMemberCount(teamId, -1);
+          }),
+        )
+        .pipe(
+          Effect.catchTags({ SqlError: Effect.die, SchemaError: Effect.die }),
+        );
+
+    const removeUserFromOrganizationTeams: TeamRecordsShape["removeUserFromOrganizationTeams"] = (
+      organizationId,
+      userId,
+    ) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const rows = yield* listOrganizationTeamIdsOfUserQuery({ organizationId, userId });
+            for (const { teamId } of rows) {
+              yield* sql`DELETE FROM organization_team_membership WHERE teamId = ${teamId} AND userId = ${userId}`;
+              yield* adjustMemberCount(teamId, -1);
+            }
+            return rows.map((row) => row.teamId);
+          }),
+        )
+        .pipe(Effect.orDie);
 
     const findTeamMembership: TeamRecordsShape["findTeamMembership"] = (teamId, userId) =>
       findTeamMembershipQuery({ teamId, userId }).pipe(
@@ -555,6 +714,7 @@ export const layerSql = Layer.effect(
     return {
       createTeam,
       findTeamById,
+      findTeamByIdAnyOrg,
       listTeamsByOrganization,
       countTeamsByOrganization,
       updateTeam,
@@ -562,6 +722,7 @@ export const layerSql = Layer.effect(
       removeAllTeamsForOrganization,
       addTeamMember,
       removeTeamMember,
+      removeUserFromOrganizationTeams,
       findTeamMembership,
       listTeamMembers,
       listTeamsByUser,

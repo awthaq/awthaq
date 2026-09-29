@@ -18,7 +18,7 @@
 // untapped before the tap is installed.
 import { Api } from "@awthaq/api";
 import { AuditLog, Hooks, AuthEvents, HookPoint, Sessions, Users } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -78,6 +78,7 @@ const buildLayer = (extraHooks: Layer.Layer<never>) =>
     Layer.provideMerge(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(Mailer.layerMemory),
+    Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(extraHooks),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
   );

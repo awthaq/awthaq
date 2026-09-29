@@ -74,6 +74,8 @@ REQUIREMENT: A repository MUST be a `Context.Service` built via
 
 `research/10-schema-migrations.md` Q72 documents why: `SqlClient.withTransaction`'s nested calls become savepoints rather than independent transactions, so a repository that opened its own transaction internally would silently change the atomicity boundary any caller composing two repository calls expects. Keeping repositories transaction-agnostic and letting the domain service (`Password.confirmReset`, for instance, consuming a token and rotating a session in one transaction — see [BEH-EA-058](08-verification-tokens.md#beh-ea-058-a-verification-tokens-consumption-and-the-state-change-it-authorizes-commit-in-one-transaction)) hold the boundary is what keeps composition safe.
 
+**One bounded exception (OHS-002).** A plugin's own records service (`@awthaq/organization`'s `TeamRecords`, hand-written over `SqlSchema` rather than `SqlModel.makeRepository`) whose *single* operation is inherently several statements — delete a team and its membership rows, insert a membership and bump the team's `memberCount` — wraps that one operation in `sql.withTransaction` so it is atomic even when called directly. This does not move the caller's boundary: inside a domain service's own transaction the wrapper is a savepoint, and the outer commit/rollback still decides the outcome. Composing two records calls remains the domain service's job (`Organization.delete` holds the cascade's transaction via the `SqlTransaction` port).
+
 ## BEH-EA-036: Pagination is keyset-only; no repository interface accepts an offset
 
 ```ts

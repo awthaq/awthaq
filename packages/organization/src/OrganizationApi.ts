@@ -131,6 +131,20 @@ export class OrgRoleNotFound extends Schema.TaggedError<OrgRoleNotFound>()(
   { httpApiStatus: 404 },
 ) {}
 
+/** MTI-003/OHS-006: the user already holds a membership in this organization; a role change goes through `updateMemberRole`, never through add/invite/accept. */
+export class AlreadyMember extends Schema.TaggedError<AlreadyMember>()(
+  "AlreadyMember",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
+/** OHS-003: the user is already on this team. */
+export class AlreadyTeamMember extends Schema.TaggedError<AlreadyTeamMember>()(
+  "AlreadyTeamMember",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
 /** RZS-005/N8: a dynamic role may not take a built-in tier's name (`owner`/`admin`/`member`) or an `OrganizationConfig.permissionStatements` key. */
 export class ReservedOrgRoleName extends Schema.TaggedError<ReservedOrgRoleName>()(
   "ReservedOrgRoleName",
@@ -547,6 +561,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrganizationPermissionDenied,
         InvitationLimitReached,
         MembershipLimitReached,
+        AlreadyMember,
         TeamsDisabled,
         TeamNotFound,
         RolePermissionEscalation,
@@ -588,6 +603,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         InvitationExpired,
         InvitationEmailMismatch,
         MembershipLimitReached,
+        AlreadyMember,
         EmailVerificationRequired,
         TeamMemberLimitReached,
         HookPoint.HookAborted,
@@ -752,6 +768,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         TeamNotFound,
         MembershipNotFound,
         TeamMemberLimitReached,
+        AlreadyTeamMember,
         HookPoint.HookAborted,
       ],
     }),

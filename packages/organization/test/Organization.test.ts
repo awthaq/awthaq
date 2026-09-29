@@ -4,7 +4,7 @@
 // `@awthaq/admin`'s own `Admin.test.ts` does.
 import { Api } from "@awthaq/api";
 import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -61,6 +61,7 @@ const buildLayer = (configOverrides: Partial<Organization.OrganizationConfigShap
     Layer.provideMerge(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(Mailer.layerMemory),
+    Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
   );
 
@@ -597,7 +598,8 @@ describe("Organization", () => {
     }).pipe(Effect.provide(buildLayer({ cancelPendingInvitationsOnReInvite: true }))),
   );
 
-  it.effect("inviting an existing member cancels their prior pending invitation", () =>
+  // OHS-006: re-inviting a member is refused (it used to mint a second invitation).
+  it.effect("inviting an existing member fails AlreadyMember and keeps their accepted invitation", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
       const users = yield* Users.Users;
@@ -611,7 +613,10 @@ describe("Organization", () => {
       });
       yield* organization.acceptInvitation(asCaller(invitee.id), invitation.id);
 
-      yield* organization.invite(owner, org.id, { email: invitee.email, role: ["member"] });
+      const failure = yield* organization
+        .invite(owner, org.id, { email: invitee.email, role: ["member"] })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "AlreadyMember");
       const stored = yield* organization.getInvitation(invitation.id);
       assert.strictEqual(stored.status, "accepted");
     }).pipe(Effect.provide(buildLayer())),
@@ -792,24 +797,23 @@ describe("Organization", () => {
           userId: Users.UserId("plain-1"),
           role: ["member"],
         });
-        const updated = yield* organization.updateMemberRole(
-          hr,
-          org.id,
-          Users.UserId("plain-1"),
-          ["hr"],
-        );
+        const updated = yield* organization.updateMemberRole(hr, org.id, Users.UserId("plain-1"), [
+          "hr",
+        ]);
         assert.deepStrictEqual(updated.role, ["hr"]);
       }).pipe(Effect.provide(buildLayer(hrConfig))),
     );
 
-    it.effect("an inviter holding invitation:create but not owner statements cannot invite an owner", () =>
-      Effect.gen(function* () {
-        const { organization, hr, org } = yield* setup;
-        const failure = yield* organization
-          .invite(hr, org.id, { email: "new@example.com", role: ["owner"] })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "RolePermissionEscalation");
-      }).pipe(Effect.provide(buildLayer(hrConfig))),
+    it.effect(
+      "an inviter holding invitation:create but not owner statements cannot invite an owner",
+      () =>
+        Effect.gen(function* () {
+          const { organization, hr, org } = yield* setup;
+          const failure = yield* organization
+            .invite(hr, org.id, { email: "new@example.com", role: ["owner"] })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "RolePermissionEscalation");
+        }).pipe(Effect.provide(buildLayer(hrConfig))),
     );
 
     it.effect("an inviter can invite at or below its own privilege", () =>
@@ -967,9 +971,7 @@ describe("Organization", () => {
         const exit = yield* Effect.exit(
           Effect.gen(function* () {
             return yield* Organization.OrganizationConfig;
-          }).pipe(
-            Effect.provide(Organization.config({ permissionStatements: { owner: {} } })),
-          ),
+          }).pipe(Effect.provide(Organization.config({ permissionStatements: { owner: {} } }))),
         );
         assert.isTrue(exit._tag === "Failure");
       }),
@@ -1228,4 +1230,95 @@ describe("Organization", () => {
       assert.strictEqual(failure._tag, "TeamNotFound");
     }).pipe(Effect.provide(withTeams())),
   );
+
+  // MTI-003/OHS-006/OHS-003: membership uniqueness is enforced at the
+  // records layer and surfaced as typed errors on every add path.
+  describe("membership uniqueness (MTI-003, OHS-006, OHS-003)", () => {
+    it.effect("addMember for an existing member fails AlreadyMember and keeps the roles", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const failure = yield* organization
+          .addMember({
+            organizationId: org.id,
+            userId: Users.UserId("owner-1"),
+            role: ["member"],
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "AlreadyMember");
+        const members = yield* organization.listMembers(owner, org.id);
+        assert.strictEqual(members.length, 1);
+        assert.deepStrictEqual(members[0]?.role, ["owner"]);
+      }).pipe(Effect.provide(buildLayer())),
+    );
+
+    it.effect("inviting an existing member fails AlreadyMember and creates no invitation", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const users = yield* Users.Users;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const existing = yield* users.create({ email: "member@example.com", name: "Member" });
+        yield* organization.addMember({
+          organizationId: org.id,
+          userId: existing.id,
+          role: ["member"],
+        });
+        const failure = yield* organization
+          .invite(owner, org.id, { email: existing.email, role: ["admin"] })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "AlreadyMember");
+        const listed = yield* organization.listInvitationsForOrganization(owner, org.id);
+        assert.strictEqual(listed.length, 0);
+      }).pipe(Effect.provide(buildLayer())),
+    );
+
+    it.effect(
+      "accepting an invitation while already a member fails AlreadyMember and leaves the roles unchanged",
+      () =>
+        Effect.gen(function* () {
+          const organization = yield* Organization.Organization;
+          const users = yield* Users.Users;
+          const owner = asCaller("owner-1");
+          const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+          const invitee = yield* users.create({ email: "invitee@example.com", name: "Invitee" });
+          const invitation = yield* organization.invite(owner, org.id, {
+            email: invitee.email,
+            role: ["admin"],
+          });
+          // Added directly (e.g. SCIM) after the invitation went out.
+          yield* organization.addMember({
+            organizationId: org.id,
+            userId: invitee.id,
+            role: ["member"],
+          });
+          const failure = yield* organization
+            .acceptInvitation(asCaller(invitee.id), invitation.id)
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "AlreadyMember");
+          const attrs = yield* organization.attributesFor(org.id, invitee.id);
+          assert.isTrue(Option.isSome(attrs));
+          if (Option.isSome(attrs)) assert.deepStrictEqual(attrs.value.role, ["member"]);
+          const stale = yield* organization.getInvitation(invitation.id);
+          assert.strictEqual(stale.status, "canceled");
+        }).pipe(Effect.provide(buildLayer())),
+    );
+
+    it.effect("addTeamMember for an existing team member fails AlreadyTeamMember", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const team = yield* organization.createTeam(owner, org.id, "Engineering");
+        yield* organization.addTeamMember(owner, org.id, team.id, Users.UserId("owner-1"));
+        const failure = yield* organization
+          .addTeamMember(owner, org.id, team.id, Users.UserId("owner-1"))
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "AlreadyTeamMember");
+        const teams = yield* organization.listTeams(owner, org.id);
+        assert.strictEqual(teams[0]?.memberCount, 1);
+      }).pipe(Effect.provide(withTeams())),
+    );
+  });
 });
