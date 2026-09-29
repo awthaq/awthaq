@@ -95,6 +95,42 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 
+  When(
+    "the provider redirects back with the authorization error {string}",
+    Effect.fn(function* (error: string) {
+      const oauth = yield* oauthService();
+      const state = (yield* getOutcome("state")) as string;
+      const failure = yield* oauth
+        .callback("google", { code: undefined, state, iss: undefined, cookieState: state, error })
+        .pipe(Effect.flip);
+      yield* setOutcome("denial", failure);
+    }),
+  );
+
+  Then(
+    "the callback fails with the typed denial {string}",
+    function* (error: string) {
+      const failure = (yield* getOutcome("denial")) as {
+        readonly _tag: string;
+        readonly error?: string;
+      };
+      assert.strictEqual(failure._tag, "OAuthAuthorizationDenied");
+      assert.strictEqual(failure.error, error);
+    },
+  );
+
+  Then(
+    "the flow is consumed, so a replay carrying a code fails",
+    Effect.fn(function* () {
+      const oauth = yield* oauthService();
+      const state = (yield* getOutcome("state")) as string;
+      const replay = yield* oauth
+        .callback("google", { code: "auth-code", state, iss: undefined, cookieState: state })
+        .pipe(Effect.flip);
+      assert.strictEqual(replay._tag, "OAuthCallbackFailed");
+    }),
+  );
+
   When("the authorization request is built", function* () {
     yield* Effect.void;
   });

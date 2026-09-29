@@ -59,6 +59,13 @@ Feature: OAuth and OIDC
       When the same callback is replayed with the same "state" value
       Then the replayed callback fails, rather than re-running the token exchange
 
+    @REQ-EA-333
+    Scenario: A user denying consent at the provider gets the typed denial outcome
+      Given an OAuth flow initiated for provider "google"
+      When the provider redirects back with the authorization error "access_denied"
+      Then the callback fails with the typed denial "access_denied"
+      And the flow is consumed, so a replay carrying a code fails
+
     @REQ-EA-334
     Scenario: A callback presented after its flow-state entry's TTL has expired fails
       Given an "oauth.flow" Verification entry whose TTL has expired before the callback arrives

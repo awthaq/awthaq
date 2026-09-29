@@ -143,8 +143,16 @@ const AppLayer = buildAppLayer({});
  */
 const ThrottledAppLayer = buildAppLayer({ enforcing: true });
 
-/** Runs authorize then callback against `layer`, returning the callback response. */
-const runCallback = (layer: typeof AppLayer) =>
+/**
+ * Runs authorize then callback against `layer`, returning the callback
+ * response. `query` builds the callback's query string from the flow's
+ * `state` (default: a normal `code` redirect); `handler` lets a test send
+ * several callbacks against the one router.
+ */
+const runCallback = (
+  layer: typeof AppLayer,
+  query: (state: string) => string = (state) => `code=auth-code&state=${state}`,
+) =>
   Effect.gen(function* () {
     const { handler } = HttpRouter.toWebHandler(layer);
     const authorizeResponse = yield* Effect.promise(() =>
@@ -159,7 +167,7 @@ const runCallback = (layer: typeof AppLayer) =>
     return yield* Effect.promise(() =>
       handler(
         new Request(
-          `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
+          `http://localhost/oauth/acme/callback?${query(encodeURIComponent(state ?? ""))}`,
           { headers: { cookie: stateCookie.split(";")[0] ?? "" } },
         ),
       ),
@@ -372,6 +380,84 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
         handler(new Request("http://localhost/oauth/acme/authorize")),
       );
       assert.strictEqual(throttled.status, 429);
+    }),
+  );
+
+  it.effect("AP-005: a provider error redirect with a valid state answers the typed denial, not a decode error", () =>
+    Effect.gen(function* () {
+      const response = yield* runCallback(
+        AppLayer,
+        (state) =>
+          `error=access_denied&error_description=${encodeURIComponent("user said no")}&state=${state}`,
+      );
+      assert.strictEqual(response.status, 400);
+      // `error_description` is provider-controlled text and is never echoed.
+      assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
+        _tag: "OAuthAuthorizationDenied",
+        error: "access_denied",
+      });
+    }),
+  );
+
+  it.effect("AP-005: an error redirect outside the RFC's enumerated set is the uniform OAuthCallbackFailed", () =>
+    Effect.gen(function* () {
+      const response = yield* runCallback(AppLayer, (state) => `error=made_up_code&state=${state}`);
+      assert.strictEqual(response.status, 400);
+      assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
+        _tag: "OAuthCallbackFailed",
+      });
+    }),
+  );
+
+  it.effect("AP-005: a callback with neither code nor error is the uniform OAuthCallbackFailed", () =>
+    Effect.gen(function* () {
+      const response = yield* runCallback(AppLayer, (state) => `state=${state}`);
+      assert.strictEqual(response.status, 400);
+      assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
+        _tag: "OAuthCallbackFailed",
+      });
+    }),
+  );
+
+  it.effect("AP-005: error=access_denied with a mismatched state answers 400 OAuthCallbackFailed", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const response = yield* Effect.promise(() =>
+        handler(
+          new Request("http://localhost/oauth/acme/callback?error=access_denied&state=bogus.state", {
+            headers: { cookie: "__Host-oauth-state=different-state" },
+          }),
+        ),
+      );
+      assert.strictEqual(response.status, 400);
+      assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
+        _tag: "OAuthCallbackFailed",
+      });
+    }),
+  );
+
+  it.effect("AP-005: a denial consumes the flow, so a replay carrying a code fails", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const authorizeResponse = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/oauth/acme/authorize")),
+      );
+      const location = authorizeResponse.headers.get("location") ?? "";
+      const cookie = (authorizeResponse.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+      const state = encodeURIComponent(new URL(location).searchParams.get("state") ?? "");
+      const call = (query: string) =>
+        Effect.promise(() =>
+          handler(
+            new Request(`http://localhost/oauth/acme/callback?${query}`, { headers: { cookie } }),
+          ),
+        );
+      const denied = yield* call(`error=access_denied&state=${state}`);
+      assert.strictEqual(denied.status, 400);
+      const replay = yield* call(`code=auth-code&state=${state}`);
+      assert.strictEqual(replay.status, 400);
+      assert.deepStrictEqual(yield* Effect.promise(() => replay.json()), {
+        _tag: "OAuthCallbackFailed",
+      });
     }),
   );
 

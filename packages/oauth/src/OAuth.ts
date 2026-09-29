@@ -485,6 +485,10 @@ export const OAuthHandlers = HttpApiBuilder.group(
           code: query.code,
           state: query.state,
           iss: query.iss,
+          ...(query.error === undefined ? {} : { error: query.error }),
+          ...(query.error_description === undefined
+            ? {}
+            : { errorDescription: query.error_description }),
           cookieState,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
         });
@@ -519,10 +523,15 @@ export interface OAuthShape {
   readonly callback: (
     providerId: string,
     input: {
-      readonly code: string;
+      /** `undefined` on an authorization-error redirect (AP-005), which carries `error` instead. */
+      readonly code: string | undefined;
       readonly state: string;
       readonly iss: string | undefined;
       readonly cookieState: string | undefined;
+      /** AP-005: the RFC 6749 §4.1.2.1 `error` code, when the provider redirected back with one. */
+      readonly error?: string;
+      /** Provider-controlled free text: logged at debug level only, never echoed. */
+      readonly errorDescription?: string;
       /**
        * Shipping-gap map (.scratch/shipping-gaps), ticket 13: the
        * rate-limit key — no identity exists yet at this point in the
@@ -543,6 +552,7 @@ export interface OAuthShape {
     | OAuthApi.ProviderNotFound
     | OAuthApi.ProviderUnavailable
     | OAuthApi.OAuthCallbackFailed
+    | OAuthApi.OAuthAuthorizationDenied
     | OAuthApi.AccountExists
     | Api.RateLimited
     | Hooks.TwoFactorRequired
@@ -786,6 +796,28 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           input.iss !== provider.issuer.value
         ) {
           return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+        }
+
+        // AP-005 (RFC 6749 §4.1.2.1): an authorization-error redirect (no
+        // `code`) ends the flow here — state, cookie and provider were
+        // validated and the single-use flow entry is already consumed above,
+        // so a denial can't be replayed into an exchange. An enumerated
+        // `error` code is surfaced typed; anything else is the uniform
+        // failure. `error_description`/`error_uri` are never echoed.
+        if (input.error !== undefined || input.code === undefined) {
+          yield* Effect.logDebug("oauth authorization error redirect").pipe(
+            Effect.annotateLogs({
+              error: input.error ?? "(no code)",
+              ...(input.errorDescription === undefined
+                ? {}
+                : { errorDescription: input.errorDescription }),
+            }),
+          );
+          const code = Schema.decodeUnknownOption(OAuthApi.AuthorizationErrorCode)(input.error);
+          return yield* Option.match(code, {
+            onNone: () => Effect.fail(new OAuthApi.OAuthCallbackFailed()),
+            onSome: (error) => Effect.fail(new OAuthApi.OAuthAuthorizationDenied({ error })),
+          });
         }
 
         const redirectUri = `${config_.baseUrl}/oauth/${providerId}/callback`;

@@ -62,6 +62,36 @@ export class OAuthCallbackFailed extends Schema.TaggedError<OAuthCallbackFailed>
 ) {}
 
 /**
+ * AP-005 (RFC 6749 §4.1.2.1): the provider redirected back with an
+ * authorization *error* instead of a code — most commonly `access_denied`
+ * (the user declined consent). Raised only after the correlation cookie and
+ * `state` have been validated and the flow consumed, so its enumerated
+ * `error` code is echoed to the very browser that initiated the flow and
+ * nobody else (an attacker cannot forge a valid state+cookie pair for a
+ * victim). `error_description`/`error_uri` are provider-controlled free text
+ * and are never echoed; an `error` outside the RFC's enumerated set is a
+ * plain `OAuthCallbackFailed`. Decision (2026-09-29): option B of the plan.
+ */
+export class OAuthAuthorizationDenied extends Schema.TaggedError<OAuthAuthorizationDenied>()(
+  "OAuthAuthorizationDenied",
+  {
+    error: Schema.Literals([
+      "access_denied",
+      "invalid_request",
+      "unauthorized_client",
+      "unsupported_response_type",
+      "invalid_scope",
+      "server_error",
+      "temporarily_unavailable",
+    ]),
+  },
+  { httpApiStatus: 400 },
+) {}
+
+/** The RFC 6749 §4.1.2.1 error codes `OAuthAuthorizationDenied` can carry. */
+export const AuthorizationErrorCode = OAuthAuthorizationDenied.fields.error;
+
+/**
  * BEH-EA-123: the default, explicit-linking outcome — a callback whose
  * (verified) email matches an existing, unlinked account.
  *
@@ -97,8 +127,13 @@ export const CallbackParams = Schema.Struct({ provider: Schema.String });
 export type CallbackParams = typeof CallbackParams.Type;
 
 export const CallbackQuery = Schema.Struct({
-  code: Schema.String,
+  /** Absent on an authorization-error redirect (RFC 6749 §4.1.2.1), which carries `error` instead. */
+  code: Schema.optional(Schema.String),
   state: Schema.String,
+  /** AP-005: the RFC 6749 §4.1.2.1 error response members. */
+  error: Schema.optional(Schema.String),
+  error_description: Schema.optional(Schema.String),
+  error_uri: Schema.optional(Schema.String),
   /** RFC 9207 mix-up countermeasure — validated when the provider sends it. */
   iss: Schema.optional(Schema.String),
 });
@@ -129,6 +164,7 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
         ProviderNotFound,
         ProviderUnavailable,
         OAuthCallbackFailed,
+        OAuthAuthorizationDenied,
         AccountExists,
         Api.RateLimited,
         Hooks.TwoFactorRequired,
