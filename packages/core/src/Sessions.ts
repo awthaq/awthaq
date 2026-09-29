@@ -275,15 +275,43 @@ export interface SessionsShape {
     SessionNotFound | SessionExpired | PlatformError.PlatformError
   >;
   readonly revoke: (id: SessionId) => Effect.Effect<void, SessionNotFound>;
+  /**
+   * GC-005: revokes session `id` only if it belongs to `userId`, atomically —
+   * ownership is enforced by the domain operation, not by a caller-side
+   * list-then-check. Fails `SessionNotFound` for an unknown id and a foreign
+   * id alike (BEH-EA-086/ADR-EA-013's enumeration safety). Use bare `revoke`
+   * only in already-authorized contexts (admin, the caller's own sign-out).
+   */
+  readonly revokeOwned: (userId: UserId, id: SessionId) => Effect.Effect<void, SessionNotFound>;
   /** BEH-EA-054: revokes every session for `userId` except `keep`. */
   readonly revokeOthers: (userId: UserId, keep: SessionId) => Effect.Effect<void>;
   /** Ticket 02: revokes every session for `userId`, no exceptions — including the caller's own current session. */
   readonly revokeAll: (userId: UserId) => Effect.Effect<void>;
-  /** BEH-EA-054: `current` is set on whichever row's id equals `current`. */
+  /**
+   * BEH-EA-054: exactly the user's *live* sessions — not tombstoned, past
+   * neither `absoluteExpiresAt` nor `idleExpiresAt` — newest activity first
+   * (`lastActiveAt` descending), identically in both layers (ESS-005/
+   * SMS-002). `current` is set on whichever row's id equals `current`.
+   * Exhaustive: `layerSql` drains every repository page rather than silently
+   * truncating (TIR-003), bounded by `LIST_LIMIT` with a logged warning if a
+   * user somehow exceeds it. Not for keyed lookups — use `findOwned`.
+   */
   readonly list: (
     userId: UserId,
     current?: SessionId,
   ) => Effect.Effect<ReadonlyArray<SessionListItem>>;
+  /**
+   * TIR-003/ESS-005: the keyed ownership lookup every point query goes
+   * through — one `findById` plus ownership, tombstone and expiry checks,
+   * never `list`'s per-user scan. `None` for an unknown id, another user's
+   * session, a tombstoned row, or one past either expiry. `current` on the
+   * returned item is always `false`: the caller already knows which id it
+   * asked about.
+   */
+  readonly findOwned: (
+    userId: UserId,
+    id: SessionId,
+  ) => Effect.Effect<Option.Option<SessionListItem>>;
   /**
    * TIR-002/FAMS-009/MAPS-006: the exact liveness check a caller holding
    * only a bare `id` (no secret — `verify`'s own credential) needs — e.g.
@@ -296,7 +324,7 @@ export interface SessionsShape {
    * authenticate the caller, only to answer "is this session still live."
    * `false` for a session belonging to a different `userId` than claimed,
    * already tombstoned, past either expiry, or simply absent — a single
-   * keyed lookup, not `list`'s full per-user scan.
+   * keyed lookup (`findOwned`), not `list`'s full per-user scan.
    */
   readonly isLive: (userId: UserId, id: SessionId) => Effect.Effect<boolean>;
   /**
@@ -313,6 +341,41 @@ export interface SessionsShape {
 }
 
 export class Sessions extends Context.Service<Sessions, SessionsShape>()("awthaq/core/Sessions") {}
+
+/**
+ * TIR-003/SMS-002: the one liveness predicate — the same absolute and idle
+ * checks `verify` applies (modulo the secret), a tombstoned (RRS-003) row
+ * being not live. `list`, `findOwned` and `isLive` share it so the layers
+ * and the operations cannot drift.
+ */
+const isLiveAt = (
+  now: DateTime.Utc,
+  row: {
+    readonly absoluteExpiresAt: DateTime.Utc;
+    readonly idleExpiresAt: DateTime.Utc;
+    readonly supersededAt: Option.Option<DateTime.Utc>;
+  },
+): boolean =>
+  Option.isNone(row.supersededAt) &&
+  DateTime.toEpochMillis(now) < DateTime.toEpochMillis(row.absoluteExpiresAt) &&
+  DateTime.toEpochMillis(now) < DateTime.toEpochMillis(row.idleExpiresAt);
+
+/** ESS-005: newest activity first, ties broken by id so both layers order identically. */
+const newestActivityFirst = (
+  items: ReadonlyArray<SessionListItem>,
+): ReadonlyArray<SessionListItem> =>
+  [...items].sort(
+    (a, b) =>
+      DateTime.toEpochMillis(b.lastActiveAt) - DateTime.toEpochMillis(a.lastActiveAt) ||
+      (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+  );
+
+/**
+ * Upper bound on how many live sessions `list` drains for one user — far past
+ * any realistic device list; a logged warning (never silent truncation) if a
+ * user somehow exceeds it.
+ */
+export const LIST_LIMIT = 1000;
 
 interface SessionRow {
   readonly id: SessionId;
@@ -612,6 +675,27 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           },
         ).pipe(Effect.flatMap(Effect.fromResult));
 
+      const revokeOwned: SessionsShape["revokeOwned"] = (userId, id) =>
+        Ref.modify(
+          state,
+          (
+            s,
+          ): readonly [
+            Result.Result<void, SessionNotFound>,
+            HashMap.HashMap<SessionId, SessionRow>,
+          ] => {
+            const row = HashMap.get(s, id);
+            if (Option.isNone(row) || row.value.userId !== userId) {
+              return [
+                Result.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+                s,
+              ] as const;
+            }
+            const ok: Result.Result<void, SessionNotFound> = Result.succeed(undefined);
+            return [ok, HashMap.remove(s, id)] as const;
+          },
+        ).pipe(Effect.flatMap(Effect.fromResult));
+
       const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep) =>
         Ref.update(state, (s) =>
           HashMap.filter(s, (row, id) => id === keep || row.userId !== userId),
@@ -620,43 +704,42 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
       const revokeAll: SessionsShape["revokeAll"] = (userId) =>
         Ref.update(state, (s) => HashMap.filter(s, (row) => row.userId !== userId));
 
-      // RRS-003: `Option.isNone(row.supersededAt)` — load-bearing, not
-      // cosmetic. A tombstoned row must never appear in a user's device
-      // list, and this is also what makes `verifyLive`/`Jwt.introspectLive`
-      // correctly reject a reused/family-revoked session's JWT for free —
-      // both call this same `list`.
+      const toItem = (row: SessionRow, current: SessionId | undefined): SessionListItem => ({
+        id: row.id,
+        createdAt: row.createdAt,
+        authenticatedAt: row.authenticatedAt,
+        lastActiveAt: row.lastActiveAt,
+        expiresAt: row.absoluteExpiresAt,
+        userAgent: row.userAgent,
+        current: row.id === current,
+      });
+
+      // RRS-003/SMS-002: `isLiveAt` — load-bearing, not cosmetic. A
+      // tombstoned or expired row must never appear in a user's device list
+      // (and is what makes `verifyLive`/`Jwt.introspectLive` reject a
+      // reused/family-revoked session's JWT — they call `isLive`).
       const list: SessionsShape["list"] = (userId, current) =>
-        Ref.get(state).pipe(
-          Effect.map((s) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const s = yield* Ref.get(state);
+          return newestActivityFirst(
             Array.from(HashMap.values(s))
-              .filter((row) => row.userId === userId && Option.isNone(row.supersededAt))
-              .map((row): SessionListItem => ({
-                id: row.id,
-                createdAt: row.createdAt,
-                authenticatedAt: row.authenticatedAt,
-                lastActiveAt: row.lastActiveAt,
-                expiresAt: row.absoluteExpiresAt,
-                userAgent: row.userAgent,
-                current: row.id === current,
-              })),
-          ),
-        );
+              .filter((row) => row.userId === userId && isLiveAt(now, row))
+              .map((row) => toItem(row, current)),
+          );
+        });
+
+      const findOwned: SessionsShape["findOwned"] = (userId, id) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const row = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
+          return Option.filter(row, (r) => r.userId === userId && isLiveAt(now, r)).pipe(
+            Option.map((r) => toItem(r, undefined)),
+          );
+        });
 
       const isLive: SessionsShape["isLive"] = (userId, id) =>
-        Effect.gen(function* () {
-          const row = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
-          if (Option.isNone(row)) return false;
-          if (row.value.userId !== userId) return false;
-          if (Option.isSome(row.value.supersededAt)) return false;
-          const now = yield* DateTime.now;
-          if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.absoluteExpiresAt)) {
-            return false;
-          }
-          if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.idleExpiresAt)) {
-            return false;
-          }
-          return true;
-        });
+        findOwned(userId, id).pipe(Effect.map(Option.isSome));
 
       const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id) {
         const now = yield* DateTime.now;
@@ -677,7 +760,18 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         return toView(updated.value);
       });
 
-      return { issue, verify, revoke, revokeOthers, revokeAll, list, isLive, reauthenticate };
+      return {
+        issue,
+        verify,
+        revoke,
+        revokeOwned,
+        revokeOthers,
+        revokeAll,
+        list,
+        findOwned,
+        isLive,
+        reauthenticate,
+      };
     }),
   );
 
@@ -696,9 +790,6 @@ const toSessionView = (row: SqlModels.Session): SessionView => ({
       ? Option.none()
       : Option.some({ type: row.actingAsType, id: row.actingAsId }),
 });
-
-/** Generous enough for `Sessions.list`'s realistic device-list sizes; real UI-facing pagination (BEH-EA-036) is a repository-level concern this Shape doesn't itself expose. */
-const LIST_PAGE_SIZE = 200;
 
 export const layerSql: Layer.Layer<
   Sessions,
@@ -933,49 +1024,84 @@ export const layerSql: Layer.Layer<
         Effect.flatMap(() => repo.delete(id).pipe(Effect.orDie)),
       );
 
+    const revokeOwned: SessionsShape["revokeOwned"] = (userId, id) =>
+      repo.deleteOwned(id, userId).pipe(
+        Effect.orDie,
+        Effect.flatMap((deleted) =>
+          deleted
+            ? Effect.void
+            : Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+        ),
+      );
+
     const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep) =>
       repo.deleteAllForUserExcept(userId, keep).pipe(Effect.orDie);
 
     const revokeAll: SessionsShape["revokeAll"] = (userId) =>
       repo.deleteAllByUser(userId).pipe(Effect.orDie);
 
+    const toItem = (row: SqlModels.Session, current: SessionId | undefined): SessionListItem => ({
+      id: SessionId(row.id),
+      createdAt: row.createdAt,
+      authenticatedAt: row.authenticatedAt,
+      lastActiveAt: row.lastActiveAt,
+      expiresAt: row.absoluteExpiresAt,
+      userAgent: Option.fromNullishOr(row.userAgent),
+      current: row.id === current,
+    });
+
+    // TIR-003/ESS-005: drains every page of the user's live rows (the
+    // repository applies the liveness predicate at `now`, SMS-002) rather
+    // than one 200-row page — a silent truncation used to drop the newest,
+    // i.e. current, session from the list.
+    const drainLive = Effect.fnUntraced(function* (userId: UserId) {
+      const now = yield* DateTime.now;
+      const rows: Array<SqlModels.Session> = [];
+      let cursor: Option.Option<SqlRepositories.Cursor> = Option.none();
+      while (rows.length < LIST_LIMIT) {
+        const page = yield* repo
+          .listByUser(userId, now, Option.getOrUndefined(cursor), SqlRepositories.MAX_PAGE_SIZE)
+          .pipe(Effect.orDie);
+        rows.push(...page.items);
+        if (Option.isNone(page.nextCursor)) return rows;
+        cursor = page.nextCursor;
+      }
+      yield* Effect.logWarning(
+        `awthaq: Sessions.list stopped at ${LIST_LIMIT} live sessions for user ${userId}`,
+      );
+      return rows;
+    });
+
     const list: SessionsShape["list"] = (userId, current) =>
-      repo.listByUser(userId, undefined, LIST_PAGE_SIZE).pipe(
-        Effect.map((page) =>
-          page.items.map((row): SessionListItem => ({
-            id: SessionId(row.id),
-            createdAt: row.createdAt,
-            authenticatedAt: row.authenticatedAt,
-            lastActiveAt: row.lastActiveAt,
-            expiresAt: row.absoluteExpiresAt,
-            userAgent: Option.fromNullishOr(row.userAgent),
-            current: row.id === current,
-          })),
-        ),
-        Effect.orDie,
+      drainLive(userId).pipe(
+        Effect.map((rows) => newestActivityFirst(rows.map((row) => toItem(row, current)))),
       );
 
-    const isLive: SessionsShape["isLive"] = (userId, id) =>
+    const findOwned: SessionsShape["findOwned"] = (userId, id) =>
       Effect.gen(function* () {
         const row = yield* repo.findById(id).pipe(
+          Effect.map(Option.some),
           Effect.catchTags({
-            NoSuchElementError: () => Effect.succeed(null),
+            NoSuchElementError: () => Effect.succeed(Option.none()),
             SchemaError: Effect.die,
             SqlError: Effect.die,
           }),
         );
-        if (row === null) return false;
-        if (row.userId !== userId) return false;
-        if (row.supersededAt !== null) return false;
         const now = yield* DateTime.now;
-        if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
-          return false;
-        }
-        if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
-          return false;
-        }
-        return true;
+        return Option.filter(
+          row,
+          (r) =>
+            r.userId === userId &&
+            isLiveAt(now, {
+              absoluteExpiresAt: r.absoluteExpiresAt,
+              idleExpiresAt: r.idleExpiresAt,
+              supersededAt: Option.fromNullishOr(r.supersededAt),
+            }),
+        ).pipe(Option.map((r) => toItem(r, undefined)));
       });
+
+    const isLive: SessionsShape["isLive"] = (userId, id) =>
+      findOwned(userId, id).pipe(Effect.map(Option.isSome));
 
     const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id) {
       const now = yield* DateTime.now;
@@ -990,6 +1116,17 @@ export const layerSql: Layer.Layer<
       return toSessionView(row);
     });
 
-    return { issue, verify, revoke, revokeOthers, revokeAll, list, isLive, reauthenticate };
+    return {
+      issue,
+      verify,
+      revoke,
+      revokeOwned,
+      revokeOthers,
+      revokeAll,
+      list,
+      findOwned,
+      isLive,
+      reauthenticate,
+    };
   }),
 );

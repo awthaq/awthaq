@@ -395,4 +395,20 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // PPS-002/SEA-006/SSMS-008: the session device-list page query filters on
+  // `userId` and live (`supersededAt IS NULL`) rows and orders by
+  // `(createdAt, id)`. The single-column `sessions_user_id` index forced a
+  // sort of the user's whole row set; this partial composite index matches
+  // filter and order. `sessions_user_id` stays — bulk deletes also remove
+  // tombstoned rows, which this partial index excludes. `IF NOT EXISTS`
+  // keeps an out-of-band `CREATE INDEX CONCURRENTLY` (a large table) possible.
+  migration(18, "create_sessions_user_created_live_index", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`CREATE INDEX IF NOT EXISTS sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL`,
+      sqlite: () =>
+        sql`CREATE INDEX IF NOT EXISTS sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);

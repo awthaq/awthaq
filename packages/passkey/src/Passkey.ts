@@ -558,12 +558,12 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       /**
        * Ticket 15 (BPAS-001): the shared freshness gate `registerOptions`/
        * `registerOptionsConditional`/`registerVerify` all apply before
-       * doing anything else — `Sessions.list` + `find` mirrors
-       * `@awthaq/qadi`'s own `reauthHandler`, the closest existing
-       * precedent for "read the caller's own current `SessionListItem`."
-       * A session absent from its own owner's list (already
-       * revoked/tombstoned) fails closed the same as a stale one — there
-       * is no live session left to have proven anything recently.
+       * doing anything else — `Sessions.findOwned` (TIR-003: a keyed
+       * lookup, never a `list` + `find` that a 200-row page cap could
+       * blind) mirrors `@awthaq/qadi`'s own `reauthHandler`. A session
+       * that is not live for its owner (already revoked/tombstoned/
+       * expired) fails closed the same as a stale one — there is no live
+       * session left to have proven anything recently.
        */
       const requireFreshSession = (
         userId: Users.UserId,
@@ -571,13 +571,12 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       ): Effect.Effect<void, PasskeyApi.PasskeyReauthRequired> =>
         Effect.gen(function* () {
           const maxAgeSeconds = Duration.toSeconds(config.reauthMaxAgeSeconds);
-          const items = yield* sessions.list(userId, Sessions.SessionId(sessionId));
-          const current = items.find((item) => item.id === sessionId);
-          if (current === undefined) {
+          const current = yield* sessions.findOwned(userId, Sessions.SessionId(sessionId));
+          if (Option.isNone(current)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds }));
           }
           const now = yield* DateTime.now;
-          if (Sessions.isStale(current.authenticatedAt, maxAgeSeconds, now)) {
+          if (Sessions.isStale(current.value.authenticatedAt, maxAgeSeconds, now)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyReauthRequired({ maxAgeSeconds }));
           }
         });

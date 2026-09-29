@@ -325,11 +325,21 @@ export const AccountsRepositoryLive: Layer.Layer<
 
 // ---- Sessions -----------------------------------------------------------
 
+/**
+ * ESR-010: the hard upper bound on any one session page. `listByUser` clamps
+ * to it, and the request schema below enforces it as defense in depth, so no
+ * caller-supplied limit can yield a `SqlError` (0, negative) or an unbounded
+ * page.
+ */
+export const MAX_PAGE_SIZE = 200;
+
 const SessionCursorRequest = Schema.Struct({
   userId: UserId,
+  /** SMS-002: the caller's clock (so `TestClock` controls it) — rows past either expiry are not listed. */
+  now: Schema.DateTimeUtcFromString,
   cursorCreatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   cursorId: Schema.NullOr(Schema.String),
-  limit: Schema.Int,
+  limit: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 1, maximum: MAX_PAGE_SIZE }))),
 });
 
 export interface SessionsRepositoryShape {
@@ -338,9 +348,15 @@ export interface SessionsRepositoryShape {
   readonly findById: (
     id: SessionId,
   ) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
-  /** BEH-EA-036: `cursor` is opaque and derived from `(createdAt, id)`. */
+  /**
+   * BEH-EA-036: `cursor` is opaque and derived from `(createdAt, id)`.
+   * SMS-002/BEH-EA-054: lists only *live* rows — not tombstoned and past
+   * neither `absoluteExpiresAt` nor `idleExpiresAt` at `now`. ESR-010:
+   * `limit` is clamped to `[1, MAX_PAGE_SIZE]`.
+   */
   readonly listByUser: (
     userId: UserId,
+    now: DateTime.Utc,
     cursor?: Cursor,
     limit?: number,
   ) => Effect.Effect<Page<Session>, RepositoryError>;
@@ -374,6 +390,13 @@ export interface SessionsRepositoryShape {
    * `deleteAllForUserExcept`'s "all but one" shape.
    */
   readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
+  /**
+   * GC-005: deletes session `id` only when it belongs to `userId`, in one
+   * statement — ownership is enforced atomically, not by a preceding lookup.
+   * `true` when a row was deleted (owned and present), `false` for an unknown
+   * id and a foreign id alike, so a caller cannot tell them apart.
+   */
+  readonly deleteOwned: (id: SessionId, userId: UserId) => Effect.Effect<boolean, SqlError>;
   /**
    * RRS-003: tombstones the superseded row in a rotation — sets
    * `supersededBy`/`supersededAt`, never deletes it. Returns the
@@ -426,10 +449,13 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
       });
 
       // RRS-003: `"supersededAt" IS NULL` — load-bearing, not cosmetic. A
-      // tombstoned row must never appear in a user's device list, and this
-      // is also what makes `Sessions.verifyLive`/`Jwt.introspectLive`
-      // correctly reject a reused/family-revoked session's JWT for free —
-      // both call this same `list`.
+      // tombstoned row must never appear in a user's device list.
+      // SMS-002: the two expiry predicates make the list exactly the rows
+      // `verify` would still accept (modulo the secret); they are residual
+      // filters on the index scan. PPS-002: the cursor is a row-value
+      // comparison over `(createdAt, id)` so the partial composite index
+      // `sessions_user_created_live` (migration 18) serves both the filter
+      // and the order with no sort node.
       const page = SqlSchema.findAll({
         Request: SessionCursorRequest,
         Result: Session,
@@ -437,23 +463,27 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
           request.cursorCreatedAt === null || request.cursorId === null
             ? sql`SELECT * FROM sessions WHERE "userId" = ${request.userId}
                   AND "supersededAt" IS NULL
+                  AND "absoluteExpiresAt" > ${request.now}
+                  AND "idleExpiresAt" > ${request.now}
                   ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit}`
             : sql`SELECT * FROM sessions WHERE "userId" = ${request.userId}
                   AND "supersededAt" IS NULL
-                  AND ("createdAt" > ${request.cursorCreatedAt}
-                       OR ("createdAt" = ${request.cursorCreatedAt} AND id > ${request.cursorId}))
+                  AND "absoluteExpiresAt" > ${request.now}
+                  AND "idleExpiresAt" > ${request.now}
+                  AND ("createdAt", id) > (${request.cursorCreatedAt}, ${request.cursorId})
                   ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit}`,
       });
 
-      const listByUser: SessionsRepositoryShape["listByUser"] = (userId, cursor, limit) =>
-        page({
+      const listByUser: SessionsRepositoryShape["listByUser"] = (userId, now, cursor, limit) => {
+        const effectiveLimit = Math.min(Math.max(limit ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+        return page({
           userId,
+          now,
           cursorCreatedAt: cursor?.createdAt ?? null,
           cursorId: cursor?.id ?? null,
-          limit: limit ?? DEFAULT_PAGE_SIZE,
+          limit: effectiveLimit,
         }).pipe(
           Effect.map((items): Page<Session> => {
-            const effectiveLimit = limit ?? DEFAULT_PAGE_SIZE;
             const last = items.at(-1);
             const nextCursor =
               items.length === effectiveLimit && last !== undefined
@@ -462,6 +492,7 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
             return { items, nextCursor };
           }),
         );
+      };
 
       const touch = SqlSchema.findOneOption({
         Request: Schema.Struct({
@@ -503,6 +534,11 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
       // quoted form is correct on both dialects.
       const deleteAllByUser: SessionsRepositoryShape["deleteAllByUser"] = (userId) =>
         sql`DELETE FROM sessions WHERE "userId" = ${userId}`.pipe(Effect.asVoid);
+
+      const deleteOwned: SessionsRepositoryShape["deleteOwned"] = (id, userId) =>
+        sql`DELETE FROM sessions WHERE id = ${id} AND "userId" = ${userId} RETURNING id`.pipe(
+          Effect.map((rows) => rows.length > 0),
+        );
 
       const tombstoneQuery = SqlSchema.findOne({
         Request: Schema.Struct({
@@ -561,6 +597,7 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         touch,
         deleteAllForUserExcept,
         deleteAllByUser,
+        deleteOwned,
         tombstone,
         markReused,
         revokeFamily,

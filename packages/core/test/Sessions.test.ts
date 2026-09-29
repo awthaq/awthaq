@@ -504,6 +504,115 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
+    // ESS-005/SMS-002: `list` is exactly the live sessions, newest activity
+    // first, identically in both layers.
+    it.effect("BEH-EA-054: list excludes idle-expired sessions", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        yield* sessions.issue({ userId });
+        // idle is 500ms, absolute 1000ms: past idle only.
+        yield* TestClock.adjust(Duration.millis(600));
+        assert.strictEqual((yield* sessions.list(userId)).length, 0);
+      }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    it.effect("BEH-EA-054: list excludes absolute-expired sessions", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        // Keep the idle window alive across the absolute ceiling.
+        yield* TestClock.adjust(Duration.millis(400));
+        const first = yield* sessions.verify(token);
+        const t1 = Option.getOrElse(first.rotated, () => token);
+        yield* TestClock.adjust(Duration.millis(400));
+        yield* sessions.verify(t1);
+        assert.strictEqual((yield* sessions.list(userId)).length, 1);
+        yield* TestClock.adjust(Duration.millis(300));
+        assert.strictEqual((yield* sessions.list(userId)).length, 0);
+      }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    it.effect("BEH-EA-054: list orders newest activity first and flags the current row", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.millis(10));
+        const b = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.millis(10));
+        const c = yield* sessions.issue({ userId });
+        // Touch `a` last (past touchEvery), making it the most recently active.
+        yield* TestClock.adjust(Duration.millis(120));
+        yield* sessions.verify(a.token);
+        const listed = yield* sessions.list(userId, b.session.id);
+        assert.deepStrictEqual(
+          listed.map((row) => row.id),
+          [a.session.id, c.session.id, b.session.id],
+        );
+        assert.deepStrictEqual(
+          listed.map((row) => row.current),
+          [false, false, true],
+        );
+      }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    // TIR-003: the keyed ownership lookup every point query goes through.
+    it.effect("TIR-003: findOwned resolves an owned live session and only that", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const otherUser = Users.UserId("22222222-2222-2222-2222-222222222222");
+        const mine = yield* sessions.issue({ userId });
+        const theirs = yield* sessions.issue({ userId: otherUser });
+
+        const found = yield* sessions.findOwned(userId, mine.session.id);
+        assert.isTrue(Option.isSome(found));
+        assert.strictEqual(Option.getOrThrow(found).id, mine.session.id);
+        assert.isFalse(Option.getOrThrow(found).current);
+        // Another user's session and an unknown id are the same `None`.
+        assert.isTrue(Option.isNone(yield* sessions.findOwned(userId, theirs.session.id)));
+        assert.isTrue(
+          Option.isNone(yield* sessions.findOwned(userId, Sessions.SessionId("missing"))),
+        );
+        // A tombstoned (superseded) row and an expired row are not live.
+        const next = yield* sessions.issue({ userId, supersedes: mine.session.id });
+        assert.isTrue(Option.isNone(yield* sessions.findOwned(userId, mine.session.id)));
+        assert.isTrue(Option.isSome(yield* sessions.findOwned(userId, next.session.id)));
+        yield* TestClock.adjust(Duration.millis(600));
+        assert.isTrue(Option.isNone(yield* sessions.findOwned(userId, next.session.id)));
+      }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    // GC-005: ownership enforced atomically in the domain operation.
+    it.effect("GC-005: revokeOwned revokes an owned session", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const mine = yield* sessions.issue({ userId });
+        yield* sessions.revokeOwned(userId, mine.session.id);
+        const failure = yield* sessions.verify(mine.token).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "SessionNotFound");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("GC-005: revokeOwned on another user's session fails SessionNotFound and leaves it live", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const otherUser = Users.UserId("22222222-2222-2222-2222-222222222222");
+        const theirs = yield* sessions.issue({ userId: otherUser });
+        const failure = yield* sessions.revokeOwned(userId, theirs.session.id).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "SessionNotFound");
+        yield* sessions.verify(theirs.token);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("GC-005: revokeOwned on an unknown id fails SessionNotFound", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const failure = yield* sessions
+          .revokeOwned(userId, Sessions.SessionId("missing"))
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "SessionNotFound");
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect(
       "an ordinary session's own idle-refresh is unaffected by the actingAs skip logic",
       () =>
@@ -788,5 +897,28 @@ describe("Sessions atomic supersede (layerSql)", () => {
         for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
         assert.strictEqual(yield* Ref.get(reuse), 0);
       }).pipe(Effect.provide(FlakySqlLayer)),
+  );
+});
+
+// TIR-003/ESS-005: pagination past one repository page (MAX_PAGE_SIZE = 200).
+describe("Sessions.list past one page (layerSql)", () => {
+  it.effect(
+    "BEH-EA-054: list returns all 250 live sessions, findOwned resolves the newest of them",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        let newest = yield* sessions.issue({ userId });
+        for (let i = 1; i < 250; i++) newest = yield* sessions.issue({ userId });
+        const listed = yield* sessions.list(userId, newest.session.id);
+        assert.strictEqual(listed.length, 250);
+        assert.strictEqual(new Set(listed.map((row) => row.id)).size, 250);
+        assert.strictEqual(listed.filter((row) => row.current).length, 1);
+        const found = yield* sessions.findOwned(userId, newest.session.id);
+        assert.isTrue(Option.isSome(found));
+        // GC-005: an owned session beyond the first repository page revokes fine.
+        yield* sessions.revokeOwned(userId, newest.session.id);
+        assert.strictEqual((yield* sessions.list(userId)).length, 249);
+      }).pipe(Effect.provide(SqlLayer)),
+    30_000,
   );
 });

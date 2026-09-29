@@ -78,7 +78,7 @@ REQUIREMENT: A repository MUST be a `Context.Service` built via
 
 ```ts
 type Cursor = { readonly createdAt: DateTime.Utc; readonly id: string }
-listByUser: (userId: UserId, cursor?: Cursor, limit?: number) => Effect.Effect<ReadonlyArray<Session>, RepositoryError>
+listByUser: (userId: UserId, now: DateTime.Utc, cursor?: Cursor, limit?: number) => Effect.Effect<Page<Session>, RepositoryError>
 ```
 
 ```text
@@ -89,6 +89,8 @@ REQUIREMENT: No repository's public interface MAY accept an offset
 ```
 
 `research/10-schema-migrations.md` Q72 and Q79 cite the reason directly: offset pagination forces the database to walk and discard every skipped row, a cost that grows linearly with the offset (Winand, "No Offset"; Slack's own migration off offset pagination is cited as the production case study). Session and verification-token tables are append-mostly with a monotonic `(createdAt, id)`, which is exactly the shape a keyset cursor needs — a tiebreaker on `id` is required because timestamps alone can collide within the same millisecond.
+
+Two refinements bind the session page query specifically. **Index-aligned (PPS-002):** the cursor is a row-value comparison `("createdAt", id) > (?, ?)` served by the partial composite index `sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL` (migration 18), so filter and order need no sort node. **Bounded by construction (ESR-010):** `listByUser` clamps the page size to `[1, MAX_PAGE_SIZE]` (200) and the request schema enforces the same bound, so no caller-supplied limit can produce a `SqlError` or an unbounded page; the query also takes the caller's clock and lists only live (unexpired, non-tombstoned) rows (SMS-002, [BEH-EA-054](07-sessions.md#beh-ea-054-sessions-expose-a-device-list-per-device-revocation-and-revoke-others)).
 
 ## BEH-EA-037: A plugin's migrations are v4 `Migrator` records, exported statically per plugin
 

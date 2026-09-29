@@ -129,9 +129,11 @@ const UnreliableSessions: Layer.Layer<Sessions.Sessions> = Layer.succeed(Session
   issue: () => Effect.die("not used in this test"),
   verify: () => Effect.fail(outage),
   revoke: () => Effect.die("not used in this test"),
+  revokeOwned: () => Effect.die("not used in this test"),
   revokeOthers: () => Effect.die("not used in this test"),
   revokeAll: () => Effect.die("not used in this test"),
   list: () => Effect.die("not used in this test"),
+  findOwned: () => Effect.die("not used in this test"),
   isLive: () => Effect.die("not used in this test"),
   reauthenticate: () => Effect.die("not used in this test"),
 });
@@ -481,9 +483,11 @@ describe("Authentication per-request cache (TS-003/NHS-006)", () => {
           ),
         ),
       revoke: () => Effect.die("not used in this test"),
+      revokeOwned: () => Effect.die("not used in this test"),
       revokeOthers: () => Effect.die("not used in this test"),
       revokeAll: () => Effect.die("not used in this test"),
       list: () => Effect.die("not used in this test"),
+      findOwned: () => Effect.die("not used in this test"),
       isLive: () => Effect.die("not used in this test"),
       reauthenticate: () => Effect.die("not used in this test"),
     });

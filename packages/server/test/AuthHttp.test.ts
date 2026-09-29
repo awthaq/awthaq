@@ -70,7 +70,7 @@ const csrfHeaders = (cookie?: string): Record<string, string> => ({
   "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
 });
 
-const AppLayer = Layer.mergeAll(
+const makeAppLayer = (sessionsLayer: typeof Sessions.layerMemory) => Layer.mergeAll(
   AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(Session.SessionHandlers),
     Layer.provide(Account.AccountHandlers),
@@ -83,7 +83,7 @@ const AppLayer = Layer.mergeAll(
   // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
   // `SqlTransaction` — a no-op wrapper for this in-memory composition.
   Layer.provide(SqlTransaction.layerNoop),
-  Layer.provideMerge(Sessions.layerMemory),
+  Layer.provideMerge(sessionsLayer),
   Layer.provideMerge(Users.layerMemory),
   Layer.provideMerge(Accounts.layerMemory),
   Layer.provideMerge(Verification.layerMemory),
@@ -95,6 +95,21 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(TestServices),
   Layer.provideMerge(HttpRouter.layer),
 );
+
+const AppLayer = makeAppLayer(Sessions.layerMemory);
+
+// TIR-003/ESS-005/GC-005: a `Sessions` whose `list` never contains the
+// caller's own session — what the SQL layer's 200-row page cap used to do to
+// a user with many historical sessions. Point queries must not depend on it.
+const ListlessSessions: typeof Sessions.layerMemory = Layer.effect(
+  Sessions.Sessions,
+  Effect.gen(function* () {
+    const real = yield* Sessions.Sessions;
+    return { ...real, list: () => Effect.succeed([]) };
+  }),
+).pipe(Layer.provide(Sessions.layerMemory));
+
+const ListlessAppLayer = makeAppLayer(ListlessSessions);
 
 const userId = Users.UserId("44444444-4444-4444-4444-444444444444");
 const otherUserId = Users.UserId("55555555-5555-5555-5555-555555555555");
@@ -289,6 +304,56 @@ describe("AuthHttp + Session (real HTTP)", () => {
         assert.strictEqual(aResponse.status, 200);
       }),
     ).pipe(Effect.provide(AppLayer)),
+  );
+});
+
+describe("AuthHttp + Session: point queries never go through list (TIR-003/GC-005)", () => {
+  it.effect("GET /session answers 200 even when the caller's session is absent from list", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const { token, session } = yield* sessions.issue({ userId });
+        const response = yield* router.asHttpEffect().pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/session", { headers: cookieHeader(token) }),
+            ),
+          ),
+        );
+        assert.strictEqual(response.status, 200);
+        const body = (yield* jsonBody(response)) as { id: string; current: boolean };
+        assert.strictEqual(body.id, session.id);
+        assert.isTrue(body.current);
+      }),
+    ).pipe(Effect.provide(ListlessAppLayer)),
+  );
+
+  it.effect("POST /session/revoke revokes an owned session even when list omits it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const current = yield* sessions.issue({ userId });
+        const other = yield* sessions.issue({ userId });
+        const response = yield* router.asHttpEffect().pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/session/revoke", {
+                method: "POST",
+                headers: { ...cookieHeader(current.token), "content-type": "application/json" },
+                body: JSON.stringify({ id: other.session.id }),
+              }),
+            ),
+          ),
+        );
+        assert.strictEqual(response.status, 204);
+        const failure = yield* sessions.verify(other.token).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "SessionNotFound");
+      }),
+    ).pipe(Effect.provide(ListlessAppLayer)),
   );
 });
 

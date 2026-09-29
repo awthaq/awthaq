@@ -61,12 +61,14 @@ export const SessionHandlers = HttpApiBuilder.group(
         const principal = yield* currentUserPrincipal;
         const userId = Users.UserId(principal.ref.id);
         const sessionId = Sessions.SessionId(principal.sessionId);
-        const items = yield* sessions.list(userId, sessionId);
-        const item = items.find((row) => row.current);
-        if (item === undefined) {
-          return yield* Effect.die(new Error("awthaq: current session missing from its own list"));
+        // TIR-003/ESS-005: a keyed lookup, never `list` + `find` — a user
+        // with many historical sessions used to push the current one off the
+        // list's first page and turn this into a 500.
+        const item = yield* sessions.findOwned(userId, sessionId);
+        if (Option.isNone(item)) {
+          return yield* Effect.die(new Error("awthaq: current session missing after verify"));
         }
-        return toDto(item);
+        return toDto({ ...item.value, current: true });
       }),
 
       list: Effect.fnUntraced(function* () {
@@ -99,12 +101,11 @@ export const SessionHandlers = HttpApiBuilder.group(
         const principal = yield* currentUserPrincipal;
         const userId = Users.UserId(principal.ref.id);
         const targetId = Sessions.SessionId(payload.id);
-        const owned = yield* sessions.list(userId);
-        if (!owned.some((row) => row.id === targetId)) {
-          return yield* Effect.fail(new SessionContract.SessionNotFound());
-        }
+        // GC-005: ownership is enforced atomically by the domain operation
+        // (no list-then-check, no 200-row cap); a foreign id and an unknown
+        // id are indistinguishable.
         yield* sessions
-          .revoke(targetId)
+          .revokeOwned(userId, targetId)
           .pipe(Effect.catchTag("SessionNotFound", () => new SessionContract.SessionNotFound()));
       }),
 
