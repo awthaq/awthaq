@@ -280,6 +280,11 @@ describe("AuthHttp + Organization (real HTTP)", () => {
           body: { email: "x@example.com", role: ["member"] },
         },
         { method: "GET", path: (id) => `/organization/${id}/teams` },
+        // PV-300: `leave` and the caller-scoped team reads used to answer a different 404 body
+        // (or 200 []) for an existing organization than for an unknown id.
+        { method: "POST", path: (id) => `/organization/${id}/leave` },
+        { method: "GET", path: (id) => `/organization/${id}/teams/mine` },
+        { method: "GET", path: (id) => `/organization/${id}/teams/some-team/members` },
       ];
     for (const probe of probes) {
       const existing = await request(handler, probe.method, probe.path(record.id), probe.body, {
@@ -290,6 +295,38 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       });
       assert.strictEqual(existing.status, 404, `${probe.method} ${probe.path(record.id)}`);
       assert.strictEqual(missing.status, 404);
+      assert.strictEqual(await existing.text(), await missing.text());
+    }
+  });
+
+  // PV-300: with teams disabled (the default) the feature gate used to run before the membership
+  // gate, so an outsider got 403 TeamsDisabled for an existing organization and 404 for an unknown one.
+  it("a non-member gets the same 404 from team endpoints whether or not teams are enabled", async () => {
+    const { handler, issueSessionCookieHeader } = buildHandler();
+    const ownerCookie = await issueSessionCookieHeader("owner-1");
+    const outsiderCookie = await issueSessionCookieHeader("outsider-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme" },
+      { cookie: ownerCookie },
+    );
+    const record = (await created.json()) as { id: string };
+    const probes: ReadonlyArray<{ method: string; path: (id: string) => string; body?: unknown }> =
+      [
+        { method: "GET", path: (id) => `/organization/${id}/teams` },
+        { method: "GET", path: (id) => `/organization/${id}/teams/mine` },
+        { method: "POST", path: (id) => `/organization/${id}/teams`, body: { name: "x" } },
+      ];
+    for (const probe of probes) {
+      const existing = await request(handler, probe.method, probe.path(record.id), probe.body, {
+        cookie: outsiderCookie,
+      });
+      const missing = await request(handler, probe.method, probe.path("no-such-org"), probe.body, {
+        cookie: outsiderCookie,
+      });
+      assert.strictEqual(existing.status, 404, `${probe.method} ${probe.path(record.id)}`);
       assert.strictEqual(await existing.text(), await missing.text());
     }
   });

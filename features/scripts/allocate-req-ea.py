@@ -51,6 +51,8 @@ ORDER = [
     "08-tooling/26-cli.feature",
     "09-admin-and-impersonation/27-admin-impersonation.feature",
     "05-authentication-methods/28-device-authorization.feature",
+    "10-organization/31-organization.feature",
+    "11-jwt/32-jwt.feature",
 ]
 
 # Explicit feature-file -> source-behavior-md map (most basenames match
@@ -83,6 +85,8 @@ SOURCE_MD = {
     "25-testing-harness.feature": "25-testing-harness.md",
     "26-cli.feature": "26-cli.md",
     "27-admin-impersonation.feature": "27-admin-impersonation.md",
+    "31-organization.feature": "31-organization.md",
+    "32-jwt.feature": "32-jwt.md",
 }
 
 # DAG-007: a feature for a plugin that has no BEH-EA range yet traces to its model

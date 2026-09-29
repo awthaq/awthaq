@@ -2420,7 +2420,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           const own = yield* members.findByUserAndOrg(callerId, organizationId).pipe(
             Effect.flatMap(
               Option.match({
-                onNone: () => Effect.fail(new OrganizationApi.MembershipNotFound()),
+                // PV-300 (MTI-009): a non-member leaving is answered exactly like an unknown id.
+                onNone: () => Effect.fail(new OrganizationApi.OrganizationNotFound()),
                 onSome: Effect.succeed,
               }),
             ),
@@ -3157,6 +3158,15 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         orgConfig.teams.enabled ? Effect.void : Effect.fail(new OrganizationApi.TeamsDisabled()),
       );
 
+      /**
+       * PV-300 (MTI-009): the membership gate comes *before* the feature gate. A
+       * non-member must get `OrganizationNotFound` whether or not teams are enabled,
+       * or `TeamsDisabled` (403) versus `OrganizationNotFound` (404) tells an outsider
+       * which organization ids exist.
+       */
+      const requireTeamsFor = (callerId: Users.UserId, organizationId: string) =>
+        requireMembership(callerId, organizationId).pipe(Effect.andThen(requireTeamsEnabled));
+
       const requireTeam = (organizationId: string, teamId: string) =>
         teams.findTeamById(organizationId, teamId).pipe(
           Effect.flatMap(
@@ -3170,7 +3180,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const createTeam: OrganizationShape["createTeam"] = Effect.fnUntraced(
         function* (caller, organizationId, name, parentId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
+          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           // OHS-004: a nested team needs `team:create` on its parent (a team role held
           // on the parent or an ancestor suffices); a root team needs it org-level.
           yield* requirePermission(
@@ -3214,7 +3224,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const moveTeam: OrganizationShape["moveTeam"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId, parentId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
+          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           // OHS-004: authority over the team *and* over its destination — a move can
           // hand a subtree to another team's leads, so the target's own authority is
           // required too; the root is org-level.
@@ -3257,7 +3267,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const listTeamAncestors: OrganizationShape["listTeamAncestors"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
+          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
           yield* requireTeam(organizationId, teamId);
           return yield* teams.getAncestors(organizationId, teamId);
@@ -3267,7 +3277,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const listTeamDescendants: OrganizationShape["listTeamDescendants"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
+          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           yield* requireMembership(Users.UserId(caller.ref.id), organizationId);
           yield* requireTeam(organizationId, teamId);
           return yield* teams.getDescendants(organizationId, teamId);
@@ -3277,7 +3287,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const listTeams: OrganizationShape["listTeams"] = Effect.fnUntraced(
         function* (caller, organizationId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
+          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           // MTI-002: any authenticated principal could otherwise enumerate
           // another tenant's team names/counts — member-only, mirroring
           // `getFull`'s own `requireMembership` posture for a read.
@@ -3289,7 +3299,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const listUserTeams: OrganizationShape["listUserTeams"] = Effect.fnUntraced(
         function* (caller, organizationId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
+          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           return yield* teams.listTeamsByUser(organizationId, Users.UserId(caller.ref.id));
         },
       );
@@ -3297,7 +3307,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const updateTeam: OrganizationShape["updateTeam"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId, name) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
+          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           yield* requirePermission(
             Users.UserId(caller.ref.id),
             organizationId,
@@ -3326,7 +3336,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const removeTeam: OrganizationShape["removeTeam"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
+          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           yield* requirePermission(
             Users.UserId(caller.ref.id),
             organizationId,
@@ -3370,7 +3380,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const listTeamMembers: OrganizationShape["listTeamMembers"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
+          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           yield* requireTeam(organizationId, teamId);
           // MTI-002: a team roster is personal data about another tenant's
           // staff — member-only, mirroring `getFull`'s own
@@ -3388,7 +3398,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         role = ["member"],
       ) {
         yield* requireOrganization(organizationId);
-        yield* requireTeamsEnabled;
+        yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
         const callerId = Users.UserId(caller.ref.id);
         yield* requirePermission(callerId, organizationId, "team", "update", teamId);
         const team = yield* requireTeam(organizationId, teamId);
@@ -3429,7 +3439,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const updateTeamMemberRole: OrganizationShape["updateTeamMemberRole"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId, targetUserId, role) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
+          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           const callerId = Users.UserId(caller.ref.id);
           yield* requirePermission(callerId, organizationId, "team", "update", teamId);
           yield* requireTeam(organizationId, teamId);
@@ -3475,7 +3485,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const removeTeamMember: OrganizationShape["removeTeamMember"] = Effect.fnUntraced(
         function* (caller, organizationId, teamId, targetUserId) {
           yield* requireOrganization(organizationId);
-          yield* requireTeamsEnabled;
+          yield* requireTeamsFor(Users.UserId(caller.ref.id), organizationId);
           yield* requirePermission(
             Users.UserId(caller.ref.id),
             organizationId,
