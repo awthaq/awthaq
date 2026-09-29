@@ -15,9 +15,8 @@
 // reused for both requests, since each independent build would otherwise
 // own its own, unrelated `Sessions`/`Users` state.
 import { Api } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
+import { SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, expectTypeOf, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -33,6 +32,7 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import { CurrentSubject } from "@qadi/core";
 import * as AuthorizedSubject from "../src/AuthorizedSubject.ts";
+import { TestAuth } from "@awthaq/test";
 
 class Whoami extends Schema.Class<Whoami>("Whoami")({ subjectId: Schema.String }) {}
 
@@ -67,10 +67,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 );
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const AppLayer = AuthHttp.routes(TestApi, {}).pipe(

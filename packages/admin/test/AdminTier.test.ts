@@ -4,12 +4,9 @@ import { Api } from "@awthaq/api";
 import {
   Accounts,
   AuditChain,
-  AuditLog,
-  AuthEvents,
   Auth,
   DataExport,
   Erasure,
-  Hooks,
   Sessions,
   Users,
   Verification,
@@ -30,6 +27,7 @@ import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import * as Admin from "../src/Admin.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
+import { TestAuth } from "@awthaq/test";
 
 const ORIGIN = "http://localhost:3000";
 
@@ -52,10 +50,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 );
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(

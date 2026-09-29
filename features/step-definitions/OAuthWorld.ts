@@ -17,16 +17,7 @@
 // depends on (e.g. `DateTime.now`) see the same simulated `TestClock` every
 // other step does. Several of this feature's own scenarios (REQ-EA-334's
 // flow-TTL expiry) depend on that.
-import {
-  AuditLog,
-  AuthEvents,
-  Accounts,
-  Hooks,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { ClientAddress, RateLimiter, SqlTransaction, Encryption, KeyProvider } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import { OAuth, OAuthProvider } from "@awthaq/oauth";
@@ -43,6 +34,7 @@ import * as Ref from "effect/Ref";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as Migrator from "effect/unstable/sql/Migrator";
+import { TestAuth } from "@awthaq/test";
 
 // ---- fake HttpClient: routes by URL substring ----
 
@@ -126,12 +118,7 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
@@ -166,10 +153,7 @@ export const SqliteIdentityStores = Layer.mergeAll(
     Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
   ),
 ).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );

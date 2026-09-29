@@ -4,26 +4,16 @@
 // speak to it exactly as they speak to a deployed server — through the generated `HttpApiClient`
 // with `Authorization: Bearer` — so what the suite proves is the wire, not a stub.
 import { AuthCore } from "@awthaq/api";
-import {
-  Accounts,
-  AuditLog,
-  AuthEvents,
-  DataExport,
-  Erasure,
-  Hooks,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, DataExport, Erasure, Sessions, Users, Verification } from "@awthaq/core";
 import { RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as NetAddress from "effect/unstable/net/NetAddress";
+import { TestAuth } from "@awthaq/test";
 
 // The `account` group's handlers call core's erasure and export (CSG-001/CSG-005), over these stores.
 const Base = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
@@ -37,10 +27,7 @@ const Base = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
       Verification.layerMemory,
     ),
   ),
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const Middleware = Layer.mergeAll(

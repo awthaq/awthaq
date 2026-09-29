@@ -1,7 +1,6 @@
 // spec/behaviors/21-qadi-resolvers-obligations.md, BEH-EA-161, BEH-EA-165.
 import { Api } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -11,12 +10,10 @@ import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as Schema from "effect/Schema";
 import { AttributeResolver, exists, hasAttribute, makeSubjectId, obligation } from "@qadi/core";
 import * as Resolvers from "../src/Resolvers.ts";
+import { TestAuth } from "@awthaq/test";
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const AttributesLayer = Resolvers.UserAttributes.pipe(Layer.provideMerge(CoreLive));

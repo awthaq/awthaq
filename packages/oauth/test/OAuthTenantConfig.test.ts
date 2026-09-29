@@ -2,17 +2,7 @@
 // default callback, auto-link list, timeouts, rate-limit budgets) is read per operation, so one
 // composition serves tenants with different `OAuth.config(...)`. With no override the build-time
 // configuration applies exactly as before.
-import {
-  AuditLog,
-  Hooks,
-  AuthEvents,
-  Accounts,
-  RateLimits,
-  Sessions,
-  Tenant,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, RateLimits, Sessions, Tenant, Users, Verification } from "@awthaq/core";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -27,6 +17,7 @@ import * as Redacted from "effect/Redacted";
 import * as OAuth from "../src/OAuth.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
 import { fakeHttpClient } from "./FakeProvider.ts";
+import { TestAuth } from "@awthaq/test";
 
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
@@ -48,12 +39,7 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const acme = OAuthProvider.oauth2({
   id: "acme",

@@ -3,16 +3,7 @@
 // bearer authentication — the same layer graph an application builds.
 import { Api } from "@awthaq/api";
 import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
-import {
-  ActiveContextRecords,
-  InvitationRecords,
-  MembershipRecords,
-  Organization,
-  OrganizationHooks,
-  OrganizationRecords,
-  OrgRoleRecords,
-  TeamRecords,
-} from "@awthaq/organization";
+import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -73,13 +64,8 @@ export const ScimLive = (
     Layer.provideMerge(ScimConnections.layerStore),
     Layer.provideMerge(OrganizationLive(organizationConfig)),
     Layer.provideMerge(ScimRecords.layerMemory),
+    Layer.provideMerge(OrganizationMemory.layer),
     Layer.provideMerge(CoreLive(users, hooks)),
-    Layer.provideMerge(OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(ActiveContextRecords.layerMemory),
-    Layer.provideMerge(InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(Mailer.layerMemory),
     Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),

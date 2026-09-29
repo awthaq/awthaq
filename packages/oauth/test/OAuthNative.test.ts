@@ -3,16 +3,7 @@
 // an allowlisted deep link carrying a one-time exchange code, redeemed once at
 // `POST /oauth/token` for the session token. Domain-level, like `OAuth.test.ts`.
 import { createHash } from "node:crypto";
-import {
-  AuditLog,
-  Hooks,
-  AuthEvents,
-  Accounts,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -29,6 +20,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as OAuth from "../src/OAuth.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
 import { fakeHttpClient } from "./FakeProvider.ts";
+import { TestAuth } from "@awthaq/test";
 
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
@@ -50,12 +42,7 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const acme = OAuthProvider.oauth2({
   id: "acme",

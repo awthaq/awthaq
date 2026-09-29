@@ -9,16 +9,7 @@
 // state (credential hash, session liveness) the wire never exposes, and the
 // reset scenario can run over a real SQLite transaction with an injectable
 // fault.
-import {
-  AuditLog,
-  AuthEvents,
-  Accounts,
-  Hooks,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { AuthEvents, Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import {
   ClientAddress,
   Encryption,
@@ -57,6 +48,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Migrator from "effect/unstable/sql/Migrator";
+import { TestAuth } from "@awthaq/test";
 
 /** Which fault, if any, the fault-injecting `Sessions` wrapper raises when the flow reaches it (TIR-005). */
 export type Fault = "none" | "sessionIssue" | "revokeAll";
@@ -105,12 +97,7 @@ const memoryCore = (fault: Ref.Ref<Fault>) =>
     // ARF-001: `confirmReset` runs inside a `SqlTransaction` — a no-op wrapper for this
     // in-memory composition, same as `SessionWorld.ts`'s own precedent.
     SqlTransaction.layerNoop,
-  ).pipe(
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(Hooks.HooksLive),
-    Layer.provideMerge(NodeCrypto.layer),
-  );
+  ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 /** `AccountsRepositoryLive` encrypts provider tokens at rest, so it needs `Encryption`: a fixed test key read through an isolated `ConfigProvider`. */
 const EncryptionLive = Encryption.layer.pipe(
@@ -152,10 +139,7 @@ const sqliteCore = (fault: Ref.Ref<Fault>) => {
     ),
     SqlTransaction.layerSql,
   ).pipe(
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(Hooks.HooksLive),
-    Layer.provideMerge(NodeCrypto.layer),
+    Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(SqlLive),
     Layer.provideMerge(Migrated),
   );

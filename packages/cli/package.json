@@ -44,6 +44,7 @@
   },
   "devDependencies": {
     "@awthaq/password": "workspace:*",
+    "@awthaq/test": "workspace:*",
     "@effect/vitest": "catalog:",
     "@qadi/core": "^0.7.0",
     "typescript": "catalog:",

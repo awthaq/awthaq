@@ -5,28 +5,14 @@
 // cross-tenant Rule asserts exactly what an attacker holding a valid session would see.
 // The World is rebuilt per scenario, so the tenants a scenario names are the only tenants
 // that exist.
-import {
-  Accounts,
-  AuditLog,
-  AuthEvents,
-  Erasure,
-  Hooks,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, AuthEvents, Erasure, Sessions, Users, Verification } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import {
-  ActiveContextRecords,
-  InvitationRecords,
-  MembershipRecords,
   Organization,
   OrganizationApi,
   OrganizationHooks,
-  OrganizationRecords,
-  OrgRoleRecords,
-  TeamRecords,
+  OrganizationMemory,
 } from "@awthaq/organization";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
@@ -41,6 +27,7 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
 import { makeCapturingMailer, makeNamedRegistry, TestServices } from "./shared/Harness.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
+import { TestAuth } from "@awthaq/test";
 
 // `Accounts`/`Verification` are here only because `Erasure.layer` (BEH-EA-290's erasure
 // clause) sweeps them too; the organization group itself never touches them.
@@ -49,12 +36,7 @@ const CoreLive = Layer.mergeAll(
   Users.layerMemory,
   Accounts.layerMemory,
   Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
@@ -93,13 +75,8 @@ const buildAppLayer = (
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(eventsLayer),
     Layer.provideMerge(Erasure.layer),
+    Layer.provideMerge(OrganizationMemory.layer),
     Layer.provideMerge(CoreLive),
-    Layer.provideMerge(OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(ActiveContextRecords.layerMemory),
-    Layer.provideMerge(InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(mailer),
     Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(options.hooks ?? Layer.empty),

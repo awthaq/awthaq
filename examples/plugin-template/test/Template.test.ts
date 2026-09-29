@@ -3,16 +3,7 @@
 // endpoints over a real `HttpRouter` handler with a real session cookie, and aborts an
 // operation with a veto tap.
 import { Api } from "@awthaq/api";
-import {
-  Auth,
-  AuditLog,
-  AuthEvents,
-  Hooks,
-  HookPoint,
-  Migrations,
-  Sessions,
-  Users,
-} from "@awthaq/core";
+import { Auth, HookPoint, Migrations, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -39,10 +30,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 );
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(

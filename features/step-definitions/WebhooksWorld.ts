@@ -14,7 +14,6 @@ import {
   DataExport,
   Erasure,
   EventRelay,
-  Hooks,
   Sessions,
   Users,
 } from "@awthaq/core";
@@ -43,6 +42,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { makeNamedRegistry, TestServices } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
+import { TestAuth } from "@awthaq/test";
 
 // ---- the receiver ---------------------------------------------------------------------------
 
@@ -123,10 +123,7 @@ const EncryptionLive = Encryption.layer.pipe(
 );
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 /** Names the fake resolver knows; "rebind" answers with a private address (DNS rebinding), anything else does not resolve. */

@@ -2,16 +2,7 @@
 // configuration, dumped through the admin surface behind the same fail-closed gate as user
 // administration — sensitive values redacted, never unwrapped.
 import { Api } from "@awthaq/api";
-import {
-  Auth,
-  AuditChain,
-  AuditLog,
-  AuthEvents,
-  EffectiveConfig,
-  Hooks,
-  Sessions,
-  Users,
-} from "@awthaq/core";
+import { Auth, AuditChain, AuthEvents, EffectiveConfig, Sessions, Users } from "@awthaq/core";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -24,14 +15,12 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Duration from "effect/Duration";
 import * as Admin from "../src/Admin.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
+import { TestAuth } from "@awthaq/test";
 
 const CANARY = "audit-chain-key-canary-7c1f";
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(

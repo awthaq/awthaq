@@ -11,11 +11,10 @@
 //    `session` group is the thing under test (BEH-EA-031).
 // Sessions are minted directly against the same running services (shared `MemoMap`).
 import { Api } from "@awthaq/api";
-import { Auth, AuthEvents, AuditLog, Hooks, Sessions, Users } from "@awthaq/core";
+import { Auth, Sessions, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { Authentication, AuthHttp } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -128,10 +127,7 @@ const buildAuthProbe = () => {
     Layer.provide(Authentication.PrincipalResolverLive),
     Layer.provideMerge(Sessions.layerMemory),
     Layer.provideMerge(Users.layerMemory),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(Hooks.HooksLive),
-    Layer.provideMerge(NodeCrypto.layer),
+    Layer.provideMerge(TestAuth.memoryFoundation),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
   );

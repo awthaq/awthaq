@@ -3,7 +3,7 @@ ID: "BPAS-007"
 Title: "Docs claim the passkey plugin is pre-implementation while it ships; spec omits implemented behaviors"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/17-passkey.md:15"
 Auditor: "biometric-platform-authenticator-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `—` · reported by **Biometric / Platform Authenticator Specialist** (`biometric-platform-authenticator-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-behavior-code-reconcile`. Evidence at HEAD ec065a7: `spec/behaviors/17-passkey.md:15`. Fix: Replace the three stale banners and give the shipped passkey ceremony logic a normative home: new BEH ids for Conditional Create, registration-freshness (reauth) and webauthnUserId generation, and an amended BEH-EA-130/131 for the config-gated UV policy. (effort M). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
 
 **Plan note (2026-09-29):** Spec side done in P19: spec/behaviors/17-passkey.md rev 1.1 replaces the banner, amends BEH-EA-130/131 for the user-presence and config-gated UV policy, and adds BEH-EA-255 (registration needs a fresh session), BEH-EA-256 (Conditional Create) and BEH-EA-257 (one stable user handle) - not 221-223, which the admin behaviors took; the BEH-EA-relaxed code comment is now BEH-EA-256. Left open: the two Gherkin characterization scenarios (Conditional Create under its own challenge scope; refused when disabled) and the PasskeyWorld step wiring belong to the features/ suite (P20a), and REQ-EA allocation must go through allocate-req-ea.py after they are added (the new BEH ids need Rule blocks in 17-passkey.feature). NB for merges: another program allocating BEH-EA-255+ (two-factor) will collide; check 8 of verify-traceability.sh catches it.
+
+**Resolved (2026-09-29):** Verified at HEAD: the passkey banner is gone from spec/behaviors/17-passkey.md, the .feature header and packages/passkey/README.md (P19 + P20a). BEH-EA-255/256/257 now have Rule blocks in features/features/05-authentication-methods/17-passkey.feature with REQ-EA-1007..1024 (Conditional Create under its own challenge scope, refused when disabled, freshness, the stable user handle), all wired in PasskeyRegistrationSteps/PasskeyWorld and passing (54 passed in the passkey steps test). Only remaining edit: the passkey README's spec pointer now names BEH-EA-255..257.

@@ -23,12 +23,9 @@
 //   handler blocks until released, so "validated, then revoked, then completes" can be driven.
 import { Api, AuthCore } from "@awthaq/api";
 import {
-  AuditLog,
-  AuthEvents,
   Accounts,
   DataExport,
   Erasure,
-  Hooks,
   RateLimits,
   Sessions,
   Users,
@@ -39,7 +36,7 @@ import type { Mailer } from "@awthaq/ports";
 import { Password, PasswordApi } from "@awthaq/password";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
-import { RedactionGuard } from "@awthaq/test";
+import { RedactionGuard, TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
@@ -155,10 +152,7 @@ const buildAppLayer = (settings: Sessions.SessionConfig, gate: Gate) => {
         Verification.layerMemory,
       ),
     ),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(Hooks.HooksLive),
-    Layer.provideMerge(NodeCrypto.layer),
+    Layer.provideMerge(TestAuth.memoryFoundation),
   );
 
   // Records every span, log line and published event of this composition (BEH-EA-199).

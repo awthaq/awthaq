@@ -1,15 +1,7 @@
 // The shared domain-level composition for this package's tests: real in-memory `Users`, `Sessions`,
 // `Verification`, `AuthEvents` and `AuditLog`, the real `MagicLink` and `EmailOtp` plugins, and —
 // so the MFA divert can be proven end to end — the real `@awthaq/two-factor` plugin with both gates.
-import {
-  AuditLog,
-  AuthEvents,
-  Hooks,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import {
   ClientAddress,
   Encryption,
@@ -28,6 +20,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as EmailOtp from "../../src/EmailOtp.ts";
 import * as MagicLink from "../../src/MagicLink.ts";
+import { TestAuth } from "@awthaq/test";
 
 const TestHasher = PasswordHasher.layerArgon2id.pipe(
   Layer.provide(
@@ -59,12 +52,7 @@ const CoreLive = Layer.mergeAll(
   Users.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),

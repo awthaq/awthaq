@@ -3,16 +3,7 @@
 // (the first factor), the real `TwoFactor` plugin with both of its gates, the real `Encryption`
 // port over a fixed test key, and argon2id at its smallest legal cost. Only the rate limiter and the
 // plugin's configuration vary per suite.
-import {
-  Accounts,
-  AuditLog,
-  AuthEvents,
-  Hooks,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import {
   ClientAddress,
   Encryption,
@@ -38,6 +29,7 @@ import * as Totp from "../../src/Totp.ts";
 import * as TwoFactor from "../../src/TwoFactor.ts";
 import * as TwoFactorConfig from "../../src/TwoFactorConfig.ts";
 import * as TwoFactorStore from "../../src/TwoFactorStore.ts";
+import { TestAuth } from "@awthaq/test";
 
 export const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   HttpClient.HttpClient,
@@ -79,12 +71,7 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),

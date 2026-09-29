@@ -5,9 +5,8 @@
 // actually serve a decodable `SubjectDto`, not just that the underlying
 // `AuthorizedSubject` middleware chain resolves a subject in memory.
 import { SubjectContract } from "@awthaq/api";
-import { Auth, AuditLog, Hooks, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
+import { Auth, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -25,6 +24,7 @@ import * as AuthorizedSubject from "../src/AuthorizedSubject.ts";
 import * as Resolvers from "../src/Resolvers.ts";
 import * as SubjectApi from "../src/SubjectApi.ts";
 import * as UserClaims from "../src/UserClaims.ts";
+import { TestAuth } from "@awthaq/test";
 
 // A separate, standalone tiny `HttpApi` (its own id, its own group) rather
 // than folding a `/login` endpoint into `SubjectApi.SubjectApi` itself —
@@ -64,10 +64,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 );
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const AppLayer = Layer.mergeAll(

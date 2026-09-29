@@ -16,7 +16,6 @@ import { Api } from "@awthaq/api";
 import {
   Accounts,
   AuditLog,
-  AuthEvents,
   HookPoint,
   Hooks,
   RateLimits,
@@ -65,6 +64,7 @@ import {
 } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
+import { TestAuth } from "@awthaq/test";
 
 export type NamedRegistry<A> = ReturnType<typeof makeNamedRegistry<A>>;
 
@@ -130,12 +130,7 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
 

@@ -19,16 +19,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import {
-  ActiveContextRecords,
-  InvitationRecords,
-  MembershipRecords,
-  Organization,
-  OrganizationHooks,
-  OrganizationRecords,
-  OrgRoleRecords,
-  TeamRecords,
-} from "@awthaq/organization";
+import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
 import { ClientAddress, Mailer, RateLimiter, SqlTransaction, XmlSignature } from "@awthaq/ports";
 import { Saml, SamlConnections, SamlRecords, XmlSignatureNode } from "@awthaq/saml";
 
@@ -181,13 +172,8 @@ const buildLive = (observations: Observations, config: Partial<SamlConfigInput>)
     Layer.provideMerge(spyLayer(observations)),
     Layer.provideMerge(RateLimiter.layerPermissive),
     Layer.provideMerge(ClientAddress.layerDirect),
+    Layer.provideMerge(OrganizationMemory.layer),
     Layer.provideMerge(CoreLive),
-    Layer.provideMerge(OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(ActiveContextRecords.layerMemory),
-    Layer.provideMerge(InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(Mailer.layerMemory),
     Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),

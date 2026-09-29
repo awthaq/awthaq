@@ -3,16 +3,7 @@
 // an organization's rows into provider configs; `oauthConnections` installs the
 // resolver `@awthaq/oauth` consults after its static registry — proven here end
 // to end by completing a real callback through a stored connection.
-import {
-  AuditLog,
-  AuthEvents,
-  Accounts,
-  Hooks,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { OAuth, OAuthConnections } from "@awthaq/oauth";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
@@ -28,6 +19,7 @@ import { fakeHttpClient } from "../../oauth/test/FakeProvider.ts";
 import * as ConnectionRecords from "../src/ConnectionRecords.ts";
 import * as OrganizationConnections from "../src/OrganizationConnections.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
+import { TestAuth } from "@awthaq/test";
 
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
@@ -289,12 +281,7 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const OAuthLive = OAuth.OAuth.layer.pipe(
   Layer.provide(OrganizationConnections.oauthConnections),

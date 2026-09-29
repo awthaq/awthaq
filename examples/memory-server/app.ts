@@ -6,16 +6,7 @@
 // that refuses a subject without the permission and admits one with it, and a
 // `BeforeSignUp` allow-list tap that refuses a disallowed e-mail domain.
 
-import {
-  ActiveContextRecords,
-  InvitationRecords,
-  MembershipRecords,
-  Organization,
-  OrganizationHooks,
-  OrgRoleRecords,
-  OrganizationRecords,
-  TeamRecords,
-} from "@awthaq/organization";
+import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Auth, HookPoint, Hooks, Retention, SecuritySignals, Slots, Users } from "@awthaq/core";
@@ -103,13 +94,8 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   ),
   Layer.provide(NodeCrypto.layer),
 );
-const OrganizationMemory = Layer.mergeAll(
-  OrganizationRecords.layerMemory,
-  MembershipRecords.layerMemory,
-  ActiveContextRecords.layerMemory,
-  InvitationRecords.layerMemory,
-  OrgRoleRecords.layerMemory,
-  TeamRecords.layerMemory,
+const OrganizationStores = Layer.mergeAll(
+  OrganizationMemory.layer,
   // Every lifecycle-hook point's own default (no-tap) layer — required
   // once per composition, per `OrganizationHooksLive`'s own doc comment.
   OrganizationHooks.OrganizationHooksLive,
@@ -158,7 +144,7 @@ const makeAppLayer = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
       Mailer.layerConsole,
       AuthenticationLive,
       CsrfProtectionLive,
-      OrganizationMemory,
+      OrganizationStores,
       httpClient,
       GuardLive,
       SignUpAllowList,

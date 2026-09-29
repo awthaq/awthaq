@@ -1,6 +1,6 @@
 // Shared composition for the webhooks plugin's tests: the real in-memory core, a real `Encryption`
 // over a fixed test key, and a programmable `HttpClient` that records every request it is asked to send.
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Encryption, HostResolver, KeyProvider, RateLimiter } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -18,6 +18,7 @@ import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as WebhookSecrets from "../src/WebhookSecrets.ts";
 import * as WebhookSignature from "../src/WebhookSignature.ts";
 import * as Webhooks from "../src/Webhooks.ts";
+import { TestAuth } from "@awthaq/test";
 
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
@@ -35,10 +36,7 @@ const EncryptionLive = Encryption.layer.pipe(
 );
 
 export const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 /** What the fake receiver saw. */

@@ -2,16 +2,7 @@
 // codes, a real session cookie, the CSRF double-submit: deny-by-default 403, the erasure cascade
 // behind DELETE, the 202 of a mailed email change, the 422 of a weak password.
 import { Api } from "@awthaq/api";
-import {
-  Accounts,
-  AuditLog,
-  AuthEvents,
-  Erasure,
-  Hooks,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, Erasure, Sessions, Users, Verification } from "@awthaq/core";
 import { Mailer, PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -29,6 +20,7 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Admin from "../src/Admin.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 import * as AdminAccountsApi from "../src/AdminAccountsApi.ts";
+import { TestAuth } from "@awthaq/test";
 
 const CSRF_TEST_SECRET = "admin-accounts-http-csrf-secret-padded-to-thirty-two-bytes";
 
@@ -57,12 +49,7 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),

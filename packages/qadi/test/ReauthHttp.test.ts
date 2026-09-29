@@ -8,9 +8,8 @@
 // decodes it — the very schema asserted against below — telling a reauth demand
 // (with its window) apart from a plain permission denial.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, SessionCookie, Sessions, Users } from "@awthaq/core";
+import { SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { allOf, enforce, EvaluationServicesNone, obliged } from "@qadi/core";
 import * as Effect from "effect/Effect";
@@ -27,6 +26,7 @@ import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as AuthorizedSubject from "../src/AuthorizedSubject.ts";
 import * as Resolvers from "../src/Resolvers.ts";
+import { TestAuth } from "@awthaq/test";
 
 // A window of 0 makes any elapsed time "stale" without needing a test clock the
 // router's own runtime would not share; a wide window is never stale.
@@ -89,10 +89,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 );
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const AppLayer = AuthHttp.routes(TestApi, {}).pipe(

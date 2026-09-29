@@ -6,7 +6,7 @@
 // real encode/decode/SQL round-trip. A scenario's Given records what to arrange, its When runs the
 // whole flow against one database inside a single `withDatabase`, and the Then reads the result
 // back from the scratch (`FoundationsWorld`).
-import { AuditLog, AuthEvents, Hooks, Users } from "@awthaq/core";
+import { Users } from "@awthaq/core";
 import { Models, Repositories, CoreMigrations } from "@awthaq/sql";
 import { Encryption, KeyProvider } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 import * as Model from "effect/unstable/schema/Model";
 import * as Migrator from "effect/unstable/sql/Migrator";
+import { TestAuth } from "@awthaq/test";
 
 /** The SQLite-dialect models: what `Repositories` decodes with on this database. */
 export const M = Models.makeModels("sqlite");
@@ -108,8 +109,5 @@ export const optionValue = <A>(option: Option.Option<A>): A | undefined =>
 
 /** The domain `Users` service over memory — the "ordinary creation path" a caller goes through (`create` takes no id). */
 export const MemoryUsersLive = Users.layerMemory.pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );

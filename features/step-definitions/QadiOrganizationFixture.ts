@@ -3,17 +3,12 @@
 // does, for 21-qadi-resolvers-obligations.feature (BEH-EA-162). The one seam an application owns is
 // `ResourceOrganizationLookup` (which organization a resource belongs to); `probe` lets a scenario
 // steer and observe it.
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import { Sessions, Users } from "@awthaq/core";
 import {
-  ActiveContextRecords,
-  InvitationRecords,
-  MembershipRecords,
   Organization,
   OrganizationHooks,
   OrganizationQadi,
-  OrganizationRecords,
-  OrgRoleRecords,
-  TeamRecords,
+  OrganizationMemory,
 } from "@awthaq/organization";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
@@ -24,6 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import { CsrfConfigForTests } from "./CsrfTestSupport.ts";
+import { TestAuth } from "@awthaq/test";
 
 /** What a scenario steers and observes about the application's resource -> organization walk. */
 export interface WalkProbe {
@@ -45,10 +41,7 @@ export const makeWalkProbe = (): WalkProbe => ({
 });
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
@@ -64,13 +57,8 @@ const OrganizationLive = Organization.Organization.layer.pipe(
   Layer.provide(Organization.config({})),
   Layer.provide(AuthenticationLive),
   Layer.provide(CsrfProtectionLive),
+  Layer.provideMerge(OrganizationMemory.layer),
   Layer.provideMerge(CoreLive),
-  Layer.provideMerge(OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-  Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-  Layer.provideMerge(ActiveContextRecords.layerMemory),
-  Layer.provideMerge(InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-  Layer.provideMerge(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-  Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
   Layer.provideMerge(Mailer.layerMemory),
   Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),

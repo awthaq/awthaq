@@ -152,19 +152,30 @@ const MemoryStores = Layer.mergeAll(
  * erasure contribution registers into), so a plugin installed in a `TestAuth` composition is
  * erased like any other.
  */
+/**
+ * ELC-004: what every memory layer (`Users`/`Accounts`/`Sessions`/`Verification`, each plugin's
+ * record stores) needs beneath it, as one layer: the platform `Crypto` (ids and secrets),
+ * `AuthEvents` over an in-memory `AuditLog`, and every hook point's default (no-tap) layer.
+ * `layerMemory.pipe(Layer.provideMerge(TestAuth.memoryFoundation))` replaces the four
+ * `Layer.provideMerge(NodeCrypto.layer | AuthEvents.layer | AuditLog.layerMemory |
+ * Hooks.HooksLive)` lines each suite used to repeat. The services stay in the output, so a test
+ * can `yield*` the very instances the stores were built over. Raw layers stay available for a
+ * suite that injects its own `Crypto` or hook taps.
+ */
+export const memoryFoundation = AuthEvents.layer.pipe(
+  // BEH-EA-100: `AuthEvents.layer` needs `AuditLog` — see its own header comment.
+  Layer.provideMerge(AuditLog.layerMemory),
+  // AOMS-006/BCR-004/CSG-002/THS-002 (wayfinder ticket 03): every hook point's own default
+  // (no-tap) layer — `Users.layerMemory` and every plugin's own `make` consult one directly. See
+  // `Hooks.HooksLive`'s own doc comment.
+  Layer.provideMerge(Hooks.HooksLive),
+  Layer.provideMerge(NodeCrypto.layer),
+);
+
 const MemoryPorts = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
   Layer.provideMerge(MemoryStores),
-  Layer.provideMerge(NodeCrypto.layer),
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(AuthEvents.layer),
-  // BEH-EA-100: `AuthEvents.layer` now needs `AuditLog` too — see its own
-  // header comment.
-  Layer.provideMerge(AuditLog.layerMemory),
-  // AOMS-006/BCR-004/CSG-002/THS-002 (wayfinder ticket 03): every hook
-  // point's own default (no-tap) layer — `Users.layerMemory` and every
-  // plugin's own `make` now consult one directly. See `Hooks.HooksLive`'s
-  // own doc comment.
-  Layer.provideMerge(Hooks.HooksLive),
+  // RRS-003: `Sessions.layerMemory` also needs `AuthEvents`.
+  Layer.provideMerge(memoryFoundation),
 );
 
 const GuardLive = RedactionGuard.layerEvents.pipe(Layer.provideMerge(RedactionGuard.layer));
