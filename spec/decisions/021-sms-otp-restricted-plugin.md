@@ -20,7 +20,7 @@ An SMS-delivered one-time code is the factor users ask for and the one NIST SP 8
 
 ## Decision
 
-1. **The substrate ships; the SMS plugin does not (yet).** `@awthaq/magic-link`'s `EmailOtp` is the channel-OTP substrate (BEH-EA-268 to 247): six digits minted inside `Verification`, hashed at rest, a per-code attempt budget, a resend window, per-source and per-address rate limits. SMS is *a channel over that substrate*, not a new mechanism.
+1. **The substrate ships; the SMS plugin does not (yet).** `@awthaq/magic-link`'s `EmailOtp` is the channel-OTP substrate (BEH-EA-268 to 271): six digits minted inside `Verification`, hashed at rest, a per-code attempt budget, a resend window, per-source and per-address rate limits. SMS is *a channel over that substrate*, not a new mechanism.
 2. **When SMS ships it is a separate plugin, `@awthaq/sms-otp`, explicitly degraded.** Never bundled into `two-factor` or `email-otp`; TOTP and passkeys stay the documented first choice.
 3. **It can never be an account's only factor.** Enrolment is refused unless the account already has a confirmed non-restricted factor, and disabling the last non-restricted factor is refused while SMS remains — enforced at enrol time, not documented.
 4. **The operator must acknowledge the restriction.** The plugin's configuration requires `acknowledgeRestricted: true`; without it the layer fails to build with a typed configuration error, so restricted status is a decision someone made, not a default.
