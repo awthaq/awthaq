@@ -1662,6 +1662,8 @@ const organizationMigrations: Migrations.Migrations = [
 // EP-001 (ADR-EA-018): the opt-in tenant middleware, reachable as `Organization.tenantMiddleware`.
 export {
   layer as tenantMiddleware,
+  layerWithConfig as tenantMiddlewareWithConfig,
+  layerWithConfigAndRls as tenantMiddlewareWithConfigAndRls,
   layerWithRls as tenantMiddlewareWithRls,
 } from "./TenantMiddleware.ts";
 
@@ -1703,7 +1705,15 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       // for an in-memory composition, `layerSql` over the real client otherwise.
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const crypto = yield* Crypto.Crypto;
-      const orgConfig = yield* OrganizationConfig;
+      // EP-007 (ADR-EA-018): the configuration in force is decided per operation, not frozen at
+      // layer build. A `provideService(OrganizationConfig, ...)` in the *calling* fiber (the tenant
+      // middleware does this from a `TenantConfig`) overrides for that request; with none, the
+      // build-time value applies exactly as before — so `Layer.provide(Organization.config(...))`
+      // keeps meaning what it always meant.
+      const builtConfig = yield* OrganizationConfig;
+      const configNow = Effect.contextWith((context: Context.Context<never>) =>
+        Effect.succeed(Context.getOrUndefined(context, OrganizationConfig) ?? builtConfig),
+      );
       const beforeCreate = yield* OrganizationHooks.BeforeCreateOrganization;
       const afterCreate = yield* OrganizationHooks.AfterCreateOrganization;
       const beforeUpdate = yield* OrganizationHooks.BeforeUpdateOrganization;
@@ -1769,18 +1779,20 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       /** Static statements plus, when dynamic access control is enabled, every custom role this organization has defined. */
       const statementsByRole = (organizationId: string) =>
-        orgConfig.dynamicAccessControl.enabled
-          ? orgRoles.listByOrganization(organizationId).pipe(
-              Effect.map((rows) => {
-                const dynamic: Record<string, PermissionEngine.Statements> = {};
-                for (const row of rows) dynamic[row.role] = row.permission;
-                return PermissionEngine.statementsByRoleFrom(
-                  orgConfig.permissionStatements,
-                  dynamic,
-                );
-              }),
-            )
-          : Effect.succeed(PermissionEngine.statementsByRoleFrom(orgConfig.permissionStatements));
+        Effect.flatMap(configNow, (orgConfig) =>
+          orgConfig.dynamicAccessControl.enabled
+            ? orgRoles.listByOrganization(organizationId).pipe(
+                Effect.map((rows) => {
+                  const dynamic: Record<string, PermissionEngine.Statements> = {};
+                  for (const row of rows) dynamic[row.role] = row.permission;
+                  return PermissionEngine.statementsByRoleFrom(
+                    orgConfig.permissionStatements,
+                    dynamic,
+                  );
+                }),
+              )
+            : Effect.succeed(PermissionEngine.statementsByRoleFrom(orgConfig.permissionStatements)),
+        );
 
       const effectivePermissionsOf = (
         organizationId: string,
@@ -1801,10 +1813,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
        * OHS-004: the team-role statements a `TeamMembershipRecord` may hold —
        * `member` (nothing) plus whatever `OrganizationConfig.teamStatements` defines.
        */
-      const teamRoleStatements: ReadonlyMap<string, PermissionEngine.Statements> = new Map([
-        ["member", {}],
-        ...Object.entries(orgConfig.teamStatements),
-      ]);
+      const teamRoleStatementsNow = Effect.map(
+        configNow,
+        (orgConfig): ReadonlyMap<string, PermissionEngine.Statements> =>
+          new Map([["member", {}], ...Object.entries(orgConfig.teamStatements)]),
+      );
 
       /**
        * OHS-004: what the caller's *team* roles confer on `teamId`: the statements of
@@ -1813,6 +1826,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
        */
       const teamRoleAuthority = (callerId: Users.UserId, organizationId: string, teamId: string) =>
         Effect.gen(function* () {
+          const teamRoleStatements = yield* teamRoleStatementsNow;
           const ancestors = yield* teams.getAncestors(organizationId, teamId);
           let authority: PermissionEngine.Statements = {};
           for (const id of [teamId, ...ancestors.map((team) => team.id)]) {
@@ -1915,6 +1929,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         current?: ReadonlyArray<string>,
       ) =>
         Effect.gen(function* () {
+          const teamRoleStatements = yield* teamRoleStatementsNow;
           if (roleNames.some((name) => !teamRoleStatements.has(name))) {
             return yield* Effect.fail(new OrganizationApi.UnknownTeamRole());
           }
@@ -1983,27 +1998,31 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       /** EP-006: the static limits with this organization's `limitsFor` overrides merged over them. */
       const limitsOf = (organizationId: string) =>
-        (orgConfig.limitsFor === undefined
-          ? Effect.succeed<OrganizationLimits>({})
-          : orgConfig.limitsFor(organizationId)
-        ).pipe(
-          Effect.map((override) => ({
-            membershipLimit: override.membershipLimit ?? orgConfig.membershipLimit,
-            invitationLimit: override.invitationLimit ?? orgConfig.invitationLimit,
-            maximumTeams: override.maximumTeams ?? orgConfig.teams.maximumTeams,
-            maximumMembersPerTeam:
-              override.maximumMembersPerTeam ?? orgConfig.teams.maximumMembersPerTeam,
-            maximumRolesPerOrganization:
-              override.maximumRolesPerOrganization ??
-              orgConfig.dynamicAccessControl.maximumRolesPerOrganization,
-          })),
+        Effect.flatMap(configNow, (orgConfig) =>
+          (orgConfig.limitsFor === undefined
+            ? Effect.succeed<OrganizationLimits>({})
+            : orgConfig.limitsFor(organizationId)
+          ).pipe(
+            Effect.map((override) => ({
+              membershipLimit: override.membershipLimit ?? orgConfig.membershipLimit,
+              invitationLimit: override.invitationLimit ?? orgConfig.invitationLimit,
+              maximumTeams: override.maximumTeams ?? orgConfig.teams.maximumTeams,
+              maximumMembersPerTeam:
+                override.maximumMembersPerTeam ?? orgConfig.teams.maximumMembersPerTeam,
+              maximumRolesPerOrganization:
+                override.maximumRolesPerOrganization ??
+                orgConfig.dynamicAccessControl.maximumRolesPerOrganization,
+            })),
+          ),
         );
 
       /** DRS-007: a `homeRegion` must come from the configured vocabulary. */
       const requireKnownRegion = (region: string | null | undefined) =>
-        region === undefined || region === null || orgConfig.regions.includes(region)
-          ? Effect.void
-          : Effect.fail(new OrganizationApi.UnknownRegion({ region }));
+        Effect.flatMap(configNow, (orgConfig) =>
+          region === undefined || region === null || orgConfig.regions.includes(region)
+            ? Effect.void
+            : Effect.fail(new OrganizationApi.UnknownRegion({ region })),
+        );
 
       const create: OrganizationShape["create"] = Effect.fnUntraced(function* ({
         caller,
@@ -2013,6 +2032,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         metadata,
         homeRegion,
       }) {
+        const orgConfig = yield* configNow;
         const callerId = Users.UserId(caller.ref.id);
         yield* requireKnownRegion(homeRegion);
         const allowed = yield* orgConfig.allowUserToCreateOrganization(callerId);
@@ -2129,7 +2149,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
       const delete_: OrganizationShape["delete"] = Effect.fnUntraced(
         function* (caller, organizationId) {
           yield* requireOrganization(organizationId);
-          if (orgConfig.disableOrganizationDeletion) {
+          if ((yield* configNow).disableOrganizationDeletion) {
             return yield* Effect.fail(new OrganizationApi.OrganizationDeletionDisabled());
           }
           yield* requirePermission(
@@ -2502,6 +2522,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const invite: OrganizationShape["invite"] = Effect.fnUntraced(
         function* (caller, organizationId, input) {
+          const orgConfig = yield* configNow;
           const organizationRecord = yield* requireOrganization(organizationId);
           const callerId = Users.UserId(caller.ref.id);
           const inviter = yield* requirePermission(
@@ -2696,7 +2717,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (!ownsEmail(user, record.email)) {
             return yield* Effect.fail(new OrganizationApi.InvitationEmailMismatch());
           }
-          if (orgConfig.requireEmailVerificationOnInvitation && !Users.isEmailVerified(user)) {
+          if (
+            (yield* configNow).requireEmailVerificationOnInvitation &&
+            !Users.isEmailVerified(user)
+          ) {
             return yield* Effect.fail(new OrganizationApi.EmailVerificationRequired());
           }
 
@@ -2910,9 +2934,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       // ---- dynamic access control -----------------------------------------------
 
-      const requireDynamicAccessControlEnabled = orgConfig.dynamicAccessControl.enabled
-        ? Effect.void
-        : Effect.fail(new OrganizationApi.DynamicAccessControlDisabled());
+      const requireDynamicAccessControlEnabled = Effect.flatMap(configNow, (orgConfig) =>
+        orgConfig.dynamicAccessControl.enabled
+          ? Effect.void
+          : Effect.fail(new OrganizationApi.DynamicAccessControlDisabled()),
+      );
 
       const createRole: OrganizationShape["createRole"] = Effect.fnUntraced(
         function* (caller, organizationId, input) {
@@ -2925,7 +2951,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           // application-defined static role's name.
           if (
             PermissionEngine.isBuiltInRole(input.role) ||
-            Object.hasOwn(orgConfig.permissionStatements, input.role)
+            Object.hasOwn((yield* configNow).permissionStatements, input.role)
           ) {
             return yield* Effect.fail(new OrganizationApi.ReservedOrgRoleName());
           }
@@ -3057,9 +3083,9 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       // ---- teams --------------------------------------------------------------
 
-      const requireTeamsEnabled = orgConfig.teams.enabled
-        ? Effect.void
-        : Effect.fail(new OrganizationApi.TeamsDisabled());
+      const requireTeamsEnabled = Effect.flatMap(configNow, (orgConfig) =>
+        orgConfig.teams.enabled ? Effect.void : Effect.fail(new OrganizationApi.TeamsDisabled()),
+      );
 
       const requireTeam = (organizationId: string, teamId: string) =>
         teams.findTeamById(organizationId, teamId).pipe(
@@ -3239,7 +3265,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           );
           yield* requireTeam(organizationId, teamId);
           const count = yield* teams.countTeamsByOrganization(organizationId);
-          if (count <= 1 && !orgConfig.teams.allowRemovingAllTeams) {
+          if (count <= 1 && !(yield* configNow).teams.allowRemovingAllTeams) {
             return yield* Effect.fail(new OrganizationApi.LastTeamCannotBeRemoved());
           }
           // OHS-001: refuse before the veto hook runs; the records layer re-checks atomically.

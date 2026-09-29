@@ -15,6 +15,7 @@
 
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 /** The tenant the current fiber acts for, if any. Provided per request by `Organization.tenantMiddleware`, or per job with `withTenant`. */
@@ -31,3 +32,19 @@ export const withTenant =
 /** Runs `effect` with no ambient tenant, even inside a `withTenant` region (cross-tenant maintenance). */
 export const withoutTenant = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
   Effect.provideService(effect, TenantContext, Option.none());
+
+/**
+ * EP-007: names the tenant whose configuration layers a request runs under. A plugin's
+ * `config(...)` layer provides only a `Context.Reference`, which carries no requirement
+ * type, so it is a `Layer<never>` — and `LayerMap`'s constructors, keyed by tenant id, do not
+ * accept a lookup whose output is `never`. Adding `configApplied(tenantId)` to a tenant's
+ * layers (`Layer.merge(Organization.config(...), Tenant.configApplied(tenantId))`) gives the
+ * lookup a real output type, and lets a handler read which tenant's configuration is in force.
+ */
+export class TenantConfigApplied extends Context.Service<
+  TenantConfigApplied,
+  { readonly tenantId: string }
+>()("awthaq/ports/TenantConfigApplied") {}
+
+export const configApplied = (tenantId: string) =>
+  Layer.succeed(TenantConfigApplied, TenantConfigApplied.of({ tenantId }));

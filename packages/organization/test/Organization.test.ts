@@ -3,7 +3,7 @@
 // `MembershipRecords`, a hand-built `Api.UserPrincipal` the same way
 // `@awthaq/admin`'s own `Admin.test.ts` does.
 import { Api } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Hooks, AuthEvents, Sessions, Tenant, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -12,6 +12,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as LayerMap from "effect/LayerMap";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Redacted from "effect/Redacted";
@@ -2213,5 +2214,90 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
       const restored = yield* organization.get(owner, org.id);
       assert.strictEqual(restored.id, org.id);
     }).pipe(Effect.provide(buildLayer())),
+  );
+});
+
+// ---- EP-007 (ADR-EA-018, BEH-EA-231): per-tenant configuration in one composition ------------
+
+describe("Per-tenant configuration (EP-007)", () => {
+  /** The application's own map: tenant id -> that tenant's `Organization.config(...)`. */
+  class TenantConfig extends LayerMap.Service<TenantConfig>()("test/TenantConfig", {
+    lookup: (tenantId: string) =>
+      Layer.merge(
+        Organization.config({
+          membershipLimit: tenantId === "small" ? 1 : 3,
+          requireEmailVerificationOnInvitation: tenantId !== "lax",
+        }),
+        Tenant.configApplied(tenantId),
+      ),
+    idleTimeToLive: "1 minute",
+  }) {}
+
+  const inTenant = (tenantId: string) => Effect.provide(TenantConfig.get(tenantId));
+
+  it.effect("two tenants with different Organization.config in one composition, same layer instance", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const small = yield* organization.create({ caller: owner, name: "Small", slug: "small" });
+      const big = yield* organization.create({ caller: owner, name: "Big", slug: "big" });
+      const add = (organizationId: string, userId: string) =>
+        organization.addMember({ organizationId, userId: Users.UserId(userId), role: ["member"] });
+      // Each organization is already at one member (its owner). The `small` tenant's limit is 1.
+      const refused = yield* add(small.id, "m-1").pipe(inTenant("small"), Effect.flip);
+      assert.strictEqual(refused._tag, "MembershipLimitReached");
+      yield* add(big.id, "m-1").pipe(inTenant("big"));
+      yield* add(big.id, "m-2").pipe(inTenant("big"));
+      const full = yield* add(big.id, "m-3").pipe(inTenant("big"), Effect.flip);
+      assert.strictEqual(full._tag, "MembershipLimitReached");
+    }).pipe(Effect.provide(Layer.provideMerge(TenantConfig.layer, buildLayer({ membershipLimit: 100 })))),
+  );
+
+  it.effect("with no tenant override the build-time configuration applies, exactly as before", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const org = yield* organization.create({
+        caller: asCaller("owner-1"),
+        name: "Acme",
+        slug: "acme",
+      });
+      const add = (userId: string) =>
+        organization.addMember({
+          organizationId: org.id,
+          userId: Users.UserId(userId),
+          role: ["member"],
+        });
+      yield* add("m-1");
+      const refused = yield* add("m-2").pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "MembershipLimitReached");
+    }).pipe(Effect.provide(buildLayer({ membershipLimit: 2 }))),
+  );
+
+  it.effect("a tenant's own invitation policy applies to its acceptances", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const users = yield* Users.Users;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const invitee = yield* users.create({
+        identity: { _tag: "Email", email: "unverified@example.com" },
+        name: "Unverified",
+      });
+      const invitation = yield* organization.invite(owner, org.id, {
+        email: "unverified@example.com",
+        role: ["member"],
+      });
+      const token = yield* mailedToken(invitation.id);
+      // Under the default tenant policy an unverified invitee is refused …
+      const strict = yield* organization
+        .acceptInvitation(asCaller(invitee.id), invitation.id, token)
+        .pipe(inTenant("strict"), Effect.flip);
+      assert.strictEqual(strict._tag, "EmailVerificationRequired");
+      // … under the `lax` tenant's own configuration the same acceptance goes through.
+      const membership = yield* organization
+        .acceptInvitation(asCaller(invitee.id), invitation.id, token)
+        .pipe(inTenant("lax"));
+      assert.strictEqual(membership.userId, invitee.id);
+    }).pipe(Effect.provide(Layer.provideMerge(TenantConfig.layer, buildLayer()))),
   );
 });

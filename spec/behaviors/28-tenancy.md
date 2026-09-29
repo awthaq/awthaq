@@ -107,14 +107,16 @@ _Previous: [BEH-EA-229](28-tenancy.md#beh-ea-229-the-tenant-middleware-resolves-
 ## BEH-EA-231: Per-tenant configuration applies per request without changing the plugin tuple
 
 ```text
-REQUIREMENT: A plugin MUST read its configuration reference per operation, not
-             once at layer build, so that a per-request `provideService` (or the
-             tenant middleware's `TenantConfig` layers) changes its behavior. Two
-             tenants with different configuration MUST be servable by one
-             composition.
+REQUIREMENT: A plugin that supports per-tenant configuration MUST decide its
+             configuration per operation: a configuration reference provided in the
+             *calling fiber* (a per-request `provideService`, or the tenant
+             middleware's `TenantConfig` layers) overrides for that operation, and
+             with none provided the build-time value applies exactly as before, so
+             `Layer.provide(Plugin.config(...))` keeps its meaning. Two tenants with
+             different configuration MUST be servable by one composition.
 ```
 
-`TenantConfig` is a `LayerMap.Service` keyed by tenant id whose lookup the application supplies ([ADR-EA-005](../decisions/005-static-composition.md)'s reserved seam); with none installed the global configuration applies.
+`TenantConfig` is the application's own `LayerMap.Service` keyed by tenant id ([ADR-EA-005](../decisions/005-static-composition.md)'s reserved seam) whose `lookup` returns that tenant's `config(...)` layers merged with `Tenant.configApplied(tenantId)` — a configuration layer alone provides only a `Context.Reference`, a `Layer<never>`, which `LayerMap`'s constructors do not accept, and the marker gives the lookup a real output and lets a handler read which tenant's configuration is in force. `Organization.tenantMiddlewareWithConfig(TenantConfig)` provides those layers for the request. `@awthaq/organization` adopts the per-operation rule; other plugins adopt it one by one (their boot-time derivations — rate-limit rules, a timing floor — need per-tenant treatment of their own).
 
 _Previous: [BEH-EA-230](28-tenancy.md#beh-ea-230-organization-oauth-connections-are-consulted-after-the-static-registry) | Next: [BEH-EA-232](28-tenancy.md#beh-ea-232-a-suspended-organization-refuses-organization-scoped-access)_
 

@@ -9,3 +9,5 @@ import { Tenant } from "@awthaq/ports";
 export const TenantContext = Tenant.TenantContext;
 export const withTenant = Tenant.withTenant;
 export const withoutTenant = Tenant.withoutTenant;
+export const TenantConfigApplied = Tenant.TenantConfigApplied;
+export const configApplied = Tenant.configApplied;
