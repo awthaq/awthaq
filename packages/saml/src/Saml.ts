@@ -757,10 +757,9 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
             ? yield* spKeys.signingKey(connectionId)
             : Option.none();
           if (connection.value.authnRequestsSigned && Option.isNone(signing)) {
-            return yield* Effect.die(
-              new Error(
-                `awthaq/saml: connection ${connectionId} signs its AuthnRequests but has no usable signing key`,
-              ),
+            return yield* Defects.invariantViolation(
+              "saml.signingKeyUsable",
+              `awthaq/saml: connection ${connectionId} signs its AuthnRequests but has no usable signing key`,
             );
           }
           const location = redirectUrl({

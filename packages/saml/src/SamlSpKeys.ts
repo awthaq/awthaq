@@ -9,7 +9,7 @@
 // Several keys per connection are a rotation overlap: the NEWEST unexpired one signs, and every unexpired certificate is
 // published, so an IdP that has not refreshed the metadata yet still trusts the previous key until it expires.
 
-import { Encryption } from "@awthaq/ports";
+import { Defects, Encryption } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -115,10 +115,9 @@ export const layer = Layer.effect(
         .decrypt(chosen.privateKey, aad(chosen.id))
         .pipe(Effect.option);
       if (Option.isNone(opened)) {
-        return yield* Effect.die(
-          new Error(
-            `awthaq/saml: the signing key ${chosen.id} of connection ${connectionId} cannot be opened`,
-          ),
+        return yield* Defects.invariantViolation(
+          "saml.signingKeyOpens",
+          `awthaq/saml: the signing key ${chosen.id} of connection ${connectionId} cannot be opened`,
         );
       }
       return Option.some({

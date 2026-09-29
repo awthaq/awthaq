@@ -3,7 +3,7 @@
 // changes nothing (no session ended, no state consumed by a message that failed), and a valid message ends exactly the sessions
 // it names, at the connection it came from, with reason `federatedLogout`.
 import { Api } from "@awthaq/api";
-import { AuditLog, Sessions } from "@awthaq/core";
+import { AuditLog, Sessions, Users } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
 import * as Layer from "effect/Layer";
 import { assert, describe, it } from "@effect/vitest";
@@ -45,7 +45,7 @@ let assertions = 0;
 /** A fresh assertion id per sign-in: an assertion is accepted once, so two sign-ins in one test need two. */
 const freshAssertionId = () => `_assertion-${(assertions += 1)}`;
 
-const principalOf = (userId: Sessions.UserId, sessionId: Sessions.SessionId) =>
+const principalOf = (userId: Users.UserId, sessionId: Sessions.SessionId) =>
   new Api.UserPrincipal({ ref: new Api.PrincipalRef({ type: "user", id: userId }), sessionId });
 const sloUrlOf = (connectionId: string) => `${BASE_URL}/auth/saml/slo/${connectionId}`;
 
@@ -168,7 +168,7 @@ const signIn = (connectionId: string, options: { readonly assertionId?: string }
     return { sessionId: outcome.session.session.id, userId: outcome.session.session.userId };
   });
 
-const isLive = (userId: Sessions.UserId, sessionId: Sessions.SessionId) =>
+const isLive = (userId: Users.UserId, sessionId: Sessions.SessionId) =>
   Effect.flatMap(Sessions.Sessions, (sessions) => sessions.isLive(userId, sessionId));
 
 const revocations = Effect.flatMap(AuditLog.AuditLog, (auditLog) =>
@@ -190,11 +190,7 @@ const rejectedAs = (input: SamlSlo.SloInput) =>
   );
 
 /** Parses the LogoutResponse the SP sent the IdP over the redirect binding, verifying its signature under the SP's certificate. */
-const readSpResponse = (
-  location: string,
-  connectionId: string,
-  spCertificates: ReadonlyArray<string>,
-) =>
+const readSpResponse = (location: string, spCertificates: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const parts = redirectParts(location);
     const xml = inflateRawSync(Buffer.from(decodeURIComponent(parts.message), "base64")).toString(
@@ -250,7 +246,7 @@ describe("an IdP-initiated LogoutRequest over the Redirect binding", () => {
         assert.strictEqual(outcome._tag, "redirect");
         if (outcome._tag !== "redirect") return;
         const spCertificates = certificatesInSpMetadata(yield* saml.metadata(connection.id));
-        const answered = yield* readSpResponse(outcome.location, connection.id, spCertificates);
+        const answered = yield* readSpResponse(outcome.location, spCertificates);
         assert.strictEqual(answered.endpoint, IDP_SLO);
         assert.isTrue(answered.signed, "the answer is signed with the SP key the connection has");
         assert.include(answered.xml, "<samlp:LogoutResponse");
@@ -446,7 +442,7 @@ describe("every way of getting a logout message wrong is the same refusal, and e
   const request = (connectionId: string, overrides: Partial<LogoutRequestOptions> = {}) =>
     logoutRequestXml({ destination: sloUrlOf(connectionId), ...overrides });
   const stillLive = (session: {
-    readonly userId: Sessions.UserId;
+    readonly userId: Users.UserId;
     readonly sessionId: Sessions.SessionId;
   }) => isLive(session.userId, session.sessionId);
 
@@ -681,7 +677,7 @@ describe("SP-initiated logout", () => {
         assert.strictEqual(started._tag, "redirect");
         if (started._tag !== "redirect") return;
         const spCertificates = certificatesInSpMetadata(yield* saml.metadata(connection.id));
-        const sent = yield* readSpResponse(started.location, connection.id, spCertificates);
+        const sent = yield* readSpResponse(started.location, spCertificates);
         assert.strictEqual(sent.endpoint, IDP_SLO);
         assert.isTrue(sent.signed);
         assert.include(sent.xml, "<samlp:LogoutRequest");
