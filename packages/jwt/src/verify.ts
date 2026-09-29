@@ -76,6 +76,8 @@ export interface VerifierOptions {
   readonly cacheTtl?: Duration.Input;
   /** Minimum gap between forced refetches triggered by an unknown `kid` (also how long a failed fetch is replayed). Default 30 seconds. */
   readonly minRefetchInterval?: Duration.Input;
+  /** ECF-001: deadline for one JWKS fetch, request plus body decode; a hung issuer fails the verification, not the fiber. Default 5 seconds. */
+  readonly fetchTimeout?: Duration.Input;
 }
 
 export interface Verifier {
@@ -116,6 +118,7 @@ export const makeVerifier = (options: VerifierOptions) =>
     const fetchKeys = httpClient.get(options.jwksUrl).pipe(
       Effect.flatMap(HttpIncomingMessage.schemaBodyJson(JwksDocumentSchema)),
       Effect.map(toVerificationKeys),
+      Effect.timeout(options.fetchTimeout ?? "5 seconds"),
       Effect.catch(() =>
         Effect.fail(new JwtCodec.JwtInvalidError({ reason: "jwks fetch failed" })),
       ),

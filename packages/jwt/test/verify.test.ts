@@ -11,6 +11,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
@@ -205,6 +206,31 @@ describe("lite verifier (@awthaq/jwt/verify)", () => {
 
       const secondClaims = yield* verifier.verify(tokenAfterRotation);
       assert.strictEqual(secondClaims["sub"], "user-2");
+    }).pipe(Effect.provide(buildJwtLayer())),
+  );
+
+  // ECF-001: the JWKS fetch (request plus body decode) has a deadline, so a hung issuer fails the
+  // verification instead of pinning the caller's fiber.
+  it.effect("a JWKS endpoint that never answers fails within fetchTimeout", () =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+      const token = yield* jwt.signJWT({ sub: "user-1" });
+      const hung = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make(() => Effect.never),
+      );
+      const verifier = yield* Verify.makeVerifier({
+        jwksUrl: JWKS_URL,
+        issuer: ISSUER,
+        audience: ISSUER,
+        algorithms: ["EdDSA"],
+        expectedTyp: "JWT",
+        fetchTimeout: Duration.seconds(2),
+      }).pipe(Effect.provide(hung));
+      const fiber = yield* Effect.forkChild(verifier.verify(token).pipe(Effect.flip));
+      yield* TestClock.adjust(Duration.seconds(3));
+      const failure = yield* Fiber.join(fiber);
+      assert.strictEqual(failure.reason, "jwks fetch failed");
     }).pipe(Effect.provide(buildJwtLayer())),
   );
 });

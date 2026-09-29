@@ -26,7 +26,6 @@ import {
   Accounts,
   AuthEvents,
   AuthPlugin,
-  ConstantTime,
   Errors,
   Hooks,
   RateLimits,
@@ -35,16 +34,14 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { ClientAddress, Encryption, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Encryption, Hmac, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Headers from "effect/unstable/http/Headers";
 import * as HttpClient from "effect/unstable/http/HttpClient";
@@ -544,7 +541,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // ERS-003: the retrying client serves the idempotent GETs (JWKS,
       // userinfo); `httpClient` stays plain for the single-use code exchange.
       const readClient = ProviderHttp.retrying(httpClient, config_.retry);
-      const jwksCache = yield* Ref.make(HashMap.empty<string, IdToken.JwksCacheEntry>());
+      const jwksCaches = yield* IdToken.makeJwksCaches;
       const limiter = yield* RateLimiter.RateLimiter;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const encryption = yield* Encryption.Encryption;
@@ -709,7 +706,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(Effect.orDie);
         const cookieMatches =
           input.cookieState !== undefined &&
-          ConstantTime.constantTimeEqual(
+          Hmac.constantTimeEqualBytes(
             yield* digest(input.cookieState),
             yield* digest(input.state),
           );
@@ -804,7 +801,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                 ? yield* CallbackFailure.callbackFailed("missing-nonce")
                 : yield* IdToken.verify({
                     httpClient: readClient,
-                    jwksCache,
+                    jwksCaches,
                     provider,
                     idToken: tokens.idToken,
                     nonce,

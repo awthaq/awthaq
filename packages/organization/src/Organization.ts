@@ -15,7 +15,7 @@
 
 import { Api } from "@awthaq/api";
 import { AuthEvents, AuthPlugin, Errors, HookPoint, Hooks, Migrations, Users } from "@awthaq/core";
-import { Mailer, SqlTransaction } from "@awthaq/ports";
+import { Hmac, Mailer, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -601,14 +601,6 @@ const hexOf = (bytes: Uint8Array): string =>
  * token for a real invitation. Never equals a real SHA-256 hex digest.
  */
 const NO_INVITATION_TOKEN_HASH = "0".repeat(64);
-
-/** Constant-time comparison of two equal-length hex digests (same shape as `Sessions.ts`'s). */
-const constantTimeEqual = (a: string, b: string): boolean => {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-};
 
 // ---- dto mapping ----------------------------------------------------------------
 
@@ -2472,7 +2464,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           const found = yield* invitations.findById(invitationId);
           const presented = yield* hashInvitationToken(token);
           const stored = Option.flatMap(found, (record) => record.tokenHash);
-          const matches = constantTimeEqual(
+          const matches = Hmac.constantTimeEqualString(
             presented,
             Option.getOrElse(stored, () => NO_INVITATION_TOKEN_HASH),
           );

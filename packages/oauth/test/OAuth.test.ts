@@ -2135,6 +2135,54 @@ describe("OAuth", () => {
     );
 
     it.effect(
+      "ECF-002: concurrent callbacks presenting an unknown kid cause one JWKS refetch, not one per request",
+      () => {
+        let jwksCalls = 0;
+        return Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const flows = yield* Effect.forEach(Array.from({ length: 6 }), () =>
+            oauth.authorize("okta", { callbackURL: undefined, link: undefined }),
+          );
+          currentClaims = {
+            iss: "https://okta.example.com/oauth2/default",
+            aud: "okta-client-id",
+            sub: "okta-user-1",
+            exp: Math.floor(Date.now() / 1000) + 3600,
+            nonce: "irrelevant: the kid is checked first",
+          };
+          const failures = yield* Effect.forEach(
+            flows,
+            ({ state }) =>
+              oauth
+                .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+                .pipe(Effect.flip),
+            { concurrency: "unbounded" },
+          );
+          for (const failure of failures) assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+          // One cold load shared by every caller, plus at most one forced refetch for the miss.
+          assert.isAtMost(jwksCalls, 2);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta()],
+              httpRoutes: {
+                ...idTokenRoutes(),
+                "/token": () => ({
+                  access_token: "at-1",
+                  id_token: signJwt(currentClaims, keyPair.privateKey, "unregistered-kid"),
+                }),
+                "/jwks": () => {
+                  jwksCalls += 1;
+                  return { keys: [jwk] };
+                },
+              },
+            }),
+          ),
+        );
+      },
+    );
+
+    it.effect(
       "JJS-001/JR-002/KRS-004/OIT-002: a rotated signing key is picked up via the kid-miss refetch, not stuck on the stale cache",
       () => {
         const rotatedKeyPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
