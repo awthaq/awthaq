@@ -7,7 +7,7 @@
 // codes, a real session cookie — mirroring `@awthaq/passkey`'s own
 // `AuthHttp.test.ts`.
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import { AuditChain, AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -82,7 +82,12 @@ const buildAppLayer = (config: Partial<Admin.AdminConfigShape>) =>
   ).pipe(
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
-    Layer.provideMerge(ImpersonationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
+    Layer.provideMerge(
+      ImpersonationRecords.layerMemory.pipe(
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer))),
+      ),
+    ),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
   );

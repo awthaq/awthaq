@@ -348,12 +348,114 @@ const adminMigrations: Migrations.Migrations = [
       });
     }),
   },
+  {
+    // ALF-005: the append-only, hash-chained ledger `ImpersonationRecords` writes every
+    // episode start/end to (see that module's header). `payload` is the canonical string
+    // that was hashed, so `verifyChain` can recompute `rowHash` from what is stored.
+    name: "create_admin_impersonation_chain",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE admin_impersonation_chain (
+            seq SERIAL PRIMARY KEY,
+            kind TEXT NOT NULL,
+            episodeId TEXT NOT NULL,
+            prevHash TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            rowHash TEXT NOT NULL
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE admin_impersonation_chain (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            episodeId TEXT NOT NULL,
+            prevHash TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            rowHash TEXT NOT NULL
+          )`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+  {
+    // ALF-005: database-level immutability. `admin_impersonation` rejects DELETE and any
+    // UPDATE other than *closing an open episode* (`endedAt`/`endedBy` while `endedAt` is
+    // still NULL); the ledger rejects every UPDATE and DELETE. A DBA can still drop these
+    // triggers — which is what the hash chain (`ImpersonationRecords.verifyChain`) exists
+    // to make detectable. Postgres also blocks TRUNCATE. The Postgres branch is exercised
+    // by no test in this repo (SQLite only) — review it against a real Postgres.
+    name: "add_admin_impersonation_immutability_triggers",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () =>
+          Effect.gen(function* () {
+            yield* sql`
+              CREATE FUNCTION admin_impersonation_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+              BEGIN
+                IF TG_TABLE_NAME = 'admin_impersonation' AND TG_OP = 'UPDATE' THEN
+                  IF NEW.id IS DISTINCT FROM OLD.id
+                    OR NEW.adminUserId IS DISTINCT FROM OLD.adminUserId
+                    OR NEW.targetUserId IS DISTINCT FROM OLD.targetUserId
+                    OR NEW.sessionId IS DISTINCT FROM OLD.sessionId
+                    OR NEW.reason IS DISTINCT FROM OLD.reason
+                    OR NEW.startedAt IS DISTINCT FROM OLD.startedAt
+                    OR NEW.expiresAt IS DISTINCT FROM OLD.expiresAt
+                    OR OLD.endedAt IS NOT NULL THEN
+                    RAISE EXCEPTION 'awthaq: % is append-only: this UPDATE is rejected', TG_TABLE_NAME;
+                  END IF;
+                  RETURN NEW;
+                END IF;
+                RAISE EXCEPTION 'awthaq: % is append-only: % is rejected', TG_TABLE_NAME, TG_OP;
+              END
+              $$`;
+            yield* sql`
+              CREATE TRIGGER admin_impersonation_guard BEFORE UPDATE OR DELETE ON admin_impersonation
+              FOR EACH ROW EXECUTE FUNCTION admin_impersonation_guard()`;
+            yield* sql`
+              CREATE TRIGGER admin_impersonation_no_truncate BEFORE TRUNCATE ON admin_impersonation
+              FOR EACH STATEMENT EXECUTE FUNCTION admin_impersonation_guard()`;
+            yield* sql`
+              CREATE TRIGGER admin_impersonation_chain_guard BEFORE UPDATE OR DELETE ON admin_impersonation_chain
+              FOR EACH ROW EXECUTE FUNCTION admin_impersonation_guard()`;
+            yield* sql`
+              CREATE TRIGGER admin_impersonation_chain_no_truncate BEFORE TRUNCATE ON admin_impersonation_chain
+              FOR EACH STATEMENT EXECUTE FUNCTION admin_impersonation_guard()`;
+          }),
+        sqlite: () =>
+          Effect.gen(function* () {
+            yield* sql`
+              CREATE TRIGGER admin_impersonation_no_delete BEFORE DELETE ON admin_impersonation
+              BEGIN SELECT RAISE(ABORT, 'awthaq: admin_impersonation is append-only: DELETE is rejected'); END`;
+            yield* sql`
+              CREATE TRIGGER admin_impersonation_immutable BEFORE UPDATE ON admin_impersonation
+              WHEN NEW.id IS NOT OLD.id
+                OR NEW.adminUserId IS NOT OLD.adminUserId
+                OR NEW.targetUserId IS NOT OLD.targetUserId
+                OR NEW.sessionId IS NOT OLD.sessionId
+                OR NEW.reason IS NOT OLD.reason
+                OR NEW.startedAt IS NOT OLD.startedAt
+                OR NEW.expiresAt IS NOT OLD.expiresAt
+                OR OLD.endedAt IS NOT NULL
+              BEGIN SELECT RAISE(ABORT, 'awthaq: admin_impersonation is append-only: this UPDATE is rejected'); END`;
+            yield* sql`
+              CREATE TRIGGER admin_impersonation_chain_no_update BEFORE UPDATE ON admin_impersonation_chain
+              BEGIN SELECT RAISE(ABORT, 'awthaq: admin_impersonation_chain is append-only: UPDATE is rejected'); END`;
+            yield* sql`
+              CREATE TRIGGER admin_impersonation_chain_no_delete BEFORE DELETE ON admin_impersonation_chain
+              BEGIN SELECT RAISE(ABORT, 'awthaq: admin_impersonation_chain is append-only: DELETE is rejected'); END`;
+          }),
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
 ];
 
 export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
   apiVersion: 1,
   contract: AdminApi.AdminApi,
-  tables: ["admin_impersonation"],
+  tables: ["admin_impersonation", "admin_impersonation_chain"],
   migrations: adminMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Admin, {

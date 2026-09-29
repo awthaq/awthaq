@@ -169,7 +169,21 @@ REQUIREMENT: `impersonate` MUST insert one `admin_impersonation` row per
              an exported sweep (`Admin.sweepExpiredEpisodes`), publishing
              one `auth.admin.impersonationStopped { endedBy: "expired" }`
              per episode it closes, exactly once.
+
+REQUIREMENT: The trail MUST be tamper-evident (ALF-005). The database MUST
+             reject DELETE on `admin_impersonation` and any UPDATE of it
+             other than closing an open episode (`endedAt`/`endedBy` while
+             `endedAt` is still null). Every episode start and end MUST also
+             be appended, in one transaction with the row change, to an
+             append-only `admin_impersonation_chain` ledger whose links are
+             chained with `AuditChain` (`rowHash = HMAC(key, prevHash ||
+             payload)`, key optional). `ImpersonationRecords.verifyChain`
+             MUST report the first ledger link that no longer verifies, or
+             the first episode row that no longer matches, is missing from,
+             or was never recorded in the ledger.
 ```
+
+ALF-005 (decision recorded 2026-09-29: adopted recommended option C now + A, shared primitive; B — an external append-only sink — is left as an optional future port): a DBA can still drop the triggers, which is what the chain is for — editing, deleting or reordering a row, or forging one with raw SQL, is detectable by anyone holding the key. Without a configured key the chain is unkeyed SHA-256: it catches casual edits but can be recomputed end to end, so a host wanting forgery-evidence supplies `AuditChain.config({ key })`. Detecting truncation of the newest links needs an external anchor (an exported head hash) and is the host's. The primitive (`@awthaq/core`'s `AuditChain`) is table-agnostic; applying it to the core `audit_log` (BEH-EA-100) is tracked separately. The Postgres trigger DDL ships in the same migration but is untested here (SQLite only).
 
 IDS-004: before this, `"expired"` was declared but nothing produced it, so a naturally-expired episode stayed reported `active` forever and the audit trail never closed. The close is a single atomic statement that returns only the rows it closed, so concurrent readers cannot double-announce an episode.
 

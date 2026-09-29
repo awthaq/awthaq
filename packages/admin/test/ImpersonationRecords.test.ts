@@ -8,7 +8,7 @@
 // verification `packages/jwt/test/RevocationStore.test.ts` establishes:
 // genuine end-to-end proof that this plugin's own declared migrations
 // produce a working schema.
-import { Migrations, Users } from "@awthaq/core";
+import { AuditChain, Migrations, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
@@ -17,11 +17,17 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 
-const MemoryLayer = ImpersonationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
+const ChainLive = AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer));
+
+const MemoryLayer = ImpersonationRecords.layerMemory.pipe(
+  Layer.provide(NodeCrypto.layer),
+  Layer.provide(ChainLive),
+);
 
 const SqlLive = SqliteClient.layer({ filename: ":memory:" });
 
@@ -31,6 +37,7 @@ const Migrated = Layer.effectDiscard(Migrations.run(Admin.Admin.migrations)).pip
 
 const SqlLayer = ImpersonationRecords.layerSql.pipe(
   Layer.provide(NodeCrypto.layer),
+  Layer.provide(ChainLive),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
@@ -221,8 +228,173 @@ const suite = (
         if (Option.isSome(ended)) assert.deepStrictEqual(ended.value.endedBy, Option.some("self"));
       }).pipe(Effect.provide(layer)),
     );
+
+    it.effect("ALF-005: verifyChain is clean across create, end, close-expired and list", () =>
+      Effect.gen(function* () {
+        const records = yield* ImpersonationRecords.ImpersonationRecords;
+        assert.isTrue(Option.isNone(yield* records.verifyChain));
+        const start = yield* DateTime.now;
+        yield* records.create({
+          adminUserId: adminId,
+          targetUserId: targetId,
+          sessionId: "s-self",
+          reason: "one",
+          expiresAt: DateTime.addDuration(start, Duration.hours(5)),
+        });
+        yield* records.create({
+          adminUserId: adminId,
+          targetUserId: targetId,
+          sessionId: "s-expiring",
+          reason: "two",
+          expiresAt: DateTime.addDuration(start, Duration.minutes(1)),
+        });
+        yield* records.endEpisode("s-self", "self");
+        yield* TestClock.adjust(Duration.minutes(2));
+        yield* records.closeExpired(yield* DateTime.now);
+        assert.isTrue(Option.isNone(yield* records.verifyChain));
+      }).pipe(Effect.provide(layer)),
+    );
   });
 };
 
 suite("ImpersonationRecords (layerMemory)", MemoryLayer);
 suite("ImpersonationRecords (layerSql)", SqlLayer);
+
+/**
+ * ALF-005: the database itself refuses the casual rewrite, and the hash chain makes a
+ * forger who bypasses the triggers (a DBA, `DROP TRIGGER`) detectable. SQLite only:
+ * the Postgres triggers ship in the same migration but need a Postgres to run.
+ */
+describe("ALF-005 tamper evidence (layerSql)", () => {
+  /** A `SqlError` wraps the driver's own error; the trigger's message lives a few `cause`s down. */
+  const rejection = (error: unknown): string => {
+    const messages: Array<string> = [];
+    let current: unknown = error;
+    for (let depth = 0; depth < 6 && current instanceof Error; depth++) {
+      messages.push(current.message);
+      current = current.cause;
+    }
+    return messages.join(" | ");
+  };
+
+  const seedTwo = Effect.gen(function* () {
+    const records = yield* ImpersonationRecords.ImpersonationRecords;
+    const first = yield* seed(records, "session-a", "first");
+    yield* TestClock.adjust(Duration.millis(1));
+    const second = yield* seed(records, "session-b", "second");
+    yield* records.endEpisode("session-a", "self");
+    return { records, first, second };
+  });
+
+  it.effect("a raw UPDATE of an immutable column is rejected by the trigger", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { first } = yield* seedTwo;
+      const failure =
+        yield* sql`UPDATE admin_impersonation SET reason = 'forged' WHERE id = ${first.id}`.pipe(
+          Effect.flip,
+        );
+      assert.include(rejection(failure), "append-only");
+    }).pipe(Effect.provide(SqlLayer)),
+  );
+
+  it.effect("a raw DELETE is rejected by the trigger", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { first } = yield* seedTwo;
+      const failure = yield* sql`DELETE FROM admin_impersonation WHERE id = ${first.id}`.pipe(
+        Effect.flip,
+      );
+      assert.include(rejection(failure), "append-only");
+    }).pipe(Effect.provide(SqlLayer)),
+  );
+
+  it.effect("an ended episode's endedAt/endedBy can no longer be rewritten", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { first } = yield* seedTwo;
+      const failure =
+        yield* sql`UPDATE admin_impersonation SET endedBy = 'expired' WHERE id = ${first.id}`.pipe(
+          Effect.flip,
+        );
+      assert.include(rejection(failure), "append-only");
+    }).pipe(Effect.provide(SqlLayer)),
+  );
+
+  it.effect("the chain ledger itself rejects UPDATE and DELETE", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* seedTwo;
+      const update = yield* sql`UPDATE admin_impersonation_chain SET payload = 'x'`.pipe(
+        Effect.flip,
+      );
+      assert.include(rejection(update), "append-only");
+      const remove = yield* sql`DELETE FROM admin_impersonation_chain`.pipe(Effect.flip);
+      assert.include(rejection(remove), "append-only");
+    }).pipe(Effect.provide(SqlLayer)),
+  );
+
+  it.effect(
+    "verifyChain detects a row rewritten with the triggers disabled, naming the episode",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const { records, second } = yield* seedTwo;
+        assert.isTrue(Option.isNone(yield* records.verifyChain));
+
+        yield* sql`DROP TRIGGER admin_impersonation_immutable`;
+        yield* sql`UPDATE admin_impersonation SET reason = 'forged' WHERE id = ${second.id}`;
+
+        const broken = yield* records.verifyChain;
+        assert.isTrue(Option.isSome(broken));
+        if (Option.isSome(broken)) {
+          assert.strictEqual(broken.value.episodeId, second.id);
+          assert.strictEqual(broken.value.reason, "row-mismatch");
+          // `second` was the second link written (`first`'s start, `second`'s start, `first`'s end).
+          assert.deepStrictEqual(broken.value.seq, Option.some(2));
+        }
+      }).pipe(Effect.provide(SqlLayer)),
+  );
+
+  it.effect("verifyChain detects a deleted episode row and a rewritten ledger entry", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { records, first, second } = yield* seedTwo;
+
+      yield* sql`DROP TRIGGER admin_impersonation_no_delete`;
+      yield* sql`DELETE FROM admin_impersonation WHERE id = ${second.id}`;
+      const missing = yield* records.verifyChain;
+      assert.isTrue(Option.isSome(missing));
+      if (Option.isSome(missing)) {
+        assert.strictEqual(missing.value.episodeId, second.id);
+        assert.strictEqual(missing.value.reason, "row-missing");
+      }
+
+      yield* sql`DROP TRIGGER admin_impersonation_chain_no_update`;
+      yield* sql`UPDATE admin_impersonation_chain SET payload = 'forged' WHERE episodeId = ${first.id} AND kind = 'started'`;
+      const ledger = yield* records.verifyChain;
+      assert.isTrue(Option.isSome(ledger));
+      if (Option.isSome(ledger)) {
+        assert.strictEqual(ledger.value.reason, "chain-broken");
+        assert.deepStrictEqual(ledger.value.seq, Option.some(1));
+        assert.strictEqual(ledger.value.episodeId, first.id);
+      }
+    }).pipe(Effect.provide(SqlLayer)),
+  );
+
+  it.effect("a row inserted straight into the table with no ledger link is reported", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const { records } = yield* seedTwo;
+      yield* sql`INSERT INTO admin_impersonation (id, adminUserId, targetUserId, sessionId, reason, startedAt, expiresAt, endedAt, endedBy)
+        VALUES ('smuggled', 'a', 'b', 'session-x', 'r', '1970-01-01T00:00:00.000Z', NULL, NULL, NULL)`;
+      const broken = yield* records.verifyChain;
+      assert.isTrue(Option.isSome(broken));
+      if (Option.isSome(broken)) {
+        assert.strictEqual(broken.value.episodeId, "smuggled");
+        assert.strictEqual(broken.value.reason, "row-unledgered");
+        assert.isTrue(Option.isNone(broken.value.seq));
+      }
+    }).pipe(Effect.provide(SqlLayer)),
+  );
+});

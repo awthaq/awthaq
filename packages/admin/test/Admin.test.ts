@@ -6,7 +6,7 @@
 // `canImpersonate` function (no `Layer.mock` needed — it is a bare config
 // predicate, not a service).
 import { Api } from "@awthaq/api";
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import { AuditChain, AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -65,7 +65,12 @@ const buildLayerWith = (config: Partial<Admin.AdminConfigShape>) =>
     Layer.provide(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
-    Layer.provideMerge(ImpersonationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
+    Layer.provideMerge(
+      ImpersonationRecords.layerMemory.pipe(
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer))),
+      ),
+    ),
   );
 
 const buildLayer = (canImpersonate: Admin.AdminConfigShape["canImpersonate"]) =>
