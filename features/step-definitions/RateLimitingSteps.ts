@@ -54,6 +54,8 @@ import {
   type WorldShape,
 } from "./RateLimitingWorld.ts";
 import { resolvedBeforeSignUp } from "./HooksWorld.ts";
+import { assertTypeGate } from "./FoundationsWorld.ts";
+import { inTwoFactorApp } from "./TwoFactorWorld.ts";
 
 /** `Password.signIn` for an account the scenario signed up: only whether it was refused for rate limiting matters. */
 const signInAttempt = (email: string) =>
@@ -105,6 +107,91 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { host } = yield* World;
       const context = yield* host.context;
       assert.equal(Context.getOption(context, RateLimiter.RateLimiterStore)._tag, "None");
+    },
+  );
+
+  // ---- the second official plugin: TwoFactor reaches the same port (REQ-EA-278/297) ----
+
+  /** One TwoFactor rule as a scenario reads it: `endpoint`, `limit`, `window` (milliseconds). */
+  const describeRule = (rule: RateLimits.RegisteredRule) =>
+    `${rule.endpoint}|${rule.limit}|${Duration.toMillis(Duration.fromInputUnsafe(rule.window))}`;
+
+  Given(
+    "a plugin {string} that needs rate limiting for its {string} endpoint",
+    function* (plugin: string, endpoint: string) {
+      assert.deepEqual([plugin, endpoint], ["two-factor", "verify"]);
+      yield* Effect.void;
+    },
+  );
+
+  When("{string} is composed into an application", function* (_plugin: string) {
+    // The application supplies only the port (the permissive limiter, no store): the composition
+    // then holds what the plugin registered and whatever store it could have reached.
+    const facts = yield* inTwoFactorApp(
+      Effect.gen(function* () {
+        const registry = yield* RateLimits.RateLimitsRegistry;
+        const context = yield* Effect.context<never>();
+        return {
+          rules: (yield* registry.registered).filter((rule) => rule.plugin === "two_factor"),
+          hasStore: Context.getOption(context, RateLimiter.RateLimiterStore)._tag === "Some",
+        };
+      }),
+    );
+    yield* setTexts("twoFactorRules", facts.rules.map(describeRule));
+    yield* setTexts("twoFactorHasStore", [String(facts.hasStore)]);
+  });
+
+  Then(
+    "{string} requires {string} as a port in its Layer's requirements",
+    function* (_plugin: string, port: string) {
+      assert.equal(port, "RateLimiter");
+      yield* Effect.void;
+      assertTypeGate("two-factor-requires-the-rate-limiter-port", "CompileTimeGates.ts", [
+        "TwoFactorNeeds",
+        "RateLimiter.RateLimiter",
+      ]);
+    },
+  );
+
+  Then("{string} does not bundle its own limiter implementation", function* (_plugin: string) {
+    // The application gave it the permissive limiter and no store: there was nothing for the plugin to bundle onto.
+    assert.deepEqual(yield* getTexts("twoFactorHasStore"), ["false"]);
+    assert.ok((yield* getTexts("twoFactorRules")).length > 0, "the plugin registered no rule");
+  });
+
+  Given(
+    "the official {string} plugin's {string} endpoint",
+    function* (plugin: string, endpoint: string) {
+      assert.deepEqual([plugin, endpoint], ["two-factor", "verify"]);
+      yield* Effect.void;
+    },
+  );
+
+  When(
+    "{string} is installed with no application-authored rate-limit configuration",
+    function* (_plugin: string) {
+      const rules = yield* inTwoFactorApp(
+        Effect.flatMap(RateLimits.RateLimitsRegistry, (registry) => registry.registered),
+      );
+      yield* setTexts(
+        "twoFactorRules",
+        rules.filter((rule) => rule.plugin === "two_factor").map(describeRule),
+      );
+    },
+  );
+
+  Then(
+    "{string} is rate limited by rules the plugin itself ships: {int} attempts per {int} minutes per source address, and a per-user failure budget",
+    function* (path: string, limit: number, minutes: number) {
+      assert.equal(path, "/two-factor/verify");
+      const rules = yield* getTexts("twoFactorRules");
+      const verify = rules.filter((rule) => rule.startsWith("verify|"));
+      assert.ok(
+        verify.includes(`verify|${limit}|${minutes * 60_000}`),
+        `no per-source verify rule: ${rules.join(" ")}`,
+      );
+      // ...and the per-user budget beside it: another verify rule, with its own (configured) limit.
+      assert.ok(verify.length >= 2, `no failure budget: ${rules.join(" ")}`);
     },
   );
 

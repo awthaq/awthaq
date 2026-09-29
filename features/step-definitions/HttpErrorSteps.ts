@@ -1,7 +1,10 @@
 // P20a/AH-003 tier 1: 11-http-error-mapping.feature — see `HttpErrorWorld.ts` for the compositions
 // (every one built through `Auth.make` + `TestAuth.layer`).
 import { Api } from "@awthaq/api";
-import { PasswordApi } from "@awthaq/password";
+import { Auth } from "@awthaq/core";
+import { OAuth } from "@awthaq/oauth";
+import { PasswordApi, Password } from "@awthaq/password";
+import { TwoFactor } from "@awthaq/two-factor";
 import { TestAuth } from "@awthaq/test";
 import { defineSteps } from "@effect-cucumber/vitest";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -309,6 +312,45 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* register("merged", passwordInviteApp());
     },
   );
+
+  // REQ-EA-226: the same claim for a composition with two other, newly-added plugins. Static: what
+  // decides whether the handler Layer built before them still serves is the group's service key,
+  // which derives from the group id alone (BEH-EA-082) and so cannot depend on who else is installed.
+  When(
+    "{string} is composed alongside newly-added plugins {string} and {string}",
+    function* (_plugin: string, first: string, second: string) {
+      assert.deepEqual([first, second], ["TwoFactor", "OAuth"]);
+      const built = Auth.make([Password.Password, TwoFactor.TwoFactor, OAuth.OAuth]);
+      const password = Object.values(built.api.groups).find(
+        (group) => group.identifier === "password",
+      );
+      yield* setOutcome("mergedPasswordKey", password?.key);
+      yield* setOutcome("mergedGroupIds", Object.keys(built.api.groups));
+    },
+  );
+
+  Then(
+    "the merged {string} still declares the {string} group under the service key {string}'s own handler Layer provides",
+    function* (_api: string, groupId: string, _plugin: string) {
+      const isolated = yield* groupsOf("isolated");
+      assert.ok(isolated.has(keyOf(groupId)), "the isolated handler Layer provides the group");
+      assert.equal(yield* getOutcome("mergedPasswordKey"), keyOf(groupId));
+    },
+  );
+
+  Then("the newly-added plugins' groups sit beside it without displacing it", function* () {
+    const ids = yield* getOutcome("mergedGroupIds");
+    assert.ok(Array.isArray(ids));
+    assert.ok(ids.includes("password"));
+    assert.ok(
+      ids.some((id) => String(id).startsWith("two")),
+      String(ids),
+    );
+    assert.ok(
+      ids.some((id) => String(id).startsWith("oauth")),
+      String(ids),
+    );
+  });
 
   Then(
     "it already satisfies the service {string} requires for the {string} group",

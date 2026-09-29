@@ -11,7 +11,7 @@ import { HookPoint, RateLimits, Verification } from "@awthaq/core";
 import { TwoFactor } from "@awthaq/two-factor";
 import { OAuthProvider } from "@awthaq/oauth";
 import { Password } from "@awthaq/password";
-import { PasswordHasher } from "@awthaq/ports";
+import { PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthorizedSubject } from "@awthaq/qadi";
 import { PublicEndpoint } from "@qadi/http";
 import * as Duration from "effect/Duration";
@@ -126,6 +126,9 @@ type TwoFactorNeeds = Layer.Services<typeof TwoFactor.TwoFactor.layer>;
 // type-gate: two-factor-requires-the-session-gate
 export const requiresTheSessionGate: Includes<TwoFactorNeeds, TwoFactor.TwoFactorGateInstalled> =
   true;
+
+// type-gate: two-factor-requires-the-rate-limiter-port
+export const requiresTheRateLimiterPort: Includes<TwoFactorNeeds, RateLimiter.RateLimiter> = true;
 
 // type-gate: two-factor-requires-a-reset-guard
 export const requiresAResetGuard: Includes<TwoFactorNeeds, TwoFactor.TwoFactorResetGuard> = true;

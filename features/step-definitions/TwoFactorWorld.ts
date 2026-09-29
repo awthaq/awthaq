@@ -148,6 +148,22 @@ const buildAppLayer = (options: AppOptions) =>
     Layer.provideMerge(Password.config({ signInTimingFloor: "off" })),
   );
 
+/**
+ * Runs `effect` once against a fresh composition, outside any World (a scenario of another feature that
+ * only needs to look at what installing the plugin does): the composition's rate-limit registry and
+ * limiter ride along with the plugin's own services.
+ */
+export const inTwoFactorApp = <A, E>(
+  effect: Effect.Effect<A, E, TwoFactorServices | RateLimits.RateLimitsRegistry>,
+  options: AppOptions = {},
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const context = yield* Layer.build(buildAppLayer(options));
+      return yield* Effect.provide(effect, context);
+    }),
+  );
+
 /** What a step may ask of the running composition. */
 export type TwoFactorServices =
   | Password.Password

@@ -35,14 +35,13 @@ Feature: HTTP Serving and Error Mapping
       Then it already satisfies the service "HttpApiBuilder.layer(auth.api)" requires for the "password" group
       And no additional adaptation of "Password"'s handler Layer is needed
 
-    # @skip: names "TwoFactor", whose package is an empty placeholder until P15 builds it; the same
-    # property is asserted with a shipped-shape plugin by the next scenario | blocked by two-factor plugin.
-    @skip
+    # Composition is static here: `Auth.make` over the three plugin classes, no layer built (TwoFactor and OAuth need their own stores and providers).
     @REQ-EA-226
     Scenario: This holds regardless of which other plugins are installed alongside it
       Given a plugin "Password" whose handlers were authored before any other plugin was chosen
       When "Password" is composed alongside newly-added plugins "TwoFactor" and "OAuth"
-      Then "Password"'s handler Layer continues to satisfy its own group's requirement unchanged
+      Then the merged "AuthApi" still declares the "password" group under the service key "Password"'s own handler Layer provides
+      And the newly-added plugins' groups sit beside it without displacing it
 
     @REQ-EA-690
     Scenario: A plugin's group service is unchanged when another plugin is composed alongside it
