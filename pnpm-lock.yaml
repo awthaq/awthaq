@@ -147,11 +147,11 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
       '@qadi/core':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       '@qadi/http':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -327,11 +327,11 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)
       '@qadi/core':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       '@qadi/http':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.2
@@ -372,8 +372,8 @@ importers:
         specifier: workspace:*
         version: link:../sql
       '@qadi/core':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -496,8 +496,8 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)
       '@qadi/core':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -733,18 +733,15 @@ importers:
       '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@awthaq/client':
-        specifier: workspace:*
-        version: link:../client
-      '@awthaq/core':
-        specifier: workspace:*
-        version: link:../core
       '@awthaq/jwt':
         specifier: workspace:*
         version: link:../jwt
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
+      '@awthaq/web':
+        specifier: workspace:*
+        version: link:../web
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -752,6 +749,9 @@ importers:
         specifier: '>=15.0.0'
         version: 16.3.6(@types/node@22.20.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
     devDependencies:
+      '@awthaq/core':
+        specifier: workspace:*
+        version: link:../core
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
@@ -826,8 +826,8 @@ importers:
         specifier: workspace:*
         version: link:../sql
       '@qadi/core':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -959,11 +959,11 @@ importers:
         specifier: workspace:*
         version: link:../server
       '@qadi/core':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       '@qadi/http':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -1003,11 +1003,11 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)
       '@qadi/core':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       '@qadi/react':
-        specifier: ^0.7.0
-        version: 0.7.0(react@19.3.0)(scheduler@0.27.0)
+        specifier: ^0.8.0
+        version: 0.8.0(react@19.3.0)(scheduler@0.27.0)
       '@testing-library/react':
         specifier: 'catalog:'
         version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -1045,11 +1045,11 @@ importers:
         specifier: workspace:*
         version: link:../qadi
       '@qadi/core':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       '@qadi/http':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -1292,6 +1292,37 @@ importers:
         specifier: 'catalog:'
         version: 5.0.0(@types/node@22.20.2)(@vitest/coverage-v8@5.0.0)(happy-dom@20.14.5)(vite@8.3.0(@types/node@22.20.2)(jiti@2.7.0)(yaml@2.9.0))
 
+  packages/web:
+    dependencies:
+      '@awthaq/api':
+        specifier: workspace:*
+        version: link:../api
+      '@awthaq/client':
+        specifier: workspace:*
+        version: link:../client
+      '@awthaq/core':
+        specifier: workspace:*
+        version: link:../core
+      '@awthaq/server':
+        specifier: workspace:*
+        version: link:../server
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116
+    devDependencies:
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.0(@types/node@22.20.2)(@vitest/coverage-v8@5.0.0)(happy-dom@20.14.5)(vite@8.3.0(@types/node@22.20.2)(jiti@2.7.0)(yaml@2.9.0))
+
   packages/webhooks:
     dependencies:
       '@awthaq/api':
@@ -1307,8 +1338,8 @@ importers:
         specifier: workspace:*
         version: link:../sql
       '@qadi/core':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -2440,16 +2471,16 @@ packages:
     resolution: {integrity: sha512-4EDEmvxWtgsCnnVeBvtFIFZtUhPPt1+bA9JrSwU4Sa//6oKtzCSlGGXYJr44OD9aGISymbieJ4mCKHUygUDU+g==}
     engines: {node: '>=18'}
 
-  '@qadi/core@0.7.0':
-    resolution: {integrity: sha512-lysrlFSJDA1Y+dJMQZZoB1z1jIbhmlHAIypu9db/pTNNddfruApvKYggDcRZ7zwT1qCqSU+EMm5tQLNow0u18g==}
+  '@qadi/core@0.8.0':
+    resolution: {integrity: sha512-BC3Nni1D2oc4TltgIhWDCqZqnaFXJE5o/PurQI6Q5baTD6OnNt1TOY9ChZRzPbxKlpeSZ5jVwsAGRrl5LbFczw==}
     engines: {node: '>=22.12.0'}
 
-  '@qadi/http@0.7.0':
-    resolution: {integrity: sha512-KIwWrpD5tn/0Ew8wfCvqXwthq5SkoW4FTB0jzM8Ze2yReZUjBj2KhG7pJ/NEgg9Wxz5JH8SDUpduh1wuy3Ow6g==}
+  '@qadi/http@0.8.0':
+    resolution: {integrity: sha512-HV0RCbS37dVK9/WLUwaI7Fvj++WuYzeaCj93OWuzd/BfPhrRGGtSetwSkZbcN320gJj4hCI7g/YQngLykU2F4w==}
     engines: {node: '>=22.12.0'}
 
-  '@qadi/react@0.7.0':
-    resolution: {integrity: sha512-Pyi+4CjpATg5Nxrm7ahA+VyEr/9QxVUPlDHnqeqHHKNb8OUULI1FHPgcgt1xKqpjalDFXTiZ3cm5qWabjn64aA==}
+  '@qadi/react@0.8.0':
+    resolution: {integrity: sha512-YbJQe20sAKQafcvTqhRKFEVw76GWfk7Bg92MADwW9Wvuc2TxJJVTYrWf7s2Idi0G7IQFRKYzrdQD7CtxDEgpzA==}
     engines: {node: '>=22.12.0'}
     peerDependencies:
       react: '>=19.2.4'
@@ -4983,19 +5014,19 @@ snapshots:
     dependencies:
       tinyexec: 1.3.1
 
-  '@qadi/core@0.7.0':
+  '@qadi/core@0.8.0':
     dependencies:
       effect: 4.0.0-rc.116
 
-  '@qadi/http@0.7.0':
+  '@qadi/http@0.8.0':
     dependencies:
-      '@qadi/core': 0.7.0
+      '@qadi/core': 0.8.0
       effect: 4.0.0-rc.116
 
-  '@qadi/react@0.7.0(react@19.3.0)(scheduler@0.27.0)':
+  '@qadi/react@0.8.0(react@19.3.0)(scheduler@0.27.0)':
     dependencies:
       '@effect/atom-react': 4.0.0-rc.116(effect@4.0.0-rc.116)(react@19.3.0)(scheduler@0.27.0)
-      '@qadi/core': 0.7.0
+      '@qadi/core': 0.8.0
       effect: 4.0.0-rc.116
       react: 19.3.0
       scheduler: 0.27.0

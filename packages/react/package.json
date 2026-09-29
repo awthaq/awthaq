@@ -32,8 +32,8 @@
   "devDependencies": {
     "@effect/atom-react": "catalog:",
     "@effect/vitest": "catalog:",
-    "@qadi/core": "^0.7.0",
-    "@qadi/react": "^0.7.0",
+    "@qadi/core": "^0.8.0",
+    "@qadi/react": "^0.8.0",
     "@testing-library/react": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
@@ -45,8 +45,8 @@
   },
   "peerDependencies": {
     "@effect/atom-react": "catalog:",
-    "@qadi/core": "^0.7.0",
-    "@qadi/react": "^0.7.0",
+    "@qadi/core": "^0.8.0",
+    "@qadi/react": "^0.8.0",
     "react": ">=19.3.0"
   },
   "engines": {

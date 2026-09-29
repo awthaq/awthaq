@@ -3,7 +3,7 @@ ID: "CTA-007"
 Title: "Absence of the entire domain is documented honestly in every artifact"
 Level: info
 Category: "docs"
-Status: needs-triage
+Status: wontfix
 Package: "cli"
 Source: "packages/cli/README.md:3"
 Auditor: "cli-tool-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `docs` · `cli` · reported by **CLI Tool Auth Specialist** (`cli-tool-auth-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Keep this discipline as the domain is built: when login lands, update the README
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `cli-manifest-tooling`. Evidence at HEAD ec065a7: `packages/cli/README.md:3`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
+
+**Wontfix (2026-09-29):** A positive observation: the domain's absence was documented honestly at audit time. It has since been built (`@awthaq/cli`, the device-authorization plugin is in flight from a separate workstream), so the artifacts are being updated with the code rather than carrying the old disclaimers. Nothing to change here.

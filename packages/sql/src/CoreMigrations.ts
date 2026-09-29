@@ -635,4 +635,21 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
+  // RRS-005: the previous secret's hash and its expiry — the bounded rotation grace window
+  // (`SessionConfig.rotationGrace`). Both NULL for every existing row (no grace in flight).
+  migration(29, "add_sessions_rotation_grace_columns", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`ALTER TABLE sessions ADD COLUMN "previousSecretHash" TEXT`.pipe(
+          Effect.andThen(
+            sql`ALTER TABLE sessions ADD COLUMN "previousSecretExpiresAt" TIMESTAMPTZ`,
+          ),
+        ),
+      sqlite: () =>
+        sql`ALTER TABLE sessions ADD COLUMN previousSecretHash TEXT`.pipe(
+          Effect.andThen(sql`ALTER TABLE sessions ADD COLUMN previousSecretExpiresAt TEXT`),
+        ),
+      orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
 ]);

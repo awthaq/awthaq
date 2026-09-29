@@ -51,6 +51,6 @@ minimumReleaseAgeExclude:
   - "@effect/vitest@4.0.0-rc.116"
   - effect@4.0.0-rc.116
   - "@effect/atom-react@4.0.0-rc.116"
-  - "@qadi/core@0.7.0"
-  - "@qadi/http@0.7.0"
-  - "@qadi/react@0.7.0"
+  - "@qadi/core@0.8.0"
+  - "@qadi/http@0.8.0"
+  - "@qadi/react@0.8.0"

@@ -3,7 +3,7 @@ ID: "SOS-007"
 Title: "Rate-limit key strategies have no recipient/E.164 notion; SMS pumping protection would lean entirely on the warned-about escape hatch"
 Level: low
 Category: "security"
-Status: needs-triage
+Status: resolved
 Package: "core"
 Source: "packages/core/src/RateLimits.ts:57"
 Auditor: "sms-otp-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `core` · reported by **SMS OTP Specialist** (`sms-otp-specialist`)
 
-Status: **needs-triage**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ When the SMS plugin lands, ship it with a mandatory rule pair from day one: per-
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence medium); workstream `verification-otp-substrate`. Evidence at HEAD ec065a7: `packages/core/src/RateLimits.ts:57`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/01-core-sessions-users.md`.
+
+**Resolved (2026-09-29):** Added `RateLimits.phoneKey(read, options?)` in core: a `RateLimitKey` function strategy whose bucket is `phone:<E.164>` after `Phone.normalizePhone` (spellings of one number share a budget; non-phone input goes to one shared `phone:invalid` bucket, never unthrottled), so an SMS-sending endpoint registers a per-recipient rule beside `"ip"` and `"principal"` rules (the toll-fraud defence is those simultaneous caps; documented on the function). Tests: RateLimitKeys.test.ts 'RateLimits.phoneKey (SOS-007)' incl. enforcement through `enforceRule`. The mandatory rule pair itself belongs to the future SMS plugin.

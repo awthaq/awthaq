@@ -74,9 +74,9 @@ let failed = false;
 // emitted `.js` is rewritten to `.js`). That is deliberate and works, because TypeScript maps a
 // `.ts` specifier inside a declaration file to its `.d.ts` sibling; this guard keeps it true for
 // a consumer that is strict about it: a `nodenext` program with `skipLibCheck` off must not hit a
-// *module-resolution* error anywhere in any package's declaration graph. (Other declaration
-// diagnostics are out of scope here: a tsgo emit gap for `Model.Class` generics in
-// `@awthaq/sql`'s Models.d.ts is tracked on its own.)
+// *module-resolution* error anywhere in any package's declaration graph, nor any type error inside
+// a package's own emitted `.d.ts` (PV-380: `@awthaq/sql`'s Models.d.ts once referenced unresolved
+// names, invisible under this repo's own `skipLibCheck: true`).
 const consumerResolutionProblems = () => {
   const dir = mkdtempSync(path.join(tmpdir(), "awthaq-consumer-"));
   try {
@@ -105,7 +105,11 @@ const consumerResolutionProblems = () => {
           noEmit: true,
           jsx: "react-jsx",
           lib: ["esnext", "dom"],
-          types: [],
+          // A server library's declarations may name Node's own types (`@awthaq/jwt`'s
+          // `node:crypto` webcrypto params): the consumer is a Node/Bun/Deno program that
+          // has platform types installed, so the guard gives it `@types/node` and nothing else.
+          typeRoots: [path.join(rootDir, "node_modules", "@types")],
+          types: ["node"],
         },
         files: ["index.ts"],
       }),
@@ -119,10 +123,16 @@ const consumerResolutionProblems = () => {
     } catch (error) {
       output = error && typeof error === "object" && "stdout" in error ? String(error.stdout) : "";
     }
-    // 2307/2792 cannot find module, 2691/5097 a `.ts` extension is refused, 7016 no declaration.
+    // Every diagnostic in a package's own emitted declarations (PV-380), plus module-resolution
+    // errors anywhere (2307/2792 cannot find module, 2691/5097 a `.ts` extension is refused,
+    // 7016 no declaration). Errors inside third-party declarations are not this repo's to fix.
     return output
       .split("\n")
-      .filter((line) => /error TS(2307|2792|2691|5097|7016):/.test(line))
+      .filter(
+        (line) =>
+          /error TS(2307|2792|2691|5097|7016):/.test(line) ||
+          /^packages\/[^/]+\/lib\/.*error TS\d+:/.test(line.replaceAll(`${rootDir}/`, "")),
+      )
       .map((line) => line.replaceAll(rootDir, "."));
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -132,11 +142,15 @@ const consumerResolutionProblems = () => {
 {
   const resolutionProblems = consumerResolutionProblems();
   if (resolutionProblems.length > 0) {
-    console.error("package:smoke: FAIL nodenext consumer (skipLibCheck off) cannot resolve:");
+    console.error(
+      "package:smoke: FAIL nodenext consumer (skipLibCheck off) reports declaration errors:",
+    );
     for (const line of resolutionProblems) console.error(`  - ${line}`);
     failed = true;
   } else {
-    console.log("package:smoke: PASS nodenext consumer resolves every package's declarations");
+    console.log(
+      "package:smoke: PASS nodenext consumer (skipLibCheck off) type-checks every package's declarations",
+    );
   }
 }
 

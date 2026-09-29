@@ -3,7 +3,7 @@ ID: "AGA-006"
 Title: "No trusted-header identity seam exists — correctly so for this architecture"
 Level: info
 Category: "architecture"
-Status: needs-triage
+Status: wontfix
 Package: "server"
 Source: "packages/server/src/Authentication.ts:283"
 Auditor: "api-gateway-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `server` · reported by **API Gateway Auth Specialist** (`api-gateway-auth-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Keep the seam closed. If gateway forwarding is ever added, require a signed, aud
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `none`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:299`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/06-server-api.md`.
+
+**Wontfix (2026-09-29):** A positive observation the auditor themselves called correct: identity is only ever derived from a verified credential (`Sessions.verify` -> `Principal`), never from a forwarded header, and authorization stays in qadi. Adding a trusted-header seam would be a spoofing surface for any caller that can reach a backend directly, so it is deliberately not built. A team that wants gateway-terminated auth today verifies the bearer/JWT at the gateway (`@awthaq/jwt` publishes a JWKS) and forwards the verified token, or builds a signed internal-context scheme in its own middleware; a documented topology guide is a docs task, not a library seam.

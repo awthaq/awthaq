@@ -3,7 +3,7 @@ ID: "PIL-008"
 Title: "Admin impersonation semantics encoded in core's session model"
 Level: info
 Category: "architecture"
-Status: needs-triage
+Status: wontfix
 Package: "core"
 Source: "packages/core/src/Sessions.ts:81"
 Auditor: "pilcrow"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `core` · reported by **pilcrow (pilcrowOnPaper) — Creator of Lucia Auth** (`pilcrow`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Acceptable as-is; if a second consumer never materializes, consider pushing the 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `session-policy`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:81`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/01-core-sessions-users.md`.
+
+**Wontfix (2026-09-29):** A deliberate, documented design the auditor themselves noted rather than condemned: two nullable columns (`actingAsType`/`actingAsId`) and one early return in `verify` (a session carrying `actingAs` never idle-refreshes, hard expiry), with the cap on duration supplied by the producer (`issue`'s `absoluteDuration`). The field is generic (`{ type, id }`), `Sessions.issue` now also refuses a self-acting session (IDS-008), and moving impersonation semantics out of core would require the verify path to consult a plugin on every request. Kept in core on purpose; a deployment that does not use impersonation pays two nullable columns.

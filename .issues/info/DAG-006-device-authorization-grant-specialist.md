@@ -3,7 +3,7 @@ ID: "DAG-006"
 Title: "Session-issuance integration point is well-prepared for a future device flow"
 Level: info
 Category: "architecture"
-Status: needs-triage
+Status: wontfix
 Package: "—"
 Source: "spec/models/13-device-authorization.md:44"
 Auditor: "device-authorization-grant-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `—` · reported by **Device Authorization Grant Specialist** (`device-authorization-grant-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Preserve this when implementing: the /device/token poll must call Sessions.issue
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `device-authorization-design`. Evidence at HEAD ec065a7: `spec/models/13-device-authorization.md:44`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/12-spec.md`.
+
+**Wontfix (2026-09-29):** A positive observation, not a defect: device-authorization approval mints an ordinary session through `Sessions.issue` (with request ip/userAgent), which is exactly the integration point the auditor liked. The device-authorization plugin itself is being built by a separate workstream this round, so this stays an observation; its own issues track the work.

@@ -189,8 +189,9 @@ describe("CsrfProtection", () => {
   it.effect("MNA-008: an empty Authorization header grants no exemption", () =>
     Effect.gen(function* () {
       const client = yield* HttpApiTest.groups(TestApi, ["protected"]);
+      // With a cookie present: the exemption below (no Cookie header at all) does not apply.
       const failure = yield* client.protected
-        .write({ headers: { authorization: "   " } })
+        .write({ headers: { authorization: "   ", cookie: "__Host-session=abc.def" } })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "CsrfRejected");
     }).pipe(Effect.provide(TestLayer)),
@@ -204,6 +205,98 @@ describe("CsrfProtection", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "CsrfRejected");
     }).pipe(Effect.provide(TestLayer)),
+  );
+});
+
+// Native first sign-in (BEH-EA-077, cookie-less exemption): CSRF defends ambient browser credentials,
+// and a request with no `Cookie` header at all carries none, so the double-submit pair is not
+// demanded of it; the site checks still run, and a stricter form of them guards the login-CSRF case.
+describe("Csrf cookie-less requests (native first sign-in)", () => {
+  const layerWith = (extra: { readonly requireTokenWithoutCookies?: boolean }) =>
+    GroupLayer.pipe(
+      Layer.provideMerge(Csrf.CsrfProtectionLive),
+      Layer.provideMerge(CsrfClientPassthrough),
+      Layer.provide(
+        Layer.succeed(Csrf.CsrfConfig, {
+          secret: Redacted.make(secret),
+          allowedOrigins: ["https://example.com"],
+          ...extra,
+        }),
+      ),
+      Layer.provide(NodeCrypto.layer),
+      Layer.provideMerge(TestServices),
+    );
+
+  const post = (headers: Record<string, string>, layer: ReturnType<typeof layerWith> = TestLayer) =>
+    Effect.gen(function* () {
+      const client = yield* HttpApiTest.groups(TestApi, ["protected"]);
+      return yield* client.protected.write({ headers }).pipe(Effect.result);
+    }).pipe(Effect.provide(layer));
+
+  const assertAllowed = (headers: Record<string, string>) =>
+    Effect.gen(function* () {
+      const result = yield* post(headers);
+      assert.isTrue(result._tag === "Success", "expected the request to pass CsrfProtection");
+    });
+
+  const assertRejected = (
+    headers: Record<string, string>,
+    layer: ReturnType<typeof layerWith> = TestLayer,
+  ) =>
+    Effect.gen(function* () {
+      const result = yield* post(headers, layer);
+      assert.isTrue(result._tag === "Failure" && result.failure._tag === "CsrfRejected");
+    });
+
+  it.effect("a native client's first sign-in (no cookies, no site headers) needs no token", () =>
+    assertAllowed({}),
+  );
+
+  it.effect("a browser's same-origin cookie-less POST (first visit) needs no token", () =>
+    Effect.gen(function* () {
+      yield* assertAllowed({ "sec-fetch-site": "same-origin" });
+      yield* assertAllowed({ "sec-fetch-site": "none" });
+      yield* assertAllowed({ origin: "https://example.com" });
+    }),
+  );
+
+  it.effect("login CSRF: a cross-site or foreign-Origin cookie-less POST is still rejected", () =>
+    Effect.gen(function* () {
+      yield* assertRejected({ "sec-fetch-site": "cross-site" });
+      yield* assertRejected({ origin: "https://evil.example" });
+      yield* assertRejected({ origin: "null" });
+    }),
+  );
+
+  it.effect(
+    "a same-site sibling (Sec-Fetch-Site: same-site) is refused unless its Origin is allowed",
+    () =>
+      Effect.gen(function* () {
+        yield* assertRejected({ "sec-fetch-site": "same-site" });
+        yield* assertRejected({
+          "sec-fetch-site": "same-site",
+          origin: "https://evil.example.com",
+        });
+        yield* assertAllowed({ "sec-fetch-site": "same-site", origin: "https://example.com" });
+      }),
+  );
+
+  it.effect("a browser with a stale session cookie still needs the double-submit pair", () =>
+    Effect.gen(function* () {
+      yield* assertRejected({
+        cookie: "__Host-session=stale.secret",
+        "sec-fetch-site": "same-origin",
+      });
+      // Any cookie at all means ambient credentials may be attached: not only the session cookie.
+      yield* assertRejected({ cookie: "_ga=GA1.2.3", "sec-fetch-site": "same-origin" });
+      yield* assertRejected({ cookie: `${Api.CSRF_COOKIE_NAME}=not-a-valid-token` });
+    }),
+  );
+
+  it.effect("a blank Cookie header is no cookies", () => assertAllowed({ cookie: "   " }));
+
+  it.effect("requireTokenWithoutCookies: true restores the pair for cookie-less requests too", () =>
+    assertRejected({}, layerWith({ requireTokenWithoutCookies: true })),
   );
 });
 

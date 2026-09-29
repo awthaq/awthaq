@@ -1254,6 +1254,9 @@ export interface SessionsRepositoryShape {
     readonly id: SessionId;
     readonly expectedSecretHash: string;
     readonly secretHash: string;
+    /** RRS-005: the replaced hash, kept until `previousSecretExpiresAt`; absent/`null` clears any earlier grace. */
+    readonly previousSecretHash?: string | null | undefined;
+    readonly previousSecretExpiresAt?: DateTime.Utc | null | undefined;
     readonly lastActiveAt: DateTime.Utc;
     readonly idleExpiresAt: DateTime.Utc;
   }) => Effect.Effect<Option.Option<Session>, RepositoryError>;
@@ -1520,6 +1523,8 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
         id: SessionId,
         expectedSecretHash: Schema.String,
         secretHash: Schema.String,
+        previousSecretHash: Schema.NullOr(Schema.String),
+        previousSecretExpiresAt: models.wire.nullableDateTime,
         lastActiveAt: models.wire.dateTime,
         idleExpiresAt: models.wire.dateTime,
       }),
@@ -1533,6 +1538,8 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
       execute: (request) => sql`
           UPDATE sessions
           SET "secretHash" = ${request.secretHash},
+              "previousSecretHash" = ${request.previousSecretHash},
+              "previousSecretExpiresAt" = ${request.previousSecretExpiresAt},
               "lastActiveAt" = ${request.lastActiveAt},
               "idleExpiresAt" = ${request.idleExpiresAt}
           WHERE "id" = ${request.id}
@@ -1542,7 +1549,11 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
     });
 
     const touch: SessionsRepositoryShape["touch"] = (input) =>
-      touchQuery(input).pipe(
+      touchQuery({
+        ...input,
+        previousSecretHash: input.previousSecretHash ?? null,
+        previousSecretExpiresAt: input.previousSecretExpiresAt ?? null,
+      }).pipe(
         Effect.flatMap(
           Option.match({
             onNone: () => Effect.succeedNone,

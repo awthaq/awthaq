@@ -78,7 +78,9 @@ const Migrated = Layer.effectDiscard(
         supersededAt TEXT,
         reusedAt TEXT,
         amr TEXT NOT NULL DEFAULT '[]',
-        tenantId TEXT
+        tenantId TEXT,
+        previousSecretHash TEXT,
+        previousSecretExpiresAt TEXT
       )
     `;
   }),
@@ -384,7 +386,7 @@ const suite = (
     );
 
     it.effect(
-      "upstream-hardening ticket 01: the same throttled touch rotates the secret, invalidating the old token immediately",
+      "upstream-hardening ticket 01: the same throttled touch rotates the secret; the old token survives only as the grace-window previous",
       () =>
         Effect.gen(function* () {
           const sessions = yield* Sessions.Sessions;
@@ -399,9 +401,11 @@ const suite = (
           const touched = yield* sessions.verify(token);
           assert.isTrue(Option.isSome(touched.rotated));
 
-          // The old token no longer verifies — no grace window.
-          const oldFails = yield* sessions.verify(token).pipe(Effect.flip);
-          assert.strictEqual(oldFails._tag, "Sessions/NotFound");
+          // RRS-005: the replaced secret is only the grace-window previous — presenting it
+          // re-rotates and hands back a fresh secret (immediate invalidation is
+          // `rotationGrace: 0`, and expiry of the window is covered by the grace suite).
+          const recovered = yield* sessions.verify(token);
+          assert.isTrue(Option.isSome(recovered.rotated));
 
           // The freshly-rotated token verifies and resolves the same session.
           const rotatedToken = Option.getOrThrow(touched.rotated);
@@ -1102,8 +1106,10 @@ const eventsSuite = (
               },
             ),
           );
+          // RRS-005: a concurrent request that read after the winner's write is a grace-window
+          // recovery (`viaGrace`), not a second primary rotation: exactly one rotation is not.
           assert.strictEqual(
-            seen.filter((event) => event._tag === "auth.session.rotated").length,
+            seen.filter((event) => event._tag === "auth.session.rotated" && !event.viaGrace).length,
             1,
           );
           const rotated = seen.find((event) => event._tag === "auth.session.rotated");
@@ -1306,6 +1312,218 @@ eventsSuite("Sessions lifecycle events (layerSql)", SqlLayerWithEvents);
 
 reuseSuite("Sessions reuse detection (layerMemory)", MemoryLayerWithEvents);
 reuseSuite("Sessions reuse detection (layerSql)", SqlLayerWithEvents);
+
+// RRS-005/RRC-006: a bounded rotation grace window. The throttled touch moves the outgoing secret's
+// hash aside for `rotationGrace`; presenting it inside that window is accepted (and re-delivers a
+// fresh secret), after it the secret is dead — and reuse detection (RRS-003, the `supersedes` path)
+// is neither weakened nor triggered by it.
+const graceConfig = (rotationGrace?: Duration.Duration) =>
+  Layer.succeed(Sessions.SessionConfig, {
+    absolute: Duration.days(30),
+    idle: Duration.days(7),
+    touchEvery: Duration.hours(1),
+    ...(rotationGrace === undefined ? {} : { rotationGrace }),
+  });
+
+const graceMemoryLayer = (rotationGrace?: Duration.Duration) =>
+  Sessions.layerMemory.pipe(
+    Layer.provide(Layer.mergeAll(NodeCrypto.layer, graceConfig(rotationGrace))),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+  );
+
+const graceSqlLayer = (rotationGrace?: Duration.Duration) =>
+  Sessions.layerSql.pipe(
+    Layer.provide(Repositories.SessionsRepositoryLive),
+    Layer.provide(Layer.mergeAll(NodeCrypto.layer, graceConfig(rotationGrace))),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
+
+const graceSuite = (
+  name: string,
+  layerFor: (
+    rotationGrace?: Duration.Duration,
+  ) => Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
+): void => {
+  const collecting = <A, E>(body: Effect.Effect<A, E, Sessions.Sessions>) =>
+    Effect.gen(function* () {
+      const events = yield* AuthEvents.AuthEvents;
+      const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+      yield* Effect.forkChild(
+        events.stream.pipe(
+          Stream.filter((event) => event._tag.startsWith("auth.session.")),
+          Stream.runForEach((event) =>
+            Ref.update(seen, (all) => [...all, AuthEvents.payloadOf(event)]),
+          ),
+        ),
+        { startImmediately: true },
+      );
+      yield* body;
+      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+      return yield* Ref.get(seen);
+    });
+
+  describe(name, () => {
+    it.effect(
+      "RRS-005: a rotation whose response was lost is recoverable — the previous secret verifies inside the grace window and delivers a fresh one",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(1));
+          const first = yield* sessions.verify(token);
+          assert.isTrue(Option.isSome(first.rotated));
+          // The client never saw `first.rotated`; it retries the secret it still holds.
+          yield* TestClock.adjust(Duration.seconds(5));
+          const retry = yield* sessions.verify(token);
+          assert.strictEqual(retry.session.id, first.session.id);
+          const recovered = Option.getOrThrow(retry.rotated);
+          assert.notStrictEqual(Redacted.value(recovered), Redacted.value(token));
+          // The token the retry was handed is the durable credential from here on.
+          yield* TestClock.adjust(Duration.minutes(5));
+          const { rotated } = yield* sessions.verify(recovered);
+          assert.isTrue(Option.isNone(rotated));
+        }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect("RRS-005: the previous secret is dead once the grace window has passed", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(1));
+        const first = yield* sessions.verify(token);
+        const current = Option.getOrThrow(first.rotated);
+        yield* TestClock.adjust(Duration.seconds(31));
+        const failure = yield* sessions.verify(token).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+        // Expiry of the window is not a theft signal: the session itself is untouched.
+        const { session } = yield* sessions.verify(current);
+        assert.strictEqual(session.id, first.session.id);
+      }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect("RRS-005: rotationGrace of zero restores immediate invalidation", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(1));
+        yield* sessions.verify(token);
+        const failure = yield* sessions.verify(token).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+      }).pipe(Effect.provide(layerFor(Duration.zero))),
+    );
+
+    it.effect("RRS-005: a configured window is honoured, not a fixed 30 seconds", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(1));
+        yield* sessions.verify(token);
+        yield* TestClock.adjust(Duration.minutes(4));
+        yield* sessions.verify(token);
+        yield* TestClock.adjust(Duration.minutes(2));
+        const failure = yield* sessions.verify(token).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+      }).pipe(Effect.provide(layerFor(Duration.minutes(5)))),
+    );
+
+    it.effect("RRS-005: a previous secret is only ever valid for its own session", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const b = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(1));
+        yield* sessions.verify(a.token);
+        yield* sessions.verify(b.token);
+        const aSecret = Redacted.value(a.token).slice(Redacted.value(a.token).indexOf(".") + 1);
+        const crossed = yield* sessions
+          .verify(Redacted.make(`${b.session.id}.${aSecret}`))
+          .pipe(Effect.flip);
+        assert.strictEqual(crossed._tag, "Sessions/NotFound");
+      }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect(
+      "RRS-005/RRS-003: presenting a previous secret in the window never revokes the family or publishes auth.session.reuse — even for a session since superseded",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(1));
+          yield* sessions.verify(a.token);
+          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
+          const seen = yield* collecting(
+            sessions.verify(a.token).pipe(
+              Effect.flip,
+              Effect.tap((failure) =>
+                Effect.sync(() => assert.strictEqual(failure._tag, "Sessions/NotFound")),
+              ),
+            ),
+          );
+          assert.isUndefined(seen.find((event) => event._tag === "auth.session.reuse"));
+          assert.isUndefined(seen.find((event) => event._tag === "auth.session.revoked"));
+          const { session } = yield* sessions.verify(b.token);
+          assert.strictEqual(session.id, b.session.id);
+        }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect(
+      "RRS-003: reuse detection still fires for a tombstoned row's current secret with a grace window configured",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
+          const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.flip));
+          assert.isDefined(seen.find((event) => event._tag === "auth.session.reuse"));
+          const failure = yield* sessions.verify(b.token).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
+        }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect(
+      "RRC-006: every concurrent caller of a rotation keeps a token that still verifies",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(1));
+          const outcomes = yield* Effect.all([sessions.verify(token), sessions.verify(token)], {
+            concurrency: 2,
+          });
+          // Whatever each concurrent caller ended up holding — its own rotated token, or the
+          // token it presented when it lost the compare-and-swap — still verifies.
+          for (const outcome of outcomes) {
+            const held = Option.getOrElse(outcome.rotated, () => token);
+            const { session } = yield* sessions.verify(held);
+            assert.strictEqual(session.id, outcome.session.id);
+          }
+        }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect(
+      "RRS-005: a grace-window rotation is announced as auth.session.rotated with viaGrace",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(1));
+          yield* sessions.verify(token);
+          const seen = yield* collecting(sessions.verify(token));
+          const rotated = seen.filter((event) => event._tag === "auth.session.rotated");
+          assert.strictEqual(rotated.length, 1);
+          const [event] = rotated;
+          if (event?._tag === "auth.session.rotated") assert.strictEqual(event.viaGrace, true);
+        }).pipe(Effect.provide(layerFor())),
+    );
+  });
+};
+
+graceSuite("Sessions rotation grace (layerMemory)", graceMemoryLayer);
+graceSuite("Sessions rotation grace (layerSql)", graceSqlLayer);
 
 describe("Sessions", () => {
   it("BEH-EA-055: the default session cookie name is fixed", () => {

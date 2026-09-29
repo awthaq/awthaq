@@ -22,7 +22,7 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { makeServerActionClient, serverActionClient } from "../src/ServerActionClient.ts";
+import { inProcessClient, makeInProcessClient } from "../src/InProcessClient.ts";
 
 // CSRF secrets must be at least 32 bytes (the layer dies at build otherwise).
 const secret = "test-csrf-secret-0123456789-0123456789";
@@ -103,13 +103,13 @@ const recordingJar = () => {
   return { calls, set: (name: string, value: string) => calls.push({ name, value }) };
 };
 
-describe("serverActionClient (BO-002/NSA-008)", () => {
+describe("inProcessClient (BO-002/NSA-008)", () => {
   it("signIn through the in-process client writes the session cookie into the jar", async () => {
     const { handler, dispose } = HttpRouter.toWebHandler(AppLayer);
     try {
       const csrf = validCsrfCookie();
       const jar = recordingJar();
-      const client = await serverActionClient(TestApi, {
+      const client = await inProcessClient(TestApi, {
         handler,
         headers: actionHeaders({ cookie: `${Api.CSRF_COOKIE_NAME}=${csrf}` }),
         jar,
@@ -127,7 +127,7 @@ describe("serverActionClient (BO-002/NSA-008)", () => {
     const { handler, dispose } = HttpRouter.toWebHandler(AppLayer);
     try {
       const jar = recordingJar();
-      const client = await serverActionClient(TestApi, {
+      const client = await inProcessClient(TestApi, {
         handler,
         headers: actionHeaders({}),
         jar,
@@ -145,7 +145,7 @@ describe("serverActionClient (BO-002/NSA-008)", () => {
     const { handler, dispose } = HttpRouter.toWebHandler(AppLayer);
     try {
       const csrf = validCsrfCookie();
-      const client = await serverActionClient(TestApi, {
+      const client = await inProcessClient(TestApi, {
         handler,
         headers: actionHeaders({
           cookie: `theme=dark; ${Api.CSRF_COOKIE_NAME}=${csrf}`,
@@ -165,7 +165,7 @@ describe("serverActionClient (BO-002/NSA-008)", () => {
   });
 
   it("result mode resolves a typed CsrfRejected when the handler keeps rejecting, instead of throwing", async () => {
-    const client = await serverActionClient(TestApi, {
+    const client = await inProcessClient(TestApi, {
       handler: async () =>
         new Response(JSON.stringify({ _tag: "CsrfRejected" }), {
           status: 403,
@@ -180,13 +180,13 @@ describe("serverActionClient (BO-002/NSA-008)", () => {
     assert.strictEqual(Result.isFailure(result) ? result.failure._tag : undefined, "CsrfRejected");
   });
 
-  it("makeServerActionClient is the same client as an Effect", async () => {
+  it("makeInProcessClient is the same client as an Effect", async () => {
     const { handler, dispose } = HttpRouter.toWebHandler(AppLayer);
     try {
       const csrf = validCsrfCookie();
       const result = await Effect.runPromise(
         Effect.gen(function* () {
-          const client = yield* makeServerActionClient(TestApi, {
+          const client = yield* makeInProcessClient(TestApi, {
             handler,
             headers: actionHeaders({ cookie: `${Api.CSRF_COOKIE_NAME}=${csrf}` }),
             jar: recordingJar(),

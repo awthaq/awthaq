@@ -3,7 +3,7 @@ ID: "MW-007"
 Title: "Users port requires a full 7-method shape — no partial-adapter path for immutable/legacy stores"
 Level: medium
 Category: "api"
-Status: needs-triage
+Status: wontfix
 Package: "core"
 Source: "packages/core/src/Users.ts:56"
 Auditor: "matias-woloski"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `core` · reported by **Matias Woloski — Co-founder/former CTO of Auth0** (`matias-woloski`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Split UsersShape into read capabilities (findById/findByEmail, required) and wri
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence medium); workstream `user-import-idempotency`. Evidence at HEAD ec065a7: `packages/core/src/Users.ts:87`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/01-core-sessions-users.md`.
+
+**Wontfix (2026-09-29):** Deliberately not built: a partial-adapter path would need either a new 'unsupported operation' member in the error channel of every `UsersShape` method (a breaking change for every consumer) or compile-time capability gating threaded through the layer requirements of every plugin that touches users (Password, OAuth, Passkey, Admin, SCIM, ...), for which there is no consumer today. The project's adoption path for an existing identity store is migration with bridges (`LegacyPasswordVerifiers` + `@awthaq/migrate-auth0`, `LegacySessionBridge` + `@awthaq/migrate-better-auth`, `Users.createOrGet`/import), not a live read-only legacy user table. What a user does instead: `Users` is a plain `Context.Service`, so a read-only or legacy store provides its own layer implementing `findById`/`findByEmail` (the shape `layerMemory` proves) and answers the write operations it cannot support with `Effect.die` (a wiring defect) or its own translation; revisit with a concrete live-legacy-store integration.

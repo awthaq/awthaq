@@ -3,7 +3,7 @@ ID: "RRC-006"
 Title: "CAS touch loser returns a session view the presented token can no longer verify"
 Level: medium
 Category: "correctness"
-Status: needs-triage
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:544"
 Auditor: "read-replica-consistency-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Read Replica Consistency Specialist** (`read-replica-consistency-specialist`)
 
-Status: **needs-triage**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ On CAS loss, let the loser retry the rotation once from the current row's hash (
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** INVALID (confidence medium); workstream `read-replica-routing`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:838`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/01-core-sessions-users.md`.
+
+**Resolved (2026-09-29):** Resolved by RRS-005's grace window rather than a loser re-rotation (which would race two Set-Cookies): the loser of a concurrent throttled touch (or any request that read just after the winner's write) now holds a token that still verifies for `SessionConfig.rotationGrace` and, when it presents the previous secret, is handed a fresh one. Test: Sessions.test.ts 'RRC-006: every concurrent caller of a rotation keeps a token that still verifies' (both layers). The loser's own `rotated: none` behaviour is unchanged (single primary rotation, RRS-008).

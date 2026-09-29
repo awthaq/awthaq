@@ -3,7 +3,7 @@ ID: "BAM-011"
 Title: "Account linking is at parity and the identity anchor is stricter than better-auth's"
 Level: info
 Category: "architecture"
-Status: needs-triage
+Status: wontfix
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:50"
 Auditor: "better-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `oauth` · reported by **better-auth Migration Specialist** (`better-auth-migration-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -55,3 +55,5 @@ No action for parity; use this table as the template for the import command's ac
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `oauth-account-linking-policy`. Evidence at HEAD ec065a7: `packages/sql/src/CoreMigrations.ts:93`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/03-oauth-flow.md`.
+
+**Wontfix (2026-09-29):** A positive finding (account linking at parity, identity anchor stricter than better-auth's), no defect. Nothing to change.

@@ -101,19 +101,23 @@ _Previous: [BEH-EA-155](20-qadi-bridge-path-b.md#beh-ea-155-publicendpoint-is-th
 ## BEH-EA-157: Status mapping is qadi's, not awthaq's
 
 ```text
-AccessDenied, UndischargedObligation → 403
-resolver outage → 502
-wiring mistake (missing annotation) → 500
+AccessDenied → 403 (qadi's public denial view, never the trace)
+UndischargedObligation → 403 (tag only)
+resolver outage → 502 (tag plus at most one identifying attribute, never the cause)
+wiring mistake (missing annotation) → 500 (empty body)
 ```
 
 ```text
 REQUIREMENT: `RequirePermission` MUST map `AccessDenied` and
              `UndischargedObligation` to 403, a resolver outage to 502, and a
              missing annotation to 500; awthaq MUST NOT reinterpret or
-             override this mapping in its own bridge code.
+             override this mapping in its own bridge code. The 403 and 500
+             bodies MUST be empty; a resolver-outage 502 body MUST carry no
+             cause and no internal message, at most the error's tag and one
+             identifying attribute (PV-230).
 ```
 
-`usage-qadi.md` §4 states this mapping directly, and it is qadi's own status taxonomy, not something awthaq layers on top: 403 is a decision, 502 is qadi's evaluation infrastructure being unreachable (still "failure is not denial," expressed here as a gateway error rather than a handler defect since Path B has no handler code to `Effect.die` from), and 500 is the operator's own contract mistake. Bodies are empty on all three; the trace lives in the span, not in a response an attacker could read.
+`usage-qadi.md` §4 states this mapping directly, and it is qadi's own status taxonomy, not something awthaq layers on top: 403 is a decision, 502 is qadi's evaluation infrastructure being unreachable (still "failure is not denial," expressed here as a gateway error rather than a handler defect since Path B has no handler code to `Effect.die` from), and 500 is the operator's own contract mistake. The bodies are qadi's own typed views (`@qadi/http` 0.8.0), kept typed so a generated `HttpApiClient` can decode each refusal instead of receiving an empty body it would decode to `undefined`: `AccessDenied` answers `AccessDeniedPublic` (`subjectId`, `policyTag`, the root node's `reason`; the evaluation `trace` is never sent), `UndischargedObligation` answers its tag only, and a resolver outage answers the tag plus at most one identifying field (`attribute`, `relation`/`resourceId`, `event`, `name`, `subjectId`/`resourceId`) and never the `cause`, so the failing dependency's own message cannot reach a caller. Only the wiring-mistake 500 stays an empty body. The cause and the trace live in the span, not in a response an attacker could read.
 
 _Previous: [BEH-EA-156](20-qadi-bridge-path-b.md#beh-ea-156-absence-of-either-annotation-is-refusal-not-an-open-door) | Next: [BEH-EA-158](20-qadi-bridge-path-b.md#beh-ea-158-the-permission-registry-route)_
 

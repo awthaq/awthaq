@@ -3,14 +3,14 @@
 // Two layers of proof: a pure-parsing suite against synthetic `Response`
 // objects (no HTTP router needed — this is what actually exercises the
 // `Set-Cookie` attribute translation), and one integration test proving
-// `withNextCookies` works against a *real* `Response` produced by
+// `applyResponseCookies` works against a *real* `Response` produced by
 // dispatching a request through a composed router whose handler calls
 // `HttpApiBuilder.securitySetCookie` — the same `LoginGroup`/`LoginHandlers`
 // pattern `packages/qadi/test/SubjectApi.test.ts` already established for
 // "mint a real session over HTTP."
 //
 // There is no test here for "wrapping a plain domain-service call produces
-// no cookies": `withNextCookies` takes a `Response`, and a domain service
+// no cookies": `applyResponseCookies` takes a `Response`, and a domain service
 // (`Users.rename`, `Sessions.issue` called directly) returns plain data, not
 // a `Response` — the type system already makes that misuse impossible to
 // even attempt, a stronger guarantee than a runtime assertion could give.
@@ -31,8 +31,8 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import { withNextCookies } from "../src/WithNextCookies.ts";
-import type { CookieSetOptions } from "../src/index.ts";
+import { applyResponseCookies } from "../src/CookieJar.ts";
+import type { CookieJarLike, CookieSetOptions } from "../src/CookieJar.ts";
 
 type Recorded = readonly [name: string, value: string, options: CookieSetOptions | undefined];
 
@@ -44,10 +44,10 @@ const recordingJar = (): {
   return { calls, set: (name, value, options) => calls.push([name, value, options]) };
 };
 
-describe("withNextCookies — parsing a Response's Set-Cookie headers (BEH-EA-189)", () => {
+describe("applyResponseCookies — parsing a Response's Set-Cookie headers (BEH-EA-189)", () => {
   it("writes nothing into the jar when the response has no Set-Cookie header", () => {
     const jar = recordingJar();
-    withNextCookies(new Response(null), jar);
+    applyResponseCookies(new Response(null), jar);
     assert.deepStrictEqual(jar.calls, []);
   });
 
@@ -58,7 +58,7 @@ describe("withNextCookies — parsing a Response's Set-Cookie headers (BEH-EA-18
       },
     });
     const jar = recordingJar();
-    withNextCookies(response, jar);
+    applyResponseCookies(response, jar);
     assert.strictEqual(jar.calls.length, 1);
     const [name, value, options] = jar.calls[0]!;
     assert.strictEqual(name, "session");
@@ -77,7 +77,7 @@ describe("withNextCookies — parsing a Response's Set-Cookie headers (BEH-EA-18
     response.headers.append("Set-Cookie", "a=1; Path=/");
     response.headers.append("Set-Cookie", "b=2; Path=/");
     const jar = recordingJar();
-    withNextCookies(response, jar);
+    applyResponseCookies(response, jar);
     assert.deepStrictEqual(jar.calls.map(([name, value]) => [name, value]).sort(), [
       ["a", "1"],
       ["b", "2"],
@@ -89,16 +89,16 @@ describe("withNextCookies — parsing a Response's Set-Cookie headers (BEH-EA-18
       headers: { "set-cookie": "session=abc123; Path=/; SomeFutureAttribute=whatever" },
     });
     const jar = recordingJar();
-    withNextCookies(response, jar);
+    applyResponseCookies(response, jar);
     const [, , options] = jar.calls[0]!;
     assert.deepStrictEqual(options, { path: "/" });
   });
 });
 
-describe("withNextCookies — hostile attribute values and value fidelity (NSA-006)", () => {
+describe("applyResponseCookies — hostile attribute values and value fidelity (NSA-006)", () => {
   const setFrom = (header: string) => {
     const jar = recordingJar();
-    withNextCookies(new Response(null, { headers: { "set-cookie": header } }), jar);
+    applyResponseCookies(new Response(null, { headers: { "set-cookie": header } }), jar);
     return jar.calls[0]!;
   };
 
@@ -135,7 +135,74 @@ describe("withNextCookies — hostile attribute values and value fidelity (NSA-0
   });
 });
 
-describe("withNextCookies — a real HTTP response (BEH-EA-189)", () => {
+// BO-010: the shapes a second and third adapter hands `applyResponseCookies`.
+// SvelteKit's `Cookies.set` (`@sveltejs/kit`'s `Cookies` interface) *requires*
+// `path`, and Astro's `AstroCookies.set` widens the value. Declared here as
+// function-typed properties (strict parameter contravariance, not method
+// bivariance), so the assignments below are a compile-time proof that
+// `CookieJarLike` fits them.
+interface SvelteKitCookieSerializeOptions {
+  readonly domain?: string | undefined;
+  readonly expires?: Date | undefined;
+  readonly httpOnly?: boolean | undefined;
+  readonly maxAge?: number | undefined;
+  readonly partitioned?: boolean | undefined;
+  readonly sameSite?: boolean | "lax" | "strict" | "none" | undefined;
+  readonly secure?: boolean | undefined;
+}
+
+interface SvelteKitCookies {
+  readonly set: (
+    name: string,
+    value: string,
+    opts: SvelteKitCookieSerializeOptions & { readonly path: string },
+  ) => void;
+}
+
+interface AstroCookies {
+  readonly set: (
+    key: string,
+    value: string | number | boolean | object,
+    options?: {
+      readonly domain?: string;
+      readonly expires?: Date;
+      readonly httpOnly?: boolean;
+      readonly maxAge?: number;
+      readonly path?: string;
+      readonly sameSite?: boolean | "lax" | "strict" | "none";
+      readonly secure?: boolean;
+    },
+  ) => void;
+}
+
+describe("CookieJarLike — second-adapter fit (BO-010)", () => {
+  it("a SvelteKit-shaped jar (path required) is accepted, and every cookie arrives with a path", () => {
+    const written: Array<readonly [string, string, string]> = [];
+    const svelteKit: SvelteKitCookies = {
+      set: (name, value, opts) => {
+        written.push([name, value, opts.path]);
+      },
+    };
+    const jar: CookieJarLike = svelteKit;
+    // A `Set-Cookie` with no `Path` attribute still lands with `path: "/"`.
+    applyResponseCookies(new Response(null, { headers: { "set-cookie": "a=1; HttpOnly" } }), jar);
+    applyResponseCookies(new Response(null, { headers: { "set-cookie": "b=2; Path=/app" } }), jar);
+    assert.deepStrictEqual(written, [
+      ["a", "1", "/"],
+      ["b", "2", "/app"],
+    ]);
+  });
+
+  it("an Astro-shaped jar (path optional, wider value) is accepted too", () => {
+    const written: Array<string> = [];
+    const astro: AstroCookies = { set: (key) => void written.push(key) };
+    const jar: CookieJarLike = astro;
+    applyResponseCookies(new Response(null, { headers: { "set-cookie": "c=3; Path=/" } }), jar);
+    assert.deepStrictEqual(written, ["c"]);
+  });
+});
+
+describe("applyResponseCookies — a real HTTP response (BEH-EA-189)", () => {
   const LoginGroup = HttpApiGroup.make("login").add(
     HttpApiEndpoint.post("login", "/login", { success: Schema.Void }),
   );
@@ -183,7 +250,7 @@ describe("withNextCookies — a real HTTP response (BEH-EA-189)", () => {
           handler(new Request("http://localhost/login", { method: "POST" })),
         );
         const jar = recordingJar();
-        withNextCookies(response, jar);
+        applyResponseCookies(response, jar);
         assert.strictEqual(jar.calls.length, 1);
         const [name, , options] = jar.calls[0]!;
         assert.strictEqual(name, Api.SessionCookie.key);
