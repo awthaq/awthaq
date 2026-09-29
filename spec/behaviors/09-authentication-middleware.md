@@ -58,7 +58,7 @@ REQUIREMENT: The bearer handler MUST resolve an `Authorization: Bearer
              recognized identically to a browser presenting the cookie.
 ```
 
-`archive/design/usage-examples-v4.md` §11.3 documents the native-client path this handler serves: a mobile or CLI client with no cookie jar reaches the same contract via `Auth.api(..., { csrf: false })` and a bearer token pulled from a keychain, and is expected to be resolved to the same `Principal` shape a browser session would be.
+`archive/design/usage-examples-v4.md` §11.3 documents the native-client path this handler serves: a mobile or CLI client with no cookie jar reaches the same contract via `Auth.api(..., { csrf: false })` and a bearer token pulled from a keychain (for the CLI, the `CredentialStore` of [BEH-EA-228](26-cli.md#beh-ea-228-cli-credentials-live-in-a-credentialstore-never-a-plaintext-dotfile-by-default); a mobile app's storage stays the application's job), and is expected to be resolved to the same `Principal` shape a browser session would be.
 
 ## BEH-EA-067: When no scheme succeeds under required authentication, the request fails `Unauthenticated`
 

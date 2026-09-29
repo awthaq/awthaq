@@ -49,7 +49,7 @@ One row per `spec/behaviors/NN-*.md` file. The planned module column names a pla
 | [23 React Bindings](behaviors/23-react.md) | 177-184 | `@awthaq/react/src/index.ts` |
 | [24 Next.js Server Rendering](behaviors/24-nextjs-ssr.md) | 185-192 | `@awthaq/next/src/index.ts` |
 | [25 Testing Harness](behaviors/25-testing-harness.md) | 193-200 | `@awthaq/test/src/TestAuth.ts` |
-| [26 CLI](behaviors/26-cli.md) | 201-208 | `@awthaq/cli/src/cli.ts` |
+| [26 CLI](behaviors/26-cli.md) | 201-208, 225-229 | `@awthaq/cli/src/Cli.ts` (and one module per command) |
 | [27 Admin and Impersonation](behaviors/27-admin-impersonation.md) | 209-224 | `@awthaq/admin/src/Admin.ts` (BEH-EA-209/210/211 also extend `@awthaq/core/src/Sessions.ts` and `@awthaq/server/src/Authentication.ts`) |
 
 ---
@@ -153,6 +153,7 @@ One row per `spec/decisions/ADR-EA-NNN` file (`archive/PRD.md` §22).
 | [ADR-EA-024](decisions/024-read-replica-routing.md) | Read-Replica Routing Is Opt-In, Classified Per Read, and Guarded by a Causal Token | `packages/test/test/ReadRouting.test.ts`, `packages/sql/test/Repositories.postgres.test.ts` (no BEH-EA range; [BEH-EA-035](behaviors/05-persistence-stratum.md#beh-ea-035-repositories-are-built-with-sqlmodelmakerepository-over-the-ambient-sqlclient-never-opening-their-own-transactions) addendum) |
 | [ADR-EA-025](decisions/025-global-roles-vs-organization-roles.md) | Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority | [BEH-EA-139](behaviors/18-roles-subject-resolver.md#beh-ea-139-roles-flatten-through-the-dag-once-per-resolution), [BEH-EA-162](behaviors/21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership) |
 | [ADR-EA-026](decisions/026-signup-enumeration-posture.md) | Sign-Up Reveals an Existing Address by Default, With an Opt-In Conceal Mode | `packages/password/test/AuthHttp.test.ts` (no BEH-EA range) |
+| [ADR-EA-027](decisions/027-cli-on-effect-unstable-cli.md) | The CLI Is Built on effect/unstable/cli, With Typed Exit Codes and a Credential Store Port | `packages/cli/test/ExitCodes.test.ts`, `packages/cli/test/ConfigLoader.test.ts`, `packages/cli/test/CredentialStore.test.ts` ([BEH-EA-225 through 229](behaviors/26-cli.md)) |
 
 ---
 
@@ -265,7 +266,7 @@ The table below is a file-level summary, at the same granularity as §1's behavi
 | [07-client-integration/23-react.feature](../features/features/07-client-integration/23-react.feature) | 177–184 | 501–521 |
 | [07-client-integration/24-nextjs-ssr.feature](../features/features/07-client-integration/24-nextjs-ssr.feature) | 185–192 | 522–544 |
 | [08-tooling/25-testing-harness.feature](../features/features/08-tooling/25-testing-harness.feature) | 193–200 | 545–572 |
-| [08-tooling/26-cli.feature](../features/features/08-tooling/26-cli.feature) | 201–208 | 573–602 |
+| [08-tooling/26-cli.feature](../features/features/08-tooling/26-cli.feature) | 201–208, 225–229 | 573–602, 633–666 |
 | [09-admin-and-impersonation/27-admin-impersonation.feature](../features/features/09-admin-and-impersonation/27-admin-impersonation.feature) | 209–224 | 603–632 |
 
 Authorization-decision content is deliberately out of scope for this suite: scenarios touching an authorization outcome (chiefly `06-roles-and-authorization-bridge/`) treat qadi's own policy evaluation as a black box and assert only on awthaq's own bridge responsibilities, per `ADR-EA-009`. qadi's own `features/features/*.feature` (in the sibling `qadi` repository) is the suite that covers role/permission/policy-combination behavior; this suite does not duplicate it.

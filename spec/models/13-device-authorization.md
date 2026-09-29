@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-13 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Named the CLI session commands as the first consumer and pointed poll-issued sessions at `BeforeSessionIssue` (CTA-002/DAG-003, CCR-EA-006) |
 ---
 
 ## What it is
@@ -58,6 +58,8 @@ No worked example drafted yet. Neither `archive/design/usage-examples-v4.md` nor
 
 ## What is missing
 This is one of the two least-designed rows in the matrix, alongside SCIM. Beyond the one-line mention in `archive/PRD.md` §17, there is no `DeviceAuthorizationApi` contract, no decision on how the divert/poll outcome interacts with the `BeforeSessionIssue` hook point `archive/PRD.md` §13 already plans for `Two-Factor`, no rate-limiting or user-code entropy design, and no research file in this repository treats device-code flow as its primary subject — `research/03-auth-landscape.md` only situates it in passing, alongside the broader agent/MCP-identity trend, as background context rather than as design guidance.
+
+**First consumer: the CLI (BEH-EA-227).** The `login` command of [26-cli.md](../behaviors/26-cli.md#beh-ea-227-session-commands-login-logout-whoami-are-outbound-only-clients-of-a-running-auth-server) is the first client of `/device/code` and `/device/token`: it requests a code, prints the user code and verification URI, and polls on a schedule that starts at the server's `interval`, widens on `slow_down` and stops on `expired_token`. It is an outbound client only (BEH-EA-208), so it needs nothing from this plugin beyond those endpoints; until the plugin exists, `awthaq login` refuses with a typed error naming the requirement and `login --token` is the supported path. When the poll is approved, the session it receives is issued through the same `Hooks.BeforeSessionIssue` divert point as every other login method (`packages/core/src/Hooks.ts`), so a second factor or a policy hook applies to a device grant exactly as it does to a password sign-in — that closes the open question above about how the divert/poll outcome interacts with the hook point.
 
 ## Verification
 None yet — no test exists.

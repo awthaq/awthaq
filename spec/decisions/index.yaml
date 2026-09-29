@@ -86,3 +86,7 @@ entries:
     file: "026-signup-enumeration-posture.md"
     title: "Sign-Up Reveals an Existing Address by Default, With an Opt-In Conceal Mode"
     status: "Accepted — implemented"
+  - id: "ADR-EA-027"
+    file: "027-cli-on-effect-unstable-cli.md"
+    title: "The CLI Is Built on effect/unstable/cli, With Typed Exit Codes and a Credential Store Port"
+    status: "Accepted — implemented"
