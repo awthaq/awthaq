@@ -9,7 +9,7 @@
 // Transport is `@awthaq/client`'s generated `HttpApiClient` over the core `session` group (and the
 // `subject` group for `whoami`), not the React/atom surface: `AuthClient.bearerTransformClient` attaches
 // `Authorization: Bearer <token>` and captures a *rotated* token from any response (BEH-EA-052 —
-// there is no grace window, so a missed rotation logs the user out), which this module persists.
+// the replaced secret survives only `SessionConfig.rotationGrace`, so a missed rotation logs the user out once that passes), which this module persists.
 //
 // - `login --token <t>` (or `AWTHAQ_TOKEN`) is the non-interactive path CI needs from day one. The token
 //   is validated against `GET /session` and stored only when the server accepts it; a rejected token

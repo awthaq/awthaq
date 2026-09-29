@@ -351,6 +351,12 @@ const sessionFields = {
   // every other insert-only field on this table — it needs an `update`
   // variant. `Model.Sensitive` still omits it from every JSON variant.
   secretHash: Model.Sensitive(Schema.String),
+  // RRS-005: the hash the last rotation replaced, accepted alongside `secretHash` until
+  // `previousSecretExpiresAt` (a per-dialect DateTime column added by each class). Written only by the
+  // touch's own targeted UPDATE; constructor-defaulted to `null` so a fresh insert never names it.
+  previousSecretHash: Model.Sensitive(
+    Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  ),
   ipAddress: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   userAgent: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   // BEH-EA-209: the caller's own identity, immutable once issued — no
@@ -473,122 +479,125 @@ const auditLogRow = <C extends Schema.Top>(occurredAt: C) =>
 // `VerificationReservationsRepository.claim`), not a generic
 // `insert`/`update` pair — the model exists only to give that upsert's
 // `RETURNING` row a schema to decode against.
-const pgModels = () => {
-  class User extends Model.Class<User>("User")({
-    ...userFields,
-    emailVerified: pgFields.emailVerified,
-    phoneVerified: pgFields.phoneVerified,
-    suspendedUntil: pgFields.nullableDateTimeInsertOnly,
-    createdAt: pgFields.dateTimeInsert,
-    updatedAt: pgFields.dateTimeUpdate,
-  }) {}
+// PV-380: the classes are declared at module scope (not inside a factory) so the emitted
+// declarations name them (`typeof PgUser`) instead of inlining each anonymous class's whole
+// constructor type, whose `extend` signature leaked unresolved names (`Extended_1`, `S`,
+// `Self`) into `lib/Models.d.ts` for a consumer with `skipLibCheck: false`. `package:smoke`
+// type-checks every emitted `.d.ts` that way.
+class PgUser extends Model.Class<PgUser>("User")({
+  ...userFields,
+  emailVerified: pgFields.emailVerified,
+  phoneVerified: pgFields.phoneVerified,
+  suspendedUntil: pgFields.nullableDateTimeInsertOnly,
+  createdAt: pgFields.dateTimeInsert,
+  updatedAt: pgFields.dateTimeUpdate,
+}) {}
 
-  class Account extends Model.Class<Account>("Account")({
-    ...accountFields,
-    accessTokenExpiresAt: pgFields.nullableDateTimeDefaultNull,
-    refreshTokenExpiresAt: pgFields.nullableDateTimeDefaultNull,
-    createdAt: pgFields.dateTimeInsert,
-    updatedAt: pgFields.dateTimeUpdate,
-  }) {}
+class PgAccount extends Model.Class<PgAccount>("Account")({
+  ...accountFields,
+  accessTokenExpiresAt: pgFields.nullableDateTimeDefaultNull,
+  refreshTokenExpiresAt: pgFields.nullableDateTimeDefaultNull,
+  createdAt: pgFields.dateTimeInsert,
+  updatedAt: pgFields.dateTimeUpdate,
+}) {}
 
-  class Session extends Model.Class<Session>("Session")({
-    ...sessionFields,
-    absoluteExpiresAt: pgFields.dateTimeImmutable,
-    idleExpiresAt: pgFields.dateTimeUpdate,
-    createdAt: pgFields.dateTimeInsert,
-    // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
-    // (AAPS-001/BPAS-001): "when this session last proved a credential" —
-    // defaulted to now at insert (identical to `createdAt` at issue time),
-    // and the one column `Sessions.reauthenticate` writes; needs the same
-    // `update` variant `secretHash`/`lastActiveAt`/`idleExpiresAt` already
-    // have, for the identical reason.
-    authenticatedAt: pgFields.dateTimeUpdate,
-    lastActiveAt: pgFields.dateTimeUpdate,
-    /** Set at most once, alongside `supersededBy`. */
-    supersededAt: pgFields.nullableDateTime,
-    /** Set at most once — the first (and only ever recorded) time a tombstoned row is presented again. */
-    reusedAt: pgFields.nullableDateTime,
-  }) {}
+class PgSession extends Model.Class<PgSession>("Session")({
+  ...sessionFields,
+  absoluteExpiresAt: pgFields.dateTimeImmutable,
+  idleExpiresAt: pgFields.dateTimeUpdate,
+  createdAt: pgFields.dateTimeInsert,
+  // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+  // (AAPS-001/BPAS-001): "when this session last proved a credential" —
+  // defaulted to now at insert (identical to `createdAt` at issue time),
+  // and the one column `Sessions.reauthenticate` writes; needs the same
+  // `update` variant `secretHash`/`lastActiveAt`/`idleExpiresAt` already
+  // have, for the identical reason.
+  authenticatedAt: pgFields.dateTimeUpdate,
+  lastActiveAt: pgFields.dateTimeUpdate,
+  /** Set at most once, alongside `supersededBy`. */
+  supersededAt: pgFields.nullableDateTime,
+  /** Set at most once — the first (and only ever recorded) time a tombstoned row is presented again. */
+  reusedAt: pgFields.nullableDateTime,
+  previousSecretExpiresAt: pgFields.nullableDateTimeDefaultNull,
+}) {}
 
-  class VerificationToken extends Model.Class<VerificationToken>("VerificationToken")({
-    ...verificationTokenFields,
-    expiresAt: pgFields.dateTimeImmutable,
-    consumedAt: pgFields.nullableDateTime,
-    createdAt: pgFields.dateTimeInsert,
-  }) {}
+class PgVerificationToken extends Model.Class<PgVerificationToken>("VerificationToken")({
+  ...verificationTokenFields,
+  expiresAt: pgFields.dateTimeImmutable,
+  consumedAt: pgFields.nullableDateTime,
+  createdAt: pgFields.dateTimeInsert,
+}) {}
 
-  class VerificationReservation extends Model.Class<VerificationReservation>(
-    "VerificationReservation",
-  )({
-    identifier: Schema.String,
-    tenantId: tenantIdField,
-    expiresAt: pgFields.dateTime,
-  }) {}
+class PgVerificationReservation extends Model.Class<PgVerificationReservation>(
+  "VerificationReservation",
+)({
+  identifier: Schema.String,
+  tenantId: tenantIdField,
+  expiresAt: pgFields.dateTime,
+}) {}
 
-  return {
-    User,
-    Account,
-    Session,
-    VerificationToken,
-    VerificationReservation,
-    AuditLogRow: auditLogRow(pgFields.wireDateTime),
-    wire: dialectFields("pg"),
-  };
+const pgModels = {
+  User: PgUser,
+  Account: PgAccount,
+  Session: PgSession,
+  VerificationToken: PgVerificationToken,
+  VerificationReservation: PgVerificationReservation,
+  AuditLogRow: auditLogRow(pgFields.wireDateTime),
+  wire: dialectFields("pg"),
 };
 
-const sqliteModels = () => {
-  class User extends Model.Class<User>("User")({
-    ...userFields,
-    emailVerified: sqliteFields.emailVerified,
-    phoneVerified: sqliteFields.phoneVerified,
-    suspendedUntil: sqliteFields.nullableDateTimeInsertOnly,
-    createdAt: sqliteFields.dateTimeInsert,
-    updatedAt: sqliteFields.dateTimeUpdate,
-  }) {}
+class SqliteUser extends Model.Class<SqliteUser>("User")({
+  ...userFields,
+  emailVerified: sqliteFields.emailVerified,
+  phoneVerified: sqliteFields.phoneVerified,
+  suspendedUntil: sqliteFields.nullableDateTimeInsertOnly,
+  createdAt: sqliteFields.dateTimeInsert,
+  updatedAt: sqliteFields.dateTimeUpdate,
+}) {}
 
-  class Account extends Model.Class<Account>("Account")({
-    ...accountFields,
-    accessTokenExpiresAt: sqliteFields.nullableDateTimeDefaultNull,
-    refreshTokenExpiresAt: sqliteFields.nullableDateTimeDefaultNull,
-    createdAt: sqliteFields.dateTimeInsert,
-    updatedAt: sqliteFields.dateTimeUpdate,
-  }) {}
+class SqliteAccount extends Model.Class<SqliteAccount>("Account")({
+  ...accountFields,
+  accessTokenExpiresAt: sqliteFields.nullableDateTimeDefaultNull,
+  refreshTokenExpiresAt: sqliteFields.nullableDateTimeDefaultNull,
+  createdAt: sqliteFields.dateTimeInsert,
+  updatedAt: sqliteFields.dateTimeUpdate,
+}) {}
 
-  class Session extends Model.Class<Session>("Session")({
-    ...sessionFields,
-    absoluteExpiresAt: sqliteFields.dateTimeImmutable,
-    idleExpiresAt: sqliteFields.dateTimeUpdate,
-    createdAt: sqliteFields.dateTimeInsert,
-    authenticatedAt: sqliteFields.dateTimeUpdate,
-    lastActiveAt: sqliteFields.dateTimeUpdate,
-    supersededAt: sqliteFields.nullableDateTime,
-    reusedAt: sqliteFields.nullableDateTime,
-  }) {}
+class SqliteSession extends Model.Class<SqliteSession>("Session")({
+  ...sessionFields,
+  absoluteExpiresAt: sqliteFields.dateTimeImmutable,
+  idleExpiresAt: sqliteFields.dateTimeUpdate,
+  createdAt: sqliteFields.dateTimeInsert,
+  authenticatedAt: sqliteFields.dateTimeUpdate,
+  lastActiveAt: sqliteFields.dateTimeUpdate,
+  supersededAt: sqliteFields.nullableDateTime,
+  reusedAt: sqliteFields.nullableDateTime,
+  previousSecretExpiresAt: sqliteFields.nullableDateTimeDefaultNull,
+}) {}
 
-  class VerificationToken extends Model.Class<VerificationToken>("VerificationToken")({
-    ...verificationTokenFields,
-    expiresAt: sqliteFields.dateTimeImmutable,
-    consumedAt: sqliteFields.nullableDateTime,
-    createdAt: sqliteFields.dateTimeInsert,
-  }) {}
+class SqliteVerificationToken extends Model.Class<SqliteVerificationToken>("VerificationToken")({
+  ...verificationTokenFields,
+  expiresAt: sqliteFields.dateTimeImmutable,
+  consumedAt: sqliteFields.nullableDateTime,
+  createdAt: sqliteFields.dateTimeInsert,
+}) {}
 
-  class VerificationReservation extends Model.Class<VerificationReservation>(
-    "VerificationReservation",
-  )({
-    identifier: Schema.String,
-    tenantId: tenantIdField,
-    expiresAt: sqliteFields.dateTime,
-  }) {}
+class SqliteVerificationReservation extends Model.Class<SqliteVerificationReservation>(
+  "VerificationReservation",
+)({
+  identifier: Schema.String,
+  tenantId: tenantIdField,
+  expiresAt: sqliteFields.dateTime,
+}) {}
 
-  return {
-    User,
-    Account,
-    Session,
-    VerificationToken,
-    VerificationReservation,
-    AuditLogRow: auditLogRow(sqliteFields.wireDateTime),
-    wire: dialectFields("sqlite"),
-  };
+const sqliteModels = {
+  User: SqliteUser,
+  Account: SqliteAccount,
+  Session: SqliteSession,
+  VerificationToken: SqliteVerificationToken,
+  VerificationReservation: SqliteVerificationReservation,
+  AuditLogRow: auditLogRow(sqliteFields.wireDateTime),
+  wire: dialectFields("sqlite"),
 };
 
 /**
@@ -599,12 +608,12 @@ const sqliteModels = () => {
  * never overridden globally, because the ambient client is shared with the
  * host application's tables.
  */
-export type SqlModels = ReturnType<typeof pgModels> | ReturnType<typeof sqliteModels>;
+export type SqlModels = typeof pgModels | typeof sqliteModels;
 
 // DRS-001: annotated because adding the tenant column to six entities pushed the
 // inferred union past the compiler's declaration-serialization limit (TS7056).
 export const makeModels = (dialect: Dialect): SqlModels =>
-  dialect === "pg" ? pgModels() : sqliteModels();
+  dialect === "pg" ? pgModels : sqliteModels;
 
 // The decoded `Type` side is identical across dialects (only `Encoded`
 // differs), so these dialect-independent aliases are what callers name.

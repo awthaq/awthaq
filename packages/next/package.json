@@ -32,13 +32,13 @@
   },
   "dependencies": {
     "@awthaq/api": "workspace:*",
-    "@awthaq/client": "workspace:*",
-    "@awthaq/core": "workspace:*",
     "@awthaq/jwt": "workspace:*",
     "@awthaq/server": "workspace:*",
+    "@awthaq/web": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@awthaq/core": "workspace:*",
     "@awthaq/ports": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",

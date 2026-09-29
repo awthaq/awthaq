@@ -120,6 +120,8 @@ const PROBES: ReadonlyArray<{
   readonly method: string;
   readonly path: string;
   readonly csrf: boolean;
+  /** A `Cookie` header with no CSRF token: without any cookie a sign-in is exempt from the pair (BEH-EA-077). */
+  readonly staleCookie?: boolean;
   readonly body?: unknown;
 }> = [
   { name: "no session", method: "GET", path: "/session", csrf: false },
@@ -129,6 +131,7 @@ const PROBES: ReadonlyArray<{
     method: "POST",
     path: "/password/sign-in",
     csrf: false,
+    staleCookie: true,
     body: { email: "nobody@example.com", password: STRONG_PASSWORD },
   },
   {
@@ -146,6 +149,7 @@ const requestFor = (baseUrl: string, probe: (typeof PROBES)[number]) =>
     headers: {
       ...(probe.body === undefined ? {} : { "content-type": "application/json" }),
       ...(probe.csrf ? { cookie: withCsrfCookie(), "x-csrf-token": CSRF_TEST_COOKIE_VALUE } : {}),
+      ...(probe.staleCookie === true ? { cookie: "__Host-session=stale.secret" } : {}),
     },
     ...(probe.body === undefined ? {} : { body: JSON.stringify(probe.body) }),
   });

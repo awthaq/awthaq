@@ -92,6 +92,13 @@ export class PasskeyUserVerificationRequired extends Schema.TaggedError<PasskeyU
   { httpApiStatus: 400 },
 ) {}
 
+/** TC-008: `GET /.well-known/webauthn` when `PasskeyConfig.relatedOrigins` is empty (the default) — Related Origin Requests are not enabled. */
+export class PasskeyRelatedOriginsNotConfigured extends Schema.TaggedError<PasskeyRelatedOriginsNotConfigured>()(
+  "PasskeyRelatedOriginsNotConfigured",
+  {},
+  { httpApiStatus: 404 },
+) {}
+
 export class PasskeyCredentialNotFound extends Schema.TaggedError<PasskeyCredentialNotFound>()(
   "PasskeyCredentialNotFound",
   {},
@@ -369,6 +376,11 @@ export class PasskeySignalsDto extends Schema.Class<PasskeySignalsDto>("PasskeyS
   allAcceptedCredentialIds: Schema.Array(Schema.String),
 }) {}
 
+/** TC-008: the document WebAuthn Related Origin Requests defines for `/.well-known/webauthn`. */
+export class RelatedOriginsDto extends Schema.Class<RelatedOriginsDto>("RelatedOriginsDto")({
+  origins: Schema.Array(Schema.String),
+}) {}
+
 export const PasskeyGroup = HttpApiGroup.make("passkey")
   .add(
     HttpApiEndpoint.post("registerOptions", "/passkey/register/options", {
@@ -517,8 +529,21 @@ export const PasskeyReauthenticateGroup = HttpApiGroup.make("passkey.reauthentic
   .middleware(Api.Authentication)
   .middleware(Api.CsrfProtection);
 
+/**
+ * TC-008: WebAuthn Related Origin Requests. Public and anonymous — the browser fetches it, without
+ * credentials, from `https://<rpId>/.well-known/webauthn`; a `GET` with no state to protect (no CSRF
+ * middleware), 404 unless `PasskeyConfig.relatedOrigins` is set.
+ */
+export const PasskeyWellKnownGroup = HttpApiGroup.make("passkey.wellKnown").add(
+  HttpApiEndpoint.get("relatedOrigins", "/.well-known/webauthn", {
+    success: RelatedOriginsDto,
+    error: PasskeyRelatedOriginsNotConfigured,
+  }),
+);
+
 export const PasskeyApi = HttpApi.make("auth")
   .add(PasskeyGroup)
   .add(PasskeyAuthenticateGroup)
   .add(PasskeyCredentialsGroup)
-  .add(PasskeyReauthenticateGroup);
+  .add(PasskeyReauthenticateGroup)
+  .add(PasskeyWellKnownGroup);

@@ -136,6 +136,10 @@ const baseOptions = (cfg: SessionCookieConfigShape): CookieOptions => {
   }
 };
 
+/** PV-016: whether the session cookie is `SameSite=Strict` (so a cross-site-initiated redirect chain withholds it). */
+export const isStrict = (cfg: SessionCookieConfigShape): boolean =>
+  baseOptions(cfg).sameSite === "strict";
+
 /**
  * Pure: the cookie a session write carries. `Max-Age` is the session's
  * remaining absolute lifetime (never negative) when `persistence` is

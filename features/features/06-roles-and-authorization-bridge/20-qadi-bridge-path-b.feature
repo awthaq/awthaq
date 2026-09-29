@@ -121,26 +121,22 @@ Feature: Qadi Bridge — Path B (Declared Permissions)
   Rule: Status mapping is qadi's, not awthaq's
 
     @REQ-EA-440
-    Scenario Outline: RequirePermission maps each outcome to its designated status, with an empty body
+    Scenario Outline: RequirePermission maps each outcome to its designated status, and a body that never carries the cause
       Given a request to an endpoint middlewared by RequirePermission that results in "<outcome>"
       When the response is served
       Then the response is "<status>"
-      And the response body is empty
+      And the response body is "<body>"
 
+      # PV-230: qadi 0.8.0 answers typed views (so a generated client can decode them): a denial its public
+      # view without the trace, an undischarged obligation its tag, a resolver outage its tag plus one
+      # identifying attribute and never the cause or the failing dependency's own message; only the
+      # wiring-mistake 500 is an empty body.
       Examples:
-        | outcome                     | status                     |
-        | an AccessDenied decision     | 403 Forbidden               |
-        | an UndischargedObligation    | 403 Forbidden               |
-        | a missing annotation         | 500 Internal Server Error   |
-
-      # @skip: PV-230 (open). @qadi/http answers a resolver outage 502 with the typed error serialized
-      #   into the body ({"_tag":"AttributeResolveError","attribute":"plan","cause":{...message}}),
-      #   contradicting this row's "empty body" and leaking the failing attribute and the cause's
-      #   message. The 502 status itself is asserted by REQ-EA-442 below.
-      @skip
-      Examples:
-        | outcome                     | status                     |
-        | a resolver outage            | 502 Bad Gateway              |
+        | outcome                     | status                     | body                          |
+        | an AccessDenied decision     | 403 Forbidden               | the public denial, no trace   |
+        | an UndischargedObligation    | 403 Forbidden               | the tag only                  |
+        | a missing annotation         | 500 Internal Server Error   | empty                         |
+        | a resolver outage            | 502 Bad Gateway              | the tag and one attribute     |
 
     @REQ-EA-441
     Scenario: awthaq's bridge code does not reinterpret or override qadi's status mapping

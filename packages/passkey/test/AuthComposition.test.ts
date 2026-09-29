@@ -20,6 +20,7 @@ describe("Auth.make([Passkey])", () => {
           "passkey.authenticate",
           "passkey.credentials",
           "passkey.reauthenticate",
+          "passkey.wellKnown",
         ],
       },
     ]);

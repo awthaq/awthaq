@@ -112,7 +112,7 @@ Feature: CSRF Protection
 
     @REQ-EA-216
     Scenario Outline: CSRF checks apply only to unsafe methods
-      Given a request using the "<method>" method with no CSRF header, no double-submit cookie, and no Sec-Fetch-Site header
+      Given a request using the "<method>" method carrying a stale session cookie, with no CSRF header, no double-submit cookie, and no Sec-Fetch-Site header
       When "CsrfProtection" evaluates the request
       Then the request is "<outcome>"
 
@@ -124,6 +124,22 @@ Feature: CSRF Protection
         | PUT    | rejected                 |
         | PATCH  | rejected                 |
         | DELETE | rejected                 |
+
+    # Native first sign-in: no `Cookie` header means no ambient credential, so no double-submit pair is
+    # demanded; the stricter site checks still run (spec/behaviors/10-csrf.md, "Cookie-less exemption").
+    @REQ-EA-1187
+    Scenario Outline: An unsafe request with no Cookie header skips the double-submit pair but not the site checks
+      Given an unsafe "POST" request with no "Cookie" header and no CSRF pair, carrying "<signal>"
+      When "CsrfProtection" evaluates the request
+      Then the request is "<outcome>"
+
+      Examples:
+        | signal                                                  | outcome                  |
+        | no site signal at all (a native client)                  | not subject to rejection |
+        | Sec-Fetch-Site: same-origin                              | not subject to rejection |
+        | Sec-Fetch-Site: cross-site                               | rejected                 |
+        | an Origin outside the allowed origins                    | rejected                 |
+        | Sec-Fetch-Site: same-site and no allowed Origin          | rejected                 |
 
   # BEH-EA-078 — spec/behaviors/10-csrf.md
   @BEH-EA-078
@@ -162,7 +178,7 @@ Feature: CSRF Protection
       Given a native client with a bearer token and no cookie jar
       When it sends an unsafe "POST" request carrying an "Authorization" header and no CSRF header or double-submit cookie
       Then the request passes without any CSRF check being applied to it, and no "__Host-csrf" cookie is minted for it
-      And an unsafe "POST" request with an empty "Authorization" header and no CSRF pair is still rejected
+      And an unsafe "POST" request with an empty "Authorization" header, a session cookie and no CSRF pair is still rejected
 
   # BEH-EA-080 — spec/behaviors/10-csrf.md
   @BEH-EA-080

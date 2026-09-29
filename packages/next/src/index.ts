@@ -16,6 +16,7 @@ export { makeServerActionClient, serverActionClient } from "./ServerActionClient
 export type { ServerActionOptions } from "./ServerActionClient.ts";
 export { toInitialSession, toInitialSubject } from "./Seed.ts";
 export type { SubjectLike } from "./Seed.ts";
-export { hasSessionCookie } from "./HasSessionCookie.ts";
+// BO-004: the presence check is framework-neutral (`@awthaq/web`).
+export { hasSessionCookie } from "@awthaq/web";
 export { withNextCookies } from "./WithNextCookies.ts";
 export type { CookieJarLike, CookieSetOptions } from "./WithNextCookies.ts";

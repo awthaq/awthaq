@@ -73,7 +73,9 @@
       "@awthaq/next/edge": ["./packages/next/src/edge.ts"],
       "@awthaq/oauth/presets": ["./packages/oauth/src/presets/index.ts"],
       "@awthaq/webhooks": ["./packages/webhooks/src/index.ts"],
-      "@awthaq/saml": ["./packages/saml/src/index.ts"]
+      "@awthaq/saml": ["./packages/saml/src/index.ts"],
+      "@awthaq/web": ["./packages/web/src/index.ts"],
+      "@awthaq/web/cookies": ["./packages/web/src/cookies.ts"]
     },
     "plugins": [
       {

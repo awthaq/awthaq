@@ -3,7 +3,7 @@ ID: "BCR-009"
 Title: "Backup codes must be long-lived but expiresAt is NOT NULL and expiry fails as replay"
 Level: low
 Category: "correctness"
-Status: needs-triage
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Models.ts:165"
 Auditor: "backup-codes-recovery-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `sql` · reported by **Backup Codes & Account Recovery Specialist** (`backup-codes-recovery-specialist`)
 
-Status: **needs-triage**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Give TwoFactorConfig an explicit code-set TTL default (e.g. 1-2 years) and surfa
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence medium); workstream `two-factor-recovery-codes`. Evidence at HEAD ec065a7: `packages/sql/src/Models.ts:225`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/05-sql.md`.
+
+**Resolved (2026-09-29):** Verified moot against the current package: recovery codes are not `Verification` tokens. They live in `two_factor_recovery_code` (packages/two-factor/src/TwoFactorStore.ts: `codeHash`, `usedAt`, no `expiresAt`), so nothing needs a far-future horizon, codes never expire, and a spent or wrong code fails the ordinary way. The remaining count the finding wanted for a low-codes warning is already surfaced (`remainingRecoveryCodes` on the status/enable responses, `auth.twoFactor.recoveryCodeUsed { remaining }`, `countUnused`). Recorded in BEH-EA-264 (spec/behaviors/31-two-factor.md). No code change.

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-10 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a paragraph on the double-submit-cookie vs. synchronizer-token tradeoff (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a paragraph on the double-submit-cookie vs. synchronizer-token tradeoff (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-09-29): Added the cookie-less exemption and its threat model to BEH-EA-077 (native first sign-in) |
 
 ---
 
@@ -101,6 +101,36 @@ REQUIREMENT: `CsrfProtection` MUST NOT reject, and MUST NOT mint a cookie
 
 The double-submit and site checks exist to stop a browser *automatically* attaching an ambient credential (a cookie) to a forged cross-site request. A cross-site page cannot set `Authorization` without a CORS preflight the server's own policy must separately allow, so an explicitly-bearer request is outside CSRF's threat model, and a cookie-less native or server-to-server client must not be 403'd on sign-out, revoke or delete-user. A cookie-authenticated request with no `Authorization` header stays fully protected. (`Auth.make(..., { csrf })`, decision 24 §1, is still unimplemented and tracked with APS-001/PDR-002.)
 
+**Cookie-less exemption (native first sign-in).** An unsafe request that carries **no `Cookie` header at all** (and no `Authorization`) is exempt from the double-submit pair, but not from the site checks:
+
+```text
+REQUIREMENT: `CsrfProtection` MUST NOT demand the `__Host-csrf` double-submit
+             pair of an unsafe request that carries no `Cookie` header (a blank
+             header counts as none) and no `Authorization` header, and MUST
+             instead admit it only through the cookie-less site check: a
+             `Sec-Fetch-Site` of `same-origin` or `none`; a `same-site` request
+             only when its `Origin` is in `CsrfConfig.allowedOrigins`;
+             `cross-site` never; when `Sec-Fetch-Site` is absent, an absent
+             `Origin` (a non-browser caller) or an allowed one, never a foreign
+             or `null` `Origin`. A request carrying any cookie, however
+             unrelated, keeps the full check. `CsrfConfig.requireTokenWithoutCookies:
+             true` withdraws the exemption.
+```
+
+*Decision record (ADR-worthy reasoning; 2026-09-29, adopted as recommended, the user may revisit).* Before this rule a native client's **first** sign-in or sign-up (no cookie jar, no bearer token yet, so neither the bearer exemption nor a double-submit cookie applied) answered `403 CsrfRejected`, and the only way out was a warm-up `GET` to receive a cookie the client had no jar to keep. CSRF is a defence of *ambient* credentials: it exists because a browser attaches cookies to a request an attacker's page caused. A request that arrives with no `Cookie` header has no ambient credential on it, so there is nothing for a forged request to ride, and the double-submit pair (a proof of "this request came from a script that could read our cookie") protects nothing that is not already absent. What the pair *would* still catch is the residual threat of a cookie-less forged request, **login CSRF** (an attacker's page makes the victim's browser sign in as the attacker); that is answered by the site checks, which is why they are kept and made stricter, not by the pair.
+
+| Threat | Outcome |
+|---|---|
+| Native / CLI / server client, first sign-in, sign-up, reset, `POST /oauth/token`; no cookies, no site headers | Allowed: no ambient credential; the unguessable credentials in the body are the whole authorization. |
+| Browser, first visit, same-origin page (`Sec-Fetch-Site: same-origin`) | Allowed: our own origin. |
+| Browser with a **stale or unrelated cookie** (an expired `__Host-session`, an analytics cookie) | Still needs the pair: a `Cookie` header means an ambient credential may ride, and the rule is deliberately the coarse "no `Cookie` header at all" rather than "no session cookie". The client's cold-start bootstrap (CDS-007) covers it. |
+| Login CSRF from another site: the victim's browser withholds `SameSite=Strict` cookies from a cross-site request, so it arrives cookie-less | Refused: `Sec-Fetch-Site: cross-site`, or a foreign/`null` `Origin`, fails the cookie-less site check. |
+| Login CSRF from a same-site sibling (a takeover-prone subdomain; `Sec-Fetch-Site: same-site`) | Refused unless the sibling's `Origin` is allow-listed: `same-site` is not our origin. |
+| A browser too old to send either `Sec-Fetch-Site` or (on a cross-origin `POST`) `Origin` | **Accepted, documented residual.** Indistinguishable from a native caller. No supported browser omits both; a deployment that must cover one sets `requireTokenWithoutCookies: true`. |
+| Credentials that are ambient but not cookies (mTLS client certificates, an intranet network position, HTTP Basic) | Out of scope: none of awthaq's own strategies authenticate that way. A deployment that fronts awthaq with such an ambient credential sets `requireTokenWithoutCookies: true`. |
+
+Minting is unchanged (`__Host-csrf` is still set on a cookie-less response, so a browser that arrives cookie-less holds a token for its next request). The client half for a program with no jar is `CsrfClientNative` (`@awthaq/client`): it sends no header and never retries. Tests: `packages/server/test/Csrf.test.ts` ("Csrf cookie-less requests"), `packages/password/test/AuthHttp.test.ts` (native first sign-up and sign-in over HTTP), `packages/client/test/Csrf.test.ts`.
+
 ## BEH-EA-078: A rejected CSRF check fails with a typed `CsrfRejected` error at `403`
 
 ```ts
@@ -129,6 +159,8 @@ REQUIREMENT: A native (bearer-token) client MUST be able to make unsafe
              minting and enforcement, while an empty `Authorization` header is
              not.
 ```
+
+**First sign-in of a bearer client.** The exemption above needs a bearer token, which a client does not have until it has signed in; that first request is covered by the cookie-less exemption of BEH-EA-077 (no `Cookie` header, so no ambient credential), not by the `Authorization` one.
 
 **Superseded in part (PV-262, decision 24 / MNA-008).** The `Auth.api(..., { csrf: false })` contract variant this behavior originally specified is not built and is retired; the exemption is a runtime rule of `CsrfProtectionLive` instead (REQ-EA-689, `packages/server/test/Csrf.test.ts`). The trade-off the original text argued against (a check that is present in the type but skipped at runtime) is accepted deliberately: a header a cross-site page cannot set without a CORS preflight is what makes the skip safe. REQ-EA-219/220 described the retired variant and were removed from the suite (their ids are not reused); the shipped rule is REQ-EA-689.
 

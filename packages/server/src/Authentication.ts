@@ -374,8 +374,8 @@ const claimResolution = (request: HttpServerRequest.HttpServerRequest, raw: stri
  * middleware, Path B's `RequirePermission`) and every handler outcome,
  * including a typed-error response (a `flatMap` on the handler's success, as
  * this used to be, never sees `HandlerError`, so the rotated secret was lost
- * and the client silently logged out — there is no grace window,
- * upstream-hardening ticket 01).
+ * and the client silently logged out once `SessionConfig.rotationGrace` passed,
+ * upstream-hardening ticket 01, RRS-005).
  *
  * Delivery splits by how the request authenticated: `cookie` gets the
  * `Set-Cookie` write `OAuth.ts` already uses after `issue` (a browser's jar
