@@ -66,6 +66,23 @@ export class GroupIdConflict extends Data.TaggedError("GroupIdConflict")<{
 }> {}
 
 /**
+ * AVS-004: two contributed endpoints, in the same or different groups, claim
+ * the same method and path. The router would silently serve whichever
+ * registered first, shadowing the other plugin's endpoint, so composition
+ * refuses it instead of relying on a hand-kept list of reserved paths — which
+ * also covers a plugin's deliberate root-level routes (`@awthaq/password`
+ * owns `/verify-email`, `/resend-verification`, `/change-password`) the same
+ * way it covers namespaced ones.
+ */
+export class RouteConflict extends Data.TaggedError("RouteConflict")<{
+  readonly method: string;
+  readonly path: string;
+  readonly firstPluginId: string;
+  readonly secondPluginId: string;
+  readonly message: string;
+}> {}
+
+/**
  * A loop invariant `linkPlugins`/`findCycle` rely on (e.g. "a queue drained
  * one non-undefined element at a time never returns undefined while
  * non-empty") did not hold. Reachable only if one of those invariants is
@@ -376,6 +393,12 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
   })),
 });
 
+const hasRoute = (endpoint: object): endpoint is { readonly method: string; readonly path: string } =>
+  "method" in endpoint &&
+  typeof endpoint.method === "string" &&
+  "path" in endpoint &&
+  typeof endpoint.path === "string";
+
 /**
  * Every group of every plugin's own `contract`, added in one call —
  * `HttpApiGroup.Constraint` values, read straight off each `HttpApi`, prove
@@ -408,6 +431,27 @@ const composeApi = (
       });
     }
     ownerOf.set(group.identifier, plugin);
+  }
+  // AVS-004: a group id is not the only thing two plugins can collide on —
+  // refuse a duplicate (method, path) across every contributed endpoint.
+  const routeOwner = new Map<string, AuthPlugin.Any>();
+  for (const { plugin, group } of contributions) {
+    for (const endpoint of Object.values(group.endpoints)) {
+      // `HttpApiGroup.Constraint` widens each endpoint past its method/path.
+      if (!hasRoute(endpoint)) continue;
+      const route = `${endpoint.method} ${endpoint.path}`;
+      const owner = routeOwner.get(route);
+      if (owner !== undefined) {
+        throw new RouteConflict({
+          method: endpoint.method,
+          path: endpoint.path,
+          firstPluginId: owner.id,
+          secondPluginId: plugin.id,
+          message: `awthaq: E_ROUTE_CONFLICT: ${route} contributed by plugin "${owner.id}" and plugin "${plugin.id}"`,
+        });
+      }
+      routeOwner.set(route, plugin);
+    }
   }
   const groups = contributions.map((contribution) => contribution.group);
   const [firstGroup, ...restGroups] = groups;

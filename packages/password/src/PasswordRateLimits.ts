@@ -46,6 +46,8 @@ export const defaultEmailRateKey = (email: string): string => {
 };
 
 export interface PasswordRule<Input> {
+  /** The contract group the endpoint belongs to (`password`, or `password.account` for the authenticated pair, EHA-007). */
+  readonly group: string;
   /** The rule's fixed label (never a bucket key) — reported with a breach. */
   readonly name: string;
   readonly endpoint: string;
@@ -59,6 +61,7 @@ export interface PasswordRule<Input> {
 }
 
 const rule = <S extends Schema.Decoder<unknown>>(spec: {
+  readonly group?: string;
   readonly name: string;
   readonly endpoint: string;
   readonly dimension: RateLimits.EnforceMeta["dimension"];
@@ -69,6 +72,7 @@ const rule = <S extends Schema.Decoder<unknown>>(spec: {
 }): PasswordRule<S["Type"]> => {
   const decode = Schema.decodeUnknownOption(spec.input);
   return {
+    group: spec.group ?? "password",
     name: spec.name,
     endpoint: spec.endpoint,
     dimension: spec.dimension,
@@ -177,6 +181,7 @@ export const makeRules = (emailKey: (email: string) => string) => {
   // Shipping-gap map (.scratch/shipping-gaps), ticket 14. Keyed on the
   // authenticated caller's user id, mirroring its own posture.
   const changePassword = rule({
+    group: "password.account",
     name: "changePassword",
     endpoint: "changePassword",
     dimension: "identity",
@@ -188,6 +193,7 @@ export const makeRules = (emailKey: (email: string) => string) => {
   // Wayfinder ticket 15: mirrors `changePassword` — the identical
   // authenticated-password-recheck shape.
   const reauthenticate = rule({
+    group: "password.account",
     name: "reauthenticate",
     endpoint: "reauthenticate",
     dimension: "identity",
@@ -265,7 +271,7 @@ export type PasswordRules = ReturnType<typeof makeRules>;
 /** The registry's view of every rule, in registration order. */
 export const registryEntries = (rules: PasswordRules) =>
   Object.values(rules).map((definition) => ({
-    group: "password",
+    group: definition.group,
     endpoint: definition.endpoint,
     key: definition.registryKey,
     limit: definition.limit,
@@ -273,11 +279,12 @@ export const registryEntries = (rules: PasswordRules) =>
   }));
 
 export const metaOf = (definition: {
+  readonly group: string;
   readonly name: string;
   readonly endpoint: string;
   readonly dimension: RateLimits.EnforceMeta["dimension"];
 }): RateLimits.EnforceMeta => ({
-  group: "password",
+  group: definition.group,
   endpoint: definition.endpoint,
   rule: definition.name,
   dimension: definition.dimension,

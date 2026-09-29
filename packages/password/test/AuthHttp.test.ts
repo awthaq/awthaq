@@ -573,4 +573,47 @@ describe("AuthHttp + Password (real HTTP)", () => {
       assert.strictEqual(weak.status, 422);
     }),
   );
+
+  // ESS-006: malformed input is rejected at decode, before any rate-limit,
+  // hasher or database work.
+  it.effect("ESS-006: a malformed email answers 400 and creates no user", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      for (const path of ["/password/sign-up", "/password/sign-in", "/password/request-reset", "/resend-verification"]) {
+        const response = yield* Effect.promise(() =>
+          post(handler, path, { email: "junk", password: strongPassword }),
+        );
+        assert.strictEqual(response.status, 400, path);
+      }
+    }),
+  );
+
+  it.effect("ESS-006: an oversized password answers 400 before reaching the hasher", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const response = yield* Effect.promise(() =>
+        post(handler, "/password/sign-in", {
+          email: "ada@example.com",
+          password: "x".repeat(PasswordApi.MAX_PASSWORD_LENGTH + 1),
+        }),
+      );
+      assert.strictEqual(response.status, 400);
+    }),
+  );
+
+  // EHA-007: the plugin contract follows the dotted-sub-group convention.
+  it("EHA-007: every password.account endpoint requires Authentication; no endpoint in the public group does", () => {
+    const requiresAuthentication = (endpoint: { readonly middlewares: ReadonlySet<unknown> }) =>
+      endpoint.middlewares.has(Api.Authentication);
+    const groups = PasswordApi.PasswordApi.groups;
+    const account = Object.values(groups["password.account"].endpoints);
+    assert.deepStrictEqual(account.map((endpoint) => endpoint.identifier).sort(), [
+      "changePassword",
+      "reauthenticate",
+    ]);
+    for (const endpoint of account) assert.isTrue(requiresAuthentication(endpoint), endpoint.identifier);
+    for (const endpoint of Object.values(groups["password"].endpoints)) {
+      assert.isFalse(requiresAuthentication(endpoint), endpoint.identifier);
+    }
+  });
 });

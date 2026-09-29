@@ -489,7 +489,22 @@ export const PasswordHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
         });
       }),
+    });
+  }),
+);
 
+/**
+ * EHA-007: the `password.account` group — the endpoints that need a live
+ * session (`Api.Authentication` runs as group middleware, so
+ * `Api.CurrentPrincipal` is always resolved here).
+ */
+export const PasswordAccountHandlers = HttpApiBuilder.group(
+  PasswordApi.PasswordApi,
+  "password.account",
+  Effect.fnUntraced(function* (handlers) {
+    const password = yield* Password;
+
+    return handlers.handleAll({
       changePassword: Effect.fnUntraced(function* ({
         payload,
       }: {
@@ -559,7 +574,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
    * sibling export.
    */
   static readonly layer = AuthPlugin.layer(Password, {
-    handlers: PasswordHandlers,
+    handlers: Layer.mergeAll(PasswordHandlers, PasswordAccountHandlers),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const accounts = yield* Accounts.Accounts;
