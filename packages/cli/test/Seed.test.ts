@@ -70,7 +70,7 @@ describe("seed admin", () => {
           readonly emailVerified: number;
         }>`SELECT email, emailVerified FROM users`;
         assert.deepStrictEqual(rows, [{ email: "ops@acme.com", emailVerified: 1 }]);
-        const held = yield* sql<{ readonly role: string }>`SELECT role FROM role_assignments`;
+        const held = yield* sql<{ readonly role: string }>`SELECT role FROM roles_assignments`;
         assert.deepStrictEqual(held, [{ role: "admin" }]);
         const tags = yield* auditTags(app);
         assert.include(tags, "auth.admin.seeded");
@@ -105,7 +105,7 @@ describe("seed admin", () => {
         assert.isTrue(Exit.isSuccess(forced));
         const holders = yield* sql<{
           readonly n: number;
-        }>`SELECT count(*) AS n FROM role_assignments WHERE role = 'admin'`;
+        }>`SELECT count(*) AS n FROM roles_assignments WHERE role = 'admin'`;
         assert.strictEqual(holders[0]?.n, 2);
         const records = yield* AuditLog.AuditLog.use((log) =>
           log.list({ eventTag: "auth.admin.seeded" }),
@@ -127,7 +127,7 @@ describe("seed admin", () => {
         assert.strictEqual(users[0]?.n, 1);
         const held = yield* sql<{
           readonly role: string;
-        }>`SELECT role FROM role_assignments ORDER BY role`;
+        }>`SELECT role FROM roles_assignments ORDER BY role`;
         assert.deepStrictEqual(held, [{ role: "admin" }, { role: "editor" }]);
       }),
     ),

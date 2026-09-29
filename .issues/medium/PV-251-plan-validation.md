@@ -31,3 +31,5 @@ Reword BEH-EA-032 to say the refusal is `Auth.make`'s, and document that hand-me
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Plan note (2026-09-29, P20a):** Left open: the silent replacement happens inside effect's HttpApi.addHttpApi; awthaq only controls Auth.make, which already refuses a duplicate group id. The honest fix is to amend BEH-EA-082 to scope the refusal to Auth.make (spec prose, P19). REQ-EA-082 stays skipped.

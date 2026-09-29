@@ -31,3 +31,5 @@ Either enforce it where it can be observed — `runPluginContractTests`' migrati
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Plan note (2026-09-29, P20a):** Left open: INV-EA-016 enforcement (a migration cannot alter a shared table) needs a statement-level check in Migrations.run or a validating test harness; larger than a cheap fix and it wants a design call on how to inspect raw SQL. REQ-EA-106..108 stay skipped.

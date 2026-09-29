@@ -33,3 +33,5 @@ Publish the replay event after the transaction has rolled back (catch `TokenCons
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Plan note (2026-09-29, P20a):** Left open: every plugin that consumes a token transactionally (password verifyEmail/confirmReset, and now magic-link, email-otp and two-factor challenges) would need the publish moved outside its transaction, or Verification.consume needs a deferred-publication contract; that is an events/transaction design call (P10), not a cheap fix. The skipped scenario keeps this id.

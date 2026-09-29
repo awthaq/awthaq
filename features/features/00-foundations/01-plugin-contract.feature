@@ -110,6 +110,11 @@ Feature: Plugin Contract
       When its "tables" array declares the bare entry "account"
       Then the declaration fails to type-check as an argument to "AuthPlugin.Service"
 
+    Scenario: A table name under another plugin's prefix fails to type-check
+      Given a plugin with id "password"
+      When its "tables" array declares the entry "oauth_account" under another plugin's prefix
+      Then the declaration fails to type-check as an argument to "AuthPlugin.Service"
+
   # BEH-EA-006 — spec/behaviors/01-plugin-contract.md
   @BEH-EA-006 @compile-time
   Rule: migrations is a static, declarative member, never computed from runtime configuration

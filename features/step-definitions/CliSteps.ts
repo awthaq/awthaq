@@ -754,7 +754,7 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
         users.map((row) => row.email),
         ["ops@acme.com"],
       );
-      const held = yield* sql<{ readonly role: string }>`SELECT role FROM role_assignments`;
+      const held = yield* sql<{ readonly role: string }>`SELECT role FROM roles_assignments`;
       assert.deepEqual(
         held.map((row) => row.role),
         ["admin"],
@@ -802,7 +802,7 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal((yield* lastRun).code, 0);
     const holders = yield* sql<{
       readonly n: number;
-    }>`SELECT count(*) AS n FROM role_assignments WHERE role = 'admin'`;
+    }>`SELECT count(*) AS n FROM roles_assignments WHERE role = 'admin'`;
     assert.equal(Number(holders[0]?.n), 2);
   });
 

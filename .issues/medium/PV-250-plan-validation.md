@@ -31,3 +31,5 @@ Decide one side: amend BEH-EA-026 (and REQ-EA-062/064) to the two-contract shape
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Plan note (2026-09-29, P20a):** Left open: the combined SessionView of BEH-EA-026 is a feature, not a defect fix; needs a decision on whether to ship it or amend BEH-EA-026 (P19/P12 territory). REQ-EA-062..064 stay skipped with this id.

@@ -71,7 +71,7 @@ describe.skipIf(postgresUrl === undefined)("migration status|apply on Postgres",
         // `select 'ledger'::regclass` against a ledger that exists — the call that wrecked the connection.
         yield* Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
-          yield* sql.unsafe(`DROP INDEX ${schema}.role_assignments_user_id`);
+          yield* sql.unsafe(`DROP INDEX ${schema}.roles_assignments_user_id`);
           yield* sql.unsafe(
             `DELETE FROM ${schema}.awthaq_plugin_migrations WHERE migration_id = 2`,
           );

@@ -321,6 +321,16 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
+  When(
+    "its {string} array declares the entry {string} under another plugin's prefix",
+    function* (_field: string, table: string) {
+      const { id } = yield* take(claim);
+      assert.ok(!table.startsWith(`${id}_`), `"${table}" is under another plugin's prefix`);
+      assert.match(table, /^[a-z]+_/);
+      yield* put(claim, { gate: "table-foreign-prefix", accepted: false, id });
+    },
+  );
+
   Then("the plugin's class definition type-checks", function* () {
     const { gate, accepted } = yield* take(claim);
     assert.equal(accepted, true);
@@ -354,7 +364,11 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
       assert.equal(factory, "AuthPlugin.Service");
       const { gate, accepted } = yield* take(claim);
       assert.equal(accepted, false);
-      assertTypeGate(gate, GATES, ["@ts-expect-error", 'tables: ["account"]']);
+      if (gate === "table-foreign-prefix") {
+        assertTypeGate(gate, GATES, ["@ts-expect-error", 'tables: ["oauth_account"]']);
+      } else {
+        assertTypeGate(gate, GATES, ["@ts-expect-error", 'tables: ["account"]']);
+      }
     },
   );
 

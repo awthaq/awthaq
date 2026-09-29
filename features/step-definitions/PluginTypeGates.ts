@@ -76,6 +76,19 @@ export class BareTablePlugin extends AuthPlugin.Service<BareTablePlugin, Record<
   },
 ) {}
 
+// type-gate: table-foreign-prefix
+// PV-253: `Id` used to be an inference site for the table names, so a table under *another* plugin's prefix
+// widened `Id` instead of failing; `NoInfer<Id>` in `AuthPlugin.Service` makes it the compile error it should be.
+export class ForeignTablePlugin extends AuthPlugin.Service<
+  ForeignTablePlugin,
+  Record<string, never>
+>()("password", {
+  apiVersion: 1,
+  contract: HttpApi.make("auth"),
+  // @ts-expect-error - "oauth_account" starts with another plugin's prefix, not "password_" (BEH-EA-005)
+  tables: ["oauth_account"],
+}) {}
+
 // type-gate: duplicate-id
 export const duplicateIdDiagnostic: Auth.Validate<readonly [typeof InviteOne, typeof InviteTwin]> =
   { awthaq: 'plugin id "invite" appears more than once' };

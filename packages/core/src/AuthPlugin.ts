@@ -208,7 +208,7 @@ export const Service =
     options: {
       readonly apiVersion: 1;
       readonly contract: HttpApi.HttpApi<"auth", Groups>;
-      readonly tables?: ReadonlyArray<`${Id}_${string}`>;
+      readonly tables?: ReadonlyArray<`${NoInfer<Id>}_${string}`>;
       readonly migrations?: Migrations;
       readonly readsTables?: ReadonlyArray<string>;
       /** ECS-008/BEH-EA-229: descriptors of the `Context.Reference`s this plugin reads (`ConfigDescriptor.make`). */

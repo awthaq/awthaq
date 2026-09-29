@@ -49,3 +49,5 @@ row. awthaq's bridge cannot fix it locally: it adds no middleware of its own on 
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Plan note (2026-09-29, P20a):** Not fixable from this repository: the response encoding lives in @qadi/http (../qadi packages/http/src/QadiHttpError.ts, AttributeResolveErrorResponse and siblings, installed here as 0.7.0). The fix is to declare those five resolver-outage errors with an empty body schema (or convert them to an empty 502 the way AccessDenied is converted) in qadi and release it; the skipped Examples row of REQ-EA-440 then un-skips. Left open.

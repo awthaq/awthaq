@@ -1,6 +1,6 @@
 # @awthaq/roles
 
-The Roles plugin: a global (platform-wide) assignment of role names to users, flattened through qadi's role DAG into `AuthSubject.roles` / `permissions` by overriding the `SubjectResolver` slot (BEH-EA-137–143). Persistence is `Roles.layer` (memory) or `Roles.layerSql` (`role_assignments`, `UNIQUE(userId, role)`).
+The Roles plugin: a global (platform-wide) assignment of role names to users, flattened through qadi's role DAG into `AuthSubject.roles` / `permissions` by overriding the `SubjectResolver` slot (BEH-EA-137–143). Persistence is `Roles.layer` (memory) or `Roles.layerSql` (`roles_assignments`, `UNIQUE(userId, role)`).
 
 ```ts
 const catalog = [editor, owner]; // built with @qadi/core's role()

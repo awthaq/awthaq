@@ -34,7 +34,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | [spec/roadmap.md](roadmap.md) | EFAUTH-RMP | The delivery roadmap (milestones M0–M8), derived from `archive/PRD.md` §23, restated against this tree's IDs, with what has shipped against each milestone. |
 | [spec/models/](models/) | `MOD-EA-001`–`015` | Sixteen files. `00-adoption-matrix.md` is an index with no `MOD` id of its own; `01`–`15` each specify one authentication-method or core-plugin domain model (see table below). |
 | [spec/decisions/](decisions/) | `ADR-EA-001`–`034` | Thirty-two architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
-| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`257` | Thirty files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
+| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`298` | Thirty-six files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
 | [spec/process/](process/) | EFAUTH-PROC-01/02 | Two files: the requirement-ID scheme in full, and the definitions of done applied at each stage of work. |
 | [spec/appendices/](appendices/) | — | Five files of supporting reference material, authored alongside the rest of the tree and cross-referenced from it rather than summarized here. |
 
@@ -131,11 +131,14 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `26-cli.md` | 201–208, 225–229 | CLI |
 | `27-admin-impersonation.md` | 209–224 | Admin and Impersonation |
 | `28-tenancy.md` | 230–237 | Tenancy |
-| `29-saml-sp.md` | 238–245 | SAML Service Provider (specified, not built) |
+| `29-saml-sp.md` | 238–245 | SAML Service Provider |
 | `30-scim.md` | 246–253 | SCIM (inbound provisioning) |
 | `31-two-factor.md` | 260–266 | Two-Factor Authentication |
 | `32-magic-link.md` | 267–270 | Magic Link |
 | `33-email-otp.md` | 271–274 | Email OTP |
+| `34-webhooks.md` | 275–282 | Outbound Webhooks |
+| `35-organization.md` | 283–290 | Organization |
+| `36-jwt.md` | 291–298 | JWT |
 
 ### `spec/process/`
 
@@ -150,7 +153,7 @@ Every identifier in this tree carries the infix `EA` and a series prefix that sa
 
 ## `features/` is the acceptance suite
 
-The repository root also holds [`features/`](../features/), a Gherkin acceptance suite (`features/features/*.feature`) that restates the behavior catalog in `spec/behaviors/` as scenarios, one `Rule:` per `BEH-EA-NNN` and one `REQ-EA-NNN`-tagged `Scenario:`/`Scenario Outline:` per requirement clause and named edge case. It is normative in the same sense `behaviors/` is — every scenario traces to a `BEH-EA` id and does not invent requirements beyond what that id states — but a scenario is only runtime evidence if it is wired. The suite runs with `pnpm test:bdd` (`features/vitest.config.ts`, `@effect-cucumber/vitest`, step definitions in `features/step-definitions/`) inside `pnpm check`: the session, password, OAuth, passkey and admin-impersonation feature files are wired against the real plugins, and the remaining feature files are registered but tagged `@skip @unwired` — a passing wired scenario is evidence, an unwired one is a restated requirement only. [`behaviors/25-testing-harness.md`](behaviors/25-testing-harness.md) (`BEH-EA-193`–`200`) specifies the `@awthaq/test` harness (`TestAuth`, `runPluginContractTests`, the redaction guard) that plugin packages' own suites use. See [`traceability.md` §6](traceability.md#6-acceptance-scenarios-req-ea) for the `REQ-EA` allocation and [`features/README.md`](../features/README.md) for the suite's own structure and conventions.
+The repository root also holds [`features/`](../features/), a Gherkin acceptance suite (`features/features/*.feature`) that restates the behavior catalog in `spec/behaviors/` as scenarios, one `Rule:` per `BEH-EA-NNN` and one `REQ-EA-NNN`-tagged `Scenario:`/`Scenario Outline:` per requirement clause and named edge case. It is normative in the same sense `behaviors/` is — every scenario traces to a `BEH-EA` id and does not invent requirements beyond what that id states — but a scenario is only runtime evidence if it is wired. The suite runs with `pnpm test:bdd` (`features/vitest.config.ts`, `@effect-cucumber/vitest`, step definitions in `features/step-definitions/`) inside `pnpm check`: every feature file is wired against the real plugins except the ones tagged `@skip @unwired` (a plugin that is not built yet, today only device authorization), and a scenario-level `@skip` always carries a `# @skip:` rationale — a passing wired scenario is evidence, an unwired one is a restated requirement only. `spec/traceability.md` §6 has the per-file wiring status. [`behaviors/25-testing-harness.md`](behaviors/25-testing-harness.md) (`BEH-EA-193`–`200`) specifies the `@awthaq/test` harness (`TestAuth`, `runPluginContractTests`, the redaction guard) that plugin packages' own suites use. See [`traceability.md` §6](traceability.md#6-acceptance-scenarios-req-ea) for the `REQ-EA` allocation and [`features/README.md`](../features/README.md) for the suite's own structure and conventions.
 
 ## `research/` and `better-auth/` are evidence, not specification
 

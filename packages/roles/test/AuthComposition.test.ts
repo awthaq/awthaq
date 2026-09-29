@@ -50,7 +50,7 @@ describe("Auth.make([Roles])", () => {
   it("Roles + RolesAdmin compose: the admin plugin depends on Roles and contributes the one group (YL-009)", () => {
     const auth = Auth.make([Roles.Roles, RolesAdmin.RolesAdmin]);
     assert.deepStrictEqual(auth.manifest.plugins, [
-      { id: "roles", apiVersion: 1, tables: ["role_assignments"], dependsOn: [], groups: [] },
+      { id: "roles", apiVersion: 1, tables: ["roles_assignments"], dependsOn: [], groups: [] },
       { id: "rolesAdmin", apiVersion: 1, tables: [], dependsOn: ["roles"], groups: ["rolesAdmin"] },
     ]);
   });
@@ -60,7 +60,7 @@ describe("Auth.make([Roles])", () => {
     assert.strictEqual(auth.api.identifier, "auth");
     assert.deepStrictEqual(auth.manifest.plugins, [
       { id: "ping", apiVersion: 1, tables: [], dependsOn: [], groups: ["ping"] },
-      { id: "roles", apiVersion: 1, tables: ["role_assignments"], dependsOn: [], groups: [] },
+      { id: "roles", apiVersion: 1, tables: ["roles_assignments"], dependsOn: [], groups: [] },
     ]);
   });
 });

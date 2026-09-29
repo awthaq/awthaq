@@ -3,7 +3,7 @@ ID: "PV-253"
 Title: "`AuthPlugin.Service`'s `tables` prefix constraint (BEH-EA-005) is bypassable by type inference, and `@awthaq/roles` already violates it"
 Level: medium
 Category: "correctness"
-Status: open
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthPlugin.ts:152"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `MEDIUM` · `correctness` · `core` · found while wiring `05-persistence-stratum.feature` (P20a, REQ-EA-105)
 
-Status: **open**
+Status: **resolved**
 
 ## Summary
 
@@ -44,3 +44,5 @@ class ForeignTable extends AuthPlugin.Service<ForeignTable, {}>()("password", {
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29, P20a):** AuthPlugin.Service's tables option now uses NoInfer<Id>, so a table under another plugin's prefix is a compile error; @awthaq/roles renamed role_assignments to roles_assignments (SQL, migrations, index, roles and cli tests, CliSteps, README). Type gate table-foreign-prefix (PluginTypeGates.ts) with a BEH-EA-005 scenario; REQ-EA-105 un-skipped and passes with Roles included.

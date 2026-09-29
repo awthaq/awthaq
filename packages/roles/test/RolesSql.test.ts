@@ -127,7 +127,7 @@ describe("Roles.Roles.layerSql", () => {
         const userId = Users.UserId("55555555-5555-5555-5555-555555555555");
         yield* roles.assign(userId, "owner");
         // A row written around the plugin (or left behind by a catalog rename).
-        yield* sql`INSERT INTO role_assignments ("userId", role) VALUES (${userId}, ${"renamed-away"})`;
+        yield* sql`INSERT INTO roles_assignments ("userId", role) VALUES (${userId}, ${"renamed-away"})`;
 
         captured.length = 0;
         const subject = yield* resolver.resolve(

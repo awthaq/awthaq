@@ -178,8 +178,6 @@ Feature: The Persistence Stratum
   @BEH-EA-040
   Rule: A plugin migration may only alter tables under its own prefix; shared tables are altered only through a declared extension point
 
-    # @skip: @awthaq/roles creates `role_assignments` (its id is "roles") and AuthPlugin.Service's `tables` prefix check is bypassable by inference, so this cannot pass until the table is renamed and the constraint is tightened; blocked by PV-253. Wired and green for every other shipped plugin.
-    @skip
     @REQ-EA-105
     Scenario: A plugin's migration creates or alters only tables under its own prefix
       Given the shipped plugins that declare migrations

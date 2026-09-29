@@ -16,6 +16,7 @@
 //  14  Document Control revision is current     (BDD-003)
 //  15  no REQ-EA tag is claimed twice           (BDD-003)
 //  16  ADR/INV/URS/NFR/MOD ids are unique       (parallel branches allocating "the next number")
+//  17  spec/README.md lists every behaviors file and its BEH range (P20a)
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -59,6 +60,8 @@ const STALE = [
   /there is no `pnpm check`/i,
   /no `\.github\/workflows\/check\.yml`/i,
   /every gate is \**not yet active/i,
+  /remaining feature files are registered but tagged/i,
+  /every other feature file is registered with zero steps/i,
 ];
 {
   const files = [
@@ -260,6 +263,28 @@ const block = (file, name) => {
   const dupes = [...defs].filter(([, at]) => at.length > 1).map(([id, at]) => `${id} (${at.join(", ")})`);
   if (dupes.length > 0) report("FAIL", "ADR/INV/URS/MOD ids are unique", dupes.join("; "));
   else report("PASS", "ADR/INV/URS/MOD ids are unique", `${defs.size} id(s), each defined once`);
+}
+
+// ---------------------------------------------------------------------------
+// 17. spec/README.md describes the behavior catalog: its `BEH-EA-001`–`N` range equals the
+// highest id defined, and every behaviors/NN-*.md file has a row in its table. A new behavior
+// file that is not listed there (or a range nobody bumped) is drift the reader trusts.
+// ---------------------------------------------------------------------------
+{
+  const readme = readFileSync(join(specDir, "README.md"), "utf8");
+  const files = readdirSync(join(specDir, "behaviors")).filter((f) => /^\d{2}-.*\.md$/.test(f));
+  let max = 0;
+  for (const file of files) {
+    for (const m of readFileSync(join(specDir, "behaviors", file), "utf8").matchAll(/^## BEH-EA-(\d{3})\b/gm)) max = Math.max(max, Number(m[1]));
+  }
+  const claimed = readme.match(/`BEH-EA-001`–`(\d{3})`/)?.[1];
+  const unlisted = files.filter((f) => !readme.includes(`\`${f}\``));
+  const problems = [];
+  if (claimed === undefined) problems.push("no `BEH-EA-001`–`N` range found");
+  else if (Number(claimed) !== max) problems.push(`range says ${claimed}, highest defined is ${String(max).padStart(3, "0")}`);
+  if (unlisted.length > 0) problems.push(`not listed: ${unlisted.join(", ")}`);
+  if (problems.length > 0) report("FAIL", "spec/README.md lists the behavior catalog", problems.join("; "));
+  else report("PASS", "spec/README.md lists the behavior catalog", `${files.length} file(s), BEH-EA-001–${claimed}`);
 }
 
 console.log(results.join("\n"));

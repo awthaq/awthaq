@@ -32,3 +32,5 @@ Either implement the resolvers (a `RateLimits.keyFor(rule, request)` that reads 
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Plan note (2026-09-29, P20a):** Left open: PV-240 (principal/ip key strategies are registry metadata only) needs the RateLimits key derivation to be designed against ClientAddress and CurrentPrincipal; not a small fix.

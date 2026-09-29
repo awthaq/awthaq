@@ -21,7 +21,7 @@
 // they cannot be mistaken for an organization's `owner`/`admin`.
 //
 // BAM-006 (.issues/high): `layerSql` closes the persistence gap this
-// header used to document as deferred — a `role_assignments` table,
+// header used to document as deferred — a `roles_assignments` table,
 // `UNIQUE(userId, role)` making `assign` idempotent at the database layer
 // too (matching `layerMemory`'s own "assigning an already-held role name
 // is a no-op" contract), mirroring `@awthaq/jwt`'s own
@@ -236,7 +236,7 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
       Result: RoleAssignmentRow,
       execute: (r) =>
         sql`
-          INSERT INTO role_assignments ("userId", role)
+          INSERT INTO roles_assignments ("userId", role)
           VALUES (${r.userId}, ${r.role})
           ON CONFLICT ("userId", role) DO NOTHING
           RETURNING "userId", role
@@ -247,7 +247,7 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
       Request: RoleAssignmentRow,
       Result: RoleAssignmentRow,
       execute: (r) =>
-        sql`DELETE FROM role_assignments WHERE "userId" = ${r.userId} AND role = ${r.role} RETURNING "userId", role`,
+        sql`DELETE FROM roles_assignments WHERE "userId" = ${r.userId} AND role = ${r.role} RETURNING "userId", role`,
     });
 
     const listUnknownQuery = SqlSchema.findAll({
@@ -255,20 +255,20 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
       Result: RoleAssignmentRow,
       execute: (names) =>
         names.length === 0
-          ? sql`SELECT "userId", role FROM role_assignments`
-          : sql`SELECT "userId", role FROM role_assignments WHERE role NOT IN ${sql.in(names)}`,
+          ? sql`SELECT "userId", role FROM roles_assignments`
+          : sql`SELECT "userId", role FROM roles_assignments WHERE role NOT IN ${sql.in(names)}`,
     });
 
     const holdersQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: Schema.Struct({ userId: Schema.String }),
-      execute: (roleName) => sql`SELECT "userId" FROM role_assignments WHERE role = ${roleName}`,
+      execute: (roleName) => sql`SELECT "userId" FROM roles_assignments WHERE role = ${roleName}`,
     });
 
     const listQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: Schema.Struct({ role: Schema.String }),
-      execute: (userId) => sql`SELECT role FROM role_assignments WHERE "userId" = ${userId}`,
+      execute: (userId) => sql`SELECT role FROM roles_assignments WHERE "userId" = ${userId}`,
     });
 
     return {
@@ -326,19 +326,19 @@ const rolesMakeSql: Effect.Effect<RolesShape, never, SqlClient.SqlClient | AuthE
  */
 const rolesMigrations: Migrations.Migrations = [
   {
-    name: "create_role_assignments",
+    name: "create_roles_assignments",
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
         pg: () => sql`
-          CREATE TABLE role_assignments (
+          CREATE TABLE roles_assignments (
             "userId" TEXT NOT NULL,
             role TEXT NOT NULL,
             "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
             UNIQUE ("userId", role)
           )`,
         sqlite: () => sql`
-          CREATE TABLE role_assignments (
+          CREATE TABLE roles_assignments (
             "userId" TEXT NOT NULL,
             role TEXT NOT NULL,
             "createdAt" TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -349,12 +349,12 @@ const rolesMigrations: Migrations.Migrations = [
     }),
   },
   {
-    name: "create_role_assignments_user_id_index",
+    name: "create_roles_assignments_user_id_index",
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql.onDialectOrElse({
-        pg: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments("userId")`,
-        sqlite: () => sql`CREATE INDEX role_assignments_user_id ON role_assignments("userId")`,
+        pg: () => sql`CREATE INDEX roles_assignments_user_id ON roles_assignments("userId")`,
+        sqlite: () => sql`CREATE INDEX roles_assignments_user_id ON roles_assignments("userId")`,
         orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
@@ -450,7 +450,7 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   // trivially, the same bottom-type reasoning `Auth.ts`'s own comments use
   // for `Layer`'s contravariant `ROut`).
   contract: HttpApi.make("auth"),
-  tables: ["role_assignments"],
+  tables: ["roles_assignments"],
   migrations: rolesMigrations,
   // The catalog is listed by role name (each `Role` carries its whole permission tree).
   config: [
