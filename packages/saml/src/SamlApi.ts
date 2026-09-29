@@ -146,7 +146,10 @@ export const SamlGroup = HttpApiGroup.make("saml")
       success: HttpApiSchema.Empty(302),
       error: [SamlLogoutRejected, Api.RateLimited, Api.StoreUnavailable],
     }),
-  );
+  )
+  // BEH-EA-201: the IdP posts here cross-site by construction (no double-submit cookie can exist); the messages carry their own
+  // signature and single-use id, so `awthaq doctor` skips its CSRF check for this group.
+  .annotate(Api.BackChannel, true);
 
 export const LogoutPayload = Schema.Struct({
   /** Where the browser lands after the logout: a relative path, or an origin in `SamlConfig.trustedOrigins`; anything else is the default. */

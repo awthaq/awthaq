@@ -72,13 +72,17 @@ export class StartResponse extends Schema.Class<StartResponse>("SsoStartResponse
   loginUrl: Schema.String,
 }) {}
 
-export const SsoGroup = HttpApiGroup.make("sso").add(
-  HttpApiEndpoint.post("start", "/auth/sso/start", {
-    payload: StartPayload,
-    success: StartResponse,
-    error: [SsoNotFound, Api.RateLimited],
-  }),
-);
+export const SsoGroup = HttpApiGroup.make("sso")
+  .add(
+    HttpApiEndpoint.post("start", "/auth/sso/start", {
+      payload: StartPayload,
+      success: StartResponse,
+      error: [SsoNotFound, Api.RateLimited],
+    }),
+  )
+  // BEH-EA-201: a pre-authentication lookup (which login does this address route to?) that reads no credential and changes
+  // nothing, so there is no ambient credential to forge: `awthaq doctor` skips its CSRF check.
+  .annotate(Api.BackChannel, true);
 
 export const SsoApi = HttpApi.make("auth").add(SsoGroup);
 
@@ -131,6 +135,7 @@ export class Sso extends AuthPlugin.Service<Sso, SsoShape>()("sso", {
   migrations: [],
 }) {
   static readonly layer = AuthPlugin.layer(Sso, {
+    ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
     dependsOn: [Saml.Saml],
     handlers: HttpApiBuilder.group(
       SsoApi,

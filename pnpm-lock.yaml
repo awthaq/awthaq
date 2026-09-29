@@ -1134,8 +1134,8 @@ importers:
         specifier: workspace:*
         version: link:../sql
       '@qadi/core':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       '@xmldom/xmldom':
         specifier: 0.8.15
         version: 0.8.15
