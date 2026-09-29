@@ -6,13 +6,14 @@
   "type": "module",
   "scripts": {
     "start": "node --experimental-strip-types index.ts",
-    "typecheck": "tsc -b tsconfig.json"
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
     "@awthaq/organization": "workspace:*",
     "@awthaq/password": "workspace:*",
-    "@awthaq/ports": "workspace:*",
     "@awthaq/qadi": "workspace:*",
     "@awthaq/roles": "workspace:*",
     "@awthaq/server": "workspace:*",
@@ -23,7 +24,9 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "typescript": "catalog:"
+    "@effect/vitest": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": ">=22.12.0"

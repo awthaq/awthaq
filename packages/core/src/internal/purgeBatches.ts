@@ -4,7 +4,7 @@
 import * as Effect from "effect/Effect";
 
 /** Rows deleted per statement. */
-export const PURGE_BATCH = 1000;
+const PURGE_BATCH = 1000;
 
 /** Runs `step` (which deletes at most `limit` rows and resolves to how many it deleted) until a batch comes back short, and resolves to the total. */
 export const drainBatches = (

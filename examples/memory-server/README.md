@@ -18,12 +18,12 @@ It listens on `:3001`. Try it:
 ```sh
 curl -X POST localhost:3001/password/sign-up \
   -H 'content-type: application/json' \
-  -d '{"email":"demo@example.com","password":"correct horse battery staple"}'
+  -d '{"email":"demo@example.com","password":"Zx9-quartz-Lantern-7431-orbit"}'
 # -> 200, sets a real __Host-session cookie
 
 curl -X POST localhost:3001/password/sign-in \
   -H 'content-type: application/json' \
-  -d '{"email":"demo@example.com","password":"correct horse battery staple"}'
+  -d '{"email":"demo@example.com","password":"Zx9-quartz-Lantern-7431-orbit"}'
 # -> 403 EmailNotVerified — signIn hard-blocks until the mailed token is
 #    consumed via POST /verify-email (the memory Mailer just drops the
 #    mail; there is no console-log stand-in wired into this example)
@@ -42,7 +42,14 @@ curl localhost:3001/roles/catalog
 #    serve if any guarded endpoint declares neither a permission nor `publicEndpoint`.
 ```
 
-See `index.ts`'s own comments for what each composition step is doing and
-why. Backed entirely by `@awthaq/test`'s `TestAuth.layer` — the same memory
+Sign-up is guarded by a `BeforeSignUp` allow-list tap (only `@example.com`
+addresses; anything else is refused with the typed `HookAborted`, 403), the
+hook seam a host uses for policy the library does not own. `GET /roles/catalog`
+is the `RequirePermission` (qadi Path B) dogfood: 403 until a user is assigned
+`platform:admin` (`Roles.assign` is the trusted primitive). `test/smoke.test.ts`
+boots this exact composition in-process and asserts both (`pnpm test`).
+
+See `app.ts`'s own comments for what each composition step is doing and
+why (`index.ts` only starts it). Backed entirely by `@awthaq/test`'s `TestAuth.layer` — the same memory
 machinery this repository's own HTTP integration tests and BDD suite already
 exercise, not new stub scaffolding built just for this example.
