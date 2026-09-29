@@ -1,0 +1,32 @@
+AAPS-009-abac-attribute-policy-specialist | info | ApiKey/Service principals carry no attribute payload; attribute policies deny them by construct
+AGA-006-api-gateway-auth-specialist | info | No trusted-header identity seam exists — correctly so for this architecture
+BAM-011-better-auth-migration-specialist | info | Account linking is at parity and the identity anchor is stricter than better-auth's
+BCR-008-backup-codes-recovery-specialist | info | Show-once primitive already exists: issue returns the plaintext value exactly once as Redacted
+BO-010-balazs-orban | info | CookieJarLike does not structurally satisfy SvelteKit's Cookies.set (path required) — second-ad
+CTA-007-cli-tool-auth-specialist | info | Absence of the entire domain is documented honestly in every artifact
+DAG-006-device-authorization-grant-specialist | info | Session-issuance integration point is well-prepared for a future device flow
+EAR-005-effect-atom-react-specialist | info | Seeded SSR props guarantee a hydration mismatch in the guarded subtree
+MM-008-mattia-manzati | info | no-unused-internal lint rule dark under TS7 (honestly documented)
+PCS-007-permission-caching-specialist | info | Client-side decision invalidation is a disconnected model: reactivity keys, no server push
+PIL-008-pilcrow | info | Admin impersonation semantics encoded in core's session model
+RRC-007-read-replica-consistency-specialist | info | Verification write path is replica-friendly by construction: single-statement issue/consume wit
+TC-008-tim-cappalli | info | No Related Origin Requests support for multi-origin passkey deployments
+TS-007-tim-smart | info | No streaming HTTP responses anywhere on the server surface — every response is a buffered DTO
+BCR-009-backup-codes-recovery-specialist | low | Backup codes must be long-lived but expiresAt is NOT NULL and expiry fails as replay
+BO-007-balazs-orban | low | Wildcard re-export of @qadi/react leaks upstream renames into the public API
+MTS-007-monorepo-tooling-specialist | low | minimumReleaseAgeExclude block configures exclusions for a gate that is not enabled
+PPS-006-postgres-performance-specialist | low | No prepared-statement reuse: every hot statement is an unnamed template executed fresh
+PPS-008-postgres-performance-specialist | low | SELECT * on every hand-written lookup pulls full wide rows including ciphertext and audit colum
+SFS-005-saml-federation-specialist | low | Single-algorithm RS256 equality gate is the only algorithm-policy precedent
+SOS-007-sms-otp-specialist | low | Rate-limit key strategies have no recipient/E.164 notion; SMS pumping protection would lean ent
+AR-002-aeneas-rekkas | medium | Self-service flows are ad-hoc endpoints, not resumable flow state machines
+BCR-007-backup-codes-recovery-specialist | medium | better-auth design contract keeps a plaintext backup-code read path that contradicts the repo's
+BO-004-balazs-orban | medium | Framework-neutral adapter code lives in a Next-named package, stranding Astro/SvelteKit reuse
+DRS-004-data-residency-sharding-specialist | medium | Session token carries no shard/region hint; verify is a bare findById that needs a global direc
+MW-007-matias-woloski | medium | Users port requires a full 7-method shape — no partial-adapter path for immutable/legacy stores
+PCS-004-permission-caching-specialist | medium | Decision cache has no TTL or staleness upper bound: FIFO capacity eviction only
+RRC-006-read-replica-consistency-specialist | medium | CAS touch loser returns a session view the presented token can no longer verify
+RRS-005-refresh-token-rotation-specialist | medium | Zero grace window on rotation: any missed delivery permanently kills the legitimate client
+SOS-002-sms-otp-specialist | medium | No SmsSender port: the archive design reserved auth.sms but the ports stratum never implemented
+TTE-006-typescript-type-level-engineer | medium | Double `any` in GroupsFor erases endpoint checking at the plugin contract boundary
+YL-003-yang-luo | medium | Closed matcher DSL and fixed combining algorithms cap model flexibility
