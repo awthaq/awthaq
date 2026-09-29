@@ -15,6 +15,7 @@ import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import {
   actorNamed,
   authProbeApp,
@@ -742,11 +743,51 @@ export const contractStratumSteps = defineSteps<ScratchWorld | AppWorld>(
       },
     );
 
+    // PV-251: a host group merged through `Auth.make`'s `extraGroups` is the supported path for
+    // a group no plugin owns; a duplicate id is refused there, attributed to `core`/`host`.
+    Given(
+      "a host group with the id {string} passed as an extra group to Auth.make",
+      function* (group: string) {
+        yield* put(tuple, `extra:${group}`);
+      },
+    );
+
+    const composeExtra = (group: string) =>
+      Effect.sync(() => {
+        try {
+          Auth.make([PasswordFixture], { extraGroups: [HttpApiGroup.make(group)] });
+        } catch (error) {
+          if (error instanceof Auth.GroupIdConflict) {
+            return {
+              tag: error._tag,
+              groupId: error.groupId,
+              first: error.firstPluginId,
+              second: error.secondPluginId,
+              message: error.message,
+            };
+          }
+          throw error;
+        }
+        return { tag: "none", groupId: "", first: "", second: "", message: "" };
+      });
+
+    Then(
+      "the rejection names {string} and {string} as the owners of the {string} group",
+      function* (first: string, second: string, group: string) {
+        const [outcome] = yield* take(composeOutcome);
+        assert.ok(outcome !== undefined);
+        assert.deepEqual([outcome.first, outcome.second], [first, second]);
+        assert.equal(outcome.groupId, group);
+      },
+    );
+
     When("{string} composes the tuple", function* (make: string) {
       assert.equal(make, "Auth.make");
       const kind = yield* take(tuple);
       if (kind === "conflict") {
         yield* put(composeOutcome, [yield* compose("forward")]);
+      } else if (kind.startsWith("extra:")) {
+        yield* put(composeOutcome, [yield* composeExtra(kind.slice("extra:".length))]);
       } else {
         assert.equal(kind, "password");
       }

@@ -233,14 +233,14 @@ Feature: The Contract Stratum
       Then composition is rejected
       And the rejection names both "login" and "login.legacy" as the contributing plugins
 
-    # @skip: raw HttpApi.addHttpApi replaces a same-id group silently (Effect's assignProperty, last wins) — awthaq only refuses a duplicate through Auth.make's composeApi (REQ-EA-081/083); blocked by PV-251
-    @skip
+    # PV-251: Effect's own HttpApi.addHttpApi replaces a same-id group silently (last wins), so awthaq's
+    # refusal is Auth.make's; a host that has a group of its own hands it to Auth.make as `extraGroups`.
     @REQ-EA-082
-    Scenario: Merging raw contracts outside Auth.make rejects a duplicate group id at the point they are merged
-      Given two raw HttpApiGroup contracts, both declaring the group id "password", composed outside Auth.make via HttpApi.addHttpApi
-      When the contracts are merged
-      Then the merge is rejected as "E_GROUP_CONFLICT"
-      And neither group silently replaces the other
+    Scenario: A group a host adds through Auth.make's extraGroups is refused when its id is already composed
+      Given a host group with the id "session" passed as an extra group to Auth.make
+      When "Auth.make" composes the tuple
+      Then composition is rejected
+      And the rejection names "core" and "host" as the owners of the "session" group
 
     @REQ-EA-083
     Scenario: A duplicate group id is never resolved by array order

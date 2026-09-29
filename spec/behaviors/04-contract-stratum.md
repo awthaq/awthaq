@@ -158,14 +158,16 @@ export const AuthApi = Auth.api(plugins.map((p) => p.contract), { prefix: "/auth
 
 ```text
 REQUIREMENT: Merging two contracts that declare the same `HttpApiGroup` id
-             through `Auth.api` MUST fail — either at the type level via
-             the same `Validate<P>` machinery `Auth.make` uses, or, when
-             composing raw contracts outside `Auth.make`, at the point
-             `HttpApi.addHttpApi` evaluates — never by one group silently
-             replacing the other.
+             through `Auth.make` (the composed `api`) MUST fail — at the type
+             level via the `Validate<P>` machinery for plugin classes, and at
+             composition for every group it merges (a plugin's, core's, a
+             host's `extraGroups`) — never by one group silently replacing
+             the other.
 ```
 
 `archive/design/usage-examples-v4.md` §2.2 is the documented failure this behavior must reproduce: `password()` and a third-party `acmeLegacyLogin()` both contributing a group named `"password"` is designed to be caught as `E_GROUP_CONFLICT`, naming both contributing plugins by version, at the point the contracts are merged — never resolved by whichever plugin happened to be added to the array last.
+
+**As shipped (PV-251):** the refusal is `Auth.make`'s (`composeApi`, `GroupIdConflict`, `E_GROUP_CONFLICT`). Effect's own `HttpApi.addHttpApi` copies groups with `assignProperty`, so a same-id group **replaces** the earlier one without an error; awthaq cannot change that, and a host that merges raw contracts by hand outside `Auth.make` gets that silent replacement. A host with a group no plugin owns therefore hands it to `Auth.make` as `extraGroups`, where a duplicate id is refused (REQ-EA-082, attributed to `core`/`host`); merging with `addHttpApi` directly is unsupported.
 
 MW-002 (wayfinder ticket 26): the composed `api` is the one served document. `Auth.make` seeds it with core's own `session` and `account` groups (attributed to the pseudo-owner `core` in a conflict message, so a plugin reusing one of those ids, or one of their routes, is refused exactly as two plugins colliding are), then the optional `extraGroups` a host passes for groups no plugin owns (`@awthaq/qadi`'s `SubjectApi.SubjectGroup`), then every plugin group. `Built<P, Extra>["api"]` types all of them; `publicApi` keeps core's and the host's groups (none is admin-tier). Their handlers are `@awthaq/server`'s `AuthHttp.coreHandlers` (a composition that serves `built.api` without them fails at layer build); the standalone `AuthCore.AuthCoreApi` remains the typed input those handlers are built against, not a separately served document.
 
