@@ -56,6 +56,8 @@ REQUIREMENT: `SessionView` MUST include `principal`, `user`, `session`, and
 
 `archive/PRD.md` §7 and §16 describe `SessionView` as the single response shape returned by sign-in, sign-up, and `GET /auth/session` alike (`archive/design/usage-examples-v4.md` §1.2), and `SubjectDto` as the array-shaped counterpart of qadi's `AuthSubject` the React and Next.js bindings reconstitute client-side (`archive/design/usage-examples-v4.md` §12.2, `makeSubject`). One shape answering "what does the client now know" is designed to remove the need for a second, ad hoc session-serialization format per plugin.
 
+**As shipped (PV-250, decision adopted: two wire shapes, composed client-side):** the combined struct is not built, and the requirement above is delivered as two contracts. Sign-in, sign-up and `GET /session` answer one shape, `SessionDto` (`Api.SessionContract`), and the authorization subject is its own `GET /subject` answer, `SubjectDto` (`Api.SubjectContract`), served by `@awthaq/qadi`; `@awthaq/react`'s `Providers` composes them (the subject is gated on the session, its roles and permissions come from `/subject`). The server cannot assemble one struct: the subject comes from qadi's `SubjectResolver`, a stratum above `@awthaq/server`, and folding roles into the session DTO would contradict the layering `packages/api/src/Subject.ts` documents. `principal` is server-side (`CurrentPrincipal`) and `user` is `GET /user`; neither is part of `SessionDto`. A future composed endpoint in the qadi stratum stays possible; nothing depends on it (REQ-EA-062/064).
+
 ## BEH-EA-027: Every contract error is a `Schema.TaggedError` carrying its own `httpApiStatus`, and credential errors are enumeration-safe
 
 ```ts

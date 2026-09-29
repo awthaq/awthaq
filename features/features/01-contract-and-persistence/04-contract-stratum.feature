@@ -41,13 +41,14 @@ Feature: The Contract Stratum
   @BEH-EA-026
   Rule: SessionView and SubjectDto are the wire shapes of "who is signed in and what they may do"
 
-    # @skip: the combined SessionView struct (principal + user + session + subject) is not shipped: sign-in, sign-up and GET /session return SessionDto, and the subject is its own GET /subject atom (packages/api/src/Subject.ts header); blocked by PV-250
-    @skip
+    # PV-250: delivered as two wire shapes the client composes (packages/api/src/Subject.ts header):
+    # the server cannot assemble one struct, because qadi's subject resolver sits a stratum above it.
     @REQ-EA-062
-    Scenario: SessionView bundles principal, user, session, and subject in one struct
-      Given a signed-in user "alice" with a valid session
-      When a SessionView is produced for "alice"
-      Then the SessionView carries "principal", "user", "session", and "subject" as one struct
+    Scenario: Who is signed in and what they may do are two wire shapes the client composes
+      Given the session contract and the subject contract
+      When their wire shapes are inspected
+      Then the session shape carries "id", "createdAt", "expiresAt" and "current"
+      And the subject shape carries "id", "roles", "permissions" and "attributes"
 
     # @skip: SubjectDto's mapper from AuthSubject is module-private to @awthaq/qadi and only reachable through the served GET /subject; covered by packages/qadi/test/SubjectApi.test.ts ("an exposed resolver-backed attribute appears in GET /subject", decoding the SubjectDto)
     @skip
@@ -58,13 +59,11 @@ Feature: The Contract Stratum
       Then the SubjectDto's "roles" and "permissions" are each a flat array suitable for serialization
       And the SubjectDto carries an "attributes" record alongside them
 
-    # @skip: sign-in, sign-up and GET /session do not return one SessionView shape (they return SessionDto; the subject is a separate contract); blocked by PV-250
-    @skip
     @REQ-EA-064
-    Scenario: Sign-in, sign-up, and GET /auth/session return the same SessionView shape
-      Given a signed-in user "alice"
-      When "alice" signs in, and separately when a new user signs up, and separately when "alice" requests GET /auth/session
-      Then all three responses are shaped as the same SessionView struct
+    Scenario: Sign-in, sign-up, and GET /session answer the same SessionDto shape
+      Given a new user who signs up and then signs in
+      When the user requests the current session
+      Then the sign-up, sign-in and current-session responses all decode as the same SessionDto
 
   # BEH-EA-027 — spec/behaviors/04-contract-stratum.md
   @BEH-EA-027

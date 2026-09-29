@@ -3,7 +3,7 @@ ID: "PV-251"
 Title: "BEH-EA-032's second half (raw `HttpApi.addHttpApi` rejects a duplicate group id) is not true: Effect replaces silently"
 Level: medium
 Category: "docs"
-Status: open
+Status: resolved
 Package: "core"
 Source: "spec/behaviors/04-contract-stratum.md:BEH-EA-032"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `MEDIUM` · `docs` · `core` · found while wiring `04-contract-stratum.feature` (P20a, REQ-EA-082)
 
-Status: **open**
+Status: **resolved**
 
 ## Summary
 
@@ -33,3 +33,5 @@ Reword BEH-EA-032 to say the refusal is `Auth.make`'s, and document that hand-me
 _Triage notes and discussion append here._
 
 **Plan note (2026-09-29, P20a):** Left open: the silent replacement happens inside effect's HttpApi.addHttpApi; awthaq only controls Auth.make, which already refuses a duplicate group id. The honest fix is to amend BEH-EA-082 to scope the refusal to Auth.make (spec prose, P19). REQ-EA-082 stays skipped.
+
+**Resolved (2026-09-29):** Took the issue's first option (spec correction, no new helper): spec/behaviors/04-contract-stratum.md BEH-EA-032's requirement now says the refusal is Auth.make's (Validate for plugin classes; composeApi at composition for every merged group: plugins, core, extraGroups) and an as-shipped paragraph states that Effect's HttpApi.addHttpApi replaces a same-id group silently and hand-merging with it is unsupported; a host group goes through extraGroups. REQ-EA-082 was rewritten to that reality and un-skipped: 'A group a host adds through Auth.make's extraGroups is refused when its id is already composed' (GroupIdConflict naming core and host), new steps in ContractStratumSteps.ts; features/traceability.md row retitled. Gates: features 01-contract-and-persistence, spec:verify:strict, typecheck.

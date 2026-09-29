@@ -5,7 +5,7 @@
 // (INV-EA-011) is compile-time and goes through `ContractTypeGates.ts`.
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
-import { Api } from "@awthaq/api";
+import { Api, SessionContract, SubjectContract } from "@awthaq/api";
 import { Auth, Sessions, Users } from "@awthaq/core";
 import { AuthClient } from "@awthaq/client";
 import * as Effect from "effect/Effect";
@@ -252,6 +252,68 @@ export const contractStratumSteps = defineSteps<ScratchWorld | AppWorld>(
     );
 
     // ---- BEH-EA-027: contract errors, enumeration safety ----
+
+    // ---- BEH-EA-026 as shipped (PV-250): two wire shapes, composed by the client ----
+
+    Given("the session contract and the subject contract", function* () {
+      yield* put(strings, [
+        `session:${Object.keys(SessionContract.SessionDto.fields).join(",")}`,
+        `subject:${Object.keys(SubjectContract.SubjectDto.fields).join(",")}`,
+      ]);
+    });
+
+    When("their wire shapes are inspected", function* () {
+      yield* Effect.void; // the shapes were read in the Given: nothing to await
+    });
+
+    Then(
+      "the session shape carries {string}, {string}, {string} and {string}",
+      function* (...fields: ReadonlyArray<string>) {
+        const [session] = yield* take(strings);
+        const carried = (session ?? "").replace("session:", "").split(",");
+        for (const field of fields) assert.ok(carried.includes(field), `${field} in ${session}`);
+      },
+    );
+
+    Then(
+      "the subject shape carries {string}, {string}, {string} and {string}",
+      function* (...fields: ReadonlyArray<string>) {
+        const [, subject] = yield* take(strings);
+        const carried = (subject ?? "").replace("subject:", "").split(",");
+        for (const field of fields) assert.ok(carried.includes(field), `${field} in ${subject}`);
+      },
+    );
+
+    Given("a new user who signs up and then signs in", function* () {
+      const { handler } = yield* passwordApp;
+      const email = "one-shape@example.com";
+      const signedUp = yield* signUp(handler, email);
+      const signedIn = yield* signInAttempt(handler, email, STRONG_PASSWORD);
+      yield* put(replies, [signedUp, signedIn]);
+    });
+
+    When("the user requests the current session", function* () {
+      const { handler } = yield* passwordApp;
+      const [, signedIn] = yield* take(replies);
+      assert.ok(signedIn !== undefined);
+      const cookie = signedIn.headers.get("set-cookie")?.split(";")[0];
+      assert.ok(cookie !== undefined, "sign-in set a session cookie");
+      const current = yield* send(handler, "GET", "/session", { cookie });
+      yield* put(replies, [...(yield* take(replies)), current]);
+    });
+
+    Then(
+      "the sign-up, sign-in and current-session responses all decode as the same SessionDto",
+      function* () {
+        const all = yield* take(replies);
+        assert.equal(all.length, 3);
+        for (const reply of all) {
+          assert.equal(reply.status, 200, reply.body);
+          const decoded = Schema.decodeUnknownSync(SessionContract.SessionDto)(json(reply.body));
+          assert.equal(typeof decoded.id, "string");
+        }
+      },
+    );
 
     Given("the {string} contract error", function* (name: string) {
       yield* Effect.void; // an assertion-only step: nothing to await
