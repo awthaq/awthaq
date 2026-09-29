@@ -21,6 +21,8 @@ Multi-tenancy: organizations, memberships with built-in / static / dynamic per-o
 
 Anything else, or an id that names no organization/team, answers `"Unknown"`. `relationships` **requires** a `ResourceOrganizationLookup` — provide `ResourceOrganizationLookup.layerNone` if you never walk from non-organization resources. `attributes` answers `organizationCount` / `ownedOrganizationCount`. Denials of the plugin's own gating are published as `auth.organization.permissionDenied` into the `AuditLog`.
 
+**Consistency, and bringing your own graph engine.** A relationship answer is exactly as fresh as this plugin's records layer; a per-request `DecisionCache` (the `@awthaq/qadi` default) preserves that, an application-scoped one needs `DecisionCacheInvalidationLive`. To use OpenFGA/SpiceDB instead, replace the `OrganizationQadi.relationships` layer with one backed by that engine and export membership tuples from the `AfterAddMember` / `AfterRemoveMember` hook points — no adapter ships.
+
 Erasure: `Organization.beforeUserDeleteErasure` (provide once, application-wide) sweeps a deleted user's memberships and active-context rows.
 
 Global roles versus organization roles: [ADR-EA-017](../../spec/decisions/017-global-roles-vs-organization-roles.md).
