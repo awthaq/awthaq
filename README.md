@@ -48,7 +48,7 @@ import { CoreMigrations, RateLimiterStoreSql, Repositories } from "@awthaq/sql";
 import { Encryption, KeyProvider, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthCore } from "@awthaq/api";
 import { Password } from "@awthaq/password";
-import { Account, Authentication, AuthHttp, Session } from "@awthaq/server";
+import { Account, Authentication, AuthHttp, BodyLimit, Session } from "@awthaq/server";
 import { NodeCrypto, NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
 import * as Effect from "effect/Effect";
@@ -169,7 +169,10 @@ const AppLayer = Layer.mergeAll(
 //    instead in tests, and in any Fetch-native runtime — Bun, Deno,
 //    Cloudflare Workers — since it returns a portable `(Request) =>
 //    Promise<Response>` handler rather than binding a Node socket).
-const ServerLive = HttpRouter.serve(AppLayer).pipe(
+//    `BodyLimit.layer` bounds every request body (256 KiB by default, 413
+//    beyond it; `BodyLimit.config({ maxBytes })` overrides): Effect's server
+//    reads bodies with no cap unless one is set.
+const ServerLive = HttpRouter.serve(BodyLimit.layer.pipe(Layer.provideMerge(AppLayer))).pipe(
   Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 })),
 );
 
