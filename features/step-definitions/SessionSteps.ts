@@ -18,6 +18,7 @@ import {
   countSessionRows,
   gateAdmitted,
   getSession,
+  mailedTo,
   nowMillis,
   pinSessionSecret,
   postSession,
@@ -31,6 +32,7 @@ import {
   aliasActor,
   type SessionRow,
 } from "./SessionWorld.ts";
+import { mailedToken } from "./MailedToken.ts";
 import { cookieFrom, setCookieFrom, STRONG_PASSWORD } from "./shared/Harness.ts";
 
 /** The `id.secret` halves of a `__Host-session=...` cookie pair. */
@@ -488,6 +490,19 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
   When("{string} performs a {string}", function* (name: string, operation: string) {
     const { actors, responses } = yield* World;
     const actor = yield* actors.get(name);
+    if (operation === "email change") {
+      // The shipped flow: an authenticated request mails a token to the NEW address; confirming it
+      // (a public endpoint: the link may be opened anywhere) replaces the address.
+      const { texts } = yield* World;
+      const newEmail = `${name}-changed@example.com`;
+      const requested = yield* postSession("/change-email", { newEmail }, actor.cookie);
+      assert.equal(requested.status, 202);
+      const token = mailedToken(yield* mailedTo(newEmail, "change-email"));
+      yield* texts.set(`newEmail:${name}`, newEmail);
+      yield* responses.set(name, yield* postSession("/change-email/confirm", { token }));
+      yield* actors.use(name);
+      return;
+    }
     if (operation !== "password change") {
       return yield* Effect.die(new Error(`no wiring for "${operation}": no such capability ships`));
     }
@@ -500,6 +515,26 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       ),
     );
     yield* actors.use(name);
+  });
+
+  // REQ-EA-686: the confirmation ends the account's sessions (there is no caller session to rotate).
+  Then("session {string} no longer verifies", function* (sessionName: string) {
+    const { actors, responses } = yield* World;
+    assert.equal((yield* responses.get(yield* actors.current)).status, 204);
+    assert.equal(
+      (yield* getSession("/session", (yield* actors.get(sessionName)).cookie)).status,
+      401,
+    );
+  });
+
+  Then("{string} signs in afresh under the new address", function* (name: string) {
+    const { texts } = yield* World;
+    const newEmail = yield* texts.get(`newEmail:${name}`);
+    const response = yield* postSession("/password/sign-in", {
+      email: newEmail,
+      password: STRONG_PASSWORD,
+    });
+    assert.equal(response.status, 200);
   });
 
   Then("a newly minted session replaces {string}", function* (sessionName: string) {

@@ -123,15 +123,13 @@ Feature: Sessions
       Then a newly minted session replaces "s0"
       And session "s0" no longer verifies, its row tombstoned rather than left valid
 
-    # @skip: no changeEmail capability exists in any package (no changeEmail-shaped endpoint
-    # or Users operation), so there is nothing to perform; un-skip when one ships (SMS-008)
-    @skip
+    # Rewritten to what shipped (BEH-EA-053 as-shipped): the confirmation has no session of its own to rotate, so it ends every session of the account.
     @REQ-EA-686
-    Scenario: An email change issues a new session and tombstones the superseded row
+    Scenario: An email change ends the account's sessions, because its confirmation has no session to rotate
       Given a signed-in user "alice" with session "s0"
       When "alice" performs a "email change"
-      Then a newly minted session replaces "s0"
-      And session "s0" no longer verifies, its row tombstoned rather than left valid
+      Then session "s0" no longer verifies
+      And "alice" signs in afresh under the new address
 
   # BEH-EA-054 — spec/behaviors/07-sessions.md
   @BEH-EA-054

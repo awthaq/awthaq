@@ -465,6 +465,20 @@ export const signUp = Effect.fn("features.session.signUp")(function* (name: stri
   return response;
 });
 
+/** The newest mail of `template` sent to `address`, once the dispatch fibers have run. */
+export const mailedTo = Effect.fn("features.session.mailedTo")(function* (
+  address: string,
+  template: string,
+) {
+  const { sentMail } = yield* appHandle();
+  yield* letForkedFibersRun;
+  const found = (yield* sentMail).findLast(
+    (message) => message.template === template && message.to === address,
+  );
+  if (found === undefined) throw new Error(`expected a ${template} mail for ${address}`);
+  return found;
+});
+
 /** Signs the actor `existingName` in again (BEH-EA-053: a new session is minted, never reused); the new session is registered under `newName`. */
 export const signInAgain = Effect.fn("features.session.signInAgain")(function* (
   newName: string,

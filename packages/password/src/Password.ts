@@ -1583,6 +1583,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                     IdentityMismatch: Effect.die,
                   }),
                 );
+                // BEH-EA-053: an email change is a privilege change. The confirming request is the
+                // mailed link — possibly opened in another browser, with no session of its own — so
+                // there is no caller session to rotate: every session of the account ends, in the
+                // same transaction, and the owner signs in afresh under the new address.
+                yield* sessions.revokeAll(userId, "emailChanged");
                 return { userId, previous: Users.emailOf(before) };
               }),
             )

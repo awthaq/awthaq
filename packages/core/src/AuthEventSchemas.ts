@@ -175,6 +175,8 @@ export const SessionRevocationReason = Schema.Literals([
   "userRevoked",
   "passwordChanged",
   "passwordReset",
+  /** BEH-EA-053: a confirmed email change ends every session of the account. */
+  "emailChanged",
   "userDeleted",
   "impersonationStopped",
   "admin",

@@ -34,7 +34,7 @@ export const noGenericFactory = HookPoint.Service;
 export const definesWithoutInput = () => {
   // @ts-expect-error - `input` is a required argument of every factory
   class NoInput extends HookPoint.veto<NoInput>()("auth.gate.no-input") {}
-  return NoInput;
+  void NoInput;
 };
 
 // type-gate: tap-needs-its-point
