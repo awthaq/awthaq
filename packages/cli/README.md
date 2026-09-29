@@ -6,7 +6,7 @@ The `awthaq` command line: inspect and operate an awthaq authentication runtime.
 awthaq [--config <path>] [--json]
   doctor [--build] [--production]                    link, configuration and insecure-default audit
   config list                                        every declared configuration input, default vs override
-  plugin list [--graph | --hooks] [--format text|json|dot]   installed plugins in the linker's order, or each hook point's declared taps
+  plugin list [--graph | --hooks | --rules] [--format text|json|dot]   installed plugins in the linker's order (with ports and taps), each hook point's declared taps, or the declared rate-limit rules
   routes                                             every endpoint, owning plugin, middleware
   openapi [--out <file>]                             the one aggregated OpenAPI document
   migration status | apply [--yes] [--dry-run] [--allow-empty]   (--database-url)
@@ -94,5 +94,5 @@ Interactive `awthaq login` is the device authorization grant (RFC 8628) and need
 
 ## Not done (and why)
 
-- `plugin list --graph` prints order, `dependsOn`, groups and tables. A plugin's *required ports* are its layer's requirements (a type-level fact), not derivable without evaluating layers, which manifest-only commands may not. `plugin list --hooks` prints each hook point's plugin-declared taps in the order the runtime chain runs them (`manifest.hooks`); application taps registered in the host run after those and are not listed.
+- `plugin list --graph` prints order, `dependsOn`, groups, tables, each plugin's required ports and where its declared taps sit in each hook chain. Ports are a *declaration* (`AuthPlugin.layer`'s `ports`, which the compiler checks is complete against what the layer requires): a layer's requirements have no runtime trace, and building layers is not manifest-only. `plugin list --hooks` prints each hook point's plugin-declared taps in the order the runtime chain runs them (`manifest.hooks`); application taps registered in the host run after those and are not listed. `plugin list --rules` prints each plugin's declared rate-limit rules (`AuthPlugin.Service`'s `rateLimits`, the default numbers: a plugin's configuration may tune them at build).
 - `doctor` reports what descriptors and the built application Layer expose; an override computed dynamically per request or per tenant cannot be validated before deploy ([ADR-EA-006](../../spec/decisions/006-runtime-config-separate-from-installation.md)).

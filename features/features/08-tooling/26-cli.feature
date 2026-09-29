@@ -78,16 +78,16 @@ Feature: CLI
       Then "password" is printed before "oauth"
 
     @REQ-EA-578
-    Scenario: plugin list --graph says a plugin's required ports are not printed, since they are not derivable without building the layer
-      Given an installed plugin set including "oauth", which requires the "TokenStore" port
+    Scenario: plugin list --graph prints each plugin's required ports from its static declaration
+      Given an installed plugin set including "oauth", which requires the "RateLimiter" port
       When "awthaq plugin list --graph" runs
-      Then it states that required ports are not printed rather than omitting them silently
+      Then it lists the "RateLimiter" port among "oauth"'s required ports
 
     @REQ-EA-579
-    Scenario: plugin list --graph says the resolved hook-tap chain is not printed, since taps register only when a layer is built
-      Given an installed plugin set with taps registered on the "AfterSignUp" hook point
+    Scenario: plugin list --graph prints where each plugin's declared taps sit in the resolved hook-tap chain
+      Given an installed plugin set with a plugin that declares a tap on the "auth.user.signedUp" hook point
       When "awthaq plugin list --graph" runs
-      Then it states that hook-tap chains are not printed rather than omitting them silently
+      Then it prints that plugin's tap position in the "auth.user.signedUp" chain
 
     @REQ-EA-580
     Scenario: The printed ordering matches the order the linker uses for migrations and hook resolution

@@ -338,6 +338,12 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
   migrations: samlMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Saml, {
+    ports: [
+      ClientAddress.ClientAddress,
+      RateLimiter.RateLimiter,
+      SqlTransaction.SqlTransaction,
+      XmlSignature.XmlSignature,
+    ],
     dependsOn: [Organization.Organization],
     handlers: SamlHandlers,
     make: Effect.gen(function* () {

@@ -64,6 +64,8 @@ describe("doctor: graph", () => {
           { id: "billing", apiVersion: 1 as const, tables: [], dependsOn: ["ledger"], groups: [] },
         ],
         hooks: {},
+        rateLimits: [],
+        ports: [],
         config: [],
         userFields: [],
       };

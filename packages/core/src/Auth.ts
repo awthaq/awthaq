@@ -277,6 +277,17 @@ export interface ManifestPlugin {
   readonly groups: ReadonlyArray<string>;
 }
 
+/** PV-241/BEH-EA-202: one port a plugin's layer requires (`AuthPlugin.layer`'s `ports`), by service key, declared statically. */
+export interface ManifestPort {
+  readonly plugin: string;
+  readonly key: string;
+}
+
+/** PV-241/BEH-EA-111: one statically declared rate-limit rule, tagged with the plugin that declared it. */
+export interface ManifestRateLimit extends AuthPlugin.RateLimitDeclaration {
+  readonly plugin: string;
+}
+
 /** ECS-008/BEH-EA-229: one configuration descriptor, tagged with the plugin that declared it. */
 export interface ManifestConfig {
   readonly pluginId: string;
@@ -300,6 +311,14 @@ export interface Manifest {
    * not declared statically and run after every entry listed here.
    */
   readonly hooks: Readonly<Record<string, ReadonlyArray<ManifestTap>>>;
+  /**
+   * PV-241/BEH-EA-111: every rate-limit rule a plugin declares (`AuthPlugin.Service`'s `rateLimits`),
+   * in link order and each plugin's own declaration order — static, no Layer evaluated. The numbers
+   * are the declared defaults; a configurable plugin may register tuned ones at build.
+   */
+  readonly rateLimits: ReadonlyArray<ManifestRateLimit>;
+  /** PV-241/BEH-EA-202: every plugin's declared required ports, in link order and each plugin's own declaration order — static, no Layer evaluated. */
+  readonly ports: ReadonlyArray<ManifestPort>;
   /** ECS-008: every installed plugin's configuration descriptors, in link order — static, no Layer evaluated. */
   readonly config: ReadonlyArray<ManifestConfig>;
   /** SAM-004: every plugin-declared user field the linker adds a column for, in link order. */
@@ -654,6 +673,10 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
     groups: Object.values(plugin.contract.groups).map((group) => group.identifier),
   })),
   hooks: buildHooks(order),
+  ports: order.flatMap((plugin) => (plugin.ports ?? []).map((key) => ({ plugin: plugin.id, key }))),
+  rateLimits: order.flatMap((plugin) =>
+    (plugin.rateLimits ?? []).map((rule) => ({ plugin: plugin.id, ...rule })),
+  ),
   config: order.flatMap((plugin) =>
     (plugin.config ?? []).map((descriptor) => ({ pluginId: plugin.id, descriptor })),
   ),

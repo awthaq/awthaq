@@ -417,6 +417,11 @@ export const TwoFactorHandlers = Layer.mergeAll(
 export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("two_factor", {
   apiVersion: 1,
   contract: TwoFactorApi.TwoFactorApi,
+  // PV-241: the rules at the default configuration (`failureBudget` follows `failureLimit`/`failureWindow`).
+  rateLimits: AuthPlugin.declareRateLimits(
+    ["two_factor", "two_factor.account"],
+    Object.values(TwoFactorRateLimits.makeRules(TwoFactorConfig.defaultValue())),
+  ),
   tables: ["two_factor_secret", "two_factor_recovery_code"],
   migrations,
   // ECS-008/BEH-EA-229: the default issuer is the classic thing left in production — the label users see in their authenticator app.
@@ -437,6 +442,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
   ],
 }) {
   static readonly layer = AuthPlugin.layer(TwoFactor, {
+    ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
     handlers: TwoFactorHandlers,
     contributes: Layer.mergeAll(twoFactorErasure, twoFactorExport),
     make: Effect.gen(function* () {

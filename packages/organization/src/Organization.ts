@@ -1778,6 +1778,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
   },
 ) {
   static readonly layer = AuthPlugin.layer(Organization, {
+    ports: [Mailer.Mailer, SqlTransaction.SqlTransaction],
     handlers: OrganizationHandlers,
     contributes: Layer.mergeAll(organizationErasure, organizationExport),
     make: Effect.gen(function* () {
