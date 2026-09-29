@@ -423,6 +423,16 @@ const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.EventOf<T
     userId,
     clientId: "c-1",
   },
+  "auth.deviceAuthorization.approved": {
+    _tag: "auth.deviceAuthorization.approved",
+    userId,
+    clientId: "awthaq-cli",
+  },
+  "auth.deviceAuthorization.denied": {
+    _tag: "auth.deviceAuthorization.denied",
+    userId,
+    clientId: "awthaq-cli",
+  },
 };
 
 const allSamples: ReadonlyArray<AuthEvents.AuthEvent> = Object.values(samples);

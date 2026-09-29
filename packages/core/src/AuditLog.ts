@@ -196,6 +196,8 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.apiKey.clientRegistered":
     case "auth.apiKey.clientRevoked":
     case "auth.apiKey.clientSecretRotated":
+    case "auth.deviceAuthorization.approved":
+    case "auth.deviceAuthorization.denied":
       return Option.some(UserId(event.userId));
     case "auth.admin.impersonationStarted":
     case "auth.admin.impersonationStopped":

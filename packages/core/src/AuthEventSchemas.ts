@@ -862,6 +862,25 @@ export const TwoFactorLockedEvent = Schema.TaggedStruct("auth.twoFactor.locked",
 });
 export type TwoFactorLockedEvent = typeof TwoFactorLockedEvent.Type;
 
+/**
+ * BEH-EA-317 (`@awthaq/device-authorization`): a person's decision on a device grant. `userId` is
+ * the approver, `clientId` the registered client that asked. The user code, the device code, their
+ * hashes and the scope are never carried: identifiers only (ADR-EA-029). The session the approved
+ * grant later becomes is announced by the ordinary `auth.session.issued` / `auth.user.signedIn`
+ * (strategy `deviceAuthorization`).
+ */
+export const DeviceAuthorizationApprovedEvent = Schema.TaggedStruct(
+  "auth.deviceAuthorization.approved",
+  { userId: UserIdSchema, clientId: Schema.String },
+);
+export type DeviceAuthorizationApprovedEvent = typeof DeviceAuthorizationApprovedEvent.Type;
+
+export const DeviceAuthorizationDeniedEvent = Schema.TaggedStruct(
+  "auth.deviceAuthorization.denied",
+  { userId: UserIdSchema, clientId: Schema.String },
+);
+export type DeviceAuthorizationDeniedEvent = typeof DeviceAuthorizationDeniedEvent.Type;
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries. */
 export const AuthEventSchema = Schema.Union([
   TokenReplayEvent,
@@ -944,6 +963,8 @@ export const AuthEventSchema = Schema.Union([
   TwoFactorRecoveryCodeUsedEvent,
   TwoFactorRecoveryCodesRegeneratedEvent,
   TwoFactorLockedEvent,
+  DeviceAuthorizationApprovedEvent,
+  DeviceAuthorizationDeniedEvent,
 ]);
 
 export type AuthEvent = typeof AuthEventSchema.Type;
