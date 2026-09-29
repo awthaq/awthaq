@@ -3,6 +3,7 @@
 // `fakeCountingHttpClient` records every outbound JWKS request. The full `Jwt`
 // plugin is composed only to produce a really-signed token and a real JWKS
 // document, exactly like `verify.test.ts`.
+import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -32,6 +33,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 const JwtLive = Jwt.Jwt.layer.pipe(
   Layer.provideMerge(KeyRing.KeyRing.layer),
   Layer.provideMerge(SigningKeyRecords.layerMemory),
+  Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provideMerge(AuthenticationLive),
   Layer.provideMerge(Sessions.layerMemory),
   Layer.provideMerge(AuthEvents.layer),
@@ -61,7 +63,8 @@ const verifierOptions = {
   jwksUrl: JWKS_URL,
   issuer: ISSUER,
   audience: ISSUER,
-  algorithm: "EdDSA",
+  algorithms: ["EdDSA"],
+  expectedTyp: "JWT",
 } as const;
 
 describe("lite verifier JWKS caching (ECF-002)", () => {

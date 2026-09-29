@@ -50,7 +50,9 @@
 
 import { Api } from "@awthaq/api";
 import { AuthPlugin, Migrations, Sessions, Users } from "@awthaq/core";
+import { RefreshingCache } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
+import * as Arr from "effect/Array";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -68,6 +70,15 @@ import * as JwtCodec from "./JwtCodec.ts";
 import * as KeyRing from "./KeyRing.ts";
 import * as RevocationStore from "./RevocationStore.ts";
 
+/**
+ * VB-005: the header `typ` separating token classes. Principal tokens follow
+ * RFC 9068 (`at+jwt`); everything `signJWT` mints is a plain `JWT` unless the
+ * caller says otherwise, so an arbitrary payload carrying `sub`/`sid` cannot
+ * pass as a principal token.
+ */
+const PRINCIPAL_TYP = "at+jwt";
+const GENERAL_TYP = "JWT";
+
 /** RFC 7662 shape (TIR-001/TRBS-001/MAPS-002): `claims` present iff `active`. */
 export type IntrospectionResult =
   | { readonly active: true; readonly claims: Record<string, unknown> }
@@ -82,14 +93,32 @@ export interface JwtShape {
   readonly verifyLive: (
     token: string,
   ) => Effect.Effect<Record<string, unknown>, JwtCodec.JwtInvalidError, Sessions.Sessions>;
-  /** Ticket 14: arbitrary-payload signing, not tied to any `Principal` — reuses the same key/rotation machinery `sign` does. `options.ttl` overrides `JwtConfig.ttl` for this one call. */
+  /**
+   * Ticket 14: arbitrary-payload signing, not tied to any `Principal` — reuses
+   * the same key/rotation machinery `sign` does. `options.ttl` overrides
+   * `JwtConfig.ttl` for this one call. VB-005: `options.audience` (ticket 33's
+   * `signJWT({ audience })`) replaces `JwtConfig.audience` for this token, and
+   * the header `typ` is `"JWT"` (override with `options.typ`) so a general-purpose
+   * token can never be mistaken for a principal token (`"at+jwt"`) by `verify`,
+   * `verifyLive` or `introspect`, whatever claims its payload carries.
+   */
   readonly signJWT: (
     payload: Record<string, unknown>,
-    options?: { readonly ttl?: Duration.Duration },
+    options?: {
+      readonly ttl?: Duration.Duration;
+      readonly audience?: string | ReadonlyArray<string>;
+      readonly typ?: string;
+    },
   ) => Effect.Effect<string, JwtCodec.JwtInvalidError>;
-  /** Ticket 14: identical checks to `verify` — `verify` never assumed a particular principal shape beyond a present, non-empty `sub`, so this is that same function, not a second implementation. */
+  /**
+   * The general-purpose counterpart of `signJWT` (JJS-007/VB-005): checks
+   * issuer, `options.audience` (default `JwtConfig.audience`) and
+   * `options.typ` (default `"JWT"`), but — unlike `verify` — does not require a
+   * `sub`, so every token `signJWT` can mint is one this can verify.
+   */
   readonly verifyJWT: (
     token: string,
+    options?: { readonly audience?: string; readonly typ?: string },
   ) => Effect.Effect<Record<string, unknown>, JwtCodec.JwtInvalidError>;
   readonly jwks: Effect.Effect<{ readonly keys: ReadonlyArray<Record<string, unknown>> }>;
   /**
@@ -119,11 +148,23 @@ export interface JwtShape {
   readonly introspectLive: (
     token: string,
   ) => Effect.Effect<IntrospectionResult, never, Sessions.Sessions>;
+  /**
+   * TIR-007: what `POST /jwt/introspect` calls. `introspect`, plus the same
+   * session-liveness check `introspectLive` runs *whenever `Sessions` was
+   * composed alongside `Jwt` at build time* — captured once in `make` through
+   * `Effect.serviceOption`, so it keeps `R = never` (dischargeable by
+   * `HttpApiBuilder.group`) and `Sessions` still is not a dependency of
+   * installing `Jwt`. Without `Sessions` in the composition it is exactly
+   * `introspect`. Revoking a session therefore makes every JWT minted from it
+   * introspect `active: false` over HTTP at once; bare `verify` (and any
+   * bearer re-entry built on it) lags by at most `JwtConfig.ttl`.
+   */
+  readonly introspectComposed: (token: string) => Effect.Effect<IntrospectionResult>;
 }
 
 /**
  * `sub` always comes from the principal's own ref id, for every principal
- * kind. `sid`/`act` (RFC 8693-style) exist only for a `UserPrincipal` — the
+ * kind. `sid`/`act` (RFC 8693 §4.1) exist only for a `UserPrincipal` — the
  * only kind `Authentication`'s own `PrincipalResolverLive` ever actually
  * resolves (BEH-EA-069), and the only kind that carries a session/`actingAs`
  * at all; omitted entirely (not `undefined`) for every other principal kind
@@ -136,7 +177,9 @@ const principalClaims = (principal: Api.Principal): Record<string, unknown> =>
         sub: principal.ref.id,
         sid: principal.sessionId,
         ...(principal.actingAs !== undefined
-          ? { act: { type: principal.actingAs.type, id: principal.actingAs.id } }
+          ? // JR-005: RFC 8693 §4.1 identifies the actor by `sub`; the actor's
+            // principal type rides along as a private (non-registered) member.
+            { act: { sub: principal.actingAs.id, awthaq_actor_type: principal.actingAs.type } }
           : {}),
       }
     : { sub: principal.ref.id };
@@ -177,17 +220,16 @@ export const JwtHandlers = Layer.mergeAll(
           const token = yield* jwt.sign(principal).pipe(Effect.orDie);
           return new TokenResponse({ token });
         }),
-        // TIR-001/MAPS-002: `introspect`, not `introspectLive` — the
-        // latter carries `Sessions` as its own per-call `R`, exactly like
-        // `verifyLive`, which this codebase's own established convention
-        // (and a genuine `HttpApiBuilder.group` limitation — see `make`'s
-        // comment on `revocationStore`) keeps off of every HTTP handler.
-        // This endpoint is still the full denylist-aware RFC 7662 path
-        // TIR-001/MAPS-002 ask for; a caller that also wants the
-        // live-session check calls `jwt.introspectLive` directly (the
-        // in-process API), the same way `jwt.verifyLive` already works.
+        // TIR-001/MAPS-002/TIR-007: `introspectComposed`, not
+        // `introspectLive` — the latter carries `Sessions` as its own per-call
+        // `R`, which this codebase's own established convention (and a
+        // genuine `HttpApiBuilder.group` limitation — see `make`'s comment on
+        // `revocationStore`) keeps off of every HTTP handler. `Sessions` is
+        // captured once in `make` instead, when the app composed it, so this
+        // endpoint is the full denylist- and session-liveness-aware RFC 7662
+        // path without a per-call requirement.
         introspect: Effect.fnUntraced(function* ({ payload }) {
-          const result = yield* jwt.introspect(payload.token);
+          const result = yield* jwt.introspectComposed(payload.token);
           return new IntrospectionResponse(
             result.active ? { active: true, claims: result.claims } : { active: false },
           );
@@ -200,16 +242,26 @@ export const JwtHandlers = Layer.mergeAll(
 /**
  * .scratch/jwt/issues/16-automatic-response-mirroring.md: installing `Jwt`
  * overrides `@awthaq/server`'s `Authentication.PostAuthResponseHook`
- * (default: a no-op) so a fresh token mirrors onto every authenticated
- * response across every installed plugin — better-auth's `set-auth-jwt`
- * equivalent — with no per-plugin opt-in. Requires `Jwt` itself, provided
- * via `Layer.provideMerge` against `AuthPlugin.layer(Jwt, {...})` in
- * `Jwt`'s own `static readonly layer` below (first plugin in this
- * codebase to merge a second Layer into its own `static readonly layer`).
- * `decorate`'s own type forces this to never fail the underlying response
- * (`Effect.Effect<HttpServerResponse>`, no error channel): a `sign`
- * failure here is swallowed via `Effect.catch`, not surfaced — minting
- * a bonus header must never break an otherwise-successful response.
+ * (default: a no-op) so a fresh token can mirror onto authenticated
+ * responses across every installed plugin — better-auth's `set-auth-jwt`
+ * equivalent — with no per-plugin opt-in. PDR-003 (decision: adopted
+ * recommended option B): mirroring is a `JwtConfig.mirrorResponses` choice
+ * and defaults to `"off"`, because a response header is a log/proxy/APM
+ * capture surface and silently converting a cookie session into a portable
+ * bearer token is not something a deployment should get by accident.
+ * `"bearer"` mirrors only for bearer-authenticated requests, `"always"` also
+ * for cookie-authenticated ones; the explicit `GET /jwt/token` endpoint is
+ * the recommended delivery either way. Cross-origin JS needs
+ * `Access-Control-Expose-Headers: x-jwt-token` to read the header at all.
+ *
+ * Requires `Jwt` itself, provided via `Layer.provideMerge` against
+ * `AuthPlugin.layer(Jwt, {...})` in `Jwt`'s own `static readonly layer`
+ * below (first plugin in this codebase to merge a second Layer into its own
+ * `static readonly layer`). `decorate`'s own type forces this to never fail
+ * the underlying response (`Effect.Effect<HttpServerResponse>`, no error
+ * channel): a `sign` failure here is logged and the response is returned
+ * unchanged — minting a bonus header must never break an otherwise-
+ * successful response, but it must not vanish silently either.
  *
  * Header name `x-jwt-token`: neither `spec/models/08-jwt-bearer.md`'s own
  * sketch nor `.scratch/jwt/spec.md` names one (better-auth's own
@@ -220,11 +272,23 @@ const PostAuthResponseHookLive = Layer.effect(
   Authentication.PostAuthResponseHook,
   Effect.gen(function* () {
     const jwt = yield* Jwt;
-    const decorate: Authentication.PostAuthResponseHookShape["decorate"] = (principal, response) =>
-      jwt.sign(principal).pipe(
-        Effect.map((token) => HttpServerResponse.setHeader(response, "x-jwt-token", token)),
-        Effect.catch(() => Effect.succeed(response)),
-      );
+    const config = yield* JwtConfig;
+    const decorate: Authentication.PostAuthResponseHookShape["decorate"] = (
+      principal,
+      response,
+      context,
+    ) =>
+      config.mirrorResponses === "off" ||
+      (config.mirrorResponses === "bearer" && context.scheme !== "bearer")
+        ? Effect.succeed(response)
+        : jwt.sign(principal).pipe(
+            Effect.map((token) => HttpServerResponse.setHeader(response, "x-jwt-token", token)),
+            Effect.catch((error) =>
+              Effect.logWarning("awthaq/jwt: response mirroring failed", error.reason).pipe(
+                Effect.as(response),
+              ),
+            ),
+          );
     return { decorate };
   }),
 );
@@ -310,6 +374,21 @@ const jwtMigrations: Migrations.Migrations = [
         WHERE rotatedAt IS NULL`;
     }),
   },
+  {
+    // JJS-004/KRS-009: at most one current key (`rotatedAt IS NULL`), enforced
+    // by the store — every current row indexes the same constant expression,
+    // so a second one is a unique violation, which `SigningKeyRecords.create`
+    // reports as `CurrentKeyConflict` and `KeyRing` resolves by adopting the
+    // winner. Expression + partial unique index: valid on pg and sqlite.
+    name: "create_jwt_signing_key_single_current_index",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        CREATE UNIQUE INDEX jwt_signing_key_single_current
+        ON jwt_signing_key ((rotatedAt IS NULL))
+        WHERE rotatedAt IS NULL`;
+    }),
+  },
 ];
 
 export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
@@ -340,6 +419,10 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
         // `R = never` and the handler ordinarily dischargeable — matching
         // every other plugin method's convention.
         const revocationStore = yield* RevocationStore.RevocationStore;
+        // TIR-007: present iff the app composed `Sessions` alongside `Jwt`;
+        // asking for an *optional* service adds no requirement (`R` stays
+        // `never`) and keeps `Jwt.dependsOn` empty.
+        const composedSessions = yield* Effect.serviceOption(Sessions.Sessions);
 
         // Discharges `KeyRing.current`/`KeyRing.verifiable`'s own `R`
         // (`KeyRing | JwtConfig` — ticket 11's rotation-aware accessors) down
@@ -360,12 +443,25 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
          * place those four registered claims are ever set, so neither caller
          * can special-case forgetting them.
          */
-        const signClaims = (claims: Record<string, unknown>, ttl?: Duration.Duration) =>
+        const signClaims = (
+          claims: Record<string, unknown>,
+          options: {
+            readonly typ: string;
+            readonly ttl?: Duration.Duration | undefined;
+            readonly audience?: string | ReadonlyArray<string> | undefined;
+          },
+        ) =>
           Effect.gen(function* () {
             const key = yield* currentKey;
+            const audience = options.audience ?? config.audience;
+            if (typeof audience !== "string" && !Arr.isReadonlyArrayNonEmpty(audience)) {
+              return yield* Effect.fail(
+                new JwtCodec.JwtInvalidError({ reason: "audience must not be empty" }),
+              );
+            }
             const now = yield* DateTime.now;
             const iat = Math.floor(DateTime.toEpochMillis(now) / 1000);
-            const exp = iat + Math.floor(Duration.toMillis(ttl ?? config.ttl) / 1000);
+            const exp = iat + Math.floor(Duration.toMillis(options.ttl ?? config.ttl) / 1000);
             // TRBS-001/TIR-001: every minted token gets a UUIDv7 `jti`,
             // this codebase's established UUIDv7-for-identifiers convention
             // (`Sessions.issue`/`Users.create` mint their own ids the same
@@ -395,8 +491,9 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             return yield* JwtCodec.sign({
               kid: key.kid,
               alg: key.alg,
+              typ: options.typ,
               signer,
-              claims: { ...claims, iat, exp, jti, iss: config.issuer, aud: config.audience },
+              claims: { ...claims, iat, exp, jti, iss: config.issuer, aud: audience },
             });
           });
 
@@ -406,7 +503,10 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             // `principalClaims` wins over `definePayload`'s extras — a
             // config-supplied payload function may add claims, never
             // override the ones this plugin itself is responsible for.
-            return yield* signClaims({ ...extra, ...principalClaims(principal) });
+            return yield* signClaims(
+              { ...extra, ...principalClaims(principal) },
+              { typ: PRINCIPAL_TYP },
+            );
           });
 
         // `definePayload` is principal-scoped (`(principal: Api.Principal) => ...`)
@@ -415,10 +515,33 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
         // `payload` is this method's one input; registered claims still
         // always win over it, via `signClaims`.
         const signJWT: JwtShape["signJWT"] = (payload, options) =>
-          signClaims({ ...payload }, options?.ttl);
+          signClaims(
+            { ...payload },
+            { typ: options?.typ ?? GENERAL_TYP, ttl: options?.ttl, audience: options?.audience },
+          );
 
-        const verify: JwtShape["verify"] = (token) =>
-          Effect.gen(function* () {
+        // JJS-003: the signature algorithm is checked against each key's own
+        // `alg` (and this set, the distinct algorithms of the server-side
+        // verifiable keys), so keys minted before a `JwtConfig.algorithm`
+        // change keep verifying through their grace period.
+        //
+        // KRS-006: a token naming a `kid` this process's snapshot lacks (a peer
+        // just rotated, or a key was imported) triggers one forced,
+        // rate-limited re-read of the store and a single retry, so peer-minted
+        // keys verify at once instead of after `keyCacheMaxAge`.
+        const keyRefresh = yield* RefreshingCache.make(
+          Effect.provide(KeyRing.refresh, keyRingAmbient),
+          { ttl: config.keyCacheMaxAge, minRefetchInterval: config.keyMinRefreshInterval },
+        );
+        const verifyWith = (
+          token: string,
+          expected: {
+            readonly typ: string | ReadonlyArray<string>;
+            readonly audience: string;
+            readonly requireSubject: boolean;
+          },
+        ) => {
+          const attempt = Effect.gen(function* () {
             const keys = yield* verifiableKeys;
             return yield* JwtCodec.verify({
               token,
@@ -427,16 +550,39 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
                 alg: key.alg,
                 publicKeyJwk: key.publicKeyJwk,
               })),
-              algorithm: config.algorithm,
+              algorithms: Array.from(new Set(keys.map((key) => key.alg))),
               issuer: config.issuer,
-              audience: config.audience,
+              audience: expected.audience,
+              expectedTyp: expected.typ,
+              requireSubject: expected.requireSubject,
             });
           });
+          return attempt.pipe(
+            Effect.catchIf(
+              (error) => error.reason === "unknown kid",
+              () => Effect.andThen(keyRefresh.refreshOnMiss, attempt),
+            ),
+          );
+        };
 
-        // Identical checks to `verify` — it never assumed a particular
-        // principal shape beyond a present, non-empty `sub` — so this is
-        // that same function, not a second implementation.
-        const verifyJWT: JwtShape["verifyJWT"] = verify;
+        // Principal tokens only (`typ: "at+jwt"`, a `sub` is mandatory):
+        // what `sign`, `GET /jwt/token` and response mirroring mint.
+        const verify: JwtShape["verify"] = (token) =>
+          verifyWith(token, {
+            typ: PRINCIPAL_TYP,
+            audience: config.audience,
+            requireSubject: true,
+          });
+
+        // JJS-007/VB-005: its own function, not `verify` under another name —
+        // a different token class (`typ`), no mandatory `sub`, and a
+        // per-call audience matching `signJWT`'s.
+        const verifyJWT: JwtShape["verifyJWT"] = (token, options) =>
+          verifyWith(token, {
+            typ: options?.typ ?? GENERAL_TYP,
+            audience: options?.audience ?? config.audience,
+            requireSubject: false,
+          });
 
         /**
          * `sid`'s owning session is still a live row, per `Sessions.isLive`
@@ -448,11 +594,11 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
          * this file's own established "reuse, don't duplicate" posture
          * for `verify`/`verifyJWT`.
          */
+        const sidStillLiveIn = (sessions: Sessions.SessionsShape, sub: string, sid: string) =>
+          sessions.isLive(Users.UserId(sub), Sessions.SessionId(sid));
+
         const sidStillLive = (sub: string, sid: string) =>
-          Effect.gen(function* () {
-            const sessions = yield* Sessions.Sessions;
-            return yield* sessions.isLive(Users.UserId(sub), Sessions.SessionId(sid));
-          });
+          Effect.flatMap(Sessions.Sessions, (sessions) => sidStillLiveIn(sessions, sub, sid));
 
         const verifyLive: JwtShape["verifyLive"] = (token) =>
           Effect.gen(function* () {
@@ -479,7 +625,15 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
 
         const introspect: JwtShape["introspect"] = (token) =>
           Effect.gen(function* () {
-            const outcome = yield* Effect.result(verify(token));
+            const outcome = yield* Effect.result(
+              // RFC 7662 introspection answers "is this token live" for either
+              // token class; only `verify`/`verifyLive` are principal-only.
+              verifyWith(token, {
+                typ: [PRINCIPAL_TYP, GENERAL_TYP],
+                audience: config.audience,
+                requireSubject: false,
+              }),
+            );
             if (Result.isFailure(outcome)) return { active: false };
             const claims = outcome.success;
             const jti = claims["jti"];
@@ -506,6 +660,17 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             return stillLive ? result : { active: false };
           });
 
+        const introspectComposed: JwtShape["introspectComposed"] = (token) =>
+          Effect.gen(function* () {
+            const result = yield* introspect(token);
+            if (!result.active || Option.isNone(composedSessions)) return result;
+            const sid = result.claims["sid"];
+            const sub = result.claims["sub"];
+            if (typeof sid !== "string" || typeof sub !== "string") return result;
+            const stillLive = yield* sidStillLiveIn(composedSessions.value, sub, sid);
+            return stillLive ? result : { active: false };
+          });
+
         return {
           sign,
           verify,
@@ -515,6 +680,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
           jwks,
           introspect,
           introspectLive,
+          introspectComposed,
         };
       }),
     }),

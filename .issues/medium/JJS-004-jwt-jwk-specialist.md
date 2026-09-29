@@ -3,7 +3,7 @@ ID: "JJS-004"
 Title: "Key rotation has no concurrency guard: multi-instance rotation mints duplicate current keys and re-extends grace periods"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/SigningKeyRecords.ts:210"
 Auditor: "jwt-jwk-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `jwt` · reported by **JWT/JWK Specialist** (`jwt-jwk-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Make markRotated conditional (WHERE rotatedAt IS NULL) and serialize rotation �
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jwt-key-rotation-integrity`. Evidence at HEAD ec065a7: `packages/jwt/src/SigningKeyRecords.ts:209`. Fix: Enforce one current signing key at the store (unique partial index + conditional markRotated), and run mark+mint atomically in `SqlTransaction`, with losers re-reading the winner. (effort L). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Store enforces one current key: migration create_jwt_signing_key_single_current_index (unique expression+partial index) in Jwt.ts; SigningKeyRecords.create fails with CurrentKeyConflict (memory: atomic check; sql: UniqueViolation mapped), markRotated is a compare-and-swap returning boolean, new retire(kid, at). KeyRing settleCurrent runs markRotated+mint in SqlTransaction.withTransaction (KeyRing now requires SqlTransaction), losers re-read and adopt the winner, first-mint race covered; registerRemoteKey rotates the existing current key in the same transaction. Tests (memory and SQL suites) in packages/jwt/test/KeyRing.test.ts: 'two concurrent rotations of a key leave exactly one current key', 'concurrent lazy first-mint from two KeyRings yields exactly one current key', 'a second current key is rejected with CurrentKeyConflict', 'markRotated on an already-rotated kid leaves retiresAt unchanged and reports false', SQL: 'a failing mint after markRotated rolls back and the previous key stays current', 'the migrations create the single-current unique index'; RevocationStore.test.ts migration count 3->4. Gates green.

@@ -3,7 +3,7 @@ ID: "BAM-010"
 Title: "JWT algorithm vocabulary is EdDSA/ES256 only"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/JwtCodec.ts:36"
 Auditor: "better-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `jwt` · reported by **better-auth Migration Specialist** (`better-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ If RS256-class deployments matter for migration, widen the Algorithm union and W
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jose-algorithm-coverage`. Evidence at HEAD ec065a7: `packages/jwt/src/JwtCodec.ts:36`. Fix: Widen the jwt plugin to the common asymmetric JOSE set (EdDSA, ES256, ES384, RS256, PS256) via one algorithm table; still no HS*. (effort M). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Algorithm vocabulary widened to EdDSA, ES256, ES384, RS256, PS256 through one AlgorithmSpec table in JwtCodec (import/sign/generate params, kty); JwtCodec.generateKeyJwks replaces KeyRing's inline keygen (JwtConfig.rsaModulusLength, default 2048); SigningKeyRecords derives its alg literals from the same schema; verify.ts toVerificationKeys uses the isAlgorithm guard; HS* stays unrepresentable. KeyRing.importKey imports a foreign public key as a verification-only (already-rotated) key, rejecting a wrong kty or private material (InvalidKeyImport). Tests: JwtCodec.test.ts round-trip for all five algorithms and cross-alg confusion, KeyRing.test.ts 'imports a foreign RS256 key and verifies a token signed by it, without disturbing the current key', 'importKey refuses ...', 'mints a key for every supported algorithm'. Deviation: importKey takes only the public half (verification-only), since a migrator needs old tokens to verify, not to keep signing with a foreign key.

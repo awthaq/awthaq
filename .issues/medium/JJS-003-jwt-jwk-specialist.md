@@ -3,7 +3,7 @@ ID: "JJS-003"
 Title: "Changing JwtConfig.algorithm desynchronizes sign and verify until the next time-based rotation"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/JwtCodec.ts:225"
 Auditor: "jwt-jwk-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `jwt` · reported by **JWT/JWK Specialist** (`jwt-jwk-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Have rotateIfDue (and layerFromStore) treat current.alg !== config.algorithm as 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jwt-key-rotation-integrity`. Evidence at HEAD ec065a7: `packages/jwt/src/Jwt.ts:387`. Fix: Rotate immediately when the current key's alg differs from config, and verify against each key's own alg under an allowlist so grace-period keys of the old alg keep verifying. (effort M). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/jwt: Algorithm is defined once in JwtCodec (JwtConfig re-exports it); JwtCodec.verify takes algorithms (allowlist) and requires header alg == the matched key's own alg, verifying with key.alg; Jwt.verify passes the distinct algs of the verifiable keys; lite verifier VerifierOptions.algorithm became algorithms; KeyRing treats current.alg != JwtConfig.algorithm as due (layerFromStore and rotateIfDue) so a config change rotates on next access. Tests: packages/jwt/test/JwtTokenClasses.test.ts 'switching JwtConfig.algorithm rotates on next access; the old key keeps verifying during grace', 'a token minted before an algorithm switch keeps verifying; new ones use the new algorithm'; JwtCodec.test.ts per-key algorithm cases.

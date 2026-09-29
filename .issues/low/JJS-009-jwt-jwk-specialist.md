@@ -3,7 +3,7 @@ ID: "JJS-009"
 Title: "No negative tests for algorithm confusion or core unknown-kid fail-closed"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/JwtCodec.ts:229"
 Auditor: "jwt-jwk-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `jwt` · reported by **JWT/JWK Specialist** (`jwt-jwk-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Add three tests: header alg 'none'/missing/'HS256' fails with JwtInvalidError; u
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jwt-claims-codec-hardening`. Evidence at HEAD ec065a7: `packages/jwt/src/JwtCodec.ts:225`. Fix: Add pinning tests for algorithm confusion and unknown-kid fail-closed. (effort S). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Characterization pins added in packages/jwt/test/JwtCodec.test.ts: alg none, alg missing, HS256 signed with the public key bytes as HMAC secret, ES256 header against an EdDSA configuration, a kid matching no key fails closed with other keys present (no first-key fallback), impostor signature under a known kid. Retired-key-after-cache-refresh case is delivered by ECF-002's verifyCache.test.ts. Confirmed the pins bite: loosening the header-alg check in JwtCodec.verify to trust the token alg fails the 'ES256 header against an EdDSA configuration' and cross-alg tests.

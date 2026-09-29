@@ -26,20 +26,32 @@
 // the next `create` becomes the new current key automatically; it keeps
 // satisfying `listVerifiable` until `retiresAt` elapses, via the same
 // `isVerifiable` filter already in place.
+//
+// JJS-004/KRS-009: at most one row is current (`rotatedAt` unset) at any
+// time, enforced by the store itself — a partial unique index in `layerSql`
+// (`Jwt.ts`'s `create_jwt_signing_key_single_current_index` migration), an
+// atomic check in `layerMemory`. `create` of a second current key fails with
+// `CurrentKeyConflict` (the caller re-reads and adopts the winner), and
+// `markRotated` only applies to a row that is still current and reports
+// whether it did, so a second rotator can neither mint a duplicate current
+// key nor re-extend a grace period that already started.
 
 import { Encryption } from "@awthaq/ports";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import type { Algorithm } from "./JwtConfig.ts";
+import { AlgorithmLiterals } from "./JwtCodec.ts";
+import type { Algorithm } from "./JwtCodec.ts";
 
 export type Jwk = Record<string, unknown>;
 
@@ -53,23 +65,50 @@ export interface SigningKeyRecord {
   readonly retiresAt: Option.Option<DateTime.Utc>;
 }
 
+/** JJS-004: another process (or fiber) already created the one current key. Re-read `findCurrent` and use it. */
+export class CurrentKeyConflict extends Data.TaggedError("CurrentKeyConflict")<{
+  readonly kid: string;
+}> {}
+
 export interface SigningKeyRecordsShape {
+  /**
+   * Inserts a key. Without `rotated` it becomes the current signing key and
+   * fails with `CurrentKeyConflict` when one already exists; with `rotated` it
+   * is inserted already rotated (a verification-only key, e.g. one imported
+   * from another system), which never conflicts.
+   */
   readonly create: (input: {
     readonly kid: string;
     readonly alg: Algorithm;
     readonly publicKeyJwk: Jwk;
     readonly privateKeyJwk: Option.Option<Redacted.Redacted<Jwk>>;
-  }) => Effect.Effect<SigningKeyRecord>;
+    readonly rotated?: {
+      readonly rotatedAt: DateTime.Utc;
+      readonly retiresAt: DateTime.Utc;
+    };
+  }) => Effect.Effect<SigningKeyRecord, CurrentKeyConflict>;
   /** The row with no `rotatedAt` yet — the one currently used to sign new tokens, if any exists. */
   readonly findCurrent: () => Effect.Effect<Option.Option<SigningKeyRecord>>;
   /** Every row not yet past its `retiresAt` (rows with no `retiresAt` at all included). */
   readonly listVerifiable: (now: DateTime.Utc) => Effect.Effect<ReadonlyArray<SigningKeyRecord>>;
-  /** Stops `kid` from being `findCurrent`'s row and starts its grace period — it keeps satisfying `listVerifiable` until `retiresAt`. */
+  /**
+   * Stops `kid` from being `findCurrent`'s row and starts its grace period — it
+   * keeps satisfying `listVerifiable` until `retiresAt`. Applies only to a row
+   * that is still current; resolves `false` when it was already rotated (so a
+   * concurrent rotator never re-extends `retiresAt`).
+   */
   readonly markRotated: (
     kid: string,
     rotatedAt: DateTime.Utc,
     retiresAt: DateTime.Utc,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<boolean>;
+  /**
+   * N12/KRS-008: shortens an already-rotated key's grace period to end at
+   * `retiresAt` — the "this key is compromised, stop trusting it now" lever.
+   * Never lengthens a grace period and never touches a current key; resolves
+   * `true` only when a row actually changed.
+   */
+  readonly retire: (kid: string, retiresAt: DateTime.Utc) => Effect.Effect<boolean>;
 }
 
 export class SigningKeyRecords extends Context.Service<SigningKeyRecords, SigningKeyRecordsShape>()(
@@ -104,11 +143,18 @@ export const layerMemory = Layer.effect(
         publicKeyJwk: input.publicKeyJwk,
         privateKeyJwk: input.privateKeyJwk,
         createdAt: now,
-        rotatedAt: Option.none(),
-        retiresAt: Option.none(),
+        rotatedAt: Option.fromNullishOr(input.rotated?.rotatedAt),
+        retiresAt: Option.fromNullishOr(input.rotated?.retiresAt),
       };
-      yield* Ref.update(state, (s) => HashMap.set(s, record.kid, record));
-      return record;
+      // One atomic step: the single-current check and the insert.
+      return yield* Ref.modify(
+        state,
+        (s): readonly [Result.Result<SigningKeyRecord, CurrentKeyConflict>, RecordsState] =>
+          Option.isNone(record.rotatedAt) &&
+          Array.from(HashMap.values(s)).some((row) => Option.isNone(row.rotatedAt))
+            ? [Result.fail(new CurrentKeyConflict({ kid: record.kid })), s]
+            : [Result.succeed(record), HashMap.set(s, record.kid, record)],
+      ).pipe(Effect.flatMap(Effect.fromResult));
     });
 
     const findCurrent: SigningKeyRecordsShape["findCurrent"] = () =>
@@ -127,15 +173,34 @@ export const layerMemory = Layer.effect(
       );
 
     const markRotated: SigningKeyRecordsShape["markRotated"] = (kid, rotatedAt, retiresAt) =>
-      Ref.update(state, (s) =>
-        HashMap.modify(s, kid, (row) => ({
-          ...row,
-          rotatedAt: Option.some(rotatedAt),
-          retiresAt: Option.some(retiresAt),
-        })),
-      );
+      Ref.modify(state, (s): readonly [boolean, RecordsState] => {
+        const row = HashMap.get(s, kid);
+        return Option.isSome(row) && Option.isNone(row.value.rotatedAt)
+          ? [
+              true,
+              HashMap.set(s, kid, {
+                ...row.value,
+                rotatedAt: Option.some(rotatedAt),
+                retiresAt: Option.some(retiresAt),
+              }),
+            ]
+          : [false, s];
+      });
 
-    return { create, findCurrent, listVerifiable, markRotated };
+    const retire: SigningKeyRecordsShape["retire"] = (kid, retiresAt) =>
+      Ref.modify(state, (s): readonly [boolean, RecordsState] => {
+        const row = HashMap.get(s, kid);
+        if (Option.isNone(row) || Option.isNone(row.value.rotatedAt)) return [false, s];
+        const sooner = Option.match(row.value.retiresAt, {
+          onNone: () => true,
+          onSome: (current) => DateTime.toEpochMillis(current) > DateTime.toEpochMillis(retiresAt),
+        });
+        return sooner
+          ? [true, HashMap.set(s, kid, { ...row.value, retiresAt: Option.some(retiresAt) })]
+          : [false, s];
+      });
+
+    return { create, findCurrent, listVerifiable, markRotated, retire };
   }),
 );
 
@@ -143,7 +208,7 @@ export const layerMemory = Layer.effect(
 
 const SigningKeyRow = Schema.Struct({
   kid: Schema.String,
-  alg: Schema.Literals(["EdDSA", "ES256"]),
+  alg: AlgorithmLiterals,
   publicKeyJwk: Schema.String,
   privateKeyJwk: Schema.NullOr(Schema.String),
   createdAt: Schema.DateTimeUtcFromString,
@@ -198,17 +263,19 @@ export const layerSql = Layer.effect(
     const insert = SqlSchema.findOne({
       Request: Schema.Struct({
         kid: Schema.String,
-        alg: Schema.Literals(["EdDSA", "ES256"]),
+        alg: AlgorithmLiterals,
         publicKeyJwk: Schema.String,
         privateKeyJwk: Schema.NullOr(Schema.String),
         createdAt: Schema.DateTimeUtcFromString,
+        rotatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+        retiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
       }),
       Result: SigningKeyRow,
       execute: (r) => sql`
           INSERT INTO jwt_signing_key
             (kid, alg, publicKeyJwk, privateKeyJwk, createdAt, rotatedAt, retiresAt)
           VALUES
-            (${r.kid}, ${r.alg}, ${r.publicKeyJwk}, ${r.privateKeyJwk}, ${r.createdAt}, NULL, NULL)
+            (${r.kid}, ${r.alg}, ${r.publicKeyJwk}, ${r.privateKeyJwk}, ${r.createdAt}, ${r.rotatedAt}, ${r.retiresAt})
           RETURNING *
         `,
     });
@@ -231,7 +298,10 @@ export const layerSql = Layer.effect(
         `,
     });
 
-    const markRotatedQuery = SqlSchema.findOne({
+    // JJS-004: `rotatedAt IS NULL` makes this a compare-and-swap — a second
+    // rotator's UPDATE matches no row (and reports `false`) instead of
+    // re-extending a grace period that already started.
+    const markRotatedQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         kid: Schema.String,
         rotatedAt: Schema.DateTimeUtcFromString,
@@ -240,7 +310,22 @@ export const layerSql = Layer.effect(
       Result: SigningKeyRow,
       execute: (r) => sql`
           UPDATE jwt_signing_key SET rotatedAt = ${r.rotatedAt}, retiresAt = ${r.retiresAt}
-          WHERE kid = ${r.kid}
+          WHERE kid = ${r.kid} AND rotatedAt IS NULL
+          RETURNING *
+        `,
+    });
+
+    // N12: only ever shortens the grace period of an already-rotated key.
+    const retireQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        kid: Schema.String,
+        retiresAt: Schema.DateTimeUtcFromString,
+      }),
+      Result: SigningKeyRow,
+      execute: (r) => sql`
+          UPDATE jwt_signing_key SET retiresAt = ${r.retiresAt}
+          WHERE kid = ${r.kid} AND rotatedAt IS NOT NULL
+            AND (retiresAt IS NULL OR retiresAt > ${r.retiresAt})
           RETURNING *
         `,
     });
@@ -261,7 +346,21 @@ export const layerSql = Layer.effect(
         publicKeyJwk: JSON.stringify(input.publicKeyJwk),
         privateKeyJwk,
         createdAt: now,
-      }).pipe(Effect.orDie);
+        rotatedAt: input.rotated?.rotatedAt ?? null,
+        retiresAt: input.rotated?.retiresAt ?? null,
+      }).pipe(
+        // A unique violation on a *current* key insert can only be the
+        // single-current index (the kid is a fresh identifier): another
+        // process minted the current key first.
+        Effect.catchTags({
+          SqlError: (error) =>
+            error.reason._tag === "UniqueViolation" && input.rotated === undefined
+              ? Effect.fail(new CurrentKeyConflict({ kid: input.kid }))
+              : Effect.die(error),
+          NoSuchElementError: Effect.die,
+          SchemaError: Effect.die,
+        }),
+      );
       return yield* decodeRow(row);
     });
 
@@ -283,8 +382,11 @@ export const layerSql = Layer.effect(
       );
 
     const markRotated: SigningKeyRecordsShape["markRotated"] = (kid, rotatedAt, retiresAt) =>
-      markRotatedQuery({ kid, rotatedAt, retiresAt }).pipe(Effect.asVoid, Effect.orDie);
+      markRotatedQuery({ kid, rotatedAt, retiresAt }).pipe(Effect.map(Option.isSome), Effect.orDie);
 
-    return { create, findCurrent, listVerifiable, markRotated };
+    const retire: SigningKeyRecordsShape["retire"] = (kid, retiresAt) =>
+      retireQuery({ kid, retiresAt }).pipe(Effect.map(Option.isSome), Effect.orDie);
+
+    return { create, findCurrent, listVerifiable, markRotated, retire };
   }),
 );

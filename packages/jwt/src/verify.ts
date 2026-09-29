@@ -49,7 +49,22 @@ export interface VerifierOptions {
   readonly jwksUrl: string;
   readonly issuer: string;
   readonly audience: string;
-  readonly algorithm: JwtCodec.Algorithm;
+  /**
+   * Signature algorithms the issuer's tokens may use (JJS-003/BAM-010) — an
+   * allowlist, never the token's own say-so. Several entries let a verifier
+   * span an algorithm switch or a dual-run (e.g. `["EdDSA", "RS256"]`).
+   */
+  readonly algorithms: ReadonlyArray<JwtCodec.Algorithm>;
+  /**
+   * The header `typ` the tokens must carry (JJS-008/VB-005): `"at+jwt"` for the
+   * principal tokens `Jwt.sign`/`GET /jwt/token` mint (the default), `"JWT"` for
+   * general-purpose `signJWT` tokens. Compared case-insensitively.
+   */
+  readonly expectedTyp?: string | ReadonlyArray<string>;
+  /** Require a non-empty `sub` (default true; a general-purpose token may have none — JJS-007). */
+  readonly requireSubject?: boolean;
+  /** Tolerated clock difference for `exp`/`nbf`/`iat` checks. Default none. */
+  readonly clockSkew?: Duration.Input;
   /** How long a fetched JWKS is served before the next verification refetches it. Default 10 minutes. */
   readonly cacheTtl?: Duration.Input;
   /** Minimum gap between forced refetches triggered by an unknown `kid` (also how long a failed fetch is replayed). Default 30 seconds. */
@@ -67,14 +82,14 @@ const JwksDocumentSchema = Schema.Struct({
   keys: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
 });
 
-/** A fetched JWK is only usable for verification once it carries a `kid` and one of this module's two supported algorithms — both narrowed by plain equality checks, never a cast. */
+/** A fetched JWK is only usable for verification once it carries a `kid` and one of this module's supported algorithms — narrowed by a type guard, never a cast. */
 const toVerificationKeys = (
   jwks: typeof JwksDocumentSchema.Type,
 ): ReadonlyArray<JwtCodec.VerificationKey> =>
   jwks.keys.flatMap((jwk) => {
     const kid = jwk["kid"];
     const alg = jwk["alg"];
-    return typeof kid === "string" && (alg === "EdDSA" || alg === "ES256")
+    return typeof kid === "string" && JwtCodec.isAlgorithm(alg)
       ? [{ kid, alg, publicKeyJwk: jwk }]
       : [];
   });
@@ -108,9 +123,12 @@ export const makeVerifier = (options: VerifierOptions) =>
       JwtCodec.verify({
         token,
         keys,
-        algorithm: options.algorithm,
+        algorithms: options.algorithms,
         issuer: options.issuer,
         audience: options.audience,
+        expectedTyp: options.expectedTyp ?? "at+jwt",
+        ...(options.requireSubject === undefined ? {} : { requireSubject: options.requireSubject }),
+        ...(options.clockSkew === undefined ? {} : { clockSkew: options.clockSkew }),
       });
 
     const verify: Verifier["verify"] = (token) =>
