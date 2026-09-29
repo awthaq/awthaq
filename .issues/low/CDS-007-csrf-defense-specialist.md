@@ -3,7 +3,7 @@ ID: "CDS-007"
 Title: "CsrfClientLive sends an empty-string header when the cookie is absent, producing opaque first-request 403s"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "client"
 Source: "packages/client/src/AuthClient.ts:99"
 Auditor: "csrf-defense-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `client` · reported by **CSRF Defense Specialist** (`csrf-defense-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Omit the header when readCookie returns undefined (a missing header should read 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `csrf-client-bootstrap`. Evidence at HEAD ec065a7: `packages/client/src/AuthClient.ts:93`. Fix: Make CsrfClientLive self-bootstrapping: omit the header when no cookie is readable, and on a CsrfRejected response retry exactly once after the 403's Set-Cookie has landed; document the flow. (effort M). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** AuthClient.csrfClientLayer({readCookie, bootstrapRetry}) (CsrfClientLive = csrfClientLayer()): omits x-csrf-token when no/empty cookie; on a 403 whose body _tag is CsrfRejected, retries exactly once if a cookie not carried by the rejected request is now readable. Stale 'no group declares CsrfProtection' comments removed (AuthClient.ts header, index.ts, AuthClient.test.ts); BEH-EA-170 implementation note + traceability row. Tests: Csrf.test.ts (7 runtime scenarios via scripted HttpClient) + react ReactClient cold-start test. Red reasoning: old layer sent an empty header and never retried.

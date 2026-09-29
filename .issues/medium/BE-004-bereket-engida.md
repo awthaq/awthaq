@@ -3,7 +3,7 @@ ID: "BE-004"
 Title: "Reactive React client covers only the core session; plugin routes need hand-built clients"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "react"
 Source: "packages/react/src/AuthClientAtom.ts:13"
 Auditor: "bereket-engida"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `react` · reported by **Bereket Engida — Creator of better-auth** (`bereket-engida`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Export a generic `makeReactClient(api)` factory over AtomHttpApi (already generi
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `react-client-atoms-factory`. Evidence at HEAD ec065a7: `packages/react/src/AuthClientAtom.ts:37`. Fix: Export a generic reactive-client factory over an app's composed `auth.api`, carrying CSRF + transport options, and rebuild the built-in session/subject atoms on it. (effort M). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/react/src/ReactClient.ts: makeReactClient<Self>()(id,{api,baseUrl?,httpClient?,transformClient?,runtime?}) over any composed api, default transport FetchHttpClient + AuthClient.CsrfClientLive (closes NF-11-1: built-in mutations 403'd; red test = header null before). ReactAuthClient/ReactSubjectClient rebuilt on it; SESSION_KEY exported; @awthaq/client added as react dependency. Also fixes clean-build TS2883 in AuthClientAtom via in-scope AuthCoreTypes anchor (no return annotations/casts). Tests: ReactClient.test.ts (CSRF header, baseUrl+per-group typing with ts-expect-error, cold-start). DEFERRED: the README org-switcher recipe (step 5) lands with the DESS-001 README rewrite. Decision: csrf opt-out is done by passing httpClient (typed by AtomHttpApi's ClientServices) rather than a csrf flag.
