@@ -17,6 +17,7 @@ import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type * as HookPoint from "./HookPoint.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
+import * as UserFields from "./UserFields.ts";
 
 /**
  * BEH-EA-004: a plugin's contract groups are confined to its own id or a
@@ -76,6 +77,7 @@ export interface Class<
   Id extends string,
   Shape,
   Groups extends HttpApiGroup.Constraint,
+  Fields extends UserFields.Declarations = {},
 > extends Context.ServiceClass<Self, Key<Id>, Shape> {
   readonly id: Id;
   readonly apiVersion: 1;
@@ -89,6 +91,17 @@ export interface Class<
   readonly readsTables: ReadonlyArray<string>;
   /** ECS-008/BEH-EA-229: the configuration inputs this plugin reads, declared statically (none when it has no policy knobs). */
   readonly config: ReadonlyArray<ConfigDescriptor>;
+  /**
+   * SAM-004 (BEH-EA-040/048): the typed scalar fields this plugin adds to `users`, declared statically
+   * (none when it adds none). The linker generates their columns; see `UserFields`.
+   */
+  readonly userFields: UserFields.Declarations;
+  /**
+   * Type-only: the declared fields' own type, which `Auth.UserFieldsOf` folds over a plugin tuple.
+   * Never assigned (a plain `userFields` value cannot carry per-key types through a class static
+   * without an assertion), so it reads `undefined`.
+   */
+  readonly "~userFields"?: Fields;
 }
 
 /** PERS-003: a statically declared tap, as far as `Auth.make`'s manifest needs it. */
@@ -128,6 +141,8 @@ export interface Any {
   readonly readsTables?: ReadonlyArray<string>;
   /** Optional here (a hand-built `Any` may have none); every plugin made with `Service` carries the list. */
   readonly config?: ReadonlyArray<ConfigDescriptor>;
+  /** SAM-004: optional so a hand-built plugin value need not declare any; every plugin made with `Service` carries the record. */
+  readonly userFields?: UserFields.Declarations;
   readonly layer: Layer.Layer<never, unknown, unknown>;
 }
 
@@ -184,7 +199,11 @@ const sameIds = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boo
  */
 export const Service =
   <Self, Shape>() =>
-  <const Id extends string, Groups extends GroupsFor<Id>>(
+  <
+    const Id extends string,
+    Groups extends GroupsFor<Id>,
+    const Fields extends UserFields.Declarations = {},
+  >(
     id: Id,
     options: {
       readonly apiVersion: 1;
@@ -194,9 +213,18 @@ export const Service =
       readonly readsTables?: ReadonlyArray<string>;
       /** ECS-008/BEH-EA-229: descriptors of the `Context.Reference`s this plugin reads (`ConfigDescriptor.make`). */
       readonly config?: ReadonlyArray<ConfigDescriptor>;
+      /**
+       * SAM-004/BEH-EA-040/048: nullable scalar columns this plugin adds to `users`, `{ plan:
+       * UserFields.serverOnly(Schema.Literals(["free", "pro"])) }` for a column `<id>_plan`. The linker
+       * (`Auth.make`) generates the migration; a field is client-writable unless declared otherwise.
+       * Validated here, at definition time: a schema that is not one scalar throws `InvalidDeclaration`.
+       */
+      readonly userFields?: Fields;
     },
-  ): Class<Self, Id, Shape, Groups> => {
+  ): Class<Self, Id, Shape, Groups, Fields> => {
     const key: Key<Id> = `awthaq/plugin/${id}`;
+    const userFields: UserFields.Declarations = options.userFields ?? {};
+    UserFields.describePlugin(id, userFields);
     const serviceKey = Context.Service<Self, Shape>()(key);
     // `Object.assign`'s source is a plain-valued `dependsOn` (not a getter): a
     // getter here would be *invoked immediately* by `Object.assign` itself (it
@@ -214,6 +242,7 @@ export const Service =
       migrations: options.migrations ?? [],
       readsTables: options.readsTables ?? [],
       config: options.config ?? [],
+      userFields,
       dependsOn: noDependencies,
       taps: noTaps,
     });

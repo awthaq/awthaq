@@ -23,12 +23,12 @@
 // consumer that means to see everything). `id` is the event's own `eventId`
 // (ESA-002), so a subscriber's delivered event joins its row by equality.
 //
-// `record`'s return type is deliberately `Effect.Effect<void>` — no typed
-// error. `layerSql`'s implementation `.orDie`s a SQL failure internally: a
-// fail-closed choice (an audit-store outage now takes down whatever
-// operation triggered it, not just audit visibility), because a
-// "successful" security-relevant operation with no durable row is exactly
-// what BEH-EA-100 exists to make impossible.
+// MA-004/ADR-EA-028: every method's `E` carries `StoreUnavailable` (a database that is down or
+// busy) beside its domain error, for both layers, instead of `layerSql` dying on a `SqlError`.
+// Whether an audit-store outage fails the operation that triggered the event is not decided here
+// but by `AuthEvents`' explicit `AuditWritePolicy` (default `"bestEffort"`: logged and counted,
+// the operation succeeds and the bus still delivers; `"required"`: the operation dies, the
+// pre-MA-004 fail-closed behaviour), so it is a choice a deployment can read and make.
 //
 // ESA-005: `pseudonymizeActor` is the erasure primitive — the rows outlive a
 // deleted user (a forensic timeline is worth keeping), but stop naming them.
@@ -58,6 +58,7 @@ import {
   encodeEvent,
   upcastPayload,
 } from "./AuthEventSchemas.ts";
+import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import { drainBatches } from "./internal/purgeBatches.ts";
 import { UserId } from "./Users.ts";
 
@@ -112,11 +113,11 @@ export interface AuditLogReplayInput {
 
 export interface AuditLogShape {
   /** Called by `AuthEvents.publish` for every event, after it is stamped, before it is enqueued. */
-  readonly record: (event: Published) => Effect.Effect<void>;
+  readonly record: (event: Published) => Effect.Effect<void, StoreUnavailable>;
   /** Newest-first (ties broken by id); every filter is optional and combines with AND. */
   readonly list: (
     input?: AuditLogListInput,
-  ) => Effect.Effect<ReadonlyArray<AuditLogRecord>, AuditLogDecodeError>;
+  ) => Effect.Effect<ReadonlyArray<AuditLogRecord>, AuditLogDecodeError | StoreUnavailable>;
   /**
    * ESA-003: the recovery path for the at-most-once bus. An ascending,
    * cursor-based read over the whole log — a consumer keeps the last `id` it
@@ -126,7 +127,7 @@ export interface AuditLogShape {
    */
   readonly replay: (
     input?: AuditLogReplayInput,
-  ) => Stream.Stream<AuditLogRecord, AuditLogDecodeError>;
+  ) => Stream.Stream<AuditLogRecord, AuditLogDecodeError | StoreUnavailable>;
   /**
    * ESA-005: erasure. Rewrites every row that names `userId` (as actor, or
    * anywhere in its payload): the id becomes a fresh random alias — the same
@@ -135,7 +136,7 @@ export interface AuditLogShape {
    * (`PII_FIELDS`) are blanked. Row id, tag, timestamp and correlation are kept.
    * Idempotent; resolves to how many rows were rewritten.
    */
-  readonly pseudonymizeActor: (userId: UserId) => Effect.Effect<number>;
+  readonly pseudonymizeActor: (userId: UserId) => Effect.Effect<number, StoreUnavailable>;
   /**
    * ALF-010: retention. Deletes every row that occurred before `before` — only rows
    * whose tag is in `eventTags` when given, never rows whose tag is in `exceptTags` —
@@ -146,7 +147,7 @@ export interface AuditLogShape {
     readonly before: DateTime.Utc;
     readonly eventTags?: ReadonlyArray<AuthEventTag>;
     readonly exceptTags?: ReadonlyArray<AuthEventTag>;
-  }) => Effect.Effect<number>;
+  }) => Effect.Effect<number, StoreUnavailable>;
 }
 
 export class AuditLog extends Context.Service<AuditLog, AuditLogShape>()("awthaq/core/AuditLog") {}
@@ -161,6 +162,7 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.user.created":
     case "auth.user.signedIn":
     case "auth.user.emailVerified":
+    case "auth.user.emailChanged":
     case "auth.user.deleted":
     case "auth.user.dataExported":
     case "auth.session.reuse":
@@ -202,6 +204,9 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.admin.userUpdated":
     case "auth.admin.userBanned":
     case "auth.admin.userUnbanned":
+    case "auth.admin.userDeleted":
+    case "auth.admin.userEmailChangeRequested":
+    case "auth.admin.userPasswordSet":
     case "auth.admin.sessionRevoked":
     case "auth.admin.organizationSuspended":
     case "auth.admin.organizationUnsuspended":
@@ -473,7 +478,12 @@ export const layerSql = Layer.effect(
     const record: AuditLogShape["record"] = (event) =>
       toStoredRow(event).pipe(
         Effect.flatMap((row) => repo.insert(row)),
-        Effect.orDie,
+        Effect.catchTags({
+          SqlError: storeUnavailable("AuditLog.record"),
+          SchemaError: Effect.die,
+          // An insert that returns no row broke the repository's own contract.
+          NoSuchElementError: Effect.die,
+        }),
       );
 
     const list: AuditLogShape["list"] = (input) =>
@@ -485,7 +495,7 @@ export const layerSql = Layer.effect(
           occurredBefore: input?.occurredBefore ?? null,
         })
         .pipe(
-          Effect.orDie,
+          orStoreUnavailable("AuditLog.list"),
           Effect.flatMap((rows) => Effect.forEach(rows, (row) => decodeRow(toStored(row)))),
         );
 
@@ -498,7 +508,7 @@ export const layerSql = Layer.effect(
             limit: input?.batchSize ?? DEFAULT_BATCH,
           })
           .pipe(
-            Effect.orDie,
+            orStoreUnavailable("AuditLog.replay"),
             Effect.flatMap((rows) => {
               const last = rows.at(-1);
               return Effect.forEach(rows, (row) => decodeRow(toStored(row))).pipe(
@@ -514,14 +524,16 @@ export const layerSql = Layer.effect(
     const pseudonymizeActor: AuditLogShape["pseudonymizeActor"] = (userId) =>
       Effect.gen(function* () {
         const alias = yield* newAlias;
-        const rows = yield* repo.listReferencing(userId).pipe(Effect.orDie);
+        const rows = yield* repo
+          .listReferencing(userId)
+          .pipe(orStoreUnavailable("AuditLog.pseudonymizeActor"));
         let rewritten = 0;
         for (const row of rows) {
           const scrubbed = scrubRow(toStored(row), userId, alias);
           if (JSON.stringify(scrubbed) === JSON.stringify(toStored(row))) continue;
           yield* repo
             .rewrite({ id: row.id, actorUserId: scrubbed.actorUserId, payload: scrubbed.payload })
-            .pipe(Effect.orDie);
+            .pipe(orStoreUnavailable("AuditLog.pseudonymizeActor"));
           rewritten += 1;
         }
         return rewritten;
@@ -536,7 +548,7 @@ export const layerSql = Layer.effect(
             exceptTags: input.exceptTags ?? [],
             limit,
           })
-          .pipe(Effect.orDie),
+          .pipe(orStoreUnavailable("AuditLog.purge")),
       );
 
     return AuditLog.of({ record, list, replay, pseudonymizeActor, purge });

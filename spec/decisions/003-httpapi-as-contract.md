@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-003 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
-> | Status | Accepted — design; implementation deferred |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006); Core groups inventory added (`session` incl. `revokeAll`, `account` incl. `updateProfile`, `deleteUser`, `exportData`; `subject` owned by `@awthaq/qadi`); the `Auth.api`/`addHttpApi` sentence replaced with `Auth.make`'s composition (AVS-008) |
 
 ---
 
@@ -22,7 +22,19 @@ Effect's `HttpApi` (in `effect/unstable/httpapi` under the v4 target, ADR-EA-007
 
 ## Decision
 
-`HttpApi` (and its constituents `HttpApiGroup`, `HttpApiEndpoint`, `HttpApiMiddleware`) is awthaq's API contract, in full: every plugin's contract is an `HttpApiGroup` (or several, one per sub-namespace) with schema payloads and `Schema.TaggedError` errors carrying their own `httpApiStatus`; core owns the root groups (`session`: current, list, signOut, revoke, revokeOthers, per PRD §10); applications merge contracts via `Auth.api`, sugar over `HttpApi.addHttpApi`, which refuses duplicate group ids. `Authentication` and `CsrfProtection` are declared as `HttpApiMiddleware.Service`s directly on the contract — `Authentication`'s `security` record is itself the strategy chain (v4 tries schemes in declaration order and returns the first success), and `CsrfProtection` declares `requiredForClient: true` so a generated client cannot type-check without implementing the client half of CSRF (PRD §10). Because contract and handlers are drawn from the same plugin tuple (ADR-EA-001, ADR-EA-002), a contract without handlers — or handlers without a contract — cannot be constructed (`archive/design/plugins-as-layers.md` §1: "impossible: `api` and `layer` come from one tuple").
+`HttpApi` (and its constituents `HttpApiGroup`, `HttpApiEndpoint`, `HttpApiMiddleware`) is awthaq's API contract, in full: every plugin's contract is an `HttpApiGroup` (or several, one per sub-namespace) with schema payloads and `Schema.TaggedError` errors carrying their own `httpApiStatus`; core owns the root groups (`session` and `account`, inventoried below, not per-plugin groups); `Auth.make(plugins)` composes every plugin's groups with core's into one served `api`, refusing a duplicate group id or route. `Authentication` and `CsrfProtection` are declared as `HttpApiMiddleware.Service`s directly on the contract — `Authentication`'s `security` record is itself the strategy chain (v4 tries schemes in declaration order and returns the first success), and `CsrfProtection` declares `requiredForClient: true` so a generated client cannot type-check without implementing the client half of CSRF (PRD §10). Because contract and handlers are drawn from the same plugin tuple (ADR-EA-001, ADR-EA-002), a contract without handlers — or handlers without a contract — cannot be constructed (`archive/design/plugins-as-layers.md` §1: "impossible: `api` and `layer` come from one tuple").
+
+### Core groups inventory
+
+`@awthaq/api`'s `AuthCoreApi` (`packages/api/src/AuthCore.ts`) is the living, authoritative list; the block below is its machine-checked mirror, one `group: endpoint, ...` line per group, diffed against `packages/api/src/{Session,Account,Subject}.ts` by `spec/scripts/check-drift.mjs` (definitions-of-done gate 10). Adding, renaming or removing a core endpoint without updating it fails `pnpm check`.
+
+<!-- surface:api -->
+session: current, list, signOut, revoke, revokeOthers, revokeAll
+account: updateProfile, deleteUser, exportData
+subject: current
+<!-- /surface:api -->
+
+`session` and `account` are core root groups. `subject` (`GET /subject`) is declared in `@awthaq/api` (`Subject.ts`) but is not a core group: `@awthaq/qadi` composes it (`SubjectApi.ts`) and the application passes it to `Auth.make` as an extra group, since it needs the qadi bridge to answer. Plugins' own groups (`password`, `oauth`, `passkey`, `jwt`, `organization`, `admin`, ...) live in each plugin's `*Api.ts` and are not listed here.
 
 ## Alternatives considered
 
@@ -35,5 +47,3 @@ Effect's `HttpApi` (in `effect/unstable/httpapi` under the v4 target, ADR-EA-007
 **Negative**: `HttpApi` in the v3 line is officially "Unstable" with a known middleware-skipping bug class and no dedicated web guide (research/01-effect-ecosystem.md: "officially 'Unstable' ... a known middleware-skipping bug class (#6121), and no streaming/SSE in v3"); awthaq's public contract surface is therefore coupled to the stability trajectory of one still-evolving Effect module, mitigated in v1 by targeting v4 where `HttpApi` streaming and the more mature `addHttpApi`/multi-scheme middleware land (ADR-EA-007).
 
 **Trade-off accepted**: awthaq commits its entire public contract surface to `HttpApi`'s API shape and its evolution; a breaking change to `HttpApi` between v4 milestones is a breaking change to every awthaq plugin's contract, with no independent contract abstraction layer standing between the two.
-
-Not yet implemented — see spec/roadmap.md for milestone.

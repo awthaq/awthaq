@@ -3,7 +3,7 @@ ID: "HSK-009"
 Title: "spec/models/03-passkey-webauthn.md is stale: claims pre-implementation and a two-minute challenge TTL"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/03-passkey-webauthn.md:67"
 Auditor: "hardware-security-key-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `—` · reported by **Hardware Security Key (FIDO U2F/CTAP) Specialist** (`hardware-security-key-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Refresh spec/models/03-passkey-webauthn.md to Implemented status, drop the 'What
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-behavior-code-reconcile`. Evidence at HEAD ec065a7: `spec/models/03-passkey-webauthn.md:67`. Fix: Refresh model 03 to the shipped state and fix the TTL/storage misquote. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/models/03-passkey-webauthn.md: the challenge storage and TTL misquote is corrected (dedicated passkey_challenge table, fixed five minutes per BEH-EA-132, attestation none per BEH-EA-135), status aligned to Shipped-Unpublished, revision bumped; grep -rn 'two-minute' spec now returns nothing.

@@ -569,6 +569,84 @@ describe("AuthHttp + Password (real HTTP)", () => {
     }),
   );
 
+  it.effect(
+    "BAM-009: change-email mails the new address, and confirming the token replaces the address",
+    () =>
+      Effect.gen(function* () {
+        const mailer = capturingMailer();
+        const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+        const signUp = yield* Effect.promise(() =>
+          post(handler, "/password/sign-up", {
+            email: "before@example.com",
+            password: strongPassword,
+          }),
+        );
+        assert.strictEqual(signUp.status, 200);
+        yield* verifyLatestSignUp(handler, mailer);
+        const cookie = cookieFrom(signUp);
+
+        // Anonymous: refused before anything is mailed.
+        const anonymous = yield* Effect.promise(() =>
+          post(handler, "/change-email", { newEmail: "after@example.com" }),
+        );
+        assert.strictEqual(anonymous.status, 401);
+
+        const requested = yield* Effect.promise(() =>
+          handler(
+            new Request("http://localhost/change-email", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                cookie: withCsrfCookie(cookie),
+                [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
+              },
+              body: JSON.stringify({ newEmail: "after@example.com" }),
+            }),
+          ),
+        );
+        assert.strictEqual(requested.status, 202);
+        const mail = (yield* mailer.sent).findLast(
+          (message) => message.template === "change-email",
+        );
+        assert.strictEqual(mail?.to, "after@example.com");
+
+        // The old address still signs in until the change is confirmed.
+        const stillOld = yield* Effect.promise(() =>
+          post(handler, "/password/sign-in", {
+            email: "before@example.com",
+            password: strongPassword,
+          }),
+        );
+        assert.strictEqual(stillOld.status, 200);
+
+        const token = tokenOf(mail);
+        const confirmed = yield* Effect.promise(() =>
+          post(handler, "/change-email/confirm", { token }),
+        );
+        assert.strictEqual(confirmed.status, 204);
+        const replay = yield* Effect.promise(() =>
+          post(handler, "/change-email/confirm", { token }),
+        );
+        assert.strictEqual(replay.status, 410);
+
+        const oldAddress = yield* Effect.promise(() =>
+          post(handler, "/password/sign-in", {
+            email: "before@example.com",
+            password: strongPassword,
+          }),
+        );
+        assert.strictEqual(oldAddress.status, 401);
+        const newAddress = yield* Effect.promise(() =>
+          post(handler, "/password/sign-in", {
+            email: "after@example.com",
+            password: strongPassword,
+          }),
+        );
+        // Verified by the confirmation itself: no separate verify-email round trip.
+        assert.strictEqual(newAddress.status, 200);
+      }),
+  );
+
   it.effect("shipping-gaps/11/401: change-password without a session is rejected", () =>
     Effect.gen(function* () {
       const { handler } = HttpRouter.toWebHandler(AppLayer);
@@ -682,6 +760,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
     const groups = PasswordApi.PasswordApi.groups;
     const account = Object.values(groups["password.account"].endpoints);
     assert.deepStrictEqual(account.map((endpoint) => endpoint.identifier).sort(), [
+      "changeEmail",
       "changePassword",
       "reauthenticate",
     ]);

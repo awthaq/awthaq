@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-005 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
-> | Status | Accepted — design; implementation deferred |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Strengthened "Alternatives considered" with OSGi's dynamic service registry as a real, grounded competing precedent (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced "Not yet implemented" with a pointer to ADR-EA-018 (EP-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Strengthened "Alternatives considered" with OSGi's dynamic service registry as a real, grounded competing precedent (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced "Not yet implemented" with a pointer to ADR-EA-018 (EP-001) <br> 1.3 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
 
 ---
 

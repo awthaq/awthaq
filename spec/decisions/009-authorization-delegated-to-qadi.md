@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-009 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
-> | Status | Accepted — design; implementation deferred |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
 
 ---
 
@@ -37,5 +37,3 @@ awthaq defines **no permissions, no policies, and no authorizer**. It ships exac
 **Trade-off accepted**: awthaq gives up being a self-contained authentication-and-authorization solution — a property some competing libraries (with their own, more limited RBAC plugins) do offer out of the box — in exchange for not carrying the long-term maintenance burden of a policy engine, and in exchange for whatever authorization it does support being as capable as qadi is, rather than as capable as an authentication team's part-time authorization effort would be.
 
 Database-level isolation is defence in depth, not this control: [ADR-EA-018](018-tenancy-is-an-organization.md)'s opt-in Postgres row-level security under the `"tenantId"` column is a backstop for a forgotten application filter, and authorization decisions still belong to qadi. A migration from Supabase keeps its RLS through the qadi rollout and retires it only once qadi covers every data path (`packages/sql/README.md`, "Multi-tenancy").
-
-Not yet implemented — see spec/roadmap.md for milestone.

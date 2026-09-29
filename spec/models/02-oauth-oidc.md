@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-02 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Status flipped to Shipped-Unpublished; "What is missing" and "Verification" rewritten against `packages/oauth` (AOMS-011, CCR-EA-006) |
 ---
 
 ## What it is
-OAuth and OIDC is the relying-party social-login method: awthaq redirects to an external provider (Google, GitHub, or a generic OIDC issuer), verifies the callback with PKCE and server-side state, and either creates or links an `Account` row to a `User`. It is planned as an MVP plugin, one of the four named in `archive/PRD.md` §9.4's example tuple.
+OAuth and OIDC is the relying-party social-login method: awthaq redirects to an external provider (Google, GitHub, or a generic OIDC issuer), verifies the callback with PKCE and server-side state, and either creates or links an `Account` row to a `User`. It ships as `@awthaq/oauth`, one of the four plugins named in `archive/PRD.md` §9.4's example tuple.
 
 ## Who asks for it
 Nearly every consumer-facing application that isn't purely enterprise-internal. `research/05-oauth-oidc.md`'s TL;DR is explicit about the shape this demand takes in 2026: "RFC 10017, OAuth 2.0 for Browser-Based Apps... formalizes what better-auth/Auth.js already practice: JS apps should not hold OAuth tokens; cookie-session BFF is the robust default" — which is directly load-bearing for awthaq's default topology, since awthaq's session is already a cookie, not a bearer token, in the browser case. The same document also notes Arctic's own author concluded "OAuth 2.0 isn't an ideal layer to abstract into a library; any library should target an abstraction one or two layers above it" — i.e. awthaq cannot simply depend on Arctic and must own this layer itself.
@@ -22,7 +22,7 @@ Nearly every consumer-facing application that isn't purely enterprise-internal. 
 ## Status
 | Property | Value |
 |---|---|
-| Status | Planned-MVP |
+| Status | Shipped-Unpublished (`packages/oauth`) |
 | Priority | P0 |
 | Enabler(s) | E2 — External provider/port abstraction |
 | Breaking? | Additive on top of core `Sessions`/`Users` and the `Password` plugin's `Account` table — the plugin-as-Layer model means OAuth only adds to the merged contract's `RIn`/groups, it does not reshape anything Password already committed to. |
@@ -61,9 +61,9 @@ oauth({ providers: [google()], linking: { trustedProviders: ["google"] } })   //
 Reproduced from `archive/design/usage-examples-v4.md` §7.1–7.2, fences changed to `ts` (one block is the raw HTTP exchange and is left as a plain fence per the source).
 
 ## What is missing
-Everything: no `OAuth` plugin class exists, no `OAuthProvider` port or its Google/GitHub/generic-OIDC implementations exist, no PKCE/state storage exists (planned to reuse the same purpose-scoped verification-token infrastructure as `password`, per `research/05-oauth-oidc.md`'s recommendation to key flow state as `purpose: "oauth.flow"`), and none of the threat mitigations `research/05-oauth-oidc.md`'s Q88 slice names (SSRF via provider-configured endpoints, open redirect, state/nonce reuse, mix-up attacks) have been implemented or tested against.
+The plugin, the `OAuthProvider` port with vendor presets (Google, GitHub, Microsoft, GitLab, Discord) and a generic OIDC issuer, server-held flow state in `Verification` (`purpose: "oauth.flow"`), PKCE S256, `id_token` verification under a per-provider algorithm allowlist, explicit and opt-in account linking, the native return leg (exchange code, `POST /oauth/token`, redirect allowlist) and per-organization connections are built. What `research/05-oauth-oidc.md`'s Q88 slice names as threats (SSRF via provider-configured endpoints, open redirect, state/nonce reuse, mix-up) are covered by the tests below, not by a separate security review, which is an M8 item. Not built: acting as an OAuth *authorization server* (`client_credentials` issuance lives in `@awthaq/api-key`; an OIDC provider is [MOD-EA-011](11-oidc-provider.md), planned).
 
 ## Verification
-None yet — no test exists.
+`packages/oauth/test/*` (`OAuth.test.ts`, `OAuthPresets.test.ts`, `OAuthNative.test.ts`, hooks, token access, the real HTTP surface in `AuthHttp.test.ts`) and the wired `16-oauth.feature` scenarios (`features/`); see [`spec/traceability.md`](../traceability.md) §5.
 
 _Related: [00 — Adoption Matrix](00-adoption-matrix.md)_

@@ -76,6 +76,12 @@ export const eventsDropped = Metric.counter("awthaq_event_dropped_total", {
   incremental: true,
 });
 
+/** MA-004/ADR-EA-028: `AuthEvents.publish` could not write the durable audit row (the store was unavailable). */
+export const auditWriteFailures = Metric.counter("awthaq_audit_write_failed_total", {
+  description: "AuthEvents publishes whose durable AuditLog row could not be written",
+  incremental: true,
+});
+
 /** ECF-010: how many `AuthEvents.on`/`onBatch` subscriptions currently have a live drain fiber. */
 export const eventSubscriptionsActive = Metric.gauge("awthaq_event_subscriptions_active", {
   description: "Live AuthEvents subscription drain fibers",

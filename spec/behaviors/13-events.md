@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-13 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 
 ---
 
-> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §13 and `archive/design/usage-examples-v4.md` §15 — not code that has shipped.
+> Implemented in `@awthaq/core` (`AuthEvents.ts`, `AuditLog.ts`, `EventRelay.ts`; tests `packages/core/test/AuthEvents.test.ts`, `AuditLog.test.ts`, `EventRelay.test.ts`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/PRD.md` §13 and `archive/design/usage-examples-v4.md` §15.
 
 ## BEH-EA-097: `AuthEvents` is a bounded `PubSub`
 
@@ -73,6 +73,8 @@ REQUIREMENT: The audit trail of security-relevant operations MUST be
 ```
 
 `archive/PRD.md` §13's own phrasing draws the line precisely: "publishers never await subscribers; the audit table is the record of record." `AuthEvents` is designed for observation — analytics, alerting, cross-cutting reactions — while the audit table is the durable ground truth a security review or an incident investigation is meant to consult; the two are deliberately not the same mechanism, so that disabling or misconfiguring event subscribers can never cause an audit gap.
+
+**Audit-write failure policy (MA-004, ADR-EA-028).** When the store is unavailable, `AuditLog.record` fails with the typed `StoreUnavailable` and `AuthEvents.publish` applies `AuthEvents.AuditWritePolicy`: `"bestEffort"` (default) logs the failure, counts it (`awthaq_audit_write_failed_total{tag}`), lets the operation succeed and still delivers the bus event; `"required"` dies with the `StoreUnavailable` so no operation completes without its row. The default trades a possible audit gap during an audit-store outage (visible in the log and the counter) for not failing an operation whose own write already committed; a deployment that must never have the gap selects `"required"` (`packages/core/test/AuditLog.test.ts`).
 
 **Cross-process delivery (CWM-004, ADR-EA-030).** The bus is in-process and at-most-once, so the audit table is also the outbox: `EventRelay.layer({ name })` (opt-in) tails it from a persisted position (`RelayCursorStore`, `auth_relay_cursor`) into an application-provided `EventTransport`, advancing only after the transport accepted the batch — at-least-once, idempotent on `eventId`, an event relayed once it is `settleDelay` old so a late-committing row is not skipped (`packages/core/test/EventRelay.test.ts`).
 

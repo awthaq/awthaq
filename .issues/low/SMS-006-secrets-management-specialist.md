@@ -3,7 +3,7 @@ ID: "SMS-006"
 Title: "README quickstart loads DATABASE_URL via non-null assertion instead of Effect Config"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "README.md:75"
 Auditor: "secrets-management-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Secrets Management Specialist** (`secrets-management-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Show the Config path in the quickstart: read Config.Redacted("DATABASE_URL") thr
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `readme-docs-accuracy`. Evidence at HEAD ec065a7: `README.md:75`. Fix: Load DATABASE_URL through Config (`PgClient.layerConfig({ url: Config.Redacted("DATABASE_URL") })`) — and, because validation shows the whole quickstart has drifted into not type-checking (Mailer shape, missing AuditLog, missing CsrfProtection), move the quickstart into a real, workspace-typechecked example that the README embeds/links so it can never drift again. (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** DATABASE_URL goes through Config (PgClient.layerConfig with Config.Redacted), no non-null assertion. The drift the dossier found (Mailer shape, missing AuditLog, CsrfProtection, hook points, erasure and export, ClientAddress, SqlTransaction) is fixed and locked in: packages/sql/test/fixtures/readme-quickstart.ts is the README block verbatim, compiled by tsc -p tsconfig.test.json through a type-only import from packages/sql/test/ReadmeQuickstart.test.ts, which also asserts README equals fixture. Red first: the old snippet failed pnpm typecheck with 12 unsatisfied services. Deviation from the plan: the compiled home is a test fixture, not examples/sql-server (examples/ belongs to P20b; SEA-007 stays open for that). The curl walkthrough was corrected (CSRF echo, verify-email, a breach-safe example password) and run end to end against SQLite: sign-up, verify, sign-in, PATCH, export, DELETE. Decision (2026-09-29): adopted the plan's recommended option; user may revisit.

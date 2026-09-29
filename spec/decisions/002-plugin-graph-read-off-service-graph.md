@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-002 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
-> | Status | Accepted — design; implementation deferred |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
 
 ---
 
@@ -37,5 +37,3 @@ Two concerns remain, deliberately, at runtime rather than in the type system: **
 **Negative**: Anything that is not naturally expressible as a Layer's type-level channel (in practice: cycle detection and migration ordering, per the Context above) still needs a small amount of runtime logic outside the pure type-level story. The plugin system is not *entirely* free of runtime bookkeeping, only free of a second parallel *graph*.
 
 **Trade-off accepted**: The project gives up having an independently inspectable, purely-data plugin manifest that exists prior to and separate from Layer construction (which would have been trivially serializable for tooling) in exchange for a single source of truth with no drift risk; the CLI-facing `manifest` (`archive/design/plugins-as-layers.md` §4.1) must instead be *derived* from the Layer graph's types plus the small amount of static class data each plugin carries (ADR-EA-008), rather than authored directly.
-
-Not yet implemented — see spec/roadmap.md for milestone.

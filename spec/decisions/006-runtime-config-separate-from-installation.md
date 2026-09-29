@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-006 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-12 |
-> | Status | Accepted — design; implementation deferred |
+> | Revision | 1.3 |
+> | Effective Date | 2026-09-29 |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Sharpened the Negative consequence to name the missing config-listing/validation tooling explicitly (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the accepted "no config listing / validation" gap with statically declared configuration descriptors, a `config list` command and a runtime `EffectiveConfig.snapshot` (ECS-008, EP-009, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Sharpened the Negative consequence to name the missing config-listing/validation tooling explicitly (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the accepted "no config listing / validation" gap with statically declared configuration descriptors, a `config list` command and a runtime `EffectiveConfig.snapshot` (ECS-008, EP-009, CCR-EA-006) <br> 1.3 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
 
 ---
 

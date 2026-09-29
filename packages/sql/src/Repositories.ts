@@ -10,7 +10,7 @@
 // commit together (BEH-EA-058). Every paginated query takes an opaque
 // `(createdAt, id)` cursor, never an offset (BEH-EA-036).
 
-import { Encryption, Tenant } from "@awthaq/ports";
+import { Defects, Encryption, Tenant } from "@awthaq/ports";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -164,9 +164,36 @@ const sealedPii = (encryption: Encryption.EncryptionShape): PiiCodec => {
 
 // ---- Users ------------------------------------------------------------
 
+/** SAM-004: a plugin-declared user-field column and how its scalar is stored (`text`, `real` = double precision, `boolean`). */
+export interface UserFieldColumn {
+  readonly name: string;
+  readonly kind: "text" | "real" | "boolean";
+}
+
+/** SAM-004: what a user-field column holds. */
+export type UserFieldScalar = string | number | boolean;
+
 export interface UsersRepositoryShape {
   /** TS-001: the dialect-resolved models this repository decodes with — callers build insert/update inputs from these. */
   readonly models: SqlModels;
+  /**
+   * SAM-004 (BEH-EA-040): reads the named declared-field columns of one user — `None` when there is
+   * no such user, else the columns that hold a value (an unset column is absent). Column names come
+   * from the composition's own registry, never from a request, and are always quoted identifiers.
+   * Booleans come back as booleans on both dialects (SQLite stores 0/1).
+   */
+  readonly readFields: (
+    id: UserId,
+    columns: ReadonlyArray<UserFieldColumn>,
+  ) => Effect.Effect<Option.Option<Readonly<Record<string, UserFieldScalar>>>, RepositoryError>;
+  /**
+   * SAM-004: writes declared-field columns in one `UPDATE` (`null` clears); `false` when there is no
+   * such user. It touches nothing else on the row.
+   */
+  readonly writeFields: (
+    id: UserId,
+    values: Readonly<Record<string, UserFieldScalar | null>>,
+  ) => Effect.Effect<boolean, RepositoryError>;
   readonly insert: (input: UserInsert) => Effect.Effect<User, RepositoryError>;
   readonly update: (input: UserUpdate) => Effect.Effect<User, RepositoryError>;
   /**
@@ -256,15 +283,87 @@ export class UsersRepository extends Context.Service<UsersRepository, UsersRepos
 
 const userMetadataAad = (id: string) => `user:${id}:metadata`;
 
+/**
+ * SAM-004: a declared-field cell as its column kind says it should look: `null` is unset, a boolean
+ * is a boolean on both dialects (SQLite hands back 0/1), and anything else that does not match the
+ * declared kind is a corrupt column, a defect a retry cannot fix.
+ */
+const userFieldScalar = (
+  column: UserFieldColumn,
+  raw: unknown,
+): Effect.Effect<UserFieldScalar | null> => {
+  if (raw === null || raw === undefined) return Effect.succeed(null);
+  switch (column.kind) {
+    case "text":
+      if (typeof raw === "string") return Effect.succeed(raw);
+      break;
+    case "real":
+      if (typeof raw === "number") return Effect.succeed(raw);
+      break;
+    case "boolean":
+      if (typeof raw === "boolean") return Effect.succeed(raw);
+      if (raw === 0 || raw === 1) return Effect.succeed(raw === 1);
+      break;
+  }
+  return Defects.invariantViolation(
+    "UserFieldColumnMismatch",
+    `awthaq: users column "${column.name}" holds a ${typeof raw}, not a ${column.kind}`,
+  );
+};
+
 const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const models = makeModels(yield* resolveDialect(sql));
+    const dialect = yield* resolveDialect(sql);
+    const models = makeModels(dialect);
     const repo = yield* SqlModel.makeRepository(models.User, {
       tableName: "users",
       spanPrefix: "Users",
       idColumn: "id",
     });
+
+    // SAM-004: the plugin-declared columns are outside the model (they exist only when a
+    // composition declares them), so they are read and written with plain statements over
+    // identifiers the registry supplied.
+    const readFields: UsersRepositoryShape["readFields"] = (id, columns) =>
+      columns.length === 0
+        ? repo.findById(id).pipe(
+            Effect.map(() => Option.some({})),
+            Effect.catchTag("NoSuchElementError", () => Effect.succeedNone),
+          )
+        : sql`SELECT ${sql.csv(columns.map((column) => sql`${sql(column.name)}`))} FROM users WHERE id = ${id}`.pipe(
+            Effect.flatMap((rows) => {
+              const [row] = rows;
+              if (row === undefined) return Effect.succeedNone;
+              return Effect.forEach(columns, (column) =>
+                userFieldScalar(column, row[column.name]).pipe(
+                  Effect.map((value) => [column.name, value] as const),
+                ),
+              ).pipe(
+                Effect.map((entries) =>
+                  Option.some(
+                    Object.fromEntries(
+                      entries.flatMap(([name, value]) => (value === null ? [] : [[name, value]])),
+                    ),
+                  ),
+                ),
+              );
+            }),
+            traced("Users.readFields", { id }),
+          );
+
+    const writeFields: UsersRepositoryShape["writeFields"] = (id, values) => {
+      const stored = Object.fromEntries(
+        Object.entries(values).map(([name, value]) => [
+          name,
+          dialect === "sqlite" && typeof value === "boolean" ? (value ? 1 : 0) : value,
+        ]),
+      );
+      return sql`UPDATE users SET ${sql.update(stored)} WHERE id = ${id} RETURNING id`.pipe(
+        Effect.map((rows) => rows.length > 0),
+        traced("Users.writeFields", { id }),
+      );
+    };
 
     // CSG-006: `users.metadata` is the one free-form personal-data column. With
     // the default repository these are all no-ops; the encrypted variant seals
@@ -585,6 +684,8 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
 
     return {
       models,
+      readFields,
+      writeFields,
       insert,
       update,
       findById,

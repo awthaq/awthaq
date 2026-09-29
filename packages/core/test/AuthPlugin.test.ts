@@ -342,6 +342,7 @@ describe("Auth.make", () => {
         ],
         hooks: {},
         config: [],
+        userFields: [],
       });
     }),
   );

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-013 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
-> | Status | Accepted — design; implementation deferred |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
 
 ---
 
@@ -47,5 +47,3 @@ Enumeration-safety is a structural property of specific errors, not a matter of 
 **Messages carry no identifiers (EOTS-004).** Error `message`s are constant strings (`awthaq: no such session`). A session id is the public half of a bearer credential and an email address is personal data, and messages reach logs. Identifiers ride only in typed fields (`SessionNotFound.id`, `UserNotFound.id`, `EmailAlreadyExists.email`, `TokenConsumed.identifier`) for in-process correlation. Policy: a typed error field may be used to route or correlate a failure, but a log line, span attribute or metric label MUST NOT interpolate a field that names a credential (session ids, token identifiers) or a person (emails, user ids of unauthenticated callers); log the constant message and the error's `_tag`.
 
 **Defects are tagged too (GC-008).** What legitimately dies — a misconfigured composition, an unsupported SQL dialect, an invariant this code itself broke — dies with one of three `@awthaq/ports` `Defects` classes (`InvalidConfiguration`, `UnsupportedDialect`, `InvariantViolation`, tags `Defects/...`) instead of a plain `Error`, so an alert or a test tells one defect from another by tag, not prose. `scripts/check-error-tags.mjs` fails on `Effect.die(new Error(...))` in `packages/*/src`. Infrastructure outages are not defects: they are `StoreUnavailable` ([ADR-EA-028](028-infrastructure-error-policy.md)).
-
-Not yet implemented — see spec/roadmap.md for milestone.

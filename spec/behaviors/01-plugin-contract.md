@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-01 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 
 ---
 
-> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/design/plugins-as-layers.md` and `archive/PRD.md` §9 — not code that has shipped.
+> Implemented in `@awthaq/core` (`packages/core/src/AuthPlugin.ts`; tests `packages/core/test/AuthPlugin.test.ts`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/design/plugins-as-layers.md` and `archive/PRD.md` §9.
 
 ## BEH-EA-001: A plugin is a `Context.Service` class produced by `AuthPlugin.Service`
 

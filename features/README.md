@@ -2,7 +2,7 @@
 
 This is the Gherkin/BDD acceptance suite for awthaq. It exists because `spec/process/requirement-id-scheme.md` reserved `REQ-EA-NNN` for exactly this ("a BDD-testable acceptance requirement"), `spec/traceability.md` §6 was written as a stub waiting for it, and `spec/scripts/verify-traceability.sh` already contains check logic that looks for `features/features/*.feature` — this fills that slot in.
 
-**This suite is pre-implementation, same as the rest of the repository.** There is no `package.json`, no Cucumber configuration, and no step-definition layer wiring these scenarios to real code — see `spec/behaviors/25-testing-harness.md` (`BEH-EA-193`–`200`) for the planned testing harness that will eventually execute them. Until then, every `.feature` file here is a specification artifact: it makes `spec/behaviors/`'s prose requirements Gherkin-shaped so a future BDD suite has scenarios to run, not a suite that currently passes or fails.
+**Some of this suite runs, and some of it only restates requirements.** `pnpm test:bdd` (`features/vitest.config.ts`, `@effect-cucumber/vitest`, step definitions in `features/step-definitions/`) runs inside `pnpm check`. A feature file wired to step definitions runs its scenarios against the real plugins (sessions, password, OAuth, passkey and admin-impersonation at the time of writing, plus `_smoke`); every other feature file is registered with zero steps and tagged `@skip @unwired`, so it is a specification artifact that makes `spec/behaviors/`'s prose Gherkin-shaped without running it. A passing wired scenario is runtime evidence; an unwired one is not. See `spec/behaviors/25-testing-harness.md` (`BEH-EA-193`–`200`) for the `@awthaq/test` harness plugin suites use.
 
 ## How this maps to `spec/behaviors/`
 

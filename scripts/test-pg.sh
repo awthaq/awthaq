@@ -23,6 +23,7 @@ suites=(
   packages/sql/test/RateLimiterStoreSql.postgres.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
   packages/core/test/Users.test.ts
+  packages/core/test/UserFields.test.ts
   packages/core/test/UserImport.test.ts
   packages/jwt/test/KeyRing.test.ts
   packages/jwt/test/RevocationStore.test.ts

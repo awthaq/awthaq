@@ -3,7 +3,7 @@ ID: "CSS-005"
 Title: "README quickstart shows the session cookie as SameSite=Lax; every code path and the BDD suite enforce Strict"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "README.md:182"
 Auditor: "cookie-security-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `—` · reported by **Cookie Security Specialist** (`cookie-security-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Correct the sample header to SameSite=Strict, or better, generate it from a real
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `readme-docs-accuracy`. Evidence at HEAD ec065a7: `README.md:182`. Fix: Correct the sample header to SameSite=Strict and add one sentence explaining why OAuth uses its own Lax __Host-oauth-state flow cookie (IC-005's addition). (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** README.md: the sample header is now SameSite=Strict (captured from a real run of the quickstart composition against SQLite) and a paragraph explains why the OAuth plugin correlates its callback with its own ten-minute SameSite=Lax __Host-oauth-state cookie. No other session-cookie Lax claim remains in README, package READMEs or examples.

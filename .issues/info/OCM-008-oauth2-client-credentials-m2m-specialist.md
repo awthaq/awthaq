@@ -3,7 +3,7 @@ ID: "OCM-008"
 Title: "Spec and code agree on non-implementation — docs claim verified against code"
 Level: info
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/07-api-keys.md:23"
 Auditor: "oauth2-client-credentials-m2m-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `docs` · `—` · reported by **OAuth2 Client Credentials / M2M Specialist** (`oauth2-client-credentials-m2m-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ None required for honesty; when M7 lands, update the model doc's Status table an
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `spec-status-banner-sweep`. Evidence at HEAD ec065a7: `packages/api-key/src/index.ts:8`. Fix: Positive finding is correct about the plugin, but 07-api-keys.md carries two stale sentences; fix them in the banner sweep. (Rotation/transport decisions are OCM-005's, not this ID's.) (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/models/07-api-keys.md had already been rewritten when @awthaq/api-key shipped (the two stale sentences the dossier names no longer exist); this pass aligned its Status cell to the adoption-matrix vocabulary (Shipped-Unpublished) and bumped its revision.

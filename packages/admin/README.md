@@ -15,6 +15,10 @@ Admin.config({
   canManageEpisode: ({ admin, episode }) => Effect.succeed(false), // optional; defaults to canImpersonate(admin, episode.target)
   canManageUsers: ({ admin, target }) => Effect.succeed(false), // target is None for listUsers
   canBanUsers: ({ admin, target }) => Effect.succeed(false), // banUser / unbanUser
+  canDeleteUsers: ({ admin, target }) => Effect.succeed(false), // AdminAccounts.deleteUser
+  canManageCredentials: ({ admin, target }) => Effect.succeed(false), // AdminAccounts.setUserEmail / setUserPassword
+  passwordPolicy: (password) => Effect.succeed([]), // hints an admin-set password violates; default: 12 to 1024 characters
+  links: { changeEmail: (token) => `https://app.example/confirm-email#${token}` }, // the URL in the change-email mail
   canAdministerTenants: ({ admin, organizationId }) => Effect.succeed(false), // superadmin: cross-tenant episodes + AdminTenants
 });
 ```
@@ -43,7 +47,13 @@ Every predicate defaults to "deny", and every one **sees the target** (and, for 
 
 **Ban and unban** (`POST /admin/users/:userId/ban` `{ reason?, until? }`, `POST /admin/users/:userId/unban`) sit behind their own predicate, `canBanUsers` — being allowed to edit a user does not imply being allowed to lock them out. `banUser` is `Users.setStatus(userId, "suspended", …)` plus `Sessions.revokeAll(userId, "suspended")` (every session, impersonation sessions issued as the user included), publishes `auth.admin.userBanned`, and refuses to ban the calling admin (`AdminSelfBanRefused`). The block is the one shared sign-in gate, `Users.assertCanSignIn`, which password, passkey and OAuth sign-in each consult, so a banned user is refused `UserSuspended` (403) everywhere while `getUser`/`unbanUser` still resolve them; `until` makes a ban lapse by itself and `reason` is an operator note the banned user never sees. `unbanUser` is `setStatus("active")` — nothing was deleted, so the user just signs in again.
 
-Not shipped yet (tracked under BAM-005): user deletion (needs the single shared erasure cascade) and admin email/password change (an admin-set address must itself be verified by its owner; `Users.changeEmail` exists as a primitive). **There is deliberately no `setRole` endpoint** — role assignment is a qadi/application concern (ADR-EA-009), not the admin plugin's: who holds which role belongs next to the authorization library, and a second authority here would drift from it.
+**Deletion and credentials (`AdminAccounts`).** An opt-in third plugin, `Auth.make([Admin, AdminAccounts])`, in the admin-tier group `admin.accounts`: `DELETE /admin/users/:userId` (`canDeleteUsers`), `POST /admin/users/:userId/email` `{ email }` and `POST /admin/users/:userId/password` `{ password }` (both `canManageCredentials`). It needs the erasure cascade, `PasswordHasher` and `Mailer`, so `Admin` alone still composes without them. Each is fail-closed with its own predicate, gate before existence, and publishes an audited `auth.admin.*` event.
+
+- **`deleteUser`** is `AccountErasure.eraseAccount(userId, { deletedBy: "admin" })`: the same cascade a user's own account deletion runs (accounts, sessions, verification tokens, registered erasure contributions, audit pseudonymization, the `BeforeUserDelete` veto as `HookAborted`). You cannot delete yourself.
+- **`setUserEmail`** mails a `change-email` token to the *new* address; the address changes, and becomes verified, only when its owner confirms it at `POST /change-email/confirm` in `@awthaq/password` (so the password plugin must be composed to complete the change). An address already in use is a 409 to the administrator; a failed mail is a typed 502 with nothing changed.
+- **`setUserPassword`** hashes through the `PasswordHasher` port, replaces (or creates) the password credential, revokes every session of the user (reason `admin`) in one transaction, and publishes `auth.password.changed` and `auth.admin.userPasswordSet`. The password must satisfy `passwordPolicy` (422 with hints otherwise). You cannot set your own password here. It runs `Hooks.BeforeCredentialReset` with no second-factor code, like a self-service reset that has none: for a user with a confirmed second factor (`@awthaq/two-factor`'s `credentialResetGate`) it answers `403 HookAborted` (`TWO_FACTOR_REQUIRED`) and writes nothing, so an administrator cannot silently replace the password of an MFA-protected account.
+
+Not shipped: `createUser` (create accounts through sign-up or the import tooling, `awthaq import`). **There is deliberately no `setRole` endpoint** — role assignment is a qadi/application concern (ADR-EA-009), not the admin plugin's: who holds which role belongs next to the authorization library, and a second authority here would drift from it.
 
 ## Tenant administration (`AdminTenants`)
 
@@ -71,7 +81,10 @@ better-auth swaps the session cookie server-side and restores it on stop; awthaq
 | `listUserSessions`                                       | `GET /admin/users/:userId/sessions`                                                        |
 | `revokeUserSession` / `revokeUserSessions`               | `DELETE /admin/users/:userId/sessions/:sessionId` / `DELETE /admin/users/:userId/sessions` |
 | `banUser` / `unbanUser`                                  | `POST /admin/users/:userId/ban` `{ reason?, until? }` / `POST /admin/users/:userId/unban`  |
-| `removeUser`, `setUserPassword`, `setRole`, `createUser` | not shipped (see above)                                                                    |
+| `removeUser`                                             | `DELETE /admin/users/:userId` (`AdminAccounts`, `canDeleteUsers`)                          |
+| `setUserPassword`                                        | `POST /admin/users/:userId/password` (`AdminAccounts`, `canManageCredentials`)             |
+| email set through `adminUpdateUser`                      | `POST /admin/users/:userId/email` (`AdminAccounts`; the owner confirms by mail)            |
+| `setRole`, `createUser`                                  | not shipped (see above)                                                                    |
 
 ## Impersonation authority and the JWT `act` claim
 

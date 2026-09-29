@@ -82,6 +82,8 @@ describe("wire shapes", () => {
       identity: { _tag: "Email", email: "a@b.co", emailVerified: false },
       name: "A",
       image: null,
+      // SAM-004: plugin-declared user fields, keyed `<plugin id>_<field>`.
+      fields: { billing_plan: "pro", billing_seats: 3, billing_newsletter: false },
     };
     expect(
       Schema.encodeSync(Account.AccountDto)(Schema.decodeUnknownSync(Account.AccountDto)(account)),

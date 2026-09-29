@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-05 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 
 ---
 
-> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §12 and `research/10-schema-migrations.md` — not code that has shipped.
+> Implemented in `@awthaq/sql` (`Models.ts`, `Repositories.ts`, `CoreMigrations.ts`; tests `packages/sql/test`, run against SQLite, libSQL and Postgres); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/PRD.md` §12 and `research/10-schema-migrations.md`.
 
 ## BEH-EA-033: Every entity is a `Model.Class` with `Model.UuidV7Insert` ids
 
@@ -170,6 +170,8 @@ REQUIREMENT: A plugin's migrations MUST create or alter only tables named
 `research/09-plugin-architecture.md` Q25 documents better-auth's opposite choice — plugins may add fields directly to the shared `user`/`session` tables via `additionalFields`, with a documentation-only warning against storing sensitive data there — as the failure mode this rule is designed to close: two plugins altering the same shared table in incompatible ways, or a plugin quietly widening a table core does not know about. `research/10-schema-migrations.md` Q78 states the awthaq-specific line precisely: primitive, nullable/defaulted scalar extensions are the only thing a shared table may accept, and even those go through a declared extension mechanism, never an unmediated `ALTER TABLE` from plugin migration code.
 
 **As shipped (SEA-001/SSMS-002, ADR-EA-033):** the schema is deliberately foreign-key-less. No table declares a `FOREIGN KEY` into `users` (or into any other plugin's table), so there is no database-level `ON DELETE CASCADE` to rely on and none is intended: a cascade would be invisible to the audit trail and to a plugin's own transaction, and would tie table ownership together. A user's data is removed by `Erasure.AccountErasure`, which runs every plugin's registered erasure contribution, the core deletes and the audit pseudonymization in one transaction (BEH-EA-095), so referential cleanup is application-level and atomic. A plugin that adds a table keyed by user id MUST contribute an erasure for it (`AuthPlugin.layer(Self, { contributes: Erasure.contribute(...) })`).
+
+**As shipped (SAM-004, ADR-EA-035): the declared extension point is `userFields`.** A plugin declares typed scalar fields on `users` in its `AuthPlugin.Service` options; it writes no DDL. `Auth.make` generates one `ALTER TABLE users ADD COLUMN "<plugin id>_<field>"` migration per field (nullable, unbackfilled, dialect-neutral, named `NNNN_<plugin>_add_user_field_<field>` and appended after every plugin's own migrations), and refuses a declaration whose schema does not encode to one scalar, a name that is not a plain identifier, a column name over 63 characters, and two declarations that would share a column. `Session` and `Account` have no such extension point.
 
 _Previous: [BEH-EA-032](04-contract-stratum.md#beh-ea-032-authapi-merges-contracts-and-refuses-a-duplicate-group-id)_
 _Next: [BEH-EA-041](06-domain-users-accounts.md#beh-ea-041-a-user-is-identified-by-a-case-insensitively-unique-email)_

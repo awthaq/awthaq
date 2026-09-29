@@ -1212,7 +1212,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           ) {
             return yield* Effect.fail(new PasskeyApi.PasskeyConditionalCreateDisabled());
           }
-          // BEH-EA-relaxed: Chrome's Conditional Create flow produces
+          // BEH-EA-256: Chrome's Conditional Create flow produces
           // UP=0/UV=0 — a `residentKey: "required"` discoverable
           // credential is also what makes autofill possible at all.
           return yield* creationOptions(userId, conditionalScope(sessionId), {

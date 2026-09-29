@@ -26,7 +26,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
+import { LockTimeoutError, SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Sessions from "../src/Sessions.ts";
@@ -1309,6 +1309,90 @@ describe("Sessions infrastructure failures (MA-004)", () => {
         // The cause is logged where it happened; it is not a field a response could carry.
         assert.notProperty(failure, "cause");
       }).pipe(Effect.provide(FlakySqlLayer)),
+  );
+
+  // SEA-002: a `SQLITE_BUSY`-class failure (a retryable `SqlError`) is retried a bounded number of
+  // times before it becomes `StoreUnavailable`; anything else is not retried at all.
+  const insertAttempts = Effect.runSync(Ref.make(0));
+  const failFirstInserts = Effect.runSync(Ref.make(0));
+  const failWith = Effect.runSync(Ref.make<"busy" | "unknown">("busy"));
+
+  const BusyInsertRepository = Layer.effect(
+    Repositories.SessionsRepository,
+    Effect.gen(function* () {
+      const real = yield* Repositories.SessionsRepository;
+      return {
+        ...real,
+        insert: (input: Parameters<typeof real.insert>[0]) =>
+          Effect.gen(function* () {
+            yield* Ref.update(insertAttempts, (n) => n + 1);
+            const remaining = yield* Ref.get(failFirstInserts);
+            if (remaining <= 0) return yield* real.insert(input);
+            yield* Ref.set(failFirstInserts, remaining - 1);
+            const kind = yield* Ref.get(failWith);
+            return yield* Effect.fail(
+              new SqlError({
+                reason:
+                  kind === "busy"
+                    ? new LockTimeoutError({ cause: new Error("SQLITE_BUSY: database is locked") })
+                    : new UnknownError({ cause: new Error("boom") }),
+              }),
+            );
+          }),
+      };
+    }),
+  ).pipe(Layer.provide(Repositories.SessionsRepositoryLive));
+
+  const BusySqlLayer = Sessions.layerSql.pipe(
+    Layer.provide(BusyInsertRepository),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
+
+  const reset = (failures: number, kind: "busy" | "unknown") =>
+    Ref.set(insertAttempts, 0).pipe(
+      Effect.andThen(Ref.set(failFirstInserts, failures)),
+      Effect.andThen(Ref.set(failWith, kind)),
+    );
+
+  it.effect("SEA-002: issue retries a busy write and succeeds once the lock frees", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      yield* reset(2, "busy");
+      const fiber = yield* Effect.forkChild(sessions.issue({ userId }));
+      yield* TestClock.adjust(Duration.seconds(5));
+      const issued = yield* Fiber.join(fiber);
+      assert.strictEqual(issued.session.userId, userId);
+      assert.strictEqual(yield* Ref.get(insertAttempts), 3);
+    }).pipe(Effect.provide(BusySqlLayer)),
+  );
+
+  it.effect(
+    "SEA-002: the retry is bounded — a write that stays busy becomes StoreUnavailable",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        yield* reset(1000, "busy");
+        const fiber = yield* Effect.forkChild(sessions.issue({ userId }).pipe(Effect.flip));
+        yield* TestClock.adjust(Duration.seconds(5));
+        const failure = yield* Fiber.join(fiber);
+        assert.strictEqual(failure._tag, "StoreUnavailable");
+        // The first try plus three retries, and no more.
+        assert.strictEqual(yield* Ref.get(insertAttempts), 4);
+      }).pipe(Effect.provide(BusySqlLayer)),
+  );
+
+  it.effect("SEA-002: a non-retryable failure is not retried", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      yield* reset(1000, "unknown");
+      const failure = yield* sessions.issue({ userId }).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+      assert.strictEqual(yield* Ref.get(insertAttempts), 1);
+    }).pipe(Effect.provide(BusySqlLayer)),
   );
 
   const BrokenCrypto = Layer.succeed(

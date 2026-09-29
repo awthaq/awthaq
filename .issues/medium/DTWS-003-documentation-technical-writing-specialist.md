@@ -3,7 +3,7 @@ ID: "DTWS-003"
 Title: "Root README lists @awthaq/next as a stub package; it has a real implementation"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "README.md:232"
 Auditor: "documentation-technical-writing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `—` · reported by **Documentation & Technical Writing Specialist** (`documentation-technical-writing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Remove `next` from the stub list (and note what it does ship: session resolution
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `readme-docs-accuracy`. Evidence at HEAD ec065a7: `README.md:232`. Fix: Correct the README's plugin/package inventory: remove `next` from the stub list, add a row describing what @awthaq/next ships, and fix the same claim in .scratch/shipping-gaps/map.md. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** README.md no longer lists next as a stub: the 'Around the plugins' table describes getSession, hasSessionCookie and withNextCookies (and the edge and serverActionClient entries); only two-factor and magic-link are called placeholders. Deferred: .scratch/shipping-gaps/map.md's same claim, because the brief bars staging .scratch/. CWM-007 closes as its duplicate.

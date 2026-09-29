@@ -4,28 +4,30 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-21 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-012 callout to BEH-EA-161 and a note on unhandled same-attribute/relation resolver conflicts across plugins (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-012 callout to BEH-EA-161 and a note on unhandled same-attribute/relation resolver conflicts across plugins (CCR-EA-002) <br> 1.2 (2026-09-29): Banner replaced with per-behavior implementation pointers; BEH-EA-161's example rewritten to the shipped shape (no `plan` attribute; a user-table defect surfaces as `AttributeResolveError`); the same-attribute-resolver paragraph rewritten around `attributeResolverRegistry` (AAPS-007, RZS-007, CCR-EA-006) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
+> Implemented: BEH-EA-161 in `@awthaq/qadi`'s `Resolvers.UserAttributes`; BEH-EA-162 in `@awthaq/organization`'s `OrganizationQadi.relationships` (with the application's `ResourceOrganizationLookup`, layer `layerNone` by default); BEH-EA-163 by `@qadi/core`'s `relationshipResolverFromEdges`; BEH-EA-165 in `Resolvers` (`reauth`, `ObligationHandlers.reauth`). BEH-EA-164 (decision history over the audit table) is an example of what an application composes from `AuditLog`; awthaq ships no `DecisionHistory` layer of its own. Tests: `packages/qadi/test/Resolvers.test.ts`, `packages/organization/test/OrganizationQadi.test.ts`. The Gherkin scenarios in `features/` are `@skip @unwired`.
 
 ## BEH-EA-161: Attributes resolved from the user table
 
 > **Invariant:** [INV-EA-012](../invariants.md#inv-ea-012-a-qadi-resolvers-failure-never-becomes-an-authorization-denial)
 
 ```ts
+// shape of the shipped `Resolvers.UserAttributes` (email, emailVerified, name); `userIdOf` strips the `user:` prefix and any other subject resolves `undefined`
 export const UserAttributes = Layer.effect(AttributeResolver, Effect.gen(function*() {
   const users = yield* Users
   return AttributeResolver.of({
     name: "awthaq/UserAttributes",
-    resolve: (subjectId, attribute) => users.byId(id).pipe(
-      Effect.map((u) => attribute === "plan" ? u.plan : undefined),
-      Effect.mapError((cause) => new AttributeResolveError({ subjectId, attribute, cause }))
+    resolve: (subjectId, attribute) => users.findById(userIdOf(subjectId)).pipe(
+      Effect.map((user) => { switch (attribute) { case "email": return user.email; /* emailVerified, name */ default: return undefined } }),
+      Effect.catchTag("UserNotFound", () => Effect.succeed(undefined)),   // a deleted user: "no opinion"
+      Effect.catchDefect((cause) => Effect.fail(new AttributeResolveError({ attribute, cause })))   // a store outage is a typed failure
     )
   })
 }))
@@ -38,7 +40,7 @@ REQUIREMENT: An `AttributeResolver` backed by awthaq's user table MUST
              mean only "this resolver has no opinion on this attribute."
 ```
 
-`usage-qadi.md` §6.1 draws the line precisely: the resolver returns `undefined` for an attribute it does not recognize (`type !== "user"`, or an unhandled attribute name), and maps every genuine failure — a database error reading `users.byId` — to a typed `AttributeResolveError` instead. Collapsing those two cases would make an outage of the user table indistinguishable from "this subject has no plan," turning an infrastructure failure into a silent authorization decision.
+`usage-qadi.md` §6.1 draws the line precisely: the resolver returns `undefined` for an attribute it does not recognize (`type !== "user"`, or an unhandled attribute name), and maps every genuine failure — a database error reading `users.byId` — to a typed `AttributeResolveError` instead. Collapsing those two cases would make an outage of the user table indistinguishable from "this subject has no such attribute," turning an infrastructure failure into a silent authorization decision. The attribute set is what awthaq's user record carries (`email`, `emailVerified`, `name`); an application-specific attribute such as a billing plan belongs to the plugin or application that owns it, registered as its own resolver. A deleted user resolves `undefined`, a legitimate "no opinion" answer.
 
 _Previous: [BEH-EA-160](20-qadi-bridge-path-b.md#beh-ea-160-both-bridges-share-one-wiring-root) | Next: [BEH-EA-162](21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership)_
 
@@ -88,7 +90,7 @@ REQUIREMENT: A deployment or test with a small, statically known relationship
 
 `usage-qadi.md` §6.2 notes this is "enough" when the graph is fixed — a test suite (`usage-qadi.md` §15's `edgeRelationshipResolver`), or a deployment that has no organization plugin installed at all but still wants a couple of hard-coded relationships. Because both implementations satisfy the same `RelationshipResolver` tag, a policy written against `hasRelationship` never needs to know or care which backing implementation is in effect.
 
-**Two plugins both wiring a resolver for the same attribute or relation** is, honestly, an unhandled case today, and worth stating plainly rather than implying a check exists. `AttributeResolver` and `RelationshipResolver` are qadi's own service tags (`@qadi/core`), not one of awthaq's own declared slots (`SubjectResolver`, `SessionViewExtension` — ADR-EA-012), so `Auth.make`'s `SlotConflict<P>` check (INV-EA-004) has no visibility into them: it only detects a collision between two plugins' `ROut` for a slot *awthaq itself* defines. If, say, both `Organization` and a hypothetical third-party `Billing` plugin each provide a `Layer.effect(AttributeResolver, ...)` for the `"plan"` attribute, ordinary Effect Layer composition applies — the later-provided Layer shadows the earlier one for that tag, the same shadow-not-merge semantics `behaviors/14-rate-limiting.md`'s BEH-EA-109 documents for two `RateLimiter` store Layers — and the losing resolver's contribution is silently unreachable, with no name-both-plugins compiler error the way an actual slot conflict gets. Closing this gap would mean either classifying `AttributeResolver`/`RelationshipResolver` as awthaq-recognized slots (extending `SlotConflict<P>` to see through to a qadi-owned tag it does not otherwise know about) or introducing an aggregating combinator that tries each contributed resolver in order and takes the first non-`undefined` answer, mirroring how `undefined` already means "no opinion" per BEH-EA-161's own resolver contract — neither of which this specification commits to today. Until one of those exists, an application composing more than one resolver for the same attribute or relation is responsible for either combining them into a single Layer itself before providing it, or ensuring no two installed plugins target the same attribute/relation name at all.
+**Two plugins wiring a resolver for the same attribute.** `AttributeResolver` and `RelationshipResolver` are qadi's own service tags (`@qadi/core`), not slots awthaq declares, so `Auth.make`'s `SlotConflict<P>` check (INV-EA-004) cannot see a collision, and ordinary Layer composition lets the later-provided Layer shadow the earlier one silently. For attributes, `@awthaq/qadi` ships the answer: `AttributeResolvers.attributeResolverRegistry` composes several `{ names, layer }` contributions into one resolver, dispatches each lookup to the one contribution that declared the name, and refuses two contributions declaring the same name with a typed `DuplicateAttributeResolver` at composition time (each shipped producer exports its own name list: `Resolvers.UserAttributeNames`, `OrganizationQadi.OrganizationAttributeNames`). An application composing more than one attribute producer is responsible for going through it. For relationships there is no such registry, and the original gap stays open: two plugins each providing a `RelationshipResolver` shadow one another, so an application composing more than one must combine them into a single Layer itself or ensure no two installed plugins answer the same relation name.
 
 _Previous: [BEH-EA-162](21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership) | Next: [BEH-EA-164](21-qadi-resolvers-obligations.md#beh-ea-164-decision-history-backed-by-audit-events)_
 

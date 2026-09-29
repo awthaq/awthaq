@@ -14,9 +14,11 @@
 // never a field: it is logged here, where it happened, and cannot reach a response body.
 
 import { Api } from "@awthaq/api";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Schedule from "effect/Schedule";
 import type * as Schema from "effect/Schema";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import { isSqlError, type SqlError } from "effect/unstable/sql/SqlError";
 
 export import StoreUnavailable = Api.StoreUnavailable;
 
@@ -46,3 +48,37 @@ export const orStoreUnavailable =
         SchemaError: Effect.die,
       }),
     );
+
+/**
+ * SEA-002/MA-004: how a hot write retries a transient database failure. Three retries with
+ * jittered exponential backoff from 25 ms (about 25 + 50 + 100 ms) sit well under `SqliteClient`'s
+ * 5 s `busy_timeout`, so a writer that lost a `SQLITE_BUSY` race to another connection gets a
+ * chance to win the next one; a database that is really down still surfaces as `StoreUnavailable`
+ * within a fraction of a second.
+ */
+export const transientRetrySchedule = Schedule.exponential(Duration.millis(25)).pipe(
+  Schedule.jittered,
+);
+
+/**
+ * Retries `self` while it fails with a *retryable* `SqlError` (`SQLITE_BUSY`/`SQLITE_LOCKED`, a
+ * Postgres deadlock or serialization failure, a lock or statement timeout, a dropped connection),
+ * at most `times` more times (default 3) on `schedule`. A constraint violation, a syntax error, a
+ * `SchemaError` or a defect is never retried, and neither is anything else in `E`. Apply it to a
+ * *whole* unit of work: the statement of a plain write, or the `withTransaction` around a
+ * multi-statement one (a rolled-back transaction re-runs from its first statement; a single
+ * statement inside an aborted Postgres transaction cannot be retried on its own). The retry
+ * ends where the outage policy begins: once the retries are spent the last `SqlError` flows on to
+ * the service's own `catchTag("SqlError", storeUnavailable(operation))`.
+ */
+export const retryTransient =
+  (options?: {
+    readonly times?: number;
+    readonly schedule?: Schedule.Schedule<unknown, unknown>;
+  }) =>
+  <A, E, R>(self: Effect.Effect<A, E, R>) =>
+    Effect.retry(self, {
+      schedule: options?.schedule ?? transientRetrySchedule,
+      times: options?.times ?? 3,
+      while: (error) => isSqlError(error) && error.isRetryable,
+    });

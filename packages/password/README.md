@@ -1,6 +1,6 @@
 # @awthaq/password
 
-The Password plugin: `sign-up`, `sign-in`, `request-reset` / `confirm-reset`, `verify-email` / `resend-verification`, `change-password` and `reauthenticate`, with argon2id/scrypt hashing (rehash-on-login), rate limiting, an optional HIBP breach check and transactional reset confirmation. Mounted under the shared `"auth"` id, group `"password"`.
+The Password plugin: `sign-up`, `sign-in`, `request-reset` / `confirm-reset`, `verify-email` / `resend-verification`, `change-email` / `change-email/confirm` (a mailed, verified address change), `change-password` and `reauthenticate`, with argon2id/scrypt hashing (rehash-on-login), rate limiting, an optional HIBP breach check and transactional reset confirmation. Mounted under the shared `"auth"` id, group `"password"`.
 
 Requires the ports it names (`PasswordHasher`, `Mailer`, `RateLimiter`, `SqlTransaction`, ...) — the application provides them.
 
