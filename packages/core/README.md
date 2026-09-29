@@ -5,6 +5,7 @@ Domain stratum (4): the plugin contract, `Auth.make` composition and the domain 
 **Shipped**
 
 - `AuthPlugin` / `Auth` (BEH-EA-001–016): `AuthPlugin.Service` plugin classes, `Auth.make` composing a plugin tuple into one `api`, `layer`, and manifest.
+- Static plugin declarations (PV-241, BEH-EA-111/202): `AuthPlugin.Service`'s `rateLimits` (each rule's `group` confined to the plugin's own contract groups by the compiler; `AuthPlugin.declareRateLimits` builds one from a rule table, `RateLimits.registerDeclared` registers it, `RateLimits.declarationDrift` compares it with the registry) and `AuthPlugin.layer`'s `ports` (port classes that join the layer's `RIn`; a required `.../ports/...` service left out of `ports` fails to type-check). Both reach `Auth.make(...).manifest` (`rateLimits`, `ports`) so `awthaq plugin list --rules` and `--graph` print them without building a layer.
 - Domain services, each with `layerMemory` and a SQL-backed `layerSql`: `Users`, `Accounts`, `Sessions` (rotation, reuse detection, `authenticatedAt`), `Verification` (single-use tokens, reservations), `AuditLog`.
 - `AuthEvents` (BEH-EA-097–104) — a non-blocking event bus that also records every event durably via `AuditLog` — and the closed `AuthEvent` union.
 - `HookPoint` / `Hooks` (BEH-EA-089–096): veto / observe / divert points and their taps.

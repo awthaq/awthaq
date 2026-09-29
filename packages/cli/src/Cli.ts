@@ -9,14 +9,15 @@
 //   awthaq [--config <path>] [--json]
 //     doctor [--build] [--production]
 //     config list
-//     plugin list [--graph | --hooks] [--format text|json|dot]
+//     plugin list [--graph | --hooks | --rules] [--format text|json|dot]
 //     routes
 //     openapi [--out <file>]
 //     migration status | apply [--yes] [--dry-run] [--allow-empty]      (--database-url)
 //     seed admin --email <email> [--name] [--role] [--force] [--prompt-password]
 //     import --from <source> --source <export> [--yes] [--dry-run] [--continue-on-error]
 //            [--batch-size] [--report <file>] [--issuer p=i] [--source-option k=v]
-//     login [--token <t>] [--base-url <url>] | logout | whoami                    (AWTHAQ_TOKEN, AWTHAQ_BASE_URL)
+//     login [--token <t>] [--base-url <url>] [--no-browser] [--client-id <id>] | logout | whoami
+//                                                                                  (AWTHAQ_TOKEN, AWTHAQ_BASE_URL)
 //
 // Every flag decodes through a Schema (BEH-EA-226): the email through the sign-up payload's own
 // Schema, `--database-url` through `Database.DatabaseUrl`, `--format` through a literal union.
@@ -164,11 +165,17 @@ const pluginList = Command.make(
   "list",
   {
     graph: Flag.Boolean("graph").pipe(
-      Flag.withDescription("Print dependency edges, groups and tables"),
+      Flag.withDescription(
+        "Print dependency edges, groups, tables, required ports and hook-tap positions",
+      ),
       Flag.withDefault(false),
     ),
     hooks: Flag.Boolean("hooks").pipe(
       Flag.withDescription("Print each hook point's declared taps in the order they run"),
+      Flag.withDefault(false),
+    ),
+    rules: Flag.Boolean("rules").pipe(
+      Flag.withDescription("Print every plugin's declared rate-limit rules (the defaults)"),
       Flag.withDefault(false),
     ),
     format: Flag.Literals("format", ["text", "json", "dot"]).pipe(
@@ -180,7 +187,12 @@ const pluginList = Command.make(
     withOutput(
       load.pipe(
         Effect.flatMap((config) =>
-          Plugin.show(config.auth, { graph: args.graph, hooks: args.hooks, format: args.format }),
+          Plugin.show(config.auth, {
+            graph: args.graph,
+            hooks: args.hooks,
+            rules: args.rules,
+            format: args.format,
+          }),
         ),
       ),
     ),
@@ -354,11 +366,31 @@ const loginCommand = Command.make(
       Flag.withFallbackConfig(Config.String("AWTHAQ_BASE_URL")),
       Flag.optional,
     ),
+    noBrowser: Flag.Boolean("no-browser").pipe(
+      Flag.withDescription(
+        "Interactive login: print the verification URL and code instead of opening a browser",
+      ),
+      Flag.withDefault(false),
+    ),
+    clientId: Flag.String("client-id").pipe(
+      Flag.withDescription(
+        "Interactive login: the device-flow client the server registered for this CLI",
+      ),
+      Flag.withDefault("awthaq-cli"),
+    ),
   },
-  (args) => withOutput(Session.login({ token: args.token, baseUrl: args.baseUrl })),
+  (args) =>
+    withOutput(
+      Session.login({
+        token: args.token,
+        baseUrl: args.baseUrl,
+        noBrowser: args.noBrowser,
+        clientId: args.clientId,
+      }),
+    ),
 ).pipe(
   Command.withDescription(
-    "Validate a token against the server and store it (OS keychain first, else a 0600 file); the interactive device flow needs the DeviceAuthorization plugin",
+    "Sign in: with --token (or AWTHAQ_TOKEN) validate a token and store it; without one, run the device authorization flow (a code to approve in a browser) — stored in the OS keychain first, else a 0600 file",
   ),
 );
 

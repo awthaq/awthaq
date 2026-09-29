@@ -1,6 +1,6 @@
 // @awthaq/saml — SamlSpKeys
 //
-// BEH-EA-305: the service provider's signing keys, per connection, at rest. A key is generated here (`SamlKeys`) or brought
+// BEH-EA-314: the service provider's signing keys, per connection, at rest. A key is generated here (`SamlKeys`) or brought
 // by an operator; its PRIVATE half is stored only as an `Encryption` envelope (the `@awthaq/ports` port over the application's
 // `KeyProvider`) whose additional authenticated data names the key and the field, so a sealed key copied into another key's
 // row does not decrypt, and a database read (a backup, a replica) discloses nothing that signs. The certificate is public: it

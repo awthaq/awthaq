@@ -5,7 +5,7 @@
 // delivery with retry, backoff and dead-letter, SSRF-safe endpoints, per-endpoint event filters, a
 // delivery log, and a fail-closed admin API.
 //
-// spec/behaviors/34-webhooks.md, BEH-EA-275 through 282 and BEH-EA-299 through 303. See spec/overview.md for the full package map.
+// spec/behaviors/34-webhooks.md, BEH-EA-275 through 282 and BEH-EA-308 through 313. See spec/overview.md for the full package map.
 
 export * as WebhookDelivery from "./WebhookDelivery.ts";
 export * as WebhookHeaders from "./WebhookHeaders.ts";

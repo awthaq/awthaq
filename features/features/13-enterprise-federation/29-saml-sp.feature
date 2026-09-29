@@ -371,11 +371,11 @@ Feature: SAML Service Provider
       Then "Users.assertCanSignIn" refuses the sign-in
       And no session is minted
 
-  # BEH-EA-305 — spec/behaviors/29-saml-sp.md; see also BEH-EA-244, ADR-EA-019
-  @BEH-EA-305
+  # BEH-EA-314 — spec/behaviors/29-saml-sp.md; see also BEH-EA-244, ADR-EA-019
+  @BEH-EA-314
   Rule: A connection can sign its AuthnRequests with an SP key that is stored sealed, and never falls back to unsigned
 
-    @REQ-EA-1188
+    @REQ-EA-1215
     Scenario: A signing connection's login redirect is signed, and the signature verifies under the certificate its metadata publishes
       Given the connection "acme" signs its AuthnRequests
       When the browser starts a login on "acme"
@@ -384,19 +384,19 @@ Feature: SAML Service Provider
       And that signature no longer verifies once the request is altered
       And that signature does not verify under the IdP's own certificate
 
-    @REQ-EA-1189
+    @REQ-EA-1216
     Scenario: A connection that does not sign sends no signature and publishes no key
       When the browser starts a login on "acme"
       Then the redirect to the IdP carries no signature
       And the metadata of "acme" declares AuthnRequestsSigned false and publishes no certificate
 
-    @REQ-EA-1190
+    @REQ-EA-1217
     Scenario: The private key is stored only as an Encryption envelope bound to its key
       Given the connection "acme" signs its AuthnRequests
       Then the stored signing key of "acme" is a sealed envelope holding no private key material
       And it opens only under its own key id
 
-    @REQ-EA-1191
+    @REQ-EA-1218
     Scenario: A rotated key signs from then on while the previous certificate stays published
       Given the connection "acme" signs its AuthnRequests
       And the browser starts a login on "acme"
@@ -404,17 +404,17 @@ Feature: SAML Service Provider
       Then the metadata of "acme" publishes 2 certificates
       And a new login on "acme" is signed by the newest key only
 
-    @REQ-EA-1192
+    @REQ-EA-1219
     Scenario: A key that no longer opens makes the login fail closed instead of sending an unsigned request
       Given the connection "acme" signs its AuthnRequests
       When a newer signing key of "acme" is stored that cannot be opened
       Then starting a login on "acme" is a defect and produces no redirect
 
-  # BEH-EA-306 — spec/behaviors/29-saml-sp.md; see also BEH-EA-239, BEH-EA-240, BEH-EA-244
-  @BEH-EA-306
+  # BEH-EA-315 — spec/behaviors/29-saml-sp.md; see also BEH-EA-239, BEH-EA-240, BEH-EA-244
+  @BEH-EA-315
   Rule: Single Logout ends sessions in both directions over the Redirect and POST bindings, verified like an assertion
 
-    @REQ-EA-1193
+    @REQ-EA-1220
     Scenario: The IdP's signed LogoutRequest ends the user's session with reason federatedLogout, as the connection's tenant, and is answered Success
       Given the connection "acme" signs its AuthnRequests and has an IdP logout endpoint
       And "ada" is signed in through "acme"
@@ -422,14 +422,14 @@ Feature: SAML Service Provider
       Then the session of "ada" is ended with the reason "federatedLogout" in the tenant of "acme"
       And the IdP is answered with a signed LogoutResponse of status Success
 
-    @REQ-EA-1194
+    @REQ-EA-1221
     Scenario: A LogoutRequest over the POST binding is verified by the same XML-signature port
       Given the connection "acme" has an IdP logout endpoint
       And "ada" is signed in through "acme"
       When the IdP sends a LogoutRequest for "ada" over the POST binding
       Then the session of "ada" is ended with the reason "federatedLogout" in the tenant of "acme"
 
-    @REQ-EA-1195
+    @REQ-EA-1222
     Scenario Outline: A LogoutRequest that is not properly signed is refused, and ends nothing
       Given the connection "acme" has an IdP logout endpoint
       And "ada" is signed in through "acme"
@@ -450,7 +450,7 @@ Feature: SAML Service Provider
         | POST     | is wrapped with a second, unsigned request  |
         | POST     | carries a DOCTYPE                           |
 
-    @REQ-EA-1196
+    @REQ-EA-1223
     Scenario Outline: A validly signed LogoutRequest is still refused when it does not fit this service provider
       Given the connection "acme" has an IdP logout endpoint
       And "ada" is signed in through "acme"
@@ -466,7 +466,7 @@ Feature: SAML Service Provider
         | was issued half an hour from now        |
         | has already expired                     |
 
-    @REQ-EA-1197
+    @REQ-EA-1224
     Scenario: A replayed LogoutRequest cannot log the user out again
       Given the connection "acme" has an IdP logout endpoint
       And "ada" is signed in through "acme"
@@ -476,7 +476,7 @@ Feature: SAML Service Provider
       Then the logout is refused with the uniform "SamlLogoutRejected" failure
       And the new session of "ada" is still live
 
-    @REQ-EA-1198
+    @REQ-EA-1225
     Scenario: A SessionIndex ends only that session of the NameID
       Given the connection "acme" has an IdP logout endpoint
       And "ada" is signed in through "acme" with SessionIndex "idx-1"
@@ -484,7 +484,7 @@ Feature: SAML Service Provider
       When the IdP sends a LogoutRequest for "ada" naming only SessionIndex "idx-2"
       Then exactly 1 session of "ada" is ended
 
-    @REQ-EA-1199
+    @REQ-EA-1226
     Scenario: The user's own logout ends the local session first, then sends the IdP a signed LogoutRequest
       Given the connection "acme" signs its AuthnRequests and has an IdP logout endpoint
       And "ada" is signed in through "acme"
@@ -492,7 +492,7 @@ Feature: SAML Service Provider
       Then the session of "ada" is ended with the reason "signOut" in the tenant of "acme"
       And the IdP receives a signed LogoutRequest naming "ada" and the SessionIndex of that sign-in
 
-    @REQ-EA-1200
+    @REQ-EA-1227
     Scenario: The IdP's LogoutResponse finishes our own logout once, and only when it answers that request
       Given the connection "acme" has an IdP logout endpoint
       And "ada" is signed in through "acme"
@@ -502,7 +502,7 @@ Feature: SAML Service Provider
       When the IdP answers our LogoutRequest with a signed LogoutResponse
       Then the logout is refused with the uniform "SamlLogoutRejected" failure
 
-    @REQ-EA-1201
+    @REQ-EA-1228
     Scenario: A LogoutResponse that answers another request is refused
       Given the connection "acme" has an IdP logout endpoint
       And "ada" is signed in through "acme"
@@ -510,7 +510,7 @@ Feature: SAML Service Provider
       When the IdP answers a different request with a signed LogoutResponse
       Then the logout is refused with the uniform "SamlLogoutRejected" failure
 
-    @REQ-EA-1202
+    @REQ-EA-1229
     Scenario: A connection whose IdP offers no logout endpoint refuses logout messages and logs the user out locally
       Given "ada" is signed in through "acme"
       When the IdP sends a LogoutRequest for "ada" over the Redirect binding
@@ -519,11 +519,11 @@ Feature: SAML Service Provider
       Then the session of "ada" is ended with the reason "signOut" in the tenant of "acme"
       And the browser is sent straight back to the application
 
-  # BEH-EA-307 — spec/behaviors/29-saml-sp.md; see also BEH-EA-288 (canGrant), ADR-EA-025
-  @BEH-EA-307
+  # BEH-EA-316 — spec/behaviors/29-saml-sp.md; see also BEH-EA-288 (canGrant), ADR-EA-025
+  @BEH-EA-316
   Rule: An assertion's groups map to organization roles under a ceiling, guarded by the canGrant rule
 
-    @REQ-EA-1203
+    @REQ-EA-1230
     Scenario: A group is mapped to a role within the connection's ceiling, and defaults apply otherwise
       Given the connection "acme" maps the group "admins" to the role "admin" under the ceiling "admin" with the default role "member"
       When "ada" signs in through "acme" carrying the groups "eng, admins"
@@ -531,12 +531,12 @@ Feature: SAML Service Provider
       Then "ada" holds the role "admin" in the organization of "acme"
       And "grace" holds the role "member" in the organization of "acme"
 
-    @REQ-EA-1204
+    @REQ-EA-1231
     Scenario: A connection with no mapping changes no membership
       When "ada" signs in through "acme" carrying the groups "admins"
       Then "ada" holds no role in the organization of "acme"
 
-    @REQ-EA-1205
+    @REQ-EA-1232
     Scenario Outline: A mapping that could mint owner or exceed its ceiling is refused when the connection is written
       When an administrator writes the connection "second" of "acme" mapping the group "g" to the role "<role>" under the ceiling "<ceiling>"
       Then the connection is refused as "<reason>"
@@ -548,7 +548,7 @@ Feature: SAML Service Provider
         | owner  | admin   | may not confer owner                                |
         | wizard | admin   | does not have                                       |
 
-    @REQ-EA-1206
+    @REQ-EA-1233
     Scenario: A mapping rewritten around the store still cannot mint owner at sign-in
       Given the connection "acme" maps the group "admins" to the role "admin" under the ceiling "admin" with the default role "member"
       And the mapping of "acme" is rewritten in the records to give owner to the group "admins" under the ceiling "admin"
@@ -556,18 +556,18 @@ Feature: SAML Service Provider
       Then "ada" is signed in
       And "ada" holds no role in the organization of "acme"
 
-    @REQ-EA-1207
+    @REQ-EA-1234
     Scenario: An organization's owner is never reshaped by an IdP whose ceiling is lower
       Given the connection "acme" maps the group "admins" to the role "admin" under the ceiling "admin" with the default role "member"
       And "ada" is the only owner of the organization of "acme" and trusts the connection's email
       When "ada" signs in through "acme" carrying the groups "admins"
       Then "ada" holds the role "owner" in the organization of "acme"
 
-  # BEH-EA-308 — spec/behaviors/29-saml-sp.md; see also BEH-EA-235, ADR-EA-023
-  @BEH-EA-308
+  # BEH-EA-317 — spec/behaviors/29-saml-sp.md; see also BEH-EA-235, ADR-EA-023
+  @BEH-EA-317
   Rule: The Sso dispatcher routes an email domain across OIDC and SAML connections to the owning plugin's login URL
 
-    @REQ-EA-1208
+    @REQ-EA-1235
     Scenario Outline: An email domain routes to the protocol that owns it
       Given the organization "acme" has a <protocol> connection for the domain "acme.example"
       When the Sso dispatcher is asked where "ada@acme.example" signs in
@@ -578,7 +578,7 @@ Feature: SAML Service Provider
         | SAML     |
         | OIDC     |
 
-    @REQ-EA-1209
+    @REQ-EA-1236
     Scenario Outline: When both protocols route the same domain the preference decides and the conflict is listed
       Given the Sso preference is <preferred>
       And the organization "acme" has a SAML connection for the domain "acme.example"
@@ -592,17 +592,17 @@ Feature: SAML Service Provider
         | SAML      |
         | OIDC      |
 
-    @REQ-EA-1210
+    @REQ-EA-1237
     Scenario: Nothing routing is one uniform not-found, whatever the reason
       Given the organization "acme" has a SAML connection for the domain "acme.example"
       Then asking where "ada@other.example" signs in is refused as "SsoNotFound"
       And asking where "" signs in is refused as "SsoNotFound"
 
-  # BEH-EA-309 — spec/behaviors/29-saml-sp.md; see also BEH-EA-281, BEH-EA-300
-  @BEH-EA-309
+  # BEH-EA-318 — spec/behaviors/29-saml-sp.md; see also BEH-EA-281, BEH-EA-309
+  @BEH-EA-318
   Rule: The administrator manages connections fail-closed, tenant-scoped, importing IdP metadata with pinned certificates
 
-    @REQ-EA-1211
+    @REQ-EA-1238
     Scenario: With no gate configured every administrative operation is denied, audited, and touches nothing
       Given the connection "acme" exists
       When the administrator attempts every SAML admin operation
@@ -610,21 +610,21 @@ Feature: SAML Service Provider
       And each refusal published auth.admin.actionDenied naming "saml.<action>"
       And the connection "acme" is unchanged
 
-    @REQ-EA-1212
+    @REQ-EA-1239
     Scenario: Pasted IdP metadata pins its certificates and offers its logout endpoint
       Given the administrator gate allows every action
       When the administrator creates a connection for "acme" from IdP metadata listing two certificates and a logout endpoint
       Then the connection pins both certificate fingerprints and the logout endpoint
       And a creation audit event names the administrator and the connection
 
-    @REQ-EA-1213
+    @REQ-EA-1240
     Scenario: A refresh from metadata replaces the trust set, so the old key stops signing in
       Given the administrator gate allows every action
       And the connection "acme" was imported from IdP metadata
       When the IdP metadata is refreshed with only the next certificate
       Then the connection trusts only the next certificate
 
-    @REQ-EA-1214
+    @REQ-EA-1241
     Scenario: A refresh from metadata that names another entity is refused and changes nothing
       Given the administrator gate allows every action
       And the connection "acme" was imported from IdP metadata
@@ -632,7 +632,7 @@ Feature: SAML Service Provider
       Then the refresh is refused as "InvalidSamlConnectionRequest"
       And the connection still trusts the original certificate
 
-    @REQ-EA-1215
+    @REQ-EA-1242
     Scenario: Another tenant's connection is answered like one that does not exist
       Given the administrator gate allows every action
       And the connection "acme" exists
@@ -640,7 +640,7 @@ Feature: SAML Service Provider
       When an administrator acting inside "globex" reads the connection "acme"
       Then the read is refused as "SamlConnectionNotFound", exactly as for an unknown id
 
-    @REQ-EA-1216
+    @REQ-EA-1243
     Scenario: An update's audit event names the fields, never their values
       Given the administrator gate allows every action
       And the connection "acme" exists

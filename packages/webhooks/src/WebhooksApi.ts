@@ -108,7 +108,7 @@ const EventTagsSchema = Schema.Array(
   ),
 );
 
-/** BEH-EA-304: name to value; the rules (reserved names, count, characters) are `WebhookHeaders.problem`'s, answered as `InvalidWebhookEndpoint`. */
+/** BEH-EA-313: name to value; the rules (reserved names, count, characters) are `WebhookHeaders.problem`'s, answered as `InvalidWebhookEndpoint`. */
 const HeadersSchema = Schema.Record(Schema.String, Schema.String);
 
 /** `eventTags` is required: an endpoint says what it wants (`["*"]` for everything). */
@@ -159,9 +159,9 @@ export class EndpointDto extends Schema.Class<EndpointDto>("WebhookEndpointDto")
   /** `manual` (an administrator) or `failing` (the consecutive-failure threshold); null while enabled. */
   disabledReason: Schema.NullOr(Schema.String),
   consecutiveDead: Schema.Number,
-  /** BEH-EA-304: the names of the custom headers sent with every delivery; their values are never returned. */
+  /** BEH-EA-313: the names of the custom headers sent with every delivery; their values are never returned. */
   headerNames: Schema.Array(Schema.String),
-  /** BEH-EA-300: the tenant (organization id) the endpoint belongs to; null for the platform's own. */
+  /** BEH-EA-309: the tenant (organization id) the endpoint belongs to; null for the platform's own. */
   tenantId: Schema.NullOr(Schema.String),
   /** ISO instant the previous secret stops being accepted; null when no rotation is in its grace window. */
   previousSecretExpiresAt: Schema.NullOr(Schema.String),
@@ -256,7 +256,7 @@ export const WebhooksAdminGroup = HttpApiGroup.make("webhooks.admin")
     }),
   )
   .add(
-    // BEH-EA-301: queues a signed synthetic `webhook.test` event for the endpoint; the outcome is read from the delivery log.
+    // BEH-EA-310: queues a signed synthetic `webhook.test` event for the endpoint; the outcome is read from the delivery log.
     HttpApiEndpoint.post("testEndpoint", "/admin/webhooks/endpoints/:endpointId/test", {
       params: EndpointIdParams,
       success: DeliveryDto,

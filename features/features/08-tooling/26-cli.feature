@@ -78,16 +78,16 @@ Feature: CLI
       Then "password" is printed before "oauth"
 
     @REQ-EA-578
-    Scenario: plugin list --graph says a plugin's required ports are not printed, since they are not derivable without building the layer
-      Given an installed plugin set including "oauth", which requires the "TokenStore" port
+    Scenario: plugin list --graph prints each plugin's required ports from its static declaration
+      Given an installed plugin set including "oauth", which requires the "RateLimiter" port
       When "awthaq plugin list --graph" runs
-      Then it states that required ports are not printed rather than omitting them silently
+      Then it lists the "RateLimiter" port among "oauth"'s required ports
 
     @REQ-EA-579
-    Scenario: plugin list --graph says the resolved hook-tap chain is not printed, since taps register only when a layer is built
-      Given an installed plugin set with taps registered on the "AfterSignUp" hook point
+    Scenario: plugin list --graph prints where each plugin's declared taps sit in the resolved hook-tap chain
+      Given an installed plugin set with a plugin that declares a tap on the "auth.user.signedUp" hook point
       When "awthaq plugin list --graph" runs
-      Then it states that hook-tap chains are not printed rather than omitting them silently
+      Then it prints that plugin's tap position in the "auth.user.signedUp" chain
 
     @REQ-EA-580
     Scenario: The printed ordering matches the order the linker uses for migrations and hook resolution
@@ -479,11 +479,6 @@ Feature: CLI
   @BEH-EA-227
   Rule: Session commands are outbound-only clients of a running auth server
 
-    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
-    # authorization endpoints (no device-authorization plugin ships,
-    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
-    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
-    @skip
     @REQ-EA-670
     Scenario: login polls the device endpoint as an outbound client and never opens a listener
       Given a running auth server offering the device authorization endpoints
@@ -491,22 +486,12 @@ Feature: CLI
       Then it polls "/device/token" as an outbound client
       And it never starts a listener
 
-    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
-    # authorization endpoints (no device-authorization plugin ships,
-    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
-    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
-    @skip
     @REQ-EA-671
     Scenario: login honors slow_down
       Given a device token endpoint that answers "slow_down"
       When "awthaq login" polls
       Then the poll interval widens
 
-    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
-    # authorization endpoints (no device-authorization plugin ships,
-    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
-    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
-    @skip
     @REQ-EA-672
     Scenario: login exits non-zero on expired_token
       Given a device token endpoint that answers "expired_token"
@@ -514,11 +499,6 @@ Feature: CLI
       Then it exits with the authentication code
       And it tells the user to run "awthaq login" again
 
-    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
-    # authorization endpoints (no device-authorization plugin ships,
-    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
-    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
-    @skip
     @REQ-EA-673
     Scenario: AWTHAQ_TOKEN bypasses the device flow and the credential store
       Given "AWTHAQ_TOKEN" is set to a valid token
@@ -526,11 +506,6 @@ Feature: CLI
       Then it uses that token without contacting the device endpoints
       And it never writes the credential store
 
-    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
-    # authorization endpoints (no device-authorization plugin ships,
-    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
-    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
-    @skip
     @REQ-EA-674
     Scenario: login --token stores nothing when the token is invalid
       Given a token the server rejects
@@ -558,10 +533,8 @@ Feature: CLI
       When "awthaq login --token" succeeds
       Then the credential is stored there and no credentials file is written
 
-    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
-    # authorization endpoints (no device-authorization plugin ships,
-    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
-    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
+    # @skip: needs the real credential-store backends and a home directory the scenario cannot own; the
+    # 0600/0700 fallback file and its one-time warning are covered by packages/cli/test/CredentialStore.test.ts
     @skip
     @REQ-EA-677
     Scenario: the fallback credentials file is created 0600 and a warning is printed
@@ -570,11 +543,6 @@ Feature: CLI
       Then "credentials.json" is created with mode 0600 in a 0700 directory
       And a warning is printed once
 
-    # @skip: needs the session-command transport: a real HTTP server on a socket with the device
-    # authorization endpoints (no device-authorization plugin ships,
-    # features/05-authentication-methods/28-device-authorization.feature) and the credential-store
-    # backends; covered by packages/cli/test/Session.test.ts and CredentialStore.test.ts
-    @skip
     @REQ-EA-678
     Scenario: AWTHAQ_TOKEN is never persisted
       Given "AWTHAQ_TOKEN" is set
@@ -596,3 +564,41 @@ Feature: CLI
       Given a configuration Layer setting a value declared sensitive
       When "awthaq config list" runs
       Then the sensitive value is printed as "<redacted>"
+
+  # BEH-EA-307 — spec/behaviors/26-cli.md; see also spec/behaviors/37-device-authorization.md
+  @BEH-EA-307
+  Rule: Interactive login is the device authorization grant, polled with backoff
+
+    @REQ-EA-1188
+    Scenario: login prints the verification URL and code on stderr and stores the session once the person approves
+      Given a running auth server offering the device authorization endpoints
+      When "awthaq login" runs
+      Then it exits successfully
+      And the verification URL and user code were printed on stderr
+      And the credential store was written once
+
+    @REQ-EA-1189
+    Scenario: login never prints the device code or the token
+      Given a running auth server offering the device authorization endpoints
+      When "awthaq login" runs
+      Then neither the device code nor the token appears in the output
+
+    @REQ-EA-1190
+    Scenario: login adds 5 seconds to its interval on every slow_down
+      Given a device token endpoint that answers "slow_down"
+      When "awthaq login" polls
+      Then each wait after a slow_down is at least 5 seconds longer than the wait before it
+
+    @REQ-EA-1191
+    Scenario: a denied login request ends with the authentication code and stores nothing
+      Given the person denies the login request on the other device
+      When "awthaq login" polls
+      Then it exits with the authentication code
+      And nothing is stored
+
+    @REQ-EA-1192
+    Scenario: a server without the device endpoints is unavailable and names the plugin
+      Given a running auth server without the device authorization endpoints
+      When "awthaq login" runs
+      Then it exits with the unavailable code
+      And it names the DeviceAuthorization plugin and the "--token" alternative

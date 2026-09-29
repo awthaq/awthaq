@@ -16,10 +16,10 @@
 // way past an SSRF check), read or store the receiver's response body (untrusted text), or send to an
 // address the URL check refuses. The URL is re-checked at every attempt: the host is resolved ONCE
 // (`HostResolver.pin`), every address it answered must be public, and the request connects to that
-// address with the original Host/SNI (`WebhookTransport`, BEH-EA-303), so a name that flips between
+// address with the original Host/SNI (`WebhookTransport`, BEH-EA-312), so a name that flips between
 // the check and the connect has nothing to flip: DNS is not asked again.
 //
-// Routing is per tenant (BEH-EA-300): an event reaches only the endpoints of the tenant it happened in.
+// Routing is per tenant (BEH-EA-309): an event reaches only the endpoints of the tenant it happened in.
 //
 // Delivery is at-least-once: a worker that dies between the POST and the row update leaves the lease
 // to lapse and the delivery is sent again, with the same `webhook-id`. Receivers deduplicate on it.
@@ -71,7 +71,7 @@ export const enqueue = (events: ReadonlyArray<Parameters<typeof WebhookPayload.t
       const subjectUserId = WebhookPayload.subjectUserId(event);
       for (const endpoint of endpoints) {
         if (!WebhookPayload.matchesAny(endpoint.eventTags, event._tag)) continue;
-        // BEH-EA-300: a tenant's events reach that tenant's endpoints only.
+        // BEH-EA-309: a tenant's events reach that tenant's endpoints only.
         if (
           !WebhookPayload.tenantRoutes(
             endpoint.tenantId,
@@ -179,7 +179,7 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
     const failed = (info: { readonly statusCode?: number; readonly error: string }) =>
       Effect.gen(function* () {
         const made = delivery.attempts + 1;
-        // BEH-EA-301: a test ping is one attempt, and a receiver that is down is not evidence against the endpoint.
+        // BEH-EA-310: a test ping is one attempt, and a receiver that is down is not evidence against the endpoint.
         if (delivery.eventTag === WebhookPayload.TEST_EVENT_TAG) {
           yield* records.markDead(delivery.id, { at: now, ...info });
           return "dead" satisfies Outcome;
@@ -209,7 +209,7 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
       });
 
     // The URL is judged again at every attempt: registration was a point in time. The host is resolved ONCE here
-    // and the attempt connects to that address (BEH-EA-303); development mode (`allowPrivateTargets`) has no pin.
+    // and the attempt connects to that address (BEH-EA-312); development mode (`allowPrivateTargets`) has no pin.
     const syntactic = OutboundUrl.problem("url", endpoint.url, {
       allowPrivate: settings.allowPrivateTargets,
     });
@@ -221,7 +221,7 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
 
     const secrets = yield* WebhookSecrets.open(encryption, endpoint, now);
     if (Option.isNone(secrets)) return yield* failed({ error: "secret" });
-    // BEH-EA-304: the endpoint's custom headers, opened like the secret (a value that does not open fails as `secret`).
+    // BEH-EA-313: the endpoint's custom headers, opened like the secret (a value that does not open fails as `secret`).
     const custom = yield* WebhookSecrets.openHeaders(encryption, endpoint);
     if (Option.isNone(custom)) return yield* failed({ error: "secret" });
 

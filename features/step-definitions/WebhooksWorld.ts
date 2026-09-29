@@ -111,7 +111,7 @@ const makeReceiver = () => {
       }),
     ),
   );
-  // BEH-EA-303: the transport is the seam the pin crosses, so the World records what it was asked to connect to
+  // BEH-EA-312: the transport is the seam the pin crosses, so the World records what it was asked to connect to
   // and then sends over the fake `HttpClient` like every other scenario.
   const transportLayer = Layer.effect(
     WebhookTransport.WebhookTransport,

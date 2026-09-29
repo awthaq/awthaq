@@ -75,7 +75,8 @@
       "@awthaq/webhooks": ["./packages/webhooks/src/index.ts"],
       "@awthaq/saml": ["./packages/saml/src/index.ts"],
       "@awthaq/web": ["./packages/web/src/index.ts"],
-      "@awthaq/web/cookies": ["./packages/web/src/cookies.ts"]
+      "@awthaq/web/cookies": ["./packages/web/src/cookies.ts"],
+      "@awthaq/device-authorization": ["./packages/device-authorization/src/index.ts"]
     },
     "plugins": [
       {

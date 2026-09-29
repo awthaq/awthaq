@@ -6,7 +6,14 @@
 // maps it (`Runtime.getErrorExitCode`, BEH-EA-225). Database-backed commands run over a real
 // in-memory SQLite client the *World* owns, so state survives across the separate runtimes each
 // invocation builds, the way a database does (the same seam `packages/cli/test/support/*` uses).
-import { Cli, CliErrors, Config as CliConfigModule, CredentialStore } from "@awthaq/cli";
+import {
+  Browser,
+  Cli,
+  CliErrors,
+  Config as CliConfigModule,
+  CredentialStore,
+  DeviceLogin,
+} from "@awthaq/cli";
 import {
   Accounts,
   Auth,
@@ -31,6 +38,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { role } from "@qadi/core";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Duration from "effect/Duration";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -41,6 +49,8 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Reactivity from "effect/unstable/reactivity/Reactivity";
 import * as Runtime from "effect/Runtime";
+import * as Scope from "effect/Scope";
+import * as TestClock from "effect/testing/TestClock";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -50,6 +60,7 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { cheapArgon2id } from "./shared/Harness.ts";
 import { makeOutcomes, type Outcomes } from "./shared/Outcomes.ts";
+import { startSessionServer, type SessionServer } from "./SessionServer.ts";
 
 // ---- the compositions ---------------------------------------------------------------------
 
@@ -187,17 +198,34 @@ export const migrate = Effect.gen(function* () {
 /** A credential store the Scenario owns, so no run ever touches the OS keychain or the home directory. */
 export const memoryCredentials = Effect.gen(function* () {
   const ref = yield* Ref.make(Option.none<CredentialStore.Credential>());
+  const writes = yield* Ref.make(0);
   const layer = Layer.succeed(
     CredentialStore.CredentialStore,
     CredentialStore.CredentialStore.of({
       backend: "memory",
       get: Ref.get(ref),
-      set: (credential) => Ref.set(ref, Option.some(credential)),
+      set: (credential) =>
+        Ref.set(ref, Option.some(credential)).pipe(
+          Effect.andThen(Ref.update(writes, (n) => n + 1)),
+        ),
       clear: Ref.set(ref, Option.none()),
     }),
   );
-  return { ref, layer };
+  return { ref, writes, layer };
 });
+
+/**
+ * How the interactive login's second device behaves while the command polls (BEH-EA-307): `approve` (the
+ * person confirms the printed code at the first wait), `deny`, `expire` (nobody does, and the code's lifetime
+ * passes), `hurry` (time does not pass between the first waits, so the server answers `slow_down`; the person
+ * approves at the fourth wait).
+ */
+export type PersonMode = "approve" | "deny" | "expire" | "hurry";
+
+/** What the command's polling clock did, so a Then can read the schedule. */
+export interface LoginTrace {
+  readonly sleeps: ReadonlyArray<number>;
+}
 
 export interface RunResult {
   readonly argv: ReadonlyArray<string>;
@@ -221,6 +249,18 @@ export interface WorldShape {
   /** What `awthaq.config.ts` currently exports; Givens replace parts of it. */
   readonly config: Ref.Ref<CliConfigModule.CliConfig>;
   readonly last: Ref.Ref<RunResult | undefined>;
+  /** The real auth server the session commands talk to, once a Given has started one (BEH-EA-227). */
+  readonly server: Ref.Ref<Option.Option<SessionServer>>;
+  /** Environment variables the next runs see on top of the process's own (`AWTHAQ_TOKEN`, `AWTHAQ_BASE_URL`). */
+  readonly env: Ref.Ref<Readonly<Record<string, string>>>;
+  /** What the person on the second device does during an interactive login. */
+  readonly person: Ref.Ref<PersonMode>;
+  /** How many times a command wrote the credential store, across the scenario's runs. */
+  readonly credentialWrites: Ref.Ref<number>;
+  /** The waits the interactive login made between polls, newest run last. */
+  readonly sleeps: Ref.Ref<ReadonlyArray<number>>;
+  /** Scopes of the servers a scenario started, closed with the scenario. */
+  readonly scopes: Ref.Ref<ReadonlyArray<Scope.Closeable>>;
 }
 
 export class World extends Context.Service<World, WorldShape>()("features/CliWorld") {}
@@ -231,7 +271,7 @@ export const WorldLive = Layer.effect(
     const sql = yield* SqliteClient.make({ filename: ":memory:" }).pipe(
       Effect.provide(Reactivity.layer),
     );
-    return World.of({
+    const world = World.of({
       outcomes: yield* makeOutcomes,
       sql,
       app: sqlApp(sql),
@@ -239,15 +279,64 @@ export const WorldLive = Layer.effect(
         configOf(passwordAndRoles, { sql: Layer.succeed(SqlClient.SqlClient, sql) }),
       ),
       last: yield* Ref.make<RunResult | undefined>(undefined),
+      server: yield* Ref.make(Option.none<SessionServer>()),
+      env: yield* Ref.make<Readonly<Record<string, string>>>({}),
+      person: yield* Ref.make<PersonMode>("approve"),
+      credentialWrites: yield* Ref.make(0),
+      sleeps: yield* Ref.make<ReadonlyArray<number>>([]),
+      scopes: yield* Ref.make<ReadonlyArray<Scope.Closeable>>([]),
     });
+    yield* Effect.addFinalizer(() =>
+      Ref.get(world.scopes).pipe(
+        Effect.flatMap((scopes) =>
+          Effect.forEach(scopes, (scope) => Scope.close(scope, Exit.void), { discard: true }),
+        ),
+      ),
+    );
+    return world;
   }),
 );
+
+/** Adds environment variables the session commands see on the next runs. */
+export const setEnv = (variables: Readonly<Record<string, string>>) =>
+  Effect.gen(function* () {
+    const world = yield* World;
+    yield* Ref.update(world.env, (existing) => ({ ...existing, ...variables }));
+  });
+
+/**
+ * Starts the real auth server the session commands talk to (BEH-EA-227), once per scenario, and points
+ * `AWTHAQ_BASE_URL` at it. `device: false` leaves the device authorization routes out.
+ */
+export const ensureServer = (options?: { readonly device?: boolean }) =>
+  Effect.gen(function* () {
+    const world = yield* World;
+    const existing = yield* Ref.get(world.server);
+    if (Option.isSome(existing)) return existing.value;
+    const scope = Scope.makeUnsafe();
+    const server = yield* startSessionServer(options).pipe(
+      Effect.provideService(Scope.Scope, scope),
+    );
+    yield* Ref.set(world.server, Option.some(server));
+    yield* Ref.update(world.scopes, (all) => [...all, scope]);
+    yield* setEnv({ AWTHAQ_BASE_URL: server.baseUrl });
+    return server;
+  });
 
 export const updateConfig = (change: Partial<CliConfigModule.CliConfig>) =>
   Effect.gen(function* () {
     const { config } = yield* World;
     yield* Ref.update(config, (current) => ({ ...current, ...change }));
   });
+
+/** The process environment as the plain string record `ConfigProvider.fromEnv` takes. */
+const definedEnv = (): Record<string, string> => {
+  const defined: Record<string, string> = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (value !== undefined) defined[name] = value;
+  }
+  return defined;
+};
 
 /** Runs `awthaq <argv>` in-process against the current configuration and records the outcome. */
 export const runCommand = (argv: ReadonlyArray<string>) =>
@@ -265,20 +354,60 @@ export const runCommand = (argv: ReadonlyArray<string>) =>
         stderr.push(values.map(String).join(" "));
       },
     };
-    const credentials = (yield* memoryCredentials).layer;
+    const stored = yield* memoryCredentials;
+    const env = yield* Ref.get(world.env);
+    const server = yield* Ref.get(world.server);
+    const person = yield* Ref.get(world.person);
+    yield* Ref.set(world.sleeps, []);
+    /** The interactive login's clock: real time is `TestClock`, and the person acts inside the wait (BEH-EA-307). */
+    const pacing: DeviceLogin.PacingShape = {
+      sleep: (duration) =>
+        Effect.gen(function* () {
+          const waits = [...(yield* Ref.get(world.sleeps)), Duration.toSeconds(duration)];
+          yield* Ref.set(world.sleeps, waits);
+          const printed = /confirm the code ([A-Z]{4}-[A-Z]{4})/.exec(stderr.join("\n"))?.[1];
+          if (person === "expire") return yield* TestClock.adjust(Duration.minutes(16));
+          if (person === "hurry" && waits.length < 4) return;
+          if (Option.isSome(server) && printed !== undefined) {
+            yield* server.value.decide(
+              printed,
+              "second-device@example.com",
+              person === "deny" ? "deny" : "approve",
+            );
+          }
+          yield* TestClock.adjust(duration.pipe(Duration.max(Duration.minutes(1))));
+        }),
+    };
+    const overlay =
+      Object.keys(env).length === 0
+        ? Layer.empty
+        : ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ...definedEnv(), ...env } }));
+    // As the binary wires it: `AWTHAQ_TOKEN` (with `AWTHAQ_BASE_URL`) wins over the store and is never written to it.
+    const credentials = Layer.effect(
+      CredentialStore.CredentialStore,
+      Effect.gen(function* () {
+        const store = yield* CredentialStore.CredentialStore;
+        return CredentialStore.CredentialStore.of(yield* CredentialStore.withEnvOverride(store));
+      }),
+    ).pipe(Layer.provide(stored.layer), Layer.provide(overlay));
     const exit = yield* Effect.exit(
       Cli.run(argv).pipe(
         Effect.provide(
           Layer.mergeAll(
             CliConfigModule.layerFixed(config),
             credentials,
+            Browser.layerNone,
             NodeHttpClient.layerUndici,
             NodeServices.layer,
           ),
         ),
+        Effect.provideService(DeviceLogin.Pacing, pacing),
+        Effect.provide(overlay),
         Effect.provideService(Console.Console, capturing),
       ),
     );
+    const wrote = yield* Ref.get(stored.writes);
+    yield* Ref.update(world.credentialWrites, (n) => n + wrote);
     const code = Exit.isSuccess(exit)
       ? 0
       : (() => {

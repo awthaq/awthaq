@@ -440,7 +440,7 @@ describe("AuthEvents", () => {
   );
 
   it.effect(
-    "BEH-EA-299: publish stamps the ambient tenant on the envelope and the audit row, and none outside a tenant",
+    "BEH-EA-308: publish stamps the ambient tenant on the envelope and the audit row, and none outside a tenant",
     () =>
       Effect.gen(function* () {
         const events = yield* AuthEvents.AuthEvents;

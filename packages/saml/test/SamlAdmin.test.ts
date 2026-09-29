@@ -1,4 +1,4 @@
-// BEH-EA-309 (spec/behaviors/29-saml-sp.md): the administrator's CRUD over SAML connections, through the service the `saml.admin`
+// BEH-EA-318 (spec/behaviors/29-saml-sp.md): the administrator's CRUD over SAML connections, through the service the `saml.admin`
 // group is a thin shell over (the HTTP wiring is `SamlAdminHttp.test.ts`). Fail-closed and tenant-scoped, IdP metadata imported from
 // XML or a URL (the fetch itself is `SamlMetadataFetcher.test.ts`), the trust set replaced by a refresh, the SP signing key rotated,
 // and every successful mutation audited by identifiers only.

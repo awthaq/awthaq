@@ -88,7 +88,7 @@ const familyOf = (address: string): 4 | 6 => (address.includes(":") ? 6 : 4);
  * literal is judged as written (no lookup); a name must resolve, and *every* address it resolves to must be a
  * globally routable unicast one (one private answer among several is a refusal). The first answer is pinned.
  *
- * This is what closes DNS rebinding (BEH-EA-303): a caller connects to `address` with the original `hostname`
+ * This is what closes DNS rebinding (BEH-EA-312): a caller connects to `address` with the original `hostname`
  * as Host and SNI, so the name is never resolved again between this check and the connect. Call it on EVERY
  * attempt (a stored URL's answer can change), and let the connecting side re-judge the address it is handed
  * (`OutboundUrl.isPublicAddress`) so a caller that forgets the check still cannot reach a private one.

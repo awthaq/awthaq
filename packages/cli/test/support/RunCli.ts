@@ -14,11 +14,13 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Runtime from "effect/Runtime";
+import * as Browser from "../../src/Browser.ts";
 import { run } from "../../src/Cli.ts";
 import { ConfigUnavailable } from "../../src/CliErrors.ts";
 import type { CliConfig } from "../../src/Config.ts";
 import * as ConfigModule from "../../src/Config.ts";
 import * as CredentialStore from "../../src/CredentialStore.ts";
+import * as DeviceLogin from "../../src/DeviceLogin.ts";
 
 /** A credential store that lives in a `Ref` the test owns, so it can seed and inspect it. */
 export const memoryCredentials = (initial?: CredentialStore.Credential) =>
@@ -53,11 +55,19 @@ export const withEnvOverride = (base: Layer.Layer<CredentialStore.CredentialStor
 export const runCli = (
   args: ReadonlyArray<string>,
   config?: CliConfig,
-  options?: { readonly credentials?: Layer.Layer<CredentialStore.CredentialStore, unknown> },
+  options?: {
+    readonly credentials?: Layer.Layer<CredentialStore.CredentialStore, unknown>;
+    /** The interactive login's browser opener; default: one that opens nothing (a test never launches a browser). */
+    readonly browser?: Layer.Layer<Browser.Browser>;
+    /** The interactive login's poll clock; default: real sleeping. Tests pass one that returns at once. */
+    readonly pacing?: DeviceLogin.PacingShape;
+    /** Where stderr lines land as they are written, so a pacing hook can read what the command printed so far. */
+    readonly stderr?: Array<string>;
+  },
 ) =>
   Effect.gen(function* () {
     const stdout: Array<string> = [];
-    const stderr: Array<string> = [];
+    const stderr: Array<string> = options?.stderr ?? [];
     const capturing: Console.Console = {
       ...globalThis.console,
       log: (...values: ReadonlyArray<unknown>) => {
@@ -83,8 +93,17 @@ export const runCli = (
     const exit = yield* Effect.exit(
       run(args).pipe(
         Effect.provide(
-          Layer.mergeAll(source, credentials, NodeHttpClient.layerUndici, NodeServices.layer),
+          Layer.mergeAll(
+            source,
+            credentials,
+            options?.browser ?? Browser.layerNone,
+            NodeHttpClient.layerUndici,
+            NodeServices.layer,
+          ),
         ),
+        options?.pacing === undefined
+          ? (effect) => effect
+          : Effect.provideService(DeviceLogin.Pacing, options.pacing),
         Effect.provideService(Console.Console, capturing),
       ),
     );

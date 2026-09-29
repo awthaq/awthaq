@@ -1,6 +1,6 @@
 // @awthaq/saml — SamlLogout
 //
-// BEH-EA-306: reading and judging an inbound Single Logout message, the way `SamlAssertion` reads an assertion. A
+// BEH-EA-315: reading and judging an inbound Single Logout message, the way `SamlAssertion` reads an assertion. A
 // `LogoutRequest` (the IdP telling this SP to end a user's sessions) and a `LogoutResponse` (the IdP answering a logout this
 // SP started) arrive over the HTTP-Redirect binding (a query-string signature, `SamlKeys.verifyRedirect`) or the HTTP-POST
 // binding (an enveloped XML signature, the `XmlSignature` port). Either way the message is read ONLY from bytes a
@@ -158,7 +158,7 @@ const judgeCommon = (
     }
   });
 
-/** BEH-EA-306: issuer, destination, freshness, and a `NotOnOrAfter` that has not passed. */
+/** BEH-EA-315: issuer, destination, freshness, and a `NotOnOrAfter` that has not passed. */
 export const validateLogoutRequest = Effect.fnUntraced(function* (
   request: LogoutRequestData,
   expected: LogoutExpectations,
@@ -174,7 +174,7 @@ export const validateLogoutRequest = Effect.fnUntraced(function* (
   return request;
 });
 
-/** BEH-EA-306: issuer, destination, freshness, `InResponseTo` naming the request this SP made, and a success status. */
+/** BEH-EA-315: issuer, destination, freshness, `InResponseTo` naming the request this SP made, and a success status. */
 export const validateLogoutResponse = Effect.fnUntraced(function* (
   response: LogoutResponseData,
   expected: LogoutExpectations & { readonly inResponseTo: string },

@@ -1656,6 +1656,22 @@ describe("OAuth", () => {
     );
   });
 
+  describe("PV-241: the static rateLimits declaration matches the registry", () => {
+    it.effect("declares exactly what the layer registers, at the default configuration", () =>
+      Effect.gen(function* () {
+        const registry = yield* RateLimits.RateLimitsRegistry;
+        assert.deepStrictEqual(
+          RateLimits.declarationDrift(OAuth.OAuth, yield* registry.registered),
+          {
+            undeclared: [],
+            unregistered: [],
+            mismatched: [],
+          },
+        );
+      }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+    );
+  });
+
   describe("baseUrl is required config, validated at boot (PDR-005/AGA-005)", () => {
     /** Boots `options` with a capturing logger and reports what it logged, or the defect it died with. */
     const boot = (options: Parameters<typeof buildLayer>[0]) =>

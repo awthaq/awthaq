@@ -1,6 +1,6 @@
 // BEH-EA-201..208, 225..229 (26-cli.feature). See CliWorld.ts for the seam.
 import { Api, EmailContract } from "@awthaq/api";
-import { SessionCookie, AuditLog } from "@awthaq/core";
+import { AuditLog, AuthPlugin, Hooks, SessionCookie } from "@awthaq/core";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Passkey } from "@awthaq/passkey";
 import { Organization } from "@awthaq/organization";
@@ -14,9 +14,11 @@ import { role } from "@qadi/core";
 import * as ByteSize from "effect/ByteSize";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -26,11 +28,13 @@ import { fileURLToPath } from "node:url";
 import {
   argvOf,
   combined,
+  ensureServer,
   EXIT,
   lastRun,
   migrate,
   passwordAndRoles,
   runCommand,
+  setEnv,
   sqlAppWithoutRoles,
   updateConfig,
   widgetOnly,
@@ -63,6 +67,13 @@ const runsFor = (command: string) =>
   Effect.gen(function* () {
     const argv = argvOf(command);
     const needsEmail = argv[0] === "seed" && argv[1] === "admin" && !argv.includes("--email");
+    // `login --token` names no value in a scenario: the token a Given prepared (or the one it says the server rejects).
+    const world = yield* World;
+    const loginToken = argv[0] === "login" && argv[1] === "--token" && argv.length === 2;
+    if (loginToken) {
+      const token = yield* world.outcomes.getAs("loginToken", isString);
+      return yield* runCommand([...argv, token]);
+    }
     return yield* runCommand(needsEmail ? [...argv, "--email", "second@acme.com"] : argv);
   });
 
@@ -149,6 +160,8 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
         { id: "billing", apiVersion: 1 as const, tables: [], dependsOn: ["ledger"], groups: [] },
       ],
       hooks: {},
+      rateLimits: [],
+      ports: [],
       config: [],
       userFields: [],
     };
@@ -370,26 +383,49 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
+  /** The lines of one plugin's block in the `--graph` listing (`N. id`, up to the next numbered line). */
+  const blockOf = (text: string, plugin: string) => {
+    const lines = text.split("\n");
+    const start = lines.findIndex((line) => new RegExp(`^\\d+\\. ${plugin}$`).test(line));
+    assert.ok(start >= 0, `no block for ${plugin} in:\n${text}`);
+    const rest = lines.slice(start + 1);
+    const end = rest.findIndex((line) => /^\d+\. /.test(line));
+    return end < 0 ? rest : rest.slice(0, end);
+  };
+
   Then(
-    "it states that required ports are not printed rather than omitting them silently",
-    function* () {
-      assert.match(combined(yield* lastRun), /required ports .*not derivable/);
+    "it lists the {string} port among {string}'s required ports",
+    function* (port: string, plugin: string) {
+      const block = blockOf(combined(yield* lastRun), plugin);
+      const ports = block.find((line) => line.trimStart().startsWith("ports:"));
+      assert.ok(ports?.includes(`awthaq/ports/${port}`), block.join("\n"));
     },
   );
+
+  // A plugin that declares a tap statically (`AuthPlugin.layer`'s `taps`): only the declaration is
+  // read, so its layer is never built.
+  class SignUpAudit extends AuthPlugin.Service<SignUpAudit, {}>()("signUpAudit", {
+    apiVersion: 1,
+    contract: HttpApi.make("auth"),
+  }) {
+    static readonly layer = AuthPlugin.layer(SignUpAudit, {
+      make: Effect.succeed({}),
+      taps: [Hooks.AfterSignUp.declareTap(() => Effect.void, { order: 3 })],
+    });
+  }
 
   Given(
-    "an installed plugin set with taps registered on the {string} hook point",
+    "an installed plugin set with a plugin that declares a tap on the {string} hook point",
     function* (_point: string) {
-      yield* updateConfig({ auth: passwordAndRoles });
+      yield* updateConfig({ auth: Auth.make([Password.Password, SignUpAudit]) });
     },
   );
 
-  Then(
-    "it states that hook-tap chains are not printed rather than omitting them silently",
-    function* () {
-      assert.match(combined(yield* lastRun), /hook-tap chains are not derivable/);
-    },
-  );
+  Then("it prints that plugin's tap position in the {string} chain", function* (point: string) {
+    const block = blockOf(combined(yield* lastRun), "signUpAudit");
+    const taps = block.find((line) => line.trimStart().startsWith("hook taps:"));
+    assert.ok(taps?.includes(`${point} #1 (order 3)`), block.join("\n"));
+  });
 
   Given("an installed plugin set composed by {string}", function* (_make: string) {
     yield* updateConfig({ auth: withOAuth });
@@ -1218,6 +1254,186 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("it fails with the authentication code", function* () {
     assert.equal((yield* lastRun).code, EXIT.authenticationRequired);
+  });
+
+  // ---- BEH-EA-227/307: the session commands against a real auth server ----------------------
+
+  /** Runs the command like `{string} runs` does, watching for any listener the command itself starts. */
+  const runWatched = (command: string) =>
+    Effect.gen(function* () {
+      const { outcomes } = yield* World;
+      const watch = watchListeners();
+      try {
+        yield* outcomes.set("ran", yield* runsFor(command));
+      } finally {
+        yield* outcomes.set("listeners", watch.started());
+        watch.stop();
+      }
+    });
+
+  Given("a running auth server offering the device authorization endpoints", function* () {
+    yield* ensureServer();
+  });
+
+  Given("a running auth server without the device authorization endpoints", function* () {
+    yield* ensureServer({ device: false });
+  });
+
+  Given("a device token endpoint that answers {string}", function* (answer: string) {
+    const { person } = yield* World;
+    yield* ensureServer();
+    // `slow_down` is what a server says to a client whose clock runs too fast; `expired_token` what it says once the code's life has passed.
+    if (answer === "slow_down") return yield* Ref.set(person, "hurry");
+    if (answer === "expired_token") return yield* Ref.set(person, "expire");
+    return yield* Effect.die(new Error(`no way to provoke a device token answer of ${answer}`));
+  });
+
+  Given("the person denies the login request on the other device", function* () {
+    const { person } = yield* World;
+    yield* ensureServer();
+    yield* Ref.set(person, "deny");
+  });
+
+  When("{string} polls", function* (command: string) {
+    yield* runWatched(command);
+  });
+
+  Then("it polls {string} as an outbound client", function* (path: string) {
+    const { server } = yield* World;
+    const running = yield* Ref.get(server);
+    assert.ok(Option.isSome(running), "no auth server is running");
+    const requests = yield* running.value.requests;
+    assert.ok(requests.includes(`POST ${path}`), JSON.stringify(requests));
+  });
+
+  Then("it never starts a listener", function* () {
+    const { outcomes } = yield* World;
+    assert.equal(yield* outcomes.getAs("listeners", isNumber), 0);
+  });
+
+  Then("it exits successfully", function* () {
+    const result = yield* lastRun;
+    assert.equal(result.code, 0, combined(result));
+  });
+
+  Then("the verification URL and user code were printed on stderr", function* () {
+    const result = yield* lastRun;
+    const printed = result.stderr.join("\n");
+    assert.match(printed, /https:\/\/app\.test\/device\?user_code=/);
+    assert.match(printed, /confirm the code [BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}/);
+    // stdout carries the result, not the instructions.
+    assert.doesNotMatch(result.stdout.join("\n"), /confirm the code/);
+  });
+
+  Then("the credential store was written once", function* () {
+    const { credentialWrites } = yield* World;
+    assert.equal(yield* Ref.get(credentialWrites), 1);
+  });
+
+  Then("neither the device code nor the token appears in the output", function* () {
+    const result = yield* lastRun;
+    assert.equal(result.code, 0, combined(result));
+    // A device code is 43 base64url characters; a session token is `id.secret` — neither is printed.
+    assert.doesNotMatch(combined(result), /[A-Za-z0-9_-]{40,}/);
+  });
+
+  Then("the poll interval widens", function* () {
+    const { sleeps } = yield* World;
+    const waits = yield* Ref.get(sleeps);
+    assert.ok(waits.length >= 3, JSON.stringify(waits));
+    assert.ok(
+      waits.some((wait, index) => index > 0 && wait > (waits[index - 1] ?? wait)),
+      JSON.stringify(waits),
+    );
+  });
+
+  Then(
+    "each wait after a slow_down is at least 5 seconds longer than the wait before it",
+    function* () {
+      const { sleeps } = yield* World;
+      const waits = yield* Ref.get(sleeps);
+      // The hurried client is told to slow down twice: 5, 5, then +5 each time.
+      assert.deepEqual(waits, [5, 5, 10, 15]);
+      for (let index = 2; index < waits.length; index++) {
+        assert.ok(
+          (waits[index] ?? 0) >= (waits[index - 1] ?? 0) + 5 || waits[index] === waits[index - 1],
+        );
+      }
+    },
+  );
+
+  Then("it exits with the authentication code", function* () {
+    assert.equal((yield* lastRun).code, EXIT.authenticationRequired);
+  });
+
+  Then("it exits with the unavailable code", function* () {
+    assert.equal((yield* lastRun).code, EXIT.unavailable);
+  });
+
+  Then("it tells the user to run {string} again", function* (command: string) {
+    assert.ok(
+      combined(yield* lastRun).includes(`run \`${command}\` again`),
+      combined(yield* lastRun),
+    );
+  });
+
+  Then(
+    "it names the DeviceAuthorization plugin and the {string} alternative",
+    function* (flag: string) {
+      const printed = combined(yield* lastRun);
+      assert.ok(printed.includes("DeviceAuthorization"), printed);
+      assert.ok(printed.includes(flag), printed);
+    },
+  );
+
+  Given("{string} is set to a valid token", function* (variable: string) {
+    assert.equal(variable, "AWTHAQ_TOKEN");
+    const server = yield* ensureServer();
+    const { token } = yield* server.issue("env-token@example.com");
+    yield* setEnv({ AWTHAQ_TOKEN: token });
+  });
+
+  Given("{string} is set", function* (variable: string) {
+    assert.equal(variable, "AWTHAQ_TOKEN");
+    const server = yield* ensureServer();
+    const { token } = yield* server.issue("env-set@example.com");
+    yield* setEnv({ AWTHAQ_TOKEN: token });
+  });
+
+  Then("it uses that token without contacting the device endpoints", function* () {
+    const result = yield* lastRun;
+    assert.equal(result.code, 0, combined(result));
+    const { server } = yield* World;
+    const running = yield* Ref.get(server);
+    assert.ok(Option.isSome(running));
+    const requests = yield* running.value.requests;
+    assert.ok(requests.length > 0, "whoami never asked the server who the token is");
+    assert.ok(!requests.some((request) => request.includes("/device/")), JSON.stringify(requests));
+  });
+
+  Then("it never writes the credential store", function* () {
+    const { credentialWrites } = yield* World;
+    assert.equal(yield* Ref.get(credentialWrites), 0);
+  });
+
+  When("any session command runs", function* () {
+    yield* runWatched("awthaq whoami");
+  });
+
+  Then("no credential store is written", function* () {
+    const { credentialWrites } = yield* World;
+    assert.equal(yield* Ref.get(credentialWrites), 0);
+  });
+
+  Given("a token the server rejects", function* () {
+    const { outcomes } = yield* World;
+    yield* ensureServer();
+    yield* outcomes.set("loginToken", "not-a-token-the-server-issued");
+  });
+
+  Then("nothing is stored", function* () {
+    const { credentialWrites } = yield* World;
+    assert.equal(yield* Ref.get(credentialWrites), 0);
   });
 
   // ---- BEH-EA-229: configuration is declared statically -------------------------------------

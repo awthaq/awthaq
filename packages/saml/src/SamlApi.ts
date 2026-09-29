@@ -1,6 +1,6 @@
 // @awthaq/saml — SamlApi
 //
-// spec/behaviors/29-saml-sp.md, BEH-EA-238 through 245 and 305 through 309; spec/models/10-saml.md ("The contract"). Three groups:
+// spec/behaviors/29-saml-sp.md, BEH-EA-238 through 245 and 314 through 318; spec/models/10-saml.md ("The contract"). Three groups:
 //
 //   - `saml` (BEH-EA-004): public. The SP metadata document, the login redirect, the Assertion Consumer Service and the Single
 //     Logout endpoint (the IdP's browser delivers a `LogoutRequest` or the `LogoutResponse` to ours, over Redirect or POST).
@@ -39,7 +39,7 @@ export class SamlAssertionRejected extends Schema.TaggedError<SamlAssertionRejec
   { httpApiStatus: 400 },
 ) {}
 
-/** BEH-EA-306: the one answer to every reason a Single Logout message can be refused. */
+/** BEH-EA-315: the one answer to every reason a Single Logout message can be refused. */
 export class SamlLogoutRejected extends Schema.TaggedError<SamlLogoutRejected>()(
   "SamlLogoutRejected",
   {},
@@ -74,7 +74,7 @@ export const AcsPayload = Schema.Struct({
 export type AcsPayload = typeof AcsPayload.Type;
 
 /**
- * BEH-EA-306: what the IdP's browser delivers to the logout endpoint. Over the Redirect binding these are query parameters
+ * BEH-EA-315: what the IdP's browser delivers to the logout endpoint. Over the Redirect binding these are query parameters
  * (the signature covers the raw query, which the handler reads from the request itself); over POST, a form. Exactly one of
  * `SAMLRequest` (the IdP asks this SP to end sessions) and `SAMLResponse` (the IdP answers our request) is expected.
  */
@@ -130,7 +130,7 @@ export const SamlGroup = HttpApiGroup.make("saml")
     }),
   )
   .add(
-    // BEH-EA-306: the answer is a redirect (a LogoutResponse over the Redirect binding, or back to the app after our own
+    // BEH-EA-315: the answer is a redirect (a LogoutResponse over the Redirect binding, or back to the app after our own
     // logout) or, for an IdP that takes the POST binding, a self-submitting HTML form (200): the handler chooses.
     HttpApiEndpoint.get("slo", "/auth/saml/slo/:connection", {
       params: SloParams,
@@ -154,7 +154,7 @@ export const LogoutPayload = Schema.Struct({
 });
 export type LogoutPayload = typeof LogoutPayload.Type;
 
-/** BEH-EA-306: the signed-in user's own SP-initiated Single Logout (authenticated, CSRF-protected). */
+/** BEH-EA-315: the signed-in user's own SP-initiated Single Logout (authenticated, CSRF-protected). */
 export const SamlAccountGroup = HttpApiGroup.make("saml.account")
   .add(
     HttpApiEndpoint.post("logout", "/auth/saml/logout", {
@@ -166,7 +166,7 @@ export const SamlAccountGroup = HttpApiGroup.make("saml.account")
   .middleware(Api.Authentication)
   .middleware(Api.CsrfProtection);
 
-// ---- the administrator's surface (BEH-EA-309, BEH-EA-307) -------------------------------------------
+// ---- the administrator's surface (BEH-EA-318, BEH-EA-316) -------------------------------------------
 
 /** The caller failed `canManageSaml` (or is rate limited before it is asked). */
 export class SamlActionDenied extends Schema.TaggedError<SamlActionDenied>()(

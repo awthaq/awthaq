@@ -21,9 +21,9 @@
 //    7. the account is `(saml:<organizationId>:<connectionId>, NameID, issuer)` — never linked by email alone
 //       (BEH-EA-245) — and `Users.assertCanSignIn` runs before a session exists.
 //
-// Beyond the ACS (each with its own behavior): signed AuthnRequests (BEH-EA-305), Single Logout in both directions
-// (BEH-EA-306, `SamlSlo`), the administrator's connection CRUD (BEH-EA-309, `SamlAdmin`), and organization role mapping under a
-// ceiling (BEH-EA-307, `SamlRoleMapping`). Not offered, by decision (spec/behaviors/29-saml-sp.md BEH-EA-244, ADR-EA-036):
+// Beyond the ACS (each with its own behavior): signed AuthnRequests (BEH-EA-314), Single Logout in both directions
+// (BEH-EA-315, `SamlSlo`), the administrator's connection CRUD (BEH-EA-318, `SamlAdmin`), and organization role mapping under a
+// ceiling (BEH-EA-316, `SamlRoleMapping`). Not offered, by decision (spec/behaviors/29-saml-sp.md BEH-EA-244, ADR-EA-036):
 // IdP-initiated LOGIN and encrypted assertions.
 
 import { Api } from "@awthaq/api";
@@ -128,7 +128,7 @@ export interface SamlShape {
     | ServerError
   >;
   /**
-   * BEH-EA-306: a Single Logout message delivered by the IdP's browser (a `LogoutRequest` to end sessions, or the
+   * BEH-EA-315: a Single Logout message delivered by the IdP's browser (a `LogoutRequest` to end sessions, or the
    * `LogoutResponse` to our own request); resolves to what the browser does next.
    */
   readonly slo: (
@@ -137,12 +137,12 @@ export interface SamlShape {
     SamlSlo.SloOutcome,
     SamlApi.SamlLogoutRejected | Api.RateLimited | ServerError
   >;
-  /** BEH-EA-306: the signed-in user's own SP-initiated logout: ends their session and, when the connection has a logout endpoint, sends the IdP a `LogoutRequest`. */
+  /** BEH-EA-315: the signed-in user's own SP-initiated logout: ends their session and, when the connection has a logout endpoint, sends the IdP a `LogoutRequest`. */
   readonly logout: (
     caller: Api.UserPrincipal,
     input: { readonly callbackURL?: string | undefined; readonly ip?: string | undefined },
   ) => Effect.Effect<SamlSlo.LogoutStart, ServerError>;
-  /** BEH-EA-309: the administrator's operations (the `saml.admin` group). */
+  /** BEH-EA-318: the administrator's operations (the `saml.admin` group). */
   readonly admin: SamlAdmin.SamlAdminShape;
 }
 
@@ -209,7 +209,7 @@ const samlMigrations: Migrations.Migrations = [
     }),
   },
   {
-    // BEH-EA-305/306/307/309: signed AuthnRequests, the IdP's logout endpoint, the metadata URL, and the role mapping (JSON).
+    // BEH-EA-314/315/316/318: signed AuthnRequests, the IdP's logout endpoint, the metadata URL, and the role mapping (JSON).
     name: "add_saml_connection_signing_logout_roles",
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -227,7 +227,7 @@ const samlMigrations: Migrations.Migrations = [
     }),
   },
   {
-    // BEH-EA-305: the SP's own signing keys per connection; `privateKey` is the sealed `Encryption` envelope.
+    // BEH-EA-314: the SP's own signing keys per connection; `privateKey` is the sealed `Encryption` envelope.
     name: "create_saml_sp_key",
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -260,7 +260,7 @@ const samlMigrations: Migrations.Migrations = [
     }),
   },
   {
-    // BEH-EA-306: which local sessions a connection's sign-ins created, by the NameID/SessionIndex the IdP knows them by.
+    // BEH-EA-315: which local sessions a connection's sign-ins created, by the NameID/SessionIndex the IdP knows them by.
     name: "create_saml_session",
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -504,7 +504,7 @@ const respondToBrowser = Effect.fnUntraced(function* (outcome: SamlSlo.SloOutcom
   }
 });
 
-/** BEH-EA-306: the signed-in user's own logout (`saml.account`). */
+/** BEH-EA-315: the signed-in user's own logout (`saml.account`). */
 export const SamlAccountHandlers = HttpApiBuilder.group(
   SamlApi.SamlApi,
   "saml.account",
@@ -554,7 +554,7 @@ export const SamlAccountHandlers = HttpApiBuilder.group(
   }),
 );
 
-/** BEH-EA-309: the administrator's group (`saml.admin`): admin tier by its id, fail-closed by `canManageSaml`. */
+/** BEH-EA-318: the administrator's group (`saml.admin`): admin tier by its id, fail-closed by `canManageSaml`. */
 export const SamlAdminHandlers = HttpApiBuilder.group(
   SamlApi.SamlApi,
   "saml.admin",
@@ -655,6 +655,12 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
   migrations: samlMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Saml, {
+    ports: [
+      ClientAddress.ClientAddress,
+      RateLimiter.RateLimiter,
+      SqlTransaction.SqlTransaction,
+      XmlSignature.XmlSignature,
+    ],
     dependsOn: [Organization.Organization],
     handlers: Layer.mergeAll(SamlHandlers, SamlAccountHandlers, SamlAdminHandlers),
     make: Effect.gen(function* () {
@@ -751,7 +757,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
             },
           });
           const now = yield* DateTime.now;
-          // BEH-EA-305: a connection that signs its requests never sends one unsigned. No usable key is a defect (the store
+          // BEH-EA-314: a connection that signs its requests never sends one unsigned. No usable key is a defect (the store
           // guarantees one exists, so this means every key has expired or cannot be opened), not a silent downgrade.
           const signing = connection.value.authnRequestsSigned
             ? yield* spKeys.signingKey(connectionId)
@@ -901,7 +907,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       });
 
       /**
-       * BEH-EA-307: the assertion's attributes, through the connection's rules, into the organization's roles, under the
+       * BEH-EA-316: the assertion's attributes, through the connection's rules, into the organization's roles, under the
        * connection's ceiling (`canGrant`, RRM-001). A mapping that cannot be applied (a role that no longer exists, a member who
        * out-privileges the connection, the last owner, a membership limit) is logged and skipped: the identity provider proved
        * who the user is, and that is still true; what it may confer is bounded, never a reason to lock them out.
@@ -1038,7 +1044,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
           },
           amr: ["fed"],
         });
-        // BEH-EA-306: remember which identity the IdP knows this session by, so a Single Logout can find it again.
+        // BEH-EA-315: remember which identity the IdP knows this session by, so a Single Logout can find it again.
         yield* records.saveSession({
           sessionId: issued.session.id,
           connectionId: connection.id,

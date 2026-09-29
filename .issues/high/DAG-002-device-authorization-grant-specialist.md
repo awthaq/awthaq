@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `cli-session-commands`. Duplicate of `CTA-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/cli/src/index.ts:3`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → resolved.
 
 **Resolved (2026-09-29):** Duplicate of `CTA-001-cli-tool-auth-specialist` — closed by its fix (see that issue's Resolved comment).
+
+**Resolved (2026-09-29):** The consumer now exists too: awthaq login without a token is the device flow (packages/cli/src/DeviceLogin.ts, Browser.ts; BEH-EA-307) against the plugin, with --no-browser, --client-id, +5 s on slow_down, exit 8/9 mapping, tested on a real socket (test/DeviceLogin.test.ts) and in the 26-cli feature.

@@ -1,4 +1,4 @@
-// BEH-EA-306 over real HTTP: the logout endpoint (`GET`/`POST /auth/saml/slo/:connection`) reads the RAW query the IdP sent and
+// BEH-EA-315 over real HTTP: the logout endpoint (`GET`/`POST /auth/saml/slo/:connection`) reads the RAW query the IdP sent and
 // answers with a redirect or a form; the signed-in user's own logout (`POST /auth/saml/logout`, authenticated and CSRF-protected)
 // expires the session cookie and sends the browser to the IdP with a `__Host-saml-logout` cookie (`SameSite=None`); and the admin
 // group is 401 unauthenticated, 403 while the gate is unconfigured, and typed errors past it.

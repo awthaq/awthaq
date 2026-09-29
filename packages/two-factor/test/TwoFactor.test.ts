@@ -1,7 +1,7 @@
 // THS-001, AOMS-003, ARF-005, THS-004/005/007, BCR-002/006 (BEH-EA-259 to BEH-EA-266): the plugin
 // end to end at the domain level — the real `Password` plugin as the first factor, the real
 // `TwoFactor` plugin and its two gates, real (in-memory) stores, the real `Encryption` port.
-import { AuditLog, Users, VerificationLink } from "@awthaq/core";
+import { AuditLog, Hooks, Users, VerificationLink } from "@awthaq/core";
 import { Encryption, Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { assert, describe, it } from "@effect/vitest";
@@ -138,6 +138,28 @@ describe("TwoFactor: enrolment and the divert (BEH-EA-260/261/263)", () => {
         const stale = yield* twoFactor.enable(other.userId, other.sessionId).pipe(Effect.flip);
         if (stale._tag !== "TwoFactorReauthRequired") return assert.fail(stale._tag);
         assert.strictEqual(stale.maxAgeSeconds, 600);
+      }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect(
+    "an amr that already proves a second factor is not asked for one again (a device grant approved by an mfa session, BEH-EA-304)",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Hooks.BeforeSessionIssue;
+        const user = yield* enrolledUser("device@example.com");
+        const first = yield* gate.run({
+          userId: user.userId,
+          strategy: "deviceAuthorization",
+          amr: ["pwd"],
+        });
+        assert.strictEqual(first._tag, "Diverted");
+        // The approving session went through this very gate, so its amr says `mfa`: nothing left to prove.
+        const inherited = yield* gate.run({
+          userId: user.userId,
+          strategy: "deviceAuthorization",
+          amr: ["pwd", "otp", "mfa"],
+        });
+        assert.strictEqual(inherited._tag, "Continue");
       }).pipe(Effect.provide(buildLayer())),
   );
 

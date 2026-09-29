@@ -40,26 +40,26 @@ export interface SamlConfigShape {
   readonly rateLimits: {
     readonly login: SamlRateLimit;
     readonly acs: SamlRateLimit;
-    /** BEH-EA-306: the Single Logout endpoint (IdP-initiated and the response to ours). */
+    /** BEH-EA-315: the Single Logout endpoint (IdP-initiated and the response to ours). */
     readonly slo: SamlRateLimit;
-    /** BEH-EA-308: `POST /auth/sso/start`, which tells a caller whether an email domain has single sign-on. */
+    /** BEH-EA-317: `POST /auth/sso/start`, which tells a caller whether an email domain has single sign-on. */
     readonly sso: SamlRateLimit;
   };
   /**
-   * BEH-EA-306: how far from now a Single Logout message's `IssueInstant` may be (both directions, clock skew added). A captured
+   * BEH-EA-315: how far from now a Single Logout message's `IssueInstant` may be (both directions, clock skew added). A captured
    * `LogoutRequest` replayed later would log the user out again on demand; default 5 minutes.
    */
   readonly logoutFreshness: Duration.Duration;
-  /** BEH-EA-306: how long a session row (NameID and SessionIndex of a sign-in) is kept for a logout to find; default 90 days. */
+  /** BEH-EA-315: how long a session row (NameID and SessionIndex of a sign-in) is kept for a logout to find; default 90 days. */
   readonly sessionRecordRetention: Duration.Duration;
-  /** BEH-EA-305: the validity of a generated SP signing certificate, in days; default 1825 (5 years). */
+  /** BEH-EA-314: the validity of a generated SP signing certificate, in days; default 1825 (5 years). */
   readonly signingKeyValidityDays: number;
-  /** BEH-EA-309: refuse IdP metadata larger than this (bytes) when fetching it from a URL; default 512 KiB. */
+  /** BEH-EA-318: refuse IdP metadata larger than this (bytes) when fetching it from a URL; default 512 KiB. */
   readonly maxMetadataBytes: number;
-  /** BEH-EA-309: the deadline for fetching IdP metadata from a URL; default 10 seconds. */
+  /** BEH-EA-318: the deadline for fetching IdP metadata from a URL; default 10 seconds. */
   readonly metadataTimeout: Duration.Duration;
   /**
-   * BEH-EA-309: the administrator's gate, DENYING BY DEFAULT (an application that installs the admin group and never
+   * BEH-EA-318: the administrator's gate, DENYING BY DEFAULT (an application that installs the admin group and never
    * configures this exposes nothing). `action` names the operation; `organizationId` the organization it concerns, when
    * there is one (`createConnection`, `getConnection`, ...), so a host can let one administrator manage one tenant.
    */
@@ -68,10 +68,10 @@ export interface SamlConfigShape {
     readonly action: string;
     readonly organizationId: string | undefined;
   }) => Effect.Effect<boolean>;
-  /** BEH-EA-309: calls per administrator per window on the admin group, past the gate. */
+  /** BEH-EA-318: calls per administrator per window on the admin group, past the gate. */
   readonly adminRate: SamlRateLimit;
   /**
-   * BEH-EA-307: whether a connection's role mapping may ever confer `owner` (its ceiling, a rule or the defaults naming it).
+   * BEH-EA-316: whether a connection's role mapping may ever confer `owner` (its ceiling, a rule or the defaults naming it).
    * Off by default: an identity provider's assertion promoting somebody to owner is a decision, not a default.
    */
   readonly allowOwnerRoleMapping: boolean;
@@ -151,7 +151,7 @@ export const config = (input: SamlConfigInput) =>
 export const acsUrl = (settings: SamlConfigShape): string => `${settings.baseUrl}/auth/saml/acs`;
 
 /**
- * BEH-EA-306: this SP's Single Logout endpoint FOR ONE CONNECTION (both bindings, one URL): the `Destination` every signed logout
+ * BEH-EA-315: this SP's Single Logout endpoint FOR ONE CONNECTION (both bindings, one URL): the `Destination` every signed logout
  * message carries. The connection is in the path so an IdP-initiated `LogoutRequest`, which has no state of ours to consult,
  * still selects its trust set from what this server published, never from the document.
  */

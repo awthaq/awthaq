@@ -1,7 +1,7 @@
 // @awthaq/saml — SamlConnections
 //
-// spec/models/10-saml.md, BEH-EA-241/305/307/309: the write side of an organization's SAML connections —
-// `SamlConnectionStore`, which the administrator's HTTP surface (`saml.admin`, BEH-EA-309) and an application call. It validates
+// spec/models/10-saml.md, BEH-EA-241/314/316/318: the write side of an organization's SAML connections —
+// `SamlConnectionStore`, which the administrator's HTTP surface (`saml.admin`, BEH-EA-318) and an application call. It validates
 // everything an organization supplies, because an IdP description is exactly the input that decides whose signatures this
 // server believes:
 //
@@ -13,9 +13,9 @@
 //     one after);
 //   - the organization must exist;
 //   - an email domain routes to exactly one connection;
-//   - a connection that signs its AuthnRequests has an SP signing key (generated when there is none, BEH-EA-305);
+//   - a connection that signs its AuthnRequests has an SP signing key (generated when there is none, BEH-EA-314);
 //   - a role mapping names only roles the organization has, confers no more than its ceiling (the `canGrant` rule of RRM-001,
-//     `Organization.checkRoleCeiling`), and mentions `owner` only where the deployment allowed it (BEH-EA-307).
+//     `Organization.checkRoleCeiling`), and mentions `owner` only where the deployment allowed it (BEH-EA-316).
 //
 // An IdP's metadata can be imported (`idp: { metadataXml }`, or fetched by the caller from a URL and passed the same way) and
 // refreshed (`refreshMetadata`): the certificates it lists become the trust set. That is exactly as trustworthy as the channel
@@ -119,14 +119,14 @@ export interface SamlConnectionStoreShape {
     readonly emailDomains?: ReadonlyArray<string> | undefined;
     /** BEH-EA-245: allow first sign-ins to link to an existing local account with a verified matching email. Default false. */
     readonly trustsEmail?: boolean | undefined;
-    /** BEH-EA-305: sign AuthnRequests. Default: what the IdP's metadata asks for (`WantAuthnRequestsSigned`), else false. */
+    /** BEH-EA-314: sign AuthnRequests. Default: what the IdP's metadata asks for (`WantAuthnRequestsSigned`), else false. */
     readonly authnRequestsSigned?: boolean | undefined;
     /** Overrides the single-logout endpoint the metadata offered (or supplies one for a hand-made connection). */
     readonly sloUrl?: string | undefined;
     readonly sloBinding?: SamlRecords.SloBinding | undefined;
-    /** BEH-EA-309: where the metadata was fetched from, kept so it can be refreshed. */
+    /** BEH-EA-318: where the metadata was fetched from, kept so it can be refreshed. */
     readonly metadataUrl?: string | undefined;
-    /** BEH-EA-307. */
+    /** BEH-EA-316. */
     readonly roleMapping?: SamlRecords.RoleMapping | undefined;
   }) => Effect.Effect<
     SamlRecords.ConnectionRecord,
@@ -158,7 +158,7 @@ export interface SamlConnectionStoreShape {
     InvalidSamlConnection | SamlConnectionNotFound | SamlRecords.SamlDomainTaken
   >;
   /**
-   * BEH-EA-309: re-reads the IdP's metadata (fetched by the caller) into the connection: the trust set is REPLACED by the
+   * BEH-EA-318: re-reads the IdP's metadata (fetched by the caller) into the connection: the trust set is REPLACED by the
    * certificates it lists, and the SSO and single-logout endpoints follow. The metadata must name the connection's own entity
    * id (an IdP whose identity changed is a new connection, not a refresh).
    */
@@ -222,7 +222,7 @@ export const layerStore = Layer.effect(
         ),
       );
 
-    /** BEH-EA-307: the mapping is well-formed, names only roles the organization has, and confers no more than its ceiling. */
+    /** BEH-EA-316: the mapping is well-formed, names only roles the organization has, and confers no more than its ceiling. */
     const validatedRoleMapping = Effect.fnUntraced(function* (
       organizationId: string,
       mapping: SamlRecords.RoleMapping,
@@ -278,7 +278,7 @@ export const layerStore = Layer.effect(
       return mapping;
     });
 
-    /** BEH-EA-305: a connection that signs has a key. Generated when there is none; a present key is never replaced here. */
+    /** BEH-EA-314: a connection that signs has a key. Generated when there is none; a present key is never replaced here. */
     const ensureSigningKey = (connection: SamlRecords.ConnectionRecord) =>
       connection.authnRequestsSigned
         ? spKeys.list(connection.id).pipe(

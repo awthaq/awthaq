@@ -164,7 +164,7 @@ const suite = (name: string, layer: Layer.Layer<SamlRecords.SamlRecords, unknown
       }).pipe(Effect.provide(layer)),
     );
 
-    // BEH-EA-305/306/307: the signing flag, the logout endpoint, the metadata URL and the role mapping round-trip, are patched
+    // BEH-EA-314/315/316: the signing flag, the logout endpoint, the metadata URL and the role mapping round-trip, are patched
     // field by field (null clears), and default to what a pre-existing connection always was.
     it.effect(
       "the signing, logout, metadata and role-mapping fields round-trip and patch independently",

@@ -1,4 +1,4 @@
-// BEH-EA-303: `HostResolver.pin` resolves once and returns THE address to connect to; a caller that connects
+// BEH-EA-312: `HostResolver.pin` resolves once and returns THE address to connect to; a caller that connects
 // there (with the URL's own host as Host/SNI) never resolves the name again, which is what closes DNS rebinding.
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

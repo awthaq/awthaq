@@ -1,4 +1,4 @@
-// The steps of 29-saml-sp.feature's BEH-EA-305 through BEH-EA-309 rules: signed AuthnRequests, Single Logout in both directions,
+// The steps of 29-saml-sp.feature's BEH-EA-314 through BEH-EA-318 rules: signed AuthnRequests, Single Logout in both directions,
 // role mapping under a ceiling, the `Sso` dispatcher and the administrator's fail-closed, tenant-scoped connection management.
 // They share the World of `SamlSteps.ts` (the real in-memory core, the organization plugin, the SAML records and stores, the Node
 // XML-signature adapter, sealed SP keys over a real `Encryption`) and play the IdP's side of each protocol message themselves.
@@ -416,7 +416,7 @@ const logoutFor = (
   });
 
 export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) => {
-  // ---- BEH-EA-305: signed AuthnRequests -------------------------------------------------------
+  // ---- BEH-EA-314: signed AuthnRequests -------------------------------------------------------
 
   Given("the connection {string} signs its AuthnRequests", function* (name: string) {
     yield* planConnection(name, { authnRequestsSigned: true });
@@ -563,7 +563,7 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
-  // ---- BEH-EA-306: Single Logout -------------------------------------------------------------
+  // ---- BEH-EA-315: Single Logout -------------------------------------------------------------
 
   Given("{string} is signed in through {string}", function* (user: string, name: string) {
     const outcome = yield* signInUser(user, name);
@@ -864,7 +864,7 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     assert.deepEqual(started, { _tag: "local", callbackURL: "/bye" });
   });
 
-  // ---- BEH-EA-307: role mapping ----------------------------------------------------------------
+  // ---- BEH-EA-316: role mapping ----------------------------------------------------------------
 
   Given(
     "the connection {string} maps the group {string} to the role {string} under the ceiling {string} with the default role {string}",
@@ -1006,7 +1006,7 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
-  // ---- BEH-EA-308: the Sso dispatcher ------------------------------------------------------------
+  // ---- BEH-EA-317: the Sso dispatcher ------------------------------------------------------------
 
   /** The organization called `name`: the one its SAML connection seeded, else one created for it (an OIDC-only organization). */
   const organizationOf = (name: string) =>
@@ -1104,7 +1104,7 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
-  // ---- BEH-EA-309: administration ---------------------------------------------------------------
+  // ---- BEH-EA-318: administration ---------------------------------------------------------------
 
   Given("the administrator gate allows every action", function* () {
     yield* configure({ canManageSaml: () => Effect.succeed(true) });

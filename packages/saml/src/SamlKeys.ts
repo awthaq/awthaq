@@ -1,6 +1,6 @@
 // @awthaq/saml — SamlKeys
 //
-// BEH-EA-305: the service provider's own signing material, and the two signature forms it produces.
+// BEH-EA-314: the service provider's own signing material, and the two signature forms it produces.
 //
 //   - A SIGNING KEY is an RSA key pair (at least 2048 bits) and a self-signed X.509 certificate for it. `generateSigningKey`
 //     makes one (node:crypto for the key and the signature; the certificate's DER is assembled here, because Node has no

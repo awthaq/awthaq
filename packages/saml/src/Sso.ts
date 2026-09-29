@@ -1,6 +1,6 @@
 // @awthaq/saml — Sso
 //
-// BEH-EA-308 (ADR-EA-023 Decision 4): the thin dispatcher in front of the two enterprise sign-in protocols. `Saml` and `OAuth` own
+// BEH-EA-317 (ADR-EA-023 Decision 4): the thin dispatcher in front of the two enterprise sign-in protocols. `Saml` and `OAuth` own
 // their protocol routes; `Sso` only answers "where does this person sign in?": it routes an email domain (or an organization id)
 // to an organization's OIDC/OAuth2 connection (`OrganizationConnectionStore`, `@awthaq/organization`) or to its SAML connection
 // (`SamlConnectionStore`) and hands back the URL of the protocol plugin's own login route, which the browser then follows: the

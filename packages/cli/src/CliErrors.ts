@@ -126,7 +126,7 @@ export class ServerUnavailable extends Data.TaggedError("ServerUnavailable")<{
   override readonly [Runtime.errorReported] = false;
 }
 
-/** BEH-EA-227: interactive `login` needs the DeviceAuthorization plugin, which does not exist yet; `login --token` is the path. */
+/** BEH-EA-307: interactive `login` reached a server that does not serve the device authorization endpoints (the plugin is not installed); `login --token` is the path. */
 export class DeviceAuthorizationUnavailable extends Data.TaggedError(
   "DeviceAuthorizationUnavailable",
 )<{

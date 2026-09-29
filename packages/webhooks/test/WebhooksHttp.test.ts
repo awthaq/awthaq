@@ -194,7 +194,7 @@ describe("webhooks admin over HTTP", () => {
       }),
   );
 
-  // BEH-EA-301: the test ping is a state-changing admin call: 401/403/CSRF like the rest, 404 for an unknown id.
+  // BEH-EA-310: the test ping is a state-changing admin call: 401/403/CSRF like the rest, 404 for an unknown id.
   it.effect(
     "the test ping queues a delivery over HTTP, and an unknown endpoint is a typed 404",
     () =>

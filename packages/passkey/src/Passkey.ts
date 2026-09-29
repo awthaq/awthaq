@@ -1019,6 +1019,15 @@ export const passkeyErasure = Erasure.contribute({
 export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passkey", {
   apiVersion: 1,
   contract: PasskeyApi.PasskeyApi,
+  // PV-241: declared from `RATE_LIMITS`, the table both the registry and enforcement draw from.
+  rateLimits: AuthPlugin.declareRateLimits(
+    ["passkey.authenticate"],
+    Object.entries(RATE_LIMITS).map(([name, rule]) => ({
+      group: "passkey.authenticate",
+      name,
+      ...rule,
+    })),
+  ),
   tables: ["passkey_credential", "passkey_challenge", "passkey_user_handle"],
   migrations: passkeyMigrations,
   // ECS-008/BEH-EA-229: the dev defaults (`localhost`, an `http` origin) are the classic thing left in production.
@@ -1049,6 +1058,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   ],
 }) {
   static readonly layer = AuthPlugin.layer(Passkey, {
+    ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter, WebAuthn.WebAuthn],
     handlers: PasskeyHandlers,
     contributes: Layer.mergeAll(passkeyErasure, passkeyExport),
     make: Effect.gen(function* () {

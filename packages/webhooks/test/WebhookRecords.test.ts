@@ -87,7 +87,7 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
-    // BEH-EA-300: the tenant is stored once, at registration, and survives every later write.
+    // BEH-EA-309: the tenant is stored once, at registration, and survives every later write.
     it.effect(
       "an endpoint keeps the tenant it was registered under, and none means the platform's",
       () =>
@@ -109,7 +109,7 @@ const suite = (
         }).pipe(Effect.provide(layer)),
     );
 
-    // BEH-EA-304: the sealed header object and its names are stored with the endpoint and replaced or cleared whole.
+    // BEH-EA-313: the sealed header object and its names are stored with the endpoint and replaced or cleared whole.
     it.effect(
       "custom headers round-trip, are replaced whole, cleared with null, and left alone when omitted",
       () =>

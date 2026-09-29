@@ -1,4 +1,4 @@
-// BEH-EA-303/BEH-EA-306: `PinnedHttp` connects to the address a caller checked, keeps the registered name as Host and SNI,
+// BEH-EA-312/BEH-EA-315: `PinnedHttp` connects to the address a caller checked, keeps the registered name as Host and SNI,
 // judges the address again, never follows a redirect, and reads a body only when asked, never beyond its cap.
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";

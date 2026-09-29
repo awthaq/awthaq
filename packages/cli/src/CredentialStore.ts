@@ -4,24 +4,32 @@
 // the token `awthaq login` obtained. A token is a bearer credential to a user's account, so the
 // default is never a plaintext dotfile:
 //
-//   1. the OS-native store, first — macOS Keychain (`security`), Linux Secret Service (`secret-tool`);
-//   2. only when none is reachable (a headless CI runner, a container, Windows until a tested backend
-//      lands — see below), `$XDG_CONFIG_HOME/awthaq/credentials.json`, created mode 0600 inside a 0700
-//      directory, with one warning per process saying so;
+//   1. the OS-native store, first — macOS Keychain (`security`), Linux Secret Service (`secret-tool`),
+//      Windows DPAPI through PowerShell (below);
+//   2. only when none is reachable (a headless CI runner, a container, a Windows without PowerShell),
+//      `$XDG_CONFIG_HOME/awthaq/credentials.json`, created mode 0600 inside a 0700 directory, with one
+//      warning per process saying so;
 //   3. `AWTHAQ_TOKEN` (and `AWTHAQ_BASE_URL`) always win over whatever is stored, and are never written
 //      to any store (`withEnvOverride`) — a CI job needs no store at all.
 //
 // The secret never travels on a command line, where a process listing shows it: the Keychain backend
-// drives `security -i` (commands read from stdin) and `secret-tool store` reads the secret from stdin.
-// Only the *lookup* commands carry arguments, and those name the account, not the secret. The token is
-// `Redacted` in memory throughout and this module never prints it.
+// drives `security -i` (commands read from stdin), `secret-tool store` reads the secret from stdin and
+// the Windows backend pipes it to PowerShell's stdin. Only the *lookup* commands carry arguments, and
+// those name the account, not the secret. The token is `Redacted` in memory throughout and this module
+// never prints it.
+//
+// Windows: DPAPI (CurrentUser scope) through `powershell.exe` (`pwsh` if that is absent), which ships with
+// every Windows and needs no module: `ConvertTo-SecureString -AsPlainText | ConvertFrom-SecureString`
+// turns the secret into an opaque blob only this user on this machine can decrypt, kept in
+// `%APPDATA%\awthaq\credential.dpapi`. PowerShell 5.1 and 7 produce and read the same blob. Trade-off,
+// stated plainly: DPAPI protects against another user and against offline disk theft, not against another
+// process running as the same user (the exposure the Keychain has for a process the user approved). Not
+// `cmdkey` (it takes the secret as an argument, visible in a process listing) and not Credential Manager
+// proper (reading a secret back needs a module or P/Invoke); see ADR-EA-027.
 //
 // The backends sit behind a small `Exec` port (spawn a process, optionally feeding stdin), so the
-// suite drives them with a fake `security`/`secret-tool` and never touches a developer's real keychain.
-//
-// Not shipped: a Windows Credential Manager backend. Windows falls back to the file (with the warning)
-// — mode bits do not restrict a file on Windows, so this is the honest limit of the fallback, recorded
-// in the ADR rather than papered over with an untested `cmdkey` call that would put the secret on argv.
+// suite drives them with a fake `security`/`secret-tool`/`powershell.exe` and never touches a
+// developer's real keychain.
 
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -183,8 +191,89 @@ const secretService = (exec: ExecShape): NativeBackend => ({
     .pipe(Effect.asVoid),
 });
 
-const nativeFor = (platform: string, exec: ExecShape): NativeBackend | undefined =>
-  platform === "darwin" ? keychain(exec) : platform === "linux" ? secretService(exec) : undefined;
+/** Where the DPAPI blob lives, and what reads and writes it: the pure logic below never names a Windows API. */
+export interface BlobFile {
+  readonly fs: FileSystem.FileSystem;
+  readonly path: Path.Path;
+  readonly file: string;
+}
+
+const POWERSHELL_FLAGS = ["-NoProfile", "-NonInteractive", "-Command"];
+
+// The secret (or the blob) is read from stdin, never interpolated into the script, so it cannot reach argv.
+// `$ErrorActionPreference = 'Stop'` turns a bad blob into exit 1 instead of an empty success.
+const DPAPI_PROTECT =
+  "$ErrorActionPreference = 'Stop'; try { $p = [Console]::In.ReadToEnd().Trim(); ConvertTo-SecureString -String $p -AsPlainText -Force | ConvertFrom-SecureString } catch { exit 1 }";
+const DPAPI_UNPROTECT =
+  "$ErrorActionPreference = 'Stop'; try { $b = [Console]::In.ReadToEnd().Trim(); $s = ConvertTo-SecureString -String $b; [System.Net.NetworkCredential]::new('', $s).Password } catch { exit 1 }";
+
+/** `powershell.exe` (5.1, on every Windows), else `pwsh` (7); a spawn failure of both is `undefined`. */
+const powershell = (exec: ExecShape, script: string, stdin: string) =>
+  exec
+    .run("powershell.exe", [...POWERSHELL_FLAGS, script], stdin)
+    .pipe(
+      Effect.flatMap((result) =>
+        result === undefined
+          ? exec.run("pwsh", [...POWERSHELL_FLAGS, script], stdin)
+          : Effect.succeed(result),
+      ),
+    );
+
+/**
+ * Windows DPAPI (CurrentUser). The secret is base64 first, so the console code page cannot mangle it,
+ * protected by PowerShell into an opaque blob and stored in a per-user file; `get` hands the blob back to
+ * PowerShell to unprotect. A missing, unreadable or corrupted blob reads as absent.
+ */
+const dpapi = (exec: ExecShape, blob: BlobFile): NativeBackend => ({
+  name: "dpapi",
+  get: Effect.gen(function* () {
+    const stored = yield* blob.fs.readFileString(blob.file).pipe(Effect.option);
+    if (Option.isNone(stored) || stored.value.trim() === "") return Option.none<string>();
+    const result = yield* powershell(exec, DPAPI_UNPROTECT, stored.value.trim());
+    return result !== undefined && result.exitCode === 0 && result.stdout.trim() !== ""
+      ? Option.some(fromBase64(result.stdout))
+      : Option.none<string>();
+  }),
+  set: (secret) =>
+    Effect.gen(function* () {
+      const result = yield* powershell(exec, DPAPI_PROTECT, toBase64(secret));
+      if (result === undefined || result.exitCode !== 0 || result.stdout.trim() === "") {
+        return false;
+      }
+      return yield* blob.fs.makeDirectory(blob.path.dirname(blob.file), { recursive: true }).pipe(
+        Effect.andThen(blob.fs.writeFileString(blob.file, result.stdout.trim())),
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+    }),
+  clear: blob.fs.remove(blob.file, { force: true }).pipe(Effect.ignore),
+});
+
+const nativeFor = (
+  platform: string,
+  exec: ExecShape,
+  blob: BlobFile | undefined,
+): NativeBackend | undefined =>
+  platform === "darwin"
+    ? keychain(exec)
+    : platform === "linux"
+      ? secretService(exec)
+      : platform === "win32" && blob !== undefined
+        ? dpapi(exec, blob)
+        : undefined;
+
+/** `%APPDATA%\awthaq\credential.dpapi`, else under the profile's `AppData\Roaming`. */
+export const dpapiFile = (
+  path: Path.Path,
+  env: { readonly appData?: string; readonly home?: string },
+) =>
+  path.join(
+    env.appData !== undefined && env.appData !== ""
+      ? env.appData
+      : path.join(env.home ?? ".", "AppData", "Roaming"),
+    "awthaq",
+    "credential.dpapi",
+  );
 
 // ---- the file fallback -----------------------------------------------------------
 
@@ -207,6 +296,8 @@ export interface MakeOptions {
   readonly fs: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly file: string;
+  /** Windows only: where the DPAPI blob is kept (`dpapiFile`); without it Windows has no native backend. */
+  readonly dpapiFile?: string | undefined;
 }
 
 /**
@@ -215,7 +306,13 @@ export interface MakeOptions {
  * is found later even if a keychain has since become available.
  */
 export const make = Effect.fnUntraced(function* (options: MakeOptions) {
-  const native = nativeFor(options.platform, options.exec);
+  const native = nativeFor(
+    options.platform,
+    options.exec,
+    options.dpapiFile === undefined
+      ? undefined
+      : { fs: options.fs, path: options.path, file: options.dpapiFile },
+  );
   const warned = yield* Ref.make(false);
 
   const readFile = options.fs.readFileString(options.file).pipe(
@@ -288,11 +385,18 @@ export const layerBase = Layer.effect(
       Config.orElse(() => Config.String("USERPROFILE")),
       Config.option,
     );
+    const appData = yield* Config.String("APPDATA").pipe(Config.option);
     const file = credentialsFile(path, {
       ...(Option.isSome(xdgConfigHome) ? { xdgConfigHome: xdgConfigHome.value } : {}),
       ...(Option.isSome(home) ? { home: home.value } : {}),
     });
-    return CredentialStore.of(yield* make({ platform: process.platform, exec, fs, path, file }));
+    const blob = dpapiFile(path, {
+      ...(Option.isSome(appData) ? { appData: appData.value } : {}),
+      ...(Option.isSome(home) ? { home: home.value } : {}),
+    });
+    return CredentialStore.of(
+      yield* make({ platform: process.platform, exec, fs, path, file, dpapiFile: blob }),
+    );
   }),
 );
 

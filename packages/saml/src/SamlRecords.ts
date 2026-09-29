@@ -6,17 +6,17 @@
 //
 // - `saml_connection` — one organization's own identity provider: the IdP's entity id, its SSO URL, and its
 //   *trust set* (`idpCertificates`: PEM + fingerprint + notBefore/notAfter per certificate, so a key rotation
-//   overlaps: publish the next certificate ahead of its use, retire the old one after). BEH-EA-305..309 add whether
+//   overlaps: publish the next certificate ahead of its use, retire the old one after). BEH-EA-314..309 add whether
 //   AuthnRequests are signed, the IdP's single-logout endpoint, the metadata URL it was imported from and the role
 //   mapping (rules, ceiling, defaults).
 // - `saml_connection_domain` — the email domains that route to a connection, UNIQUE across all connections (a
 //   domain routes to exactly one, like `OrganizationConnectionStore.discover` does for OIDC), so home-realm
 //   discovery ("ada@acme.example" -> Acme's IdP) is one indexed lookup and a domain cannot be claimed twice.
-// - `saml_sp_key` — the service provider's own signing keys, per connection (BEH-EA-305): the certificate (public) and
+// - `saml_sp_key` — the service provider's own signing keys, per connection (BEH-EA-314): the certificate (public) and
 //   the private key SEALED by the `Encryption` port before it reaches this table (a database read discloses nothing that
 //   signs). Several rows are a rotation overlap: the newest signs, every unexpired certificate is published.
 // - `saml_session` — which local sessions a connection's sign-ins created, with the NameID and SessionIndex the IdP knows
-//   them by (BEH-EA-306): what a Single Logout request from the IdP has to find.
+//   them by (BEH-EA-315): what a Single Logout request from the IdP has to find.
 
 import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
@@ -40,7 +40,7 @@ export interface IdpCertificate {
 }
 
 /**
- * BEH-EA-307: one mapping rule. When the assertion carries `attribute` (case-insensitive) with a value equal to `value`
+ * BEH-EA-316: one mapping rule. When the assertion carries `attribute` (case-insensitive) with a value equal to `value`
  * (any value when `value` is absent), the user is given `roles` in the connection's organization. Rules are additive: a
  * user's roles are the union of every rule that matched.
  */
@@ -51,7 +51,7 @@ export interface RoleRule {
 }
 
 /**
- * BEH-EA-307: the connection's role mapping. `ceiling` is the most it can confer (role names of the organization; the
+ * BEH-EA-316: the connection's role mapping. `ceiling` is the most it can confer (role names of the organization; the
  * `canGrant` rule of RRM-001 with the ceiling standing in for the caller), so a connection cannot mint `owner` unless its
  * ceiling holds it. `defaultRoles` are given when no rule matched (empty: a sign-in that matched nothing changes nothing).
  */
@@ -81,19 +81,19 @@ export interface ConnectionRecord {
    * verified. Default `false`: an IdP asserts an identity in ITS directory, not ownership of a local account.
    */
   readonly trustsEmail: boolean;
-  /** BEH-EA-305: sign the AuthnRequests (and Single Logout messages) with the connection's SP key. Default `false`. */
+  /** BEH-EA-314: sign the AuthnRequests (and Single Logout messages) with the connection's SP key. Default `false`. */
   readonly authnRequestsSigned: boolean;
-  /** BEH-EA-306: where this connection's IdP takes logout requests, and by which binding; `None`: no Single Logout. */
+  /** BEH-EA-315: where this connection's IdP takes logout requests, and by which binding; `None`: no Single Logout. */
   readonly sloUrl: Option.Option<string>;
   readonly sloBinding: SloBinding;
-  /** BEH-EA-309: the IdP metadata URL the connection was imported from (what a refresh re-reads). */
+  /** BEH-EA-318: the IdP metadata URL the connection was imported from (what a refresh re-reads). */
   readonly metadataUrl: Option.Option<string>;
   readonly roleMapping: RoleMapping;
   readonly createdAt: DateTime.Utc;
   readonly updatedAt: DateTime.Utc;
 }
 
-/** One SP signing key (BEH-EA-305). `privateKey` is the `Encryption` envelope, never the key. */
+/** One SP signing key (BEH-EA-314). `privateKey` is the `Encryption` envelope, never the key. */
 export interface SpKeyRecord {
   readonly id: string;
   readonly connectionId: string;
@@ -107,7 +107,7 @@ export interface SpKeyRecord {
 
 export type NewSpKey = Omit<SpKeyRecord, "createdAt">;
 
-/** A local session a connection's sign-in created (BEH-EA-306). */
+/** A local session a connection's sign-in created (BEH-EA-315). */
 export interface SamlSessionRecord {
   readonly sessionId: string;
   readonly connectionId: string;
@@ -182,11 +182,11 @@ export interface SamlRecordsShape {
   ) => Effect.Effect<ConnectionRecord, SamlRecordNotFound | SamlDomainTaken>;
   /** Removes the connection with its domains, SP keys and session rows. */
   readonly remove: (id: string) => Effect.Effect<void, SamlRecordNotFound>;
-  // ---- SP signing keys (BEH-EA-305)
+  // ---- SP signing keys (BEH-EA-314)
   readonly saveSpKey: (key: NewSpKey) => Effect.Effect<SpKeyRecord>;
   /** Newest first. */
   readonly listSpKeys: (connectionId: string) => Effect.Effect<ReadonlyArray<SpKeyRecord>>;
-  // ---- sessions created by a connection's sign-ins (BEH-EA-306)
+  // ---- sessions created by a connection's sign-ins (BEH-EA-315)
   readonly saveSession: (session: NewSamlSession) => Effect.Effect<void>;
   /** The sessions of one identity at one connection; with `sessionIndex`, only that one. */
   readonly findSessions: (input: {

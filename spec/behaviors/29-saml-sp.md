@@ -9,7 +9,7 @@
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-09-29): implemented as `@awthaq/saml` over the `XmlSignature` port (SFS-003): the port is generic XML-DSig (the SAML assertion reader is the plugin's), the request is bound to the browser by a state cookie, assertion ids are one-time, and linking by email is a per-connection flag <br> 1.2 (2026-09-29): signed AuthnRequests and the SP signing key at rest (BEH-EA-305), Single Logout in both directions (306), role mapping under a ceiling (307), the `Sso` dispatcher (308) and the administrator's connection CRUD with metadata import (309); IdP-initiated login and encrypted assertions stay refused, as a recorded decision ([ADR-EA-036](../decisions/036-saml-refusals-are-decisions.md)) |
+> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-09-29): implemented as `@awthaq/saml` over the `XmlSignature` port (SFS-003): the port is generic XML-DSig (the SAML assertion reader is the plugin's), the request is bound to the browser by a state cookie, assertion ids are one-time, and linking by email is a per-connection flag <br> 1.2 (2026-09-29): signed AuthnRequests and the SP signing key at rest (BEH-EA-314), Single Logout in both directions (306), role mapping under a ceiling (307), the `Sso` dispatcher (308) and the administrator's connection CRUD with metadata import (309); IdP-initiated login and encrypted assertions stay refused, as a recorded decision ([ADR-EA-036](../decisions/036-saml-refusals-are-decisions.md)) |
 ---
 
 > `@awthaq/saml` implements this ([MOD-EA-010](../models/10-saml.md)). It was written first on purpose — SAML's failure modes are silent signature bypasses, so the checks and their order were fixed before an implementation could drift — and every rule below has a negative test, including the XML signature-wrapping (XSW) corpus from the SAML security literature (`packages/saml/test/XmlSignatureNode.test.ts`). The signature step is the `XmlSignature` port (`@awthaq/ports`), implemented over the maintained `xml-crypto` library (Node adapter in `@awthaq/saml`); the plugin reads the assertion ONLY from the signed bytes that port returns.
@@ -162,7 +162,7 @@ The IdP asserts an identity *within its own directory*; treating its email attri
 
 _Previous: [BEH-EA-244](29-saml-sp.md#beh-ea-244-inresponseto-matches-a-stored-single-consume-request-id) | Next: [BEH-EA-246](30-scim.md#beh-ea-246-a-scim-connection-authenticates-by-a-hashed-revocable-bearer-token-and-scopes-everything-it-reads)_
 
-## BEH-EA-305: A connection can sign its AuthnRequests with an SP key that is stored sealed, and never falls back to unsigned
+## BEH-EA-314: A connection can sign its AuthnRequests with an SP key that is stored sealed, and never falls back to unsigned
 
 ```text
 REQUIREMENT: A connection with `authnRequestsSigned` MUST send every AuthnRequest
@@ -186,11 +186,11 @@ REQUIREMENT: A connection with `authnRequestsSigned` MUST send every AuthnReques
              `WantAuthnRequestsSigned="true"` makes the flag default on.
 ```
 
-The redirect binding forbids an enveloped XML signature, so the signature covers the query octets; the same key signs Single Logout messages (BEH-EA-306) when the connection has one. The negative tests are the verifier's side of it: a signature that fails after any change to the message, under another key, or under a downgraded `SigAlg`.
+The redirect binding forbids an enveloped XML signature, so the signature covers the query octets; the same key signs Single Logout messages (BEH-EA-315) when the connection has one. The negative tests are the verifier's side of it: a signature that fails after any change to the message, under another key, or under a downgraded `SigAlg`.
 
-_Previous: [BEH-EA-245](29-saml-sp.md#beh-ea-245-the-nameid-links-to-an-account-through-the-connection-never-by-email-alone) | Next: [BEH-EA-306](29-saml-sp.md#beh-ea-306-single-logout-ends-sessions-in-both-directions-over-the-redirect-and-post-bindings-verified-like-an-assertion)_
+_Previous: [BEH-EA-245](29-saml-sp.md#beh-ea-245-the-nameid-links-to-an-account-through-the-connection-never-by-email-alone) | Next: [BEH-EA-315](29-saml-sp.md#beh-ea-315-single-logout-ends-sessions-in-both-directions-over-the-redirect-and-post-bindings-verified-like-an-assertion)_
 
-## BEH-EA-306: Single Logout ends sessions in both directions over the Redirect and POST bindings, verified like an assertion
+## BEH-EA-315: Single Logout ends sessions in both directions over the Redirect and POST bindings, verified like an assertion
 
 ```text
 REQUIREMENT: Each connection MUST record, per sign-in, the NameID and SessionIndex
@@ -229,9 +229,9 @@ REQUIREMENT: Each connection MUST record, per sign-in, the NameID and SessionInd
 
 A logout endpoint that accepted unsigned messages would be a way for anyone to end anyone's sessions; freshness and one-time ids are what keep a signed capture from being replayed at leisure.
 
-_Previous: [BEH-EA-305](29-saml-sp.md#beh-ea-305-a-connection-can-sign-its-authnrequests-with-an-sp-key-that-is-stored-sealed-and-never-falls-back-to-unsigned) | Next: [BEH-EA-307](29-saml-sp.md#beh-ea-307-an-assertions-groups-map-to-organization-roles-under-a-ceiling-guarded-by-the-cangrant-rule)_
+_Previous: [BEH-EA-314](29-saml-sp.md#beh-ea-314-a-connection-can-sign-its-authnrequests-with-an-sp-key-that-is-stored-sealed-and-never-falls-back-to-unsigned) | Next: [BEH-EA-316](29-saml-sp.md#beh-ea-316-an-assertions-groups-map-to-organization-roles-under-a-ceiling-guarded-by-the-cangrant-rule)_
 
-## BEH-EA-307: An assertion's groups map to organization roles under a ceiling, guarded by the canGrant rule
+## BEH-EA-316: An assertion's groups map to organization roles under a ceiling, guarded by the canGrant rule
 
 ```text
 REQUIREMENT: A connection MAY carry a role mapping: rules (`{ attribute, value?,
@@ -258,9 +258,9 @@ REQUIREMENT: A connection MAY carry a role mapping: rules (`{ attribute, value?,
 
 The IdP proves who the user is, which stays true when a mapping is stale; what it may confer is bounded, never a reason to lock a person out. The ceiling is the caller-less counterpart of the rule every role-assignment path already obeys ([BEH-EA-288](35-organization.md#beh-ea-288-a-role-can-only-be-conferred-by-someone-who-holds-everything-it-grants)): nobody, and no identity provider, gives what it does not hold.
 
-_Previous: [BEH-EA-306](29-saml-sp.md#beh-ea-306-single-logout-ends-sessions-in-both-directions-over-the-redirect-and-post-bindings-verified-like-an-assertion) | Next: [BEH-EA-308](29-saml-sp.md#beh-ea-308-the-sso-dispatcher-routes-an-email-domain-across-oidc-and-saml-connections-to-the-owning-plugins-login-url)_
+_Previous: [BEH-EA-315](29-saml-sp.md#beh-ea-315-single-logout-ends-sessions-in-both-directions-over-the-redirect-and-post-bindings-verified-like-an-assertion) | Next: [BEH-EA-317](29-saml-sp.md#beh-ea-317-the-sso-dispatcher-routes-an-email-domain-across-oidc-and-saml-connections-to-the-owning-plugins-login-url)_
 
-## BEH-EA-308: The Sso dispatcher routes an email domain across OIDC and SAML connections to the owning plugin's login URL
+## BEH-EA-317: The Sso dispatcher routes an email domain across OIDC and SAML connections to the owning plugin's login URL
 
 ```text
 REQUIREMENT: `POST /auth/sso/start { email | organizationId, callbackURL? }` MUST
@@ -279,9 +279,9 @@ REQUIREMENT: `POST /auth/sso/start { email | organizationId, callbackURL? }` MUS
 
 The dispatcher is a router, not a third protocol: the state cookie, the redirect and every check stay the owning plugin's ([ADR-EA-023](../decisions/023-enterprise-federation-packages.md) Decision 4).
 
-_Previous: [BEH-EA-307](29-saml-sp.md#beh-ea-307-an-assertions-groups-map-to-organization-roles-under-a-ceiling-guarded-by-the-cangrant-rule) | Next: [BEH-EA-309](29-saml-sp.md#beh-ea-309-the-administrator-manages-connections-fail-closed-tenant-scoped-importing-idp-metadata-with-pinned-certificates)_
+_Previous: [BEH-EA-316](29-saml-sp.md#beh-ea-316-an-assertions-groups-map-to-organization-roles-under-a-ceiling-guarded-by-the-cangrant-rule) | Next: [BEH-EA-318](29-saml-sp.md#beh-ea-318-the-administrator-manages-connections-fail-closed-tenant-scoped-importing-idp-metadata-with-pinned-certificates)_
 
-## BEH-EA-309: The administrator manages connections fail-closed, tenant-scoped, importing IdP metadata with pinned certificates
+## BEH-EA-318: The administrator manages connections fail-closed, tenant-scoped, importing IdP metadata with pinned certificates
 
 ```text
 REQUIREMENT: The `saml.admin` group MUST be admin-tier (BEH-EA-071), behind
@@ -298,7 +298,7 @@ REQUIREMENT: The `saml.admin` group MUST be admin-tier (BEH-EA-071), behind
              A connection MAY be described by hand, by pasted IdP metadata XML, or
              by a metadata URL; the URL MUST pass `OutboundUrl`, be resolved once
              with every answer public and fetched through the pinned connection
-             (BEH-EA-303), never follow a redirect, read at most `maxMetadataBytes`
+             (BEH-EA-312), never follow a redirect, read at most `maxMetadataBytes`
              within `metadataTimeout`, and fail as a CLASS (`invalidUrl`,
              `blocked`, `timeout`, `connect`, `tooLarge`, `status`), never text from
              the far end. The certificates a metadata document lists MUST be
@@ -313,4 +313,4 @@ REQUIREMENT: The `saml.admin` group MUST be admin-tier (BEH-EA-071), behind
 
 Importing metadata is trusting the channel it arrived by, which is why the channel is guarded as hard as a webhook URL and why what is pinned afterwards is the fingerprint, not the document.
 
-_Previous: [BEH-EA-308](29-saml-sp.md#beh-ea-308-the-sso-dispatcher-routes-an-email-domain-across-oidc-and-saml-connections-to-the-owning-plugins-login-url)_
+_Previous: [BEH-EA-317](29-saml-sp.md#beh-ea-317-the-sso-dispatcher-routes-an-email-domain-across-oidc-and-saml-connections-to-the-owning-plugins-login-url)_

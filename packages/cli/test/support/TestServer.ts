@@ -4,11 +4,26 @@
 // speak to it exactly as they speak to a deployed server — through the generated `HttpApiClient`
 // with `Authorization: Bearer` — so what the suite proves is the wire, not a stub.
 import { AuthCore } from "@awthaq/api";
-import { Accounts, DataExport, Erasure, Sessions, Users, Verification } from "@awthaq/core";
-import { RateLimiter, SqlTransaction } from "@awthaq/ports";
+import {
+  Accounts,
+  DataExport,
+  Erasure,
+  RateLimits,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
+import {
+  DeviceAuthorization,
+  DeviceAuthorizationApi,
+  DeviceClientRecords,
+  DeviceGrantRecords,
+} from "@awthaq/device-authorization";
+import { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
@@ -32,6 +47,9 @@ const Base = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
 
 const Middleware = Layer.mergeAll(
   Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
+  Authentication.OptionalAuthenticationLive.pipe(
+    Layer.provide(Authentication.PrincipalResolverLive),
+  ),
   Csrf.CsrfProtectionLive.pipe(
     Layer.provide(
       Layer.succeed(Csrf.CsrfConfig, {
@@ -44,37 +62,75 @@ const Middleware = Layer.mergeAll(
 
 const Services = Middleware.pipe(Layer.provideMerge(Base));
 
+/** The device authorization plugin over in-memory records, on top of the same users and sessions. */
+const DeviceServices = DeviceAuthorization.DeviceAuthorization.layer.pipe(
+  Layer.provideMerge(DeviceAuthorization.DeviceAuthorizationHooksLive),
+  Layer.provideMerge(
+    Layer.mergeAll(DeviceGrantRecords.layerMemory, DeviceClientRecords.layerMemory),
+  ),
+  Layer.provideMerge(RateLimits.layer),
+  Layer.provideMerge(ClientAddress.layerDirect),
+  Layer.provideMerge(DeviceAuthorization.config({ verificationUri: "https://app.test/device" })),
+  Layer.provideMerge(Services),
+);
+
 /**
  * Starts the server (in the caller's scope — provide `NodeHttpServer.layerTest` around the whole
  * test, as the body-limit suite does, or the socket closes with the layer) and returns its base URL
  * plus a way to mint a real session token.
  */
-export const serveAuth = Effect.gen(function* () {
-  const services = yield* Layer.build(Services);
-  const sessions = yield* Sessions.Sessions.pipe(Effect.provide(Layer.succeedContext(services)));
-  const users = yield* Users.Users.pipe(Effect.provide(Layer.succeedContext(services)));
-  yield* AuthHttp.routes(AuthCore.AuthCoreApi).pipe(
-    Layer.provide(Session.SessionHandlers),
-    Layer.provide(Account.AccountHandlers),
-    Layer.provide(Layer.succeedContext(services)),
-    HttpRouter.serve,
-    Layer.build,
-  );
-  const server = yield* HttpServer.HttpServer;
-  if (!NetAddress.isInetAddress(server.address)) {
-    return yield* Effect.die("the test server did not bind a TCP port");
-  }
-  const baseUrl = `http://127.0.0.1:${server.address.port}`;
-  /** A fresh user with one live session; the returned token is what `AWTHAQ_TOKEN` / `login --token` carries. */
-  const issue = (email: string) =>
-    Effect.gen(function* () {
-      const user = yield* users
-        .create({ identity: { _tag: "Email", email }, name: "Test" })
-        .pipe(Effect.orDie);
-      const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
-      return { userId: user.id, sessionId: issued.session.id, token: Redacted.value(issued.token) };
-    });
-  /** Revokes every session of the user server-side, as an admin or another device would. */
-  const revokeAll = (userId: Users.UserId) => sessions.revokeAll(userId, "userRevoked");
-  return { baseUrl, issue, revokeAll };
-});
+export const serveAuth = (options?: { readonly device?: boolean }) =>
+  Effect.gen(function* () {
+    const withDevice = options?.device !== false;
+    const services = yield* Layer.build(DeviceServices);
+    const context = Layer.succeedContext(services);
+    const sessions = yield* Sessions.Sessions.pipe(Effect.provide(context));
+    const users = yield* Users.Users.pipe(Effect.provide(context));
+    const plugin = yield* DeviceAuthorization.DeviceAuthorization.pipe(Effect.provide(context));
+    const core = AuthHttp.routes(AuthCore.AuthCoreApi).pipe(
+      Layer.provide(Session.SessionHandlers),
+      Layer.provide(Account.AccountHandlers),
+    );
+    const device = AuthHttp.routes(DeviceAuthorizationApi.DeviceAuthorizationApi);
+    // One router for both contracts: a server without the plugin answers the device routes with a 404.
+    yield* Layer.mergeAll(core, withDevice ? device : Layer.empty).pipe(
+      Layer.provide(context),
+      HttpRouter.serve,
+      Layer.build,
+    );
+    const server = yield* HttpServer.HttpServer;
+    if (!NetAddress.isInetAddress(server.address)) {
+      return yield* Effect.die("the test server did not bind a TCP port");
+    }
+    const baseUrl = `http://127.0.0.1:${server.address.port}`;
+    /** A fresh user with one live session; the returned token is what `AWTHAQ_TOKEN` / `login --token` carries. */
+    const issue = (email: string) =>
+      Effect.gen(function* () {
+        const user = yield* users
+          .create({ identity: { _tag: "Email", email }, name: "Test" })
+          .pipe(Effect.orDie);
+        const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        return {
+          userId: user.id,
+          sessionId: issued.session.id,
+          token: Redacted.value(issued.token),
+        };
+      });
+    /** Revokes every session of the user server-side, as an admin or another device would. */
+    const revokeAll = (userId: Users.UserId) => sessions.revokeAll(userId, "userRevoked");
+    /**
+     * The person on the second device: a signed-in user opens the verification page for `userCode` (which
+     * claims it) and approves or denies it — through the plugin's own service, as the wire's handlers do.
+     */
+    const decide = (userCode: string, email: string, decision: "approve" | "deny" = "approve") =>
+      Effect.gen(function* () {
+        const { userId, sessionId } = yield* issue(email);
+        const caller = { userId, sessionId, impersonated: false, amr: ["pwd" as const] };
+        const source = { userCode, ip: "198.51.100.20" };
+        yield* plugin.verify(source, Option.some(caller)).pipe(Effect.orDie);
+        return yield* (
+          decision === "approve" ? plugin.approve(source, caller) : plugin.deny(source, caller)
+        ).pipe(Effect.orDie);
+      });
+    return { baseUrl, issue, revokeAll, decide, plugin };
+  });

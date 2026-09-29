@@ -1,4 +1,4 @@
-// BEH-EA-305 (spec/behaviors/29-saml-sp.md): signed AuthnRequests. A connection that signs sends a redirect-binding request
+// BEH-EA-314 (spec/behaviors/29-saml-sp.md): signed AuthnRequests. A connection that signs sends a redirect-binding request
 // whose query signature verifies under the SP certificate its metadata publishes, and under nothing else; the private key is
 // stored sealed (Encryption, AAD naming the key), the newest unexpired key signs while every unexpired certificate is
 // published, and a connection that says it signs NEVER sends an unsigned request, whatever happens to its key.

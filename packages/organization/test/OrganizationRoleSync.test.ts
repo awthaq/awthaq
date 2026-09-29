@@ -1,4 +1,4 @@
-// BEH-EA-307: `checkRoleCeiling` and `syncMemberRoles`, RRM-001's `canGrant` rule with a role ceiling standing in for the
+// BEH-EA-316: `checkRoleCeiling` and `syncMemberRoles`, RRM-001's `canGrant` rule with a role ceiling standing in for the
 // caller. A source with no caller (an identity provider's role mapping) can confer only what its ceiling holds, never
 // reshapes a member who out-privileges it, and never demotes the last owner.
 import { Api } from "@awthaq/api";

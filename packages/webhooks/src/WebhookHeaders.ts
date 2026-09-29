@@ -1,6 +1,6 @@
 // @awthaq/webhooks — WebhookHeaders
 //
-// BEH-EA-304: per-endpoint custom request headers, for the receivers that want more than a signature (an
+// BEH-EA-313: per-endpoint custom request headers, for the receivers that want more than a signature (an
 // `Authorization` token, an API key, a routing header). Their VALUES are credentials as far as this package is
 // concerned: they are sealed with the `Encryption` port like the signing secret (AAD naming endpoint and field), never
 // returned by the API (only the names are), and never logged. What an administrator may set is bounded here so a custom

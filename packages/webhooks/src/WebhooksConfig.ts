@@ -54,7 +54,7 @@ export interface WebhooksConfigShape {
   /** Development and test only: allow `http:` and private/loopback endpoint URLs. Never in production. */
   readonly allowPrivateTargets: boolean;
   /**
-   * BEH-EA-300: an endpoint registered outside any tenant scope (the platform's own) also hears every tenant's
+   * BEH-EA-309: an endpoint registered outside any tenant scope (the platform's own) also hears every tenant's
    * events. Off by default: a tenant's events reach that tenant's endpoints, and the platform's endpoints hear only
    * the events that belong to no tenant. Turn it on for an operator-level SIEM or audit feed.
    */

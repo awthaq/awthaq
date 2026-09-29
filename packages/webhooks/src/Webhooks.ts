@@ -112,7 +112,7 @@ export interface WebhooksShape {
     Gate | WebhooksApi.WebhookDeliveryNotFound | WebhooksApi.WebhookDeliveryNotRetryable
   >;
   /**
-   * BEH-EA-301: queues a signed synthetic `webhook.test` event for the endpoint and returns its (pending) delivery
+   * BEH-EA-310: queues a signed synthetic `webhook.test` event for the endpoint and returns its (pending) delivery
    * row; the worker sends it like any other delivery, once, and the outcome is read from the delivery log.
    */
   readonly testEndpoint: (
@@ -263,7 +263,7 @@ const webhooksMigrations: Migrations.Migrations = [
     }),
   },
   {
-    // BEH-EA-300: an endpoint belongs to a tenant (the organization the ambient `TenantContext` named when it was
+    // BEH-EA-309: an endpoint belongs to a tenant (the organization the ambient `TenantContext` named when it was
     // registered); NULL is the platform's own. Existing rows are platform endpoints, which is what they always were.
     name: "add_webhooks_endpoint_tenant",
     up: Effect.gen(function* () {
@@ -273,7 +273,7 @@ const webhooksMigrations: Migrations.Migrations = [
     }),
   },
   {
-    // BEH-EA-304: the sealed custom-header object, and its (not secret) names for the API to show.
+    // BEH-EA-313: the sealed custom-header object, and its (not secret) names for the API to show.
     name: "add_webhooks_endpoint_headers",
     up: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -337,6 +337,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
   config: [ConfigDescriptor.make(WebhooksConfig.WebhooksConfig)],
 }) {
   static readonly layer = AuthPlugin.layer(Webhooks, {
+    ports: [Encryption.Encryption, HostResolver.HostResolver, RateLimiter.RateLimiter],
     handlers: HttpApiBuilder.group(
       WebhooksApi.WebhooksApi,
       "webhooks.admin",
@@ -471,7 +472,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
       });
 
       /**
-       * BEH-EA-300: administration is scoped to the ambient tenant. An endpoint of another tenant (or of the
+       * BEH-EA-309: administration is scoped to the ambient tenant. An endpoint of another tenant (or of the
        * platform, from inside a tenant, and the reverse) is answered exactly like an id that does not exist.
        */
       const inScope = (record: WebhookRecords.EndpointRecord) =>
@@ -527,7 +528,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           );
         }
       });
-      /** BEH-EA-304: the rules for custom headers, answered like the URL's. */
+      /** BEH-EA-313: the rules for custom headers, answered like the URL's. */
       const validateHeaders = (headers: Readonly<Record<string, string>>) => {
         const refused = WebhookHeaders.problem(headers);
         return Option.isSome(refused)
@@ -741,7 +742,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           const found = yield* records.findDelivery(deliveryId);
           if (Option.isNone(found))
             return yield* Effect.fail(new WebhooksApi.WebhookDeliveryNotFound());
-          // BEH-EA-300: a delivery is visible through its endpoint's tenant only.
+          // BEH-EA-309: a delivery is visible through its endpoint's tenant only.
           yield* existing(found.value.endpointId).pipe(
             Effect.catchTag("WebhookEndpointNotFound", () =>
               Effect.fail(new WebhooksApi.WebhookDeliveryNotFound()),

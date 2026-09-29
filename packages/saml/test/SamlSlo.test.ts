@@ -1,4 +1,4 @@
-// BEH-EA-306 (spec/behaviors/29-saml-sp.md): SAML Single Logout, both directions, over the Redirect and POST bindings, with the
+// BEH-EA-315 (spec/behaviors/29-saml-sp.md): SAML Single Logout, both directions, over the Redirect and POST bindings, with the
 // same signature verification as the ACS. The invariant asserted throughout: every refusal is the SAME `SamlLogoutRejected` and
 // changes nothing (no session ended, no state consumed by a message that failed), and a valid message ends exactly the sessions
 // it names, at the connection it came from, with reason `federatedLogout`.

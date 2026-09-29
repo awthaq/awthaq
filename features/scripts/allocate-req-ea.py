@@ -107,13 +107,13 @@ SOURCE_MD = {
     "32-magic-link.feature": "32-magic-link.md",
     "33-email-otp.feature": "33-email-otp.md",
     "34-webhooks.feature": "34-webhooks.md",
+    "28-device-authorization.feature": "37-device-authorization.md",
 }
 
 # DAG-007: a feature for a plugin that has no BEH-EA range yet traces to its model
-# (spec/models/) through `@MOD-EA-NNN` Rule tags instead of `@BEH-EA-NNN`.
-SOURCE_MODEL = {
-    "28-device-authorization.feature": "13-device-authorization.md",
-}
+# (spec/models/) through `@MOD-EA-NNN` Rule tags instead of `@BEH-EA-NNN`. None does today
+# (device authorization gained BEH-EA-299 to 317 with its plugin); the hook stays for the next one.
+SOURCE_MODEL: dict[str, str] = {}
 
 RULE_RE = re.compile(r'^\s*Rule:')
 BEH_TAG_RE = re.compile(r'@(?:BEH|MOD)-EA-(\d{3})')

@@ -16,7 +16,7 @@
 
 ## Context
 
-When `@awthaq/saml` was built, five things were left off its list: signed AuthnRequests, Single Logout, a connection CRUD surface, role mapping and the `Sso` dispatcher ([BEH-EA-305 through 309](../behaviors/29-saml-sp.md)). All five are built. Two more items on the same list are not "not yet": they are refusals, and a refusal is a decision that should be written down with its reason, so nobody builds it later by accident and nobody wonders whether it was forgotten.
+When `@awthaq/saml` was built, five things were left off its list: signed AuthnRequests, Single Logout, a connection CRUD surface, role mapping and the `Sso` dispatcher ([BEH-EA-314 through 318](../behaviors/29-saml-sp.md)). All five are built. Two more items on the same list are not "not yet": they are refusals, and a refusal is a decision that should be written down with its reason, so nobody builds it later by accident and nobody wonders whether it was forgotten.
 
 ## Decision
 

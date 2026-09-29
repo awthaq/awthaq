@@ -1,6 +1,6 @@
 // @awthaq/saml — SamlMetadataFetcher
 //
-// BEH-EA-309: fetching an IdP's metadata document from a URL an administrator supplied. That is an SSRF surface exactly like a
+// BEH-EA-318: fetching an IdP's metadata document from a URL an administrator supplied. That is an SSRF surface exactly like a
 // webhook endpoint, so it gets the same defences, in the same order: the URL passes `OutboundUrl` (https, no credentials, no
 // private or internal name), its host is resolved ONCE (`HostResolver.pin`) with every answer required to be public, and the
 // request connects to that checked address with the original Host/SNI (`PinnedHttp`, `@awthaq/ports`), so a name that flips

@@ -1,4 +1,4 @@
-// BEH-EA-304 (spec/behaviors/34-webhooks.md): per-endpoint custom request headers. Values are credentials: sealed with
+// BEH-EA-313 (spec/behaviors/34-webhooks.md): per-endpoint custom request headers. Values are credentials: sealed with
 // `Encryption` (AAD naming endpoint and field), never returned (only names), and bounded so a custom header can never
 // replace what the delivery itself says.
 import { Encryption } from "@awthaq/ports";

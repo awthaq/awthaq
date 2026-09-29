@@ -49,7 +49,7 @@ import { Api } from "@awthaq/api";
 import { ClientAddress, RateLimiter } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
-import type * as Duration from "effect/Duration";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
@@ -176,6 +176,94 @@ export const rule = (
   Layer.effectDiscard(
     Effect.flatMap(RateLimitsRegistry, (registry) => registry.register(owner, input)),
   );
+
+/**
+ * PV-241/BEH-EA-111: registers every rule `owner` declared statically (`AuthPlugin.Service`'s
+ * `rateLimits`), so a plugin whose rules are all declared keeps one list, not two. `key` chooses each
+ * rule's bucket strategy (`"ip"` and `"principal"` dimensions default to the built-ins; an
+ * `identity`/`custom` rule has no strategy to guess, so it takes `key`'s answer or an opaque
+ * per-rule key); `tune` lets a config override a declared default (a limit, a window). The registry
+ * reports the tuned values, the manifest the declared ones.
+ */
+export const registerDeclared = (
+  owner: AuthPlugin.Any,
+  options?: {
+    readonly key?: (rule: AuthPlugin.RateLimitDeclaration) => RateLimitKey | undefined;
+    readonly tune?: (
+      rule: AuthPlugin.RateLimitDeclaration,
+    ) => Partial<Pick<RuleInput, "limit" | "window">> | undefined;
+  },
+) =>
+  Effect.flatMap(RateLimitsRegistry, (registry) =>
+    Effect.forEach(
+      owner.rateLimits ?? [],
+      (rule) =>
+        registry.register(owner, {
+          group: rule.group,
+          endpoint: rule.endpoint,
+          key:
+            options?.key?.(rule) ??
+            (rule.dimension === "ip" || rule.dimension === "principal"
+              ? rule.dimension
+              : () => `${rule.group}:${rule.name}`),
+          limit: rule.limit,
+          window: rule.window,
+          ...options?.tune?.(rule),
+        }),
+      { discard: true },
+    ),
+  );
+
+/** PV-241: how a plugin's runtime registrations differ from its declaration (all empty when they agree). */
+export interface DeclarationDrift {
+  /** Registered (group, endpoint) pairs no declaration names. */
+  readonly undeclared: ReadonlyArray<string>;
+  /** Declared (group, endpoint) pairs nothing registered. */
+  readonly unregistered: ReadonlyArray<string>;
+  /** Declared and registered, but with different limits or windows (a config-tuned plugin should compare under its defaults). */
+  readonly mismatched: ReadonlyArray<string>;
+}
+
+const addressOf = (rule: { readonly group: string; readonly endpoint: string }) =>
+  `${rule.group}.${rule.endpoint}`;
+
+interface Sized {
+  readonly limit: number;
+  readonly window: Duration.Input;
+}
+
+const shapesOf = (rules: ReadonlyArray<Sized>) =>
+  rules
+    .map((rule) => `${rule.limit}/${Duration.toMillis(Duration.fromInputUnsafe(rule.window))}`)
+    .toSorted()
+    .join(",");
+
+/**
+ * PV-241/BEH-EA-111: the consistency check between a plugin's static `rateLimits` declaration and what
+ * it actually registered (`RateLimitsRegistry.registered`), by (group, endpoint) and, per pair, the
+ * multiset of (limit, window). A plugin's test asserts all three lists empty, so the declaration
+ * `plugin list --rules` prints cannot drift from the rules enforced.
+ */
+export const declarationDrift = (
+  owner: AuthPlugin.Any,
+  registered: ReadonlyArray<RegisteredRule>,
+): DeclarationDrift => {
+  const declared = owner.rateLimits ?? [];
+  const mine = registered.filter((rule) => rule.plugin === owner.id);
+  const declaredAddresses = new Set(declared.map(addressOf));
+  const registeredAddresses = new Set(mine.map(addressOf));
+  return {
+    undeclared: [...registeredAddresses].filter((address) => !declaredAddresses.has(address)),
+    unregistered: [...declaredAddresses].filter((address) => !registeredAddresses.has(address)),
+    mismatched: [...declaredAddresses]
+      .filter((address) => registeredAddresses.has(address))
+      .filter(
+        (address) =>
+          shapesOf(declared.filter((rule) => addressOf(rule) === address)) !==
+          shapesOf(mine.filter((rule) => addressOf(rule) === address)),
+      ),
+  };
+};
 
 /** EOTS-007: the metric every breach increments, tagged with the rule that fired (never a key). */
 export const exceededCounter = Metric.counter("awthaq.ratelimit.exceeded", {

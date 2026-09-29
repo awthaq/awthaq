@@ -260,6 +260,9 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@awthaq/device-authorization':
+        specifier: workspace:*
+        version: link:../packages/device-authorization
       '@awthaq/jwt':
         specifier: workspace:*
         version: link:../packages/jwt
@@ -455,6 +458,9 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
+      '@awthaq/device-authorization':
+        specifier: workspace:*
+        version: link:../device-authorization
       '@awthaq/migrate-better-auth':
         specifier: workspace:*
         version: link:../migrate-better-auth
@@ -554,6 +560,46 @@ importers:
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.0(@types/node@22.20.2)(@vitest/coverage-v8@5.0.0)(happy-dom@20.14.5)(vite@8.3.0(@types/node@22.20.2)(jiti@2.7.0)(yaml@2.9.0))
+
+  packages/device-authorization:
+    dependencies:
+      '@awthaq/api':
+        specifier: workspace:*
+        version: link:../api
+      '@awthaq/core':
+        specifier: workspace:*
+        version: link:../core
+      '@awthaq/ports':
+        specifier: workspace:*
+        version: link:../ports
+      '@awthaq/server':
+        specifier: workspace:*
+        version: link:../server
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116
+    devDependencies:
+      '@awthaq/test':
+        specifier: workspace:*
+        version: link:../test
+      '@awthaq/two-factor':
+        specifier: workspace:*
+        version: link:../two-factor
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)

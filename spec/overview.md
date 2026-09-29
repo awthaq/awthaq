@@ -52,7 +52,7 @@ The system is organized into seven strata plus client, tooling, and plugin packa
 | 7 Composition | (application code) | `Auth.make([...])` and the application's own `Layer.provide` stack. |
 | client | `@awthaq/client`, `@awthaq/react`, `@awthaq/web`, `@awthaq/next` | `HttpApiClient` bindings, reactive atoms, provider glue, framework adapters (`@awthaq/web` is the framework-neutral core; `@awthaq/next` is the Next adapter over it). Headless by design: no drop-in sign-in/sign-up/user-button/organization-switcher components, ever — apps build their own UI against typed contract errors and atoms. |
 | tools | `@awthaq/test`, `@awthaq/cli` | `TestAuth`, `runPluginContractTests`, the redaction guard; the `awthaq` command line (`doctor`, `config list`, `plugin list`, `routes`, `migration`, `openapi`, `seed admin`, `import`, `login`). |
-| plugins | `@awthaq/password`, `oauth`, `passkey`, `jwt`, `api-key`, `organization`, `roles`, `admin`, `scim` (shipped); `magic-link`, `two-factor` (placeholders); `saml` (specified only) | One `AuthPlugin.Service` class each. |
+| plugins | `@awthaq/password`, `oauth`, `passkey`, `jwt`, `api-key`, `organization`, `roles`, `admin`, `scim`, `device-authorization` (shipped); `magic-link`, `two-factor` (placeholders); `saml` (specified only) | One `AuthPlugin.Service` class each. |
 | migration | `@awthaq/migrate-auth0`, `@awthaq/migrate-firebase`, `@awthaq/migrate-better-auth` | Verify a foreign password hash on first sign-in, or bridge a still-live foreign session, so a cutover needs no mass reset. |
 
 ## Public API surface
@@ -131,7 +131,7 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 | `LegacySessionBridge` | `Context.Reference` | default resolves nothing; `@awthaq/migrate-better-auth` provides the real one |
 | `WebCrypto` | Layer | `layer`, the `Crypto` service over `globalThis.crypto` for edge runtimes |
 | `XmlSignature` | `Context.Service` | `layerUnavailable` (refuses everything: a placeholder that makes a missing adapter a failure); the Node adapter over `xml-crypto` is `@awthaq/saml`'s `XmlSignatureNode.layer` ([ADR-EA-023](decisions/023-enterprise-federation-packages.md)) |
-| `HostResolver` | `Context.Service` | `layerNode` (`node:dns`, loaded lazily), `layerStatic(table)`; `pin(url)` resolves once, requires every answer public and returns the address to connect to (BEH-EA-303), `refusal(url)` is its refusal half |
+| `HostResolver` | `Context.Service` | `layerNode` (`node:dns`, loaded lazily), `layerStatic(table)`; `pin(url)` resolves once, requires every answer public and returns the address to connect to (BEH-EA-312), `refusal(url)` is its refusal half |
 | `OutboundUrl` | helpers | `problem(field, url, options?)`, the SSRF floor for a URL an administrator supplies (https, no credentials, no private/loopback/link-local/reserved address or internal name; IPv6 parsed); `isPublicAddress`, `isIpLiteral` |
 | `PinnedHttp` | helpers | `send(request)` connects to an address `HostResolver.pin` judged, with the URL's own name as Host and SNI, judging the address again, no redirect, a body only up to a cap (webhooks, IdP metadata import); `pinnedRequestOptions` |
 | `Hmac`, `RefreshingCache`, `Defects`, `Tenant` | helpers | constant-time comparison and HMAC, a single-flight TTL cache, tagged defect classes, the ambient `TenantContext` |

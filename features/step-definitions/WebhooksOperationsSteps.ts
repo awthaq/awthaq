@@ -1,4 +1,4 @@
-// The steps of 34-webhooks.feature's BEH-EA-299 through BEH-EA-303 rules: the tenant on the event envelope, per-tenant
+// The steps of 34-webhooks.feature's BEH-EA-308 through BEH-EA-312 rules: the tenant on the event envelope, per-tenant
 // endpoints, the test ping, the audit events of administrative mutations, and connection pinning. They share the World
 // of `WebhooksSteps.ts` (the real in-memory core, records and plugin service, a programmable receiver) and add a
 // scriptable resolver and a recording transport, so what a scenario asserts about the pin is what the transport was asked
@@ -67,7 +67,7 @@ const isTransportRequest = (value: unknown): value is WebhookTransport.Transport
   isRecord(value) && typeof value["url"] === "string" && isRecord(value["headers"]);
 
 export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }) => {
-  // ---- BEH-EA-299: the tenant on the envelope ----
+  // ---- BEH-EA-308: the tenant on the envelope ----
 
   When(
     "a {string} event for user {string} is published inside tenant {string} and relayed from the audit log",
@@ -135,7 +135,7 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     },
   );
 
-  // ---- BEH-EA-300: endpoints belong to a tenant ----
+  // ---- BEH-EA-309: endpoints belong to a tenant ----
 
   Given("the plugin is configured to let platform endpoints hear every tenant", function* () {
     yield* configure({ platformEndpointsHearAllTenants: true });
@@ -279,7 +279,7 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     );
   });
 
-  // ---- BEH-EA-301: the test ping ----
+  // ---- BEH-EA-310: the test ping ----
 
   When("the administrator sends a test ping to {string}", function* (name: string) {
     const world = yield* World;
@@ -343,7 +343,7 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     assert.equal(yield* world.out.getAs("pingTag", isString), tag);
   });
 
-  // ---- BEH-EA-302: audit events for mutations ----
+  // ---- BEH-EA-311: audit events for mutations ----
 
   When(
     "the administrator updates {string} to the URL {string} and the description {string}",
@@ -401,7 +401,7 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     );
   });
 
-  // ---- BEH-EA-304: custom headers ----
+  // ---- BEH-EA-313: custom headers ----
 
   When(
     "the administrator registers {string} for {string} with the headers {string} holding {string} as {string}",
@@ -473,7 +473,7 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     },
   );
 
-  // ---- BEH-EA-303: connection pinning ----
+  // ---- BEH-EA-312: connection pinning ----
 
   Given(
     "the name {string} resolves to {string} and then to {string}",

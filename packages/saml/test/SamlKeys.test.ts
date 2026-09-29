@@ -1,4 +1,4 @@
-// BEH-EA-305: the SP's signing material and its two signature forms. A generated certificate must be a real, self-signed
+// BEH-EA-314: the SP's signing material and its two signature forms. A generated certificate must be a real, self-signed
 // X.509 certificate the platform accepts; a redirect-binding signature must verify against the pinned certificate and against
 // nothing else, and every tamper, downgrade and wrong-key case must fail; an XML signature must verify through the SAME
 // `XmlSignature` port that verifies an IdP's.

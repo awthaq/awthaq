@@ -1,6 +1,6 @@
 // @awthaq/saml — SamlRoleMapping
 //
-// BEH-EA-307: what an IdP's assertion says about roles, turned into an organization's roles by rules an administrator
+// BEH-EA-316: what an IdP's assertion says about roles, turned into an organization's roles by rules an administrator
 // wrote, under a ceiling. The rules read ONLY the verified assertion (`SignedAssertion.attributes`); what they may confer
 // is bounded by `Organization.checkRoleCeiling`/`syncMemberRoles` (RRM-001's `canGrant` rule with the connection's role
 // ceiling standing in for a caller), so a connection cannot mint `owner` unless its ceiling holds it, and the configuration

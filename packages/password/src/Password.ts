@@ -697,6 +697,12 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
 export class Password extends AuthPlugin.Service<Password, PasswordShape>()("password", {
   apiVersion: 1,
   contract: PasswordApi.PasswordApi,
+  // PV-241: the default rules, from the same table the layer registers (a configured email-key
+  // normaliser changes a bucket's key, never a rule's number).
+  rateLimits: AuthPlugin.declareRateLimits(
+    ["password", "password.account"],
+    Object.values(PasswordRateLimits.makeRules(PasswordRateLimits.defaultEmailRateKey)),
+  ),
   // BEH-EA-044: a password credential is an ordinary `accounts` row — this
   // plugin owns no table of its own, so there is nothing to declare here.
   tables: [],
@@ -743,6 +749,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
    * sibling export.
    */
   static readonly layer = AuthPlugin.layer(Password, {
+    ports: [
+      ClientAddress.ClientAddress,
+      Mailer.Mailer,
+      PasswordHasher.PasswordHasher,
+      RateLimiter.RateLimiter,
+      SqlTransaction.SqlTransaction,
+    ],
     handlers: Layer.mergeAll(PasswordHandlers, PasswordAccountHandlers),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;

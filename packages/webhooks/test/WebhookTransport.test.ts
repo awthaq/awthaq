@@ -1,4 +1,4 @@
-// BEH-EA-303 (spec/behaviors/34-webhooks.md): connection pinning against DNS rebinding. An attempt resolves the
+// BEH-EA-312 (spec/behaviors/34-webhooks.md): connection pinning against DNS rebinding. An attempt resolves the
 // endpoint's host ONCE, judges every address, and the transport connects to that address with the original
 // Host/SNI; the address is judged again at the connect; nothing is resolved twice.
 import { HostResolver } from "@awthaq/ports";

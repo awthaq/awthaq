@@ -299,7 +299,7 @@ export interface OrganizationShape {
     | HookPoint.HookAborted
   >;
   /**
-   * BEH-EA-307 (the SAML role mapping's guard, RRM-001's `canGrant` rule with a role ceiling standing in for the caller): why
+   * BEH-EA-316 (the SAML role mapping's guard, RRM-001's `canGrant` rule with a role ceiling standing in for the caller): why
    * `roles` cannot be conferred by a source whose most is `ceiling` (role names of this organization), or `None` when they
    * can. `unknownRole`/`unknownCeiling`: a name this organization does not recognize; `exceedsCeiling`: `roles` hold a
    * statement the ceiling does not (an `owner` mapping under a `member` ceiling).
@@ -313,7 +313,7 @@ export interface OrganizationShape {
     OrganizationApi.OrganizationNotFound
   >;
   /**
-   * BEH-EA-307: makes `userId`'s roles in the organization exactly `roles`, on behalf of a source (an identity provider's
+   * BEH-EA-316: makes `userId`'s roles in the organization exactly `roles`, on behalf of a source (an identity provider's
    * mapping) that has no caller: adds the membership when there is none, otherwise re-roles it. `canGrant` bounds it twice:
    * `roles` must be within `ceiling`, and so must what the member holds now (a member who out-privileges the source is
    * never demoted or reshaped by it: `RolePermissionEscalation`). The last owner is never demoted
@@ -1817,6 +1817,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
   },
 ) {
   static readonly layer = AuthPlugin.layer(Organization, {
+    ports: [Mailer.Mailer, SqlTransaction.SqlTransaction],
     handlers: OrganizationHandlers,
     contributes: Layer.mergeAll(organizationErasure, organizationExport),
     make: Effect.gen(function* () {

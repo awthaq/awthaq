@@ -1,0 +1,46 @@
+{
+  "name": "@awthaq/device-authorization",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OAuth 2.0 Device Authorization Grant (RFC 8628): a CLI, TV or set-top box signs in by having the user approve a short code on a second, signed-in device; the poll mints a normal bearer session.",
+  "license": "MIT",
+  "files": [
+    "lib",
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./lib/index.js",
+      "default": "./lib/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
+    "@awthaq/ports": "workspace:*",
+    "@awthaq/server": "workspace:*",
+    "@awthaq/sql": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@awthaq/test": "workspace:*",
+    "@awthaq/two-factor": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

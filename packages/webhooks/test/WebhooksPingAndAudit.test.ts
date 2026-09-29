@@ -1,4 +1,4 @@
-// BEH-EA-301 (the test ping) and BEH-EA-302 (audit events for successful administrative mutations)
+// BEH-EA-310 (the test ping) and BEH-EA-311 (audit events for successful administrative mutations)
 // (spec/behaviors/34-webhooks.md).
 import { AuditLog, Tenant } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";

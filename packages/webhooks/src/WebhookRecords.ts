@@ -53,11 +53,11 @@ export interface EndpointRecord {
   /** The administrator's user id. */
   readonly createdBy: string;
   /**
-   * BEH-EA-300: the tenant (organization id) the endpoint belongs to, stamped from the ambient `TenantContext`
+   * BEH-EA-309: the tenant (organization id) the endpoint belongs to, stamped from the ambient `TenantContext`
    * when it is registered. `None` is the platform's own endpoint. An endpoint hears only its own tenant's events.
    */
   readonly tenantId: Option.Option<string>;
-  /** BEH-EA-304: the sealed (`Encryption`) JSON object of custom request headers; `None` when there are none. */
+  /** BEH-EA-313: the sealed (`Encryption`) JSON object of custom request headers; `None` when there are none. */
   readonly headers: Option.Option<string>;
   /** The names in `headers` (not secret): what the API shows. */
   readonly headerNames: ReadonlyArray<string>;

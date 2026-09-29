@@ -309,3 +309,14 @@ export class CsrfProtection extends HttpApiMiddleware.Service<CsrfProtection>()(
   // public, unauthenticated mutating endpoints (sign-up, sign-in, reset) can answer a store outage 503 too.
   error: [CsrfRejected, StoreUnavailable],
 }) {}
+
+/**
+ * BEH-EA-201: marks a group as an OAuth-style **back channel** — a credential-in-the-request endpoint
+ * (`apikey.token`, the device authorization `code`/`token` pair) that reads no cookie, sets none and is
+ * called by clients that are not browsers, so it deliberately carries no `CsrfProtection` (a device has
+ * no cookie to double-submit) and `awthaq doctor` does not flag it as an unprotected mutating endpoint.
+ * `group.annotate(Api.BackChannel, true)`; anything not annotated keeps the default, `false`.
+ */
+export const BackChannel = Context.Reference<boolean>("awthaq/api/BackChannel", {
+  defaultValue: () => false,
+});

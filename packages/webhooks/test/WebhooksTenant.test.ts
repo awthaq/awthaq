@@ -1,4 +1,4 @@
-// BEH-EA-300 (spec/behaviors/34-webhooks.md): endpoints belong to a tenant. An event reaches only the endpoints of
+// BEH-EA-309 (spec/behaviors/34-webhooks.md): endpoints belong to a tenant. An event reaches only the endpoints of
 // the tenant it happened in; the platform's own endpoint hears the untenanted events (and every tenant's only when
 // `platformEndpointsHearAllTenants` is set); administration is scoped to the ambient tenant, and an endpoint or delivery
 // of another tenant is indistinguishable from one that does not exist.

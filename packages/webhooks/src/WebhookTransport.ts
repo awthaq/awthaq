@@ -1,6 +1,6 @@
 // @awthaq/webhooks — WebhookTransport
 //
-// BEH-EA-303 (closes the DNS-rebinding gap the SSRF checks alone leave open): the one place a delivery leaves the
+// BEH-EA-312 (closes the DNS-rebinding gap the SSRF checks alone leave open): the one place a delivery leaves the
 // process. `WebhookDelivery.attempt` resolves the endpoint's host ONCE (`HostResolver.pin`), judges every address it got,
 // and hands this transport the pinned address; the transport connects to THAT address and never asks DNS again, while the
 // request still says the original host name in `Host` and as the TLS server name (SNI), so virtual hosting works and the

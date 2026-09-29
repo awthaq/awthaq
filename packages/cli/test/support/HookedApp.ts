@@ -2,6 +2,7 @@
 // `Auth.make(...).manifest.hooks` has something to print. `Beta` depends on `Alpha`, so its tap
 // resolves after Alpha's even though its declared `order` is lower.
 import { Auth, AuthPlugin, HookPoint } from "@awthaq/core";
+import { Mailer, RateLimiter } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -25,6 +26,8 @@ class Alpha extends AuthPlugin.Service<Alpha, {}>()("alpha", {
   contract: AlphaApi,
 }) {
   static readonly layer = AuthPlugin.layer(Alpha, {
+    // PV-241: declared, not used by `make` — the manifest only reads the declaration.
+    ports: [Mailer.Mailer, RateLimiter.RateLimiter],
     make: Effect.succeed({}),
     taps: [Normalize.declareTap((value) => Effect.succeed(value.toLowerCase()), { order: 5 })],
     handlers: HttpApiBuilder.group(AlphaApi, "alpha", (handlers) =>

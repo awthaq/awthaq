@@ -476,6 +476,16 @@ const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.EventOf<T
     userId,
     clientId: "c-1",
   },
+  "auth.deviceAuthorization.approved": {
+    _tag: "auth.deviceAuthorization.approved",
+    userId,
+    clientId: "awthaq-cli",
+  },
+  "auth.deviceAuthorization.denied": {
+    _tag: "auth.deviceAuthorization.denied",
+    userId,
+    clientId: "awthaq-cli",
+  },
 };
 
 const allSamples: ReadonlyArray<AuthEvents.AuthEvent> = Object.values(samples);
@@ -515,7 +525,7 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
       }).pipe(Effect.provide(layer)),
     );
 
-    // BEH-EA-231/BEH-EA-299: the tenant stamp is part of the record and of the delivered-event view, so a
+    // BEH-EA-231/BEH-EA-308: the tenant stamp is part of the record and of the delivered-event view, so a
     // tenant-aware consumer (per-tenant webhook endpoints) can route on it.
     it.effect(
       "carries the tenant the row was stamped with into the record and the delivered event",

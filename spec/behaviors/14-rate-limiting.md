@@ -165,6 +165,8 @@ REQUIREMENT: Rate-limit rules read for `awthaq plugin list --graph` or any
 
 Rate-limit rules are a registry, and PRD §9.3 fixes one ordering discipline for every registry in the system: "aggregating contributions ordered by dependency, then `order`, then id." Rate limiting gets no special case. An operator who has learned to read the hook chain output from `awthaq plugin list --hooks` reads the rate-limit rule listing the same way, without learning a second convention.
 
+**As shipped (PV-241):** a plugin declares its rules statically (`AuthPlugin.Service`'s `rateLimits`: group, endpoint, name, dimension, default limit and window; the group is confined to the plugin's own contract groups at the type level, BEH-EA-107), so `Auth.make(...).manifest.rateLimits` and `awthaq plugin list --rules` print them without building a layer, in link order. The runtime registry (`RateLimits.RateLimitsRegistry.registered`) remains the source of truth for what is *enforced* and for the three-key order above; `RateLimits.declarationDrift` compares the two, each shipped plugin's suite asserts no drift, and `RateLimits.registerDeclared` registers a plugin's declared rules so a new plugin need not keep two lists.
+
 _Previous: [BEH-EA-110](14-rate-limiting.md#beh-ea-110-built-in-rules-shipped-by-core-plugins) | Next: [BEH-EA-112](14-rate-limiting.md#beh-ea-112-testing-with-a-permissive-limiter)_
 
 ## BEH-EA-112: Testing with a permissive limiter

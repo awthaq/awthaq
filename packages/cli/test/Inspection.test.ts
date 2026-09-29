@@ -142,6 +142,101 @@ describe("plugin list --hooks", () => {
   );
 });
 
+// PV-241/BEH-EA-202: `--graph` also carries each plugin's declared required ports and the taps it
+// contributes to the resolved chains — read off the manifest, no Layer built.
+describe("plugin list --graph: ports and hook taps", () => {
+  it.effect("prints a plugin's required ports and its position in each tap chain", () =>
+    Effect.gen(function* () {
+      const alpha = Plugin.graph(hookedApp).find((node) => node.id === "alpha");
+      assert.deepStrictEqual(alpha?.ports, ["awthaq/ports/Mailer", "awthaq/ports/RateLimiter"]);
+      assert.deepStrictEqual(alpha?.hooks, [
+        { point: "cli.test.normalize", position: 1, order: 5 },
+      ]);
+      const beta = Plugin.graph(hookedApp).find((node) => node.id === "beta");
+      assert.deepStrictEqual(beta?.ports, []);
+      assert.deepStrictEqual(beta?.hooks, [{ point: "cli.test.normalize", position: 2, order: 0 }]);
+      const text = yield* captureStdout(Plugin.show(hookedApp, { graph: true, format: "text" }));
+      assert.isTrue(
+        text.some((line) => line.includes("ports:") && line.includes("awthaq/ports/Mailer")),
+      );
+      assert.isTrue(
+        text.some((line) => line.includes("hook taps:") && line.includes("cli.test.normalize #1")),
+      );
+      assert.isTrue(text.some((line) => line.includes("cli.test.normalize #2")));
+      // No "not derivable" apology any more: the declarations are the data.
+      assert.isFalse(text.some((line) => line.includes("not derivable")));
+      assert.isTrue(text.some((line) => line.includes("application taps")));
+    }),
+  );
+
+  it.effect("carries ports and taps in the JSON graph; a shipped plugin lists its ports", () =>
+    Effect.gen(function* () {
+      const { captured, layer } = yield* Output.capture(false);
+      yield* Plugin.show(hookedApp, { graph: true, format: "json" }).pipe(Effect.provide(layer));
+      const [doc] = yield* Ref.get(captured.documents);
+      assert.deepStrictEqual(doc, Plugin.graph(hookedApp));
+      const password = Plugin.graph(passwordAndRoles).find((node) => node.id === "password");
+      assert.includeMembers(
+        [...(password?.ports ?? [])],
+        ["awthaq/ports/Mailer", "awthaq/ports/PasswordHasher", "awthaq/ports/RateLimiter"],
+      );
+    }),
+  );
+});
+
+// PV-241/BEH-EA-111: `plugin list --rules` prints `manifest.rateLimits`, the statically declared rules.
+describe("plugin list --rules", () => {
+  it.effect(
+    "prints every declared rule with its plugin, endpoint, dimension, limit and window",
+    () =>
+      Effect.gen(function* () {
+        const signIn = Plugin.rules(passwordAndRoles).find(
+          (rule) => rule.plugin === "password" && rule.name === "signIn",
+        );
+        assert.deepStrictEqual(signIn, {
+          plugin: "password",
+          group: "password",
+          endpoint: "signIn",
+          name: "signIn",
+          dimension: "identity",
+          limit: 5,
+          window: "15m",
+        });
+        const text = yield* captureStdout(
+          Plugin.show(passwordAndRoles, { graph: false, rules: true, format: "text" }),
+        );
+        assert.match(text[0] ?? "", /^PLUGIN\s+RULE\s+ENDPOINT\s+DIMENSION\s+LIMIT/);
+        assert.isTrue(
+          text.some((line) =>
+            /^password\s+signIn\s+password\.signIn\s+identity\s+5 per 15m/.test(line),
+          ),
+        );
+      }),
+  );
+
+  it.effect("--format json emits the same rules as data", () =>
+    Effect.gen(function* () {
+      const { captured, layer } = yield* Output.capture(false);
+      yield* Plugin.show(passwordAndRoles, { graph: false, rules: true, format: "json" }).pipe(
+        Effect.provide(layer),
+      );
+      const [doc] = yield* Ref.get(captured.documents);
+      assert.deepStrictEqual(doc, Plugin.rules(passwordAndRoles));
+    }),
+  );
+
+  it.effect("says so when no installed plugin declares a rule", () =>
+    Effect.gen(function* () {
+      const text = yield* captureStdout(
+        Plugin.show(hookedApp, { graph: false, rules: true, format: "text" }),
+      );
+      assert.isTrue(
+        text.some((line) => line.includes("no installed plugin declares a rate-limit rule")),
+      );
+    }),
+  );
+});
+
 describe("openapi", () => {
   it.effect("emits one document covering every installed plugin's contract", () =>
     Effect.gen(function* () {

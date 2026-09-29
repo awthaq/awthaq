@@ -63,7 +63,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as CallbackFailure from "./CallbackFailure.ts";
 import * as IdToken from "./IdToken.ts";
 import * as OAuthApi from "./OAuthApi.ts";
-import { OAuthConfig, type OAuthConfigShape } from "./OAuthConfig.ts";
+import { OAuthConfig, type OAuthConfigShape, defaultRateLimits } from "./OAuthConfig.ts";
 import * as OAuthProvider from "./OAuthProvider.ts";
 import * as OAuthProviders from "./OAuthProviders.ts";
 import * as ProviderHttp from "./ProviderHttp.ts";
@@ -700,12 +700,42 @@ export interface OAuthShape {
 export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
   apiVersion: 1,
   contract: OAuthApi.OAuthApi,
+  // PV-241: the default throttles (`OAuthConfig.rateLimits` tunes them); mirrors the layer's registrations.
+  rateLimits: [
+    {
+      group: "oauth",
+      endpoint: "callback",
+      name: "callback",
+      dimension: "ip",
+      ...defaultRateLimits.callback,
+    },
+    {
+      group: "oauth",
+      endpoint: "authorize",
+      name: "authorize",
+      dimension: "ip",
+      ...defaultRateLimits.authorize,
+    },
+    {
+      group: "oauth.exchange",
+      endpoint: "token",
+      name: "token",
+      dimension: "ip",
+      ...defaultRateLimits.token,
+    },
+  ],
   // BEH-EA-125: an OAuth account is an ordinary `accounts` row (extended
   // with `issuer`, per BEH-EA-125) — this plugin owns no table of its own,
   // the same reasoning `@awthaq/password`'s own `tables: []` documents.
   tables: [],
 }) {
   static readonly layer = AuthPlugin.layer(OAuth, {
+    ports: [
+      ClientAddress.ClientAddress,
+      Encryption.Encryption,
+      RateLimiter.RateLimiter,
+      SqlTransaction.SqlTransaction,
+    ],
     handlers: OAuthHandlers,
     make: Effect.gen(function* () {
       const users = yield* Users.Users;

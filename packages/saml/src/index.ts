@@ -5,7 +5,7 @@
 // directions; the administrator's connection CRUD with IdP metadata import from a URL or XML; organization role mapping under a
 // ceiling; and the `Sso` dispatcher that routes an email domain to an OIDC or a SAML connection.
 //
-// spec/behaviors/29-saml-sp.md, BEH-EA-238 through 245 and 305 through 309; spec/models/10-saml.md.
+// spec/behaviors/29-saml-sp.md, BEH-EA-238 through 245 and 314 through 318; spec/models/10-saml.md.
 // See spec/overview.md for the full package map.
 
 export * as SafeXml from "./SafeXml.ts";

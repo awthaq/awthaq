@@ -359,9 +359,9 @@ export const isOutcome = (value: unknown): value is Outcome =>
 export interface WorldShape {
   readonly observations: Observations;
   readonly config: Ref.Ref<Partial<SamlConfigInput>>;
-  /** What the IdP metadata URLs serve (BEH-EA-309): a scenario edits it, the World's fetcher reads it. */
+  /** What the IdP metadata URLs serve (BEH-EA-318): a scenario edits it, the World's fetcher reads it. */
   readonly metadata: Map<string, string>;
-  /** Which protocol the `Sso` dispatcher prefers when both route a hint (BEH-EA-308); default the plugin's. */
+  /** Which protocol the `Sso` dispatcher prefers when both route a hint (BEH-EA-317); default the plugin's. */
   readonly ssoPreference: Ref.Ref<Sso.SsoProtocol | undefined>;
   readonly started: Ref.Ref<boolean>;
   readonly app: Ref.Ref<AppHandle | undefined>;
@@ -377,12 +377,12 @@ export interface WorldShape {
       signer?: Identity;
       trustsEmail?: boolean;
       certificates?: ReadonlyArray<Identity>;
-      /** BEH-EA-305: sign the connection's AuthnRequests (and logout messages) with an SP key. */
+      /** BEH-EA-314: sign the connection's AuthnRequests (and logout messages) with an SP key. */
       authnRequestsSigned?: boolean;
-      /** BEH-EA-306: the IdP's Single Logout endpoint and its binding. */
+      /** BEH-EA-315: the IdP's Single Logout endpoint and its binding. */
       sloUrl?: string;
       sloBinding?: "redirect" | "post";
-      /** BEH-EA-307: the role mapping the connection is created with. */
+      /** BEH-EA-316: the role mapping the connection is created with. */
       roleMapping?: SamlRecords.RoleMapping;
       /** The email domains the connection routes; default `<name>.example`. */
       emailDomains?: ReadonlyArray<string>;
@@ -539,12 +539,12 @@ export const planConnection = Effect.fn("features.saml.planConnection")(function
     signer?: Identity;
     trustsEmail?: boolean;
     certificates?: ReadonlyArray<Identity>;
-    /** BEH-EA-305: sign the connection's AuthnRequests (and logout messages) with an SP key. */
+    /** BEH-EA-314: sign the connection's AuthnRequests (and logout messages) with an SP key. */
     authnRequestsSigned?: boolean;
-    /** BEH-EA-306: the IdP's Single Logout endpoint and its binding. */
+    /** BEH-EA-315: the IdP's Single Logout endpoint and its binding. */
     sloUrl?: string;
     sloBinding?: "redirect" | "post";
-    /** BEH-EA-307: the role mapping the connection is created with. */
+    /** BEH-EA-316: the role mapping the connection is created with. */
     roleMapping?: SamlRecords.RoleMapping;
     /** The email domains the connection routes; default `<name>.example`. */
     emailDomains?: ReadonlyArray<string>;

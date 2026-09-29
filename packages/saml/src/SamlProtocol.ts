@@ -5,9 +5,9 @@
 // is string assembly with every interpolated value XML-escaped (no user-controlled markup); reading goes through
 // `SafeXml` like every other document here.
 //
-// BEH-EA-305: signed AuthnRequests. The redirect binding's signature is a query-string signature, not an XML-DSig one
+// BEH-EA-314: signed AuthnRequests. The redirect binding's signature is a query-string signature, not an XML-DSig one
 // (SamlKeys.signRedirect); this module only assembles the message and the metadata that publishes the SP certificate.
-// BEH-EA-306: the Single Logout messages (LogoutRequest, LogoutResponse) and the HTML form of the POST binding.
+// BEH-EA-315: the Single Logout messages (LogoutRequest, LogoutResponse) and the HTML form of the POST binding.
 
 import type { XmlSignature } from "@awthaq/ports";
 import { deflateRawSync } from "node:zlib";
@@ -56,7 +56,7 @@ const appendQuery = (endpoint: string, query: string): string =>
 
 /**
  * The redirect-binding URL for one message: the endpoint plus `<kind>=..[&RelayState=..]`, and, when `signWith` is given,
- * `&SigAlg=..&Signature=..` over those exact octets (BEH-EA-305). Any query the endpoint already carries is kept ahead of
+ * `&SigAlg=..&Signature=..` over those exact octets (BEH-EA-314). Any query the endpoint already carries is kept ahead of
  * ours: the signature covers only what this function appends, as the binding says.
  */
 export const redirectUrl = (input: {
@@ -80,7 +80,7 @@ export const redirectUrl = (input: {
   return appendQuery(input.endpoint, query);
 };
 
-/** Unsigned redirect to the IdP (the pre-BEH-EA-305 shape, kept for callers that build a request by hand). */
+/** Unsigned redirect to the IdP (the pre-BEH-EA-314 shape, kept for callers that build a request by hand). */
 export const redirectLocation = (ssoUrl: string, requestXml: string, relayState?: string): string =>
   redirectUrl({ endpoint: ssoUrl, kind: "SAMLRequest", xml: requestXml, relayState });
 
@@ -108,11 +108,11 @@ export const postFormHtml = (input: {
 export const spMetadataXml = (input: {
   readonly entityId: string;
   readonly acsUrl: string;
-  /** BEH-EA-305: the connection signs its AuthnRequests (and Single Logout messages). */
+  /** BEH-EA-314: the connection signs its AuthnRequests (and Single Logout messages). */
   readonly authnRequestsSigned?: boolean | undefined;
   /** The SP signing certificates (PEM) to publish as `KeyDescriptor use="signing"`: every unexpired one (a rotation overlap). */
   readonly certificates?: ReadonlyArray<string> | undefined;
-  /** BEH-EA-306: this SP's Single Logout endpoint; when given, it is published for the Redirect and POST bindings. */
+  /** BEH-EA-315: this SP's Single Logout endpoint; when given, it is published for the Redirect and POST bindings. */
   readonly sloUrl?: string | undefined;
 }): string => {
   const bodyOf = (pem: string) =>
@@ -142,7 +142,7 @@ export const spMetadataXml = (input: {
   );
 };
 
-// ---- Single Logout messages (BEH-EA-306) -------------------------------------------------------------
+// ---- Single Logout messages (BEH-EA-315) -------------------------------------------------------------
 
 /** A `LogoutRequest` for one identity. `id` must be an NCName. */
 export const logoutRequestXml = (input: {
@@ -194,9 +194,9 @@ export interface IdpMetadata {
   readonly ssoUrl: string;
   /** Signing certificates (PEM), from `KeyDescriptor use="signing"` or an unmarked one. */
   readonly certificates: ReadonlyArray<string>;
-  /** BEH-EA-306: the IdP's Single Logout endpoint and its binding (Redirect preferred over POST), when it offers one. */
+  /** BEH-EA-315: the IdP's Single Logout endpoint and its binding (Redirect preferred over POST), when it offers one. */
   readonly slo?: { readonly url: string; readonly binding: "redirect" | "post" } | undefined;
-  /** BEH-EA-305: the IdP says it requires signed AuthnRequests (`WantAuthnRequestsSigned="true"`). */
+  /** BEH-EA-314: the IdP says it requires signed AuthnRequests (`WantAuthnRequestsSigned="true"`). */
   readonly wantsSignedRequests: boolean;
 }
 

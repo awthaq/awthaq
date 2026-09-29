@@ -1,4 +1,4 @@
-// BEH-EA-309: fetching IdP metadata from a URL an administrator supplied is an SSRF surface, so it is guarded like a webhook endpoint:
+// BEH-EA-318: fetching IdP metadata from a URL an administrator supplied is an SSRF surface, so it is guarded like a webhook endpoint:
 // `OutboundUrl` first, the host resolved ONCE and every answer required to be public, the connection pinned to that address
 // (`PinnedHttp`, tested in `@awthaq/ports`), no redirect followed, the body capped, the deadline bounded, and failures as CLASSES.
 import { HostResolver } from "@awthaq/ports";

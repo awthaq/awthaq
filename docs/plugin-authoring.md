@@ -45,6 +45,13 @@ A plugin that needs a mailer, a crypto source, a rate limiter or a transaction b
 - Tap outputs are checked against the point's schema (a veto tap's amended value, a divert tap's diverted value); observe taps run sequentially in resolved order, so keep them cheap.
 - Provide each point's own `.layer` once; `NotesHooksLive` merges them.
 
+## Declaring ports and rate limits
+
+Two facts about a plugin are read by tooling without building its layer, so the plugin **declares** them (PV-241):
+
+- **`ports`.** `AuthPlugin.layer(Self, { ports: [Mailer.Mailer, RateLimiter.RateLimiter], ... })` lists the port classes (`@awthaq/ports`) the layer requires. They join the layer's `RIn` like `dependsOn`, and the compiler checks the list is complete: a service whose key is `.../ports/...` that `make`, the handlers or `contributes` require but `ports` omits fails to type-check, naming the missing key. `awthaq plugin list --graph` prints them (`Manifest.ports`). Core services, effect's own (`Crypto`, `SqlClient`) and your own records need no entry.
+- **`rateLimits`.** `AuthPlugin.Service(id, { rateLimits: [{ group, endpoint, name, dimension, limit, window }] })` declares each rule's defaults; `group` is confined to your contract's groups at compile time (BEH-EA-107). Register from the same declaration with `RateLimits.registerDeclared(Self, { key })` (or keep a rule table and build the declaration with `AuthPlugin.declareRateLimits(groups, rules)`), and add a test asserting `RateLimits.declarationDrift(Self, registered)` is empty so the list `awthaq plugin list --rules` prints (`Manifest.rateLimits`) cannot drift from what is enforced. Config-tuned numbers are the defaults there.
+
 ## Contributing a credential type
 
 A plugin that authenticates callers a session cannot represent (an API key, a service token, a SCIM directory token) does not add a scheme to `Api.Authentication`. It contributes to `@awthaq/server`'s credential-resolver registry, an aggregating registry (ADR-EA-012):
@@ -87,7 +94,7 @@ An operation that is several SQL statements runs in one `sql.withTransaction` so
 
 ## Checklist for a new plugin
 
-1. `AuthPlugin.Service` with `apiVersion`, `contract`, `tables`, `migrations` (and `dependsOn` only if needed).
+1. `AuthPlugin.Service` with `apiVersion`, `contract`, `tables`, `migrations` (and `dependsOn` only if needed), `rateLimits` when it throttles, and `ports` on `AuthPlugin.layer` for every port it requires.
 2. Errors typed and status-mapped; `HookAborted` on every vetoable endpoint.
 3. Config as a `Context.Reference` with a default.
 4. Records service with `layerMemory` and `layerSql` (the template ships only `layerSql`; production plugins ship both).

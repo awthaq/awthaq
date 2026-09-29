@@ -1,6 +1,6 @@
 // @awthaq/ports — PinnedHttp
 //
-// BEH-EA-303 (webhooks) and BEH-EA-306 (SAML metadata import): the one place this codebase makes an outbound HTTP
+// BEH-EA-312 (webhooks) and BEH-EA-315 (SAML metadata import): the one place this codebase makes an outbound HTTP
 // request to an address it has just judged, so DNS rebinding has nothing to flip. A caller resolves the URL's host once
 // (`HostResolver.pin`) and hands the pinned address here; the request connects to THAT address as an IP literal (so the
 // platform never resolves the name), while the URL's own host name stays the `Host` header and the TLS server name (SNI,

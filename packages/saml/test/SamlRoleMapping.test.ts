@@ -1,4 +1,4 @@
-// BEH-EA-307 (spec/behaviors/29-saml-sp.md): organization role mapping. What an IdP's assertion says about groups becomes an
+// BEH-EA-316 (spec/behaviors/29-saml-sp.md): organization role mapping. What an IdP's assertion says about groups becomes an
 // organization's roles by rules an administrator wrote, under a CEILING (RRM-001's `canGrant` rule with the ceiling standing in for a
 // caller): a connection cannot mint `owner` unless the deployment allowed it and the connection's ceiling holds it, a member who
 // out-privileges the connection is never reshaped by it, the last owner is never demoted, and a mapping that cannot be applied

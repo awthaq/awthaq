@@ -14,10 +14,11 @@
 // - `login --token <t>` (or `AWTHAQ_TOKEN`) is the non-interactive path CI needs from day one. The token
 //   is validated against `GET /session` and stored only when the server accepts it; a rejected token
 //   stores nothing. Prefer `AWTHAQ_TOKEN` to `--token`: argv is visible to a process listing.
-// - Interactive `login` is the device authorization grant (RFC 8628), which needs the
-//   `DeviceAuthorization` plugin (spec/models/13-device-authorization.md) — not built yet — so it fails
-//   with `DeviceAuthorizationUnavailable` naming that requirement instead of guessing at endpoints
-//   that do not exist. The credential store, transport and commands are ready for it.
+// - Interactive `login` (no token) is the device authorization grant (RFC 8628, BEH-EA-307) against a
+//   server running `@awthaq/device-authorization`: `DeviceLogin.ts` requests a code, prints it (and
+//   opens the verification page unless `--no-browser`), polls with backoff and hands back the bearer
+//   token the server issued. That token is then validated and stored exactly like a `--token` one. A
+//   server without the plugin fails with `DeviceAuthorizationUnavailable` (exit 9) naming the plugin.
 // - `logout` clears the local credential and revokes the session server-side on a best-effort basis
 //   (`POST /session/sign-out`); a server that cannot be reached does not stop the local logout.
 // - `whoami` prints who the stored (or `AWTHAQ_TOKEN`) credential resolves to: the session, and the
@@ -34,14 +35,10 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import {
-  AuthenticationRequired,
-  DeviceAuthorizationUnavailable,
-  ServerUnavailable,
-  UsageError,
-} from "./CliErrors.ts";
+import { AuthenticationRequired, ServerUnavailable, UsageError } from "./CliErrors.ts";
 import type { Credential } from "./CredentialStore.ts";
 import { CredentialStore } from "./CredentialStore.ts";
+import * as DeviceLogin from "./DeviceLogin.ts";
 import * as Output from "./Output.ts";
 
 const sessionApi = HttpApi.make("auth").add(SessionContract.SessionGroup);
@@ -116,6 +113,10 @@ export interface LoginInput {
   readonly token: Option.Option<Redacted.Redacted<string>>;
   /** `--base-url`, or `AWTHAQ_BASE_URL` through the flag's fallback. */
   readonly baseUrl: Option.Option<string>;
+  /** `--client-id`: the device-flow client the server registered for this CLI (default `awthaq-cli`). */
+  readonly clientId?: string | undefined;
+  /** `--no-browser`: print the verification URL and code, never open a browser. */
+  readonly noBrowser?: boolean | undefined;
 }
 
 /** BEH-EA-227: validates a token against the server and stores it only when the server accepts it. */
@@ -133,13 +134,16 @@ export const login = (input: LoginInput) =>
         message: "the auth server is unknown: pass --base-url (or set AWTHAQ_BASE_URL)",
       });
     }
-    if (Option.isNone(input.token)) {
-      return yield* new DeviceAuthorizationUnavailable({
-        message:
-          "interactive login uses the device authorization grant, which needs the DeviceAuthorization plugin (spec/models/13-device-authorization.md); it is not available yet. Pass --token or set AWTHAQ_TOKEN.",
-      });
-    }
-    const credential: Credential = { baseUrl: baseUrl.value, token: input.token.value };
+    // BEH-EA-307: no token means the interactive device flow; the token it yields is validated below like any other.
+    const method = Option.isSome(input.token) ? "token" : "device";
+    const token = Option.isSome(input.token)
+      ? input.token.value
+      : yield* DeviceLogin.obtainToken({
+          baseUrl: baseUrl.value,
+          clientId: input.clientId ?? DeviceLogin.DEFAULT_CLIENT_ID,
+          noBrowser: input.noBrowser ?? false,
+        });
+    const credential: Credential = { baseUrl: baseUrl.value, token };
     const session = yield* currentSession(credential);
     yield* store.set(credential);
     const result = {
@@ -147,6 +151,7 @@ export const login = (input: LoginInput) =>
       sessionId: session.id,
       expiresAt: session.expiresAt,
       store: store.backend,
+      method,
     };
     yield* Output.report(result, (value) => [
       `logged in to ${value.baseUrl} (session ${value.sessionId}, expires ${value.expiresAt}; credential kept in: ${value.store})`,

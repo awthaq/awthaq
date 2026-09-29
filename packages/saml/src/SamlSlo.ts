@@ -1,6 +1,6 @@
 // @awthaq/saml — SamlSlo
 //
-// BEH-EA-306: SAML Single Logout, both directions, over the HTTP-Redirect and HTTP-POST bindings.
+// BEH-EA-315: SAML Single Logout, both directions, over the HTTP-Redirect and HTTP-POST bindings.
 //
 //   - SP-initiated (`logout`): the signed-in user's session is ended locally at once (a lost or refused answer from the IdP can
 //     never leave the session alive), then the browser is sent to the IdP with a `LogoutRequest` naming the NameID and

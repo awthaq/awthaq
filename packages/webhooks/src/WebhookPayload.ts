@@ -58,7 +58,7 @@ export interface WebhookBody {
   readonly timestamp: string;
   readonly correlationId?: string;
   readonly traceId?: string;
-  /** BEH-EA-300: the tenant (organization id) the event happened in; absent outside a tenant scope. An identifier, never a name. */
+  /** BEH-EA-309: the tenant (organization id) the event happened in; absent outside a tenant scope. An identifier, never a name. */
   readonly tenantId?: string;
   /** The event's own fields, minus what the rules above remove. */
   readonly data: Readonly<Record<string, unknown>>;
@@ -111,7 +111,7 @@ export const subjectUserId = (event: AuthEvents.Published): string | undefined =
 // ---- tenants ---------------------------------------------------------------------------------
 
 /**
- * BEH-EA-300: whether an endpoint of `endpointTenant` hears an event that happened in `eventTenant`. A tenant's
+ * BEH-EA-309: whether an endpoint of `endpointTenant` hears an event that happened in `eventTenant`. A tenant's
  * endpoint hears only its own tenant's events. The platform's own endpoint (no tenant) hears the events that
  * belong to no tenant, and every tenant's only when `hearAllTenants` is set: an operator's SIEM feed is a
  * deliberate choice, never a default.
@@ -130,7 +130,7 @@ export const tenantRoutes = (
 /** The `type` of the synthetic event a test ping sends. No subscription filter can name it: it is sent to one endpoint on request. */
 export const TEST_EVENT_TAG = "webhook.test";
 
-/** BEH-EA-301: the synthetic document a test ping delivers: identifiers only, signed like any other delivery. */
+/** BEH-EA-310: the synthetic document a test ping delivers: identifiers only, signed like any other delivery. */
 export const testBody = (input: {
   readonly eventId: string;
   readonly at: DateTime.Utc;

@@ -179,6 +179,10 @@ export const sessionGate = Layer.unwrap(
       (input) =>
         Effect.gen(function* () {
           if (config.bypassStrategies.includes(input.strategy)) return Option.none();
+          // BEH-EA-304: an `amr` that already says `mfa` was recorded by this very gate's own completion
+          // (`finalizeSignIn`), so a flow that inherits it (a device grant approved from such a session)
+          // has nothing left to prove. No first-factor flow ever presents `mfa` here.
+          if ((input.amr ?? []).includes("mfa")) return Option.none();
           const userId = Users.UserId(input.userId);
           if (!(yield* factor.isEnrolled(userId))) return Option.none();
           const challengeId = yield* factor.issueChallenge({
@@ -413,6 +417,11 @@ export const TwoFactorHandlers = Layer.mergeAll(
 export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("two_factor", {
   apiVersion: 1,
   contract: TwoFactorApi.TwoFactorApi,
+  // PV-241: the rules at the default configuration (`failureBudget` follows `failureLimit`/`failureWindow`).
+  rateLimits: AuthPlugin.declareRateLimits(
+    ["two_factor", "two_factor.account"],
+    Object.values(TwoFactorRateLimits.makeRules(TwoFactorConfig.defaultValue())),
+  ),
   tables: ["two_factor_secret", "two_factor_recovery_code"],
   migrations,
   // ECS-008/BEH-EA-229: the default issuer is the classic thing left in production — the label users see in their authenticator app.
@@ -433,6 +442,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
   ],
 }) {
   static readonly layer = AuthPlugin.layer(TwoFactor, {
+    ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
     handlers: TwoFactorHandlers,
     contributes: Layer.mergeAll(twoFactorErasure, twoFactorExport),
     make: Effect.gen(function* () {

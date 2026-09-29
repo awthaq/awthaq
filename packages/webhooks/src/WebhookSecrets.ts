@@ -27,7 +27,7 @@ export const seal = (
   plaintext: Redacted.Redacted<string>,
 ) => encryption.encrypt(plaintext, aad(endpointId, field));
 
-/** BEH-EA-304: the custom headers as one sealed JSON object (their values are credentials). */
+/** BEH-EA-313: the custom headers as one sealed JSON object (their values are credentials). */
 export const sealHeaders = (
   encryption: Encryption.EncryptionShape,
   endpointId: string,

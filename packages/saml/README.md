@@ -1,6 +1,6 @@
 # @awthaq/saml
 
-**SAML 2.0 service provider (SP only)**: an organization's users sign in through the organization's own identity provider (Okta, Entra ID, Google Workspace, ADFS). Specified in [`spec/behaviors/29-saml-sp.md`](../../spec/behaviors/29-saml-sp.md) (BEH-EA-238 through 245 and 305 through 309) and [`spec/models/10-saml.md`](../../spec/models/10-saml.md); the decisions, including the XML-signature library evaluation, are [ADR-EA-023](../../spec/decisions/023-enterprise-federation-packages.md) and, for what it refuses, [ADR-EA-036](../../spec/decisions/036-saml-refusals-are-decisions.md). awthaq never acts as an identity provider.
+**SAML 2.0 service provider (SP only)**: an organization's users sign in through the organization's own identity provider (Okta, Entra ID, Google Workspace, ADFS). Specified in [`spec/behaviors/29-saml-sp.md`](../../spec/behaviors/29-saml-sp.md) (BEH-EA-238 through 245 and 314 through 318) and [`spec/models/10-saml.md`](../../spec/models/10-saml.md); the decisions, including the XML-signature library evaluation, are [ADR-EA-023](../../spec/decisions/023-enterprise-federation-packages.md) and, for what it refuses, [ADR-EA-036](../../spec/decisions/036-saml-refusals-are-decisions.md). awthaq never acts as an identity provider.
 
 ```ts
 const auth = Auth.make([Organization.Organization, Saml.Saml]); // Saml dependsOn [Organization]

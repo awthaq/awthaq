@@ -1,6 +1,6 @@
 // @awthaq/saml — SamlAdmin
 //
-// BEH-EA-309: the administrator's operations over SAML connections (and BEH-EA-307's role mapping), behind the `saml.admin` group (admin tier). Fail-closed:
+// BEH-EA-318: the administrator's operations over SAML connections (and BEH-EA-316's role mapping), behind the `saml.admin` group (admin tier). Fail-closed:
 // `SamlConfig.canManageSaml` DENIES BY DEFAULT and is asked first (a denial publishes `auth.admin.actionDenied`
 // `saml.<action>` and reveals nothing about which ids exist), then each administrator is rate limited, then the operation runs
 // scoped to the ambient tenant: inside a tenant a connection of another organization is answered exactly like one that does not
