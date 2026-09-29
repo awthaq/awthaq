@@ -97,6 +97,8 @@ describe("contract errors (BEH-EA-027/078/106/165)", () => {
     expect(statusesDeclaredBy([Api.CsrfRejected])).toContain("403");
     expect(statusesDeclaredBy([Api.ReauthRequired])).toContain("403");
     expect(statusesDeclaredBy([Api.RateLimited])).toContain("429");
+    // MA-004: a store outage is the retryable 503, distinct from every client-fault status.
+    expect(statusesDeclaredBy([Api.StoreUnavailable])).toContain("503");
   });
 
   it("RateLimited carries retryAfterMillis as a typed field, not text", () => {
@@ -137,14 +139,14 @@ describe("middleware declarations (BEH-EA-028/029/030, NHS-010)", () => {
     expect(Api.ROTATED_TOKEN_HEADER).toBe("set-auth-token");
   });
 
-  it("OptionalAuthentication declares no error (it cannot answer 401)", () => {
-    expect([...Api.OptionalAuthentication.error]).toEqual([]);
-    expect([...Api.Authentication.error]).toEqual([Api.Unauthenticated]);
-    expect([...Api.AdminAuthentication.error]).toEqual([Api.Unauthenticated]);
+  it("OptionalAuthentication cannot answer 401; the others answer it, and all three answer a store outage 503", () => {
+    expect([...Api.OptionalAuthentication.error]).toEqual([Api.StoreUnavailable]);
+    expect([...Api.Authentication.error]).toEqual([Api.Unauthenticated, Api.StoreUnavailable]);
+    expect([...Api.AdminAuthentication.error]).toEqual([Api.Unauthenticated, Api.StoreUnavailable]);
   });
 
   it("CsrfProtection is a plain middleware every generated client must supply, failing with CsrfRejected", () => {
     expect(Api.CsrfProtection.requiredForClient).toBe(true);
-    expect([...Api.CsrfProtection.error]).toEqual([Api.CsrfRejected]);
+    expect([...Api.CsrfProtection.error]).toEqual([Api.CsrfRejected, Api.StoreUnavailable]);
   });
 });

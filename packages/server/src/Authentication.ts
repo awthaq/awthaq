@@ -164,8 +164,18 @@ export interface ResolvedSession {
  */
 const sessionResolutionCache = new WeakMap<
   object,
-  Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated>>
+  Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated | Api.StoreUnavailable>>
 >();
+
+/**
+ * MA-004: Effect's security chain falls through to the next scheme on *any* typed failure and
+ * answers with the last scheme's, so a `StoreUnavailable` from the cookie scheme would be
+ * overwritten by the bearer scheme's ordinary `Unauthenticated` (no credential presented) and
+ * answer 401 again — the very conflation NHS-002 fixed. The first scheme to see the outage
+ * records it here (weak-keyed on the request, like the memo above) and every later scheme of the
+ * same request fails with it before doing any work, so the final answer is the 503.
+ */
+const requestOutages = new WeakMap<object, Api.StoreUnavailable>();
 
 /**
  * Atomically finds or creates the current request's slot for `raw`. `owner`
@@ -176,11 +186,11 @@ const claimResolution = (request: HttpServerRequest.HttpServerRequest, raw: stri
   Effect.sync(() => {
     const perRequest =
       sessionResolutionCache.get(request.source) ??
-      new Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated>>();
+      new Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated | Api.StoreUnavailable>>();
     sessionResolutionCache.set(request.source, perRequest);
     const existing = perRequest.get(raw);
     if (existing !== undefined) return { deferred: existing, owner: false, perRequest };
-    const deferred = Deferred.makeUnsafe<ResolvedSession, Api.Unauthenticated>();
+    const deferred = Deferred.makeUnsafe<ResolvedSession, Api.Unauthenticated | Api.StoreUnavailable>();
     perRequest.set(raw, deferred);
     return { deferred, owner: true, perRequest };
   });
@@ -276,26 +286,30 @@ export const resolveSession = (
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const raw = Redacted.value(credential);
+    const outage = requestOutages.get(request.source);
+    if (outage !== undefined) return yield* Effect.fail(outage);
     if (raw === "") return yield* Effect.fail(new Api.Unauthenticated());
     const { deferred, owner, perRequest } = yield* claimResolution(request, raw);
     if (!owner) return yield* Deferred.await(deferred);
-    // NHS-002/EEM-003: `verify`'s three failure tags used to collapse
-    // uniformly to `Unauthenticated` via a blanket `Effect.mapError` — a
-    // backing-store outage (`PlatformError`) answered 401 on every
-    // request, indistinguishable from a bad credential, RFC-inverted (401
-    // claims the credential is wrong, not that the server is broken), and
-    // invisible to status-code-keyed alerting. `PlatformError` alone dies
-    // (this codebase's own established idiom, e.g. `Password.ts`/
-    // `OAuth.ts`'s identical `Effect.catchTag("PlatformError", Effect.die)`)
-    // — a real infrastructure fault, reported as a server error by the
-    // framework's own default defect handling instead. Only what's left
-    // after that (`SessionNotFound`/`SessionExpired`, a genuinely absent or
-    // expired session) maps to `Unauthenticated`; ordering matters here —
-    // `catchTag` must run before `mapError`, or the die would itself get
-    // mapped away.
+    // NHS-002/EEM-003: `verify`'s failure tags used to collapse uniformly to
+    // `Unauthenticated` via a blanket `Effect.mapError` — a backing-store
+    // outage answered 401 on every request, indistinguishable from a bad
+    // credential, RFC-inverted (401 claims the credential is wrong, not that
+    // the server is broken), and invisible to status-code-keyed alerting.
+    // MA-004: an outage is now the typed `StoreUnavailable` (the interim
+    // `Effect.die` -> 500 is gone), which this middleware declares and so
+    // answers 503; only `SessionNotFound`/`SessionExpired` (a genuinely absent
+    // or expired session) map to `Unauthenticated`.
     const verified = sessions.verify(Redacted.make(raw)).pipe(
-      Effect.catchTag("PlatformError", Effect.die),
-      Effect.mapError(() => new Api.Unauthenticated()),
+      Effect.catchTags({
+        "Sessions/NotFound": () => Effect.fail(new Api.Unauthenticated()),
+        SessionExpired: () => Effect.fail(new Api.Unauthenticated()),
+      }),
+      Effect.tapError((error) =>
+        Predicate.isTagged(error, "StoreUnavailable")
+          ? Effect.sync(() => requestOutages.set(request.source, error))
+          : Effect.void,
+      ),
       Effect.tap(({ session, rotated }) =>
         Option.isSome(rotated)
           ? HttpEffect.appendPreResponseHandler(rotationDelivery(scheme, session, rotated.value))
@@ -420,7 +434,7 @@ export const AuthenticationLive: Layer.Layer<
         readonly bearer: typeof Api.BearerToken;
       },
       Api.CurrentPrincipal,
-      typeof Api.Unauthenticated,
+      typeof Api.Unauthenticated | typeof Api.StoreUnavailable,
       never
     >["cookie"] = (httpEffect, { credential }) =>
       cookieCredential(credential).pipe(
@@ -573,7 +587,7 @@ export const OptionalAuthenticationLive: Layer.Layer<
         readonly bearer: typeof Api.BearerToken;
       },
       Api.CurrentPrincipal,
-      never,
+      typeof Api.StoreUnavailable,
       never
     >["cookie"] = (httpEffect, { credential }) => cookieChain(httpEffect, credential);
     const impersonation: typeof cookie = (httpEffect, { credential }) =>

@@ -70,6 +70,7 @@ describe("token classes (VB-005)", () => {
       const issued = yield* sessions.issue({ userId: Users.UserId("user-1") });
       const forged = yield* jwt.signJWT({ sub: "user-1", sid: issued.session.id });
       const live = yield* jwt.verifyLive(forged).pipe(Effect.flip);
+      if (live._tag !== "JwtInvalidError") return assert.fail(live._tag);
       assert.strictEqual(live.reason, "typ mismatch");
       const plain = yield* jwt.verify(forged).pipe(Effect.flip);
       assert.strictEqual(plain.reason, "typ mismatch");

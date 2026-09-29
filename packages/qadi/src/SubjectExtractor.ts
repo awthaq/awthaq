@@ -23,7 +23,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Headers from "effect/unstable/http/Headers";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import { SubjectExtractor } from "@qadi/http";
+import { SubjectExtractionFailed, SubjectExtractor } from "@qadi/http";
 import { SubjectResolver } from "./SubjectResolver.ts";
 
 const BEARER_PREFIX = "bearer ";
@@ -57,12 +57,10 @@ const extractCredential = (
  * mapped to it, the same uniform treatment `OptionalAuthenticationLive`'s
  * bearer handler relies on. NHS-002: `resolvePrincipal`'s own
  * `resolveSession` no longer collapses a genuinely broken store into
- * `Unauthenticated` — a lookup `PlatformError` is `Effect.orDie`d into a
- * defect there, so it propagates through here uncaught rather than being
- * silently reported as an anonymous caller, giving this extractor the
- * store-is-unreachable distinction `@qadi/http`'s own
- * `SubjectExtractionFailed` is reserved for, without this module needing to
- * construct that error itself.
+ * `Unauthenticated`. MA-004: that outage is the typed `StoreUnavailable`,
+ * which this extractor reports as `@qadi/http`'s `SubjectExtractionFailed` —
+ * the store-is-unreachable signal that error is reserved for — never as an
+ * anonymous caller and never as a defect.
  */
 export const SubjectExtractorLive: Layer.Layer<
   SubjectExtractor,
@@ -92,7 +90,10 @@ export const SubjectExtractorLive: Layer.Layer<
               "impersonation",
             ).pipe(
               Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-              Effect.option,
+              Effect.map(Option.some),
+              // Only a missing/expired session falls through to the ordinary cookie; a store
+              // outage must not be read as "not an impersonation" (MA-004).
+              Effect.catchTag("Unauthenticated", () => Effect.succeedNone),
             );
             // Only a session carrying `actingAs` counts from that cookie (mirrors
             // `Authentication`'s `impersonation` scheme); anything else falls through.
@@ -124,7 +125,15 @@ export const SubjectExtractorLive: Layer.Layer<
             Effect.catchTag("Unauthenticated", () => Effect.succeed(Api.anonymousPrincipal)),
           );
           return yield* subjectResolver.resolve(principal);
-        }),
+        }).pipe(
+          Effect.catchTag("StoreUnavailable", (error) =>
+            Effect.fail(
+              new SubjectExtractionFailed({
+                reason: `awthaq: session store unavailable (${error.operation})`,
+              }),
+            ),
+          ),
+        ),
     };
   }),
 );

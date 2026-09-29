@@ -21,7 +21,15 @@
 // violation above.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Migrations, SessionCookie, Sessions, Users } from "@awthaq/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  Errors,
+  Migrations,
+  SessionCookie,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { Session } from "@awthaq/server";
 import type { AuthSubject } from "@qadi/core";
 import { makeSubject } from "@qadi/core";
@@ -150,12 +158,15 @@ export interface AdminShape {
   /** BEH-EA-216: `caller`'s own session must itself carry `actingAs`, or there is nothing to stop. */
   readonly stopImpersonating: (
     caller: Api.UserPrincipal,
-  ) => Effect.Effect<void, AdminApi.AdminImpersonationNotFound>;
+  ) => Effect.Effect<void, AdminApi.AdminImpersonationNotFound | Errors.StoreUnavailable>;
   /** BEH-EA-217: gated per episode by `canManageEpisode` (IDS-001); `sessionId` names the episode to end, not `caller`'s own. */
   readonly forceStop: (
     caller: Api.UserPrincipal,
     sessionId: string,
-  ) => Effect.Effect<void, AdminApi.AdminImpersonationDenied | AdminApi.AdminImpersonationNotFound>;
+  ) => Effect.Effect<
+    void,
+    AdminApi.AdminImpersonationDenied | AdminApi.AdminImpersonationNotFound | Errors.StoreUnavailable
+  >;
   /** BEH-EA-219: rows are filtered through `canManageEpisode` (IDS-001); full history by default, `active` narrows to unended episodes. */
   readonly list: (
     caller: Api.UserPrincipal,
@@ -203,7 +214,7 @@ export interface AdminShape {
     userId: Users.UserId,
   ) => Effect.Effect<
     ReadonlyArray<Sessions.SessionListItem>,
-    AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound
+    AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound | Errors.StoreUnavailable
   >;
   readonly revokeUserSession: (
     caller: Api.UserPrincipal,
@@ -211,13 +222,19 @@ export interface AdminShape {
     sessionId: string,
   ) => Effect.Effect<
     void,
-    AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound | AdminApi.AdminSessionNotFound
+    | AdminApi.AdminActionDenied
+    | AdminApi.AdminTargetNotFound
+    | AdminApi.AdminSessionNotFound
+    | Errors.StoreUnavailable
   >;
   /** Revokes every one of the user's own sessions; impersonation sessions stay (end them with `forceStop`). */
   readonly revokeUserSessions: (
     caller: Api.UserPrincipal,
     userId: Users.UserId,
-  ) => Effect.Effect<void, AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound>;
+  ) => Effect.Effect<
+    void,
+    AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound | Errors.StoreUnavailable
+  >;
 }
 
 // RSC-005: the mapping is `@awthaq/server`'s `Session.toSessionDto`; the typed

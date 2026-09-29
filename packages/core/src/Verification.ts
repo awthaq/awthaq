@@ -42,11 +42,11 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as AuthEvents from "./AuthEvents.ts";
+import { storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
@@ -102,7 +102,7 @@ export interface VerificationShape {
     readonly userId?: UserId;
   }) => Effect.Effect<
     { readonly token: VerificationTokenView; readonly value: Redacted.Redacted<string> },
-    PlatformError.PlatformError
+    StoreUnavailable
   >;
   /**
    * BEH-EA-058/062: consumption and the caller's own state change are meant
@@ -115,7 +115,7 @@ export interface VerificationShape {
   readonly consume: (
     identifier: string,
     value: Redacted.Redacted<string>,
-  ) => Effect.Effect<VerificationTokenView, TokenConsumed | PlatformError.PlatformError>;
+  ) => Effect.Effect<VerificationTokenView, TokenConsumed | StoreUnavailable>;
   /**
    * BEH-EA-063: `true` only for the first reservation of `identifier` while
    * unexpired, `false` for every later one — independent of `consume`, used
@@ -124,9 +124,9 @@ export interface VerificationShape {
   readonly reserve: (input: {
     readonly identifier: string;
     readonly ttl: Duration.Duration;
-  }) => Effect.Effect<boolean>;
+  }) => Effect.Effect<boolean, StoreUnavailable>;
   /** BCR-003: sweeps every token (live or already-consumed) naming `userId` — the cascade an account deletion needs. */
-  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void>;
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, StoreUnavailable>;
 }
 
 export class Verification extends Context.Service<Verification, VerificationShape>()(
@@ -202,7 +202,9 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           },
           value: Redacted.make(value),
         };
-      });
+      },
+      Effect.catchTag("PlatformError", storeUnavailable("Verification.issue")),
+      );
 
       const consume: VerificationShape["consume"] = Effect.fnUntraced(
         function* (identifier, value) {
@@ -258,6 +260,7 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
             Effect.tapError(() => events.publish({ _tag: "auth.token.replay", identifier })),
           );
         },
+        Effect.catchTag("PlatformError", storeUnavailable("Verification.consume")),
       );
 
       const reserve: VerificationShape["reserve"] = Effect.fnUntraced(function* (input) {
@@ -331,9 +334,16 @@ export const layerSql = Layer.effect(
       // conflict resolution (not a separate delete-then-insert racing
       // itself) decides "fresh row" vs. "replace the current live row" in
       // a single statement. Already-consumed history is never touched.
-      const row = yield* repo.upsertLive(insert).pipe(Effect.orDie);
+      const row = yield* repo.upsertLive(insert);
       return { token: toTokenView(row), value: Redacted.make(value) };
-    });
+    },
+    Effect.catchTags({
+      PlatformError: storeUnavailable("Verification.issue"),
+      SqlError: storeUnavailable("Verification.issue"),
+      SchemaError: Effect.die,
+      NoSuchElementError: Effect.die,
+    }),
+    );
 
     const consume: VerificationShape["consume"] = Effect.fnUntraced(function* (identifier, value) {
       const now = yield* DateTime.now;
@@ -342,8 +352,7 @@ export const layerSql = Layer.effect(
       // lose — no separate read racing this call's own write, the same
       // guarantee `layerMemory`'s `Ref.modify` gives.
       const claimed = yield* repo
-        .tryConsume({ identifier, valueHash: presentedHash, now })
-        .pipe(Effect.orDie);
+        .tryConsume({ identifier, valueHash: presentedHash, now });
       const outcome: Result.Result<VerificationTokenView, TokenConsumed> = Option.match(claimed, {
         onNone: () =>
           Result.fail(
@@ -360,7 +369,13 @@ export const layerSql = Layer.effect(
       return yield* Effect.fromResult(outcome).pipe(
         Effect.tapError(() => events.publish({ _tag: "auth.token.replay", identifier })),
       );
-    });
+    },
+    Effect.catchTags({
+      PlatformError: storeUnavailable("Verification.consume"),
+      SqlError: storeUnavailable("Verification.consume"),
+      SchemaError: Effect.die,
+    }),
+    );
 
     const reserve: VerificationShape["reserve"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;
@@ -369,12 +384,18 @@ export const layerSql = Layer.effect(
           identifier: input.identifier,
           expiresAt: DateTime.addDuration(now, input.ttl),
           now,
-        })
-        .pipe(Effect.orDie);
-    });
+        });
+    },
+    Effect.catchTags({
+      SqlError: storeUnavailable("Verification.reserve"),
+      SchemaError: Effect.die,
+    }),
+    );
 
     const deleteAllByUser: VerificationShape["deleteAllByUser"] = (userId) =>
-      repo.deleteAllByUser(userId).pipe(Effect.orDie);
+      repo
+        .deleteAllByUser(userId)
+        .pipe(Effect.catchTag("SqlError", storeUnavailable("Verification.deleteAllByUser")));
 
     return { issue, consume, reserve, deleteAllByUser };
   }),

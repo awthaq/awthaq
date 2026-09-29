@@ -30,6 +30,7 @@ import * as Result from "effect/Result";
 import * as Model from "effect/unstable/schema/Model";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
+import { storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
@@ -316,7 +317,7 @@ export interface SessionsShape {
     readonly absoluteDuration?: Duration.Duration;
   }) => Effect.Effect<
     { readonly session: SessionView; readonly token: Redacted.Redacted<string> },
-    PlatformError.PlatformError
+    StoreUnavailable
   >;
   /**
    * BEH-EA-050/056: hashes the presented secret and compares it to the
@@ -369,7 +370,7 @@ export interface SessionsShape {
     token: Redacted.Redacted<string>,
   ) => Effect.Effect<
     { readonly session: SessionView; readonly rotated: Option.Option<Redacted.Redacted<string>> },
-    SessionNotFound | SessionExpired | PlatformError.PlatformError
+    SessionNotFound | SessionExpired | StoreUnavailable
   >;
   /**
    * TIR-008: every revocation primitive takes the `reason` the session ended
@@ -380,7 +381,7 @@ export interface SessionsShape {
   readonly revoke: (
     id: SessionId,
     reason: AuthEvents.SessionRevocationReason,
-  ) => Effect.Effect<void, SessionNotFound>;
+  ) => Effect.Effect<void, SessionNotFound | StoreUnavailable>;
   /**
    * GC-005: revokes session `id` only if it belongs to `userId`, atomically —
    * ownership is enforced by the domain operation, not by a caller-side
@@ -392,18 +393,18 @@ export interface SessionsShape {
     userId: UserId,
     id: SessionId,
     reason: AuthEvents.SessionRevocationReason,
-  ) => Effect.Effect<void, SessionNotFound>;
+  ) => Effect.Effect<void, SessionNotFound | StoreUnavailable>;
   /** BEH-EA-054: revokes every session for `userId` except `keep`. */
   readonly revokeOthers: (
     userId: UserId,
     keep: SessionId,
     reason: AuthEvents.SessionRevocationReason,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreUnavailable>;
   /** Ticket 02: revokes every session for `userId`, no exceptions — including the caller's own current session. */
   readonly revokeAll: (
     userId: UserId,
     reason: AuthEvents.SessionRevocationReason,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, StoreUnavailable>;
   /**
    * BEH-EA-054: exactly the user's *live* sessions — not tombstoned, past
    * neither `absoluteExpiresAt` nor `idleExpiresAt` — newest activity first
@@ -421,7 +422,7 @@ export interface SessionsShape {
     userId: UserId,
     current?: SessionId,
     options?: SqlReadRouting.ReadOptions,
-  ) => Effect.Effect<ReadonlyArray<SessionListItem>>;
+  ) => Effect.Effect<ReadonlyArray<SessionListItem>, StoreUnavailable>;
   /**
    * TIR-003/ESS-005: the keyed ownership lookup every point query goes
    * through — one `findById` plus ownership, tombstone and expiry checks,
@@ -433,7 +434,7 @@ export interface SessionsShape {
   readonly findOwned: (
     userId: UserId,
     id: SessionId,
-  ) => Effect.Effect<Option.Option<SessionListItem>>;
+  ) => Effect.Effect<Option.Option<SessionListItem>, StoreUnavailable>;
   /**
    * TIR-002/FAMS-009/MAPS-006: the exact liveness check a caller holding
    * only a bare `id` (no secret — `verify`'s own credential) needs — e.g.
@@ -448,7 +449,7 @@ export interface SessionsShape {
    * already tombstoned, past either expiry, or simply absent — a single
    * keyed lookup (`findOwned`), not `list`'s full per-user scan.
    */
-  readonly isLive: (userId: UserId, id: SessionId) => Effect.Effect<boolean>;
+  readonly isLive: (userId: UserId, id: SessionId) => Effect.Effect<boolean, StoreUnavailable>;
   /**
    * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
    * (AAPS-001/BPAS-001): sets `authenticatedAt = now` only — deliberately a
@@ -463,7 +464,7 @@ export interface SessionsShape {
     id: SessionId,
     /** THS-003: methods this step-up just proved; unioned into the session's `amr` (monotone — never removed). */
     amr?: ReadonlyArray<AuthMethod>,
-  ) => Effect.Effect<SessionView, SessionNotFound>;
+  ) => Effect.Effect<SessionView, SessionNotFound | StoreUnavailable>;
 }
 
 export class Sessions extends Context.Service<Sessions, SessionsShape>()("awthaq/core/Sessions") {}
@@ -710,7 +711,9 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         }
         yield* publishIssued(events, row, row.familyId, row.actingAs);
         return { session: toView(row), token: Redacted.make(`${id}.${secret}`) };
-      });
+      },
+      Effect.catchTag("PlatformError", storeUnavailable("Sessions.issue")),
+      );
 
       /**
        * BAM-003 (.issues/high): consulted only on a primary-store miss — a
@@ -882,7 +885,9 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           session: toView(touched.value),
           rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
         };
-      });
+      },
+      Effect.catchTag("PlatformError", storeUnavailable("Sessions.verify")),
+      );
 
       // TIR-008: each primitive removes the row(s) in one `Ref.modify` and
       // then publishes exactly one `auth.session.revoked` for the call.
@@ -1110,8 +1115,6 @@ export const layerSql: Layer.Layer<
             .pipe(
               Effect.catchTags({
                 NoSuchElementError: () => Effect.succeed(undefined),
-                SchemaError: Effect.die,
-                SqlError: Effect.die,
               }),
             );
           if (ancestor !== undefined) familyId = SessionId(ancestor.familyId);
@@ -1134,7 +1137,7 @@ export const layerSql: Layer.Layer<
             reusedAt: null,
           })
           .pipe(Effect.orDie);
-        const inserted = yield* repo.insert(insert).pipe(Effect.orDie);
+        const inserted = yield* repo.insert(insert);
         // SMS-003: enforced in this same transaction — list the user's other
         // live, non-impersonation sessions (oldest activity first) and delete
         // the surplus. Under Postgres' default isolation two racing issues can
@@ -1143,12 +1146,12 @@ export const layerSql: Layer.Layer<
         const policy = input.actingAs === undefined ? config.maxConcurrent : undefined;
         const evicted: Array<string> = [];
         if (policy !== undefined) {
-          const live = yield* repo.listLiveIds(input.userId, now).pipe(Effect.orDie);
+          const live = yield* repo.listLiveIds(input.userId, now);
           for (const goneId of evictionOrder(
             policy.limit,
             live.filter((r) => r.id !== id),
           )) {
-            yield* repo.delete(SessionId(goneId)).pipe(Effect.orDie);
+            yield* repo.delete(SessionId(goneId));
             evicted.push(goneId);
           }
         }
@@ -1157,7 +1160,7 @@ export const layerSql: Layer.Layer<
       const { inserted: row, evicted } = yield* input.supersedes === undefined &&
       config.maxConcurrent === undefined
         ? persist
-        : sql.withTransaction(persist).pipe(Effect.catchTag("SqlError", Effect.die));
+        : sql.withTransaction(persist);
       for (const goneId of evicted) {
         yield* events.publish({
           _tag: "auth.session.revoked",
@@ -1170,7 +1173,13 @@ export const layerSql: Layer.Layer<
       const view = toSessionView(row);
       yield* publishIssued(events, view, row.familyId, view.actingAs);
       return { session: view, token: Redacted.make(`${row.id}.${secret}`) };
-    });
+    },
+    Effect.catchTags({
+      PlatformError: storeUnavailable("Sessions.issue"),
+      SqlError: storeUnavailable("Sessions.issue"),
+      SchemaError: Effect.die,
+    }),
+    );
 
     /**
      * BAM-003 (.issues/high): consulted only on a primary-store miss — see
@@ -1212,8 +1221,6 @@ export const layerSql: Layer.Layer<
         Effect.map(Option.some),
         Effect.catchTags({
           NoSuchElementError: () => Effect.succeed(Option.none()),
-          SchemaError: Effect.die,
-          SqlError: Effect.die,
         }),
       );
       if (Option.isNone(found)) {
@@ -1240,8 +1247,8 @@ export const layerSql: Layer.Layer<
       if (row.supersededAt !== null) {
         if (row.reusedAt === null) {
           const familyId = SessionId(row.familyId);
-          yield* repo.markReused(id, now).pipe(Effect.orDie);
-          yield* repo.revokeFamily(familyId).pipe(Effect.orDie);
+          yield* repo.markReused(id, now);
+          yield* repo.revokeFamily(familyId);
           yield* events.publish({
             _tag: "auth.session.reuse",
             sessionId: id,
@@ -1312,15 +1319,12 @@ export const layerSql: Layer.Layer<
             DateTime.addDuration(now, config.idle),
             row.absoluteExpiresAt,
           ),
-        })
-        .pipe(Effect.orDie);
+        });
       if (Option.isNone(touched)) {
         const current = yield* repo.findById(id).pipe(
           Effect.catchTags({
             NoSuchElementError: () =>
               Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
-            SchemaError: Effect.die,
-            SqlError: Effect.die,
           }),
         );
         return { session: toSessionView(current), rotated: Option.none() };
@@ -1329,7 +1333,13 @@ export const layerSql: Layer.Layer<
         session: toSessionView(touched.value),
         rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
       };
-    });
+    },
+    Effect.catchTags({
+      PlatformError: storeUnavailable("Sessions.verify"),
+      SqlError: storeUnavailable("Sessions.verify"),
+      SchemaError: Effect.die,
+    }),
+    );
 
     // TIR-008: each primitive deletes, then publishes exactly one
     // `auth.session.revoked` for the call.
@@ -1338,12 +1348,9 @@ export const layerSql: Layer.Layer<
         Effect.catchTags({
           NoSuchElementError: () =>
             Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
-          SchemaError: Effect.die,
-          SqlError: Effect.die,
         }),
         Effect.flatMap((row) =>
           repo.delete(id).pipe(
-            Effect.orDie,
             Effect.andThen(
               events.publish({
                 _tag: "auth.session.revoked",
@@ -1355,11 +1362,14 @@ export const layerSql: Layer.Layer<
             ),
           ),
         ),
+        Effect.catchTags({
+          SqlError: storeUnavailable("Sessions.revoke"),
+          SchemaError: Effect.die,
+        }),
       );
 
     const revokeOwned: SessionsShape["revokeOwned"] = (userId, id, reason) =>
       repo.deleteOwned(id, userId).pipe(
-        Effect.orDie,
         Effect.flatMap((deleted) =>
           deleted
             ? events.publish({
@@ -1371,11 +1381,11 @@ export const layerSql: Layer.Layer<
               })
             : Effect.fail(new SessionNotFound({ message: "awthaq: no such session", id })),
         ),
+        Effect.catchTag("SqlError", storeUnavailable("Sessions.revokeOwned")),
       );
 
     const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep, reason) =>
       repo.deleteAllForUserExcept(userId, keep).pipe(
-        Effect.orDie,
         Effect.andThen(
           events.publish({
             _tag: "auth.session.revoked",
@@ -1385,11 +1395,11 @@ export const layerSql: Layer.Layer<
             reason,
           }),
         ),
+        Effect.catchTag("SqlError", storeUnavailable("Sessions.revokeOthers")),
       );
 
     const revokeAll: SessionsShape["revokeAll"] = (userId, reason) =>
       repo.deleteAllByUser(userId).pipe(
-        Effect.orDie,
         Effect.andThen(
           events.publish({
             _tag: "auth.session.revoked",
@@ -1399,6 +1409,7 @@ export const layerSql: Layer.Layer<
             reason,
           }),
         ),
+        Effect.catchTag("SqlError", storeUnavailable("Sessions.revokeAll")),
       );
 
     const toItem = (row: SqlModels.Session, current: SessionId | undefined): SessionListItem => ({
@@ -1431,8 +1442,7 @@ export const layerSql: Layer.Layer<
             Option.getOrUndefined(cursor),
             SqlRepositories.MAX_PAGE_SIZE,
             options,
-          )
-          .pipe(Effect.orDie);
+          );
         rows.push(...page.items);
         if (Option.isNone(page.nextCursor)) return rows;
         cursor = page.nextCursor;
@@ -1446,6 +1456,10 @@ export const layerSql: Layer.Layer<
     const list: SessionsShape["list"] = (userId, current, options) =>
       drainLive(userId, options).pipe(
         Effect.map((rows) => newestActivityFirst(rows.map((row) => toItem(row, current)))),
+        Effect.catchTags({
+          SqlError: storeUnavailable("Sessions.list"),
+          SchemaError: Effect.die,
+        }),
       );
 
     const findOwned: SessionsShape["findOwned"] = (userId, id) =>
@@ -1454,8 +1468,6 @@ export const layerSql: Layer.Layer<
           Effect.map(Option.some),
           Effect.catchTags({
             NoSuchElementError: () => Effect.succeed(Option.none()),
-            SchemaError: Effect.die,
-            SqlError: Effect.die,
           }),
         );
         const now = yield* DateTime.now;
@@ -1469,7 +1481,12 @@ export const layerSql: Layer.Layer<
               supersededAt: Option.fromNullishOr(r.supersededAt),
             }),
         ).pipe(Option.map((r) => toItem(r, undefined)));
-      });
+      }).pipe(
+        Effect.catchTags({
+          SqlError: storeUnavailable("Sessions.findOwned"),
+          SchemaError: Effect.die,
+        }),
+      );
 
     const isLive: SessionsShape["isLive"] = (userId, id) =>
       findOwned(userId, id).pipe(Effect.map(Option.isSome));
@@ -1486,19 +1503,20 @@ export const layerSql: Layer.Layer<
               Effect.map((current) => JSON.stringify(unionAmr(parseAmr(current.amr), amr))),
               Effect.catchTags({
                 NoSuchElementError: notFound,
-                SchemaError: Effect.die,
-                SqlError: Effect.die,
               }),
             );
       const row = yield* repo.reauthenticate(id, now, unioned).pipe(
         Effect.catchTags({
           NoSuchElementError: notFound,
-          SchemaError: Effect.die,
-          SqlError: Effect.die,
         }),
       );
       return toSessionView(row);
-    });
+    },
+    Effect.catchTags({
+      SqlError: storeUnavailable("Sessions.reauthenticate"),
+      SchemaError: Effect.die,
+    }),
+    );
 
     return {
       issue,

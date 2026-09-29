@@ -223,7 +223,7 @@ export type ReauthRequired = Api.ReauthRequired;
  * rather than being silently discharged unexamined.
  */
 const reauthHandler: ObligationHandler<
-  Api.ReauthRequired,
+  Api.ReauthRequired | Api.StoreUnavailable,
   Api.CurrentPrincipal | Sessions.Sessions
 > = (obligations) =>
   Effect.gen(function* () {

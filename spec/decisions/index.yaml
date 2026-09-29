@@ -86,3 +86,7 @@ entries:
     file: "026-signup-enumeration-posture.md"
     title: "Sign-Up Reveals an Existing Address by Default, With an Opt-In Conceal Mode"
     status: "Accepted — implemented"
+  - id: "ADR-EA-028"
+    file: "028-infrastructure-error-policy.md"
+    title: "Infrastructure Failures Are One Typed StoreUnavailable, Not Defects"
+    status: "Accepted — implemented for Sessions and Verification; rollout to Users, Accounts and AuditLog pending"

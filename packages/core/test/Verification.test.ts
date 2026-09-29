@@ -8,15 +8,18 @@ import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Migrator from "effect/unstable/sql/Migrator";
+import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Users from "../src/Users.ts";
@@ -389,5 +392,79 @@ describe("Verification (layerMemory) pruning (TMS-004)", () => {
       );
       assert.isFalse(yield* verification.reserve({ identifier: "live", ttl: Duration.minutes(10) }));
     }).pipe(Effect.provide(MemoryLayer)),
+  );
+});
+
+// MA-004: an infrastructure failure is the typed `StoreUnavailable`, never a defect.
+describe("Verification infrastructure failures (MA-004)", () => {
+  const DownRepository = Layer.effect(
+    Repositories.VerificationReservationsRepository,
+    Effect.gen(function* () {
+      const real = yield* Repositories.VerificationReservationsRepository;
+      return {
+        ...real,
+        claim: () =>
+          Effect.fail(
+            new SqlError({ reason: new UnknownError({ cause: new Error("connection reset") }) }),
+          ),
+      };
+    }),
+  ).pipe(Layer.provide(Repositories.VerificationReservationsRepositoryLive));
+
+  const DownLayer = Verification.layerSql.pipe(
+    Layer.provide(Repositories.VerificationRepositoryLive),
+    Layer.provide(DownRepository),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
+
+  it.effect("layerSql: a SqlError from the repository surfaces as StoreUnavailable", () =>
+    Effect.gen(function* () {
+      const verification = yield* Verification.Verification;
+      const failure = yield* verification
+        .reserve({ identifier: "x", ttl: Duration.minutes(1) })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+      assert.strictEqual(failure.operation, "Verification.reserve");
+    }).pipe(Effect.provide(DownLayer)),
+  );
+
+  const BrokenCryptoLayer = Verification.layerMemory.pipe(
+    Layer.provide(
+      Layer.succeed(
+        Crypto.Crypto,
+        Crypto.make({
+          randomBytes: (size) => new Uint8Array(size),
+          digest: () =>
+            Effect.fail(
+              PlatformError.systemError({
+                module: "Crypto",
+                method: "digest",
+                _tag: "Unknown",
+                description: "provider down",
+              }),
+            ),
+        }),
+      ),
+    ),
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layerMemory),
+  );
+
+  it.effect("layerMemory: a crypto PlatformError surfaces as StoreUnavailable", () =>
+    Effect.gen(function* () {
+      const verification = yield* Verification.Verification;
+      const issueFailure = yield* verification
+        .issue({ identifier: "x", ttl: Duration.minutes(1) })
+        .pipe(Effect.flip);
+      assert.strictEqual(issueFailure._tag, "StoreUnavailable");
+      const consumeFailure = yield* verification
+        .consume("x", Redacted.make("nope"))
+        .pipe(Effect.flip);
+      assert.strictEqual(consumeFailure._tag, "StoreUnavailable");
+    }).pipe(Effect.provide(BrokenCryptoLayer)),
   );
 });

@@ -1,5 +1,5 @@
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-065 through BEH-EA-072.
-import { AuditLog, AuthEvents, Hooks, SessionCookie, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Errors, Hooks, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -16,7 +16,6 @@ import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -116,15 +115,10 @@ const TestLayer = Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
 
 const userId = Users.UserId("33333333-3333-3333-3333-333333333333");
 
-// NHS-002/EEM-003: simulates a backing-store outage — `verify` fails with
-// the same `PlatformError` a real `Sessions.layerSql` would report on a
-// database failure, distinct from `SessionNotFound`/`SessionExpired`.
-const outage = PlatformError.systemError({
-  _tag: "Unknown",
-  module: "Sessions",
-  method: "verify",
-  description: "simulated backing-store outage",
-});
+// NHS-002/EEM-003/MA-004: simulates a backing-store outage — `verify` fails with
+// the typed `StoreUnavailable` a real `Sessions.layerSql` reports on a database
+// failure, distinct from `SessionNotFound`/`SessionExpired`.
+const outage = new Errors.StoreUnavailable({ operation: "Sessions.verify" });
 
 const UnreliableSessions: Layer.Layer<Sessions.Sessions> = Layer.succeed(Sessions.Sessions, {
   issue: () => Effect.die("not used in this test"),
@@ -413,14 +407,13 @@ describe("Authentication", () => {
   });
 
   // NHS-002/EEM-003: `resolveSession` used to blanket-map every `verify`
-  // failure — including a `PlatformError` backing-store outage — to
-  // `Api.Unauthenticated`, so a database outage answered 401 on every
-  // request, indistinguishable from a bad credential. `Effect.exit` (not
-  // `Effect.flip`) is required here: the fix turns `PlatformError` into an
-  // unhandled defect via `Effect.orDie`, which `flip` cannot observe (it
-  // only flips a typed failure) but `exit` captures as `Cause.isDie`.
+  // failure — including a backing-store outage — to `Api.Unauthenticated`, so
+  // a database outage answered 401 on every request, indistinguishable from a
+  // bad credential. MA-004: the outage is the typed `StoreUnavailable`; it
+  // stays a typed failure (not `Unauthenticated`, not a defect), which the
+  // middleware declares and so answers 503.
   it.effect(
-    "resolveSession dies (does not fail Unauthenticated) when the session store is unreachable",
+    "resolveSession fails StoreUnavailable (not Unauthenticated, not a defect) when the session store is unreachable",
     () =>
       Effect.gen(function* () {
         const request = HttpServerRequest.fromWeb(new Request("http://localhost/whatever"));
@@ -431,8 +424,9 @@ describe("Authentication", () => {
         ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request), Effect.exit);
         assert.isTrue(Exit.isFailure(exit));
         if (!Exit.isFailure(exit)) return;
-        assert.isTrue(Cause.hasDies(exit.cause));
-        assert.isFalse(Cause.hasFails(exit.cause));
+        assert.isFalse(Cause.hasDies(exit.cause));
+        const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail");
+        assert.strictEqual(failure?.error._tag, "StoreUnavailable");
       }).pipe(Effect.provide(UnreliableSessions)),
   );
 });
@@ -461,6 +455,16 @@ const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provide(NodeCrypto.layer),
+  Layer.provideMerge(TestServices),
+  Layer.provideMerge(HttpRouter.layer),
+);
+
+// MA-004: the same route served over a session store that is down.
+const OutageLayer = HttpApiBuilder.layer(RotationApi).pipe(
+  Layer.provide(RotationHandlers),
+  Layer.provideMerge(Authentication.AuthenticationLive),
+  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provideMerge(UnreliableSessions),
   Layer.provideMerge(TestServices),
   Layer.provideMerge(HttpRouter.layer),
 );
@@ -501,6 +505,17 @@ const rotationLayerWith = (cookieConfig: Layer.Layer<never>) =>
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
   );
+
+describe("MA-004: a session-store outage answers 503", () => {
+  it.effect("an authenticated route with a cookie answers 503 StoreUnavailable, not 401 or 500", () =>
+    Effect.gen(function* () {
+      const response = yield* serve("/ok", {
+        cookie: `${Sessions.SESSION_COOKIE_NAME}=some-id.some-secret`,
+      });
+      assert.strictEqual(response.status, 503);
+    }).pipe(Effect.provide(OutageLayer)),
+  );
+});
 
 describe("Session cookie policy on rotation (IC-007, BO-005, AGA-004)", () => {
   it.effect(

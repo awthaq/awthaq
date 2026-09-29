@@ -23,10 +23,11 @@
 
 import { Api } from "@awthaq/api";
 import {
+  Accounts,
   AuthEvents,
   AuthPlugin,
-  Accounts,
   ConstantTime,
+  Errors,
   Hooks,
   RateLimits,
   SessionCookie,
@@ -478,7 +479,7 @@ export interface OAuthShape {
     | OAuthApi.OAuthAuthorizationDenied
     | OAuthApi.AccountExists
     | Api.RateLimited
-    | Hooks.TwoFactorRequired
+    | Hooks.TwoFactorRequired | Errors.StoreUnavailable
   >;
 }
 
@@ -717,7 +718,6 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         const { identifier, value } = decoded.value;
         const consumed = yield* verification.consume(identifier, value).pipe(
           Effect.catchTag("Verification/TokenConsumed", () => CallbackFailure.callbackFailed("flow-consumed")),
-          Effect.catchTag("PlatformError", Effect.die),
         );
         const decodedFlow = decodeFlowPayload(consumed.payload);
         if (Option.isNone(decodedFlow) || decodedFlow.value.providerId !== providerId) {

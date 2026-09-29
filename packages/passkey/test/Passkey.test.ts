@@ -574,7 +574,7 @@ describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", 
       yield* TestClock.adjust(Duration.minutes(6));
 
       const failure = yield* passkey.registerOptions(user.id, issued.session.id).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "PasskeyReauthRequired");
+      if (failure._tag !== "PasskeyReauthRequired") return assert.fail(failure._tag);
       assert.strictEqual(failure.maxAgeSeconds, 300);
     }).pipe(Effect.provide(TestLayer)),
   );

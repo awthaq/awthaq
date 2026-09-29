@@ -101,6 +101,22 @@ export class ReauthRequired extends Schema.TaggedError<ReauthRequired>()(
 /** Narrows an unknown decoded error to `ReauthRequired` — the client's "confirm your password" branch. */
 export const isReauthRequired = Schema.is(ReauthRequired);
 
+/**
+ * MA-004 (ADR-EA-028): a backing store (database, crypto provider) failed the operation — an
+ * infrastructure outage, not a domain answer, so it answers 503 (a retryable server fault),
+ * never 401/403 (which would say the caller is wrong) or a bare 500. One class serves both
+ * as the error core services fail with and as the wire error: the underlying cause is logged
+ * where it happened and is deliberately not a field, so it can never reach a response body.
+ * `operation` is a static label (`Sessions.verify`), safe to expose, useful to alerting.
+ * Declared on the authentication and CSRF middleware, so every endpoint behind either accepts
+ * it without naming it in its own `error` list.
+ */
+export class StoreUnavailable extends Schema.TaggedError<StoreUnavailable>()(
+  "StoreUnavailable",
+  { operation: Schema.String },
+  { httpApiStatus: 503 },
+) {}
+
 /** BEH-EA-027: identical whether the submitted credential's target account exists or not. */
 export class InvalidCredentials extends Schema.TaggedError<InvalidCredentials>()(
   "InvalidCredentials",
@@ -173,7 +189,7 @@ export class Authentication extends HttpApiMiddleware.Service<
   { provides: CurrentPrincipal }
 >()("Authentication", {
   security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
-  error: Unauthenticated,
+  error: [Unauthenticated, StoreUnavailable],
 }) {}
 
 /**
@@ -192,7 +208,7 @@ export class AdminAuthentication extends HttpApiMiddleware.Service<
   { provides: CurrentPrincipal }
 >()("AdminAuthentication", {
   security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
-  error: Unauthenticated,
+  error: [Unauthenticated, StoreUnavailable],
 }) {}
 
 /**
@@ -209,10 +225,15 @@ export class OptionalAuthentication extends HttpApiMiddleware.Service<
   { provides: CurrentPrincipal }
 >()("OptionalAuthentication", {
   security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
+  // MA-004: it still cannot answer 401, but a session store that is down is not "no credential":
+  // failing closed with 503 beats treating the caller as anonymous.
+  error: StoreUnavailable,
 }) {}
 
 /** BEH-EA-030/076/079: a plain (non-security) middleware — CSRF is a request-property check, not a credential scheme. */
 export class CsrfProtection extends HttpApiMiddleware.Service<CsrfProtection>()("CsrfProtection", {
   requiredForClient: true,
-  error: CsrfRejected,
+  // MA-004: `StoreUnavailable` is declared here as well as on the authentication middleware so the
+  // public, unauthenticated mutating endpoints (sign-up, sign-in, reset) can answer a store outage 503 too.
+  error: [CsrfRejected, StoreUnavailable],
 }) {}

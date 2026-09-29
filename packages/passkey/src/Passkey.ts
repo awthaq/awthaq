@@ -24,9 +24,10 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import {
+  Accounts,
   AuthEvents,
   AuthPlugin,
-  Accounts,
+  Errors,
   Hooks,
   Migrations,
   RateLimits,
@@ -473,14 +474,16 @@ export interface PasskeyShape {
     sessionId: string,
   ) => Effect.Effect<
     PasskeyApi.PublicKeyCredentialCreationOptions,
-    PasskeyApi.PasskeyReauthRequired
+    PasskeyApi.PasskeyReauthRequired | Errors.StoreUnavailable
   >;
   readonly registerOptionsConditional: (
     userId: Users.UserId,
     sessionId: string,
   ) => Effect.Effect<
     PasskeyApi.PublicKeyCredentialCreationOptions,
-    PasskeyApi.PasskeyConditionalCreateDisabled | PasskeyApi.PasskeyReauthRequired
+    | PasskeyApi.PasskeyConditionalCreateDisabled
+    | PasskeyApi.PasskeyReauthRequired
+    | Errors.StoreUnavailable
   >;
   readonly registerVerify: (
     userId: Users.UserId,
@@ -496,6 +499,7 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyAttestationRejected
     | PasskeyApi.PasskeyAlreadyRegistered
     | PasskeyApi.PasskeyReauthRequired
+    | Errors.StoreUnavailable
   >;
   /**
    * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
@@ -520,6 +524,7 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCredentialNotFound
     | PasskeyApi.PasskeyCounterAnomaly
+    | Errors.StoreUnavailable
   >;
   readonly authenticateOptions: (input: {
     readonly email?: string | undefined;
@@ -1027,7 +1032,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const requireFreshSession = (
         userId: Users.UserId,
         sessionId: string,
-      ): Effect.Effect<void, PasskeyApi.PasskeyReauthRequired> =>
+      ): Effect.Effect<void, PasskeyApi.PasskeyReauthRequired | Errors.StoreUnavailable> =>
         Effect.gen(function* () {
           const maxAgeSeconds = Duration.toSeconds(config.reauthMaxAgeSeconds);
           const current = yield* sessions.findOwned(userId, Sessions.SessionId(sessionId));

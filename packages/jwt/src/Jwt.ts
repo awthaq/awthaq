@@ -49,7 +49,7 @@
 // logic.
 
 import { Api } from "@awthaq/api";
-import { AuthPlugin, Migrations, Sessions, Users } from "@awthaq/core";
+import { AuthPlugin, Errors, Migrations, Sessions, Users } from "@awthaq/core";
 import { RefreshingCache } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import * as Arr from "effect/Array";
@@ -96,7 +96,11 @@ export interface JwtShape {
   /** Ticket 12: `verify` plus a live check that the token's `sid` still names an unrevoked, unexpired session. The documented, deliberate weakening `verify` alone carries (a revoked session's JWT keeps verifying until its own `exp`) does not apply here. */
   readonly verifyLive: (
     token: string,
-  ) => Effect.Effect<Record<string, unknown>, JwtCodec.JwtInvalidError, Sessions.Sessions>;
+  ) => Effect.Effect<
+    Record<string, unknown>,
+    JwtCodec.JwtInvalidError | Errors.StoreUnavailable,
+    Sessions.Sessions
+  >;
   /**
    * Ticket 14: arbitrary-payload signing, not tied to any `Principal` — reuses
    * the same key/rotation machinery `sign` does. `options.ttl` overrides
@@ -151,7 +155,7 @@ export interface JwtShape {
    */
   readonly introspectLive: (
     token: string,
-  ) => Effect.Effect<IntrospectionResult, never, Sessions.Sessions>;
+  ) => Effect.Effect<IntrospectionResult, Errors.StoreUnavailable, Sessions.Sessions>;
   /**
    * TIR-007: what `POST /jwt/introspect` calls. `introspect`, plus the same
    * session-liveness check `introspectLive` runs *whenever `Sessions` was
@@ -163,7 +167,7 @@ export interface JwtShape {
    * introspect `active: false` over HTTP at once; bare `verify` (and any
    * bearer re-entry built on it) lags by at most `JwtConfig.ttl`.
    */
-  readonly introspectComposed: (token: string) => Effect.Effect<IntrospectionResult>;
+  readonly introspectComposed: (token: string) => Effect.Effect<IntrospectionResult, Errors.StoreUnavailable>;
 }
 
 /**

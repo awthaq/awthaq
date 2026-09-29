@@ -13,11 +13,13 @@ import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
@@ -1178,6 +1180,56 @@ const FlakySqlLayer = Sessions.layerSql.pipe(
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );
+
+// MA-004: an infrastructure failure is one typed, retryable `StoreUnavailable` in the Shape's `E`,
+// for both layers — never a defect and never the raw `SqlError`/`PlatformError`.
+describe("Sessions infrastructure failures (MA-004)", () => {
+  it.effect("layerSql: a SqlError from the repository surfaces as StoreUnavailable, not a defect", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      yield* Ref.set(failNextInsert, true);
+      const failure = yield* sessions.issue({ userId }).pipe(Effect.flip);
+      yield* Ref.set(failNextInsert, false);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+      assert.strictEqual(failure.operation, "Sessions.issue");
+      // The cause is logged where it happened; it is not a field a response could carry.
+      assert.notProperty(failure, "cause");
+    }).pipe(Effect.provide(FlakySqlLayer)),
+  );
+
+  const BrokenCrypto = Layer.succeed(
+    Crypto.Crypto,
+    Crypto.make({
+      randomBytes: (size) => new Uint8Array(size),
+      digest: () =>
+        Effect.fail(
+          PlatformError.systemError({
+            module: "Crypto",
+            method: "digest",
+            _tag: "Unknown",
+            description: "provider down",
+          }),
+        ),
+    }),
+  );
+  const BrokenCryptoLayer = Sessions.layerMemory.pipe(
+    Layer.provide(BrokenCrypto),
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layerMemory),
+  );
+
+  it.effect("layerMemory: a crypto PlatformError surfaces as StoreUnavailable", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const issueFailure = yield* sessions.issue({ userId }).pipe(Effect.flip);
+      assert.strictEqual(issueFailure._tag, "StoreUnavailable");
+      const verifyFailure = yield* sessions
+        .verify(Redacted.make("some-id.some-secret"))
+        .pipe(Effect.flip);
+      assert.strictEqual(verifyFailure._tag, "StoreUnavailable");
+    }).pipe(Effect.provide(BrokenCryptoLayer)),
+  );
+});
 
 describe("Sessions atomic supersede (layerSql)", () => {
   it.effect(

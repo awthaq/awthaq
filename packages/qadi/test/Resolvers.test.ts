@@ -104,7 +104,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
         Effect.provideService(Api.CurrentPrincipal, principal),
         Effect.flip,
       );
-      assert.strictEqual(failure._tag, "ReauthRequired");
+      if (failure._tag !== "ReauthRequired") return assert.fail(failure._tag);
       assert.strictEqual(failure.maxAgeSeconds, 300);
     }).pipe(Effect.provide(CoreLive)),
   );
@@ -214,7 +214,7 @@ describe("ObligationHandlers.reauth fails closed on a malformed obligation (TS-0
           Effect.provideService(Api.CurrentPrincipal, principal),
           Effect.flip,
         );
-        assert.strictEqual(failure._tag, "ReauthRequired");
+        if (failure._tag !== "ReauthRequired") return assert.fail(failure._tag);
         assert.strictEqual(failure.maxAgeSeconds, 60);
       }
     }).pipe(Effect.provide(CoreLive)),

@@ -9,11 +9,12 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import {
+  Accounts,
   AuthEvents,
   AuthPlugin,
-  Accounts,
-  Hooks,
+  Errors,
   HookPoint,
+  Hooks,
   MailDispatch,
   RateLimits,
   SessionCookie,
@@ -231,7 +232,10 @@ export interface PasswordShape {
   readonly confirmReset: (input: {
     readonly token: Redacted.Redacted<string>;
     readonly password: Redacted.Redacted<string>;
-  }) => Effect.Effect<void, PasswordApi.TokenConsumed | PasswordApi.WeakPassword | Api.RateLimited>;
+  }) => Effect.Effect<
+    void,
+    PasswordApi.TokenConsumed | PasswordApi.WeakPassword | Api.RateLimited | Errors.StoreUnavailable
+  >;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 08: consumes the
    * verify-email token `signUp` already dispatches and flips
@@ -243,7 +247,7 @@ export interface PasswordShape {
     readonly token: Redacted.Redacted<string>;
     /** APS-003: resolved via `ClientAddress`, mirroring `signIn`/`signUp`/`requestReset`. */
     readonly ip?: string;
-  }) => Effect.Effect<void, PasswordApi.TokenConsumed | Api.RateLimited>;
+  }) => Effect.Effect<void, PasswordApi.TokenConsumed | Api.RateLimited | Errors.StoreUnavailable>;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 11: authenticated
    * change-password — distinct from the unauthenticated `requestReset`/
@@ -270,7 +274,7 @@ export interface PasswordShape {
     readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
-    PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited
+    PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited | Errors.StoreUnavailable
   >;
   /**
    * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
@@ -284,7 +288,7 @@ export interface PasswordShape {
     readonly userId: Users.UserId;
     readonly currentSessionId: Sessions.SessionId;
     readonly currentPassword: Redacted.Redacted<string>;
-  }) => Effect.Effect<void, PasswordApi.WrongPassword | Api.RateLimited>;
+  }) => Effect.Effect<void, PasswordApi.WrongPassword | Api.RateLimited | Errors.StoreUnavailable>;
 }
 
 const { toHex } = Hmac;
@@ -1072,7 +1076,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             Effect.gen(function* () {
               const consumed = yield* verification.consume(identifier, value).pipe(
                 Effect.catchTag("Verification/TokenConsumed", () => new PasswordApi.TokenConsumed()),
-                Effect.catchTag("PlatformError", Effect.die),
               );
               // ARF-009: the user comes from the consumed row, never from the
               // token; a row with none is no reset token this plugin issued.
@@ -1157,7 +1160,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             Effect.gen(function* () {
               const consumed = yield* verification.consume(identifier, value).pipe(
                 Effect.catchTag("Verification/TokenConsumed", () => new PasswordApi.TokenConsumed()),
-                Effect.catchTag("PlatformError", Effect.die),
               );
               // ARF-009: the user comes from the consumed row, not the token.
               if (Option.isNone(consumed.userId)) {
