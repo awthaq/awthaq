@@ -31,42 +31,46 @@ const codeFor = (email: string) =>
 const wrongCodeFor = (code: string) => (code === "000000" ? "111111" : "000000");
 
 describe("EmailOtp.requestCode (BEH-EA-245)", () => {
-  it.effect("mails a six-digit code with its expiry; an unknown address answers 202 and mails nothing when sign-up is off", () =>
-    Effect.gen(function* () {
-      const emailOtp = yield* EmailOtp.EmailOtp;
-      const users = yield* Users.Users;
-      const mailer = yield* Mailer.Mailer;
-      yield* users.create({ identity: { _tag: "Email", email: "ada@example.com" }, name: "Ada" });
-      const { mail, code } = yield* codeFor("ada@example.com");
-      assert.match(code, /^[0-9]{6}$/);
-      assert.isString(mail?.data?.["expiresAt"]);
-      assert.isTrue(Redacted.isRedacted(mail?.data?.["code"]));
+  it.effect(
+    "mails a six-digit code with its expiry; an unknown address answers 202 and mails nothing when sign-up is off",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        const users = yield* Users.Users;
+        const mailer = yield* Mailer.Mailer;
+        yield* users.create({ identity: { _tag: "Email", email: "ada@example.com" }, name: "Ada" });
+        const { mail, code } = yield* codeFor("ada@example.com");
+        assert.match(code, /^[0-9]{6}$/);
+        assert.isString(mail?.data?.["expiresAt"]);
+        assert.isTrue(Redacted.isRedacted(mail?.data?.["code"]));
 
-      const known = yield* emailOtp.requestCode({ email: "ada@example.com" });
-      const unknown = yield* emailOtp.requestCode({ email: "nobody@example.com" });
-      assert.strictEqual(known, unknown);
-      yield* letForkedFibersRun;
-      assert.deepStrictEqual(
-        (yield* mailer.sent).map((sent) => sent.to),
-        ["ada@example.com"],
-      );
-    }).pipe(Effect.provide(buildLayer({ emailOtp: { allowSignUp: false } }))),
+        const known = yield* emailOtp.requestCode({ email: "ada@example.com" });
+        const unknown = yield* emailOtp.requestCode({ email: "nobody@example.com" });
+        assert.strictEqual(known, unknown);
+        yield* letForkedFibersRun;
+        assert.deepStrictEqual(
+          (yield* mailer.sent).map((sent) => sent.to),
+          ["ada@example.com"],
+        );
+      }).pipe(Effect.provide(buildLayer({ emailOtp: { allowSignUp: false } }))),
   );
 
-  it.effect("MLO-002: within the resend window no second code is minted, and the first stays valid", () =>
-    Effect.gen(function* () {
-      const emailOtp = yield* EmailOtp.EmailOtp;
-      const mailer = yield* Mailer.Mailer;
-      const { code } = yield* codeFor("resend@example.com");
-      yield* emailOtp.requestCode({ email: "resend@example.com" });
-      yield* letForkedFibersRun;
-      assert.strictEqual((yield* mailer.sent).length, 1);
-      const issued = yield* emailOtp.verify({
-        email: "resend@example.com",
-        code: Redacted.make(code),
-      });
-      assert.isDefined(issued.session);
-    }).pipe(Effect.provide(buildLayer())),
+  it.effect(
+    "MLO-002: within the resend window no second code is minted, and the first stays valid",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        const mailer = yield* Mailer.Mailer;
+        const { code } = yield* codeFor("resend@example.com");
+        yield* emailOtp.requestCode({ email: "resend@example.com" });
+        yield* letForkedFibersRun;
+        assert.strictEqual((yield* mailer.sent).length, 1);
+        const issued = yield* emailOtp.verify({
+          email: "resend@example.com",
+          code: Redacted.make(code),
+        });
+        assert.isDefined(issued.session);
+      }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect("after the window a new code supersedes the old one (one live code per address)", () =>
@@ -93,35 +97,43 @@ describe("EmailOtp.requestCode (BEH-EA-245)", () => {
   it.effect("is rate limited per address, `+tag` variants sharing one budget", () =>
     Effect.gen(function* () {
       const emailOtp = yield* EmailOtp.EmailOtp;
-      for (let i = 0; i < 5; i += 1) yield* emailOtp.requestCode({ email: `victim+${i}@example.com` });
-      const limited = yield* emailOtp.requestCode({ email: "victim+9@example.com" }).pipe(Effect.flip);
+      for (let i = 0; i < 5; i += 1)
+        yield* emailOtp.requestCode({ email: `victim+${i}@example.com` });
+      const limited = yield* emailOtp
+        .requestCode({ email: "victim+9@example.com" })
+        .pipe(Effect.flip);
       assert.strictEqual(limited._tag, "RateLimited");
     }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
   );
 });
 
 describe("EmailOtp.verify (BEH-EA-246)", () => {
-  it.effect("a correct code signs in exactly once, marks the mailbox verified and records amr [otp, email]", () =>
-    Effect.gen(function* () {
-      const emailOtp = yield* EmailOtp.EmailOtp;
-      const users = yield* Users.Users;
-      const audit = yield* AuditLog.AuditLog;
-      const created = yield* users.create({
-        identity: { _tag: "Email", email: "ada@example.com" },
-        name: "Ada",
-      });
-      const { code } = yield* codeFor("ada@example.com");
-      const issued = yield* emailOtp.verify({ email: "Ada@Example.com", code: Redacted.make(code) });
-      assert.strictEqual(issued.session.userId, created.id);
-      assert.deepStrictEqual(issued.session.amr, ["otp", "email"]);
-      assert.isTrue(Users.isEmailVerified(yield* users.findById(created.id)));
-      assert.strictEqual((yield* audit.list({ eventTag: "auth.user.signedIn" })).length, 1);
+  it.effect(
+    "a correct code signs in exactly once, marks the mailbox verified and records amr [otp, email]",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        const users = yield* Users.Users;
+        const audit = yield* AuditLog.AuditLog;
+        const created = yield* users.create({
+          identity: { _tag: "Email", email: "ada@example.com" },
+          name: "Ada",
+        });
+        const { code } = yield* codeFor("ada@example.com");
+        const issued = yield* emailOtp.verify({
+          email: "Ada@Example.com",
+          code: Redacted.make(code),
+        });
+        assert.strictEqual(issued.session.userId, created.id);
+        assert.deepStrictEqual(issued.session.amr, ["otp", "email"]);
+        assert.isTrue(Users.isEmailVerified(yield* users.findById(created.id)));
+        assert.strictEqual((yield* audit.list({ eventTag: "auth.user.signedIn" })).length, 1);
 
-      const replay = yield* emailOtp
-        .verify({ email: "ada@example.com", code: Redacted.make(code) })
-        .pipe(Effect.flip);
-      assert.strictEqual(replay._tag, "InvalidEmailOtp");
-    }).pipe(Effect.provide(buildLayer())),
+        const replay = yield* emailOtp
+          .verify({ email: "ada@example.com", code: Redacted.make(code) })
+          .pipe(Effect.flip);
+        assert.strictEqual(replay._tag, "InvalidEmailOtp");
+      }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect("SOS-004: three wrong guesses burn the code — the correct one no longer works", () =>
@@ -155,80 +167,91 @@ describe("EmailOtp.verify (BEH-EA-246)", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("a value that cannot be a code, an unknown address and an expired code are all the one InvalidEmailOtp", () =>
-    Effect.gen(function* () {
-      const emailOtp = yield* EmailOtp.EmailOtp;
-      const { code } = yield* codeFor("late@example.com");
-      for (const [email, presented] of [
-        ["late@example.com", "12345"],
-        ["late@example.com", "abcdef"],
-        ["nobody@example.com", "123456"],
-      ] as const) {
-        const failure = yield* emailOtp
-          .verify({ email, code: Redacted.make(presented) })
+  it.effect(
+    "a value that cannot be a code, an unknown address and an expired code are all the one InvalidEmailOtp",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        const { code } = yield* codeFor("late@example.com");
+        for (const [email, presented] of [
+          ["late@example.com", "12345"],
+          ["late@example.com", "abcdef"],
+          ["nobody@example.com", "123456"],
+        ] as const) {
+          const failure = yield* emailOtp
+            .verify({ email, code: Redacted.make(presented) })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "InvalidEmailOtp");
+        }
+        yield* TestClock.adjust(Duration.minutes(5));
+        const expired = yield* emailOtp
+          .verify({ email: "late@example.com", code: Redacted.make(code) })
           .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "InvalidEmailOtp");
-      }
-      yield* TestClock.adjust(Duration.minutes(5));
-      const expired = yield* emailOtp
-        .verify({ email: "late@example.com", code: Redacted.make(code) })
-        .pipe(Effect.flip);
-      assert.strictEqual(expired._tag, "InvalidEmailOtp");
-    }).pipe(Effect.provide(buildLayer())),
+        assert.strictEqual(expired._tag, "InvalidEmailOtp");
+      }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("a brand-new address creates the user when the code is presented, not when it is requested", () =>
-    Effect.gen(function* () {
-      const emailOtp = yield* EmailOtp.EmailOtp;
-      const users = yield* Users.Users;
-      const { code } = yield* codeFor("new@example.com");
-      assert.isTrue(Option.isNone(yield* users.findByEmail("new@example.com")));
-      const issued = yield* emailOtp.verify({ email: "new@example.com", code: Redacted.make(code) });
-      const created = Option.getOrThrow(yield* users.findByEmail("new@example.com"));
-      assert.strictEqual(issued.session.userId, created.id);
-      assert.isTrue(Users.isEmailVerified(created));
-    }).pipe(Effect.provide(buildLayer())),
+  it.effect(
+    "a brand-new address creates the user when the code is presented, not when it is requested",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        const users = yield* Users.Users;
+        const { code } = yield* codeFor("new@example.com");
+        assert.isTrue(Option.isNone(yield* users.findByEmail("new@example.com")));
+        const issued = yield* emailOtp.verify({
+          email: "new@example.com",
+          code: Redacted.make(code),
+        });
+        const created = Option.getOrThrow(yield* users.findByEmail("new@example.com"));
+        assert.strictEqual(issued.session.userId, created.id);
+        assert.isTrue(Users.isEmailVerified(created));
+      }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("per-address verify limit: guesses across many codes are bounded (10 in 15 minutes)", () =>
-    Effect.gen(function* () {
-      const emailOtp = yield* EmailOtp.EmailOtp;
-      let limited = false;
-      for (let i = 0; i < 12; i += 1) {
+  it.effect(
+    "per-address verify limit: guesses across many codes are bounded (10 in 15 minutes)",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        let limited = false;
+        for (let i = 0; i < 12; i += 1) {
+          const failure = yield* emailOtp
+            .verify({ email: "spray@example.com", code: Redacted.make("123456") })
+            .pipe(Effect.flip);
+          if (failure._tag === "RateLimited") limited = true;
+        }
+        assert.isTrue(limited);
+      }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
+  );
+
+  it.effect(
+    "a user with a confirmed second factor is diverted to TwoFactorRequired (amr carried into the challenge)",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const twoFactor = yield* TwoFactor.TwoFactor;
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "mfa@example.com" },
+          name: "M",
+        });
+        const fresh = yield* sessions.issue({ userId: user.id });
+        const enrolment = yield* twoFactor.enable(user.id, fresh.session.id);
+        const crypto = yield* Crypto.Crypto;
+        const key = Option.getOrThrow(Totp.base32Decode(enrolment.secret));
+        const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
+        yield* twoFactor.confirm(
+          user.id,
+          Redacted.make(yield* Totp.totp(crypto, key, now, { period: 30, digits: 6 })),
+        );
+
+        const { code } = yield* codeFor("mfa@example.com");
         const failure = yield* emailOtp
-          .verify({ email: "spray@example.com", code: Redacted.make("123456") })
+          .verify({ email: "mfa@example.com", code: Redacted.make(code) })
           .pipe(Effect.flip);
-        if (failure._tag === "RateLimited") limited = true;
-      }
-      assert.isTrue(limited);
-    }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
-  );
-
-  it.effect("a user with a confirmed second factor is diverted to TwoFactorRequired (amr carried into the challenge)", () =>
-    Effect.gen(function* () {
-      const emailOtp = yield* EmailOtp.EmailOtp;
-      const users = yield* Users.Users;
-      const sessions = yield* Sessions.Sessions;
-      const twoFactor = yield* TwoFactor.TwoFactor;
-      const user = yield* users.create({
-        identity: { _tag: "Email", email: "mfa@example.com" },
-        name: "M",
-      });
-      const fresh = yield* sessions.issue({ userId: user.id });
-      const enrolment = yield* twoFactor.enable(user.id, fresh.session.id);
-      const crypto = yield* Crypto.Crypto;
-      const key = Option.getOrThrow(Totp.base32Decode(enrolment.secret));
-      const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
-      yield* twoFactor.confirm(
-        user.id,
-        Redacted.make(yield* Totp.totp(crypto, key, now, { period: 30, digits: 6 })),
-      );
-
-      const { code } = yield* codeFor("mfa@example.com");
-      const failure = yield* emailOtp
-        .verify({ email: "mfa@example.com", code: Redacted.make(code) })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "TwoFactorRequired");
-    }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
+        assert.strictEqual(failure._tag, "TwoFactorRequired");
+      }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
   );
 });

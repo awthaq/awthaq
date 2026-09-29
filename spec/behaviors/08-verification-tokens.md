@@ -37,6 +37,9 @@ MLO-009/ARF-007/ARF-009: the mailed form is `<purpose>:<publicId>.<secret>`, bui
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 documents `Verification` as "a generic, single-purpose ephemeral keyed value store," whose `identifier` is an arbitrary string whose meaning is defined entirely by the caller that created the row. awthaq's plan adopts the same generic entity but requires the purpose to be encoded in the identifier's own naming convention, so a password-reset token and an email-verification token are structurally distinct rows even when both happen to exist for the same user at once.
 
+**Caller-formatted values (BCR-005).** `issue` mints the value itself: 256-bit hex by default, or — with `format: { _tag: "Numeric", digits }` (4 to 10 digits) — a uniformly random decimal code drawn by rejection sampling over `Crypto.randomBytes`, never a string the caller supplies, so hashing and single-use cannot be bypassed. The input type requires `maxAttempts` whenever a `format` is given (a short value without a guess budget does not type-check). `@awthaq/magic-link`'s `EmailOtp` is the consumer (BEH-EA-244).
+
+
 ## BEH-EA-058: A verification token's consumption and the state change it authorizes commit in one transaction
 
 > **Invariant:** [INV-EA-009](../invariants.md#inv-ea-009-a-verification-token-is-consumable-exactly-once-inside-the-same-transaction-as-the-state-change-it-authorizes)
@@ -104,6 +107,9 @@ REQUIREMENT: When multiple callers race to consume the same token
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as the `consume-verification-value` operation's core guarantee, with an explicit blame rule alongside it: a caller that proceeds with a state change without gating on a non-null consume result is responsible for the resulting violation — the race-safety guarantee protects only callers that actually check the result. awthaq's plan carries the same operation and the same blame assignment into its own `Verification` domain service.
 
+**Bounded guesses (SOS-004).** An issued token may carry a `maxAttempts` budget. A wrong presentation against the *live* row spends one attempt — in the same atomic step as the consume (`layerMemory`'s `Ref.modify`; `layerSql`'s single `UPDATE attempts = attempts + 1, consumedAt = CASE WHEN attempts + 1 >= maxAttempts ...`, core migration 26) — and the row is burned at the budget, so the right value no longer works. The failure is still the uniform `TokenConsumed`; a token with no budget, an unknown identifier and an expired row are untouched, exactly as before.
+
+
 ## BEH-EA-063: A reservation-style identifier answers "who claimed this first," independent of any column-level uniqueness
 
 ```text
@@ -116,6 +122,9 @@ REQUIREMENT: A caller that needs to claim an identifier exclusively (a
 ```
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as a distinct operation from ordinary consumption — `reserve-verification-value` — used, for example, to serialize the "promote an unverified user on email proof" operation (§2.3) against a concurrent second promotion of the same user. awthaq's plan reuses the same generic `Verification` entity for this purpose rather than introducing a second, lock-specific table.
+
+**The resend window (MLO-002).** `reserve` is the resend-window primitive: `MagicLink` and `EmailOtp` reserve `<purpose>-resend:<normalised address>` for their `resendWindow` before minting and mailing a second artifact, so two concurrent requests (or a client hammering "resend") send one message, below and independent of the rate limiter (BEH-EA-241, BEH-EA-245).
+
 
 ## BEH-EA-064: Purpose-scoped flows respond uniformly regardless of whether their target exists
 

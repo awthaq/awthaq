@@ -54,11 +54,11 @@ const suite = (
         assert.isTrue(Option.isNone(Option.getOrThrow(pending).confirmedAt));
 
         // Confirmation records the step of the code that proved it, exactly once.
-        assert.isTrue(yield* secrets.confirm(userA, 100n));
-        assert.isFalse(yield* secrets.confirm(userA, 101n));
+        assert.isTrue(yield* secrets.confirm(userA, BigInt(100)));
+        assert.isFalse(yield* secrets.confirm(userA, BigInt(101)));
         const confirmed = Option.getOrThrow(yield* secrets.find(userA));
         assert.isTrue(Option.isSome(confirmed.confirmedAt));
-        assert.deepStrictEqual(confirmed.lastUsedStep, Option.some(100n));
+        assert.deepStrictEqual(confirmed.lastUsedStep, Option.some(BigInt(100)));
 
         // A confirmed secret is never overwritten by a fresh `enable`.
         assert.isFalse(yield* secrets.upsertPending(userA, "envelope-3"));
@@ -71,12 +71,12 @@ const suite = (
         const secrets = yield* TwoFactorStore.TwoFactorSecrets;
         yield* secrets.upsertPending(userA, "e");
         // Not yet confirmed: no step can be spent.
-        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, 5n));
-        yield* secrets.confirm(userA, 10n);
-        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, 10n));
-        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, 9n));
-        assert.isTrue(yield* secrets.advanceLastUsedStep(userA, 11n));
-        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, 11n));
+        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, BigInt(5)));
+        yield* secrets.confirm(userA, BigInt(10));
+        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, BigInt(10)));
+        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, BigInt(9)));
+        assert.isTrue(yield* secrets.advanceLastUsedStep(userA, BigInt(11)));
+        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, BigInt(11)));
       }).pipe(Effect.provide(layer)),
     );
 
@@ -84,23 +84,25 @@ const suite = (
       Effect.gen(function* () {
         const secrets = yield* TwoFactorStore.TwoFactorSecrets;
         yield* secrets.upsertPending(userA, "e");
-        yield* secrets.confirm(userA, 1n);
+        yield* secrets.confirm(userA, BigInt(1));
         const results = yield* Effect.all(
-          Array.from({ length: 12 }, () => secrets.advanceLastUsedStep(userA, 2n)),
+          Array.from({ length: 12 }, () => secrets.advanceLastUsedStep(userA, BigInt(2))),
           { concurrency: "unbounded" },
         );
         assert.strictEqual(results.filter(Boolean).length, 1);
       }).pipe(Effect.provide(layer)),
     );
 
-    it.effect("reencrypt swaps the envelope only while the row still holds the one that was read", () =>
-      Effect.gen(function* () {
-        const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-        yield* secrets.upsertPending(userA, "old");
-        assert.isFalse(yield* secrets.reencrypt(userA, "not-the-current-one", "new"));
-        assert.isTrue(yield* secrets.reencrypt(userA, "old", "new"));
-        assert.strictEqual(Option.getOrThrow(yield* secrets.find(userA)).envelope, "new");
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "reencrypt swaps the envelope only while the row still holds the one that was read",
+      () =>
+        Effect.gen(function* () {
+          const secrets = yield* TwoFactorStore.TwoFactorSecrets;
+          yield* secrets.upsertPending(userA, "old");
+          assert.isFalse(yield* secrets.reencrypt(userA, "not-the-current-one", "new"));
+          assert.isTrue(yield* secrets.reencrypt(userA, "old", "new"));
+          assert.strictEqual(Option.getOrThrow(yield* secrets.find(userA)).envelope, "new");
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("delete reports whether a row existed and leaves other users alone", () =>
@@ -184,7 +186,9 @@ describe("TwoFactorStore.layerRecoveryCodesSql atomicity (BCR-002)", () => {
       assert.isTrue(failure._tag === "Failure");
 
       const sql = yield* SqlClient.SqlClient;
-      yield* sql.unsafe(`DROP TRIGGER two_factor_fail_insert${TestSql.isPostgres ? " ON two_factor_recovery_code" : ""}`);
+      yield* sql.unsafe(
+        `DROP TRIGGER two_factor_fail_insert${TestSql.isPostgres ? " ON two_factor_recovery_code" : ""}`,
+      );
       assert.deepStrictEqual((yield* codes.listUnused(userA)).map((row) => row.id).sort(), before);
     }).pipe(Effect.provide(SqlStores)),
   );
@@ -221,36 +225,43 @@ describe("TwoFactor erasure and export contributions (CSG-001/CSG-005)", () => {
     }).pipe(Effect.scoped, Effect.provide(RegistryLayer)),
   );
 
-  it.effect("the export says whether a factor exists and how many codes remain — never a secret or a hash", () =>
-    Effect.gen(function* () {
-      const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-      const codes = yield* TwoFactorStore.TwoFactorRecoveryCodes;
-      const registry = yield* DataExport.DataExportRegistry;
-      yield* secrets.upsertPending(userA, "SUPER-SECRET-ENVELOPE");
-      yield* secrets.confirm(userA, 1n);
-      yield* codes.replaceAll(userA, [hash("SECRET-HASH-1"), hash("SECRET-HASH-2")]);
+  it.effect(
+    "the export says whether a factor exists and how many codes remain — never a secret or a hash",
+    () =>
+      Effect.gen(function* () {
+        const secrets = yield* TwoFactorStore.TwoFactorSecrets;
+        const codes = yield* TwoFactorStore.TwoFactorRecoveryCodes;
+        const registry = yield* DataExport.DataExportRegistry;
+        yield* secrets.upsertPending(userA, "SUPER-SECRET-ENVELOPE");
+        yield* secrets.confirm(userA, BigInt(1));
+        yield* codes.replaceAll(userA, [hash("SECRET-HASH-1"), hash("SECRET-HASH-2")]);
 
-      yield* Layer.build(TwoFactor.twoFactorExport);
-      const [contribution] = yield* registry.contributions;
-      const section = yield* contribution!.collect({ userId: userA });
-      assert.strictEqual(contribution?.id, "two_factor");
-      const Shape = Schema.Struct({
-        enabled: Schema.Boolean,
-        confirmedAt: Schema.NullOr(Schema.String),
-        remainingRecoveryCodes: Schema.Number,
-      });
-      const shape = Schema.decodeUnknownSync(Shape)(section);
-      assert.isTrue(shape.enabled);
-      assert.isNotNull(shape.confirmedAt);
-      assert.strictEqual(shape.remainingRecoveryCodes, 2);
-      const text = JSON.stringify(section);
-      for (const forbidden of ["SUPER-SECRET-ENVELOPE", "SECRET-HASH", "argon2id"]) {
-        assert.notInclude(text, forbidden);
-      }
-      // A user with no factor exports "not enabled", not an error.
-      const none = Schema.decodeUnknownSync(Shape)(yield* contribution!.collect({ userId: userB }));
-      assert.deepStrictEqual(none, { enabled: false, confirmedAt: null, remainingRecoveryCodes: 0 });
-    }).pipe(Effect.scoped, Effect.provide(RegistryLayer)),
+        yield* Layer.build(TwoFactor.twoFactorExport);
+        const [contribution] = yield* registry.contributions;
+        const section = yield* contribution!.collect({ userId: userA });
+        assert.strictEqual(contribution?.id, "two_factor");
+        const Shape = Schema.Struct({
+          enabled: Schema.Boolean,
+          confirmedAt: Schema.NullOr(Schema.String),
+          remainingRecoveryCodes: Schema.Number,
+        });
+        const shape = Schema.decodeUnknownSync(Shape)(section);
+        assert.isTrue(shape.enabled);
+        assert.isNotNull(shape.confirmedAt);
+        assert.strictEqual(shape.remainingRecoveryCodes, 2);
+        const text = JSON.stringify(section);
+        for (const forbidden of ["SUPER-SECRET-ENVELOPE", "SECRET-HASH", "argon2id"]) {
+          assert.notInclude(text, forbidden);
+        }
+        // A user with no factor exports "not enabled", not an error.
+        const none = Schema.decodeUnknownSync(Shape)(
+          yield* contribution!.collect({ userId: userB }),
+        );
+        assert.deepStrictEqual(none, {
+          enabled: false,
+          confirmedAt: null,
+          remainingRecoveryCodes: 0,
+        });
+      }).pipe(Effect.scoped, Effect.provide(RegistryLayer)),
   );
 });
-

@@ -32,33 +32,35 @@ const requestAndRead = (email: string) =>
   });
 
 describe("MagicLink.requestLink (BEH-EA-241)", () => {
-  it.effect("answers identically for a known and an unknown address, and with sign-up off mails only the known one", () =>
-    Effect.gen(function* () {
-      const magicLink = yield* MagicLink.MagicLink;
-      const users = yield* Users.Users;
-      const mailer = yield* Mailer.Mailer;
-      yield* users.create({ identity: { _tag: "Email", email: "ada@example.com" }, name: "Ada" });
+  it.effect(
+    "answers identically for a known and an unknown address, and with sign-up off mails only the known one",
+    () =>
+      Effect.gen(function* () {
+        const magicLink = yield* MagicLink.MagicLink;
+        const users = yield* Users.Users;
+        const mailer = yield* Mailer.Mailer;
+        yield* users.create({ identity: { _tag: "Email", email: "ada@example.com" }, name: "Ada" });
 
-      // Both requests resolve to the same `void`, whatever exists behind them.
-      const known = yield* magicLink.requestLink({ email: "ada@example.com" });
-      const unknown = yield* magicLink.requestLink({ email: "nobody@example.com" });
-      assert.strictEqual(known, unknown);
-      yield* letForkedFibersRun;
+        // Both requests resolve to the same `void`, whatever exists behind them.
+        const known = yield* magicLink.requestLink({ email: "ada@example.com" });
+        const unknown = yield* magicLink.requestLink({ email: "nobody@example.com" });
+        assert.strictEqual(known, unknown);
+        yield* letForkedFibersRun;
 
-      const sent = yield* mailer.sent;
-      assert.deepStrictEqual(
-        sent.map((mail) => [mail.template, mail.to]),
-        [["magic-link", "ada@example.com"]],
-      );
-      // The token names neither the user nor the address (ARF-009).
-      const token = secretOf(sent[0], "token");
-      const userId = Option.getOrThrow(yield* users.findByEmail("ada@example.com")).id;
-      assert.notInclude(token, userId);
-      assert.notInclude(token, "ada");
-      assert.isTrue(token.startsWith("magic-link:"));
-      // Sign-up is off: asking for a link never created anyone.
-      assert.isTrue(Option.isNone(yield* users.findByEmail("nobody@example.com")));
-    }).pipe(Effect.provide(buildLayer({ magicLink: { allowSignUp: false } }))),
+        const sent = yield* mailer.sent;
+        assert.deepStrictEqual(
+          sent.map((mail) => [mail.template, mail.to]),
+          [["magic-link", "ada@example.com"]],
+        );
+        // The token names neither the user nor the address (ARF-009).
+        const token = secretOf(sent[0], "token");
+        const userId = Option.getOrThrow(yield* users.findByEmail("ada@example.com")).id;
+        assert.notInclude(token, userId);
+        assert.notInclude(token, "ada");
+        assert.isTrue(token.startsWith("magic-link:"));
+        // Sign-up is off: asking for a link never created anyone.
+        assert.isTrue(Option.isNone(yield* users.findByEmail("nobody@example.com")));
+      }).pipe(Effect.provide(buildLayer({ magicLink: { allowSignUp: false } }))),
   );
 
   it.effect("mail data carries the expiry, and a fragment link when a baseUrl is configured", () =>
@@ -67,7 +69,10 @@ describe("MagicLink.requestLink (BEH-EA-241)", () => {
       assert.isString(mail?.data?.["expiresAt"]);
       const url = String(mail?.data?.["url"]);
       // The token is in the FRAGMENT: never sent to a server, logged, or put in a Referer.
-      assert.strictEqual(url, `https://app.example.com/magic-link#token=${encodeURIComponent(Redacted.value(token))}`);
+      assert.strictEqual(
+        url,
+        `https://app.example.com/magic-link#token=${encodeURIComponent(Redacted.value(token))}`,
+      );
       assert.notInclude(url.split("#")[0] ?? "", "token");
       assert.isFalse(url.includes("?"));
       assert.isTrue(Redacted.isRedacted(mail?.data?.["token"]));
@@ -91,52 +96,59 @@ describe("MagicLink.requestLink (BEH-EA-241)", () => {
   it.effect("is rate limited per address (5 in 15 minutes, `+tag` variants share one budget)", () =>
     Effect.gen(function* () {
       const magicLink = yield* MagicLink.MagicLink;
-      for (let i = 0; i < 5; i += 1) yield* magicLink.requestLink({ email: `victim+${i}@example.com` });
-      const limited = yield* magicLink.requestLink({ email: "victim+9@example.com" }).pipe(Effect.flip);
+      for (let i = 0; i < 5; i += 1)
+        yield* magicLink.requestLink({ email: `victim+${i}@example.com` });
+      const limited = yield* magicLink
+        .requestLink({ email: "victim+9@example.com" })
+        .pipe(Effect.flip);
       assert.strictEqual(limited._tag, "RateLimited");
     }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
   );
 });
 
 describe("MagicLink.verify (BEH-EA-242)", () => {
-  it.effect("signs an existing user in, marks the mailbox verified, records amr [email]; a replay fails MagicLinkConsumed", () =>
-    Effect.gen(function* () {
-      const magicLink = yield* MagicLink.MagicLink;
-      const users = yield* Users.Users;
-      const audit = yield* AuditLog.AuditLog;
-      const created = yield* users.create({
-        identity: { _tag: "Email", email: "ada@example.com" },
-        name: "Ada",
-      });
-      assert.isFalse(Users.isEmailVerified(created));
+  it.effect(
+    "signs an existing user in, marks the mailbox verified, records amr [email]; a replay fails MagicLinkConsumed",
+    () =>
+      Effect.gen(function* () {
+        const magicLink = yield* MagicLink.MagicLink;
+        const users = yield* Users.Users;
+        const audit = yield* AuditLog.AuditLog;
+        const created = yield* users.create({
+          identity: { _tag: "Email", email: "ada@example.com" },
+          name: "Ada",
+        });
+        assert.isFalse(Users.isEmailVerified(created));
 
-      const { token } = yield* requestAndRead("ada@example.com");
-      const issued = yield* magicLink.verify({ token }, { userAgent: "Browser/1.0" });
-      assert.strictEqual(issued.session.userId, created.id);
-      assert.deepStrictEqual(issued.session.amr, ["email"]);
-      assert.isTrue(Users.isEmailVerified(yield* users.findById(created.id)));
-      assert.strictEqual((yield* audit.list({ eventTag: "auth.user.signedIn" })).length, 1);
+        const { token } = yield* requestAndRead("ada@example.com");
+        const issued = yield* magicLink.verify({ token }, { userAgent: "Browser/1.0" });
+        assert.strictEqual(issued.session.userId, created.id);
+        assert.deepStrictEqual(issued.session.amr, ["email"]);
+        assert.isTrue(Users.isEmailVerified(yield* users.findById(created.id)));
+        assert.strictEqual((yield* audit.list({ eventTag: "auth.user.signedIn" })).length, 1);
 
-      const replay = yield* magicLink.verify({ token }).pipe(Effect.flip);
-      assert.strictEqual(replay._tag, "MagicLinkConsumed");
-    }).pipe(Effect.provide(buildLayer())),
+        const replay = yield* magicLink.verify({ token }).pipe(Effect.flip);
+        assert.strictEqual(replay._tag, "MagicLinkConsumed");
+      }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("a brand-new address creates the user only when the link is presented, through the BeforeSignUp veto", () =>
-    Effect.gen(function* () {
-      const magicLink = yield* MagicLink.MagicLink;
-      const users = yield* Users.Users;
-      const audit = yield* AuditLog.AuditLog;
-      const { token } = yield* requestAndRead("new@example.com");
-      // Requesting created no one...
-      assert.isTrue(Option.isNone(yield* users.findByEmail("new@example.com")));
-      const issued = yield* magicLink.verify({ token });
-      // ...presenting the link does, verified, announced.
-      const created = Option.getOrThrow(yield* users.findByEmail("new@example.com"));
-      assert.strictEqual(issued.session.userId, created.id);
-      assert.isTrue(Users.isEmailVerified(created));
-      assert.strictEqual((yield* audit.list({ eventTag: "auth.user.created" })).length, 1);
-    }).pipe(Effect.provide(buildLayer())),
+  it.effect(
+    "a brand-new address creates the user only when the link is presented, through the BeforeSignUp veto",
+    () =>
+      Effect.gen(function* () {
+        const magicLink = yield* MagicLink.MagicLink;
+        const users = yield* Users.Users;
+        const audit = yield* AuditLog.AuditLog;
+        const { token } = yield* requestAndRead("new@example.com");
+        // Requesting created no one...
+        assert.isTrue(Option.isNone(yield* users.findByEmail("new@example.com")));
+        const issued = yield* magicLink.verify({ token });
+        // ...presenting the link does, verified, announced.
+        const created = Option.getOrThrow(yield* users.findByEmail("new@example.com"));
+        assert.strictEqual(issued.session.userId, created.id);
+        assert.isTrue(Users.isEmailVerified(created));
+        assert.strictEqual((yield* audit.list({ eventTag: "auth.user.created" })).length, 1);
+      }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect("an expired link fails MagicLinkConsumed", () =>
@@ -202,40 +214,41 @@ describe("MagicLink.verify (BEH-EA-242)", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("ARF-005 Fix A: a user with a confirmed second factor is diverted to TwoFactorRequired, and mints no session", () =>
-    Effect.gen(function* () {
-      const magicLink = yield* MagicLink.MagicLink;
-      const users = yield* Users.Users;
-      const sessions = yield* Sessions.Sessions;
-      const twoFactor = yield* TwoFactor.TwoFactor;
-      const audit = yield* AuditLog.AuditLog;
-      const user = yield* users.create({
-        identity: { _tag: "Email", email: "mfa@example.com" },
-        name: "M",
-      });
-      // Enrol: a fresh session for the user, enable, confirm with a real TOTP.
-      const fresh = yield* sessions.issue({ userId: user.id });
-      const enrolment = yield* twoFactor.enable(user.id, fresh.session.id);
-      const crypto = yield* Crypto.Crypto;
-      const key = Option.getOrThrow(Totp.base32Decode(enrolment.secret));
-      const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
-      const code = yield* Totp.totp(crypto, key, now, { period: 30, digits: 6 });
-      yield* twoFactor.confirm(user.id, Redacted.make(code));
-      const before = (yield* audit.list({ eventTag: "auth.session.issued" })).length;
+  it.effect(
+    "ARF-005 Fix A: a user with a confirmed second factor is diverted to TwoFactorRequired, and mints no session",
+    () =>
+      Effect.gen(function* () {
+        const magicLink = yield* MagicLink.MagicLink;
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const twoFactor = yield* TwoFactor.TwoFactor;
+        const audit = yield* AuditLog.AuditLog;
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "mfa@example.com" },
+          name: "M",
+        });
+        // Enrol: a fresh session for the user, enable, confirm with a real TOTP.
+        const fresh = yield* sessions.issue({ userId: user.id });
+        const enrolment = yield* twoFactor.enable(user.id, fresh.session.id);
+        const crypto = yield* Crypto.Crypto;
+        const key = Option.getOrThrow(Totp.base32Decode(enrolment.secret));
+        const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
+        const code = yield* Totp.totp(crypto, key, now, { period: 30, digits: 6 });
+        yield* twoFactor.confirm(user.id, Redacted.make(code));
+        const before = (yield* audit.list({ eventTag: "auth.session.issued" })).length;
 
-      const { token } = yield* requestAndRead("mfa@example.com");
-      const failure = yield* magicLink.verify({ token }).pipe(Effect.flip);
-      if (failure._tag !== "TwoFactorRequired") return assert.fail(failure._tag);
-      assert.strictEqual(failure.userId, user.id);
-      assert.isString(failure.challengeId);
-      assert.strictEqual((yield* audit.list({ eventTag: "auth.session.issued" })).length, before);
+        const { token } = yield* requestAndRead("mfa@example.com");
+        const failure = yield* magicLink.verify({ token }).pipe(Effect.flip);
+        if (failure._tag !== "TwoFactorRequired") return assert.fail(failure._tag);
+        assert.strictEqual(failure.userId, user.id);
+        assert.isString(failure.challengeId);
+        assert.strictEqual((yield* audit.list({ eventTag: "auth.session.issued" })).length, before);
 
-      // The challenge records that the first factor was the mailbox: the finished session says so.
-      const factor = yield* SecondFactor.SecondFactor;
-      const consumed = yield* factor.consumeChallenge(Redacted.make(failure.challengeId));
-      assert.deepStrictEqual(consumed.amr, ["email"]);
-      assert.strictEqual(consumed.strategy, "magicLink");
-    }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
+        // The challenge records that the first factor was the mailbox: the finished session says so.
+        const factor = yield* SecondFactor.SecondFactor;
+        const consumed = yield* factor.consumeChallenge(Redacted.make(failure.challengeId));
+        assert.deepStrictEqual(consumed.amr, ["email"]);
+        assert.strictEqual(consumed.strategy, "magicLink");
+      }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
   );
 });
-

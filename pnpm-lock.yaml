@@ -513,9 +513,6 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
     devDependencies:
-      '@awthaq/password':
-        specifier: workspace:*
-        version: link:../password
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test

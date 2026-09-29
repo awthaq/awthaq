@@ -80,6 +80,8 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `015-*.md` | ADR-EA-015 | Qadi Bridge Path Selection |
 | `017-*.md` | ADR-EA-017 | JWT Signing Keys Rotate on a Grace Period Sized to Token Lifetime, With an Emergency Retire-Now Path |
 | `019-*.md` | ADR-EA-019 | Encryption-at-Rest Keys Rotate by Retirement, With Lazy Re-Encryption |
+| `020-*.md` | ADR-EA-020 | Two-Factor State — Encrypted Secrets, a Verification Challenge, One Failure Budget per Account |
+| `021-*.md` | ADR-EA-021 | SMS OTP Is a Separate, Explicitly Restricted Plugin over the Email-OTP Substrate, Deferred |
 | `026-*.md` | ADR-EA-026 | Sign-Up Reveals an Existing Address by Default, With an Opt-In Conceal Mode |
 | `024-*.md` | ADR-EA-024 | Read-Replica Routing Is Opt-In, Classified Per Read, and Guarded by a Causal Token |
 | `025-*.md` | ADR-EA-025 | Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority |
@@ -121,6 +123,10 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `24-nextjs-ssr.md` | 185–192 | Next.js Server Rendering |
 | `25-testing-harness.md` | 193–200 | Testing Harness |
 | `26-cli.md` | 201–208, 225–229 | CLI |
+| `27-admin-impersonation.md` | 209–224 | Admin and Impersonation |
+| `28-two-factor.md` | 233–239 | Two-Factor Authentication |
+| `29-magic-link.md` | 240–243 | Magic Link |
+| `30-email-otp.md` | 244–247 | Email OTP |
 
 ### `spec/process/`
 

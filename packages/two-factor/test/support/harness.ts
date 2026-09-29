@@ -47,7 +47,7 @@ export const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succ
 );
 
 /** A real hasher (real algorithm, salt and PHC format) at the smallest legal cost, so recovery-code suites stay fast. */
-export const TestHasher = PasswordHasher.layerArgon2id.pipe(
+const TestHasher = PasswordHasher.layerArgon2id.pipe(
   Layer.provide(
     ConfigProvider.layer(
       ConfigProvider.fromEnv({

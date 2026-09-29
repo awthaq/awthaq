@@ -36,55 +36,59 @@ const startedBy = (adminUserId: Users.UserId, targetUserId: Users.UserId) => ({
 });
 
 describe("ImpersonationOwnerNotice.layer (ARF-005)", () => {
-  it.effect("mails the target's owner when impersonation starts, with the reason and no credential", () =>
-    Effect.gen(function* () {
-      const users = yield* Users.Users;
-      const events = yield* AuthEvents.AuthEvents;
-      const mailer = yield* Mailer.Mailer;
-      const admin = yield* users.create({
-        identity: { _tag: "Email", email: "admin@example.com" },
-        name: "Admin",
-      });
-      const target = yield* users.create({
-        identity: { _tag: "Email", email: "owner@example.com" },
-        name: "Owner",
-      });
-      yield* settle;
-      yield* events.publish(startedBy(admin.id, target.id));
-      yield* settle;
+  it.effect(
+    "mails the target's owner when impersonation starts, with the reason and no credential",
+    () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const events = yield* AuthEvents.AuthEvents;
+        const mailer = yield* Mailer.Mailer;
+        const admin = yield* users.create({
+          identity: { _tag: "Email", email: "admin@example.com" },
+          name: "Admin",
+        });
+        const target = yield* users.create({
+          identity: { _tag: "Email", email: "owner@example.com" },
+          name: "Owner",
+        });
+        yield* settle;
+        yield* events.publish(startedBy(admin.id, target.id));
+        yield* settle;
 
-      const sent = yield* mailer.sent;
-      assert.strictEqual(sent.length, 1);
-      assert.strictEqual(sent[0]?.to, "owner@example.com");
-      assert.strictEqual(sent[0]?.template, "impersonation-started");
-      assert.strictEqual(
-        sent[0]?.data?.["reason"],
-        "customer asked us to reproduce a billing bug",
-      );
-      assert.isString(sent[0]?.data?.["startedAt"]);
-      // Never the session id, the admin's identity or a token.
-      const text = JSON.stringify(sent[0]);
-      for (const forbidden of ["session-secret-id", admin.id, "admin@example.com", "token"]) {
-        assert.notInclude(text, forbidden);
-      }
-    }).pipe(Effect.provide(TestLayer)),
+        const sent = yield* mailer.sent;
+        assert.strictEqual(sent.length, 1);
+        assert.strictEqual(sent[0]?.to, "owner@example.com");
+        assert.strictEqual(sent[0]?.template, "impersonation-started");
+        assert.strictEqual(
+          sent[0]?.data?.["reason"],
+          "customer asked us to reproduce a billing bug",
+        );
+        assert.isString(sent[0]?.data?.["startedAt"]);
+        // Never the session id, the admin's identity or a token.
+        const text = JSON.stringify(sent[0]);
+        for (const forbidden of ["session-secret-id", admin.id, "admin@example.com", "token"]) {
+          assert.notInclude(text, forbidden);
+        }
+      }).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("a phone or anonymous account has no address, so nothing is sent (and nothing fails)", () =>
-    Effect.gen(function* () {
-      const users = yield* Users.Users;
-      const events = yield* AuthEvents.AuthEvents;
-      const mailer = yield* Mailer.Mailer;
-      const admin = yield* users.create({
-        identity: { _tag: "Email", email: "admin2@example.com" },
-        name: "Admin",
-      });
-      const anonymous = yield* users.create({ identity: { _tag: "Anonymous" }, name: "Anon" });
-      yield* settle;
-      yield* events.publish(startedBy(admin.id, anonymous.id));
-      yield* settle;
-      assert.strictEqual((yield* mailer.sent).length, 0);
-    }).pipe(Effect.provide(TestLayer)),
+  it.effect(
+    "a phone or anonymous account has no address, so nothing is sent (and nothing fails)",
+    () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const events = yield* AuthEvents.AuthEvents;
+        const mailer = yield* Mailer.Mailer;
+        const admin = yield* users.create({
+          identity: { _tag: "Email", email: "admin2@example.com" },
+          name: "Admin",
+        });
+        const anonymous = yield* users.create({ identity: { _tag: "Anonymous" }, name: "Anon" });
+        yield* settle;
+        yield* events.publish(startedBy(admin.id, anonymous.id));
+        yield* settle;
+        assert.strictEqual((yield* mailer.sent).length, 0);
+      }).pipe(Effect.provide(TestLayer)),
   );
 
   it.effect("other admin events do not mail anyone", () =>

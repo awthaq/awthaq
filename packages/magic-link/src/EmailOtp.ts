@@ -216,7 +216,10 @@ export const EmailOtpHandlers = HttpApiBuilder.group(
           client.context,
         );
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
+          delivery,
+          issued,
+        );
         return response;
       }),
     });

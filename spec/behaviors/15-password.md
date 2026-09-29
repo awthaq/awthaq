@@ -184,3 +184,25 @@ This is ADR-EA-011 ("Configuration Is a Service With a Default") applied to the 
 ESS-006/EHA-007: the static half of the policy lives in the contract: every email payload field is `EmailContract.Email` from `@awthaq/api` (a shape check, non-normalizing: one `@`, no whitespace, local part at most 64, domain with a dot, at most 254 in all) and every password field is capped at 1024 characters, so malformed input answers `400` before any rate limit, hasher or database is touched. `minLength` and the breach check stay in `checkPolicy` because they read the runtime configuration a static schema cannot. The endpoints that need a live session (`change-password`, `reauthenticate`) form the `password.account` group with group-level `Authentication`, the same convention `passkey` and `jwt` follow; their wire paths are unchanged.
 
 _Previous: [BEH-EA-119](15-password.md#beh-ea-119-breach-check-is-fail-open-by-default-fail-closed-by-config) | Next: [BEH-EA-121](16-oauth.md#beh-ea-121-pkce-s256-is-structural-not-optional)_
+
+## BEH-EA-232: A credential reset consults BeforeCredentialReset before anything is rewritten
+
+> **See:** [BEH-EA-093](12-hooks.md#beh-ea-093-a-divert-tap-returns-a-typed-alternative-outcome-the-caller-must-handle), [BEH-EA-234](28-two-factor.md#beh-ea-234-a-sign-in-with-a-confirmed-second-factor-is-diverted-and-no-session-exists-until-it-passes)
+
+```ts
+POST /password/confirm-reset { token, password, secondFactorCode? } -> 204 | TokenConsumed | WeakPassword | SecondFactorRequired | HookAborted | RateLimited
+Hooks.BeforeCredentialReset   // veto: { userId, secondFactorCode? }
+```
+
+```text
+REQUIREMENT: `confirmReset` MUST run the `BeforeCredentialReset` veto inside
+             its transaction — after the emailed token is consumed and before
+             the credential is rewritten and the user's sessions revoked — so
+             a refusal rolls the consume back (on SQL) and changes nothing.
+             A veto with the code `TWO_FACTOR_REQUIRED` MUST surface as the
+             typed `SecondFactorRequired` (401); any other veto code as the
+             typed `HookAborted`. An account with no tap installed, or with
+             no second factor, MUST reset exactly as before.
+```
+
+Possession of the mailbox alone must not be able to downgrade an account a stronger factor protects (ARF-005): without the veto, an emailed link could revoke every session and rewrite the credential of a passkey-and-TOTP-protected account. `@awthaq/two-factor`'s `credentialResetGate` is the tap: for an account with a confirmed second factor it demands a TOTP or recovery code in `secondFactorCode`, and a valid one is spent only when the reset commits. `Password.layer` requires the point, so every composition that installs `Password` already provides it through `Hooks.HooksLive`.

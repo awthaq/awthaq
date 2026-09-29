@@ -271,8 +271,9 @@ export const twoFactorExport = DataExport.contribute({
 const currentUserPrincipal = Effect.gen(function* () {
   const principal = yield* Api.CurrentPrincipal;
   if (principal._tag !== "User") {
-    return yield* Effect.die(
-      new Error(`awthaq: two-factor account group reached with a non-User principal: ${principal._tag}`),
+    return yield* Defects.invariantViolation(
+      "NonUserPrincipal",
+      `awthaq: two-factor account group reached with a non-User principal: ${principal._tag}`,
     );
   }
   return principal;
@@ -302,7 +303,10 @@ export const TwoFactorHandlers = Layer.mergeAll(
           Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
         );
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
+          delivery,
+          issued,
+        );
         return response;
       });
 
@@ -316,7 +320,11 @@ export const TwoFactorHandlers = Layer.mergeAll(
         }) {
           return yield* complete(request, (ip, context) =>
             twoFactor.verify(
-              { challengeId: payload.challengeId, code: payload.code, ...(ip === undefined ? {} : { ip }) },
+              {
+                challengeId: payload.challengeId,
+                code: payload.code,
+                ...(ip === undefined ? {} : { ip }),
+              },
               context,
             ),
           );
@@ -356,14 +364,25 @@ export const TwoFactorHandlers = Layer.mergeAll(
           );
           return new TwoFactorApi.EnrollmentDto(enrollment);
         }),
-        confirm: Effect.fnUntraced(function* ({ payload }: { payload: TwoFactorApi.ConfirmPayload }) {
+        confirm: Effect.fnUntraced(function* ({
+          payload,
+        }: {
+          payload: TwoFactorApi.ConfirmPayload;
+        }) {
           const principal = yield* currentUserPrincipal;
-          const recoveryCodes = yield* twoFactor.confirm(Users.UserId(principal.ref.id), payload.code);
+          const recoveryCodes = yield* twoFactor.confirm(
+            Users.UserId(principal.ref.id),
+            payload.code,
+          );
           return new TwoFactorApi.RecoveryCodesDto({ recoveryCodes });
         }),
         disable: Effect.fnUntraced(function* ({ payload }: { payload: TwoFactorApi.CodePayload }) {
           const principal = yield* currentUserPrincipal;
-          yield* twoFactor.disable(Users.UserId(principal.ref.id), principal.sessionId, payload.code);
+          yield* twoFactor.disable(
+            Users.UserId(principal.ref.id),
+            principal.sessionId,
+            payload.code,
+          );
         }),
         regenerateRecoveryCodes: Effect.fnUntraced(function* ({
           payload,
@@ -380,7 +399,9 @@ export const TwoFactorHandlers = Layer.mergeAll(
         }),
         status: Effect.fnUntraced(function* () {
           const principal = yield* currentUserPrincipal;
-          return new TwoFactorApi.StatusDto(yield* twoFactor.status(Users.UserId(principal.ref.id)));
+          return new TwoFactorApi.StatusDto(
+            yield* twoFactor.status(Users.UserId(principal.ref.id)),
+          );
         }),
       });
     }),
@@ -495,7 +516,9 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
         const user = yield* users
           .findById(challenge.userId)
           .pipe(
-            Effect.catchTag("UserNotFound", () => Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({}))),
+            Effect.catchTag("UserNotFound", () =>
+              Effect.fail(new TwoFactorApi.InvalidTwoFactorCode({})),
+            ),
           );
         yield* Users.assertCanSignIn(user);
         const issued = yield* sessions.issue({
@@ -552,20 +575,25 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
           ),
         );
         const verifiedChallenge = yield* verified(consumed, proof);
-        return yield* finalizeSignIn(verifiedChallenge, { ip: input.ip, userAgent: context?.userAgent });
+        return yield* finalizeSignIn(verifiedChallenge, {
+          ip: input.ip,
+          userAgent: context?.userAgent,
+        });
       });
 
       const enable: TwoFactorShape["enable"] = Effect.fnUntraced(function* (userId, sessionId) {
         yield* rateLimit(rules.manageByUser, { userId });
         yield* requireFreshSession(userId, sessionId);
-        const user = yield* users.findById(userId).pipe(
-          Effect.catchTag("UserNotFound", () =>
-            Defects.invariantViolation(
-              "AuthenticatedUserMissing",
-              `awthaq: authenticated user missing: ${userId}`,
+        const user = yield* users
+          .findById(userId)
+          .pipe(
+            Effect.catchTag("UserNotFound", () =>
+              Defects.invariantViolation(
+                "AuthenticatedUserMissing",
+                `awthaq: authenticated user missing: ${userId}`,
+              ),
             ),
-          ),
-        );
+          );
         const enrolment = yield* factor.beginEnrolment(userId, Users.accountLabel(user));
         return {
           secret: Redacted.value(enrolment.secret),
@@ -579,7 +607,11 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
       });
 
       const verify: TwoFactorShape["verify"] = (input, context) =>
-        attempt("totp", { challengeId: input.challengeId, code: input.code, ip: input.ip }, context);
+        attempt(
+          "totp",
+          { challengeId: input.challengeId, code: input.code, ip: input.ip },
+          context,
+        );
 
       const verifyRecovery: TwoFactorShape["verifyRecovery"] = (input, context) =>
         attempt(

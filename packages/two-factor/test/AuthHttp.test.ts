@@ -107,7 +107,10 @@ const cookieOf = (response: Response): string =>
 const Enrollment = Schema.Struct({ secret: Schema.String, otpauthUri: Schema.String });
 const Codes = Schema.Struct({ recoveryCodes: Schema.Array(Schema.String) });
 const Status = Schema.Struct({ enabled: Schema.Boolean, remainingRecoveryCodes: Schema.Number });
-const Divert = Schema.Struct({ _tag: Schema.Literal("TwoFactorRequired"), challengeId: Schema.String });
+const Divert = Schema.Struct({
+  _tag: Schema.Literal("TwoFactorRequired"),
+  challengeId: Schema.String,
+});
 const Retry = Schema.Struct({
   _tag: Schema.Literal("InvalidTwoFactorCode"),
   challengeId: Schema.optional(Schema.String),
@@ -210,23 +213,28 @@ describe("TwoFactor over HTTP", () => {
     }),
   );
 
-  it.live("a password reset of an enrolled account asks for the second factor (SecondFactorRequired, 401)", () =>
-    Effect.gen(function* () {
-      const email = "reset@example.com";
-      const cookie = yield* registerOverHttp(email);
-      yield* enrolOverHttp(cookie);
+  it.live(
+    "a password reset of an enrolled account asks for the second factor (SecondFactorRequired, 401)",
+    () =>
+      Effect.gen(function* () {
+        const email = "reset@example.com";
+        const cookie = yield* registerOverHttp(email);
+        yield* enrolOverHttp(cookie);
 
-      yield* call("POST", "/password/request-reset", { body: { email } });
-      yield* letForkedFibersRun;
-      const resetMail = (yield* Effect.promise(sentMail)).findLast(
-        (mail) => mail.template === "reset-password",
-      );
-      const refused = yield* call("POST", "/password/confirm-reset", {
-        body: { token: tokenOf(resetMail), password: "a brand new strong password" },
-      });
-      assert.strictEqual(refused.status, 401);
-      assert.strictEqual(Schema.decodeUnknownSync(Tagged)(yield* json(refused))._tag, "SecondFactorRequired");
-    }),
+        yield* call("POST", "/password/request-reset", { body: { email } });
+        yield* letForkedFibersRun;
+        const resetMail = (yield* Effect.promise(sentMail)).findLast(
+          (mail) => mail.template === "reset-password",
+        );
+        const refused = yield* call("POST", "/password/confirm-reset", {
+          body: { token: tokenOf(resetMail), password: "a brand new strong password" },
+        });
+        assert.strictEqual(refused.status, 401);
+        assert.strictEqual(
+          Schema.decodeUnknownSync(Tagged)(yield* json(refused))._tag,
+          "SecondFactorRequired",
+        );
+      }),
   );
 
   it.live("enable, disable and status need a session; only verify is public", () =>

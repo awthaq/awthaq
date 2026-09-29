@@ -35,7 +35,10 @@ describe("RecoveryCodes", () => {
         assert.strictEqual(counts.size, 32);
         // 30000 draws, 937.5 expected per symbol: chi-square with 31 df stays far below 61.1 (p = 0.001).
         const expected = 30_000 / 32;
-        const chi = [...counts.values()].reduce((sum, seen) => sum + (seen - expected) ** 2 / expected, 0);
+        const chi = [...counts.values()].reduce(
+          (sum, seen) => sum + (seen - expected) ** 2 / expected,
+          0,
+        );
         assert.isBelow(chi, 61.1);
       }),
     ),

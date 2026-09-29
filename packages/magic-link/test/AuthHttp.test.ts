@@ -84,7 +84,11 @@ describe("the contracts have no GET route (MLO-005)", () => {
   it("every endpoint of the magicLink and emailOtp groups is a POST", () => {
     const methods = Object.values(built.api.groups)
       .filter((group) => group.identifier === "magicLink" || group.identifier === "emailOtp")
-      .flatMap((group) => Object.values(group.endpoints).map((endpoint) => `${group.identifier} ${endpoint.method} ${endpoint.path}`));
+      .flatMap((group) =>
+        Object.values(group.endpoints).map(
+          (endpoint) => `${group.identifier} ${endpoint.method} ${endpoint.path}`,
+        ),
+      );
     assert.deepStrictEqual(methods.sort(), [
       "emailOtp POST /email-otp/request",
       "emailOtp POST /email-otp/verify",
@@ -95,72 +99,85 @@ describe("the contracts have no GET route (MLO-005)", () => {
 });
 
 describe("MagicLink and EmailOtp over HTTP", () => {
-  it.live("a link is requested (202), never consumable by GET, and POST /magic-link/verify signs in once", () =>
-    Effect.gen(function* () {
-      const requested = yield* call("POST", "/magic-link/request", { email: "ada@example.com" });
-      assert.strictEqual(requested.status, 202);
-      yield* letForkedFibersRun;
-      const mail = (yield* Effect.promise(sentMail)).findLast((m) => m.template === "magic-link");
-      const token = secretOf(mail, "token");
-      // The mailed URL carries the token in the fragment.
-      assert.strictEqual(
-        String(mail?.data?.["url"]),
-        `https://app.example.com/magic-link#token=${encodeURIComponent(token)}`,
-      );
+  it.live(
+    "a link is requested (202), never consumable by GET, and POST /magic-link/verify signs in once",
+    () =>
+      Effect.gen(function* () {
+        const requested = yield* call("POST", "/magic-link/request", { email: "ada@example.com" });
+        assert.strictEqual(requested.status, 202);
+        yield* letForkedFibersRun;
+        const mail = (yield* Effect.promise(sentMail)).findLast((m) => m.template === "magic-link");
+        const token = secretOf(mail, "token");
+        // The mailed URL carries the token in the fragment.
+        assert.strictEqual(
+          String(mail?.data?.["url"]),
+          `https://app.example.com/magic-link#token=${encodeURIComponent(token)}`,
+        );
 
-      // A prefetch (GET, with the token every way it could be smuggled) consumes nothing.
-      for (const url of [
-        `/magic-link/verify?token=${encodeURIComponent(token)}`,
-        `/magic-link?token=${encodeURIComponent(token)}`,
-      ]) {
-        const prefetch = yield* call("GET", url);
-        assert.isTrue(prefetch.status === 404 || prefetch.status === 405);
-      }
+        // A prefetch (GET, with the token every way it could be smuggled) consumes nothing.
+        for (const url of [
+          `/magic-link/verify?token=${encodeURIComponent(token)}`,
+          `/magic-link?token=${encodeURIComponent(token)}`,
+        ]) {
+          const prefetch = yield* call("GET", url);
+          assert.isTrue(prefetch.status === 404 || prefetch.status === 405);
+        }
 
-      const verified = yield* call("POST", "/magic-link/verify", { token });
-      assert.strictEqual(verified.status, 200);
-      assert.include(verified.headers.get("set-cookie") ?? "", `${Api.SESSION_COOKIE_NAME}=`);
-      const body = Schema.decodeUnknownSync(SessionBody)(yield* Effect.promise(() => verified.json()));
-      assert.deepStrictEqual(body.amr, ["email"]);
+        const verified = yield* call("POST", "/magic-link/verify", { token });
+        assert.strictEqual(verified.status, 200);
+        assert.include(verified.headers.get("set-cookie") ?? "", `${Api.SESSION_COOKIE_NAME}=`);
+        const body = Schema.decodeUnknownSync(SessionBody)(
+          yield* Effect.promise(() => verified.json()),
+        );
+        assert.deepStrictEqual(body.amr, ["email"]);
 
-      const replay = yield* call("POST", "/magic-link/verify", { token });
-      assert.strictEqual(replay.status, 410);
-      assert.strictEqual(
-        Schema.decodeUnknownSync(Tagged)(yield* Effect.promise(() => replay.json()))._tag,
-        "MagicLinkConsumed",
-      );
-    }),
+        const replay = yield* call("POST", "/magic-link/verify", { token });
+        assert.strictEqual(replay.status, 410);
+        assert.strictEqual(
+          Schema.decodeUnknownSync(Tagged)(yield* Effect.promise(() => replay.json()))._tag,
+          "MagicLinkConsumed",
+        );
+      }),
   );
 
-  it.live("an emailed code signs in over POST /email-otp/verify, and a wrong one is 401 InvalidEmailOtp", () =>
-    Effect.gen(function* () {
-      const requested = yield* call("POST", "/email-otp/request", { email: "otp@example.com" });
-      assert.strictEqual(requested.status, 202);
-      yield* letForkedFibersRun;
-      const mail = (yield* Effect.promise(sentMail)).findLast((m) => m.template === "email-otp");
-      const code = secretOf(mail, "code");
+  it.live(
+    "an emailed code signs in over POST /email-otp/verify, and a wrong one is 401 InvalidEmailOtp",
+    () =>
+      Effect.gen(function* () {
+        const requested = yield* call("POST", "/email-otp/request", { email: "otp@example.com" });
+        assert.strictEqual(requested.status, 202);
+        yield* letForkedFibersRun;
+        const mail = (yield* Effect.promise(sentMail)).findLast((m) => m.template === "email-otp");
+        const code = secretOf(mail, "code");
 
-      const wrong = yield* call("POST", "/email-otp/verify", {
-        email: "otp@example.com",
-        code: code === "000000" ? "111111" : "000000",
-      });
-      assert.strictEqual(wrong.status, 401);
-      assert.strictEqual(
-        Schema.decodeUnknownSync(Tagged)(yield* Effect.promise(() => wrong.json()))._tag,
-        "InvalidEmailOtp",
-      );
+        const wrong = yield* call("POST", "/email-otp/verify", {
+          email: "otp@example.com",
+          code: code === "000000" ? "111111" : "000000",
+        });
+        assert.strictEqual(wrong.status, 401);
+        assert.strictEqual(
+          Schema.decodeUnknownSync(Tagged)(yield* Effect.promise(() => wrong.json()))._tag,
+          "InvalidEmailOtp",
+        );
 
-      const verified = yield* call("POST", "/email-otp/verify", { email: "otp@example.com", code });
-      assert.strictEqual(verified.status, 200);
-      const body = Schema.decodeUnknownSync(SessionBody)(yield* Effect.promise(() => verified.json()));
-      assert.deepStrictEqual(body.amr, ["otp", "email"]);
-    }),
+        const verified = yield* call("POST", "/email-otp/verify", {
+          email: "otp@example.com",
+          code,
+        });
+        assert.strictEqual(verified.status, 200);
+        const body = Schema.decodeUnknownSync(SessionBody)(
+          yield* Effect.promise(() => verified.json()),
+        );
+        assert.deepStrictEqual(body.amr, ["otp", "email"]);
+      }),
   );
 
-  it.live("a malformed address is rejected at decode (400) before any limit or store is touched", () =>
-    Effect.gen(function* () {
-      const response = yield* call("POST", "/magic-link/request", { email: "not-an-email" });
-      assert.strictEqual(response.status, 400);
-    }),
+  it.live(
+    "a malformed address is rejected at decode (400) before any limit or store is touched",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* call("POST", "/magic-link/request", { email: "not-an-email" });
+        assert.strictEqual(response.status, 400);
+      }),
   );
 });

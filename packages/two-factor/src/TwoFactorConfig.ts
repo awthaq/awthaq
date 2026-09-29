@@ -54,10 +54,9 @@ const defaults: TwoFactorConfigShape = {
   failureWindow: Duration.minutes(15),
 };
 
-export const TwoFactorConfig = Context.Reference<TwoFactorConfigShape>(
-  "awthaq/two-factor/Config",
-  { defaultValue: () => defaults },
-);
+export const TwoFactorConfig = Context.Reference<TwoFactorConfigShape>("awthaq/two-factor/Config", {
+  defaultValue: () => defaults,
+});
 
 export const config = (partial: Partial<TwoFactorConfigShape>) =>
   Layer.succeed(TwoFactorConfig, { ...defaults, ...partial });

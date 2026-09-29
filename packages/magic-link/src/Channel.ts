@@ -77,7 +77,11 @@ export interface Channel {
     completion: Completion,
   ) => Effect.Effect<
     IssuedSession,
-    ChannelInvalid | HookPoint.HookAborted | Hooks.TwoFactorRequired | Users.UserSuspended | Errors.StoreUnavailable
+    | ChannelInvalid
+    | HookPoint.HookAborted
+    | Hooks.TwoFactorRequired
+    | Users.UserSuspended
+    | Errors.StoreUnavailable
   >;
 }
 
@@ -158,7 +162,11 @@ export const make = Effect.gen(function* () {
     yield* Users.assertCanSignIn(user);
     // NAM-002: the sign-in veto, before the MFA divert point below.
     yield* HookPoint.aborted(Hooks.BeforeSignIn)(
-      beforeSignIn.run({ userId: user.id, ...Users.emailField(user), strategy: completion.strategy }),
+      beforeSignIn.run({
+        userId: user.id,
+        ...Users.emailField(user),
+        strategy: completion.strategy,
+      }),
     );
     // ARF-005 Fix A / BCR-004: THE canonical MFA attachment point, consulted right before this
     // flow's own `sessions.issue` — a user with a confirmed second factor is diverted here.
@@ -193,4 +201,3 @@ export const logInvalid = (strategy: string, error: ChannelInvalid) =>
   Effect.logDebug("awthaq: channel sign-in refused").pipe(
     Effect.annotateLogs({ strategy, reason: error.reason }),
   );
-

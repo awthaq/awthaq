@@ -212,7 +212,10 @@ export const layerRecoveryCodesMemory: Layer.Layer<TwoFactorRecoveryCodes, never
             });
           }
           // One `Ref.update`: the swap is atomic, so a reader sees the old set or the new one.
-          yield* Ref.update(state, (rows) => [...rows.filter((row) => row.userId !== userId), ...fresh]);
+          yield* Ref.update(state, (rows) => [
+            ...rows.filter((row) => row.userId !== userId),
+            ...fresh,
+          ]);
         });
 
       const listUnused: TwoFactorRecoveryCodesShape["listUnused"] = (userId) =>
@@ -242,7 +245,8 @@ export const layerRecoveryCodesMemory: Layer.Layer<TwoFactorRecoveryCodes, never
       const countUnused: TwoFactorRecoveryCodesShape["countUnused"] = (userId) =>
         Ref.get(state).pipe(
           Effect.map(
-            (rows) => rows.filter((row) => row.userId === userId && Option.isNone(row.usedAt)).length,
+            (rows) =>
+              rows.filter((row) => row.userId === userId && Option.isNone(row.usedAt)).length,
           ),
         );
 
@@ -361,7 +365,8 @@ export const layerSecretsSql: Layer.Layer<TwoFactorSecrets, never, SqlClient.Sql
       const deleteQuery = SqlSchema.findOneOption({
         Request: Schema.String,
         Result: SecretRow,
-        execute: (userId) => sql`DELETE FROM two_factor_secret WHERE "userId" = ${userId} RETURNING *`,
+        execute: (userId) =>
+          sql`DELETE FROM two_factor_secret WHERE "userId" = ${userId} RETURNING *`,
       });
 
       const find: TwoFactorSecretsShape["find"] = (userId) =>
@@ -370,16 +375,20 @@ export const layerSecretsSql: Layer.Layer<TwoFactorSecrets, never, SqlClient.Sql
       const upsertPending: TwoFactorSecretsShape["upsertPending"] = (userId, envelope) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now;
-          const written = yield* upsertPendingQuery({ userId, secret: envelope, createdAt: now }).pipe(
-            Effect.orDie,
-          );
+          const written = yield* upsertPendingQuery({
+            userId,
+            secret: envelope,
+            createdAt: now,
+          }).pipe(Effect.orDie);
           return Option.isSome(written);
         });
 
       const confirm: TwoFactorSecretsShape["confirm"] = (userId, step) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now;
-          const updated = yield* confirmQuery({ userId, step: Number(step), now }).pipe(Effect.orDie);
+          const updated = yield* confirmQuery({ userId, step: Number(step), now }).pipe(
+            Effect.orDie,
+          );
           return Option.isSome(updated);
         });
 
@@ -485,7 +494,10 @@ export const layerRecoveryCodesSql: Layer.Layer<
     const markUsed: TwoFactorRecoveryCodesShape["markUsed"] = (userId, id) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
-        return yield* markUsedQuery({ id, userId, now }).pipe(Effect.map(Option.isSome), Effect.orDie);
+        return yield* markUsedQuery({ id, userId, now }).pipe(
+          Effect.map(Option.isSome),
+          Effect.orDie,
+        );
       });
 
     const countUnused: TwoFactorRecoveryCodesShape["countUnused"] = (userId) =>

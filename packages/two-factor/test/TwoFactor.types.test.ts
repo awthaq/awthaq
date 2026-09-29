@@ -11,16 +11,24 @@ type Includes<Haystack, Needle> = [Needle] extends [Haystack] ? true : false;
 
 // Omitting a gate is a compile error: the plugin layer *requires* the markers, and only a gate provides them.
 type PluginNeeds = Layer.Services<typeof TwoFactor.TwoFactor.layer>;
-export const pluginRequiresTheSessionGate: Includes<PluginNeeds, TwoFactor.TwoFactorGateInstalled> = true;
+export const pluginRequiresTheSessionGate: Includes<PluginNeeds, TwoFactor.TwoFactorGateInstalled> =
+  true;
 export const pluginRequiresAResetGuard: Includes<PluginNeeds, TwoFactor.TwoFactorResetGuard> = true;
 
 // ...and each gate is what provides its marker (and nothing forces a cycle back through the plugin).
 type SessionGateGives = Layer.Success<typeof TwoFactor.sessionGate>;
 type ResetGateGives = Layer.Success<typeof TwoFactor.credentialResetGate>;
 type NoResetGives = Layer.Success<typeof TwoFactor.noCredentialReset>;
-export const sessionGateProvidesItsMarker: Includes<SessionGateGives, TwoFactor.TwoFactorGateInstalled> = true;
-export const resetGateProvidesItsGuard: Includes<ResetGateGives, TwoFactor.TwoFactorResetGuard> = true;
-export const noCredentialResetProvidesTheGuard: Includes<NoResetGives, TwoFactor.TwoFactorResetGuard> = true;
+export const sessionGateProvidesItsMarker: Includes<
+  SessionGateGives,
+  TwoFactor.TwoFactorGateInstalled
+> = true;
+export const resetGateProvidesItsGuard: Includes<ResetGateGives, TwoFactor.TwoFactorResetGuard> =
+  true;
+export const noCredentialResetProvidesTheGuard: Includes<
+  NoResetGives,
+  TwoFactor.TwoFactorResetGuard
+> = true;
 export const sessionGateDoesNotRequireThePlugin: Includes<
   Layer.Services<typeof TwoFactor.sessionGate>,
   typeof TwoFactor.TwoFactor

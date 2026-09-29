@@ -55,7 +55,10 @@ describe("Totp.totp (RFC 6238 Appendix B, SHA-1)", () => {
         const crypto = yield* Crypto.Crypto;
         for (const [time, expected] of vectors) {
           assert.strictEqual(
-            yield* Totp.totp(crypto, ascii("12345678901234567890"), time, { period: 30, digits: 8 }),
+            yield* Totp.totp(crypto, ascii("12345678901234567890"), time, {
+              period: 30,
+              digits: 8,
+            }),
             expected,
           );
         }
@@ -82,14 +85,18 @@ describe("Totp.verifyTotp", () => {
         );
         assert.deepStrictEqual(
           yield* Totp.verifyTotp(crypto, key, yield* at(-1), now, options),
-          Option.some(current - 1n),
+          Option.some(current - BigInt(1)),
         );
         assert.deepStrictEqual(
           yield* Totp.verifyTotp(crypto, key, yield* at(1), now, options),
-          Option.some(current + 1n),
+          Option.some(current + BigInt(1)),
         );
-        assert.isTrue(Option.isNone(yield* Totp.verifyTotp(crypto, key, yield* at(-2), now, options)));
-        assert.isTrue(Option.isNone(yield* Totp.verifyTotp(crypto, key, yield* at(2), now, options)));
+        assert.isTrue(
+          Option.isNone(yield* Totp.verifyTotp(crypto, key, yield* at(-2), now, options)),
+        );
+        assert.isTrue(
+          Option.isNone(yield* Totp.verifyTotp(crypto, key, yield* at(2), now, options)),
+        );
       }),
     ),
   );
@@ -114,7 +121,7 @@ describe("Totp.verifyTotp", () => {
         assert.deepStrictEqual(
           yield* Totp.verifyTotp(crypto, key, code, now, {
             ...options,
-            lastUsedStep: Option.some(step - 1n),
+            lastUsedStep: Option.some(step - BigInt(1)),
           }),
           Option.some(step),
         );

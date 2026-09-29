@@ -74,10 +74,9 @@ const defaults: MagicLinkConfigShape = {
   resendWindow: Duration.seconds(60),
 };
 
-export const MagicLinkConfig = Context.Reference<MagicLinkConfigShape>(
-  "awthaq/magic-link/Config",
-  { defaultValue: () => defaults },
-);
+export const MagicLinkConfig = Context.Reference<MagicLinkConfigShape>("awthaq/magic-link/Config", {
+  defaultValue: () => defaults,
+});
 
 export const config = (partial: Partial<MagicLinkConfigShape>) =>
   Layer.succeed(MagicLinkConfig, { ...defaults, ...partial });
@@ -207,9 +206,15 @@ export const MagicLinkHandlers = HttpApiBuilder.group(
       }) {
         const delivery = yield* SessionDelivery.mode(request);
         const client = yield* currentClient(clientAddress, request);
-        const issued = yield* magicLink.verify({ token: payload.token, ip: client.ip }, client.context);
+        const issued = yield* magicLink.verify(
+          { token: payload.token, ip: client.ip },
+          client.context,
+        );
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
-        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(
+          delivery,
+          issued,
+        );
         return response;
       }),
     });

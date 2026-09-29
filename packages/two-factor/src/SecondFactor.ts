@@ -246,9 +246,11 @@ export const layer = Layer.effect(
     });
 
     const isEnrolled: SecondFactorShape["isEnrolled"] = (userId) =>
-      secrets.find(userId).pipe(
-        Effect.map((record) => Option.isSome(record) && Option.isSome(record.value.confirmedAt)),
-      );
+      secrets
+        .find(userId)
+        .pipe(
+          Effect.map((record) => Option.isSome(record) && Option.isSome(record.value.confirmedAt)),
+        );
 
     const status: SecondFactorShape["status"] = Effect.fnUntraced(function* (userId) {
       const enabled = yield* isEnrolled(userId);
@@ -308,7 +310,8 @@ export const layer = Layer.effect(
         const step = yield* matchStep(record.value, Redacted.value(code));
         if (Option.isNone(step)) return yield* refuse(userId, "totp", "enroll");
         // A lost race (a concurrent confirm won) reads exactly like a wrong code.
-        if (!(yield* secrets.confirm(userId, step.value))) return yield* refuse(userId, "totp", "enroll");
+        if (!(yield* secrets.confirm(userId, step.value)))
+          return yield* refuse(userId, "totp", "enroll");
         const display = yield* mintRecoveryCodes(userId);
         yield* events.publish({ _tag: "auth.twoFactor.enabled", userId });
         return display;
@@ -354,13 +357,19 @@ export const layer = Layer.effect(
         }
         if (matched === undefined) return yield* refuse(userId, "recovery", purpose);
         // Single-use: the compare-and-set is the spend. Losing it (a concurrent presentation) is a refusal.
-        if (!(yield* codes.markUsed(userId, matched))) return yield* refuse(userId, "recovery", purpose);
+        if (!(yield* codes.markUsed(userId, matched)))
+          return yield* refuse(userId, "recovery", purpose);
         yield* events.publish({
           _tag: "auth.twoFactor.recoveryCodeUsed",
           userId,
           remaining: yield* codes.countUnused(userId),
         });
-        yield* events.publish({ _tag: "auth.twoFactor.verified", userId, method: "recovery", purpose });
+        yield* events.publish({
+          _tag: "auth.twoFactor.verified",
+          userId,
+          method: "recovery",
+          purpose,
+        });
         return proofOf({ userId, method: "recovery" });
       },
     );
@@ -388,23 +397,25 @@ export const layer = Layer.effect(
 
     // ---- the challenge (THS-007) ------------------------------------------------------------------
 
-    const issueChallenge: SecondFactorShape["issueChallenge"] = Effect.fnUntraced(function* (input) {
-      const issued = yield* verification.issue({
-        identifier: VerificationLink.identifierOf(CHALLENGE_PURPOSE, input.userId),
-        ttl: config.challengeTtl,
-        userId: input.userId,
-        payload: { strategy: input.strategy, amr: input.amr, attempt: input.attempt },
-      });
-      return TwoFactorChallengeId(
-        Redacted.value(
-          VerificationLink.encode({
-            purpose: CHALLENGE_PURPOSE,
-            publicId: input.userId,
-            value: issued.value,
-          }),
-        ),
-      );
-    });
+    const issueChallenge: SecondFactorShape["issueChallenge"] = Effect.fnUntraced(
+      function* (input) {
+        const issued = yield* verification.issue({
+          identifier: VerificationLink.identifierOf(CHALLENGE_PURPOSE, input.userId),
+          ttl: config.challengeTtl,
+          userId: input.userId,
+          payload: { strategy: input.strategy, amr: input.amr, attempt: input.attempt },
+        });
+        return TwoFactorChallengeId(
+          Redacted.value(
+            VerificationLink.encode({
+              purpose: CHALLENGE_PURPOSE,
+              publicId: input.userId,
+              value: issued.value,
+            }),
+          ),
+        );
+      },
+    );
 
     const decodePayload = Schema.decodeUnknownOption(ChallengePayload);
 
@@ -414,11 +425,12 @@ export const layer = Layer.effect(
         const decoded = VerificationLink.decode(Redacted.value(challengeId), CHALLENGE_PURPOSE);
         if (Option.isNone(decoded)) return yield* Effect.fail(invalid);
         // The identifier is derived from the claimed user, so a challenge cannot be spent as another's.
-        const consumed = yield* verification.consume(decoded.value.identifier, decoded.value.value).pipe(
-          Effect.catchTag("Verification/TokenConsumed", () => Effect.fail(invalid)),
-        );
+        const consumed = yield* verification
+          .consume(decoded.value.identifier, decoded.value.value)
+          .pipe(Effect.catchTag("Verification/TokenConsumed", () => Effect.fail(invalid)));
         const payload = decodePayload(consumed.payload);
-        if (Option.isNone(payload) || Option.isNone(consumed.userId)) return yield* Effect.fail(invalid);
+        if (Option.isNone(payload) || Option.isNone(consumed.userId))
+          return yield* Effect.fail(invalid);
         return {
           userId: consumed.userId.value,
           strategy: payload.value.strategy,

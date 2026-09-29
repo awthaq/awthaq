@@ -121,10 +121,13 @@ export const verifyTotp = (
     let matched: Option.Option<bigint> = Option.none();
     for (let offset = -options.window; offset <= options.window; offset += 1) {
       const step = current + BigInt(offset);
-      if (step < 0n) continue;
+      if (step < BigInt(0)) continue;
       const expected = yield* hotp(crypto, key, step, options.digits);
       // Compared even when `code` is malformed, so the work does not depend on its shape.
-      const equal = Hmac.constantTimeEqualString(expected, wellFormed ? code : "x".repeat(options.digits));
+      const equal = Hmac.constantTimeEqualString(
+        expected,
+        wellFormed ? code : "x".repeat(options.digits),
+      );
       const fresh = Option.match(options.lastUsedStep, {
         onNone: () => true,
         onSome: (last) => step > last,

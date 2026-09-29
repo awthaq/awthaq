@@ -32,7 +32,6 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@awthaq/password": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@awthaq/two-factor": "workspace:*",
     "@effect/platform-node": "catalog:",
