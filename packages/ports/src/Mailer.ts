@@ -28,6 +28,7 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 
 /**
@@ -106,6 +107,42 @@ export const layerMemory: Layer.Layer<Mailer> = Layer.effect(
     const messages = yield* Ref.make<ReadonlyArray<MailMessage>>([]);
     return Mailer.of({
       send: (message) => Ref.update(messages, (existing) => [...existing, message]),
+      sent: Ref.get(messages),
+      development: true,
+    });
+  }),
+);
+
+/**
+ * DESS-002: the development stand-in for a real provider. Records every message
+ * like `layerMemory`, and also logs it — the recipient, the template and the `data`
+ * with any `Redacted` value unwrapped — so a person running an app locally can copy a
+ * verification or reset token straight out of the console and finish the flow
+ * without an inbox.
+ *
+ * **Development only.** This is the one `Mailer` that deliberately breaks EOTS-010
+ * (no recipient, no token in a log line): logging the token is its whole purpose. It
+ * sets `development`, so `awthaq doctor --build` flags it in a production composition.
+ */
+export const layerConsole: Layer.Layer<Mailer> = Layer.effect(
+  Mailer,
+  Effect.gen(function* () {
+    const messages = yield* Ref.make<ReadonlyArray<MailMessage>>([]);
+    return Mailer.of({
+      send: (message) =>
+        Effect.logInfo("awthaq mail").pipe(
+          Effect.annotateLogs({
+            to: message.to,
+            template: message.template,
+            ...Object.fromEntries(
+              Object.entries(message.data ?? {}).map(([key, value]) => [
+                key,
+                Redacted.isRedacted(value) ? Redacted.value(value) : value,
+              ]),
+            ),
+          }),
+          Effect.andThen(Ref.update(messages, (existing) => [...existing, message])),
+        ),
       sent: Ref.get(messages),
       development: true,
     });

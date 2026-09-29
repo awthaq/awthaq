@@ -3,7 +3,10 @@
 //   - qadi's Path B `RequirePermission` guards `GET /roles/catalog`: a subject without
 //     `roles:read` gets 403, one whose role carries it gets 200;
 //   - a `BeforeSignUp` veto tap (an e-mail domain allow-list) refuses a disallowed address with
-//     the typed `HookAborted` before any account exists, and lets an allowed one through.
+//     the typed `HookAborted` before any account exists, and lets an allowed one through;
+//   - the README walkthrough ends in a real sign-in: the console mailer prints the verification
+//     token (DESS-002), and the enforcing limiter answers 429 once the sign-in budget is spent
+//     (CSD-010).
 import { Api } from "@awthaq/api";
 import { Users } from "@awthaq/core";
 import { Roles } from "@awthaq/roles";
@@ -11,7 +14,9 @@ import { assert, describe, it } from "@effect/vitest";
 import { createHmac, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
+import * as References from "effect/References";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { buildApp, demoCsrfSecret } from "../app.ts";
@@ -28,7 +33,17 @@ const NoBreachHttpClient = Layer.succeed(
   ),
 );
 
-const { handler, run: withServices } = buildApp(NoBreachHttpClient);
+// Every message the console mailer prints, read back from the log the way a person running the
+// example reads it from the terminal.
+const printedMail: Array<Record<string, unknown>> = [];
+const CaptureMail = Logger.layer([
+  Logger.make<unknown, void>((options) => {
+    const annotations = options.fiber.getRef(References.CurrentLogAnnotations);
+    if (annotations["template"] !== undefined) printedMail.push({ ...annotations });
+  }),
+]);
+
+const { handler, run: withServices } = buildApp(NoBreachHttpClient, CaptureMail);
 
 // `<iat>.<random>.<hmac(iat.random)>` — the double-submit pair CSRF protection requires on a mutation.
 const csrfToken = (() => {
@@ -53,6 +68,9 @@ const call = (method: string, path: string, options?: { cookie?: string; body?: 
 
 const signUp = (email: string) =>
   call("POST", "/password/sign-up", { body: { email, password: PASSWORD } });
+
+const signIn = (email: string, password: string) =>
+  call("POST", "/password/sign-in", { body: { email, password } });
 
 /** The bare `name=value` of the session cookie a response set. */
 const sessionCookie = (response: Response): string => {
@@ -105,5 +123,33 @@ describe("examples/memory-server (TS-007)", () => {
       catalog.map((role) => role.name),
       ["platform:admin"],
     );
+  });
+
+  it("the README walkthrough: sign-up, read the token from the console mail, verify, then sign in", async () => {
+    const email = "walkthrough@example.com";
+    assert.strictEqual((await signUp(email)).status, 200);
+
+    const blocked = await signIn(email, PASSWORD);
+    assert.strictEqual(blocked.status, 403);
+    assert.strictEqual(((await blocked.json()) as { readonly _tag: string })._tag, "EmailNotVerified");
+
+    const mail = printedMail.find((line) => line["to"] === email && line["template"] === "verify-email");
+    assert.isString(mail?.["token"]);
+    assert.strictEqual((await call("POST", "/verify-email", { body: { token: mail?.["token"] } })).status, 204);
+
+    const signedIn = await signIn(email, PASSWORD);
+    assert.strictEqual(signedIn.status, 200);
+    assert.notStrictEqual(sessionCookie(signedIn), "");
+  });
+
+  it("the sign-in budget is enforced: the sixth wrong password in a row is a 429, not a 401", async () => {
+    const email = "brute@example.com";
+    assert.strictEqual((await signUp(email)).status, 200);
+    const statuses: Array<number> = [];
+    for (let attempt = 0; attempt < 6; attempt++) {
+      statuses.push((await signIn(email, "definitely-not-the-password")).status);
+    }
+    assert.notStrictEqual(statuses[4], 429);
+    assert.strictEqual(statuses[5], 429);
   });
 });
