@@ -45,14 +45,17 @@
 // `order` keep their registration sequence. `registered` is the introspection
 // primitive a CLI listing of the rules would call.
 
-import { RateLimiter } from "@awthaq/ports";
+import { Api } from "@awthaq/api";
+import { ClientAddress, RateLimiter } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as AuthEvents from "./AuthEvents.ts";
 import type * as AuthPlugin from "./AuthPlugin.ts";
 import * as HookPoint from "./HookPoint.ts";
@@ -234,3 +237,137 @@ export const enforce = (input: EnforceInput) =>
         ),
       );
   });
+
+// ---- PV-240: key strategies ------------------------------------------------------------------
+
+/** What `bucketKey` and `enforceRule` read of a rule: its address and its strategy. */
+type Keyed = Pick<RuleInput, "group" | "endpoint">;
+
+/** The label a rule reports with a breach (`EnforceMeta.rule`): fixed, never a key. */
+const ruleLabel = (rule: Keyed) => `${rule.group}.${rule.endpoint}`;
+
+const dimensionOf = (key: RateLimitKey): EnforceMeta["dimension"] =>
+  key === "principal" ? "principal" : key === "ip" ? "ip" : "custom";
+
+/**
+ * PV-240/BEH-EA-108: the bucket key a rule's strategy derives for the current request, prefixed
+ * with the rule's own `group.endpoint` so two rules with the same strategy never share a counter.
+ *
+ * - `"principal"`: the caller's `CurrentPrincipal` (`type:id`). An anonymous caller is one shared
+ *   principal, so an unauthenticated endpoint should not use this strategy.
+ * - `"ip"`: the address the `ClientAddress` port resolves for the ambient request; an unresolvable
+ *   address falls into one explicit `unknown` bucket rather than escaping the limit.
+ * - a function: applied to `input`, the plugin author's own responsibility (BEH-EA-108).
+ */
+export function bucketKey(
+  rule: Keyed & { readonly key: "principal" },
+): Effect.Effect<string, never, Api.CurrentPrincipal>;
+export function bucketKey(
+  rule: Keyed & { readonly key: "ip" },
+): Effect.Effect<string, never, ClientAddress.ClientAddress | HttpServerRequest.HttpServerRequest>;
+export function bucketKey(
+  rule: Keyed & { readonly key: (input: unknown) => string },
+  input?: unknown,
+): Effect.Effect<string>;
+export function bucketKey(
+  rule: Keyed & { readonly key: RateLimitKey },
+  input?: unknown,
+): Effect.Effect<
+  string,
+  never,
+  Api.CurrentPrincipal | ClientAddress.ClientAddress | HttpServerRequest.HttpServerRequest
+>;
+export function bucketKey(
+  rule: Keyed & { readonly key: RateLimitKey },
+  input?: unknown,
+): Effect.Effect<
+  string,
+  never,
+  Api.CurrentPrincipal | ClientAddress.ClientAddress | HttpServerRequest.HttpServerRequest
+> {
+  const namespace = `ratelimit:${ruleLabel(rule)}`;
+  const strategy = rule.key;
+  if (typeof strategy === "function") return Effect.succeed(`${namespace}:${strategy(input)}`);
+  if (strategy === "principal") {
+    return Api.CurrentPrincipal.use((principal) =>
+      Effect.succeed(`${namespace}:principal:${principal.ref.type}:${principal.ref.id}`),
+    );
+  }
+  return Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const clientAddress = yield* ClientAddress.ClientAddress;
+    const address = yield* clientAddress.resolve(request);
+    return `${namespace}:ip:${Option.getOrElse(address, () => "unknown")}`;
+  });
+}
+
+/**
+ * PV-240: enforces a declared rule end to end: derives its bucket key (`bucketKey`) and consumes
+ * it through `enforce`, so the rule a plugin registers (`RateLimits.rule`) and the one it enforces
+ * are the same object, and a breach is reported under the rule's own `group.endpoint`, its
+ * strategy's dimension, and never its key.
+ */
+export function enforceRule(
+  rule: RuleInput & { readonly key: "principal" },
+): Effect.Effect<
+  void,
+  RateLimiter.RateLimitExceeded,
+  Api.CurrentPrincipal | RateLimiter.RateLimiter | AuthEvents.AuthEvents
+>;
+export function enforceRule(
+  rule: RuleInput & { readonly key: "ip" },
+): Effect.Effect<
+  void,
+  RateLimiter.RateLimitExceeded,
+  | ClientAddress.ClientAddress
+  | HttpServerRequest.HttpServerRequest
+  | RateLimiter.RateLimiter
+  | AuthEvents.AuthEvents
+>;
+export function enforceRule(
+  rule: RuleInput & { readonly key: (input: unknown) => string },
+  input?: unknown,
+): Effect.Effect<
+  void,
+  RateLimiter.RateLimitExceeded,
+  RateLimiter.RateLimiter | AuthEvents.AuthEvents
+>;
+export function enforceRule(
+  rule: RuleInput,
+  input?: unknown,
+): Effect.Effect<
+  void,
+  RateLimiter.RateLimitExceeded,
+  | Api.CurrentPrincipal
+  | ClientAddress.ClientAddress
+  | HttpServerRequest.HttpServerRequest
+  | RateLimiter.RateLimiter
+  | AuthEvents.AuthEvents
+>;
+export function enforceRule(
+  rule: RuleInput,
+  input?: unknown,
+): Effect.Effect<
+  void,
+  RateLimiter.RateLimitExceeded,
+  | Api.CurrentPrincipal
+  | ClientAddress.ClientAddress
+  | HttpServerRequest.HttpServerRequest
+  | RateLimiter.RateLimiter
+  | AuthEvents.AuthEvents
+> {
+  return Effect.flatMap(bucketKey(rule, input), (key) =>
+    enforce({
+      key,
+      limit: rule.limit,
+      window: rule.window,
+      ...(rule.escalation === undefined ? {} : { escalation: rule.escalation }),
+      meta: {
+        group: rule.group,
+        endpoint: rule.endpoint,
+        rule: ruleLabel(rule),
+        dimension: dimensionOf(rule.key),
+      },
+    }),
+  );
+}

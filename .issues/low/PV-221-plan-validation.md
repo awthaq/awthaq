@@ -3,7 +3,7 @@ ID: "PV-221"
 Title: "BEH-EA-045's deployment-policy exception (allow a User with zero Accounts) has no implementation"
 Level: low
 Category: "correctness"
-Status: open
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Accounts.ts:598"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `LOW` · `correctness` · `core` · found while wiring `06-users-accounts.feature` (P20a, AH-003 tier 1); not in the original audit
 
-Status: **open**
+Status: **resolved**
 
 ## Summary
 
@@ -32,3 +32,5 @@ Either add an explicit `Accounts.config({ allowZeroAccounts: true })`-style poli
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29):** packages/core/src/Accounts.ts: Accounts.AccountsPolicy (Context.Reference, default { allowZeroAccounts: false }) and Accounts.config(partial). Both layerMemory and layerSql read it through Tenant.configInForce (build-time config, a per-call Effect.provideService, or a tenant override) and refuse the last-Account unlink (LastAccountRefusal) only when it is false. Red first: packages/core/test/Accounts.test.ts PV-221 tests over both layers, and REQ-EA-125 un-skipped in 06-users-accounts.feature with new steps (the policy step sets a DomainWorld fault flag applied to the unlink call). BEH-EA-045 gained an as-shipped paragraph. Gates: typecheck, core suite (535), features 02-domain/06, spec:verify:strict.

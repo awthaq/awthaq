@@ -116,10 +116,7 @@ Feature: Rate Limiting
   @BEH-EA-108
   Rule: Key strategies
 
-    # @skip: PV-240 — the strategy names "principal" and "ip" are registry metadata only; nothing derives a bucket key from
-    # them (each plugin computes its keys itself through RateLimits.enforce, e.g. PasswordRateLimits), so there is no derivation
-    # to observe until a resolver exists.
-    @skip
+    # PV-240: `RateLimits.bucketKey` resolves the strategy against the request (CurrentPrincipal, ClientAddress).
     @REQ-EA-290
     Scenario Outline: A rate-limit rule keys its bucket using a built-in strategy
       Given a rule with key strategy "<strategy>"

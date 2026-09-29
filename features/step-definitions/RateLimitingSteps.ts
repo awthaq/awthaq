@@ -6,7 +6,7 @@
 // the step that receives the name maps it and says so.
 import { Api } from "@awthaq/api";
 import { HookPoint, RateLimits } from "@awthaq/core";
-import { RateLimiter } from "@awthaq/ports";
+import { ClientAddress, RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
@@ -14,9 +14,11 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import {
   AcmeAudit,
   AcmeGate,
@@ -517,6 +519,59 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   // ---- BEH-EA-108: key strategies ----
+
+  // PV-240/REQ-EA-290: a built-in strategy resolves against the request's own context.
+  Given("a rule with key strategy {string}", function* (strategy: string) {
+    assert.ok(strategy === "principal" || strategy === "ip", `unknown strategy ${strategy}`);
+    yield* setTexts("strategy", [strategy]);
+  });
+
+  Given("a signed-in user {string}", function* (name: string) {
+    yield* setTexts("caller", [name]);
+  });
+
+  When(
+    "{string} derives a bucket key for a request from {string}",
+    function* (call: string, name: string) {
+      assert.equal(call, "consume");
+      const [strategy] = yield* getTexts("strategy");
+      const ORIGIN = "203.0.113.7";
+      const derive = (user: string) => {
+        const ruleFor = { group: "invite", endpoint: "create" };
+        const request = HttpServerRequest.fromWeb(new Request("http://localhost/invite/create"));
+        const principal = Layer.succeed(
+          Api.CurrentPrincipal,
+          new Api.UserPrincipal({
+            ref: new Api.PrincipalRef({ type: "user", id: user }),
+            sessionId: `session-${user}`,
+          }),
+        );
+        const address = Layer.succeed(ClientAddress.ClientAddress, {
+          resolve: () => Effect.succeed(Option.some(ORIGIN)),
+        });
+        return strategy === "principal"
+          ? RateLimits.bucketKey({ ...ruleFor, key: "principal" }).pipe(Effect.provide(principal))
+          : RateLimits.bucketKey({ ...ruleFor, key: "ip" }).pipe(
+              Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+              Effect.provide(address),
+            );
+      };
+      yield* setTexts("derived", [yield* derive(name), yield* derive("someone-else")]);
+    },
+  );
+
+  Then("the bucket key is derived from {string}'s CurrentPrincipal", function* (name: string) {
+    const [own, other] = yield* getTexts("derived");
+    assert.ok(own !== undefined && own.includes(`user:${name}`), `${own} names ${name}`);
+    assert.notEqual(own, other, "another principal must get another bucket");
+  });
+
+  Then("the bucket key is derived from the request's network origin", function* () {
+    const [own, other] = yield* getTexts("derived");
+    assert.ok(own !== undefined && own.includes("203.0.113.7"), `${own} names the address`);
+    assert.ok(!own.includes("alice"), "the caller's identity is not part of an ip bucket");
+    assert.equal(own, other, "the same origin is one bucket whoever asks");
+  });
 
   Given(
     "a rule with a custom key function deriving {string} from the sign-in payload",
