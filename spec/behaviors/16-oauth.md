@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-16 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-015 callout to BEH-EA-125 (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-015 callout to BEH-EA-125 (CCR-EA-002) <br> 1.2 (2026-09-29): BEH-EA-128 gains the native return leg — exchange code, `POST /oauth/token`, native redirect allowlist (MNA-003/MNA-004) |
 ---
 
 > This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
@@ -181,5 +181,9 @@ REQUIREMENT: The post-login `callbackURL` MUST be validated against a
 research/05-oauth-oidc.md's Q88 table names the real-world failure this prevents — CVE-2026-82274, where a callback handler redirected to an attacker-controlled URL while capturing authorization codes — and states the general rule from RFC 9700: "no open redirectors" for clients. `redirect_uri` itself is always derived from the configured base URL, never from request input, so the two checks together close both ends of the callback: where the authorization code goes, and where the user lands afterward.
 
 **`baseUrl` is required configuration (PDR-005, AGA-005).** `redirect_uri` is derived from `baseUrl`, so `OAuthConfig` is a plain `Context.Service` with no default (the `JwtConfig` precedent): composing OAuth without `OAuth.config({ baseUrl })` fails to type-check. `baseUrl` must be the public scheme+host(+port) the provider redirects to — no path, query, fragment or credentials — and is validated when the plugin boots (a malformed value dies with a descriptive message; a plain-`http` non-loopback host logs a warning). The origin, not the raw string, is used, so a trailing slash never doubles into `redirect_uri`; `Host`/`X-Forwarded-Host` are never consulted. Each provider's effective `redirect_uri` is logged once at boot so an operator can diff it against the provider console.
+
+**Native clients (MNA-003, MNA-004; wayfinder ticket 17).** A native app's system browser keeps its own cookie jar, so the callback's `Set-Cookie` never reaches it. `authorize?mode=native` therefore stores `native: true` (and an optional S256 `code_challenge`) with the flow; the callback then mints the session as usual but, instead of a cookie, issues a single-use exchange record in core `Verification` (identifier prefix `oauth.exchange:`, TTL `nativeExchangeTtl`, default 60 seconds, the session token `Encryption`-sealed under that identifier) and redirects to the flow's `callbackURL` with `?code=<exchange code>` appended. The session token is never placed in a URL. `POST /oauth/token { code, codeVerifier? }` (anonymous, rate-limited per IP, no CSRF check because the unguessable code is the whole authorization) consumes the record atomically and answers the `SessionDto` with `token` set; the identifier prefix is checked *before* consuming, so a value issued for another purpose (an in-flight flow's `state`) can neither be redeemed nor burned here. When the flow carried a `code_challenge`, redemption also requires the matching `codeVerifier` (compared in constant time; a wrong or missing verifier still spends the code). A `code_challenge` without `mode=native`, or one that is not an S256 digest, is refused `400 InvalidNativeRequest`. Every redemption failure is the same opaque `OAuthCallbackFailed`. Browser mode is unchanged.
+
+**Callback allowlist for deep links (MNA-004).** `OAuthConfig.nativeRedirectURLs` lists the private-use-scheme URLs (RFC 8252 §7.1) a native flow may return to (`http(s)`, `javascript`, `data`, `blob` and `file` entries are refused at boot). In native mode a non-http(s) `callbackURL` is honoured only when its WHATWG-normalized serialization equals an entry or extends it at a `/`, `?` or `#` boundary — scheme, authority (userinfo included) and path are all compared, never `.origin`, which is `"null"` for these schemes. In browser mode a custom-scheme `callbackURL` always falls back, since a cookie on a redirect to `myapp://` is useless. Every fallback to `defaultCallbackURL` logs one warning naming the reason (`unparseable`, `untrusted-origin`, `untrusted-native-scheme`, `native-mode-required`); the request still succeeds (REQ-EA-353).
 
 _Previous: [BEH-EA-127](16-oauth.md#beh-ea-127-generic-oidc-discovery-with-exact-issuer-match) | Next: [BEH-EA-129](17-passkey.md#beh-ea-129-webauthn-is-a-port-wrapped-not-reimplemented)_

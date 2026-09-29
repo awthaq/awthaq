@@ -230,6 +230,80 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
       }),
   );
 
+  // MNA-003/MNA-004: the native return leg over the wire — a deep-link redirect
+  // carrying an exchange code, no session cookie, redeemed once at POST /oauth/token.
+  const NativeLayer = buildAppLayer({ config: { baseUrl, nativeRedirectURLs: ["myapp://oauth/callback"] } });
+
+  it.effect(
+    "MNA-003: a native flow redirects to the deep link with a code, sets no session cookie, and POST /oauth/token redeems it once",
+    () =>
+      Effect.gen(function* () {
+        const { handler } = HttpRouter.toWebHandler(NativeLayer);
+        const authorize = yield* Effect.promise(() =>
+          handler(
+            new Request(
+              "http://localhost/oauth/acme/authorize?mode=native&callbackURL=" +
+                encodeURIComponent("myapp://oauth/callback"),
+            ),
+          ),
+        );
+        assert.strictEqual(authorize.status, 302);
+        const state = new URL(authorize.headers.get("location") ?? "").searchParams.get("state");
+        const stateCookie = (authorize.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+        const callback = yield* Effect.promise(() =>
+          handler(
+            new Request(
+              `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
+              { headers: { cookie: stateCookie } },
+            ),
+          ),
+        );
+        assert.strictEqual(callback.status, 302);
+        const location = callback.headers.get("location") ?? "";
+        assert.match(location, /^myapp:\/\/oauth\/callback\?code=/);
+        // Only the (expiry of the) state cookie: no session cookie reaches the browser jar.
+        assert.isFalse((callback.headers.get("set-cookie") ?? "").includes("__Host-session"));
+
+        const code = URL.parse(location)?.searchParams.get("code") ?? "";
+        const redeem = () =>
+          handler(
+            new Request("http://localhost/oauth/token", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ code }),
+            }),
+          );
+        const redeemed = yield* Effect.promise(redeem);
+        assert.strictEqual(redeemed.status, 200);
+        assert.match(redeemed.headers.get("cache-control") ?? "", /no-store/);
+        const body = (yield* Effect.promise(() => redeemed.json())) as { token?: string };
+        assert.isString(body.token);
+        const again = yield* Effect.promise(redeem);
+        assert.strictEqual(again.status, 400);
+      }),
+  );
+
+  it.effect("MNA-003: a code_challenge without native mode, or a malformed one, answers 400", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(NativeLayer);
+      const challenge = "A".repeat(43);
+      const browserMode = yield* Effect.promise(() =>
+        handler(new Request(`http://localhost/oauth/acme/authorize?code_challenge=${challenge}`)),
+      );
+      assert.strictEqual(browserMode.status, 400);
+      const malformed = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/oauth/acme/authorize?mode=native&code_challenge=short")),
+      );
+      assert.strictEqual(malformed.status, 400);
+      const fine = yield* Effect.promise(() =>
+        handler(
+          new Request(`http://localhost/oauth/acme/authorize?mode=native&code_challenge=${challenge}`),
+        ),
+      );
+      assert.strictEqual(fine.status, 302);
+    }),
+  );
+
   it.effect("BEH-EA-004: an unknown provider answers 404 ProviderNotFound", () =>
     Effect.gen(function* () {
       const { handler } = HttpRouter.toWebHandler(AppLayer);

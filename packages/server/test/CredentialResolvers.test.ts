@@ -36,7 +36,9 @@ const RequestHeaders = {
 const TestApi = HttpApi.make("test")
   .add(
     HttpApiGroup.make("required")
-      .add(HttpApiEndpoint.get("whoAmI", "/who", { headers: RequestHeaders, success: Schema.String }))
+      .add(
+        HttpApiEndpoint.get("whoAmI", "/who", { headers: RequestHeaders, success: Schema.String }),
+      )
       .middleware(Api.Authentication),
   )
   .add(
@@ -214,20 +216,24 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
     }).pipe(Effect.provide(layerWith(contribution("apiKey", "keys", "ak_")))),
   );
 
-  it.effect("OptionalAuthentication: a claimed credential resolves, a failed one is anonymous", () =>
-    Effect.gen(function* () {
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-      const ok = yield* client.optional.whoAmI({ headers: { "x-api-key": "ak_1" } });
-      assert.strictEqual(ok, "Service:keys");
-      const bad = yield* client.optional.whoAmI({ headers: { "x-api-key": "ak_1-bad" } });
-      assert.strictEqual(bad, "Anonymous:anonymous");
-      const bearer = yield* client.optional.whoAmI({ headers: { authorization: "Bearer a.x.y" } });
-      assert.strictEqual(bearer, "Service:jwt");
-    }).pipe(
-      Effect.provide(
-        layerWith(contribution("apiKey", "keys", "ak_"), contribution("bearer", "jwt", "a.")),
+  it.effect(
+    "OptionalAuthentication: a claimed credential resolves, a failed one is anonymous",
+    () =>
+      Effect.gen(function* () {
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+        const ok = yield* client.optional.whoAmI({ headers: { "x-api-key": "ak_1" } });
+        assert.strictEqual(ok, "Service:keys");
+        const bad = yield* client.optional.whoAmI({ headers: { "x-api-key": "ak_1-bad" } });
+        assert.strictEqual(bad, "Anonymous:anonymous");
+        const bearer = yield* client.optional.whoAmI({
+          headers: { authorization: "Bearer a.x.y" },
+        });
+        assert.strictEqual(bearer, "Service:jwt");
+      }).pipe(
+        Effect.provide(
+          layerWith(contribution("apiKey", "keys", "ak_"), contribution("bearer", "jwt", "a.")),
+        ),
       ),
-    ),
   );
 
   it.effect("the post-auth hook is told the credential came in as apiKey", () => {
@@ -257,9 +263,10 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
     Effect.gen(function* () {
       const exit = yield* Effect.exit(
         Layer.build(
-          Layer.mergeAll(contribution("bearer", "dup", "a."), contribution("bearer", "dup", "b.")).pipe(
-            Layer.provide(Authentication.CredentialResolversLive),
-          ),
+          Layer.mergeAll(
+            contribution("bearer", "dup", "a."),
+            contribution("bearer", "dup", "b."),
+          ).pipe(Layer.provide(Authentication.CredentialResolversLive)),
         ),
       );
       assert.isTrue(Exit.isFailure(exit));
@@ -279,18 +286,20 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("a contribution after the registry was first read is refused (frozen at first read)", () =>
-    Effect.gen(function* () {
-      const registry = yield* Authentication.CredentialResolvers;
-      yield* registry.resolvers("bearer");
-      const exit = yield* Effect.exit(
-        registry.register("bearer", {
-          id: "late",
-          claims: () => true,
-          resolve: () => Effect.succeed(servicePrincipal("late")),
-        }),
-      );
-      assert.isTrue(Exit.isFailure(exit));
-    }).pipe(Effect.provide(Authentication.CredentialResolversLive)),
+  it.effect(
+    "a contribution after the registry was first read is refused (frozen at first read)",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* Authentication.CredentialResolvers;
+        yield* registry.resolvers("bearer");
+        const exit = yield* Effect.exit(
+          registry.register("bearer", {
+            id: "late",
+            claims: () => true,
+            resolve: () => Effect.succeed(servicePrincipal("late")),
+          }),
+        );
+        assert.isTrue(Exit.isFailure(exit));
+      }).pipe(Effect.provide(Authentication.CredentialResolversLive)),
   );
 });

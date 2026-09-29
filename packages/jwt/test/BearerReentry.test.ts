@@ -198,12 +198,14 @@ describe("JWT bearer re-entry (MAPS-001/NAM-001)", () => {
     assert.strictEqual(response.status, 200);
   });
 
-  it.effect("acceptAsBearer without the credential registry in the composition fails the build", () =>
-    Effect.gen(function* () {
-      const exit = yield* Effect.exit(
-        Layer.build(appLayer({ issuer: "https://issuer.test", acceptAsBearer: true }, false)),
-      );
-      assert.isTrue(exit._tag === "Failure");
-    }).pipe(Effect.scoped),
+  it.effect(
+    "acceptAsBearer without the credential registry in the composition fails the build",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(
+          Layer.build(appLayer({ issuer: "https://issuer.test", acceptAsBearer: true }, false)),
+        );
+        assert.isTrue(exit._tag === "Failure");
+      }).pipe(Effect.scoped),
   );
 });

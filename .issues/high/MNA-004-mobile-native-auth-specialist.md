@@ -3,7 +3,7 @@ ID: "MNA-004"
 Title: "Callback URL allowlist cannot admit custom-scheme deep links and fails silently"
 Level: high
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:159"
 Auditor: "mobile-native-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `dx` · `oauth` · reported by **Mobile/Native Auth Specialist** (`mobile-native-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `OAuth.ts:150-162` (evidence at lines 157-159) matches: `resolveCallbackURL` filters on `url.origin` membership in `trustedOrigins`, and the code comment at 143-148 confirms the documented no-error fallback (REQ-EA-353). Per WHATWG URL, a non-special scheme like `myapp://` serializes its origin as `"null"`, so it can never match an `https://...` allowlist entry and silently falls back to `defaultCallbackURL` with no log or error. The fix (match non-http(s) URLs by full scheme+host against a separate deep-link allowlist, plus a warning log) is well-scoped and mechanical. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `native-session-bootstrap`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:180`. Fix: Add an explicit native-redirect allowlist matched on the full serialized scheme+authority(+path prefix) for non-http(s) URLs, and log when a requested callbackURL is discarded. (effort M). Full dossier: `.plan/slices/03-oauth-flow.md`.
+
+**Resolved (2026-09-29):** OAuthConfig.nativeRedirectURLs (default []; http(s)/javascript/data/blob/file/unparseable entries die at boot). resolveCallbackURL now returns { url, discarded } and matches non-http(s) deep links only in native mode, on the WHATWG-normalized href (scheme+authority+path, dot segments resolved, userinfo compared) equal to an entry or extending it at a / ? # boundary — never .origin. authorize logs exactly one warning 'oauth callbackURL discarded: <reason>' (unparseable | untrusted-origin | untrusted-native-scheme | native-mode-required) while the request still succeeds (REQ-EA-353 kept). Tests in packages/oauth/test/OAuthNative.test.ts: allowlisted myapp:// and com.example.app:/cb honoured, path boundary/host/traversal/userinfo lookalikes fall back, javascript: falls back, browser mode custom scheme falls back, one warning with reason, bad entries fail boot. README documents RFC 8252 guidance (prefer claimed https links; deep links only with the exchange-code leg).

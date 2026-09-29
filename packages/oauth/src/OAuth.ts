@@ -21,7 +21,7 @@
 // calling the provider's API on the user's behalf never handles a raw
 // token directly.
 
-import { Api } from "@awthaq/api";
+import { Api, SessionContract } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
@@ -35,6 +35,7 @@ import {
   Verification,
 } from "@awthaq/core";
 import { ClientAddress, Encryption, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { Session } from "@awthaq/server";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -149,9 +150,50 @@ const FlowPayloadSchema = Schema.Struct({
   nonce: Schema.optional(Schema.String),
   callbackURL: Schema.String,
   link: Schema.optional(Schema.Struct({ userId: Schema.String })),
+  /** MNA-003: native mode — the callback returns an exchange code, not a cookie. */
+  native: Schema.optional(Schema.Boolean),
+  /** MNA-003: the optional S256 challenge the exchange code is bound to. */
+  nativeChallenge: Schema.optional(Schema.String),
 });
 type FlowPayload = typeof FlowPayloadSchema.Type;
 const decodeFlowPayload = Schema.decodeUnknownOption(FlowPayloadSchema);
+
+const EXCHANGE_PREFIX = "oauth.exchange:";
+
+/**
+ * MNA-003: what a native exchange code stands for, held in `Verification`
+ * (atomic single-use, TTL-bound, hashed at rest) for the ~60 seconds between
+ * the deep-link redirect and the JSON redemption. The session token is
+ * `Encryption`-sealed under the record's own identifier, like the PKCE
+ * material in `FlowPayload`, so a database read yields no live credential;
+ * `session` is the `SessionDto` snapshot the redemption answers with.
+ */
+const ExchangePayloadSchema = Schema.Struct({
+  token: Schema.String,
+  session: Schema.Struct({
+    id: Schema.String,
+    createdAt: Schema.String,
+    lastActiveAt: Schema.String,
+    expiresAt: Schema.String,
+    userAgent: Schema.NullOr(Schema.String),
+    amr: Schema.Array(Schema.String),
+  }),
+  codeChallenge: Schema.optional(Schema.String),
+});
+const decodeExchangePayload = Schema.decodeUnknownOption(ExchangePayloadSchema);
+
+/** RFC 7636 S256 challenge shape: the unpadded base64url of a SHA-256 digest. */
+const S256_CHALLENGE = /^[A-Za-z0-9_-]{43}$/;
+
+/** MNA-004: schemes that may never be a native redirect, whatever the operator lists. */
+const FORBIDDEN_NATIVE_SCHEMES: ReadonlySet<string> = new Set([
+  "http:",
+  "https:",
+  "javascript:",
+  "data:",
+  "blob:",
+  "file:",
+]);
 
 const generatePkce = (
   crypto: Crypto.Crypto,
@@ -178,31 +220,83 @@ export const accountAnchorFor = (provider: OAuthProvider.OAuthProviderConfig, su
 const issuerField = (issuer: Option.Option<string>): { readonly issuer: string } | {} =>
   Option.isSome(issuer) ? { issuer: issuer.value } : {};
 
+/** MNA-004: why a requested `callbackURL` was discarded for the safe default. */
+type CallbackDiscard =
+  | "unparseable"
+  | "untrusted-origin"
+  | "untrusted-native-scheme"
+  | "native-mode-required";
+
+/**
+ * MNA-004: `raw` is honoured when it normalizes to `entry` or extends it at a
+ * path boundary. Compared on the WHATWG-serialized `href` (scheme, authority
+ * and path — dot segments resolved, userinfo kept), never on `.origin`, which
+ * is the opaque `"null"` for every private-use scheme.
+ */
+const matchesNativeRedirect = (url: URL, allowlist: ReadonlyArray<URL>): boolean =>
+  allowlist.some((entry) => {
+    if (url.href === entry.href) return true;
+    if (!url.href.startsWith(entry.href)) return false;
+    // `myapp://oauth/callback` admits `.../callback/x` and `.../callback?x`, never `.../callbackx`.
+    const next = url.href.charAt(entry.href.length);
+    return entry.href.endsWith("/") || next === "/" || next === "?" || next === "#";
+  });
+
 /**
  * BEH-EA-128: a relative (same-origin) destination is always safe; an
- * absolute one is honored only when its origin is on the configured
- * allowlist — anything else silently falls back to the safe default rather
- * than failing the whole request (REQ-EA-353: the handler simply never
- * redirects there, it does not need to error either).
+ * absolute http(s) one is honored only when its origin is on the configured
+ * allowlist — anything else falls back to the safe default rather than
+ * failing the whole request (REQ-EA-353: the handler simply never redirects
+ * there, it does not need to error either). MNA-004: a private-use-scheme deep
+ * link is honoured only in native mode and only against `nativeRedirectURLs`;
+ * every fallback names its reason so the caller can log it.
  */
 const resolveCallbackURL = (
   raw: string | undefined,
-  trustedOrigins: ReadonlyArray<string>,
-  fallback: string,
-): string => {
-  if (raw === undefined) return fallback;
+  options: {
+    readonly trustedOrigins: ReadonlyArray<string>;
+    readonly nativeRedirects: ReadonlyArray<URL>;
+    readonly native: boolean;
+    readonly fallback: string;
+  },
+): { readonly url: string; readonly discarded: Option.Option<CallbackDiscard> } => {
+  const fallback = (reason: CallbackDiscard) => ({
+    url: options.fallback,
+    discarded: Option.some(reason),
+  });
+  if (raw === undefined) return { url: options.fallback, discarded: Option.none() };
   // OAP-001/AP-001: a bare leading slash alone isn't enough to prove
   // same-origin — a network-path reference (`//evil.com/phish`) or a
   // backslash variant (`/\evil.com/phish`) also starts with `/`, and a
   // browser still resolves either off-origin against the current scheme.
   // Only when the second character is neither `/` nor `\` is `raw`
   // genuinely a same-origin relative path.
-  if (raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/\\")) return raw;
-  const parsed = Option.fromNullOr(URL.parse(raw));
-  return parsed.pipe(
-    Option.filter((url) => trustedOrigins.includes(url.origin)),
-    Option.match({ onNone: () => fallback, onSome: () => raw }),
-  );
+  if (raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/\\")) {
+    return { url: raw, discarded: Option.none() };
+  }
+  const parsed = URL.parse(raw);
+  if (parsed === null) return fallback("unparseable");
+  if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+    return options.trustedOrigins.includes(parsed.origin)
+      ? { url: raw, discarded: Option.none() }
+      : fallback("untrusted-origin");
+  }
+  // A Set-Cookie on a 302 to `myapp://` is useless to a browser flow, so a
+  // deep link is only ever meaningful (and only ever admitted) in native mode.
+  if (!options.native) return fallback("native-mode-required");
+  return matchesNativeRedirect(parsed, options.nativeRedirects)
+    ? { url: raw, discarded: Option.none() }
+    : fallback("untrusted-native-scheme");
+};
+
+/** MNA-003: `callbackURL` with `code` appended as a query parameter; a relative URL stays relative. */
+const withExchangeCode = (callbackURL: string, baseOrigin: string, code: string): string => {
+  const parsed = URL.parse(callbackURL, baseOrigin);
+  if (parsed === null) return callbackURL;
+  parsed.searchParams.set("code", code);
+  return callbackURL.startsWith("/")
+    ? `${parsed.pathname}${parsed.search}${parsed.hash}`
+    : parsed.href;
 };
 
 /**
@@ -330,7 +424,7 @@ const mergeClaims = (
   return { ...idClaims, ...userinfoClaims, ...signedIdentity };
 };
 
-export const OAuthHandlers = HttpApiBuilder.group(
+const OAuthFlowHandlers = HttpApiBuilder.group(
   OAuthApi.OAuthApi,
   "oauth",
   Effect.fnUntraced(function* (handlers) {
@@ -355,11 +449,28 @@ export const OAuthHandlers = HttpApiBuilder.group(
         }
         const link =
           wantsLink && principal._tag === "User" ? { userId: principal.ref.id } : undefined;
+        // MNA-003: a `code_challenge` only makes sense for a native flow, and must
+        // be an S256 digest — refused, never silently dropped, since dropping it
+        // would leave the client believing its exchange code is bound.
+        if (
+          query.code_challenge !== undefined &&
+          (query.mode !== "native" || !S256_CHALLENGE.test(query.code_challenge))
+        ) {
+          return yield* new OAuthApi.InvalidNativeRequest();
+        }
         // OAP-008: resolved through the same `ClientAddress` port as `callback`.
         const resolvedAddress = yield* clientAddress.resolve(request);
         const url = yield* oauth.authorize(params.provider, {
           callbackURL: query.callbackURL,
           link,
+          ...(query.mode === "native"
+            ? {
+                native:
+                  query.code_challenge === undefined
+                    ? {}
+                    : { codeChallenge: query.code_challenge },
+              }
+            : {}),
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
         });
         const response = HttpServerResponse.redirect(url.location);
@@ -428,6 +539,40 @@ export const OAuthHandlers = HttpApiBuilder.group(
   }),
 );
 
+/** MNA-003: `POST /oauth/token` — redeems a native exchange code for the session (with its token). */
+const OAuthExchangeHandlers = HttpApiBuilder.group(
+  OAuthApi.OAuthApi,
+  "oauth.exchange",
+  Effect.fnUntraced(function* (handlers) {
+    const oauth = yield* OAuth;
+    const clientAddress = yield* ClientAddress.ClientAddress;
+    return handlers.handleAll({
+      token: Effect.fnUntraced(function* ({
+        payload,
+        request,
+      }: {
+        payload: OAuthApi.ExchangePayload;
+        request: HttpServerRequest.HttpServerRequest;
+      }) {
+        const resolvedAddress = yield* clientAddress.resolve(request);
+        // Holds a live token: never cacheable (MAPS-008).
+        yield* HttpEffect.appendPreResponseHandler((_request, response) =>
+          Effect.succeed(HttpServerResponse.setHeader(response, "cache-control", "no-store")),
+        );
+        // Typed local so declaration emit can name `SessionDto` (TS2883).
+        const session: SessionContract.SessionDto = yield* oauth.exchange({
+          code: payload.code,
+          ...(payload.codeVerifier === undefined ? {} : { codeVerifier: payload.codeVerifier }),
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+        });
+        return session;
+      }),
+    });
+  }),
+);
+
+export const OAuthHandlers = Layer.mergeAll(OAuthFlowHandlers, OAuthExchangeHandlers);
+
 export interface OAuthShape {
   readonly authorize: (
     providerId: string,
@@ -436,6 +581,13 @@ export interface OAuthShape {
       readonly link: { readonly userId: string } | undefined;
       /** OAP-008: the rate-limit key, exactly as for `callback` — `undefined` shares one "unknown origin" bucket. */
       readonly ip?: string;
+      /**
+       * MNA-003: present for a native flow — the callback then returns to the
+       * (allowlisted) deep link with a one-time exchange code rather than
+       * setting a cookie. `codeChallenge` (S256) binds that code to a secret
+       * only the app holds.
+       */
+      readonly native?: { readonly codeChallenge?: string };
     },
   ) => Effect.Effect<
     { readonly location: string; readonly state: string },
@@ -479,6 +631,20 @@ export interface OAuthShape {
     | OAuthApi.AccountExists
     | Api.RateLimited
     | Hooks.TwoFactorRequired
+  >;
+  /**
+   * MNA-003: redeems the exchange code a native callback put in its deep link.
+   * Single-use (`Verification.consume`), short-lived (`nativeExchangeTtl`) and,
+   * when the authorize request bound one, gated on the matching `codeVerifier`.
+   * Every failure is the same opaque `OAuthCallbackFailed`.
+   */
+  readonly exchange: (input: {
+    readonly code: string;
+    readonly codeVerifier?: string;
+    readonly ip?: string;
+  }) => Effect.Effect<
+    SessionContract.SessionDto,
+    OAuthApi.OAuthCallbackFailed | Api.RateLimited
   >;
 }
 
@@ -528,6 +694,22 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         );
       }
       const baseOrigin = parsedBase.origin;
+      // MNA-004: a native redirect entry is a private-use-scheme URL. An
+      // http(s)/javascript/data/... entry would let the allowlist admit the very
+      // destinations it exists to keep out, so it is a boot-time defect.
+      const nativeRedirects: Array<URL> = [];
+      for (const entry of config_.nativeRedirectURLs) {
+        const parsedEntry = URL.parse(entry);
+        if (parsedEntry === null || FORBIDDEN_NATIVE_SCHEMES.has(parsedEntry.protocol)) {
+          return yield* Effect.die(
+            new Error(
+              `awthaq/oauth: nativeRedirectURLs entry "${entry}" must be a private-use-scheme URL ` +
+                '(e.g. "myapp://oauth/callback" or "com.example.app:/cb"), never http(s), javascript, data, blob or file',
+            ),
+          );
+        }
+        nativeRedirects.push(parsedEntry);
+      }
       if (parsedBase.protocol === "http:" && !LOOPBACK_HOSTS.has(parsedBase.hostname)) {
         yield* Effect.logWarning(
           `awthaq/oauth: baseUrl "${config_.baseUrl}" is plain http on a non-loopback host — ` +
@@ -564,8 +746,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
        * `HttpServerRequest.remoteAddress`) shares one bucket, never
        * unthrottled.
        */
-      const { authorize: AUTHORIZE_RATE_LIMIT, callback: CALLBACK_RATE_LIMIT } =
-        config_.rateLimits;
+      const {
+        authorize: AUTHORIZE_RATE_LIMIT,
+        callback: CALLBACK_RATE_LIMIT,
+        token: TOKEN_RATE_LIMIT,
+      } = config_.rateLimits;
       // The explicit return-type annotation below is a narrow, necessary
       // exception, not a style choice: passing `OAuth` (this class) into
       // anything typed `AuthPlugin.Any` (which itself requires a `layer`
@@ -591,6 +776,16 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                 key: "ip",
                 limit: AUTHORIZE_RATE_LIMIT.limit,
                 window: AUTHORIZE_RATE_LIMIT.window,
+              }),
+            ),
+            // MNA-003: the exchange redemption is anonymous too.
+            Effect.andThen(
+              rateLimitsRegistry.register(OAuth, {
+                group: "oauth.exchange",
+                endpoint: "token",
+                key: "ip",
+                limit: TOKEN_RATE_LIMIT.limit,
+                window: TOKEN_RATE_LIMIT.window,
               }),
             ),
           );
@@ -632,11 +827,26 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           ),
         );
         const provider = yield* providers.get(providerId);
-        const callbackURL = resolveCallbackURL(
-          input.callbackURL,
-          config_.trustedOrigins,
-          config_.defaultCallbackURL,
-        );
+        const nativeChallenge = input.native?.codeChallenge;
+        const resolved = resolveCallbackURL(input.callbackURL, {
+          trustedOrigins: config_.trustedOrigins,
+          nativeRedirects,
+          native: input.native !== undefined,
+          fallback: config_.defaultCallbackURL,
+        });
+        const callbackURL = resolved.url;
+        // MNA-004: the request still succeeds (REQ-EA-353) but the operator can see
+        // why the deep link they configured did not survive. The URL itself is
+        // caller-controlled, so it is logged as data, never interpolated.
+        if (Option.isSome(resolved.discarded)) {
+          yield* Effect.logWarning(`oauth callbackURL discarded: ${resolved.discarded.value}`).pipe(
+            Effect.annotateLogs({
+              requested: input.callbackURL ?? "",
+              reason: resolved.discarded.value,
+              native: input.native !== undefined,
+            }),
+          );
+        }
         const { verifier, challenge } = yield* generatePkce(crypto);
         const nonce =
           provider.kind === "oidc"
@@ -665,6 +875,12 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           nonce: encryptedNonce,
           callbackURL,
           link: input.link,
+          ...(input.native === undefined
+            ? {}
+            : {
+                native: true,
+                ...(nativeChallenge === undefined ? {} : { nativeChallenge }),
+              }),
         };
         const { value } = yield* verification
           .issue({ identifier, ttl: FLOW_TTL, payload })
@@ -1041,10 +1257,104 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           strategy: providerId,
         });
         yield* afterSignIn.run({ userId: targetUserId, strategy: providerId });
-        return { callbackURL: flow.callbackURL, session: issued };
+        if (flow.native !== true) return { callbackURL: flow.callbackURL, session: issued };
+
+        // MNA-003 (ticket 17): a native app can only receive the deep-link URL, so
+        // the session goes into a short-lived, single-use exchange record and the
+        // redirect carries that record's code: never the session token itself,
+        // which would land in OS-level URL history and logs.
+        const exchangeIdentifier = `${EXCHANGE_PREFIX}${yield* crypto.randomUUIDv7.pipe(Effect.orDie)}`;
+        const dto = Session.toSessionDto(issued.session);
+        const exchangePayload: typeof ExchangePayloadSchema.Type = {
+          token: yield* encryption.encrypt(issued.token, exchangeIdentifier),
+          session: {
+            id: dto.id,
+            createdAt: dto.createdAt,
+            lastActiveAt: dto.lastActiveAt,
+            expiresAt: dto.expiresAt,
+            userAgent: dto.userAgent,
+            amr: dto.amr,
+          },
+          ...(flow.nativeChallenge === undefined ? {} : { codeChallenge: flow.nativeChallenge }),
+        };
+        const exchange = yield* verification
+          .issue({
+            identifier: exchangeIdentifier,
+            ttl: config_.nativeExchangeTtl,
+            payload: exchangePayload,
+            userId: targetUserId,
+          })
+          .pipe(Effect.orDie);
+        return {
+          callbackURL: withExchangeCode(
+            flow.callbackURL,
+            baseOrigin,
+            encodeState(exchangeIdentifier, exchange.value),
+          ),
+          session: undefined,
+        };
       });
 
-      return OAuth.of({ authorize, callback });
+      const exchange: OAuthShape["exchange"] = Effect.fnUntraced(function* (input) {
+        yield* RateLimits.enforce({
+          key: `oauth:token:${input.ip ?? "unknown"}`,
+          limit: TOKEN_RATE_LIMIT.limit,
+          window: TOKEN_RATE_LIMIT.window,
+          meta: { group: "oauth.exchange", endpoint: "token", rule: "token", dimension: "ip" },
+        }).pipe(
+          Effect.provideService(RateLimiter.RateLimiter, limiter),
+          Effect.provideService(AuthEvents.AuthEvents, events),
+          Effect.catchTag(
+            "RateLimitExceeded",
+            (error) => new Api.RateLimited({ retryAfterMillis: error.retryAfterMillis }),
+          ),
+        );
+        const decoded = decodeState(input.code);
+        // The prefix is checked BEFORE `consume`: consuming is destructive, and
+        // this endpoint must never burn (or redeem) a `Verification` value issued
+        // for another purpose, such as an in-flight OAuth flow's own `state`.
+        if (Option.isNone(decoded) || !decoded.value.identifier.startsWith(EXCHANGE_PREFIX)) {
+          return yield* CallbackFailure.callbackFailed("exchange-malformed");
+        }
+        const { identifier, value } = decoded.value;
+        const consumed = yield* verification.consume(identifier, value).pipe(
+          Effect.catchTag("TokenConsumed", () => CallbackFailure.callbackFailed("exchange-consumed")),
+          Effect.catchTag("PlatformError", Effect.die),
+        );
+        const record = decodeExchangePayload(consumed.payload);
+        if (Option.isNone(record)) return yield* CallbackFailure.callbackFailed("exchange-invalid");
+        // The code is already spent, so a wrong or missing verifier is one guess
+        // gone, not a retry: constant-time over fixed-length digests.
+        if (record.value.codeChallenge !== undefined) {
+          const presented =
+            input.codeVerifier === undefined
+              ? undefined
+              : toBase64Url(
+                  yield* crypto
+                    .digest("SHA-256", new TextEncoder().encode(input.codeVerifier))
+                    .pipe(Effect.orDie),
+                );
+          const digest = (text: string) =>
+            crypto.digest("SHA-256", new TextEncoder().encode(text)).pipe(Effect.orDie);
+          const matches =
+            presented !== undefined &&
+            ConstantTime.constantTimeEqual(
+              yield* digest(presented),
+              yield* digest(record.value.codeChallenge),
+            );
+          if (!matches) return yield* CallbackFailure.callbackFailed("exchange-verifier");
+        }
+        const token = yield* encryption.decrypt(record.value.token, identifier).pipe(
+          Effect.map((decrypted) => Redacted.value(decrypted.plaintext)),
+          Effect.catchTags({
+            DecryptionFailed: () => CallbackFailure.callbackFailed("decrypt"),
+            UnknownKeyId: () => CallbackFailure.callbackFailed("decrypt"),
+          }),
+        );
+        return new SessionContract.SessionDto({ ...record.value.session, current: true, token });
+      });
+
+      return OAuth.of({ authorize, callback, exchange });
     }),
     // NAM-004: the shared provider registry, provided here so callers need
     // not wire it; Layers memoize by reference, so `OAuthTokenAccess.layer`
