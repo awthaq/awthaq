@@ -69,11 +69,17 @@ _Previous: [BEH-EA-114](15-password.md#beh-ea-114-uniform-invalidcredentials-on-
 ## BEH-EA-116: Rehash on login
 
 ```text
-REQUIREMENT: On a successful sign-in, if the stored hash's parameters differ
-             from the currently configured `PasswordHasher` parameters, the
+REQUIREMENT: On a successful sign-in, if the stored hash's parameters are
+             below the currently configured `PasswordHasher` floor (or the
+             hash is in a foreign, unparseable or over-ceiling format), the
              password MUST be rehashed with current parameters in the same
-             request and the stored hash MUST be replaced.
+             request and the stored hash MUST be replaced. A stored hash
+             stronger than the configured target MUST NOT be rewritten
+             unless the deployment opts into `exact` semantics.
 ```
+
+PHS-002: the default `AUTH_PASSWORD_REHASH_POLICY=floor` rewrites only a hash weaker than the target (argon2: `m` or `t` below it; scrypt: `N` or `r` below it; `p` alone never triggers), so lowering the configured cost can never silently downgrade existing hashes. `AUTH_PASSWORD_REHASH_POLICY=exact` restores the earlier "any difference" behavior for an operator who deliberately lowers cost. Both layers also refuse, without running the KDF, any stored hash claiming a cost above a configurable ceiling (ACS-006), and `layerArgon2id` compares digests itself in constant time rather than through hash-wasm's `argon2Verify` (PHS-001).
+
 
 Argon2id parameters (memory cost, iterations, parallelism) are expected to be raised over the life of an application as hardware improves; without rehash-on-login, every account hashed under the old parameters stays weaker than a newly created one indefinitely, since a stored hash is never touched again after creation. Rehashing opportunistically at the one moment the plaintext password is available — sign-in — closes that gap without a bulk migration, mirroring the "hashed at rest" security posture PRD §18 requires generally.
 
