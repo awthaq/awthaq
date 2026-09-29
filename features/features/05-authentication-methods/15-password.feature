@@ -1,8 +1,3 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @authentication-methods @password
 Feature: Password Authentication
 
@@ -16,6 +11,14 @@ Feature: Password Authentication
       When "alice@example.com" signs up with a password
       Then the User row and the initial session are both created under one transaction
 
+    # TIR-005: the atomicity half of the claim above, observable only over a real transaction (SQLite).
+    Scenario: A failure while issuing the initial session leaves no User row behind
+      Given no user exists with email "alice@example.com"
+      And the initial session cannot be issued
+      When "alice@example.com" signs up with a password
+      Then the sign-up fails with a server error
+      And no User row exists for "alice@example.com"
+
     @REQ-EA-305
     Scenario: Sign-up dispatches the verification mail without waiting for delivery
       Given a sign-up request for "alice@example.com"
@@ -23,10 +26,11 @@ Feature: Password Authentication
       Then the caller receives a "SessionView" without the response waiting on the verification mail's delivery
       And the mail is dispatched as a detached, fire-and-forget effect
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — a timing-side-channel assertion; not deterministically
-    # assertable in CI, and this suite has no latency-measurement
-    # harness to make it one.
+    # @skip: a wall-clock timing side-channel is not deterministically assertable in CI; the
+    # "does not wait on mail delivery" half is proven with a never-resolving mailer by
+    # packages/password/test/Password.test.ts (TSS-001/TSS-002 tests), and the account-existence
+    # half is deliberately open under the default signUpEnumeration "reveal" (TMS-005, ADR-EA-018)
+    # — only "conceal" hides it.
     @skip
     @REQ-EA-306
     Scenario: Sign-up response time does not reveal whether the email address already had an account
@@ -59,8 +63,9 @@ Feature: Password Authentication
       Then all three responses have the identical status and the identical body
       And none of them reveals which of the three reasons applied
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — the same timing-side-channel non-determinism as REQ-EA-306.
+    # @skip: wall-clock latency is not deterministically assertable in CI; the mechanism that
+    # equalises the three failure reasons (the calibrated timing floor) is covered by the
+    # "Password signIn timing floor (TSS-006)" suite in packages/password/test/Password.test.ts.
     @skip
     @REQ-EA-309
     Scenario: Response latency does not vary across the three failure reasons
@@ -85,12 +90,10 @@ Feature: Password Authentication
       Then "Password" hashes and verifies passwords using "PasswordHasher.layerScrypt"
       And no change is made to "Password"'s own code to accept the substitution
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — "the composition remains incomplete" is a TypeScript
-    # compile-time property (an unsatisfied Layer requirement is a type
-    # error where it's composed, not a runtime outcome) — there is no
-    # request this suite's runtime step-definitions could make that
-    # would even compile without the missing PasswordHasher provided.
+    # @skip: "the composition remains incomplete" is a compile-time property (an unsatisfied
+    # Layer requirement is a type error where it is composed, not a runtime outcome), so no
+    # runtime step can express it; covered by the type-level test "BEH-EA-115: Password.layer
+    # requires a PasswordHasher" in packages/password/test/Password.test.ts.
     @skip
     @REQ-EA-312
     Scenario: Password bundles no hashing implementation of its own
@@ -102,12 +105,9 @@ Feature: Password Authentication
   @BEH-EA-116
   Rule: Rehash on login
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — "the stored hash is replaced" is not observable through this
-    # plugin's real HTTP surface (no endpoint returns a stored hash) —
-    # already covered at the domain level by
-    # packages/password/test/Password.test.ts's own rehash-on-login tests.
-    @skip
+    # PHS-005: observed through PasswordWorld's credential-hash read handle (no endpoint returns
+    # a stored hash); the domain-level twin is packages/password/test/Password.test.ts
+    # "BEH-EA-116: signIn against a hash stored under outdated parameters rehashes ...".
     @REQ-EA-313
     Scenario: A sign-in against a hash stored under outdated parameters triggers a rehash with current parameters
       Given a user "alice" whose stored password hash was computed under previously configured "PasswordHasher" parameters
@@ -116,20 +116,12 @@ Feature: Password Authentication
       Then the password is rehashed with the current parameters within the same request
       And the stored hash is replaced with the new one
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — the same not-wire-observable reason as REQ-EA-313.
-    @skip
     @REQ-EA-314
     Scenario: A sign-in against a hash already matching current parameters does not trigger a rehash
       Given a user "bob" whose stored password hash already matches "PasswordHasher"'s currently configured parameters
       When "bob" signs in successfully with his password
       Then the stored hash is not replaced
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — an internal-architecture claim ("no separate background job"),
-    # not something a caller's own HTTP response can distinguish from
-    # a synchronous rehash — same category as REQ-EA-313/314.
-    @skip
     @REQ-EA-315
     Scenario: The rehash occurs synchronously within the sign-in request, not as a deferred job
       Given a user "alice" whose stored hash's parameters differ from the currently configured parameters
@@ -155,6 +147,17 @@ Feature: Password Authentication
       And the new password is set
       And session "s1" is revoked
       And all three effects commit under one transaction
+
+    # TIR-005: the atomicity half of REQ-EA-317, over a real SQLite transaction with a fault injected
+    # after the credential hash update.
+    Scenario: A failure after the credential hash update rolls back the token, the new password and the session revocation together
+      Given a live password-reset token for "alice" and an existing session "s1" for "alice"
+      And the reset fails after the credential hash update
+      When "alice" confirms the reset with that token and a new password
+      Then the request fails with a server error
+      And the old password still signs in
+      And session "s1" is still valid
+      And the reset token is still redeemable
 
     @REQ-EA-318
     Scenario: A session obtained before the reset does not survive it
@@ -210,6 +213,20 @@ Feature: Password Authentication
       When a user signs up with a password in each case
       Then sign-up proceeds in all three cases, each treated as "unavailable" rather than handled inconsistently by cause
 
+    # CSD-009: under the default posture "unavailable" and "not breached" both let sign-up through,
+    # so REQ-EA-324 cannot tell them apart; fail-closed can.
+    Scenario Outline: Every failure mode of the breach-check provider is rejected under the fail-closed configuration
+      Given "password({ breachCheck: { onUnavailable: \"reject\" } })"
+      And the breach-database provider fails by <failure>
+      When a user signs up with a password
+      Then sign-up is rejected
+
+      Examples:
+        | failure   |
+        | timeout   |
+        | 5xx       |
+        | malformed |
+
   # BEH-EA-120 — spec/behaviors/15-password.md
   @BEH-EA-120
   Rule: Password policy is configuration, not a plugin variant
@@ -220,11 +237,11 @@ Feature: Password Authentication
       When it provides "Password.config({ minLength: 16 })"
       Then the tightened policy takes effect without installing any different plugin class
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — a structural/type-level claim about object identity
-    # (the same plugin class, contract, and migrations are reused) —
-    # not a runtime HTTP outcome; provable by inspection of the source,
-    # not by a request/response pair.
+    # @skip: a structural claim about object identity (the plugin class's own `contract`, `tables`
+    # and `migrations` statics are constants a Layer cannot touch), so a runtime scenario could
+    # only assert a tautology; the behavior that IS runtime (the override takes effect) is
+    # REQ-EA-325, and `Password.config` is typed `Partial<PasswordConfigShape>`, which carries
+    # no contract or migration field to override.
     @skip
     @REQ-EA-326
     Scenario: Overriding minLength does not change Password's contract, table set, or migrations

@@ -24,6 +24,7 @@ import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } fr
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -169,6 +170,20 @@ const TestLayerHangingMailer = Password.Password.layer.pipe(
   Layer.provideMerge(MailDispatch.config({ drainTimeout: Duration.zero })),
 );
 
+/**
+ * PHS-005: a real argon2id hasher at explicitly chosen cost parameters (env-style keys), for
+ * planting hashes "stored under other parameters". `Layer.fresh` matters: the composition under
+ * test already built `layerArgon2id` on the shared memo map, so without it this would resolve to
+ * that same default-cost instance and silently ignore `env`. A ConfigError here is a defect in
+ * the fixed table.
+ */
+const hasherAt = (env: Record<string, string>) =>
+  Layer.fresh(PasswordHasher.layerArgon2id).pipe(
+    Layer.provide(NodeCrypto.layer),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+    Layer.orDie,
+  );
+
 const email = "ada@example.com";
 const strongPassword = Redacted.make("correct horse battery staple");
 
@@ -288,6 +303,89 @@ describe("Password", () => {
           Redacted.value(Option.getOrThrow(hashBefore)),
           Redacted.value(Option.getOrThrow(hashAfter)),
         );
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // BEH-EA-115/REQ-EA-312 (a compile-time property, so the BDD scenario is @skip'd in favour of
+  // this): `Password.layer` bundles no hasher, so a composition that provides none is incomplete
+  // — the requirement is still on the layer's type, and this line stops compiling if it is not.
+  it("BEH-EA-115: Password.layer requires a PasswordHasher, it never supplies its own", () => {
+    type Needs = Layer.Services<typeof Password.Password.layer>;
+    const requiresHasher: PasswordHasher.PasswordHasher extends Needs ? true : false = true;
+    assert.isTrue(requiresHasher);
+  });
+
+  // PHS-005: the positive half of BEH-EA-116 — the negative case above only proves a current
+  // hash is left alone; these prove an outdated one really is upgraded (and a stronger one is not
+  // downgraded, PHS-002). The "previous configuration" is a second hasher at other cost
+  // parameters whose output is planted as the account's stored credential, so the composition's
+  // own (default-cost) hasher is what `signIn` then compares against.
+  it.effect(
+    "BEH-EA-116: signIn against a hash stored under outdated parameters rehashes to current parameters",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const accounts = yield* Accounts.Accounts;
+        const mailer = yield* Mailer.Mailer;
+        const current = yield* PasswordHasher.PasswordHasher;
+        const { session } = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
+        const account = Option.getOrThrow(
+          yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, session.userId),
+        );
+
+        const outdated = yield* Effect.gen(function* () {
+          const previous = yield* PasswordHasher.PasswordHasher;
+          return yield* previous.hash(strongPassword);
+        }).pipe(
+          Effect.provide(hasherAt({ AUTH_ARGON2_MEMORY_KIB: "1024", AUTH_ARGON2_ITERATIONS: "1" })),
+        );
+        assert.isTrue(current.needsRehash(outdated), "the planted hash must be below the floor");
+        yield* accounts.updateCredentialHash(account.id, Redacted.make(outdated));
+
+        yield* password.signIn({ email, password: strongPassword });
+
+        const stored = Redacted.value(
+          Option.getOrThrow(yield* accounts.findCredentialHash(account.id)),
+        );
+        assert.notStrictEqual(stored, outdated, "the outdated hash must have been replaced");
+        assert.match(stored, /^\$argon2id\$v=19\$m=19456,t=2,p=1\$/);
+        assert.isFalse(current.needsRehash(stored));
+        assert.isTrue(yield* current.verify(strongPassword, stored));
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "BEH-EA-116/PHS-002: signIn against a hash stronger than the current parameters does not rehash it",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const accounts = yield* Accounts.Accounts;
+        const mailer = yield* Mailer.Mailer;
+        const current = yield* PasswordHasher.PasswordHasher;
+        const { session } = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
+        const account = Option.getOrThrow(
+          yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, session.userId),
+        );
+
+        const stronger = yield* Effect.gen(function* () {
+          const previous = yield* PasswordHasher.PasswordHasher;
+          return yield* previous.hash(strongPassword);
+        }).pipe(Effect.provide(hasherAt({ AUTH_ARGON2_ITERATIONS: "3" })));
+        assert.isFalse(current.needsRehash(stronger), "a stronger hash is above the floor");
+        yield* accounts.updateCredentialHash(account.id, Redacted.make(stronger));
+
+        yield* password.signIn({ email, password: strongPassword });
+
+        const stored = Redacted.value(
+          Option.getOrThrow(yield* accounts.findCredentialHash(account.id)),
+        );
+        assert.strictEqual(stored, stronger, "signIn must never downgrade a stronger stored hash");
       }).pipe(Effect.provide(TestLayer)),
   );
 
