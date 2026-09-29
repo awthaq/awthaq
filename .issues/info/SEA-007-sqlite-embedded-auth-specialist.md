@@ -3,7 +3,7 @@ ID: "SEA-007"
 Title: "The one runnable example deliberately avoids any SQL backend, so no end-to-end SQLite composition is demonstrated"
 Level: info
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "examples/memory-server/index.ts:5"
 Auditor: "sqlite-embedded-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `—` · reported by **SQLite Embedded Auth Specialist** (`sqlite-embedded-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `readme-docs-accuracy`. Evidence at HEAD ec065a7: `examples/memory-server/index.ts:5`. Fix: Make examples/sql-server (created for SMS-006) default to a SQLite file and switch to Postgres when DATABASE_URL is set — a living proof of README.md:200's one-layer-swap claim. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
 
 **Plan note (2026-09-29):** Not done in P19: it needs examples/sql-server, which the plan creates under SMS-006 but which P19 delivered as a compiled README fixture (packages/sql/test/fixtures/readme-quickstart.ts) because examples/ belongs to P20b. The README now says the quickstart was run against SQLite and that only the SqlClient layer differs from Postgres; a runnable SQLite-by-default example is still open (P20b).
+
+**Resolved (2026-09-29):** examples/sql-server: Password over the real SQL stack (CoreMigrations run, encrypted-account repositories, durable AuditLog, RateLimiterStoreSql, SqlTransaction.layerSql). SqlLive picks PgClient when DATABASE_URL is set, else SqliteClient (SQLITE_FILE, default ./awthaq.sqlite): the one-layer swap. Runs (node --experimental-strip-types index.ts serves on :3002). test/smoke.test.ts drives sign-up, mailed token, verify, sign-in over in-memory SQLite and proves file durability (a second boot on the same file signs the same user in). Added to the workspace roster (pnpm workspace:sync + hand-edited root vitest.config.ts and tsconfig.test.json), knip and workspace:check green; README and root README link it.

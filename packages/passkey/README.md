@@ -2,7 +2,7 @@
 
 Passkey (WebAuthn) sign-in for awthaq: `Auth.make([Passkey.Passkey])` adds registration, sign-in, step-up re-authentication and credential management for phishing-resistant, passwordless credentials. The cryptography (CBOR/COSE, attestation, signatures) stays in [`@simplewebauthn/server`](https://simplewebauthn.dev) behind the `WebAuthn` port in `@awthaq/ports`; this package is the glue that decides _which challenge, origin, session and user_ a ceremony belongs to — where real WebAuthn CVEs actually land.
 
-Behavior is specified in [`spec/behaviors/17-passkey.md`](../../spec/behaviors/17-passkey.md) (BEH-EA-129 to 136). The browser half is `passkeyClient` in `@awthaq/client`.
+Behavior is specified in [`spec/behaviors/17-passkey.md`](../../spec/behaviors/17-passkey.md) (BEH-EA-129 to 136, and 255 to 257: registration freshness, Conditional Create, the stable user handle). The browser half is `passkeyClient` in `@awthaq/client`.
 
 ## Composition
 

@@ -3,7 +3,7 @@ ID: "IC-010"
 Title: "First real run requires hand-generating a base64 32-byte key; no dev auto-generation"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "README.md:171"
 Auditor: "iain-collins"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Iain Collins — Creator of NextAuth.js** (`iain-collins`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `readme-docs-accuracy`. Evidence at HEAD ec065a7: `README.md:171`. Fix: Add an explicit, opt-in `KeyProvider.layerEphemeral` (random 32-byte key generated at layer build, loud warning that ciphertext won't survive a restart) for dev/examples; keep layerEnv as the production path. Do not silently auto-fallback from layerEnv (that would lose encrypted data in a misconfigured prod). (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
 
 **Plan note (2026-09-29):** Not done in P19 (docs-only program): KeyProvider.layerEphemeral is a source change in packages/ports (plus a test and an example wiring), outside spec/README/docs. The README already documents the production path (AWTHAQ_ENCRYPTION_KEYS, key generation one-liner); add the 'layerEphemeral (dev only)' cell to the Configuration table when the layer exists.
+
+**Resolved (2026-09-29):** packages/ports/src/KeyProvider.ts: KeyProvider.layerEphemeral (random 32-byte key at layer build, logs a loud warning, requires Crypto.Crypto). It is never a fallback: layerEnv is unchanged and does not degrade into it; using the layer is the opt-in, and a NODE_ENV=production process dies with InvalidConfiguration(AWTHAQ_ALLOW_EPHEMERAL_KEY) unless AWTHAQ_ALLOW_EPHEMERAL_KEY=true. Tests first (red: layerEphemeral did not exist): packages/ports/test/KeyProviderEphemeral.test.ts (usable key with empty env and a fresh one per build, getKey semantics, warning logged, production refusal and explicit allow). README Configuration table and spec/overview.md updated; the example app uses it only when no key is configured.
