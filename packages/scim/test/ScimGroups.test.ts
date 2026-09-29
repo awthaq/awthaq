@@ -25,7 +25,8 @@ const patchGroup = (
     return yield* scim.patchGroup(connection, id, { Operations: operations });
   });
 
-const memberIds = (group: ScimApi.GroupResource) => group.members.map((member) => member.value).sort();
+const memberIds = (group: ScimApi.GroupResource) =>
+  group.members.map((member) => member.value).sort();
 
 describe("SCIM Groups (BEH-EA-251)", () => {
   it.effect("POST creates an organization team with its provisioned members", () =>
@@ -56,8 +57,14 @@ describe("SCIM Groups (BEH-EA-251)", () => {
     Effect.gen(function* () {
       const { connection } = yield* seedConnection();
       const scim = yield* Scim.Scim;
-      const first = yield* scim.createGroup(connection, { displayName: "Eng", externalId: "grp-1" });
-      const again = yield* scim.createGroup(connection, { displayName: "Eng", externalId: "grp-1" });
+      const first = yield* scim.createGroup(connection, {
+        displayName: "Eng",
+        externalId: "grp-1",
+      });
+      const again = yield* scim.createGroup(connection, {
+        displayName: "Eng",
+        externalId: "grp-1",
+      });
       assert.strictEqual(again.id, first.id);
       assert.strictEqual((yield* scim.listGroups(connection, {})).totalResults, 1);
     }).pipe(Effect.provide(ScimLive())),
@@ -80,52 +87,67 @@ describe("SCIM Groups (BEH-EA-251)", () => {
     }).pipe(Effect.provide(ScimLive())),
   );
 
-  it.effect("a connection cannot see, read or delete another connection's group, or a team it did not make", () =>
-    Effect.gen(function* () {
-      const a = yield* seedConnection("Okta");
-      const b = yield* seedConnection("Entra");
-      const scim = yield* Scim.Scim;
-      const teams = yield* TeamRecords.TeamRecords;
-      const theirs = yield* scim.createGroup(b.connection, { displayName: "Theirs" });
-      const manual = yield* teams.createTeam({ organizationId: a.organizationId, name: "Made by hand" });
-      assert.strictEqual((yield* scim.listGroups(a.connection, {})).totalResults, 0);
-      for (const id of [theirs.id, manual.id]) {
-        assert.strictEqual((yield* scim.getGroup(a.connection, id).pipe(Effect.flip))._tag, "ScimNotFound");
-        assert.strictEqual((yield* scim.deleteGroup(a.connection, id).pipe(Effect.flip))._tag, "ScimNotFound");
-      }
-      assert.isTrue(Option.isSome(yield* teams.findTeamById(a.organizationId, manual.id)));
-    }).pipe(Effect.provide(ScimLive())),
+  it.effect(
+    "a connection cannot see, read or delete another connection's group, or a team it did not make",
+    () =>
+      Effect.gen(function* () {
+        const a = yield* seedConnection("Okta");
+        const b = yield* seedConnection("Entra");
+        const scim = yield* Scim.Scim;
+        const teams = yield* TeamRecords.TeamRecords;
+        const theirs = yield* scim.createGroup(b.connection, { displayName: "Theirs" });
+        const manual = yield* teams.createTeam({
+          organizationId: a.organizationId,
+          name: "Made by hand",
+        });
+        assert.strictEqual((yield* scim.listGroups(a.connection, {})).totalResults, 0);
+        for (const id of [theirs.id, manual.id]) {
+          assert.strictEqual(
+            (yield* scim.getGroup(a.connection, id).pipe(Effect.flip))._tag,
+            "ScimNotFound",
+          );
+          assert.strictEqual(
+            (yield* scim.deleteGroup(a.connection, id).pipe(Effect.flip))._tag,
+            "ScimNotFound",
+          );
+        }
+        assert.isTrue(Option.isSome(yield* teams.findTeamById(a.organizationId, manual.id)));
+      }).pipe(Effect.provide(ScimLive())),
   );
 
-  it.effect("PUT renames, sets externalId and replaces the provisioned members without touching anyone else", () =>
-    Effect.gen(function* () {
-      const { connection, organizationId } = yield* seedConnection();
-      const scim = yield* Scim.Scim;
-      const teams = yield* TeamRecords.TeamRecords;
-      const ada = yield* user(connection, "ada");
-      const bo = yield* user(connection, "bo");
-      const cy = yield* user(connection, "cy");
-      const group = yield* scim.createGroup(connection, {
-        displayName: "Eng",
-        members: [{ value: ada }, { value: bo }],
-      });
-      // The organization owner was added to the team by hand: not the directory's to remove.
-      yield* teams.addTeamMember({ teamId: group.id, userId: Users.UserId("owner-1") });
-      const replaced = yield* scim.replaceGroup(connection, group.id, {
-        displayName: "Platform",
-        externalId: "grp-9",
-        members: [{ value: bo }, { value: cy }],
-      });
-      assert.strictEqual(replaced.displayName, "Platform");
-      assert.strictEqual(replaced.externalId, "grp-9");
-      assert.deepStrictEqual(memberIds(replaced), [bo, cy].sort());
-      const onTeam = (yield* teams.listTeamMembers(group.id)).map((row) => row.userId as string).sort();
-      assert.deepStrictEqual(onTeam, [bo, cy, "owner-1"].sort());
-      assert.strictEqual(
-        Option.getOrThrow(yield* teams.findTeamById(organizationId, group.id)).name,
-        "Platform",
-      );
-    }).pipe(Effect.provide(ScimLive())),
+  it.effect(
+    "PUT renames, sets externalId and replaces the provisioned members without touching anyone else",
+    () =>
+      Effect.gen(function* () {
+        const { connection, organizationId } = yield* seedConnection();
+        const scim = yield* Scim.Scim;
+        const teams = yield* TeamRecords.TeamRecords;
+        const ada = yield* user(connection, "ada");
+        const bo = yield* user(connection, "bo");
+        const cy = yield* user(connection, "cy");
+        const group = yield* scim.createGroup(connection, {
+          displayName: "Eng",
+          members: [{ value: ada }, { value: bo }],
+        });
+        // The organization owner was added to the team by hand: not the directory's to remove.
+        yield* teams.addTeamMember({ teamId: group.id, userId: Users.UserId("owner-1") });
+        const replaced = yield* scim.replaceGroup(connection, group.id, {
+          displayName: "Platform",
+          externalId: "grp-9",
+          members: [{ value: bo }, { value: cy }],
+        });
+        assert.strictEqual(replaced.displayName, "Platform");
+        assert.strictEqual(replaced.externalId, "grp-9");
+        assert.deepStrictEqual(memberIds(replaced), [bo, cy].sort());
+        const onTeam = (yield* teams.listTeamMembers(group.id))
+          .map((row) => row.userId as string)
+          .sort();
+        assert.deepStrictEqual(onTeam, [bo, cy, "owner-1"].sort());
+        assert.strictEqual(
+          Option.getOrThrow(yield* teams.findTeamById(organizationId, group.id)).name,
+          "Platform",
+        );
+      }).pipe(Effect.provide(ScimLive())),
   );
 
   it.effect("PATCH adds, removes and replaces members and renames (RFC 7644 forms)", () =>
@@ -163,38 +185,60 @@ describe("SCIM Groups (BEH-EA-251)", () => {
     }).pipe(Effect.provide(ScimLive())),
   );
 
-  it.effect("list filters by displayName and externalId, and DELETE removes the team and the mapping", () =>
-    Effect.gen(function* () {
-      const { connection, organizationId } = yield* seedConnection();
-      const scim = yield* Scim.Scim;
-      const teams = yield* TeamRecords.TeamRecords;
-      const auditLog = yield* AuditLog.AuditLog;
-      const eng = yield* scim.createGroup(connection, { displayName: "Eng", externalId: "grp-1" });
-      yield* scim.createGroup(connection, { displayName: "Ops", externalId: "grp-2" });
-      const byName = yield* scim.listGroups(connection, { filter: 'displayName eq "Ops"' });
-      assert.strictEqual(byName.totalResults, 1);
-      assert.strictEqual(byName.Resources[0]?.externalId, "grp-2");
-      const byExternal = yield* scim.listGroups(connection, { filter: 'externalId eq "grp-1"' });
-      assert.strictEqual(byExternal.Resources[0]?.displayName, "Eng");
-      yield* scim.deleteGroup(connection, eng.id);
-      assert.isTrue(Option.isNone(yield* teams.findTeamById(organizationId, eng.id)));
-      assert.strictEqual((yield* scim.getGroup(connection, eng.id).pipe(Effect.flip))._tag, "ScimNotFound");
-      assert.strictEqual((yield* scim.listGroups(connection, {})).totalResults, 1);
-      assert.strictEqual((yield* auditLog.list({ eventTag: "auth.scim.groupChanged" })).length, 3);
-    }).pipe(Effect.provide(ScimLive())),
+  it.effect(
+    "list filters by displayName and externalId, and DELETE removes the team and the mapping",
+    () =>
+      Effect.gen(function* () {
+        const { connection, organizationId } = yield* seedConnection();
+        const scim = yield* Scim.Scim;
+        const teams = yield* TeamRecords.TeamRecords;
+        const auditLog = yield* AuditLog.AuditLog;
+        const eng = yield* scim.createGroup(connection, {
+          displayName: "Eng",
+          externalId: "grp-1",
+        });
+        yield* scim.createGroup(connection, { displayName: "Ops", externalId: "grp-2" });
+        const byName = yield* scim.listGroups(connection, { filter: 'displayName eq "Ops"' });
+        assert.strictEqual(byName.totalResults, 1);
+        assert.strictEqual(byName.Resources[0]?.externalId, "grp-2");
+        const byExternal = yield* scim.listGroups(connection, { filter: 'externalId eq "grp-1"' });
+        assert.strictEqual(byExternal.Resources[0]?.displayName, "Eng");
+        yield* scim.deleteGroup(connection, eng.id);
+        assert.isTrue(Option.isNone(yield* teams.findTeamById(organizationId, eng.id)));
+        assert.strictEqual(
+          (yield* scim.getGroup(connection, eng.id).pipe(Effect.flip))._tag,
+          "ScimNotFound",
+        );
+        assert.strictEqual((yield* scim.listGroups(connection, {})).totalResults, 1);
+        assert.strictEqual(
+          (yield* auditLog.list({ eventTag: "auth.scim.groupChanged" })).length,
+          3,
+        );
+      }).pipe(Effect.provide(ScimLive())),
   );
 
-  it.effect("a group whose team was removed elsewhere is not found, and its stale mapping is dropped", () =>
-    Effect.gen(function* () {
-      const { connection, organizationId } = yield* seedConnection();
-      const scim = yield* Scim.Scim;
-      const teams = yield* TeamRecords.TeamRecords;
-      const group = yield* scim.createGroup(connection, { displayName: "Eng", externalId: "grp-1" });
-      yield* teams.removeTeam(organizationId, group.id);
-      assert.strictEqual((yield* scim.getGroup(connection, group.id).pipe(Effect.flip))._tag, "ScimNotFound");
-      // The external id is free again.
-      const fresh = yield* scim.createGroup(connection, { displayName: "Eng", externalId: "grp-1" });
-      assert.notStrictEqual(fresh.id, group.id);
-    }).pipe(Effect.provide(ScimLive())),
+  it.effect(
+    "a group whose team was removed elsewhere is not found, and its stale mapping is dropped",
+    () =>
+      Effect.gen(function* () {
+        const { connection, organizationId } = yield* seedConnection();
+        const scim = yield* Scim.Scim;
+        const teams = yield* TeamRecords.TeamRecords;
+        const group = yield* scim.createGroup(connection, {
+          displayName: "Eng",
+          externalId: "grp-1",
+        });
+        yield* teams.removeTeam(organizationId, group.id);
+        assert.strictEqual(
+          (yield* scim.getGroup(connection, group.id).pipe(Effect.flip))._tag,
+          "ScimNotFound",
+        );
+        // The external id is free again.
+        const fresh = yield* scim.createGroup(connection, {
+          displayName: "Eng",
+          externalId: "grp-1",
+        });
+        assert.notStrictEqual(fresh.id, group.id);
+      }).pipe(Effect.provide(ScimLive())),
   );
 });

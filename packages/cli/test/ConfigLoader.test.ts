@@ -81,9 +81,9 @@ describe("Config.layerFile", () => {
 describe("Config.fromModule", () => {
   it.effect("rejects a module whose `auth` is not a composition", () =>
     Effect.gen(function* () {
-      const error = yield* CliConfig.fromModule({ default: { auth: { not: "a composition" } } }).pipe(
-        Effect.flip,
-      );
+      const error = yield* CliConfig.fromModule({
+        default: { auth: { not: "a composition" } },
+      }).pipe(Effect.flip);
       assert.strictEqual(error._tag, "ConfigUnavailable");
     }),
   );

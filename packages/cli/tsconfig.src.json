@@ -15,7 +15,6 @@
       "@awthaq/migrate-better-auth": ["../migrate-better-auth/src/index.ts"],
       "@awthaq/migrate-firebase": ["../migrate-firebase/src/index.ts"],
       "@awthaq/ports": ["../ports/src/index.ts"],
-      "@awthaq/qadi": ["../qadi/src/index.ts"],
       "@awthaq/roles": ["../roles/src/index.ts"],
       "@awthaq/server": ["../server/src/index.ts"],
       "@awthaq/sql": ["../sql/src/index.ts"]
@@ -39,9 +38,6 @@
     },
     {
       "path": "../ports/tsconfig.src.json"
-    },
-    {
-      "path": "../qadi/tsconfig.src.json"
     },
     {
       "path": "../roles/tsconfig.src.json"

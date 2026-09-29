@@ -168,7 +168,9 @@ export interface JwtShape {
    * introspect `active: false` over HTTP at once; bare `verify` (and any
    * bearer re-entry built on it) lags by at most `JwtConfig.ttl`.
    */
-  readonly introspectComposed: (token: string) => Effect.Effect<IntrospectionResult, Errors.StoreUnavailable>;
+  readonly introspectComposed: (
+    token: string,
+  ) => Effect.Effect<IntrospectionResult, Errors.StoreUnavailable>;
 }
 
 /**
@@ -189,7 +191,9 @@ const principalClaims = (principal: Api.Principal): Record<string, unknown> =>
         // password login from a federated or passkey one (and how fresh) from the token alone.
         // Omitted, not empty, when the session recorded none.
         ...(principal.amr !== undefined && principal.amr.length > 0 ? { amr: principal.amr } : {}),
-        ...(principal.authenticatedAt !== undefined ? { auth_time: principal.authenticatedAt } : {}),
+        ...(principal.authenticatedAt !== undefined
+          ? { auth_time: principal.authenticatedAt }
+          : {}),
         ...(principal.actingAs !== undefined
           ? // JR-005: RFC 8693 §4.1 identifies the actor by `sub`; the actor's
             // principal type rides along as a private (non-registered) member.
@@ -619,7 +623,10 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
                 Option.match(remoteSigner, {
                   onSome: Effect.succeed,
                   onNone: () =>
-                    Defects.invalidConfiguration("remoteSigner", `awthaq/jwt: signing key "${key.kid}" has no local private key material and no RemoteSigner is configured`),
+                    Defects.invalidConfiguration(
+                      "remoteSigner",
+                      `awthaq/jwt: signing key "${key.kid}" has no local private key material and no RemoteSigner is configured`,
+                    ),
                 }),
             });
             return yield* JwtCodec.sign({

@@ -21,9 +21,6 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 const postgresUrl = process.env["AWTHAQ_POSTGRES_URL"];
 
-/** True when the suites are running against a real Postgres (`AWTHAQ_POSTGRES_URL`). */
-export const isPostgres = postgresUrl !== undefined;
-
 const asSqlClient = <E>(layer: Layer.Layer<SqlClient.SqlClient, E>) => layer;
 
 /**

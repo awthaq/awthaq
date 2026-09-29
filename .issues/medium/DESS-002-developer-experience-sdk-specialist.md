@@ -3,7 +3,7 @@ ID: "DESS-002"
 Title: "Memory example cannot complete a sign-in: verification token is unrecoverable"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "examples/memory-server/README.md:27"
 Auditor: "developer-experience-sdk-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `—` · reported by **Developer Experience / SDK Specialist** (`developer-experience-sdk-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Make the example's Mailer a wrapper around Mailer.layerMemory that also console.
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `examples-memory-server`. Evidence at HEAD ec065a7: `examples/memory-server/README.md:27`. Fix: Ship a dev `Mailer.layerConsole` in @awthaq/ports (logs recipient/template/data incl. the token via Effect.logInfo, and records for `sent`), wire it into the memory example through TestAuth.layer's middleware slot, and extend the example README walkthrough with the verify-email step. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Mailer.layerConsole in @awthaq/ports (records like layerMemory, logs recipient/template/data with Redacted values unwrapped, sets `development`), test written first (red: layerConsole undefined). Wired into examples/memory-server through TestAuth.layer's services slot (the plugin resolves it before the bundle's memory mailer); the README walkthrough now works verbatim (checked against a live server: CSRF cookie jar, token from the log, /verify-email, sign-in 200) and a new smoke test drives the same path, verified red by removing the console mailer. Gates: pnpm typecheck (clean build, 0 errors), oxlint clean, knip clean, format:check clean, circular, package:smoke, coverage thresholds, test:bdd, spec:verify:strict.

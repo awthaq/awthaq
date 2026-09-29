@@ -5,3 +5,4 @@ coverage/
 *.tsbuildinfo
 .quality-metrics/
 .DS_Store
+type-quality-dashboard.html

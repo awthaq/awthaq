@@ -352,11 +352,17 @@ const claimResolution = (request: HttpServerRequest.HttpServerRequest, raw: stri
   Effect.sync(() => {
     const perRequest =
       sessionResolutionCache.get(request.source) ??
-      new Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated | Api.StoreUnavailable>>();
+      new Map<
+        string,
+        Deferred.Deferred<ResolvedSession, Api.Unauthenticated | Api.StoreUnavailable>
+      >();
     sessionResolutionCache.set(request.source, perRequest);
     const existing = perRequest.get(raw);
     if (existing !== undefined) return { deferred: existing, owner: false, perRequest };
-    const deferred = Deferred.makeUnsafe<ResolvedSession, Api.Unauthenticated | Api.StoreUnavailable>();
+    const deferred = Deferred.makeUnsafe<
+      ResolvedSession,
+      Api.Unauthenticated | Api.StoreUnavailable
+    >();
     perRequest.set(raw, deferred);
     return { deferred, owner: true, perRequest };
   });
@@ -634,7 +640,8 @@ const makeSessionTierHandlers = (machine: boolean) =>
         // never sees. See `serve` for the per-request `PostAuthResponseHook`.
         Effect.flatMap(({ session }) =>
           resolveAndAnnotate(resolver, session).pipe(
-            Effect.flatMap((principal) => serve(scheme, httpEffect, principal))),
+            Effect.flatMap((principal) => serve(scheme, httpEffect, principal)),
+          ),
         ),
       );
     // MAPS-001/OCM-002: a credential a registered resolver claims resolves to its
@@ -790,7 +797,8 @@ export const OptionalAuthenticationLive: Layer.Layer<
         Effect.flatMap((resolved) => requireImpersonationSession(scheme, resolved)),
         Effect.flatMap(({ session }) =>
           resolveAndAnnotate(resolver, session).pipe(
-            Effect.flatMap((principal) => serve(scheme, httpEffect, principal))),
+            Effect.flatMap((principal) => serve(scheme, httpEffect, principal)),
+          ),
         ),
       );
     // See the identical helper on `AuthenticationLive` above: this is the user

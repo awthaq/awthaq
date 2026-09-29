@@ -3,7 +3,7 @@ ID: "ELC-003"
 Title: "Madge cycle guard skips type imports, leaving type-level cycles undetected"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "scripts/circular.mjs:22"
 Auditor: "effect-layer-context-architect"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Effect Layer/Context Architect** (`effect-layer-context-architect`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Keep skipTypeImports for the fast value check, but add a comment stating the sco
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `dev-scripts-tooling`. Evidence at HEAD ec065a7: `scripts/circular.mjs:19`. Fix: Break the one existing type cycle, then make circular.mjs run a second, type-inclusive madge pass (and scan .tsx) so type-level cycles fail `pnpm circular`. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** scripts/circular.mjs now runs madge twice (runtime cycles, then type-inclusive including `import type`, and scans .tsx), labelling which kind failed. AuditLog<->AuthEvents was already broken by the P10 schema split; the type-inclusive pass found three other type-level cycles, all fixed: Users<->Hooks<->{Erasure,DataExport}Registry (registries import the branded UserId from @awthaq/sql instead of Users) and OAuthConfig<->OAuthProvider<->ProviderHttp (OAuthRetryPolicy moved to ProviderHttp, re-exported from OAuthConfig). Red proof: the new pass failed on those three before the fixes.

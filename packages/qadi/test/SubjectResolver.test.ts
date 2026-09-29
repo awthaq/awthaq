@@ -54,21 +54,23 @@ describe("SubjectResolver (default)", () => {
   );
 
   // AAPS-006/SOS-005/HSK-005 (BEH-EA-255): how the session was authenticated reaches the policy layer.
-  it.effect("a session's amr, authenticatedAt and derived aal land on the subject's attributes", () =>
-    Effect.gen(function* () {
-      const resolver = yield* SubjectResolver.SubjectResolver;
-      const principal = new Api.UserPrincipal({
-        ref: new Api.PrincipalRef({ type: "user", id: "u-aal" }),
-        sessionId: "s-aal",
-        amr: ["pwd", "otp", "mfa"],
-        authenticatedAt: 1_700_000_000,
-      });
-      const subject = yield* resolver.resolve(principal);
-      assert.deepStrictEqual(subject.attributes["amr"], ["pwd", "otp", "mfa"]);
-      assert.strictEqual(subject.attributes["authenticatedAt"], 1_700_000_000);
-      assert.strictEqual(subject.attributes["aal"], "aal2");
-      assert.strictEqual(subject.attributes["restrictedFactor"], false);
-    }),
+  it.effect(
+    "a session's amr, authenticatedAt and derived aal land on the subject's attributes",
+    () =>
+      Effect.gen(function* () {
+        const resolver = yield* SubjectResolver.SubjectResolver;
+        const principal = new Api.UserPrincipal({
+          ref: new Api.PrincipalRef({ type: "user", id: "u-aal" }),
+          sessionId: "s-aal",
+          amr: ["pwd", "otp", "mfa"],
+          authenticatedAt: 1_700_000_000,
+        });
+        const subject = yield* resolver.resolve(principal);
+        assert.deepStrictEqual(subject.attributes["amr"], ["pwd", "otp", "mfa"]);
+        assert.strictEqual(subject.attributes["authenticatedAt"], 1_700_000_000);
+        assert.strictEqual(subject.attributes["aal"], "aal2");
+        assert.strictEqual(subject.attributes["restrictedFactor"], false);
+      }),
   );
 
   it.effect("a passkey session and a password+SMS session are distinguishable by aal", () =>

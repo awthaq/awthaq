@@ -23,7 +23,7 @@ No package is published to npm yet (`packages/*/package.json` are all still `"pr
 
 | Path | What it is |
 |---|---|
-| [`packages/`](packages) | The implementation: `core` (domain services), `api`/`server` (the HTTP contract stratum), `sql` (persistence), `ports` (adapters — password hashing, mail, encryption, rate limiting, WebAuthn, key management), and one package per plugin (`password`, `oauth`, `organization`, `admin`, `passkey`, `jwt`, `two-factor`, `magic-link`, plus stub packages not yet built out — see each package's own README). |
+| [`packages/`](packages) | The implementation, one package per `@awthaq/*` name. Foundations: `@awthaq/core` (domain services), `@awthaq/api` and `@awthaq/server` (the HTTP contract stratum), `@awthaq/sql` (persistence), `@awthaq/ports` (adapters — password hashing, mail, encryption, rate limiting, WebAuthn, key management), `@awthaq/qadi` (authorization over qadi) and `@awthaq/test` (the memory backend and test harness). Plugins: `@awthaq/password`, `@awthaq/oauth`, `@awthaq/organization`, `@awthaq/roles`, `@awthaq/admin`, `@awthaq/passkey`, `@awthaq/jwt`, `@awthaq/api-key`, `@awthaq/scim`, plus `@awthaq/magic-link` and `@awthaq/two-factor` (placeholders not yet built out). Clients: `@awthaq/client`, `@awthaq/react`, `@awthaq/next`. Tooling: `@awthaq/cli` and the migration importers `@awthaq/migrate-auth0`, `@awthaq/migrate-better-auth`, `@awthaq/migrate-firebase`. Each package's own README says what it ships. `pnpm workspace:check` fails when this list falls behind `packages/`. |
 | [`features/`](features) | The Gherkin/BDD acceptance suite (`spec/behaviors/` scenarios, executed for real against each plugin's HTTP surface). |
 | [`spec/`](spec/README.md) | The canonical specification. Read this first for *why* something is built the way it is. |
 | [`research/`](research/README.md) | The evidence base: 100 design questions answered by domain research, plus a five-part literature review on plugin-system science. Cited from `spec/decisions/` and `spec/behaviors/` as supporting evidence — not itself normative. |
@@ -340,10 +340,8 @@ Expiry is a read-time rejection, so expired rows stay until something deletes th
 | SCIM | `@awthaq/scim` | Inbound SCIM 2.0 provisioning: directory sync of users and groups, deactivation ends sessions |
 | Passkey | `@awthaq/passkey` | WebAuthn registration and authentication |
 | Jwt | `@awthaq/jwt` | JWT issuance/verification for stateless callers |
-| Two-factor | `@awthaq/two-factor` | TOTP second factor with recovery codes; diverts sign-in, and password reset, until proved |
-| Magic link / Email OTP | `@awthaq/magic-link` | Passwordless sign-in by a POST-only emailed link or a six-digit emailed code |
 
-Each composes into `Auth.make([...])` alongside Password exactly as shown in the quickstart — `Auth.make`'s own type-level `Validate<P>` rejects the tuple at compile time if a plugin's `dependsOn` isn't also in the list, or if two plugins share an id. `api-key`, `cli`, and `next` remain stub packages — see [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md)'s "Out of scope" section for why they're deliberately not part of this pass.
+Each composes into `Auth.make([...])` alongside Password exactly as shown in the quickstart — `Auth.make`'s own type-level `Validate<P>` rejects the tuple at compile time if a plugin's `dependsOn` isn't also in the list, or if two plugins share an id. `two-factor`, `magic-link`, `api-key`, `cli`, and `next` remain stub packages — see [`.scratch/shipping-gaps/map.md`](.scratch/shipping-gaps/map.md)'s "Out of scope" section for why they're deliberately not part of this pass.
 
 ### Migrating users from another provider
 

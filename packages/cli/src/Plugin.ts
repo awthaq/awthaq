@@ -56,7 +56,10 @@ export const renderDot = (nodes: ReadonlyArray<GraphNode>) => [
 ];
 
 /** `plugin list` (ids in link order) or `plugin list --graph` with edges, as text, JSON or DOT. */
-export const show = (auth: LoadedAuth, options: { readonly graph: boolean; readonly format: Format }) =>
+export const show = (
+  auth: LoadedAuth,
+  options: { readonly graph: boolean; readonly format: Format },
+) =>
   Effect.gen(function* () {
     const out = yield* Output.Output;
     const nodes = graph(auth);
@@ -65,5 +68,7 @@ export const show = (auth: LoadedAuth, options: { readonly graph: boolean; reado
     }
     if (options.format === "json" || out.json) return yield* out.document(nodes);
     if (options.graph) return yield* Effect.forEach(renderText(nodes), out.line, { discard: true });
-    yield* Effect.forEach(nodes, (node) => out.line(`${node.order}. ${node.id}`), { discard: true });
+    yield* Effect.forEach(nodes, (node) => out.line(`${node.order}. ${node.id}`), {
+      discard: true,
+    });
   });

@@ -378,16 +378,18 @@ describe("Repositories (SQLite specifics)", () => {
 
   // PPS-003: `findByIdentifier` is served by the partial unique live-identifier
   // index with no temp b-tree.
-  it.effect("PPS-003: findByIdentifier's query plan uses the partial unique live-identifier index", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const plan = yield* sql.unsafe<{ readonly detail: string }>(
-        `EXPLAIN QUERY PLAN SELECT * FROM verification_tokens WHERE identifier = ? AND "consumedAt" IS NULL`,
-        ["verify-email:user-1"],
-      );
-      const detail = plan.map((row) => row.detail).join(" | ");
-      assert.include(detail, "verification_tokens_live_identifier");
-      assert.notInclude(detail, "TEMP B-TREE");
-    }).pipe(Effect.provide(RepositoriesLive)),
+  it.effect(
+    "PPS-003: findByIdentifier's query plan uses the partial unique live-identifier index",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const plan = yield* sql.unsafe<{ readonly detail: string }>(
+          `EXPLAIN QUERY PLAN SELECT * FROM verification_tokens WHERE identifier = ? AND "consumedAt" IS NULL`,
+          ["verify-email:user-1"],
+        );
+        const detail = plan.map((row) => row.detail).join(" | ");
+        assert.include(detail, "verification_tokens_live_identifier");
+        assert.notInclude(detail, "TEMP B-TREE");
+      }).pipe(Effect.provide(RepositoriesLive)),
   );
 });

@@ -186,9 +186,10 @@ describe("TwoFactorStore.layerRecoveryCodesSql atomicity (BCR-002)", () => {
       assert.isTrue(failure._tag === "Failure");
 
       const sql = yield* SqlClient.SqlClient;
-      yield* sql.unsafe(
-        `DROP TRIGGER two_factor_fail_insert${TestSql.isPostgres ? " ON two_factor_recovery_code" : ""}`,
-      );
+      yield* sql.onDialectOrElse({
+        pg: () => sql.unsafe("DROP TRIGGER two_factor_fail_insert ON two_factor_recovery_code"),
+        orElse: () => sql.unsafe("DROP TRIGGER two_factor_fail_insert"),
+      });
       assert.deepStrictEqual((yield* codes.listUnused(userA)).map((row) => row.id).sort(), before);
     }).pipe(Effect.provide(SqlStores)),
   );

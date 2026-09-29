@@ -233,28 +233,33 @@ describe("OAuth callback sign-up/sign-in hooks (NAM-002)", () => {
   );
 
   // CSD-004: a rejected callback is the OAuth strategy's failure signal.
-  it.effect("a callback whose state does not match publishes auth.user.signInFailed (callbackRejected)", () =>
-    Effect.gen(function* () {
-      const oauth = yield* OAuth.OAuth;
-      const auditLog = yield* AuditLog.AuditLog;
-      const { state } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
-      const failure = yield* oauth
-        .callback("acme", {
-          code: "auth-code",
-          state,
-          iss: undefined,
-          cookieState: "not-the-state",
-          ip: "203.0.113.4",
-        })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "OAuthCallbackFailed");
-      const [event] = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
-      assert.deepStrictEqual(event?.payload, {
-        _tag: "auth.user.signInFailed",
-        strategy: "acme",
-        reason: "callbackRejected",
-        clientIp: "203.0.113.4",
-      });
-    }).pipe(Effect.provide(buildLayer([acme()], {}))),
+  it.effect(
+    "a callback whose state does not match publishes auth.user.signInFailed (callbackRejected)",
+    () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const auditLog = yield* AuditLog.AuditLog;
+        const { state } = yield* oauth.authorize("acme", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        const failure = yield* oauth
+          .callback("acme", {
+            code: "auth-code",
+            state,
+            iss: undefined,
+            cookieState: "not-the-state",
+            ip: "203.0.113.4",
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+        const [event] = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+        assert.deepStrictEqual(event?.payload, {
+          _tag: "auth.user.signInFailed",
+          strategy: "acme",
+          reason: "callbackRejected",
+          clientIp: "203.0.113.4",
+        });
+      }).pipe(Effect.provide(buildLayer([acme()], {}))),
   );
 });

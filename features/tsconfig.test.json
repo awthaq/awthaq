@@ -5,6 +5,7 @@
     "noEmit": true,
     "composite": false,
     "types": ["node"],
+    "lib": ["ESNext", "DOM"],
     "paths": {
       "@awthaq/api": ["../packages/api/src/index.ts"],
       "@awthaq/core": ["../packages/core/src/index.ts"],

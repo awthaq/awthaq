@@ -43,18 +43,20 @@ describe("ClientAddress.layerDirect", () => {
 describe("ClientAddress.layerTrustedProxy — X-Forwarded-For, hopCount", () => {
   const layer = ClientAddress.layerTrustedProxy({ strategy: { _tag: "hopCount", count: 1 } });
 
-  it.effect("strips exactly hopCount trusted hops from the right, returns the next one inward", () =>
-    Effect.gen(function* () {
-      const clientAddress = yield* ClientAddress.ClientAddress;
-      // client, then our one trusted edge proxy.
-      const resolved = yield* clientAddress.resolve(
-        requestWith({
-          remoteAddress: "10.0.0.1",
-          headers: { "x-forwarded-for": "198.51.100.7, 10.0.0.1" },
-        }),
-      );
-      assert.deepStrictEqual(resolved, Option.some("198.51.100.7"));
-    }).pipe(Effect.provide(layer)),
+  it.effect(
+    "strips exactly hopCount trusted hops from the right, returns the next one inward",
+    () =>
+      Effect.gen(function* () {
+        const clientAddress = yield* ClientAddress.ClientAddress;
+        // client, then our one trusted edge proxy.
+        const resolved = yield* clientAddress.resolve(
+          requestWith({
+            remoteAddress: "10.0.0.1",
+            headers: { "x-forwarded-for": "198.51.100.7, 10.0.0.1" },
+          }),
+        );
+        assert.deepStrictEqual(resolved, Option.some("198.51.100.7"));
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect("falls back to remoteAddress when the header is absent", () =>
@@ -138,7 +140,29 @@ describe("ClientAddress.layerTrustedProxy — X-Forwarded-For, CIDR allowlist", 
       assert.deepStrictEqual(resolved, Option.some("2001:db8:2::9"));
     }).pipe(
       Effect.provide(
-        ClientAddress.layerTrustedProxy({ strategy: { _tag: "cidr", trusted: ["2001:db8:1::/48"] } }),
+        ClientAddress.layerTrustedProxy({
+          strategy: { _tag: "cidr", trusted: ["2001:db8:1::/48"] },
+        }),
+      ),
+    ),
+  );
+
+  // Prefix lengths that are not a multiple of 16 split a 16-bit group: /33
+  // keeps the first bit of the third group, so 2001:db8:8000:: is outside
+  // 2001:db8::/33 while 2001:db8:7fff:: is inside it.
+  it.effect("honours IPv6 prefixes that fall inside a 16-bit group", () =>
+    Effect.gen(function* () {
+      const clientAddress = yield* ClientAddress.ClientAddress;
+      const resolved = yield* clientAddress.resolve(
+        requestWith({
+          remoteAddress: "2001:db8:7fff::1",
+          headers: { "x-forwarded-for": "2001:db8:8000::1, 2001:db8:7fff::1" },
+        }),
+      );
+      assert.deepStrictEqual(resolved, Option.some("2001:db8:8000::1"));
+    }).pipe(
+      Effect.provide(
+        ClientAddress.layerTrustedProxy({ strategy: { _tag: "cidr", trusted: ["2001:db8::/33"] } }),
       ),
     ),
   );

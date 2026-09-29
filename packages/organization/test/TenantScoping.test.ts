@@ -40,15 +40,18 @@ const ALLOWLIST: ReadonlyArray<{ readonly match: RegExp; readonly why: string }>
     why: "listByIds: ids come from the caller's own memberships (MembershipRecords.listByUser)",
   },
   {
-    match: /^SELECT \* FROM organization_org (WHERE \(createdAt, id\) > .* )?ORDER BY createdAt, id LIMIT /,
+    match:
+      /^SELECT \* FROM organization_org (WHERE \(createdAt, id\) > .* )?ORDER BY createdAt, id LIMIT /,
     why: "listPage (EP-003): the platform administrator's cross-tenant listing, reachable only through Admin.layerWithTenants' canAdministerTenants gate",
   },
   {
-    match: /^SELECT c\.\* FROM organization_oauth_connection c JOIN organization_oauth_connection_domain d ON /,
+    match:
+      /^SELECT c\.\* FROM organization_oauth_connection c JOIN organization_oauth_connection_domain d ON /,
     why: "findByEmailDomain (EP-004): home-realm discovery is deliberately cross-organization — a domain routes to exactly one connection",
   },
   {
-    match: /^SELECT domain, connectionId FROM organization_oauth_connection_domain WHERE connectionId IN /,
+    match:
+      /^SELECT domain, connectionId FROM organization_oauth_connection_domain WHERE connectionId IN /,
     why: "domainsOf (EP-004): child rows of connection rows a tenant-keyed query (or the discovery lookup) already selected",
   },
   {

@@ -3,7 +3,7 @@ ID: "MTS-005"
 Title: "tsconfig.test.json duplicates the identical paths block it already inherits"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "tsconfig.test.json:25"
 Auditor: "monorepo-tooling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **Monorepo Tooling Specialist** (`monorepo-tooling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Delete the paths block from tsconfig.test.json and rely on the inherited one; ke
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `workspace-roster-sync`. Evidence at HEAD ec065a7: `tsconfig.test.json:2`. Fix: Delete the paths block (and its comment) from tsconfig.test.json; rely on inheritance. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Removed the duplicated paths block (and comment) from tsconfig.test.json; it inherits base. Typecheck and tests unchanged.

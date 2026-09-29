@@ -39,11 +39,15 @@ const WidgetConfig = Context.Reference<WidgetConfigShape>("test/WidgetConfig", {
 const widgetDescriptor = ConfigDescriptor.make(WidgetConfig, {
   sensitive: ["apiSecret"],
   audit: (value) =>
-    value.minLength < 8 ? [ConfigDescriptor.finding("warning", "widget-short", "minLength is below 8")] : [],
+    value.minLength < 8
+      ? [ConfigDescriptor.finding("warning", "widget-short", "minLength is below 8")]
+      : [],
 });
 
 const WidgetApi = HttpApi.make("auth").add(
-  HttpApiGroup.make("widget").add(HttpApiEndpoint.get("ping", "/widget", { success: Schema.String })),
+  HttpApiGroup.make("widget").add(
+    HttpApiEndpoint.get("ping", "/widget", { success: Schema.String }),
+  ),
 );
 
 class Widget extends AuthPlugin.Service<Widget, { readonly ok: true }>()("widget", {
@@ -59,8 +63,7 @@ class Widget extends AuthPlugin.Service<Widget, { readonly ok: true }>()("widget
   });
 }
 
-const contextOf = (layer: Layer.Layer<never>) =>
-  Layer.build(layer).pipe(Effect.scoped);
+const contextOf = (layer: Layer.Layer<never>) => Layer.build(layer).pipe(Effect.scoped);
 
 describe("manifest.config", () => {
   it("lists a plugin's descriptor and its groups without building any Layer", () => {
@@ -103,10 +106,16 @@ describe("EffectiveConfig", () => {
       );
       const [item] = EffectiveConfig.read(context, owned);
       assert.strictEqual(item?.source, "override");
-      assert.strictEqual(new Map(item?.entries.map((e) => [e.path, e.value])).get("minLength"), "4");
+      assert.strictEqual(
+        new Map(item?.entries.map((e) => [e.path, e.value])).get("minLength"),
+        "4",
+      );
       assert.ok(!JSON.stringify(item).includes("canary"));
       const found = EffectiveConfig.audit(context, owned, { production: true });
-      assert.deepStrictEqual(found.map((f) => [f.owner, f.code]), [["widget", "widget-short"]]);
+      assert.deepStrictEqual(
+        found.map((f) => [f.owner, f.code]),
+        [["widget", "widget-short"]],
+      );
     }),
   );
 
@@ -127,15 +136,20 @@ describe("EffectiveConfig", () => {
     ),
   );
 
-  it.effect("scrubs the password out of a connection string even when the field is not declared sensitive", () =>
-    Effect.gen(function* () {
-      const Url = Context.Reference<{ readonly url: string }>("test/UrlConfig", {
-        defaultValue: () => ({ url: "postgres://app:hunter2-canary@db.internal/app" }),
-      });
-      const context = yield* contextOf(Layer.empty);
-      const [item] = EffectiveConfig.read(context, EffectiveConfig.owned("app", [ConfigDescriptor.make(Url)]));
-      assert.strictEqual(item?.entries[0]?.value, "postgres://app:<redacted>@db.internal/app");
-    }),
+  it.effect(
+    "scrubs the password out of a connection string even when the field is not declared sensitive",
+    () =>
+      Effect.gen(function* () {
+        const Url = Context.Reference<{ readonly url: string }>("test/UrlConfig", {
+          defaultValue: () => ({ url: "postgres://app:hunter2-canary@db.internal/app" }),
+        });
+        const context = yield* contextOf(Layer.empty);
+        const [item] = EffectiveConfig.read(
+          context,
+          EffectiveConfig.owned("app", [ConfigDescriptor.make(Url)]),
+        );
+        assert.strictEqual(item?.entries[0]?.value, "postgres://app:<redacted>@db.internal/app");
+      }),
   );
 
   it.effect("the core session cookie descriptor flags a relaxed SameSite only in production", () =>
@@ -146,7 +160,9 @@ describe("EffectiveConfig", () => {
         }),
       );
       const production = EffectiveConfig.audit(context, EffectiveConfig.core, { production: true });
-      const development = EffectiveConfig.audit(context, EffectiveConfig.core, { production: false });
+      const development = EffectiveConfig.audit(context, EffectiveConfig.core, {
+        production: false,
+      });
       assert.deepStrictEqual(
         production.filter((f) => f.code === "cookie-samesite-relaxed").map((f) => f.severity),
         ["warning"],

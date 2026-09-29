@@ -3,6 +3,8 @@
   "include": ["src/**/*.ts"],
   "compilerOptions": {
     "composite": true,
+    // Browser-facing: the base config carries no DOM lib (AH-009).
+    "lib": ["ESNext", "DOM"],
     "noEmit": false,
     "outDir": "./lib",
     "rootDir": "./src",

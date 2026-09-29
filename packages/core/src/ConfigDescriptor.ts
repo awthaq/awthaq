@@ -101,11 +101,7 @@ const leaf = (path: string, value: string, sensitive: boolean): Entry => ({
  * — declaring a secret in the type (`Redacted<string>`) is enough, the
  * descriptor's `sensitive` list exists for secrets that are plain strings.
  */
-const flatten = (
-  path: string,
-  value: unknown,
-  sensitive: boolean,
-): ReadonlyArray<Entry> => {
+const flatten = (path: string, value: unknown, sensitive: boolean): ReadonlyArray<Entry> => {
   if (sensitive || Redacted.isRedacted(value)) return [leaf(path, REDACTED, true)];
   if (value === null || value === undefined) return [leaf(path, String(value), false)];
   if (typeof value === "function") return [leaf(path, "[function]", false)];
@@ -128,7 +124,8 @@ const flatten = (
     return keys.flatMap((key) => flatten(`${path}.${key}`, value[key], false));
   }
   const proto: unknown = Object.getPrototypeOf(value);
-  const name = isRecord(proto) && typeof proto["constructor"] === "function" ? proto["constructor"].name : "";
+  const name =
+    isRecord(proto) && typeof proto["constructor"] === "function" ? proto["constructor"].name : "";
   return [leaf(path, name === "" ? "[object]" : `[${name}]`, false)];
 };
 
@@ -148,7 +145,8 @@ export const make = <A>(
   },
 ): ConfigDescriptor => {
   const sensitive: ReadonlyArray<string> = options?.sensitive ?? [];
-  const read = (context: Context.Context<never>): A => Context.getOrElse(context, reference, () => reference.defaultValue());
+  const read = (context: Context.Context<never>): A =>
+    Context.getOrElse(context, reference, () => reference.defaultValue());
   return {
     key: reference.key,
     sensitive,

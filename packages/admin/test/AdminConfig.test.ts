@@ -95,26 +95,28 @@ describe("Admin.effectiveConfig", () => {
     }).pipe(Effect.scoped, Effect.provide(buildLayer({}, true))),
   );
 
-  it.effect("lists the composition's descriptors with an override marked and the secret redacted", () =>
-    Effect.gen(function* () {
-      const admin = yield* Admin.Admin;
-      const items = yield* admin.effectiveConfig(asCaller("admin-1"));
-      const chain = items.find((item) => item.key === "awthaq/core/AuditChainConfig");
-      assert.strictEqual(chain?.owner, "admin");
-      assert.strictEqual(chain?.source, "override");
-      assert.deepStrictEqual(
-        chain?.entries.map((entry) => [entry.path, entry.value, entry.sensitive]),
-        [["key", "<redacted>", true]],
-      );
-      // Core's own descriptors are listed too, as defaults.
-      const session = items.find((item) => item.key === "awthaq/core/SessionConfig");
-      assert.strictEqual(session?.owner, "core");
-      assert.strictEqual(session?.source, "default");
-      assert.notInclude(JSON.stringify(items), CANARY);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(buildLayer({ canManageUsers: () => Effect.succeed(true) }, true)),
-    ),
+  it.effect(
+    "lists the composition's descriptors with an override marked and the secret redacted",
+    () =>
+      Effect.gen(function* () {
+        const admin = yield* Admin.Admin;
+        const items = yield* admin.effectiveConfig(asCaller("admin-1"));
+        const chain = items.find((item) => item.key === "awthaq/core/AuditChainConfig");
+        assert.strictEqual(chain?.owner, "admin");
+        assert.strictEqual(chain?.source, "override");
+        assert.deepStrictEqual(
+          chain?.entries.map((entry) => [entry.path, entry.value, entry.sensitive]),
+          [["key", "<redacted>", true]],
+        );
+        // Core's own descriptors are listed too, as defaults.
+        const session = items.find((item) => item.key === "awthaq/core/SessionConfig");
+        assert.strictEqual(session?.owner, "core");
+        assert.strictEqual(session?.source, "default");
+        assert.notInclude(JSON.stringify(items), CANARY);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(buildLayer({ canManageUsers: () => Effect.succeed(true) }, true)),
+      ),
   );
 
   it.effect("without a catalog it lists core's own descriptors only", () =>

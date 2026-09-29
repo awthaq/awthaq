@@ -241,7 +241,13 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // plain array, not `Schema.Union` — see `signUp`'s own comment above.
       // Ticket 12: rate-limited.
       // ARF-005: `SecondFactorRequired` (401) / `HookAborted` when a `BeforeCredentialReset` tap refuses.
-      error: [TokenConsumed, WeakPassword, Api.RateLimited, SecondFactorRequired, HookPoint.HookAborted],
+      error: [
+        TokenConsumed,
+        WeakPassword,
+        Api.RateLimited,
+        SecondFactorRequired,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(

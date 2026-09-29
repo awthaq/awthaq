@@ -89,25 +89,23 @@ export const enableRls = (options?: RlsOptions) =>
   });
 
 /** Removes what `enableRls` installed (every table it can cover). Idempotent, no-op off Postgres. */
-export const disableRls = Effect.gen(
-  function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql.onDialectOrElse({
-      pg: () =>
-        Effect.forEach(
-          [...partitionedTables, ...directoryTables],
-          (table) =>
-            Effect.gen(function* () {
-              yield* sql.unsafe(`DROP POLICY IF EXISTS ${POLICY} ON ${table}`);
-              yield* sql.unsafe(`ALTER TABLE ${table} NO FORCE ROW LEVEL SECURITY`);
-              yield* sql.unsafe(`ALTER TABLE ${table} DISABLE ROW LEVEL SECURITY`);
-            }),
-          { discard: true },
-        ),
-      orElse: () => Effect.void,
-    });
-  },
-);
+export const disableRls = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql.onDialectOrElse({
+    pg: () =>
+      Effect.forEach(
+        [...partitionedTables, ...directoryTables],
+        (table) =>
+          Effect.gen(function* () {
+            yield* sql.unsafe(`DROP POLICY IF EXISTS ${POLICY} ON ${table}`);
+            yield* sql.unsafe(`ALTER TABLE ${table} NO FORCE ROW LEVEL SECURITY`);
+            yield* sql.unsafe(`ALTER TABLE ${table} DISABLE ROW LEVEL SECURITY`);
+          }),
+        { discard: true },
+      ),
+    orElse: () => Effect.void,
+  });
+});
 
 /**
  * Runs `effect` as `tenantId`: provides the ambient `TenantContext` (so every

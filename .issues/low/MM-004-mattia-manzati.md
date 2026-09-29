@@ -3,7 +3,7 @@ ID: "MM-004"
 Title: "Coverage is reported but never threshold-enforced, against the DoD's own gate 6"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "vitest.config.ts:17"
 Auditor: "mattia-manzati"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `—` · reported by **Mattia Manzati — Effect Developer Tooling** (`mattia-manzati`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Set workspace-wide `coverage.thresholds` (lines/functions at a modest floor) in 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `coverage-enforcement`. Evidence at HEAD ec065a7: `vitest.config.ts:17`. Fix: Add workspace-wide coverage thresholds (floor just under the measured values) plus per-package overrides following ../qadi's pattern, and fix the ambiguous comment. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** vitest.config.ts coverage.thresholds: workspace floor statements 89 / branches 83 / functions 84 / lines 90 (measured 91.8/85.1/86.0/92.2) plus per-package globs for core, password, jwt and server, following ../qadi's pattern; the ambiguous comment now points at ../qadi. DoD gate 6 is marked active. Verified `--coverage.thresholds.lines=99` fails the run. `pnpm coverage` is in `pnpm check`.

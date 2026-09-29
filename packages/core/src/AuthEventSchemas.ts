@@ -795,10 +795,13 @@ export const TwoFactorChallengeFailedEvent = Schema.TaggedStruct("auth.twoFactor
 export type TwoFactorChallengeFailedEvent = typeof TwoFactorChallengeFailedEvent.Type;
 
 /** Published when a recovery code is spent; `remaining` is what is left, for a low-supply warning. */
-export const TwoFactorRecoveryCodeUsedEvent = Schema.TaggedStruct("auth.twoFactor.recoveryCodeUsed", {
-  userId: UserIdSchema,
-  remaining: Schema.Number,
-});
+export const TwoFactorRecoveryCodeUsedEvent = Schema.TaggedStruct(
+  "auth.twoFactor.recoveryCodeUsed",
+  {
+    userId: UserIdSchema,
+    remaining: Schema.Number,
+  },
+);
 export type TwoFactorRecoveryCodeUsedEvent = typeof TwoFactorRecoveryCodeUsedEvent.Type;
 
 /** Published when the recovery codes are replaced by a fresh set (the old set is invalid). */

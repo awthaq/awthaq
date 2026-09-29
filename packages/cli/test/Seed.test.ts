@@ -65,7 +65,10 @@ describe("seed admin", () => {
         const app = sqlApp(sql);
         const exit = yield* seed(input(), app);
         assert.isTrue(Exit.isSuccess(exit));
-        const rows = yield* sql<{ readonly email: string; readonly emailVerified: number }>`SELECT email, emailVerified FROM users`;
+        const rows = yield* sql<{
+          readonly email: string;
+          readonly emailVerified: number;
+        }>`SELECT email, emailVerified FROM users`;
         assert.deepStrictEqual(rows, [{ email: "ops@acme.com", emailVerified: 1 }]);
         const held = yield* sql<{ readonly role: string }>`SELECT role FROM role_assignments`;
         assert.deepStrictEqual(held, [{ role: "admin" }]);
@@ -95,13 +98,18 @@ describe("seed admin", () => {
       Effect.gen(function* () {
         const app = sqlApp(sql);
         yield* seed(input(), app);
-        const forced = yield* seed(input({ email: "second@acme.com", name: "Second", force: true }), app);
-        assert.isTrue(Exit.isSuccess(forced));
-        const holders = yield* sql<{ readonly n: number }>`SELECT count(*) AS n FROM role_assignments WHERE role = 'admin'`;
-        assert.strictEqual(holders[0]?.n, 2);
-        const records = yield* AuditLog.AuditLog.use((log) => log.list({ eventTag: "auth.admin.seeded" })).pipe(
-          Effect.provide(app),
+        const forced = yield* seed(
+          input({ email: "second@acme.com", name: "Second", force: true }),
+          app,
         );
+        assert.isTrue(Exit.isSuccess(forced));
+        const holders = yield* sql<{
+          readonly n: number;
+        }>`SELECT count(*) AS n FROM role_assignments WHERE role = 'admin'`;
+        assert.strictEqual(holders[0]?.n, 2);
+        const records = yield* AuditLog.AuditLog.use((log) =>
+          log.list({ eventTag: "auth.admin.seeded" }),
+        ).pipe(Effect.provide(app));
         const payloads = records.map((record) => JSON.stringify(record.payload));
         assert.isTrue(payloads.some((payload) => payload.includes('"forced":true')));
       }),
@@ -117,7 +125,9 @@ describe("seed admin", () => {
         assert.isTrue(Exit.isSuccess(promoted));
         const users = yield* sql<{ readonly n: number }>`SELECT count(*) AS n FROM users`;
         assert.strictEqual(users[0]?.n, 1);
-        const held = yield* sql<{ readonly role: string }>`SELECT role FROM role_assignments ORDER BY role`;
+        const held = yield* sql<{
+          readonly role: string;
+        }>`SELECT role FROM role_assignments ORDER BY role`;
         assert.deepStrictEqual(held, [{ role: "admin" }, { role: "editor" }]);
       }),
     ),
@@ -143,36 +153,42 @@ describe("seed admin", () => {
     ),
   );
 
-  it.effect("stores a hashed password credential, never the plaintext, and rejects a short one", () =>
-    withApp((sql) =>
-      Effect.gen(function* () {
-        const app = sqlApp(sql);
-        const short = yield* seed(input({ password: Option.some(Redacted.make("short")) }), app);
-        assert.strictEqual(exitCode(short), 2);
-        const ok = yield* seed(
-          input({ password: Option.some(Redacted.make("a-long-enough-password")) }),
-          app,
-        );
-        assert.isTrue(Exit.isSuccess(ok));
-        const rows = yield* sql<{ readonly passwordHash: string | null }>`SELECT passwordHash FROM accounts WHERE providerId = 'password'`;
-        assert.strictEqual(rows.length, 1);
-        const hash = rows[0]?.passwordHash ?? "";
-        assert.notInclude(hash, "a-long-enough-password");
-        const verified = yield* PasswordHasher.PasswordHasher.use((hasher) =>
-          hasher.verify(Redacted.make("a-long-enough-password"), PasswordHasher.PhcHash(hash)),
-        ).pipe(Effect.provide(app));
-        assert.isTrue(verified);
-      }),
-    ),
+  it.effect(
+    "stores a hashed password credential, never the plaintext, and rejects a short one",
+    () =>
+      withApp((sql) =>
+        Effect.gen(function* () {
+          const app = sqlApp(sql);
+          const short = yield* seed(input({ password: Option.some(Redacted.make("short")) }), app);
+          assert.strictEqual(exitCode(short), 2);
+          const ok = yield* seed(
+            input({ password: Option.some(Redacted.make("a-long-enough-password")) }),
+            app,
+          );
+          assert.isTrue(Exit.isSuccess(ok));
+          const rows = yield* sql<{
+            readonly passwordHash: string | null;
+          }>`SELECT passwordHash FROM accounts WHERE providerId = 'password'`;
+          assert.strictEqual(rows.length, 1);
+          const hash = rows[0]?.passwordHash ?? "";
+          assert.notInclude(hash, "a-long-enough-password");
+          const verified = yield* PasswordHasher.PasswordHasher.use((hasher) =>
+            hasher.verify(Redacted.make("a-long-enough-password"), PasswordHasher.PhcHash(hash)),
+          ).pipe(Effect.provide(app));
+          assert.isTrue(verified);
+        }),
+      ),
   );
 
-  it.effect("fails ApplicationUnavailable (exit 9) when the module exports no application Layer", () =>
-    Effect.gen(function* () {
-      const { layer } = yield* Output.capture(false);
-      const exit = yield* Effect.exit(
-        Seed.seedAdmin(configOf(passwordAndRoles), input()).pipe(Effect.provide(layer)),
-      );
-      assert.strictEqual(exitCode(exit), 9);
-    }),
+  it.effect(
+    "fails ApplicationUnavailable (exit 9) when the module exports no application Layer",
+    () =>
+      Effect.gen(function* () {
+        const { layer } = yield* Output.capture(false);
+        const exit = yield* Effect.exit(
+          Seed.seedAdmin(configOf(passwordAndRoles), input()).pipe(Effect.provide(layer)),
+        );
+        assert.strictEqual(exitCode(exit), 9);
+      }),
   );
 });

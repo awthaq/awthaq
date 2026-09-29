@@ -477,33 +477,39 @@ describe("AuthHttp + Admin (real HTTP)", () => {
       }),
   );
 
-  it.effect("EP-009: GET /admin/config is denied without the gate and lists redacted configuration with it", () =>
-    Effect.gen(function* () {
-      const denied = buildHandler({});
-      const deniedCookie = yield* Effect.promise(() => denied.issueSessionCookieHeader("admin-1"));
-      const forbidden = yield* Effect.promise(() =>
-        denied.handler(new Request(`${ORIGIN}/admin/config`, { headers: { cookie: deniedCookie } })),
-      );
-      assert.strictEqual(forbidden.status, 403);
+  it.effect(
+    "EP-009: GET /admin/config is denied without the gate and lists redacted configuration with it",
+    () =>
+      Effect.gen(function* () {
+        const denied = buildHandler({});
+        const deniedCookie = yield* Effect.promise(() =>
+          denied.issueSessionCookieHeader("admin-1"),
+        );
+        const forbidden = yield* Effect.promise(() =>
+          denied.handler(
+            new Request(`${ORIGIN}/admin/config`, { headers: { cookie: deniedCookie } }),
+          ),
+        );
+        assert.strictEqual(forbidden.status, 403);
 
-      const allowed = buildHandler({ canManageUsers: () => Effect.succeed(true) });
-      const cookie = yield* Effect.promise(() => allowed.issueSessionCookieHeader("admin-1"));
-      const response = yield* Effect.promise(() =>
-        allowed.handler(new Request(`${ORIGIN}/admin/config`, { headers: { cookie } })),
-      );
-      assert.strictEqual(response.status, 200);
-      const body = (yield* Effect.promise(() => response.json())) as ReadonlyArray<{
-        key: string;
-        entries: ReadonlyArray<{ path: string; value: string; sensitive: boolean }>;
-      }>;
-      assert.isTrue(body.some((item) => item.key === "awthaq/core/SessionConfig"));
-      // Whatever the descriptors list, a sensitive leaf is only ever `<redacted>`.
-      for (const item of body) {
-        for (const entry of item.entries) {
-          if (entry.sensitive) assert.strictEqual(entry.value, "<redacted>");
+        const allowed = buildHandler({ canManageUsers: () => Effect.succeed(true) });
+        const cookie = yield* Effect.promise(() => allowed.issueSessionCookieHeader("admin-1"));
+        const response = yield* Effect.promise(() =>
+          allowed.handler(new Request(`${ORIGIN}/admin/config`, { headers: { cookie } })),
+        );
+        assert.strictEqual(response.status, 200);
+        const body = (yield* Effect.promise(() => response.json())) as ReadonlyArray<{
+          key: string;
+          entries: ReadonlyArray<{ path: string; value: string; sensitive: boolean }>;
+        }>;
+        assert.isTrue(body.some((item) => item.key === "awthaq/core/SessionConfig"));
+        // Whatever the descriptors list, a sensitive leaf is only ever `<redacted>`.
+        for (const item of body) {
+          for (const entry of item.entries) {
+            if (entry.sensitive) assert.strictEqual(entry.value, "<redacted>");
+          }
         }
-      }
-    }),
+      }),
   );
 
   it.effect(

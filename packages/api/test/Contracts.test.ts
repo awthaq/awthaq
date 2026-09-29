@@ -14,7 +14,10 @@ const endpointsOf = (group: {
 }) => Object.entries(group.endpoints).map(([id, e]) => `${id} ${e.method} ${e.path}`);
 
 const middlewareKeysOf = (group: {
-  readonly endpoints: Record<string, { readonly middlewares: ReadonlySet<{ readonly key: string }> }>;
+  readonly endpoints: Record<
+    string,
+    { readonly middlewares: ReadonlySet<{ readonly key: string }> }
+  >;
 }) => Object.values(group.endpoints).map((e) => [...e.middlewares].map((m) => m.key));
 
 describe("AuthCoreApi (BEH-EA-031)", () => {

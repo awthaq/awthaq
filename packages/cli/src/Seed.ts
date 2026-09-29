@@ -61,7 +61,10 @@ export interface SeedResult {
 export const seedAdmin = (config: CliConfig, input: SeedInput) =>
   withApplication(config, (context) =>
     Effect.gen(function* () {
-      if (Option.isSome(input.password) && Redacted.value(input.password.value).length < MIN_PASSWORD_LENGTH) {
+      if (
+        Option.isSome(input.password) &&
+        Redacted.value(input.password.value).length < MIN_PASSWORD_LENGTH
+      ) {
         return yield* new UsageError({
           message: `the seeded password must be at least ${MIN_PASSWORD_LENGTH} characters`,
         });
@@ -74,7 +77,12 @@ export const seedAdmin = (config: CliConfig, input: SeedInput) =>
         });
       }
       const users = yield* requireService(context, Users.Users, "Users", "seed admin");
-      const events = yield* requireService(context, AuthEvents.AuthEvents, "AuthEvents", "seed admin");
+      const events = yield* requireService(
+        context,
+        AuthEvents.AuthEvents,
+        "AuthEvents",
+        "seed admin",
+      );
 
       const holders = yield* roles.value.holders(input.role);
       if (holders.length > 0 && !input.force) {
@@ -97,7 +105,9 @@ export const seedAdmin = (config: CliConfig, input: SeedInput) =>
               Effect.catchTags({
                 "Users/EmailAlreadyExists": () =>
                   Effect.fail(
-                    new UsageError({ message: "an account with that email appeared while seeding; re-run" }),
+                    new UsageError({
+                      message: "an account with that email appeared while seeding; re-run",
+                    }),
                   ),
                 "Users/PhoneAlreadyExists": Effect.die,
               }),
@@ -105,14 +115,22 @@ export const seedAdmin = (config: CliConfig, input: SeedInput) =>
       yield* users.verifyEmail(user.id).pipe(Effect.orDie);
 
       if (Option.isSome(input.password)) {
-        const accounts = yield* requireService(context, Accounts.Accounts, "Accounts", "seed admin");
+        const accounts = yield* requireService(
+          context,
+          Accounts.Accounts,
+          "Accounts",
+          "seed admin",
+        );
         const hasher = yield* requireService(
           context,
           PasswordHasher.PasswordHasher,
           "PasswordHasher",
           "seed admin",
         );
-        const linked = yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id);
+        const linked = yield* accounts.findByProviderSubject(
+          Accounts.PASSWORD_PROVIDER_ID,
+          user.id,
+        );
         if (Option.isNone(linked)) {
           const hash = yield* hasher.hash(input.password.value);
           yield* accounts

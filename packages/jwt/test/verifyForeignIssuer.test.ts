@@ -54,7 +54,7 @@ describe("lite verifier with a foreign RS256 issuer (FAMS-005)", () => {
           expectedTyp: "JWT",
         }).pipe(Effect.provide(jwksClient(jwks)));
         const claims = yield* verifier.verify(token);
-        assert.strictEqual(claims.sub, "firebase-uid-1");
+        assert.strictEqual(claims["sub"], "firebase-uid-1");
       }),
   );
 

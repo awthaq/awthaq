@@ -17,7 +17,7 @@ import {
   TeamRecords,
 } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
-import { RateLimiter } from "@awthaq/ports";
+import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Auth, HookPoint, Hooks, Retention, SecuritySignals, Slots, Users } from "@awthaq/core";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
@@ -148,7 +148,14 @@ const makeAppLayer = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
     Layer.mergeAll(
       // `TestAuth`'s bundled limiter is the permissive test one; this example serves real
       // HTTP, so it swaps in the real single-process limiter (RBS-007) through the same param.
+      // CSD-010: enforcing, so the sign-in budget (5 per account per 15 minutes) answers 429.
+      // It is one `Ref` per process: a deployment with several instances swaps in a shared
+      // store (`RateLimiter.layer` over `RateLimiterStoreSql.layerStoreSql`).
       RateLimiter.layerMemory,
+      // DESS-002: a development mailer that prints every message, including the
+      // verification token, to the log, so a sign-up can be finished without an inbox. Never
+      // for production: a real deployment provides its own `Mailer` here.
+      Mailer.layerConsole,
       AuthenticationLive,
       CsrfProtectionLive,
       OrganizationMemory,
@@ -175,11 +182,16 @@ export interface RunningApp {
   readonly run: <A, E>(effect: Effect.Effect<A, E, Users.Users | Roles.Roles>) => Promise<A>;
 }
 
-/** Boots the app in-process (no socket) for tests; `httpClient` is the breach-check transport (default: the real one). */
+/**
+ * Boots the app in-process (no socket) for tests; `httpClient` is the breach-check transport
+ * (default: the real one), and `logger` replaces the default loggers (a test uses it to read
+ * the mail the console mailer prints).
+ */
 export const buildApp = (
   httpClient: Layer.Layer<HttpClient.HttpClient> = FetchHttpClient.layer,
+  logger: Layer.Layer<never> = Layer.empty,
 ): RunningApp => {
-  const layer = makeAppLayer(httpClient);
+  const layer = makeAppLayer(httpClient).pipe(Layer.provideMerge(logger));
   const memoMap = Layer.makeMemoMapUnsafe();
   const { handler } = HttpRouter.toWebHandler(layer, { memoMap });
   const run: RunningApp["run"] = (effect) =>

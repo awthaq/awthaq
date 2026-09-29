@@ -9,6 +9,7 @@
 
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 import type * as Schema from "effect/Schema";
@@ -16,7 +17,6 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
-import type * as OAuthConfig from "./OAuthConfig.ts";
 
 /** The provider answered 5xx/429: its failure, not a malformed answer. */
 class ProviderServerError extends Data.TaggedError("ProviderServerError")<{
@@ -29,13 +29,26 @@ class ProviderRejectedError extends Data.TaggedError("ProviderRejectedError")<{
 }> {}
 
 /**
+ * ERS-003: retries for the *idempotent* provider GETs only (JWKS, userinfo,
+ * discovery) — jittered exponential backoff inside each call's deadline.
+ * The code exchange is never retried: an authorization code is single-use
+ * (RFC 6749 §4.1.2), so a replay after an ambiguous failure would turn a
+ * transient error into a permanent one.
+ */
+export interface OAuthRetryPolicy {
+  /** Extra attempts after the first (`0` disables retrying). */
+  readonly times: number;
+  readonly base: Duration.Duration;
+}
+
+/**
  * ERS-003: a client that retries transient failures (transport errors,
  * 408/429/5xx) with jittered exponential backoff. Only ever used for
  * idempotent GETs — never for the single-use code exchange.
  */
 export const retrying = (
   client: HttpClient.HttpClient,
-  policy: OAuthConfig.OAuthRetryPolicy,
+  policy: OAuthRetryPolicy,
 ): HttpClient.HttpClient =>
   client.pipe(
     HttpClient.retryTransient({

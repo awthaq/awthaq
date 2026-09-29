@@ -132,7 +132,10 @@ describe("Password.confirmReset x BeforeCredentialReset (ARF-005)", () => {
       const { token } = yield* enrolledUserWithResetToken("plain@example.com");
       yield* Ref.set(guardedUserId, undefined);
       yield* password.confirmReset({ token, password: newPassword });
-      const signedIn = yield* password.signIn({ email: "plain@example.com", password: newPassword });
+      const signedIn = yield* password.signIn({
+        email: "plain@example.com",
+        password: newPassword,
+      });
       assert.isDefined(signedIn.token);
     }).pipe(Effect.provide(TestLayer)),
   );
@@ -145,7 +148,9 @@ describe("Password.confirmReset x BeforeCredentialReset (ARF-005)", () => {
         const { userId, token } = yield* enrolledUserWithResetToken("guarded@example.com");
         yield* Ref.set(guardedUserId, userId);
 
-        const failure = yield* password.confirmReset({ token, password: newPassword }).pipe(Effect.flip);
+        const failure = yield* password
+          .confirmReset({ token, password: newPassword })
+          .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "SecondFactorRequired");
 
         // The old password still signs in: the credential was never rewritten.
@@ -182,7 +187,10 @@ describe("Password.confirmReset x BeforeCredentialReset (ARF-005)", () => {
         password: newPassword,
         secondFactorCode: Redacted.make("123456"),
       });
-      const signedIn = yield* password.signIn({ email: "goodcode@example.com", password: newPassword });
+      const signedIn = yield* password.signIn({
+        email: "goodcode@example.com",
+        password: newPassword,
+      });
       assert.isDefined(signedIn.token);
       assert.deepStrictEqual(yield* Ref.get(seen), [{ userId, code: "123456" }]);
     }).pipe(Effect.provide(TestLayer)),

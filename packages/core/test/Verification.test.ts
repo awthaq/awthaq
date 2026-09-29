@@ -394,7 +394,7 @@ const suite = (
     it.effect("BCR-005: numeric digits are drawn uniformly (no modulo bias)", () =>
       Effect.gen(function* () {
         const verification = yield* Verification.Verification;
-        const counts = new Array<number>(10).fill(0);
+        const counts = Array.from({ length: 10 }, () => 0);
         for (let i = 0; i < 1500; i += 1) {
           const { value } = yield* verification.issue({
             identifier: `email-otp:uniform-${i}`,
@@ -402,35 +402,41 @@ const suite = (
             format: { _tag: "Numeric", digits: 6 },
             maxAttempts: 3,
           });
-          for (const digit of Redacted.value(value)) counts[Number(digit)] = (counts[Number(digit)] ?? 0) + 1;
+          for (const digit of Redacted.value(value))
+            counts[Number(digit)] = (counts[Number(digit)] ?? 0) + 1;
         }
         // 9000 digits, expectation 900 each: a chi-square statistic over 10 buckets (df 9)
         // stays far below 27.88 (p = 0.001) for an unbiased source.
         const expected = 900;
-        const chi = counts.reduce((sum, observed) => sum + (observed - expected) ** 2 / expected, 0);
+        const chi = counts.reduce(
+          (sum, observed) => sum + (observed - expected) ** 2 / expected,
+          0,
+        );
         assert.isBelow(chi, 27.88);
       }).pipe(Effect.provide(layer)),
     );
 
     // SOS-004: a per-token attempt budget — a 6-digit code must not be guessable within its TTL.
-    it.effect("SOS-004: a token with maxAttempts 3 is burned by 3 wrong guesses, even for the right value next", () =>
-      Effect.gen(function* () {
-        const verification = yield* Verification.Verification;
-        const identifier = "email-otp:budget@example.com";
-        const { value } = yield* verification.issue({
-          identifier,
-          ttl: Duration.minutes(5),
-          format: { _tag: "Numeric", digits: 6 },
-          maxAttempts: 3,
-        });
-        const wrong = Redacted.make(Redacted.value(value) === "000000" ? "111111" : "000000");
-        for (let i = 0; i < 3; i += 1) {
-          const failure = yield* verification.consume(identifier, wrong).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "Verification/TokenConsumed");
-        }
-        const late = yield* verification.consume(identifier, value).pipe(Effect.flip);
-        assert.strictEqual(late._tag, "Verification/TokenConsumed");
-      }).pipe(Effect.provide(layer)),
+    it.effect(
+      "SOS-004: a token with maxAttempts 3 is burned by 3 wrong guesses, even for the right value next",
+      () =>
+        Effect.gen(function* () {
+          const verification = yield* Verification.Verification;
+          const identifier = "email-otp:budget@example.com";
+          const { value } = yield* verification.issue({
+            identifier,
+            ttl: Duration.minutes(5),
+            format: { _tag: "Numeric", digits: 6 },
+            maxAttempts: 3,
+          });
+          const wrong = Redacted.make(Redacted.value(value) === "000000" ? "111111" : "000000");
+          for (let i = 0; i < 3; i += 1) {
+            const failure = yield* verification.consume(identifier, wrong).pipe(Effect.flip);
+            assert.strictEqual(failure._tag, "Verification/TokenConsumed");
+          }
+          const late = yield* verification.consume(identifier, value).pipe(Effect.flip);
+          assert.strictEqual(late._tag, "Verification/TokenConsumed");
+        }).pipe(Effect.provide(layer)),
     );
 
     it.effect("SOS-004: fewer wrong guesses than the budget leave the token usable", () =>
@@ -492,7 +498,9 @@ describe("Verification (layerMemory) pruning (TMS-004)", () => {
       assert.isTrue(
         yield* verification.reserve({ identifier: "spray:0", ttl: Duration.seconds(1) }),
       );
-      assert.isFalse(yield* verification.reserve({ identifier: "live", ttl: Duration.minutes(10) }));
+      assert.isFalse(
+        yield* verification.reserve({ identifier: "live", ttl: Duration.minutes(10) }),
+      );
     }).pipe(Effect.provide(MemoryLayer)),
   );
 });
