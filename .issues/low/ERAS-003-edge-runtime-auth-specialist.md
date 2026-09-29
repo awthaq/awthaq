@@ -3,7 +3,7 @@ ID: "ERAS-003"
 Title: "No edge/worker export conditions or edge deployment guidance anywhere"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "client"
 Source: "packages/client/package.json:17"
 Auditor: "edge-runtime-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `client` · reported by **Edge Runtime Auth Specialist** (`edge-runtime-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Add edge-light/worker conditions (they can map to the same ./src/*.ts for now) t
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `next-edge-stateless-tier`. Evidence at HEAD ec065a7: `packages/client/package.json:14`. Fix: Documentation only: an edge deployment section; no new export conditions. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** README 'Edge deployment' subsection under the proxy.ts recipe: edge-safe entries (hasSessionCookie, @awthaq/next/edge), origin-only entries (getSession, serverActionClient, seed helpers), no edge/worker export conditions, api/client runtime-neutral; BEH-EA-188 note records the same. No ADR added.

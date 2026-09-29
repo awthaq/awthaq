@@ -3,7 +3,7 @@ ID: "BO-006"
 Title: "No stateless edge/middleware verify: presence check is the only proxy-safe primitive, jwt plugin sits unwired"
 Level: medium
 Category: "architecture"
-Status: ready-for-human
+Status: resolved
 Package: "next"
 Source: "packages/next/src/HasSessionCookie.ts:32"
 Auditor: "balazs-orban"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `next` · reported by **Balázs Orbán — Lead Maintainer, Auth.js** (`balazs-orban`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Expose a getToken-style stateless helper over packages/jwt's makeVerifier, docum
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `next-edge-stateless-tier`. Evidence at HEAD ec065a7: `packages/next/src/HasSessionCookie.ts:32`. Fix: (Pending decision D1) Add an optional stateless edge tier: an opt-in short-lived JWT session-mirror cookie minted by @awthaq/jwt, and an `@awthaq/next/edge` helper that verifies it with the lite verifier — documented as a better redirect signal, never the authorization boundary (BEH-EA-188 unchanged). (effort L). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option C per plan; user may revisit. jwt: package.json ./verify subpath export (lite verifier reachable without core/server; NF-11-3 — the Verify namespace was already on the main index), JwtConfig.sessionCookie (false default | true | {name?, ttl?}; name must start __Host-, ttl > 0; defaults SESSION_MIRROR_COOKIE_NAME '__Host-session-jwt' and 5 minutes), JwtShape.sign(principal, {ttl?}), PostAuthResponseHook also sets the HttpOnly/Secure/SameSite=Strict mirror cookie (JWT exp = cookie ttl) on cookie-authenticated responses; bearer requests get none. next: @awthaq/next/edge (makeSessionVerifier, verifySessionJwt) importing only effect, the lite verifier and CookieHeader.ts. Tests: jwt AuthHttp.test.ts (5 mirror-cookie cases), next Edge.test.ts (valid/none/garbled/forged/expired/custom name/fetch-built verifier) and EdgeImports.test.ts (runtime import-graph walk: no core/server/GetSession/plugin). Spec: BEH-EA-188 requirement amended + edge-tier note, traceability row. LIMITATIONS recorded: signOut does not clear the mirror (nor, today, the session cookie itself — server's Session.signOut only revokes), so a revoked session's mirror verifies up to ttl; the mirror is only minted on authenticated API responses (documented; Providers' GET /session and focus revalidation refresh it). Touched tsconfig.base.json (paths entry @awthaq/jwt/verify).
