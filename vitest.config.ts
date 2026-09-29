@@ -15,7 +15,12 @@ export default defineConfig({
   test: {
     // `examples/plugin-template` is the one example with a test suite (JH-009): the
     // template plugin `docs/plugin-authoring.md` walks through must keep passing.
-    projects: ["packages/*", "examples/plugin-template", "examples/memory-server", "examples/sql-server"],
+    projects: [
+      "packages/*",
+      "examples/plugin-template",
+      "examples/memory-server",
+      "examples/sql-server",
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],
