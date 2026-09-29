@@ -3,7 +3,7 @@ ID: "RRM-009"
 Title: "Roles docs and metrics still claim the package is an empty placeholder"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "roles"
 Source: "packages/roles/README.md:3"
 Auditor: "rbac-role-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `roles` · reported by **RBAC Role Modeling Specialist** (`rbac-role-modeling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Refresh the roles README, the spec file banner, and regenerate the roles/qadi qu
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `authz-docs-truthfulness`. Evidence at HEAD ec065a7: `spec/behaviors/18-roles-subject-resolver.md:15`. Fix: Refresh the roles/qadi spec banner and quality metrics (README handled by DTWS-002). (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/behaviors/18-roles-subject-resolver.md: banner replaced by an implemented-with-deviations status (BEH-EA-138 enforcement point; BEH-EA-140/141 not implemented), revision 1.2; packages/roles and packages/qadi READMEs rewritten (DTWS-002). .quality-metrics/roles.json and qadi.json are NOT tracked (the directory is gitignored and generated locally), so there is nothing to commit — a local `pnpm quality:dashboard` metrics run regenerates them. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, tests/bdd green apart from load-induced timeouts in password/ports (machine load average ~170 from parallel agents; each green in isolation), spec:verify:strict PASS, oxlint clean.
