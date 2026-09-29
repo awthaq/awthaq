@@ -245,19 +245,30 @@ describe("the plugin composes with the organization plugin", () => {
     assert.isBelow(ids.indexOf("organization"), ids.indexOf("saml"));
     const saml = auth.manifest.plugins.find((plugin) => plugin.id === "saml");
     assert.deepStrictEqual(saml?.dependsOn, ["organization"]);
-    assert.deepStrictEqual(saml?.tables, ["saml_connection", "saml_connection_domain"]);
+    assert.deepStrictEqual(saml?.tables, [
+      "saml_connection",
+      "saml_connection_domain",
+      "saml_sp_key",
+      "saml_session",
+    ]);
     assert.include(Object.keys(auth.publicApi.groups), "saml");
   });
 
-  it("the ACS is the one state-changing endpoint without CSRF (a cross-site POST from the IdP by design)", () => {
-    // Documented, not accidental: the request cookie plus the single-consume request id bind the browser instead.
+  it("the ACS and the logout endpoint are the only state-changing endpoints without CSRF (cross-site POSTs from the IdP by design)", () => {
+    // Documented, not accidental: the request cookie plus the single-consume request id bind the browser at the ACS; the logout
+    // endpoint takes only signed messages (an unsigned one is refused), and the user's own logout is in the CSRF-protected group.
     const endpoints = Object.values(SamlApi.SamlGroup.endpoints).map(
       (endpoint) => `${endpoint.method} ${endpoint.path}`,
     );
     assert.deepStrictEqual(endpoints.sort(), [
       "GET /auth/saml/login",
       "GET /auth/saml/metadata",
+      "GET /auth/saml/slo/:connection",
       "POST /auth/saml/acs",
+      "POST /auth/saml/slo/:connection",
     ]);
+    assert.include(Object.keys(auth.publicApi.groups), "saml.account");
+    assert.include(Object.keys(auth.adminApi.groups), "saml.admin");
+    assert.notInclude(Object.keys(auth.publicApi.groups), "saml.admin");
   });
 });

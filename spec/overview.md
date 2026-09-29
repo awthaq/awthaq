@@ -44,7 +44,7 @@ The system is organized into seven strata plus client, tooling, and plugin packa
 |---|---|---|
 | 1 Contract | `@awthaq/api` | `Principal`, `SessionView`, `SubjectDto`, errors, `Authentication` and `CsrfProtection` middleware definitions, core groups. Isomorphic — no server code, importable in the browser. |
 | 1 Contract | `@awthaq/<plugin>/api` | Each plugin's own groups, schemas, errors, and contract `HttpApi`. |
-| 2 Ports | `@awthaq/ports` | The capabilities a plugin requires and the application provides: `PasswordHasher`, `Mailer`, `WebAuthn`, `Encryption`, `KeyProvider`, `RateLimiter`, `SqlTransaction`, `ClientAddress`, `LegacySessionBridge`, `WebCrypto`, plus helpers (`Hmac`, `RefreshingCache`, `Defects`, `Tenant`, `PasswordHasherWorkerPool`, `OutboundUrl`) and the `XmlSignature` and `HostResolver` services. Each service ships the layers its own module documents — not a uniform `layer`/`layerNoop`/`layerMemory` triple. |
+| 2 Ports | `@awthaq/ports` | The capabilities a plugin requires and the application provides: `PasswordHasher`, `Mailer`, `WebAuthn`, `Encryption`, `KeyProvider`, `RateLimiter`, `SqlTransaction`, `ClientAddress`, `LegacySessionBridge`, `WebCrypto`, plus helpers (`Hmac`, `RefreshingCache`, `Defects`, `Tenant`, `PasswordHasherWorkerPool`, `OutboundUrl`, `PinnedHttp`) and the `XmlSignature` and `HostResolver` services. Each service ships the layers its own module documents — not a uniform `layer`/`layerNoop`/`layerMemory` triple. |
 | 3 Persistence | `@awthaq/sql` | Models, repositories, migration records, memory twins. |
 | 4 Domain | `@awthaq/core` | Domain services, hook points, `AuthEvents`, config references, slots, the `Auth` namespace. |
 | 5 HTTP | `@awthaq/server` | Middleware implementations, core handlers, `AuthHttp`. |
@@ -104,6 +104,7 @@ Mailer
 OutboundUrl
 PasswordHasher
 PasswordHasherWorkerPool
+PinnedHttp
 RateLimiter
 RefreshingCache
 SqlTransaction
@@ -128,8 +129,9 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 | `LegacySessionBridge` | `Context.Reference` | default resolves nothing; `@awthaq/migrate-better-auth` provides the real one |
 | `WebCrypto` | Layer | `layer`, the `Crypto` service over `globalThis.crypto` for edge runtimes |
 | `XmlSignature` | `Context.Service` | `layerUnavailable` (refuses everything: a placeholder that makes a missing adapter a failure); the Node adapter over `xml-crypto` is `@awthaq/saml`'s `XmlSignatureNode.layer` ([ADR-EA-023](decisions/023-enterprise-federation-packages.md)) |
-| `HostResolver` | `Context.Service` | `layerNode` (`node:dns`, loaded lazily), `layerStatic(table)`; `refusal(url)` is the resolution half of the outbound-URL defence |
+| `HostResolver` | `Context.Service` | `layerNode` (`node:dns`, loaded lazily), `layerStatic(table)`; `pin(url)` resolves once, requires every answer public and returns the address to connect to (BEH-EA-303), `refusal(url)` is its refusal half |
 | `OutboundUrl` | helpers | `problem(field, url, options?)`, the SSRF floor for a URL an administrator supplies (https, no credentials, no private/loopback/link-local/reserved address or internal name; IPv6 parsed); `isPublicAddress`, `isIpLiteral` |
+| `PinnedHttp` | helpers | `send(request)` connects to an address `HostResolver.pin` judged, with the URL's own name as Host and SNI, judging the address again, no redirect, a body only up to a cap (webhooks, IdP metadata import); `pinnedRequestOptions` |
 | `Hmac`, `RefreshingCache`, `Defects`, `Tenant` | helpers | constant-time comparison and HMAC, a single-flight TTL cache, tagged defect classes, the ambient `TenantContext` |
 
 ### Domain stratum (4)

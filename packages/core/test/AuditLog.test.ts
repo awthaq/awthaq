@@ -384,6 +384,32 @@ const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.EventOf<T
     adminUserId: userId,
     endpointId: "ep-1",
   },
+  "auth.saml.connectionCreated": {
+    _tag: "auth.saml.connectionCreated",
+    adminUserId: userId,
+    connectionId: "conn-1",
+    organizationId: "org-1",
+  },
+  "auth.saml.connectionUpdated": {
+    _tag: "auth.saml.connectionUpdated",
+    adminUserId: userId,
+    connectionId: "conn-1",
+    organizationId: "org-1",
+    fields: ["ssoUrl"],
+  },
+  "auth.saml.connectionDeleted": {
+    _tag: "auth.saml.connectionDeleted",
+    adminUserId: userId,
+    connectionId: "conn-1",
+    organizationId: "org-1",
+  },
+  "auth.saml.signingKeyRotated": {
+    _tag: "auth.saml.signingKeyRotated",
+    adminUserId: userId,
+    connectionId: "conn-1",
+    organizationId: "org-1",
+  },
+  "auth.saml.logoutRejected": { _tag: "auth.saml.logoutRejected", strategy: "saml:org-1:conn-1" },
   "auth.admin.seeded": {
     _tag: "auth.admin.seeded",
     targetUserId: userId,

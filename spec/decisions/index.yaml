@@ -142,3 +142,7 @@ entries:
     file: "035-user-field-extension-point.md"
     title: "A Plugin Adds Typed Scalar Fields to `users` Through One Declared Extension Point"
     status: "Accepted — implemented for users"
+  - id: "ADR-EA-036"
+    file: "036-saml-refusals-are-decisions.md"
+    title: "IdP-Initiated SAML Login and Encrypted Assertions Are Refused, as Decisions"
+    status: "Accepted — implemented (both refusals are tested)"

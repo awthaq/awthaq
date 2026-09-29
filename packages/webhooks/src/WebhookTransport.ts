@@ -1,33 +1,32 @@
 // @awthaq/webhooks — WebhookTransport
 //
 // BEH-EA-303 (closes the DNS-rebinding gap the SSRF checks alone leave open): the one place a delivery leaves the
-// process. `WebhookDelivery.attempt` resolves the endpoint's host ONCE (`HostResolver.pin`), judges every address it
-// got, and hands this transport the pinned address; the transport connects to THAT address and never asks DNS
-// again, while the request still says the original host name in `Host` and as the TLS server name (SNI), so virtual
-// hosting works and the certificate is verified against the name the administrator registered.
+// process. `WebhookDelivery.attempt` resolves the endpoint's host ONCE (`HostResolver.pin`), judges every address it got,
+// and hands this transport the pinned address; the transport connects to THAT address and never asks DNS again, while the
+// request still says the original host name in `Host` and as the TLS server name (SNI), so virtual hosting works and the
+// certificate is verified against the name the administrator registered.
 //
-//   - `layerNodePinned`: `node:http`/`node:https` connecting to the pinned IP literal. No lookup happens at all, so
-//     there is nothing to rebind. The address is judged again here (`OutboundUrl.isPublicAddress`) so a caller that
-//     skips the check still cannot make this transport reach a private address. Redirects are never followed and the
-//     response body is never read: the socket is destroyed as soon as the status line is in.
-//   - `layerHttpClient`: any `HttpClient` (`fetch`). It cannot pin: the client resolves the name itself, so this
-//     narrows rebinding (the pre-connect check) but does not close it. For runtimes without `node:https`, and for tests.
+//   - `layerNodePinned`: `PinnedHttp` (`@awthaq/ports`): `node:http`/`node:https` connecting to the pinned IP literal. No
+//     lookup happens at all, so there is nothing to rebind. The address is judged again there so a caller that skips the
+//     check still cannot make this transport reach a private address. Redirects are never followed and the response body is
+//     never read: the socket is destroyed as soon as the status line is in.
+//   - `layerHttpClient`: any `HttpClient` (`fetch`). It cannot pin: the client resolves the name itself, so this narrows
+//     rebinding (the pre-connect check) but does not close it. For runtimes without `node:https`, and for tests.
 //
-// The transport reports only a failure CLASS (`timeout`, `connect`, `blocked`), never a message: what a hostile
-// receiver or resolver says is untrusted text that must not reach a log or the delivery table.
+// The transport reports only a failure CLASS (`timeout`, `connect`, `blocked`), never a message: what a hostile receiver or
+// resolver says is untrusted text that must not reach a log or the delivery table.
 
-import { HostResolver, OutboundUrl } from "@awthaq/ports";
+import type { HostResolver } from "@awthaq/ports";
+import { PinnedHttp } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
-import * as Duration from "effect/Duration";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
+import type * as Option from "effect/Option";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as Http from "node:http";
-import * as Https from "node:https";
 
 export interface TransportRequest {
   /** The endpoint's own URL: its host is what `Host` and SNI say. */
@@ -61,87 +60,21 @@ export class WebhookTransport extends Context.Service<WebhookTransport, WebhookT
 
 // ---- the pinned Node transport -----------------------------------------------------------------
 
-/** What `node:http(s).request` is called with. Exported so the pinning is testable without a network. */
-export interface PinnedRequestOptions {
-  readonly secure: boolean;
-  readonly host: string;
-  readonly port: number;
-  readonly path: string;
-  /** The TLS server name: the URL's own host name (absent for an IP-literal URL, where SNI does not apply). */
-  readonly servername: string | undefined;
-  readonly headers: Readonly<Record<string, string>>;
-}
-
-/**
- * The connection options for `request`, or `blocked` when the pinned address is not a public one (and private
- * targets are not allowed). `host` is the pinned IP literal, so the platform never resolves a name;
- * `headers.host` and `servername` keep the original name.
- */
-export const pinnedRequestOptions = (
-  request: TransportRequest,
-): PinnedRequestOptions | "blocked" | "unpinned" => {
-  const url = URL.parse(request.url);
-  if (url === null) return "blocked";
-  if (Option.isNone(request.pin)) return "unpinned";
-  const { address, hostname } = request.pin.value;
-  if (!request.allowPrivate && !OutboundUrl.isPublicAddress(address)) return "blocked";
-  const secure = url.protocol === "https:";
-  return {
-    secure,
-    host: address,
-    port: url.port === "" ? (secure ? 443 : 80) : Number(url.port),
-    path: `${url.pathname}${url.search}`,
-    servername: OutboundUrl.isIpLiteral(hostname) ? undefined : hostname,
-    headers: {
-      ...request.headers,
-      host: url.host,
-      "content-length": String(new TextEncoder().encode(request.body).length),
-    },
-  };
-};
-
-const failure = (failureClass: TransportFailureClass) =>
-  Effect.fail(new WebhookTransportError({ failure: failureClass }));
-
 /** Connects to the pinned address with the original Host/SNI. Requires no service: it is `node:http(s)` directly. */
 export const layerNodePinned = Layer.succeed(
   WebhookTransport,
   WebhookTransport.of({
-    send: (request) => {
-      const options = pinnedRequestOptions(request);
-      if (options === "blocked") return failure("blocked");
-      // A dev-mode attempt (private targets allowed) has no pin: an ordinary connection to the URL.
-      const target = options === "unpinned" ? undefined : options;
-      const url = new URL(request.url);
-      return Effect.callback<{ readonly status: number }, WebhookTransportError>((resume) => {
-        const secure = target?.secure ?? url.protocol === "https:";
-        const client = secure ? Https : Http;
-        const outgoing = client.request(
-          {
-            method: "POST",
-            // A fresh connection per attempt: never a pooled socket that was opened to some other address.
-            agent: false,
-            host: target?.host ?? url.hostname.replace(/^\[|\]$/g, ""),
-            port: target?.port ?? (url.port === "" ? (secure ? 443 : 80) : Number(url.port)),
-            path: target?.path ?? `${url.pathname}${url.search}`,
-            ...(target?.servername === undefined ? {} : { servername: target.servername }),
-            headers: target?.headers ?? {
-              ...request.headers,
-              "content-length": String(new TextEncoder().encode(request.body).length),
-            },
-          },
-          (response) => {
-            // Only the status line is wanted: destroy the socket rather than read what a receiver sends back.
-            const status = response.statusCode ?? 0;
-            response.destroy();
-            resume(Effect.succeed({ status }));
-          },
-        );
-        outgoing.on("error", () => resume(failure("connect")));
-        outgoing.end(request.body);
-        return Effect.sync(() => outgoing.destroy());
-      });
-    },
+    send: (request) =>
+      PinnedHttp.send({ ...request, method: "POST" }).pipe(
+        Effect.map((response) => ({ status: response.status })),
+        // `tooLarge` cannot happen (the body is never asked for); anything else keeps its class.
+        Effect.mapError(
+          (error) =>
+            new WebhookTransportError({
+              failure: error.failure === "tooLarge" ? "connect" : error.failure,
+            }),
+        ),
+      ),
   }),
 );
 
@@ -165,7 +98,7 @@ export const layerHttpClient = Layer.effect(
             // A redirect is never followed (the fetch client would, by default); the 3xx is the outcome.
             Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
             Effect.map((response) => ({ status: response.status })),
-            Effect.catch(() => failure("connect")),
+            Effect.catch(() => Effect.fail(new WebhookTransportError({ failure: "connect" }))),
           ),
     });
   }),

@@ -168,194 +168,81 @@ describe("an attempt pins the connection to the address it checked", () => {
   });
 });
 
-const request = (overrides: Partial<WebhookTransport.TransportRequest> = {}) => ({
-  url: "https://hooks.example.com:8443/awthaq?x=1",
-  headers: { "content-type": "application/json", "webhook-id": "e1" },
-  body: '{"a":"é"}',
-  pin: Option.some({ hostname: "hooks.example.com", address: "93.184.216.34", family: 4 as const }),
-  allowPrivate: false,
-  timeout: Duration.seconds(5),
-  ...overrides,
-});
-
-describe("the pinned connection options", () => {
-  it("connects to the IP literal and keeps the original name as Host and as the TLS server name", () => {
-    const options = WebhookTransport.pinnedRequestOptions(request());
-    if (options === "blocked" || options === "unpinned") return assert.fail("expected options");
-    assert.strictEqual(options.host, "93.184.216.34");
-    assert.strictEqual(options.port, 8443);
-    assert.strictEqual(options.path, "/awthaq?x=1");
-    assert.strictEqual(options.servername, "hooks.example.com");
-    assert.strictEqual(options.headers["host"], "hooks.example.com:8443");
-    // The declared length is the encoded byte length, not the character count.
-    assert.strictEqual(options.headers["content-length"], "10");
-    assert.strictEqual(options.headers["webhook-id"], "e1");
-    assert.isTrue(options.secure);
-  });
-
-  it("an IP-literal URL sets no server name and defaults the port", () => {
-    const options = WebhookTransport.pinnedRequestOptions(
-      request({
-        url: "https://93.184.216.34/hook",
-        pin: Option.some({ hostname: "93.184.216.34", address: "93.184.216.34", family: 4 }),
-      }),
-    );
-    if (options === "blocked" || options === "unpinned") return assert.fail("expected options");
-    assert.isUndefined(options.servername);
-    assert.strictEqual(options.port, 443);
-  });
-
-  it("refuses a private or metadata address handed to it, whatever the caller checked", () => {
-    for (const address of ["169.254.169.254", "10.0.0.5", "127.0.0.1", "::1", "fd00::1"]) {
-      const options = WebhookTransport.pinnedRequestOptions(
-        request({
-          pin: Option.some({
-            hostname: "hooks.example.com",
-            address,
-            family: address.includes(":") ? 6 : 4,
-          }),
-        }),
-      );
-      assert.strictEqual(options, "blocked", address);
-    }
-  });
-
-  it("allowPrivate lifts the address check (development only); no pin means an ordinary connection", () => {
-    const lifted = WebhookTransport.pinnedRequestOptions(
-      request({
-        allowPrivate: true,
-        pin: Option.some({ hostname: "localhost", address: "127.0.0.1", family: 4 }),
-      }),
-    );
-    assert.notStrictEqual(lifted, "blocked");
-    assert.strictEqual(
-      WebhookTransport.pinnedRequestOptions(request({ pin: Option.none() })),
-      "unpinned",
-    );
-  });
-});
-
-/** A local receiver: records what it saw and answers by `reply`. */
-const withServer = <A, E, R>(
-  reply: (request: Http.IncomingMessage, response: Http.ServerResponse) => void,
-  use: (server: {
-    readonly port: number;
-    readonly seen: Array<{ host: string | undefined; body: string }>;
-  }) => Effect.Effect<A, E, R>,
-) =>
-  Effect.acquireUseRelease(
-    Effect.promise(
-      () =>
-        new Promise<{
-          readonly http: Http.Server;
-          readonly seen: Array<{ host: string | undefined; body: string }>;
-        }>((resolve) => {
-          const seen: Array<{ host: string | undefined; body: string }> = [];
-          const http = Http.createServer((incoming, outgoing) => {
-            const chunks: Array<Buffer> = [];
-            incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
-            incoming.on("end", () => {
-              seen.push({
-                host: incoming.headers.host,
-                body: Buffer.concat(chunks).toString("utf8"),
-              });
-              reply(incoming, outgoing);
-            });
-          });
-          http.listen(0, "127.0.0.1", () => resolve({ http, seen }));
-        }),
-    ),
-    ({ http, seen }) => {
-      const address = http.address();
-      const port = typeof address === "object" && address !== null ? address.port : 0;
-      return use({ port, seen });
-    },
-    ({ http }) =>
-      Effect.promise(
-        () =>
-          new Promise<void>((resolve) => {
-            http.closeAllConnections();
-            http.close(() => resolve());
-          }),
-      ),
-  );
-
-describe("layerNodePinned on a real socket", () => {
+describe("WebhookTransport.layerNodePinned", () => {
+  // The generic pinning behaviour (Host/SNI, the address check, redirects, caps) is `PinnedHttp`'s, tested in @awthaq/ports;
+  // this is the transport's own seam: the class it reports and that it reaches the pinned address.
   const send = (port: number, overrides: Partial<WebhookTransport.TransportRequest> = {}) =>
     Effect.flatMap(WebhookTransport.WebhookTransport, (transport) =>
-      transport.send(
-        request({
-          // The name does not resolve anywhere: only the pin can get this to the local server.
-          url: `http://hooks.example.com:${port}/awthaq`,
-          pin: Option.some({ hostname: "hooks.example.com", address: "127.0.0.1", family: 4 }),
-          allowPrivate: true,
-          ...overrides,
-        }),
-      ),
+      transport.send({
+        url: `http://hooks.example.com:${port}/awthaq`,
+        headers: { "content-type": "application/json" },
+        body: "{}",
+        pin: Option.some({ hostname: "hooks.example.com", address: "127.0.0.1", family: 4 }),
+        allowPrivate: true,
+        timeout: Duration.seconds(5),
+        ...overrides,
+      }),
     ).pipe(Effect.provide(WebhookTransport.layerNodePinned));
 
-  it.live("connects to the pinned address and says the registered name in Host", () =>
-    withServer(
-      (_incoming, outgoing) => outgoing.writeHead(200).end("x".repeat(100_000)),
-      (server) =>
-        Effect.gen(function* () {
-          const response = yield* send(server.port);
-          assert.strictEqual(response.status, 200);
-          const seen = only(server.seen);
-          assert.strictEqual(seen.host, `hooks.example.com:${server.port}`);
-          assert.strictEqual(seen.body, '{"a":"é"}');
-        }),
-    ),
-  );
+  const withServer = <A, E, R>(
+    reply: (response: Http.ServerResponse) => void,
+    use: (server: {
+      readonly port: number;
+      readonly hosts: Array<string | undefined>;
+    }) => Effect.Effect<A, E, R>,
+  ) =>
+    Effect.acquireUseRelease(
+      Effect.promise(
+        () =>
+          new Promise<{ readonly http: Http.Server; readonly hosts: Array<string | undefined> }>(
+            (resolve) => {
+              const hosts: Array<string | undefined> = [];
+              const http = Http.createServer((incoming, outgoing) => {
+                hosts.push(incoming.headers.host);
+                incoming.resume();
+                reply(outgoing);
+              });
+              http.listen(0, "127.0.0.1", () => resolve({ http, hosts }));
+            },
+          ),
+      ),
+      ({ http, hosts }) => {
+        const address = http.address();
+        return use({
+          port: typeof address === "object" && address !== null ? address.port : 0,
+          hosts,
+        });
+      },
+      ({ http }) =>
+        Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              http.closeAllConnections();
+              http.close(() => resolve());
+            }),
+        ),
+    );
 
   it.live(
-    "does not follow a redirect: the 3xx is the answer and the target is never contacted",
+    "reaches the pinned address by the registered name and answers with the status only",
     () =>
       withServer(
-        (_incoming, outgoing) =>
-          outgoing.writeHead(302, { location: "http://169.254.169.254/" }).end(),
+        (response) => response.writeHead(204).end(),
         (server) =>
           Effect.gen(function* () {
             const response = yield* send(server.port);
-            assert.strictEqual(response.status, 302);
-            assert.strictEqual(server.seen.length, 1);
+            assert.deepStrictEqual(response, { status: 204 });
+            assert.deepStrictEqual(server.hosts, [`hooks.example.com:${server.port}`]);
           }),
       ),
   );
 
-  it.live("refuses a private pinned address without opening a connection", () =>
-    withServer(
-      (_incoming, outgoing) => outgoing.writeHead(200).end(),
-      (server) =>
-        Effect.gen(function* () {
-          const failure = yield* send(server.port, { allowPrivate: false }).pipe(Effect.flip);
-          assert.strictEqual(failure.failure, "blocked");
-          assert.strictEqual(server.seen.length, 0);
-        }),
-    ),
-  );
-
-  it.live("a refused connection is the class `connect`, never a message", () =>
+  it.live("reports a private pinned address as `blocked` and a dead port as `connect`", () =>
     Effect.gen(function* () {
-      // Port 1 on loopback: nothing listens.
-      const failure = yield* send(1).pipe(Effect.flip);
-      assert.strictEqual(failure.failure, "connect");
-      assert.deepStrictEqual(
-        Object.keys(failure).filter((key) => key !== "failure" && key !== "_tag"),
-        [],
-      );
+      const blocked = yield* send(1, { allowPrivate: false }).pipe(Effect.flip);
+      assert.strictEqual(blocked.failure, "blocked");
+      const refused = yield* send(1).pipe(Effect.flip);
+      assert.strictEqual(refused.failure, "connect");
     }),
-  );
-
-  it.live("an interrupted attempt destroys the socket", () =>
-    withServer(
-      () => undefined,
-      (server) =>
-        Effect.gen(function* () {
-          const outcome = yield* send(server.port).pipe(Effect.timeoutOption(Duration.millis(100)));
-          assert.isTrue(Option.isNone(outcome));
-          assert.strictEqual(server.seen.length, 1);
-        }),
-    ),
   );
 });

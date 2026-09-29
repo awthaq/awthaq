@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-29 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-09-29): implemented as `@awthaq/saml` over the `XmlSignature` port (SFS-003): the port is generic XML-DSig (the SAML assertion reader is the plugin's), the request is bound to the browser by a state cookie, assertion ids are one-time, and linking by email is a per-connection flag |
+> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-09-29): implemented as `@awthaq/saml` over the `XmlSignature` port (SFS-003): the port is generic XML-DSig (the SAML assertion reader is the plugin's), the request is bound to the browser by a state cookie, assertion ids are one-time, and linking by email is a per-connection flag <br> 1.2 (2026-09-29): signed AuthnRequests and the SP signing key at rest (BEH-EA-305), Single Logout in both directions (306), role mapping under a ceiling (307), the `Sso` dispatcher (308) and the administrator's connection CRUD with metadata import (309); IdP-initiated login and encrypted assertions stay refused, as a recorded decision ([ADR-EA-036](../decisions/036-saml-refusals-are-decisions.md)) |
 ---
 
 > `@awthaq/saml` implements this ([MOD-EA-010](../models/10-saml.md)). It was written first on purpose — SAML's failure modes are silent signature bypasses, so the checks and their order were fixed before an implementation could drift — and every rule below has a negative test, including the XML signature-wrapping (XSW) corpus from the SAML security literature (`packages/saml/test/XmlSignatureNode.test.ts`). The signature step is the `XmlSignature` port (`@awthaq/ports`), implemented over the maintained `xml-crypto` library (Node adapter in `@awthaq/saml`); the plugin reads the assertion ONLY from the signed bytes that port returns.
@@ -131,7 +131,7 @@ REQUIREMENT: SP-initiated login MUST reserve the AuthnRequest id in
              response, or a login-CSRF attempt that posts an attacker's own
              valid response into another browser), an unknown, expired,
              already-consumed or other-connection id MUST be rejected.
-             Unsolicited responses are refused in this build, and no connection setting admits one (PV-370: IdP-initiated login is not offered; a per-connection opt-in would need a replay-protected assertion id and a `RelayState` allow-list first, and is not built). An assertion's own
+             Unsolicited responses are refused in this build, and no connection setting admits one (PV-370: IdP-initiated login is not offered, by decision: [ADR-EA-036](../decisions/036-saml-refusals-are-decisions.md)). An assertion's own
              `ID` MUST also be accepted once (reserved in `Verification` until it
              could no longer pass the time window): a replay under a fresh
              request id fails.
@@ -161,3 +161,156 @@ REQUIREMENT: After every check above passes, the account MUST be resolved by
 The IdP asserts an identity *within its own directory*; treating its email attribute as proof of ownership of a local account would let any organization's IdP take over accounts by email, the same account-linking rule ([BEH-EA-123](16-oauth.md)) OAuth applies.
 
 _Previous: [BEH-EA-244](29-saml-sp.md#beh-ea-244-inresponseto-matches-a-stored-single-consume-request-id) | Next: [BEH-EA-246](30-scim.md#beh-ea-246-a-scim-connection-authenticates-by-a-hashed-revocable-bearer-token-and-scopes-everything-it-reads)_
+
+## BEH-EA-305: A connection can sign its AuthnRequests with an SP key that is stored sealed, and never falls back to unsigned
+
+```text
+REQUIREMENT: A connection with `authnRequestsSigned` MUST send every AuthnRequest
+             over the HTTP-Redirect binding with a query-string signature
+             (`SigAlg` = RSA-SHA256, `Signature` over the exact octets
+             `SAMLRequest=..[&RelayState=..]&SigAlg=..`, SAML bindings 3.4.4.1)
+             made with the connection's SP signing key, and its SP metadata MUST
+             say `AuthnRequestsSigned="true"` and publish every unexpired SP
+             certificate as `KeyDescriptor use="signing"`. Enabling the flag MUST
+             generate a key when the connection has none (RSA 2048, a self-signed
+             X.509 certificate valid `signingKeyValidityDays`, default five
+             years); an operator MAY instead import a pair, which MUST be RSA of
+             at least 2048 bits with a certificate for THAT key. The private key
+             MUST be stored only as an `Encryption` envelope whose additional
+             authenticated data names the key, and MUST never appear in an API
+             response, an event or a log. The newest unexpired key signs; the
+             older certificates stay published until they expire (a rotation
+             overlap). A connection that signs and has no usable key (all
+             expired, or one that does not decrypt) MUST fail the login as a
+             defect, never send it unsigned. An IdP whose metadata says
+             `WantAuthnRequestsSigned="true"` makes the flag default on.
+```
+
+The redirect binding forbids an enveloped XML signature, so the signature covers the query octets; the same key signs Single Logout messages (BEH-EA-306) when the connection has one. The negative tests are the verifier's side of it: a signature that fails after any change to the message, under another key, or under a downgraded `SigAlg`.
+
+_Previous: [BEH-EA-245](29-saml-sp.md#beh-ea-245-the-nameid-links-to-an-account-through-the-connection-never-by-email-alone) | Next: [BEH-EA-306](29-saml-sp.md#beh-ea-306-single-logout-ends-sessions-in-both-directions-over-the-redirect-and-post-bindings-verified-like-an-assertion)_
+
+## BEH-EA-306: Single Logout ends sessions in both directions over the Redirect and POST bindings, verified like an assertion
+
+```text
+REQUIREMENT: Each connection MUST record, per sign-in, the NameID and SessionIndex
+             the IdP knows the session by. `GET|POST /auth/saml/slo/:connection`
+             MUST accept a `LogoutRequest` or a `LogoutResponse` (exactly one),
+             and MUST refuse, with ONE uniform `SamlLogoutRejected` (reason
+             logged and published as `auth.saml.logoutRejected`, never
+             answered): a message that is unsigned; whose Redirect signature does
+             not verify over the raw parameters the sender encoded (a changed,
+             re-ordered, added or dropped parameter, or a `SigAlg` off the
+             RSA-SHA256/512 allow-list); whose POST XML signature does not
+             verify through the `XmlSignature` port under the connection's
+             pinned trust set (XSW, a duplicated element, a signature over
+             another element, a DOCTYPE or comment refused as at the ACS); whose
+             Issuer is not the connection's IdP; whose `Destination` is not this
+             connection's own logout endpoint; whose `IssueInstant` is outside
+             `logoutFreshness` (default 5 minutes, skew added) or whose
+             `NotOnOrAfter` has passed; whose id was accepted before (one-time,
+             so a captured request cannot log the user out again); or for a
+             connection whose IdP has no logout endpoint. A valid LogoutRequest MUST
+             revoke every session the connection recorded for the NameID (only the
+             named SessionIndexes when given) with reason `federatedLogout`, as the
+             connection's organization tenant, and answer a `LogoutResponse`
+             (Success, also when nothing matched) over the IdP's binding, signed
+             with the SP key when the connection has one. SP-initiated: `POST
+             /auth/saml/logout` (authenticated, CSRF) MUST end the caller's session
+             first (reason `signOut`, as the tenant), expire the session cookie,
+             and, when the connection has a logout endpoint, send the IdP a
+             `LogoutRequest` naming the NameID and SessionIndex; the IdP's
+             `LogoutResponse` MUST answer THAT request id (reserved single-use in
+             `Verification`, bound to the browser by the `__Host-saml-logout`
+             cookie, `SameSite=None`) and only then lands the browser on the
+             callback (checked like a login's). A connection with no logout
+             endpoint logs the user out locally and redirects to the callback.
+```
+
+A logout endpoint that accepted unsigned messages would be a way for anyone to end anyone's sessions; freshness and one-time ids are what keep a signed capture from being replayed at leisure.
+
+_Previous: [BEH-EA-305](29-saml-sp.md#beh-ea-305-a-connection-can-sign-its-authnrequests-with-an-sp-key-that-is-stored-sealed-and-never-falls-back-to-unsigned) | Next: [BEH-EA-307](29-saml-sp.md#beh-ea-307-an-assertions-groups-map-to-organization-roles-under-a-ceiling-guarded-by-the-cangrant-rule)_
+
+## BEH-EA-307: An assertion's groups map to organization roles under a ceiling, guarded by the canGrant rule
+
+```text
+REQUIREMENT: A connection MAY carry a role mapping: rules (`{ attribute, value?,
+             roles }`, the attribute matched case-insensitively across every value
+             of a multi-valued attribute), a `ceiling` (default `["member"]`) and
+             `defaultRoles`. After a sign-in has passed every check and
+             `Users.assertCanSignIn`, the roles of the matching rules (else the
+             defaults; else nothing) MUST become the user's roles in the
+             connection's organization (`Organization.syncMemberRoles`): the
+             membership is added, or re-roled. The conferred roles MUST be within
+             the ceiling by RRM-001's `canGrant` rule (the statements they hold
+             MUST be held by the ceiling), so a connection whose ceiling does not
+             hold `owner` MUST NOT confer it; a member whose CURRENT roles exceed
+             the ceiling MUST NOT be reshaped; the last owner MUST NOT be
+             demoted; unknown role names MUST be refused. A mapping that names or
+             could confer `owner` MUST be refused when written unless the
+             deployment set `allowOwnerRoleMapping` (default off), and any mapping
+             MUST be validated against the organization's roles when written. A
+             mapping that cannot be applied at sign-in (a role since deleted, a
+             member who out-privileges the connection, the last owner, a
+             membership limit) MUST be logged and skipped: the user is signed in
+             and the roles are not conferred.
+```
+
+The IdP proves who the user is, which stays true when a mapping is stale; what it may confer is bounded, never a reason to lock a person out. The ceiling is the caller-less counterpart of the rule every role-assignment path already obeys ([BEH-EA-288](35-organization.md#beh-ea-288-a-role-can-only-be-conferred-by-someone-who-holds-everything-it-grants)): nobody, and no identity provider, gives what it does not hold.
+
+_Previous: [BEH-EA-306](29-saml-sp.md#beh-ea-306-single-logout-ends-sessions-in-both-directions-over-the-redirect-and-post-bindings-verified-like-an-assertion) | Next: [BEH-EA-308](29-saml-sp.md#beh-ea-308-the-sso-dispatcher-routes-an-email-domain-across-oidc-and-saml-connections-to-the-owning-plugins-login-url)_
+
+## BEH-EA-308: The Sso dispatcher routes an email domain across OIDC and SAML connections to the owning plugin's login URL
+
+```text
+REQUIREMENT: `POST /auth/sso/start { email | organizationId, callbackURL? }` MUST
+             resolve the hint against BOTH `OrganizationConnectionStore.discover`
+             (OIDC/OAuth2) and `SamlConnectionStore.discover`, and answer
+             `{ protocol, connectionId, organizationId, loginUrl }` where
+             `loginUrl` is the owning plugin's own login route
+             (`/auth/saml/login?connection=..` or `/oauth/<providerId>/authorize`),
+             with `callbackURL` forwarded for that plugin to check. When both
+             protocols route the hint, the configured `preferred` protocol
+             (default `saml`) MUST win and `Sso.discoverAll` MUST list every match.
+             Nothing routing MUST be one uniform `SsoNotFound` whatever the reason
+             (unknown domain, unknown organization, malformed or missing hint),
+             and the endpoint MUST be rate limited per source address.
+```
+
+The dispatcher is a router, not a third protocol: the state cookie, the redirect and every check stay the owning plugin's ([ADR-EA-023](../decisions/023-enterprise-federation-packages.md) Decision 4).
+
+_Previous: [BEH-EA-307](29-saml-sp.md#beh-ea-307-an-assertions-groups-map-to-organization-roles-under-a-ceiling-guarded-by-the-cangrant-rule) | Next: [BEH-EA-309](29-saml-sp.md#beh-ea-309-the-administrator-manages-connections-fail-closed-tenant-scoped-importing-idp-metadata-with-pinned-certificates)_
+
+## BEH-EA-309: The administrator manages connections fail-closed, tenant-scoped, importing IdP metadata with pinned certificates
+
+```text
+REQUIREMENT: The `saml.admin` group MUST be admin-tier (BEH-EA-071), behind
+             `Api.AdminAuthentication` and CSRF, and every operation (create, list,
+             get, update, delete, refresh metadata, rotate or list SP signing keys)
+             MUST be gated by `SamlConfig.canManageSaml({ admin, action,
+             organizationId? })`, which denies by default: a denial MUST answer
+             403, publish `auth.admin.actionDenied` (`saml.<action>`) and reveal
+             nothing about which ids exist; past the gate each administrator is
+             limited to `adminRate` (429). Inside a tenant only that tenant's
+             organization is in reach: another organization's connection MUST be
+             answered exactly like an id that does not exist, and registering one
+             for another organization like an organization that does not exist.
+             A connection MAY be described by hand, by pasted IdP metadata XML, or
+             by a metadata URL; the URL MUST pass `OutboundUrl`, be resolved once
+             with every answer public and fetched through the pinned connection
+             (BEH-EA-303), never follow a redirect, read at most `maxMetadataBytes`
+             within `metadataTimeout`, and fail as a CLASS (`invalidUrl`,
+             `blocked`, `timeout`, `connect`, `tooLarge`, `status`), never text from
+             the far end. The certificates a metadata document lists MUST be
+             parsed as X.509 (RSA >= 2048) and pinned by fingerprint; a refresh
+             from the stored URL MUST REPLACE the trust set (the metadata is the
+             source of truth for its keys) and MUST refuse metadata naming another
+             entity id. Every successful mutation MUST publish an audit event of
+             identifiers (`auth.saml.connectionCreated`, `connectionUpdated` naming
+             the fields changed but never their values, `connectionDeleted`,
+             `signingKeyRotated`); a refused or failed operation MUST publish none.
+```
+
+Importing metadata is trusting the channel it arrived by, which is why the channel is guarded as hard as a webhook URL and why what is pinned afterwards is the fingerprint, not the document.
+
+_Previous: [BEH-EA-308](29-saml-sp.md#beh-ea-308-the-sso-dispatcher-routes-an-email-domain-across-oidc-and-saml-connections-to-the-owning-plugins-login-url)_

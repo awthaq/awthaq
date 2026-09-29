@@ -5,6 +5,7 @@
 // to connect to.
 import { AuditLog, AuthEvents, Tenant } from "@awthaq/core";
 import { WebhookRecords, WebhookSignature, WebhookTransport, Webhooks } from "@awthaq/webhooks";
+import { PinnedHttp } from "@awthaq/ports";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import * as Http from "node:http";
@@ -505,7 +506,8 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     "a transport request for {string} is pinned to {string}",
     function* (url: string, address: string) {
       const world = yield* World;
-      const options = WebhookTransport.pinnedRequestOptions({
+      const options = PinnedHttp.pinnedRequestOptions({
+        method: "POST",
         url,
         headers: {},
         body: "{}",

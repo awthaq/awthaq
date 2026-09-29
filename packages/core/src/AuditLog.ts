@@ -218,6 +218,10 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.webhooks.secretRotated":
     case "auth.webhooks.endpointDeleted":
     case "auth.webhooks.testQueued":
+    case "auth.saml.connectionCreated":
+    case "auth.saml.connectionUpdated":
+    case "auth.saml.connectionDeleted":
+    case "auth.saml.signingKeyRotated":
       return Option.some(UserId(event.adminUserId));
     case "auth.mail.failed":
       return Option.fromNullishOr(event.userId).pipe(Option.map(UserId));
@@ -242,6 +246,8 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.scim.userReactivated":
     case "auth.scim.userDeleted":
     case "auth.scim.groupChanged":
+    // `@awthaq/saml`: a logout message that named no verified user.
+    case "auth.saml.logoutRejected":
     // ECS-006/ECS-002: a CLI run has no session, so no actor; the seeded target is in the payload.
     case "auth.admin.seeded":
     case "auth.admin.seedRefused":

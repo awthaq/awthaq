@@ -21,8 +21,10 @@
 //    7. the account is `(saml:<organizationId>:<connectionId>, NameID, issuer)` — never linked by email alone
 //       (BEH-EA-245) — and `Users.assertCanSignIn` runs before a session exists.
 //
-// Not built (the README's "Not built"): signed AuthnRequests, IdP-initiated login, SLO, encrypted assertions (refused),
-// per-connection attribute mapping beyond the email/name lists, and organization role mapping (qadi's, ADR-EA-009).
+// Beyond the ACS (each with its own behavior): signed AuthnRequests (BEH-EA-305), Single Logout in both directions
+// (BEH-EA-306, `SamlSlo`), the administrator's connection CRUD (BEH-EA-309, `SamlAdmin`), and organization role mapping under a
+// ceiling (BEH-EA-307, `SamlRoleMapping`). Not offered, by decision (spec/behaviors/29-saml-sp.md BEH-EA-244, ADR-EA-036):
+// IdP-initiated LOGIN and encrypted assertions.
 
 import { Api } from "@awthaq/api";
 import {
@@ -47,6 +49,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
@@ -58,6 +61,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SafeXml from "./SafeXml.ts";
+import * as SamlAdmin from "./SamlAdmin.ts";
 import * as SamlApi from "./SamlApi.ts";
 import {
   AssertionInvalid,
@@ -67,13 +71,17 @@ import {
 } from "./SamlAssertion.ts";
 import * as SamlConfig from "./SamlConfig.ts";
 import { trustSetOf } from "./SamlConnections.ts";
-import { authnRequestXml, redirectLocation, spMetadataXml } from "./SamlProtocol.ts";
+import { authnRequestXml, redirectUrl, spMetadataXml } from "./SamlProtocol.ts";
 import * as SamlRecords from "./SamlRecords.ts";
+import * as SamlRoleMapping from "./SamlRoleMapping.ts";
+import * as SamlSlo from "./SamlSlo.ts";
+import * as SamlSpKeys from "./SamlSpKeys.ts";
 
 export { SamlConfig, config } from "./SamlConfig.ts";
 export type { SamlConfigShape, SamlConfigInput } from "./SamlConfig.ts";
 
 export const REQUEST_COOKIE = "__Host-saml-request";
+export const LOGOUT_COOKIE = SamlSlo.LOGOUT_COOKIE;
 const REQUEST_PREFIX = "saml-request:";
 const ASSERTION_PREFIX = "saml-assertion:";
 
@@ -119,6 +127,23 @@ export interface SamlShape {
     | Api.RateLimited
     | ServerError
   >;
+  /**
+   * BEH-EA-306: a Single Logout message delivered by the IdP's browser (a `LogoutRequest` to end sessions, or the
+   * `LogoutResponse` to our own request); resolves to what the browser does next.
+   */
+  readonly slo: (
+    input: SamlSlo.SloInput,
+  ) => Effect.Effect<
+    SamlSlo.SloOutcome,
+    SamlApi.SamlLogoutRejected | Api.RateLimited | ServerError
+  >;
+  /** BEH-EA-306: the signed-in user's own SP-initiated logout: ends their session and, when the connection has a logout endpoint, sends the IdP a `LogoutRequest`. */
+  readonly logout: (
+    caller: Api.UserPrincipal,
+    input: { readonly callbackURL?: string | undefined; readonly ip?: string | undefined },
+  ) => Effect.Effect<SamlSlo.LogoutStart, ServerError>;
+  /** BEH-EA-309: the administrator's operations (the `saml.admin` group). */
+  readonly admin: SamlAdmin.SamlAdminShape;
 }
 
 // ---- migrations --------------------------------------------------------------------------------
@@ -181,6 +206,87 @@ const samlMigrations: Migrations.Migrations = [
           "connectionId" TEXT NOT NULL
         )`;
       yield* sql`CREATE INDEX saml_connection_domain_connection_id ON saml_connection_domain("connectionId")`;
+    }),
+  },
+  {
+    // BEH-EA-305/306/307/309: signed AuthnRequests, the IdP's logout endpoint, the metadata URL, and the role mapping (JSON).
+    name: "add_saml_connection_signing_logout_roles",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () =>
+          sql`ALTER TABLE saml_connection ADD COLUMN "authnRequestsSigned" BOOLEAN NOT NULL DEFAULT FALSE`,
+        sqlite: () =>
+          sql`ALTER TABLE saml_connection ADD COLUMN "authnRequestsSigned" INTEGER NOT NULL DEFAULT 0`,
+        orElse: () => Defects.unsupportedDialect("migrations"),
+      });
+      yield* sql`ALTER TABLE saml_connection ADD COLUMN "sloUrl" TEXT`;
+      yield* sql`ALTER TABLE saml_connection ADD COLUMN "sloBinding" TEXT NOT NULL DEFAULT 'redirect'`;
+      yield* sql`ALTER TABLE saml_connection ADD COLUMN "metadataUrl" TEXT`;
+      yield* sql`ALTER TABLE saml_connection ADD COLUMN "roleMapping" TEXT NOT NULL DEFAULT '{"rules":[],"ceiling":["member"],"defaultRoles":[]}'`;
+    }),
+  },
+  {
+    // BEH-EA-305: the SP's own signing keys per connection; `privateKey` is the sealed `Encryption` envelope.
+    name: "create_saml_sp_key",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE saml_sp_key (
+            id TEXT PRIMARY KEY,
+            "connectionId" TEXT NOT NULL,
+            certificate TEXT NOT NULL,
+            "privateKey" TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            "notBefore" TIMESTAMPTZ NOT NULL,
+            "notAfter" TIMESTAMPTZ NOT NULL,
+            "createdAt" TIMESTAMPTZ NOT NULL
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE saml_sp_key (
+            id TEXT PRIMARY KEY,
+            "connectionId" TEXT NOT NULL,
+            certificate TEXT NOT NULL,
+            "privateKey" TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            "notBefore" TEXT NOT NULL,
+            "notAfter" TEXT NOT NULL,
+            "createdAt" TEXT NOT NULL
+          )`,
+        orElse: () => Defects.unsupportedDialect("migrations"),
+      });
+      yield* sql`CREATE INDEX saml_sp_key_connection_id ON saml_sp_key("connectionId")`;
+    }),
+  },
+  {
+    // BEH-EA-306: which local sessions a connection's sign-ins created, by the NameID/SessionIndex the IdP knows them by.
+    name: "create_saml_session",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`
+          CREATE TABLE saml_session (
+            "sessionId" TEXT PRIMARY KEY,
+            "connectionId" TEXT NOT NULL,
+            "nameId" TEXT NOT NULL,
+            "nameIdFormat" TEXT,
+            "sessionIndex" TEXT,
+            "createdAt" TIMESTAMPTZ NOT NULL
+          )`,
+        sqlite: () => sql`
+          CREATE TABLE saml_session (
+            "sessionId" TEXT PRIMARY KEY,
+            "connectionId" TEXT NOT NULL,
+            "nameId" TEXT NOT NULL,
+            "nameIdFormat" TEXT,
+            "sessionIndex" TEXT,
+            "createdAt" TEXT NOT NULL
+          )`,
+        orElse: () => Defects.unsupportedDialect("migrations"),
+      });
+      yield* sql`CREATE INDEX saml_session_identity ON saml_session("connectionId", "nameId")`;
+      yield* sql`CREATE INDEX saml_session_created_at ON saml_session("createdAt")`;
     }),
   },
 ];
@@ -325,21 +431,232 @@ export const SamlHandlers = HttpApiBuilder.group(
           cookie.options,
         ).pipe(Effect.orDie);
       }),
+
+      slo: Effect.fnUntraced(function* ({
+        params,
+        query,
+        request,
+      }: {
+        params: SamlApi.SloParams;
+        query: SamlApi.SloQuery;
+        request: HttpServerRequest.HttpServerRequest;
+      }) {
+        yield* noReferrer;
+        const resolved = yield* clientAddress.resolve(request);
+        // The signature covers the RAW query the IdP sent; the handler hands it on untouched.
+        const questionMark = request.url.indexOf("?");
+        const outcome = yield* saml.slo({
+          connectionId: params.connection,
+          binding: "redirect",
+          rawQuery: questionMark < 0 ? undefined : request.url.slice(questionMark + 1),
+          samlRequest: query.SAMLRequest,
+          samlResponse: query.SAMLResponse,
+          relayState: query.RelayState,
+          cookieState: request.cookies[LOGOUT_COOKIE],
+          ip: Option.getOrUndefined(resolved),
+        });
+        return yield* respondToBrowser(outcome);
+      }),
+
+      sloPost: Effect.fnUntraced(function* ({
+        params,
+        payload,
+        request,
+      }: {
+        params: SamlApi.SloParams;
+        payload: SamlApi.SloPayload;
+        request: HttpServerRequest.HttpServerRequest;
+      }) {
+        yield* noReferrer;
+        const resolved = yield* clientAddress.resolve(request);
+        const outcome = yield* saml.slo({
+          connectionId: params.connection,
+          binding: "post",
+          rawQuery: undefined,
+          samlRequest: payload.SAMLRequest,
+          samlResponse: payload.SAMLResponse,
+          relayState: payload.RelayState,
+          cookieState: request.cookies[LOGOUT_COOKIE],
+          ip: Option.getOrUndefined(resolved),
+        });
+        return yield* respondToBrowser(outcome);
+      }),
     });
   }),
 );
+
+/** The logout state is single-use: every response at the logout endpoint clears the cookie, and a page that carries a form must not be cached. */
+const expireLogoutCookie = HttpEffect.appendPreResponseHandler((_request, response) =>
+  HttpServerResponse.expireCookie(response, LOGOUT_COOKIE, requestCookieOptions).pipe(Effect.orDie),
+);
+
+const respondToBrowser = Effect.fnUntraced(function* (outcome: SamlSlo.SloOutcome) {
+  yield* expireLogoutCookie;
+  switch (outcome._tag) {
+    case "redirect":
+      return HttpServerResponse.redirect(outcome.location);
+    case "done":
+      return HttpServerResponse.redirect(outcome.callbackURL);
+    case "postForm":
+      return HttpServerResponse.text(outcome.html, {
+        contentType: "text/html; charset=utf-8",
+      }).pipe(HttpServerResponse.setHeader("cache-control", "no-store"));
+  }
+});
+
+/** BEH-EA-306: the signed-in user's own logout (`saml.account`). */
+export const SamlAccountHandlers = HttpApiBuilder.group(
+  SamlApi.SamlApi,
+  "saml.account",
+  Effect.fnUntraced(function* (handlers) {
+    const saml = yield* Saml;
+    const clientAddress = yield* ClientAddress.ClientAddress;
+    const settings = yield* SamlConfig.SamlConfig;
+    return handlers.handleAll({
+      logout: Effect.fnUntraced(function* ({
+        payload,
+        request,
+      }: {
+        payload: SamlApi.LogoutPayload;
+        request: HttpServerRequest.HttpServerRequest;
+      }) {
+        yield* noReferrer;
+        const principal = yield* Api.CurrentPrincipal;
+        if (principal._tag !== "User") {
+          return yield* Defects.invariantViolation(
+            "NonUserPrincipal",
+            `awthaq: saml.account reached with a non-User principal: ${principal._tag}`,
+          );
+        }
+        const resolved = yield* clientAddress.resolve(request);
+        const started = yield* saml.logout(principal, {
+          callbackURL: payload.callbackURL,
+          ip: Option.getOrUndefined(resolved),
+        });
+        // The caller's own session ended, so its cookie is expired, whatever the IdP does next.
+        yield* SessionCookie.expire;
+        if (started._tag === "local") return HttpServerResponse.redirect(started.callbackURL);
+        const response =
+          started._tag === "redirect"
+            ? HttpServerResponse.redirect(started.location)
+            : HttpServerResponse.text(started.html, {
+                contentType: "text/html; charset=utf-8",
+              }).pipe(HttpServerResponse.setHeader("cache-control", "no-store"));
+        // The IdP's LogoutResponse comes back cross-site (POST), so the state cookie is `SameSite=None`.
+        return yield* HttpServerResponse.setCookie(
+          response,
+          LOGOUT_COOKIE,
+          Redacted.value(started.state),
+          { ...requestCookieOptions, maxAge: settings.requestTtl },
+        ).pipe(Effect.orDie);
+      }),
+    });
+  }),
+);
+
+/** BEH-EA-309: the administrator's group (`saml.admin`): admin tier by its id, fail-closed by `canManageSaml`. */
+export const SamlAdminHandlers = HttpApiBuilder.group(
+  SamlApi.SamlApi,
+  "saml.admin",
+  Effect.fnUntraced(function* (handlers) {
+    const saml = yield* Saml;
+    const admin = saml.admin;
+    return handlers.handleAll({
+      createConnection: Effect.fnUntraced(function* ({
+        payload,
+      }: {
+        payload: SamlApi.CreateConnectionPayload;
+      }) {
+        return yield* admin.createConnection(yield* currentUserPrincipal, payload);
+      }),
+      listConnections: Effect.fnUntraced(function* ({
+        query,
+      }: {
+        query: SamlApi.ListConnectionsQuery;
+      }) {
+        return yield* admin.listConnections(yield* currentUserPrincipal, query.organizationId);
+      }),
+      getConnection: Effect.fnUntraced(function* ({
+        params,
+      }: {
+        params: SamlApi.ConnectionIdParams;
+      }) {
+        return yield* admin.getConnection(yield* currentUserPrincipal, params.connectionId);
+      }),
+      updateConnection: Effect.fnUntraced(function* ({
+        params,
+        payload,
+      }: {
+        params: SamlApi.ConnectionIdParams;
+        payload: SamlApi.UpdateConnectionPayload;
+      }) {
+        return yield* admin.updateConnection(
+          yield* currentUserPrincipal,
+          params.connectionId,
+          payload,
+        );
+      }),
+      deleteConnection: Effect.fnUntraced(function* ({
+        params,
+      }: {
+        params: SamlApi.ConnectionIdParams;
+      }) {
+        yield* admin.deleteConnection(yield* currentUserPrincipal, params.connectionId);
+      }),
+      refreshMetadata: Effect.fnUntraced(function* ({
+        params,
+      }: {
+        params: SamlApi.ConnectionIdParams;
+      }) {
+        return yield* admin.refreshMetadata(yield* currentUserPrincipal, params.connectionId);
+      }),
+      rotateSigningKey: Effect.fnUntraced(function* ({
+        params,
+        payload,
+      }: {
+        params: SamlApi.ConnectionIdParams;
+        payload: SamlApi.SigningKeyPayload;
+      }) {
+        return yield* admin.rotateSigningKey(
+          yield* currentUserPrincipal,
+          params.connectionId,
+          payload,
+        );
+      }),
+      listSigningKeys: Effect.fnUntraced(function* ({
+        params,
+      }: {
+        params: SamlApi.ConnectionIdParams;
+      }) {
+        return yield* admin.listSigningKeys(yield* currentUserPrincipal, params.connectionId);
+      }),
+    });
+  }),
+);
+
+/** Same forward-reference pattern `@awthaq/admin` and `@awthaq/webhooks` document: a handler reached without a `User` principal is a wiring defect. */
+const currentUserPrincipal = Effect.gen(function* () {
+  const principal = yield* Api.CurrentPrincipal;
+  if (principal._tag !== "User") {
+    return yield* Defects.invariantViolation(
+      "NonUserPrincipal",
+      `awthaq: saml.admin reached with a non-User principal: ${principal._tag}`,
+    );
+  }
+  return principal;
+});
 
 // ---- the plugin --------------------------------------------------------------------------------------
 
 export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
   apiVersion: 1,
   contract: SamlApi.SamlApi,
-  tables: ["saml_connection", "saml_connection_domain"],
+  tables: ["saml_connection", "saml_connection_domain", "saml_sp_key", "saml_session"],
   migrations: samlMigrations,
 }) {
   static readonly layer = AuthPlugin.layer(Saml, {
     dependsOn: [Organization.Organization],
-    handlers: SamlHandlers,
+    handlers: Layer.mergeAll(SamlHandlers, SamlAccountHandlers, SamlAdminHandlers),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const accounts = yield* Accounts.Accounts;
@@ -348,6 +665,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const events = yield* AuthEvents.AuthEvents;
       const records = yield* SamlRecords.SamlRecords;
       const orgs = yield* OrganizationRecords.OrganizationRecords;
+      const organization = yield* Organization.Organization;
+      const spKeys = yield* SamlSpKeys.SamlSpKeys;
       const xmlSignature = yield* XmlSignature.XmlSignature;
       const crypto = yield* Crypto.Crypto;
       const limiter = yield* RateLimiter.RateLimiter;
@@ -360,6 +679,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const afterSignIn = yield* Hooks.AfterSignIn;
 
       const acsUrl = SamlConfig.acsUrl(settings);
+      const admin = yield* SamlAdmin.makeAdmin;
 
       const rateLimit = (endpoint: "login" | "acs", ip: string | undefined) =>
         RateLimits.enforce({
@@ -400,7 +720,15 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         const connection = yield* usableConnection(connectionId);
         if (Option.isNone(connection))
           return yield* Effect.fail(new SamlApi.SamlConnectionNotFound());
-        return spMetadataXml({ entityId: settings.spEntityId(connection.value.id), acsUrl });
+        return spMetadataXml({
+          entityId: settings.spEntityId(connection.value.id),
+          acsUrl,
+          authnRequestsSigned: connection.value.authnRequestsSigned,
+          certificates: yield* spKeys.certificates(connection.value.id),
+          sloUrl: Option.isSome(connection.value.sloUrl)
+            ? SamlConfig.sloUrl(settings, connection.value.id)
+            : undefined,
+        });
       });
 
       const authnRequest: SamlShape["authnRequest"] = Effect.fnUntraced(
@@ -423,16 +751,32 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
             },
           });
           const now = yield* DateTime.now;
-          const location = redirectLocation(
-            connection.value.ssoUrl,
-            authnRequestXml({
+          // BEH-EA-305: a connection that signs its requests never sends one unsigned. No usable key is a defect (the store
+          // guarantees one exists, so this means every key has expired or cannot be opened), not a silent downgrade.
+          const signing = connection.value.authnRequestsSigned
+            ? yield* spKeys.signingKey(connectionId)
+            : Option.none();
+          if (connection.value.authnRequestsSigned && Option.isNone(signing)) {
+            return yield* Effect.die(
+              new Error(
+                `awthaq/saml: connection ${connectionId} signs its AuthnRequests but has no usable signing key`,
+              ),
+            );
+          }
+          const location = redirectUrl({
+            endpoint: connection.value.ssoUrl,
+            kind: "SAMLRequest",
+            xml: authnRequestXml({
               id: requestId,
               issueInstant: now,
               destination: connection.value.ssoUrl,
               acsUrl,
               issuer: settings.spEntityId(connectionId),
             }),
-          );
+            signWith: Option.isSome(signing)
+              ? Redacted.value(signing.value.privateKeyPem)
+              : undefined,
+          });
           // The cookie carries `<identifier>.<secret>`: the browser proves it is the one that started this login.
           return { location, state: Redacted.make(`${identifier}.${Redacted.value(value)}`) };
         },
@@ -557,6 +901,37 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         return assertion;
       });
 
+      /**
+       * BEH-EA-307: the assertion's attributes, through the connection's rules, into the organization's roles, under the
+       * connection's ceiling (`canGrant`, RRM-001). A mapping that cannot be applied (a role that no longer exists, a member who
+       * out-privileges the connection, the last owner, a membership limit) is logged and skipped: the identity provider proved
+       * who the user is, and that is still true; what it may confer is bounded, never a reason to lock them out.
+       */
+      const applyRoleMapping = (
+        connection: SamlRecords.ConnectionRecord,
+        assertion: SignedAssertion,
+        userId: Users.UserId,
+      ) => {
+        const roles = SamlRoleMapping.rolesFor(connection.roleMapping, assertion);
+        if (roles === undefined) return Effect.void;
+        return organization
+          .syncMemberRoles({
+            organizationId: connection.organizationId,
+            userId,
+            roles,
+            ceiling: connection.roleMapping.ceiling,
+          })
+          .pipe(
+            Effect.asVoid,
+            Effect.catch((error) =>
+              Effect.logWarning("awthaq/saml: role mapping not applied", {
+                connectionId: connection.id,
+                reason: error._tag,
+              }),
+            ),
+          );
+      };
+
       /** Step 7: the account, the sign-in gate, the hooks and the session. Runs as the connection's tenant. */
       const signIn = Effect.fnUntraced(function* (
         connection: SamlRecords.ConnectionRecord,
@@ -655,6 +1030,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         );
         const point = yield* beforeSessionIssue.run({ userId: targetUserId, strategy: providerId });
         if (point._tag === "Diverted") return yield* Effect.fail(point.value);
+        yield* applyRoleMapping(connection, assertion, targetUserId);
         const issued = yield* sessions.issue({
           userId: targetUserId,
           request: {
@@ -663,6 +1039,17 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
           },
           amr: ["fed"],
         });
+        // BEH-EA-306: remember which identity the IdP knows this session by, so a Single Logout can find it again.
+        yield* records.saveSession({
+          sessionId: issued.session.id,
+          connectionId: connection.id,
+          nameId: assertion.nameId.value,
+          nameIdFormat: assertion.nameId.format,
+          sessionIndex: assertion.sessionIndex,
+        });
+        yield* records.pruneSessions(
+          DateTime.subtractDuration(yield* DateTime.now, settings.sessionRecordRetention),
+        );
         yield* events.publish({
           _tag: "auth.user.signedIn",
           userId: targetUserId,
@@ -710,7 +1097,21 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         );
       });
 
-      return Saml.of({ metadata, authnRequest, acs });
+      const slo = SamlSlo.makeSlo({
+        settings,
+        usableConnection,
+        records,
+        sessions,
+        verification,
+        events,
+        xmlSignature,
+        spKeys,
+        crypto,
+        limiter,
+        resolveCallbackURL: (raw) => resolveCallbackURL(raw, settings),
+      });
+
+      return Saml.of({ metadata, authnRequest, acs, slo: slo.slo, logout: slo.logout, admin });
     }),
   });
 }

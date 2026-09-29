@@ -19,14 +19,38 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { Organization, OrganizationHooks, OrganizationMemory } from "@awthaq/organization";
-import { ClientAddress, Mailer, RateLimiter, SqlTransaction, XmlSignature } from "@awthaq/ports";
-import { Saml, SamlConnections, SamlRecords, XmlSignatureNode } from "@awthaq/saml";
+import {
+  ConnectionRecords,
+  MembershipRecords,
+  Organization,
+  OrganizationConnections,
+  OrganizationHooks,
+  OrganizationMemory,
+} from "@awthaq/organization";
+import {
+  ClientAddress,
+  Encryption,
+  KeyProvider,
+  Mailer,
+  RateLimiter,
+  SqlTransaction,
+  XmlSignature,
+} from "@awthaq/ports";
+import {
+  Saml,
+  SamlConnections,
+  SamlMetadataFetcher,
+  SamlRecords,
+  SamlSpKeys,
+  Sso,
+  XmlSignatureNode,
+} from "@awthaq/saml";
 
 type SamlConfigInput = Saml.SamlConfigInput;
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { inflateRawSync } from "node:zlib";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -67,11 +91,19 @@ export type AppServices =
   | Saml.Saml
   | Saml.SamlConfig
   | SamlConnections.SamlConnectionStore
+  | SamlSpKeys.SamlSpKeys
+  | SamlRecords.SamlRecords
+  | Sso.Sso
+  | OrganizationConnections.OrganizationConnectionStore
+  | MembershipRecords.MembershipRecords
   | Organization.Organization
   | Users.Users
   | Accounts.Accounts
   | Sessions.Sessions
-  | Verification.Verification;
+  | Verification.Verification
+  | AuditLog.AuditLog
+  | AuthEvents.AuthEvents
+  | Encryption.Encryption;
 
 export interface Observations {
   /** The reason names `Saml.acs` logged for each rejection, oldest first. */
@@ -146,13 +178,66 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
+/** A real `Encryption` over a fixed test key: the SP signing keys are sealed with it, as in production. */
+const EncryptionLive = Encryption.layer.pipe(
+  Layer.provide(
+    KeyProvider.layerEnv.pipe(
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
+          }),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(NodeCrypto.layer),
+);
+
+const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
+  Layer.provide(AuthenticationLive),
+);
+
+/**
+ * The metadata fetcher of these scenarios serves what a scenario put in its table (there is no network in this World): the URL
+ * import's guards (SSRF, pinning, caps) are tested with the real pinned fetcher, in the package's own suites.
+ */
+const metadataFetcher = (served: ReadonlyMap<string, string>) =>
+  Layer.succeed(
+    SamlMetadataFetcher.SamlMetadataFetcher,
+    SamlMetadataFetcher.SamlMetadataFetcher.of({
+      fetch: (url) => {
+        const body = served.get(url);
+        return body === undefined
+          ? Effect.fail(
+              new SamlMetadataFetcher.MetadataFetchFailed({
+                failure: "connect",
+                detail: "no such URL in this World",
+              }),
+            )
+          : Effect.succeed(body);
+      },
+    }),
+  );
+
+/** The organization's OIDC connections, for the `Sso` dispatcher's other side. */
+const OidcStoreLive = OrganizationConnections.layerStore.pipe(
+  Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
+  Layer.provideMerge(ConnectionRecords.layerMemory),
+);
+
 const OrganizationLive = Organization.Organization.layer.pipe(
   Layer.provide(Organization.config({})),
   Layer.provide(AuthenticationLive),
   Layer.provide(CsrfProtectionLive),
 );
 
-const buildLive = (observations: Observations, config: Partial<SamlConfigInput>) => {
+const buildLive = (
+  observations: Observations,
+  config: Partial<SamlConfigInput>,
+  served: ReadonlyMap<string, string>,
+  preferred: Sso.SsoProtocol | undefined,
+) => {
   // The suite's output is not one console line per rejection: the base loggers are replaced by the capture.
   const Capture = Logger.layer([
     Logger.make((options) => {
@@ -165,8 +250,20 @@ const buildLive = (observations: Observations, config: Partial<SamlConfigInput>)
   const ClockLive = Layer.effectDiscard(TestClock.setTime(NOW_MILLIS)).pipe(
     Layer.provideMerge(TestClock.layer()),
   );
-  return Saml.Saml.layer.pipe(
+  return Sso.Sso.layer.pipe(
+    Layer.provide(preferred === undefined ? Layer.empty : Sso.config({ preferred })),
+    Layer.provideMerge(OidcStoreLive),
+    Layer.provideMerge(
+      Saml.Saml.layer.pipe(
+        Layer.provide(AdminAuthenticationLive),
+        Layer.provide(AuthenticationLive),
+        Layer.provide(CsrfProtectionLive),
+      ),
+    ),
     Layer.provideMerge(SamlConnections.layerStore),
+    Layer.provideMerge(SamlSpKeys.layer),
+    Layer.provideMerge(metadataFetcher(served)),
+    Layer.provideMerge(EncryptionLive),
     Layer.provideMerge(OrganizationLive),
     Layer.provideMerge(SamlRecords.layerMemory),
     Layer.provideMerge(spyLayer(observations)),
@@ -189,8 +286,13 @@ interface AppHandle {
   readonly close: Effect.Effect<void>;
 }
 
-const buildApp = (observations: Observations, config: Partial<SamlConfigInput>): AppHandle => {
-  const Live = buildLive(observations, config);
+const buildApp = (
+  observations: Observations,
+  config: Partial<SamlConfigInput>,
+  served: ReadonlyMap<string, string>,
+  preferred: Sso.SsoProtocol | undefined,
+): AppHandle => {
+  const Live = buildLive(observations, config, served, preferred);
   const scope = Effect.runSync(Scope.make());
   let built: Promise<Context.Context<AppServices>> | undefined;
   const context = () =>
@@ -257,6 +359,10 @@ export const isOutcome = (value: unknown): value is Outcome =>
 export interface WorldShape {
   readonly observations: Observations;
   readonly config: Ref.Ref<Partial<SamlConfigInput>>;
+  /** What the IdP metadata URLs serve (BEH-EA-309): a scenario edits it, the World's fetcher reads it. */
+  readonly metadata: Map<string, string>;
+  /** Which protocol the `Sso` dispatcher prefers when both route a hint (BEH-EA-308); default the plugin's. */
+  readonly ssoPreference: Ref.Ref<Sso.SsoProtocol | undefined>;
   readonly started: Ref.Ref<boolean>;
   readonly app: Ref.Ref<AppHandle | undefined>;
   readonly connections: Map<string, ConnectionState>;
@@ -271,6 +377,15 @@ export interface WorldShape {
       signer?: Identity;
       trustsEmail?: boolean;
       certificates?: ReadonlyArray<Identity>;
+      /** BEH-EA-305: sign the connection's AuthnRequests (and logout messages) with an SP key. */
+      authnRequestsSigned?: boolean;
+      /** BEH-EA-306: the IdP's Single Logout endpoint and its binding. */
+      sloUrl?: string;
+      sloBinding?: "redirect" | "post";
+      /** BEH-EA-307: the role mapping the connection is created with. */
+      roleMapping?: SamlRecords.RoleMapping;
+      /** The email domains the connection routes; default `<name>.example`. */
+      emailDomains?: ReadonlyArray<string>;
     }
   >;
   readonly outcomes: Outcomes;
@@ -295,6 +410,8 @@ export const WorldLive = Layer.effect(
     return World.of({
       observations,
       config: yield* Ref.make<Partial<SamlConfigInput>>({}),
+      metadata: new Map(),
+      ssoPreference: yield* Ref.make<Sso.SsoProtocol | undefined>(undefined),
       started: yield* Ref.make(false),
       app,
       connections: new Map(),
@@ -315,7 +432,12 @@ const currentApp = Effect.gen(function* () {
   yield* Ref.set(world.started, true);
   const existing = yield* Ref.get(world.app);
   if (existing !== undefined) return existing;
-  const fresh = buildApp(world.observations, yield* Ref.get(world.config));
+  const fresh = buildApp(
+    world.observations,
+    yield* Ref.get(world.config),
+    world.metadata,
+    yield* Ref.get(world.ssoPreference),
+  );
   yield* Ref.set(world.app, fresh);
   return fresh;
 });
@@ -386,9 +508,13 @@ export const ensureConnection = Effect.fn("features.saml.ensureConnection")(func
             entityId,
             ssoUrl: `https://idp.${name}.example/sso`,
             certificates: certificates.map((identity) => identity.cert),
+            sloUrl: plan.sloUrl,
+            sloBinding: plan.sloBinding,
           },
-          emailDomains: [`${name}.example`],
+          emailDomains: plan.emailDomains ?? [`${name}.example`],
           trustsEmail: plan.trustsEmail ?? false,
+          authnRequestsSigned: plan.authnRequestsSigned,
+          roleMapping: plan.roleMapping,
         })
         .pipe(Effect.orDie);
       return { id: connection.id, organizationId: org.id };
@@ -413,6 +539,15 @@ export const planConnection = Effect.fn("features.saml.planConnection")(function
     signer?: Identity;
     trustsEmail?: boolean;
     certificates?: ReadonlyArray<Identity>;
+    /** BEH-EA-305: sign the connection's AuthnRequests (and logout messages) with an SP key. */
+    authnRequestsSigned?: boolean;
+    /** BEH-EA-306: the IdP's Single Logout endpoint and its binding. */
+    sloUrl?: string;
+    sloBinding?: "redirect" | "post";
+    /** BEH-EA-307: the role mapping the connection is created with. */
+    roleMapping?: SamlRecords.RoleMapping;
+    /** The email domains the connection routes; default `<name>.example`. */
+    emailDomains?: ReadonlyArray<string>;
   },
 ) {
   const world = yield* World;

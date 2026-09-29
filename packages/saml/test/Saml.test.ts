@@ -691,6 +691,8 @@ describe("rate limits", () => {
             rateLimits: {
               login: { limit: 2, window: Duration.minutes(1) },
               acs: { limit: 2, window: Duration.minutes(1) },
+              slo: { limit: 30, window: Duration.minutes(1) },
+              sso: { limit: 30, window: Duration.minutes(1) },
             },
           },
           MemoryLimiter,

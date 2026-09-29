@@ -4,9 +4,11 @@
 import { Migrations } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 import * as Saml from "../src/Saml.ts";
 import * as SamlRecords from "../src/SamlRecords.ts";
 import * as TestSql from "../../sql/test/support/TestSql.ts";
@@ -160,6 +162,179 @@ const suite = (name: string, layer: Layer.Layer<SamlRecords.SamlRecords, unknown
           "SamlRecordNotFound",
         );
       }).pipe(Effect.provide(layer)),
+    );
+
+    // BEH-EA-305/306/307: the signing flag, the logout endpoint, the metadata URL and the role mapping round-trip, are patched
+    // field by field (null clears), and default to what a pre-existing connection always was.
+    it.effect(
+      "the signing, logout, metadata and role-mapping fields round-trip and patch independently",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* SamlRecords.SamlRecords;
+          const plain = yield* records.create(input("c1", "org-1"));
+          assert.isFalse(plain.authnRequestsSigned);
+          assert.isTrue(Option.isNone(plain.sloUrl));
+          assert.strictEqual(plain.sloBinding, "redirect");
+          assert.isTrue(Option.isNone(plain.metadataUrl));
+          assert.deepStrictEqual(plain.roleMapping, SamlRecords.EMPTY_ROLE_MAPPING);
+          const mapping: SamlRecords.RoleMapping = {
+            rules: [
+              { attribute: "groups", value: "admins", roles: ["admin"] },
+              { attribute: "department", roles: ["member"] },
+            ],
+            ceiling: ["admin"],
+            defaultRoles: ["member"],
+          };
+          const full = yield* records.create({
+            ...input("c2", "org-1"),
+            authnRequestsSigned: true,
+            sloUrl: "https://idp.example.com/slo",
+            sloBinding: "post",
+            metadataUrl: "https://idp.example.com/metadata.xml",
+            roleMapping: mapping,
+          });
+          const read = Option.getOrThrow(yield* records.findById("c2"));
+          assert.deepStrictEqual(read, full);
+          assert.isTrue(read.authnRequestsSigned);
+          assert.deepStrictEqual(read.sloUrl, Option.some("https://idp.example.com/slo"));
+          assert.strictEqual(read.sloBinding, "post");
+          assert.deepStrictEqual(
+            read.metadataUrl,
+            Option.some("https://idp.example.com/metadata.xml"),
+          );
+          assert.deepStrictEqual(read.roleMapping, mapping);
+          // A patch changes what it names; `null` clears the two optional URLs.
+          const patched = yield* records.update("c2", {
+            authnRequestsSigned: false,
+            sloUrl: null,
+            metadataUrl: null,
+          });
+          assert.isFalse(patched.authnRequestsSigned);
+          assert.isTrue(Option.isNone(patched.sloUrl));
+          assert.isTrue(Option.isNone(patched.metadataUrl));
+          assert.strictEqual(patched.sloBinding, "post");
+          assert.deepStrictEqual(patched.roleMapping, mapping);
+          const remapped = yield* records.update("c2", {
+            roleMapping: SamlRecords.EMPTY_ROLE_MAPPING,
+          });
+          assert.deepStrictEqual(remapped.roleMapping, SamlRecords.EMPTY_ROLE_MAPPING);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "SP signing keys are listed newest first per connection and removed with their connection",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* SamlRecords.SamlRecords;
+          yield* records.create(input("c1", "org-1"));
+          const key = (id: string, connectionId: string) => ({
+            id,
+            connectionId,
+            certificate: `cert-${id}`,
+            privateKey: `sealed-${id}`,
+            fingerprint: `fp-${id}`,
+            notBefore: NOT_BEFORE,
+            notAfter: NOT_AFTER,
+          });
+          yield* records.saveSpKey(key("k1", "c1"));
+          yield* TestClock.adjust(Duration.seconds(1));
+          yield* records.saveSpKey(key("k2", "c1"));
+          yield* records.saveSpKey(key("k3", "other"));
+          const listed = yield* records.listSpKeys("c1");
+          assert.deepStrictEqual(
+            listed.map((row) => row.id),
+            ["k2", "k1"],
+          );
+          assert.strictEqual(listed[0]?.privateKey, "sealed-k2");
+          assert.strictEqual(
+            DateTime.toEpochMillis(listed[0]?.notAfter ?? NOT_BEFORE),
+            DateTime.toEpochMillis(NOT_AFTER),
+          );
+          yield* records.remove("c1");
+          assert.deepStrictEqual(yield* records.listSpKeys("c1"), []);
+          assert.strictEqual((yield* records.listSpKeys("other")).length, 1);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "the sessions a connection created are found by NameID and SessionIndex, replaced by id, pruned by age and removed with the connection",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* SamlRecords.SamlRecords;
+          yield* records.create(input("c1", "org-1"));
+          yield* records.saveSession({
+            sessionId: "s1",
+            connectionId: "c1",
+            nameId: "ada",
+            nameIdFormat: "emailAddress",
+            sessionIndex: "i1",
+          });
+          yield* TestClock.adjust(Duration.days(2));
+          yield* records.saveSession({
+            sessionId: "s2",
+            connectionId: "c1",
+            nameId: "ada",
+            sessionIndex: "i2",
+          });
+          yield* records.saveSession({ sessionId: "s3", connectionId: "c1", nameId: "grace" });
+          yield* records.saveSession({
+            sessionId: "s4",
+            connectionId: "other",
+            nameId: "ada",
+            sessionIndex: "i1",
+          });
+          const ids = (rows: ReadonlyArray<SamlRecords.SamlSessionRecord>) =>
+            rows.map((row) => row.sessionId).toSorted();
+          assert.deepStrictEqual(
+            ids(yield* records.findSessions({ connectionId: "c1", nameId: "ada" })),
+            ["s1", "s2"],
+          );
+          assert.deepStrictEqual(
+            ids(
+              yield* records.findSessions({
+                connectionId: "c1",
+                nameId: "ada",
+                sessionIndex: "i2",
+              }),
+            ),
+            ["s2"],
+          );
+          assert.deepStrictEqual(
+            yield* records.findSessions({ connectionId: "c1", nameId: "nobody" }),
+            [],
+          );
+          const s1 = Option.getOrThrow(yield* records.findSession("s1"));
+          assert.deepStrictEqual(s1.nameIdFormat, Option.some("emailAddress"));
+          assert.deepStrictEqual(s1.sessionIndex, Option.some("i1"));
+          const s3 = Option.getOrThrow(yield* records.findSession("s3"));
+          assert.isTrue(Option.isNone(s3.sessionIndex));
+          // Saving the same session id again replaces its row rather than adding one.
+          yield* records.saveSession({
+            sessionId: "s1",
+            connectionId: "c1",
+            nameId: "ada",
+            sessionIndex: "i1-again",
+          });
+          assert.strictEqual(
+            (yield* records.findSessions({ connectionId: "c1", nameId: "ada" })).length,
+            2,
+          );
+          // Pruning by age drops the rows created before the cutoff and keeps the newer ones.
+          yield* TestClock.adjust(Duration.days(3));
+          yield* records.saveSession({ sessionId: "fresh", connectionId: "c1", nameId: "ada" });
+          assert.strictEqual(
+            yield* records.pruneSessions(DateTime.subtract(yield* DateTime.now, { days: 2 })),
+            4,
+          );
+          assert.isTrue(Option.isNone(yield* records.findSession("s2")));
+          assert.isTrue(Option.isSome(yield* records.findSession("fresh")));
+          yield* records.saveSession({ sessionId: "s5", connectionId: "c1", nameId: "ada" });
+          yield* records.removeSession("s5");
+          assert.isTrue(Option.isNone(yield* records.findSession("s5")));
+          yield* records.saveSession({ sessionId: "s6", connectionId: "c1", nameId: "ada" });
+          yield* records.remove("c1");
+          assert.isTrue(Option.isNone(yield* records.findSession("s6")));
+        }).pipe(Effect.provide(layer)),
     );
   });
 };

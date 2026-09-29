@@ -21,7 +21,7 @@ B2B applications selling to enterprise buyers whose procurement requires "sign i
 ## Status
 | Property | Value |
 |---|---|
-| Status | Planned-Phase3 |
+| Status | Implemented as the `Sso` dispatcher in `@awthaq/saml` ([BEH-EA-308](../behaviors/29-saml-sp.md#beh-ea-308-the-sso-dispatcher-routes-an-email-domain-across-oidc-and-saml-connections-to-the-owning-plugins-login-url)); the per-tenant connection resolver it was planned around is `OrganizationConnectionStore.discover` and `SamlConnectionStore.discover` |
 | Priority | P2 |
 | Enabler(s) | E2 — External provider/port abstraction |
 | Breaking? | Additive: SSO is planned to reuse the same external-provider port abstraction OAuth is planned to introduce (E2), with a per-tenant provider resolution layered on top; it does not require reopening any Planned-MVP contract or service shape. |

@@ -183,6 +183,8 @@ export const SessionRevocationReason = Schema.Literals([
   "reuseDetected",
   /** SMS-003: evicted by `SessionConfig.maxConcurrent` when the user's newest session was issued. */
   "limitEvicted",
+  /** `@awthaq/saml`: a SAML Single Logout (the IdP's LogoutRequest, or the user's own logout through it) ended the session. */
+  "federatedLogout",
 ]);
 export type SessionRevocationReason = typeof SessionRevocationReason.Type;
 
@@ -489,6 +491,49 @@ export const WebhookTestQueuedEvent = Schema.TaggedStruct("auth.webhooks.testQue
   endpointId: Schema.String,
 });
 export type WebhookTestQueuedEvent = typeof WebhookTestQueuedEvent.Type;
+
+/**
+ * `@awthaq/saml`'s administrative operations, after each SUCCESSFUL mutation (identifiers only: the administrator, the
+ * connection and its organization, and for an update the NAMES of the fields changed, never their values).
+ */
+export const SamlConnectionCreatedEvent = Schema.TaggedStruct("auth.saml.connectionCreated", {
+  adminUserId: UserIdSchema,
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+});
+export type SamlConnectionCreatedEvent = typeof SamlConnectionCreatedEvent.Type;
+
+export const SamlConnectionUpdatedEvent = Schema.TaggedStruct("auth.saml.connectionUpdated", {
+  adminUserId: UserIdSchema,
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+  fields: Schema.Array(Schema.String),
+});
+export type SamlConnectionUpdatedEvent = typeof SamlConnectionUpdatedEvent.Type;
+
+export const SamlConnectionDeletedEvent = Schema.TaggedStruct("auth.saml.connectionDeleted", {
+  adminUserId: UserIdSchema,
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+});
+export type SamlConnectionDeletedEvent = typeof SamlConnectionDeletedEvent.Type;
+
+/** A new SP signing key was generated or imported for a connection (its private half is sealed at rest and never published). */
+export const SamlSigningKeyRotatedEvent = Schema.TaggedStruct("auth.saml.signingKeyRotated", {
+  adminUserId: UserIdSchema,
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+});
+export type SamlSigningKeyRotatedEvent = typeof SamlSigningKeyRotatedEvent.Type;
+
+/**
+ * `@awthaq/saml`: a Single Logout message was refused (`strategy` is `saml:<organizationId>:<connectionId>` once the
+ * connection is known, `saml` before). The reason is logged, never published or answered (no validation oracle).
+ */
+export const SamlLogoutRejectedEvent = Schema.TaggedStruct("auth.saml.logoutRejected", {
+  strategy: Schema.String,
+});
+export type SamlLogoutRejectedEvent = typeof SamlLogoutRejectedEvent.Type;
 
 /**
  * ECS-006: published by `awthaq seed admin` after it grants the administrative role
@@ -942,6 +987,11 @@ export const AuthEventSchema = Schema.Union([
   WebhookSecretRotatedEvent,
   WebhookEndpointDeletedEvent,
   WebhookTestQueuedEvent,
+  SamlConnectionCreatedEvent,
+  SamlConnectionUpdatedEvent,
+  SamlConnectionDeletedEvent,
+  SamlSigningKeyRotatedEvent,
+  SamlLogoutRejectedEvent,
   AdminSeededEvent,
   AdminSeedRefusedEvent,
   ImportCompletedEvent,

@@ -5,6 +5,7 @@
 // plain `Context.Service`, and composing SAML without `config({ baseUrl })` fails to type-check instead of shipping a
 // `localhost` audience. Everything else has a default.
 
+import type { AuthSubject } from "@qadi/core";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -35,8 +36,45 @@ export interface SamlConfigShape {
   readonly tenantScoped: boolean;
   /** Development and test only: allow `http:` and private IdP URLs on a connection. */
   readonly allowPrivateTargets: boolean;
-  /** Per-source-IP budgets on the two unauthenticated endpoints. */
-  readonly rateLimits: { readonly login: SamlRateLimit; readonly acs: SamlRateLimit };
+  /** Per-source-IP budgets on the unauthenticated endpoints. */
+  readonly rateLimits: {
+    readonly login: SamlRateLimit;
+    readonly acs: SamlRateLimit;
+    /** BEH-EA-306: the Single Logout endpoint (IdP-initiated and the response to ours). */
+    readonly slo: SamlRateLimit;
+    /** BEH-EA-308: `POST /auth/sso/start`, which tells a caller whether an email domain has single sign-on. */
+    readonly sso: SamlRateLimit;
+  };
+  /**
+   * BEH-EA-306: how far from now a Single Logout message's `IssueInstant` may be (both directions, clock skew added). A captured
+   * `LogoutRequest` replayed later would log the user out again on demand; default 5 minutes.
+   */
+  readonly logoutFreshness: Duration.Duration;
+  /** BEH-EA-306: how long a session row (NameID and SessionIndex of a sign-in) is kept for a logout to find; default 90 days. */
+  readonly sessionRecordRetention: Duration.Duration;
+  /** BEH-EA-305: the validity of a generated SP signing certificate, in days; default 1825 (5 years). */
+  readonly signingKeyValidityDays: number;
+  /** BEH-EA-309: refuse IdP metadata larger than this (bytes) when fetching it from a URL; default 512 KiB. */
+  readonly maxMetadataBytes: number;
+  /** BEH-EA-309: the deadline for fetching IdP metadata from a URL; default 10 seconds. */
+  readonly metadataTimeout: Duration.Duration;
+  /**
+   * BEH-EA-309: the administrator's gate, DENYING BY DEFAULT (an application that installs the admin group and never
+   * configures this exposes nothing). `action` names the operation; `organizationId` the organization it concerns, when
+   * there is one (`createConnection`, `getConnection`, ...), so a host can let one administrator manage one tenant.
+   */
+  readonly canManageSaml: (input: {
+    readonly admin: AuthSubject;
+    readonly action: string;
+    readonly organizationId: string | undefined;
+  }) => Effect.Effect<boolean>;
+  /** BEH-EA-309: calls per administrator per window on the admin group, past the gate. */
+  readonly adminRate: SamlRateLimit;
+  /**
+   * BEH-EA-307: whether a connection's role mapping may ever confer `owner` (its ceiling, a rule or the defaults naming it).
+   * Off by default: an identity provider's assertion promoting somebody to owner is a decision, not a default.
+   */
+  readonly allowOwnerRoleMapping: boolean;
 }
 
 export class SamlConfig extends Context.Service<SamlConfig, SamlConfigShape>()(
@@ -94,10 +132,28 @@ export const config = (input: SamlConfigInput) =>
         rateLimits: input.rateLimits ?? {
           login: { limit: 30, window: Duration.minutes(1) },
           acs: { limit: 30, window: Duration.minutes(1) },
+          slo: { limit: 30, window: Duration.minutes(1) },
+          sso: { limit: 30, window: Duration.minutes(1) },
         },
+        logoutFreshness: input.logoutFreshness ?? Duration.minutes(5),
+        sessionRecordRetention: input.sessionRecordRetention ?? Duration.days(90),
+        signingKeyValidityDays: input.signingKeyValidityDays ?? 1825,
+        maxMetadataBytes: input.maxMetadataBytes ?? 512 * 1024,
+        metadataTimeout: input.metadataTimeout ?? Duration.seconds(10),
+        canManageSaml: input.canManageSaml ?? (() => Effect.succeed(false)),
+        adminRate: input.adminRate ?? { limit: 60, window: Duration.minutes(1) },
+        allowOwnerRoleMapping: input.allowOwnerRoleMapping ?? false,
       };
       return value;
     }),
   );
 
 export const acsUrl = (settings: SamlConfigShape): string => `${settings.baseUrl}/auth/saml/acs`;
+
+/**
+ * BEH-EA-306: this SP's Single Logout endpoint FOR ONE CONNECTION (both bindings, one URL): the `Destination` every signed logout
+ * message carries. The connection is in the path so an IdP-initiated `LogoutRequest`, which has no state of ours to consult,
+ * still selects its trust set from what this server published, never from the document.
+ */
+export const sloUrl = (settings: SamlConfigShape, connectionId: string): string =>
+  `${settings.baseUrl}/auth/saml/slo/${encodeURIComponent(connectionId)}`;

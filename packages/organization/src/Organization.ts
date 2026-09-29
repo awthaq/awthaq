@@ -298,6 +298,45 @@ export interface OrganizationShape {
     | OrganizationApi.UnknownOrgRole
     | HookPoint.HookAborted
   >;
+  /**
+   * BEH-EA-307 (the SAML role mapping's guard, RRM-001's `canGrant` rule with a role ceiling standing in for the caller): why
+   * `roles` cannot be conferred by a source whose most is `ceiling` (role names of this organization), or `None` when they
+   * can. `unknownRole`/`unknownCeiling`: a name this organization does not recognize; `exceedsCeiling`: `roles` hold a
+   * statement the ceiling does not (an `owner` mapping under a `member` ceiling).
+   */
+  readonly checkRoleCeiling: (input: {
+    readonly organizationId: string;
+    readonly roles: ReadonlyArray<string>;
+    readonly ceiling: ReadonlyArray<string>;
+  }) => Effect.Effect<
+    Option.Option<"unknownRole" | "unknownCeiling" | "exceedsCeiling">,
+    OrganizationApi.OrganizationNotFound
+  >;
+  /**
+   * BEH-EA-307: makes `userId`'s roles in the organization exactly `roles`, on behalf of a source (an identity provider's
+   * mapping) that has no caller: adds the membership when there is none, otherwise re-roles it. `canGrant` bounds it twice:
+   * `roles` must be within `ceiling`, and so must what the member holds now (a member who out-privileges the source is
+   * never demoted or reshaped by it: `RolePermissionEscalation`). The last owner is never demoted
+   * (`OwnerInvariantViolation`); limits, hooks and events are those of `addMember` / `updateMemberRole`.
+   */
+  readonly syncMemberRoles: (input: {
+    readonly organizationId: string;
+    readonly userId: Users.UserId;
+    readonly roles: ReadonlyArray<string>;
+    readonly ceiling: ReadonlyArray<string>;
+  }) => Effect.Effect<
+    {
+      readonly membership: MembershipRecords.MembershipRecord;
+      readonly change: "added" | "updated" | "unchanged";
+    },
+    | OrganizationApi.OrganizationNotFound
+    | OrganizationApi.MembershipLimitReached
+    | OrganizationApi.AlreadyMember
+    | OrganizationApi.UnknownOrgRole
+    | OrganizationApi.RolePermissionEscalation
+    | OrganizationApi.OwnerInvariantViolation
+    | HookPoint.HookAborted
+  >;
   readonly getActiveMember: (
     caller: Api.UserPrincipal,
   ) => Effect.Effect<MembershipRecords.MembershipRecord, OrganizationApi.NoActiveOrganization>;
@@ -2517,6 +2556,93 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         return membership;
       });
 
+      const checkRoleCeiling: OrganizationShape["checkRoleCeiling"] = Effect.fnUntraced(function* ({
+        organizationId,
+        roles,
+        ceiling,
+      }) {
+        yield* requireOrganization(organizationId);
+        const byRole = yield* statementsByRole(organizationId);
+        if (roles.some((name) => !byRole.has(name))) return Option.some("unknownRole" as const);
+        if (ceiling.some((name) => !byRole.has(name)))
+          return Option.some("unknownCeiling" as const);
+        return PermissionEngine.canGrant(
+          PermissionEngine.effectivePermissions(roles, byRole),
+          PermissionEngine.effectivePermissions(ceiling, byRole),
+        )
+          ? Option.none()
+          : Option.some("exceedsCeiling" as const);
+      });
+
+      const syncMemberRoles: OrganizationShape["syncMemberRoles"] = Effect.fnUntraced(function* ({
+        organizationId,
+        userId,
+        roles,
+        ceiling,
+      }) {
+        yield* requireOrganization(organizationId);
+        const byRole = yield* statementsByRole(organizationId);
+        yield* requireKnownRoles(byRole, roles);
+        const held = PermissionEngine.effectivePermissions(ceiling, byRole);
+        if (
+          !PermissionEngine.canGrant(PermissionEngine.effectivePermissions(roles, byRole), held)
+        ) {
+          return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
+        }
+        const existing = yield* members.findByUserAndOrg(userId, organizationId);
+        if (Option.isNone(existing)) {
+          const membership = yield* addMember({ organizationId, userId, role: roles });
+          return { membership, change: "added" as const };
+        }
+        const current = existing.value;
+        if (
+          current.role.length === roles.length &&
+          roles.every((name) => current.role.includes(name))
+        ) {
+          return { membership: current, change: "unchanged" as const };
+        }
+        // RRM-001: a source never reshapes a member who out-privileges it.
+        if (
+          !PermissionEngine.canGrant(
+            PermissionEngine.effectivePermissions(current.role, byRole),
+            held,
+          )
+        ) {
+          return yield* Effect.fail(new OrganizationApi.RolePermissionEscalation());
+        }
+        if (
+          yield* wouldViolateOwnerInvariant(
+            organizationId,
+            current.role.includes("owner"),
+            roles.includes("owner"),
+          )
+        ) {
+          return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
+        }
+        const vetoed = yield* veto(
+          "organization.member.updateRole.before",
+          beforeUpdateRole.run({ organizationId, userId, role: roles }),
+        );
+        const updated = yield* members
+          .updateRole(userId, organizationId, vetoed.role)
+          .pipe(
+            Effect.catchTag("MembershipRecordNotFound", () =>
+              Defects.invariantViolation(
+                "RowVanished",
+                "awthaq: membership vanished between check and write",
+              ),
+            ),
+          );
+        yield* events.publish({
+          _tag: "auth.organization.memberRoleUpdated",
+          organizationId,
+          userId,
+          role: vetoed.role,
+        });
+        yield* afterUpdateRole.run({ organizationId, userId, role: vetoed.role });
+        return { membership: updated, change: "updated" as const };
+      });
+
       const activeOrganizationOf = (caller: Api.UserPrincipal) =>
         activeContext.findBySessionId(caller.sessionId).pipe(
           Effect.map(Option.flatMap((row) => row.activeOrganizationId)),
@@ -3600,6 +3726,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         updateMemberRole,
         leave,
         addMember,
+        checkRoleCeiling,
+        syncMemberRoles,
         getActiveMember,
         getActiveMemberRole,
         setActive,

@@ -34,7 +34,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | [spec/roadmap.md](roadmap.md) | EFAUTH-RMP | The delivery roadmap (milestones M0–M8), derived from `archive/PRD.md` §23, restated against this tree's IDs, with what has shipped against each milestone. |
 | [spec/models/](models/) | `MOD-EA-001`–`015` | Sixteen files. `00-adoption-matrix.md` is an index with no `MOD` id of its own; `01`–`15` each specify one authentication-method or core-plugin domain model (see table below). |
 | [spec/decisions/](decisions/) | `ADR-EA-001`–`034` | Thirty-two architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
-| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`298` | Thirty-six files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
+| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`309` | Thirty-six files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
 | [spec/process/](process/) | EFAUTH-PROC-01/02 | Two files: the requirement-ID scheme in full, and the definitions of done applied at each stage of work. |
 | [spec/appendices/](appendices/) | — | Five files of supporting reference material, authored alongside the rest of the tree and cross-referenced from it rather than summarized here. |
 
@@ -98,6 +98,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `033-*.md` | ADR-EA-033 | Hook Registries Belong to the Composition, and a Tap Requires Its Point |
 | `034-*.md` | ADR-EA-034 | Before 1.0 Breaking Changes Are Allowed, Each With a Changeset That Carries a Migration Note |
 | `035-*.md` | ADR-EA-035 | A Plugin Adds Typed Scalar Fields to `users` Through One Declared Extension Point |
+| `036-*.md` | ADR-EA-036 | IdP-Initiated SAML Login and Encrypted Assertions Are Refused, as Decisions |
 
 ### `spec/behaviors/` — thirty files, grouped by subsystem
 
@@ -131,12 +132,12 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `26-cli.md` | 201–208, 225–229 | CLI |
 | `27-admin-impersonation.md` | 209–224 | Admin and Impersonation |
 | `28-tenancy.md` | 230–237 | Tenancy |
-| `29-saml-sp.md` | 238–245 | SAML Service Provider |
+| `29-saml-sp.md` | 238–245, 305–309 | SAML Service Provider |
 | `30-scim.md` | 246–253 | SCIM (inbound provisioning) |
 | `31-two-factor.md` | 260–266 | Two-Factor Authentication |
 | `32-magic-link.md` | 267–270 | Magic Link |
 | `33-email-otp.md` | 271–274 | Email OTP |
-| `34-webhooks.md` | 275–282 | Outbound Webhooks |
+| `34-webhooks.md` | 275–282, 299–304 | Outbound Webhooks |
 | `35-organization.md` | 283–290 | Organization |
 | `36-jwt.md` | 291–298 | JWT |
 
