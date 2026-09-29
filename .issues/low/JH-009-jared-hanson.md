@@ -3,7 +3,7 @@ ID: "JH-009"
 Title: "No authoring guide or template plugin — conventions live in code comments and test fixtures"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/OrganizationHooks.ts:5"
 Auditor: "jared-hanson"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `organization` · reported by **Jared Hanson — Creator of Passport.js** (`jared-hanson`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Add docs/plugin-authoring.md plus a checked-in minimal template plugin (config R
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `authz-docs-truthfulness`. Evidence at HEAD ec065a7: `packages/organization/src/OrganizationHooks.ts:5`. Fix: Ship docs/plugin-authoring.md plus a minimal, test-exercised template plugin so conventions have one canonical, CI-checked home. (effort L). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** docs/plugin-authoring.md (contract, config Reference, dependsOn vs direct yield*, ports-required rule ADR-EA-010, hook tap-registry freeze, append-only dialect-branched migrations, HookAborted veto contract, house rules, checklist) and examples/plugin-template/ (a 'notes' plugin: config Reference + config(), one HttpApi group, one table with a dialect-branched migration, a records layer, a veto + an observe hook point, handlers). Its suite (examples/plugin-template/test/Template.test.ts, 11 tests, registered in the root vitest projects and tsconfig.test.json) builds via Auth.make, runs the real migration on SQLite, drives create/list over a real HttpRouter handler with a session cookie, checks 401, a typed 422 domain refusal, a veto abort (403 HookAborted, nothing stored), and runs TestAuth.runPluginContractTests. Linked from packages/core/README.md and AGENTS.md; OrganizationHooks header no longer claims there is no example. NOTE: adds a workspace member (examples/plugin-template) so pnpm-lock.yaml changed; expect a lockfile merge conflict to regenerate with pnpm install.
