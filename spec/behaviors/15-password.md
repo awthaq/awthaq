@@ -84,6 +84,8 @@ REQUIREMENT: On a successful sign-in, if the stored hash's parameters are
              unless the deployment opts into `exact` semantics.
 ```
 
+ERS-001: KDF work is bounded, and can be moved off the event loop. The calling-thread layers admit at most `AUTH_PASSWORD_HASH_CONCURRENCY` (default 4) concurrent hash/verify derivations, legacy verifiers included; `PasswordHasherWorkerPool` provides the same hashers with the derivation in a pool of `AUTH_PASSWORD_HASH_WORKER_POOL_SIZE` worker threads (an opt-in Layer swap needing the application's worker platform). Hashes are identical either way; parsing, ceilings, the rehash policy and the constant-time comparison always run on the calling thread. Password hashing belongs on a long-running runtime, not an edge/Workers tier (ERAS-004).
+
 PHS-002: the default `AUTH_PASSWORD_REHASH_POLICY=floor` rewrites only a hash weaker than the target (argon2: `m` or `t` below it; scrypt: `N` or `r` below it; `p` alone never triggers), so lowering the configured cost can never silently downgrade existing hashes. `AUTH_PASSWORD_REHASH_POLICY=exact` restores the earlier "any difference" behavior for an operator who deliberately lowers cost. Both layers also refuse, without running the KDF, any stored hash claiming a cost above a configurable ceiling (ACS-006), and `layerArgon2id` compares digests itself in constant time rather than through hash-wasm's `argon2Verify` (PHS-001).
 
 

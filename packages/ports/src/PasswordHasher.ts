@@ -62,6 +62,33 @@
 // `r` and `N` ceilings independently cannot combine into a multi-GiB
 // allocation.
 //
+// ERS-001 (decision 35): hash-wasm runs synchronously on the calling thread, so
+// an unbounded burst of sign-ins would stall the event loop. Every layer here
+// takes its KDF from a `KdfBackend`. The default layers (`layerArgon2id`,
+// `layerScrypt`) run on the calling thread and bound concurrency with a
+// `Semaphore` (`AUTH_PASSWORD_HASH_CONCURRENCY`, default 4; legacy verifiers,
+// bcrypt included, take a permit too) — edge-compatible, unchanged in type.
+// `PasswordHasherWorkerPool` provides the same hashers with the KDF running in
+// a pool of worker threads, so hashing never blocks the loop at all. Only the
+// derivation moves: parsing, ceilings, rehash policy and the constant-time
+// comparison stay on the calling thread, one implementation for both.
+//
+// ERAS-004: where hashing should run. A verify at the default argon2id cost
+// (m=19456, t=2) costs tens of milliseconds of CPU, above the CPU budget of a
+// Cloudflare Workers free tier. Password hash/verify belongs on the origin
+// (long-running) runtime; the edge tier should do session/JWT verification
+// and redirects. No cheaper "edge storage profile" is offered on purpose: a
+// weaker stored hash would be weaker everywhere it is read.
+//
+// Per-hash cost at the defaults, and the knobs that move it (each is a
+// `Config`): argon2id `AUTH_ARGON2_MEMORY_KIB` (19456, ~19 MiB per in-flight
+// hash) / `AUTH_ARGON2_ITERATIONS` (2) / `AUTH_ARGON2_PARALLELISM` (1); scrypt
+// `AUTH_SCRYPT_COST_LOG2` (17, ~128 MiB per in-flight hash at r=8) /
+// `AUTH_SCRYPT_BLOCK_SIZE` (8) / `AUTH_SCRYPT_PARALLELISM` (1);
+// `AUTH_PASSWORD_HASH_CONCURRENCY` (4) bounds in-flight hashes on the calling
+// thread, so peak KDF memory is roughly that many times the per-hash figure;
+// `AUTH_PASSWORD_HASH_WORKER_POOL_SIZE` (4) does the same for the worker pool.
+//
 // AOMS-001/FAMS-001 (.scratch/resolve-ready-for-human-findings, ticket 21):
 // `LegacyPasswordVerifiers` below closes the "Known non-goal" this comment
 // used to describe in full — an IdP-migration import (Auth0's bcrypt,
@@ -76,10 +103,12 @@
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Semaphore from "effect/Semaphore";
 import { argon2id, scrypt } from "hash-wasm";
 import * as ConstantTime from "./ConstantTime.ts";
 
@@ -136,6 +165,81 @@ export const LegacyPasswordVerifiers: Context.Reference<
 > = Context.Reference("awthaq/ports/LegacyPasswordVerifiers", {
   defaultValue: (): ReadonlyArray<LegacyPasswordVerifierShape> => [],
 });
+
+/** The KDF itself could not run (WASM failure, a worker that died) — never a wrong password. */
+export class KdfFailed extends Data.TaggedError("KdfFailed")<{
+  readonly cause: unknown;
+}> {}
+
+export interface Argon2idJob {
+  readonly password: string;
+  readonly salt: Uint8Array;
+  readonly iterations: number;
+  readonly parallelism: number;
+  readonly memorySize: number;
+  readonly hashLength: number;
+}
+
+export interface ScryptJob {
+  readonly password: string;
+  readonly salt: Uint8Array;
+  readonly costFactor: number;
+  readonly blockSize: number;
+  readonly parallelism: number;
+  readonly hashLength: number;
+}
+
+/**
+ * ERS-001: where the key derivation runs. Both methods return the raw digest
+ * bytes; the hashers do all parsing, encoding and comparison themselves, so a
+ * backend (this thread, a worker pool) is only ever "derive these bytes".
+ */
+export interface KdfBackend {
+  readonly argon2id: (job: Argon2idJob) => Effect.Effect<Uint8Array, KdfFailed>;
+  readonly scrypt: (job: ScryptJob) => Effect.Effect<Uint8Array, KdfFailed>;
+}
+
+/** ERS-001: `AUTH_PASSWORD_HASH_CONCURRENCY`, at least 1. */
+const hashConcurrency = Config.Int("AUTH_PASSWORD_HASH_CONCURRENCY").pipe(Config.withDefault(4));
+
+/** A fresh permit pool sized by `AUTH_PASSWORD_HASH_CONCURRENCY`; each hasher layer owns one. */
+export const makeSlots = Effect.gen(function* () {
+  const permits = yield* hashConcurrency;
+  if (permits < 1) {
+    return yield* Effect.die(
+      new Error(`awthaq: AUTH_PASSWORD_HASH_CONCURRENCY (${permits}) must be at least 1`),
+    );
+  }
+  return yield* Semaphore.make(permits);
+});
+
+/**
+ * The calling-thread backend: hash-wasm, with at most `slots`' permits of KDF
+ * work in flight. Edge-compatible (pure WASM, no worker or native module).
+ */
+const wasmBackend = (slots: Semaphore.Semaphore): KdfBackend => ({
+  argon2id: (job) =>
+    slots.withPermits(1)(
+      Effect.tryPromise({
+        try: () => argon2id({ ...job, outputType: "binary" }),
+        catch: (cause) => new KdfFailed({ cause }),
+      }),
+    ),
+  scrypt: (job) =>
+    slots.withPermits(1)(
+      Effect.tryPromise({
+        try: () => scrypt({ ...job, outputType: "binary" }),
+        catch: (cause) => new KdfFailed({ cause }),
+      }),
+    ),
+});
+
+/** hash-wasm's own encoded form uses unpadded base64 for the salt and digest. */
+const encodeUnpaddedBase64 = (bytes: Uint8Array): string =>
+  Encoding.encodeBase64(bytes).replace(/=+$/, "");
+
+const toHex = (bytes: Uint8Array): string =>
+  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 // $argon2id$v=19$m=<memorySize>,t=<iterations>,p=<parallelism>$<salt>$<hash>
 // (salt and hash are unpadded base64).
@@ -209,101 +313,103 @@ const parseArgon2id = (phc: string, ceilings: Argon2Ceilings) => {
 };
 
 /**
+ * The argon2id hasher over a `KdfBackend`. `layerArgon2id` supplies the
+ * calling-thread backend; `PasswordHasherWorkerPool` supplies a pooled one.
+ *
  * BEH-EA-020 (`archive/design/plugins-as-layers.md` §3.3): the default,
  * OWASP-preferred hasher — argon2id, `m=19456, t=2, p=1` unless overridden
  * via `AUTH_ARGON2_MEMORY_KIB`/`AUTH_ARGON2_ITERATIONS`/
  * `AUTH_ARGON2_PARALLELISM`, matching `archive/PRD.md`'s own env var name
  * for the memory parameter.
  */
+export const makeArgon2id = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+    const legacy = yield* LegacyPasswordVerifiers;
+    const memorySize = yield* Config.Int("AUTH_ARGON2_MEMORY_KIB").pipe(Config.withDefault(19_456));
+    const iterations = yield* Config.Int("AUTH_ARGON2_ITERATIONS").pipe(Config.withDefault(2));
+    const parallelism = yield* Config.Int("AUTH_ARGON2_PARALLELISM").pipe(Config.withDefault(1));
+    const rehashPolicy = yield* rehashPolicyConfig;
+    const ceilings: Argon2Ceilings = {
+      memorySize: yield* Config.Int("AUTH_ARGON2_MAX_MEMORY_KIB").pipe(Config.withDefault(262_144)),
+      iterations: yield* Config.Int("AUTH_ARGON2_MAX_ITERATIONS").pipe(Config.withDefault(16)),
+      parallelism: yield* Config.Int("AUTH_ARGON2_MAX_PARALLELISM").pipe(Config.withDefault(8)),
+    };
+    yield* requireCeiling(
+      "AUTH_ARGON2_MAX_MEMORY_KIB",
+      ceilings.memorySize,
+      "AUTH_ARGON2_MEMORY_KIB",
+      memorySize,
+    );
+    yield* requireCeiling(
+      "AUTH_ARGON2_MAX_ITERATIONS",
+      ceilings.iterations,
+      "AUTH_ARGON2_ITERATIONS",
+      iterations,
+    );
+    yield* requireCeiling(
+      "AUTH_ARGON2_MAX_PARALLELISM",
+      ceilings.parallelism,
+      "AUTH_ARGON2_PARALLELISM",
+      parallelism,
+    );
+
+    const hash: PasswordHasherShape["hash"] = (plain) =>
+      Effect.gen(function* () {
+        const salt = yield* crypto.randomBytes(SALT_LENGTH);
+        const digest = yield* backend.argon2id({
+          password: Redacted.value(plain),
+          salt,
+          iterations,
+          parallelism,
+          memorySize,
+          hashLength: HASH_LENGTH,
+        });
+        return `$argon2id$v=19$m=${memorySize},t=${iterations},p=${parallelism}$${encodeUnpaddedBase64(salt)}$${encodeUnpaddedBase64(digest)}`;
+      }).pipe(Effect.orDie);
+
+    const verify: PasswordHasherShape["verify"] = (plain, phc) => {
+      const match = legacy.find((verifier) => verifier.recognizes(phc));
+      // ERS-001: a legacy verifier (bcrypt) is CPU work too.
+      if (match !== undefined) return slots.withPermits(1)(match.verify(plain, phc));
+      return Effect.gen(function* () {
+        const parsed = parseArgon2id(phc, ceilings);
+        if (parsed === undefined) return false;
+        const digest = yield* backend.argon2id({
+          password: Redacted.value(plain),
+          salt: parsed.salt,
+          iterations: parsed.iterations,
+          parallelism: parsed.parallelism,
+          memorySize: parsed.memorySize,
+          hashLength: parsed.digest.length,
+        });
+        return ConstantTime.equalBytes(digest, parsed.digest);
+      }).pipe(Effect.orElseSucceed(() => false));
+    };
+
+    const needsRehash: PasswordHasherShape["needsRehash"] = (phc) => {
+      const parsed = parseArgon2id(phc, ceilings);
+      if (parsed === undefined) return true;
+      if (rehashPolicy === "exact") {
+        return (
+          parsed.memorySize !== memorySize ||
+          parsed.iterations !== iterations ||
+          parsed.parallelism !== parallelism
+        );
+      }
+      return parsed.memorySize < memorySize || parsed.iterations < iterations;
+    };
+
+    return PasswordHasher.of({ hash, verify, needsRehash });
+  });
+
+/** argon2id on the calling thread, at most `AUTH_PASSWORD_HASH_CONCURRENCY` hashes in flight (ERS-001). */
 export const layerArgon2id: Layer.Layer<PasswordHasher, Config.ConfigError, Crypto.Crypto> =
   Layer.effect(
     PasswordHasher,
     Effect.gen(function* () {
-      const crypto = yield* Crypto.Crypto;
-      const legacy = yield* LegacyPasswordVerifiers;
-      const memorySize = yield* Config.Int("AUTH_ARGON2_MEMORY_KIB").pipe(
-        Config.withDefault(19_456),
-      );
-      const iterations = yield* Config.Int("AUTH_ARGON2_ITERATIONS").pipe(Config.withDefault(2));
-      const parallelism = yield* Config.Int("AUTH_ARGON2_PARALLELISM").pipe(Config.withDefault(1));
-      const rehashPolicy = yield* rehashPolicyConfig;
-      const ceilings: Argon2Ceilings = {
-        memorySize: yield* Config.Int("AUTH_ARGON2_MAX_MEMORY_KIB").pipe(
-          Config.withDefault(262_144),
-        ),
-        iterations: yield* Config.Int("AUTH_ARGON2_MAX_ITERATIONS").pipe(Config.withDefault(16)),
-        parallelism: yield* Config.Int("AUTH_ARGON2_MAX_PARALLELISM").pipe(Config.withDefault(8)),
-      };
-      yield* requireCeiling(
-        "AUTH_ARGON2_MAX_MEMORY_KIB",
-        ceilings.memorySize,
-        "AUTH_ARGON2_MEMORY_KIB",
-        memorySize,
-      );
-      yield* requireCeiling(
-        "AUTH_ARGON2_MAX_ITERATIONS",
-        ceilings.iterations,
-        "AUTH_ARGON2_ITERATIONS",
-        iterations,
-      );
-      yield* requireCeiling(
-        "AUTH_ARGON2_MAX_PARALLELISM",
-        ceilings.parallelism,
-        "AUTH_ARGON2_PARALLELISM",
-        parallelism,
-      );
-
-      const hash: PasswordHasherShape["hash"] = (plain) =>
-        Effect.gen(function* () {
-          const salt = yield* crypto.randomBytes(SALT_LENGTH);
-          return yield* Effect.promise(() =>
-            argon2id({
-              password: Redacted.value(plain),
-              salt,
-              iterations,
-              parallelism,
-              memorySize,
-              hashLength: HASH_LENGTH,
-              outputType: "encoded",
-            }),
-          );
-        }).pipe(Effect.orDie);
-
-      const verify: PasswordHasherShape["verify"] = (plain, phc) => {
-        const match = legacy.find((verifier) => verifier.recognizes(phc));
-        if (match !== undefined) return match.verify(plain, phc);
-        return Effect.gen(function* () {
-          const parsed = parseArgon2id(phc, ceilings);
-          if (parsed === undefined) return false;
-          const digest = yield* Effect.tryPromise(() =>
-            argon2id({
-              password: Redacted.value(plain),
-              salt: parsed.salt,
-              iterations: parsed.iterations,
-              parallelism: parsed.parallelism,
-              memorySize: parsed.memorySize,
-              hashLength: parsed.digest.length,
-              outputType: "binary",
-            }),
-          );
-          return ConstantTime.equalBytes(digest, parsed.digest);
-        }).pipe(Effect.orElseSucceed(() => false));
-      };
-
-      const needsRehash: PasswordHasherShape["needsRehash"] = (phc) => {
-        const parsed = parseArgon2id(phc, ceilings);
-        if (parsed === undefined) return true;
-        if (rehashPolicy === "exact") {
-          return (
-            parsed.memorySize !== memorySize ||
-            parsed.iterations !== iterations ||
-            parsed.parallelism !== parallelism
-          );
-        }
-        return parsed.memorySize < memorySize || parsed.iterations < iterations;
-      };
-
-      return PasswordHasher.of({ hash, verify, needsRehash });
+      const slots = yield* makeSlots;
+      return yield* makeArgon2id(wasmBackend(slots), slots);
     }),
   );
 
@@ -363,108 +469,108 @@ const parseScryptHash = (phc: string, ceilings: ScryptCeilings) => {
 };
 
 /**
+ * The scrypt hasher over a `KdfBackend` (see `makeArgon2id`).
+ *
  * BEH-EA-020: the zero-native-dependency fallback named in
  * `research/07-passwords-2fa.md` Q52 for when argon2id itself is
  * unavailable — `N=2^17, r=8, p=1` unless overridden via
  * `AUTH_SCRYPT_COST_LOG2`/`AUTH_SCRYPT_BLOCK_SIZE`/
  * `AUTH_SCRYPT_PARALLELISM`.
  */
+export const makeScrypt = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+    const legacy = yield* LegacyPasswordVerifiers;
+    const costLog2 = yield* Config.Int("AUTH_SCRYPT_COST_LOG2").pipe(Config.withDefault(17));
+    const blockSize = yield* Config.Int("AUTH_SCRYPT_BLOCK_SIZE").pipe(Config.withDefault(8));
+    const parallelism = yield* Config.Int("AUTH_SCRYPT_PARALLELISM").pipe(Config.withDefault(1));
+    const costFactor = 2 ** costLog2;
+    const rehashPolicy = yield* rehashPolicyConfig;
+    const maxCostLog2 = yield* Config.Int("AUTH_SCRYPT_MAX_COST_LOG2").pipe(Config.withDefault(20));
+    const maxBlockSize = yield* Config.Int("AUTH_SCRYPT_MAX_BLOCK_SIZE").pipe(Config.withDefault(32));
+    const maxParallelism = yield* Config.Int("AUTH_SCRYPT_MAX_PARALLELISM").pipe(
+      Config.withDefault(16),
+    );
+    yield* requireCeiling(
+      "AUTH_SCRYPT_MAX_COST_LOG2",
+      maxCostLog2,
+      "AUTH_SCRYPT_COST_LOG2",
+      costLog2,
+    );
+    yield* requireCeiling(
+      "AUTH_SCRYPT_MAX_BLOCK_SIZE",
+      maxBlockSize,
+      "AUTH_SCRYPT_BLOCK_SIZE",
+      blockSize,
+    );
+    yield* requireCeiling(
+      "AUTH_SCRYPT_MAX_PARALLELISM",
+      maxParallelism,
+      "AUTH_SCRYPT_PARALLELISM",
+      parallelism,
+    );
+    const ceilings: ScryptCeilings = {
+      costLog2: maxCostLog2,
+      blockSize: maxBlockSize,
+      parallelism: maxParallelism,
+      work: 2 ** maxCostLog2 * Math.max(blockSize, 8),
+    };
+
+    const hash: PasswordHasherShape["hash"] = (plain) =>
+      Effect.gen(function* () {
+        const salt = yield* crypto.randomBytes(SALT_LENGTH);
+        const digest = yield* backend.scrypt({
+          password: Redacted.value(plain),
+          salt,
+          costFactor,
+          blockSize,
+          parallelism,
+          hashLength: HASH_LENGTH,
+        });
+        return `$scrypt$ln=${costLog2},r=${blockSize},p=${parallelism}$${Encoding.encodeBase64(salt)}$${toHex(digest)}`;
+      }).pipe(Effect.orDie);
+
+    const verify: PasswordHasherShape["verify"] = (plain, phc) => {
+      const match = legacy.find((verifier) => verifier.recognizes(phc));
+      // ERS-001: a legacy verifier (bcrypt) is CPU work too.
+      if (match !== undefined) return slots.withPermits(1)(match.verify(plain, phc));
+      return Effect.gen(function* () {
+        const parsed = parseScryptHash(phc, ceilings);
+        if (parsed === undefined) return false;
+        const digest = yield* backend.scrypt({
+          password: Redacted.value(plain),
+          salt: parsed.salt,
+          costFactor: parsed.costFactor,
+          blockSize: parsed.blockSize,
+          parallelism: parsed.parallelism,
+          hashLength: HASH_LENGTH,
+        });
+        return ConstantTime.equalHex(toHex(digest), parsed.hash);
+      }).pipe(Effect.orElseSucceed(() => false));
+    };
+
+    const needsRehash: PasswordHasherShape["needsRehash"] = (phc) => {
+      const parsed = parseScryptHash(phc, ceilings);
+      if (parsed === undefined) return true;
+      if (rehashPolicy === "exact") {
+        return (
+          parsed.costFactor !== costFactor ||
+          parsed.blockSize !== blockSize ||
+          parsed.parallelism !== parallelism
+        );
+      }
+      return parsed.costFactor < costFactor || parsed.blockSize < blockSize;
+    };
+
+    return PasswordHasher.of({ hash, verify, needsRehash });
+  });
+
+/** scrypt on the calling thread, at most `AUTH_PASSWORD_HASH_CONCURRENCY` hashes in flight (ERS-001). */
 export const layerScrypt: Layer.Layer<PasswordHasher, Config.ConfigError, Crypto.Crypto> =
   Layer.effect(
     PasswordHasher,
     Effect.gen(function* () {
-      const crypto = yield* Crypto.Crypto;
-      const legacy = yield* LegacyPasswordVerifiers;
-      const costLog2 = yield* Config.Int("AUTH_SCRYPT_COST_LOG2").pipe(Config.withDefault(17));
-      const blockSize = yield* Config.Int("AUTH_SCRYPT_BLOCK_SIZE").pipe(Config.withDefault(8));
-      const parallelism = yield* Config.Int("AUTH_SCRYPT_PARALLELISM").pipe(Config.withDefault(1));
-      const costFactor = 2 ** costLog2;
-      const rehashPolicy = yield* rehashPolicyConfig;
-      const maxCostLog2 = yield* Config.Int("AUTH_SCRYPT_MAX_COST_LOG2").pipe(
-        Config.withDefault(20),
-      );
-      const maxBlockSize = yield* Config.Int("AUTH_SCRYPT_MAX_BLOCK_SIZE").pipe(
-        Config.withDefault(32),
-      );
-      const maxParallelism = yield* Config.Int("AUTH_SCRYPT_MAX_PARALLELISM").pipe(
-        Config.withDefault(16),
-      );
-      yield* requireCeiling(
-        "AUTH_SCRYPT_MAX_COST_LOG2",
-        maxCostLog2,
-        "AUTH_SCRYPT_COST_LOG2",
-        costLog2,
-      );
-      yield* requireCeiling(
-        "AUTH_SCRYPT_MAX_BLOCK_SIZE",
-        maxBlockSize,
-        "AUTH_SCRYPT_BLOCK_SIZE",
-        blockSize,
-      );
-      yield* requireCeiling(
-        "AUTH_SCRYPT_MAX_PARALLELISM",
-        maxParallelism,
-        "AUTH_SCRYPT_PARALLELISM",
-        parallelism,
-      );
-      const ceilings: ScryptCeilings = {
-        costLog2: maxCostLog2,
-        blockSize: maxBlockSize,
-        parallelism: maxParallelism,
-        work: 2 ** maxCostLog2 * Math.max(blockSize, 8),
-      };
-
-      const hash: PasswordHasherShape["hash"] = (plain) =>
-        Effect.gen(function* () {
-          const salt = yield* crypto.randomBytes(SALT_LENGTH);
-          const digest = yield* Effect.promise(() =>
-            scrypt({
-              password: Redacted.value(plain),
-              salt,
-              costFactor,
-              blockSize,
-              parallelism,
-              hashLength: HASH_LENGTH,
-              outputType: "hex",
-            }),
-          );
-          return `$scrypt$ln=${costLog2},r=${blockSize},p=${parallelism}$${Encoding.encodeBase64(salt)}$${digest}`;
-        }).pipe(Effect.orDie);
-
-      const verify: PasswordHasherShape["verify"] = (plain, phc) => {
-        const match = legacy.find((verifier) => verifier.recognizes(phc));
-        if (match !== undefined) return match.verify(plain, phc);
-        return Effect.gen(function* () {
-          const parsed = parseScryptHash(phc, ceilings);
-          if (parsed === undefined) return false;
-          const digest = yield* Effect.tryPromise(() =>
-            scrypt({
-              password: Redacted.value(plain),
-              salt: parsed.salt,
-              costFactor: parsed.costFactor,
-              blockSize: parsed.blockSize,
-              parallelism: parsed.parallelism,
-              hashLength: HASH_LENGTH,
-              outputType: "hex",
-            }),
-          );
-          return ConstantTime.equalHex(digest, parsed.hash);
-        }).pipe(Effect.orElseSucceed(() => false));
-      };
-
-      const needsRehash: PasswordHasherShape["needsRehash"] = (phc) => {
-        const parsed = parseScryptHash(phc, ceilings);
-        if (parsed === undefined) return true;
-        if (rehashPolicy === "exact") {
-          return (
-            parsed.costFactor !== costFactor ||
-            parsed.blockSize !== blockSize ||
-            parsed.parallelism !== parallelism
-          );
-        }
-        return parsed.costFactor < costFactor || parsed.blockSize < blockSize;
-      };
-
-      return PasswordHasher.of({ hash, verify, needsRehash });
+      const slots = yield* makeSlots;
+      return yield* makeScrypt(wasmBackend(slots), slots);
     }),
   );

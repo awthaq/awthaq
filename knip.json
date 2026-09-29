@@ -6,6 +6,9 @@
       "entry": ["scripts/*.mjs"],
       "ignoreDependencies": ["@arethetypeswrong/cli"]
     },
+    "packages/ports": {
+      "entry": ["src/passwordHasherWorker.ts"]
+    },
     "packages/api-key": {
       "ignoreDependencies": [
         "@awthaq/api",

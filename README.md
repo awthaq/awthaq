@@ -237,10 +237,30 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 
 | Port | Real layer used above | Other options |
 |---|---|---|
-| `PasswordHasher` | `layerArgon2id` | `layerScrypt` |
+| `PasswordHasher` | `layerArgon2id` | `layerScrypt`; `PasswordHasherWorkerPool.layerArgon2id`/`layerScrypt` run the KDF in worker threads (Node), see [Password hashing](#password-hashing) |
 | `Mailer` | a one-line `console.log` stand-in | bring your own (`Mailer.Mailer.of({ send })`, any provider) |
 | `RateLimiter` | `layer` over `RateLimiterStoreSql.layerStoreSql` (shared across replicas) | `layer` over the bounded, single-process `layerStoreMemory`, or your own `RateLimiterStore`; `layerPermissive` disables limiting (tests only) |
 | `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS` + `AWTHAQ_ENCRYPTION_KEY_ID`) | a KMS-backed `KeyProvider` (implement the port directly; keeps raw key bytes out of the process) |
+
+### Password hashing
+
+Hashing is CPU-heavy by design. The default layers run hash-wasm on the calling thread and bound it: at most `AUTH_PASSWORD_HASH_CONCURRENCY` (default 4) hashes in flight, and legacy verifiers such as bcrypt take a permit too. Each argon2id hash at the defaults (`AUTH_ARGON2_MEMORY_KIB=19456`, `AUTH_ARGON2_ITERATIONS=2`) takes tens of milliseconds and about 19 MiB; scrypt at `AUTH_SCRYPT_COST_LOG2=17` uses about 128 MiB, so peak KDF memory is roughly the concurrency times that.
+
+On Node, offload the KDF entirely with one Layer swap so hashing never blocks the event loop:
+
+```ts
+import { PasswordHasherWorkerPool } from "@awthaq/ports";
+import * as NodeWorker from "@effect/platform-node/NodeWorker";
+import { Worker } from "node:worker_threads";
+
+const HasherLive = PasswordHasherWorkerPool.layerArgon2id.pipe(
+  Layer.provide(NodeWorker.layer(() => new Worker(PasswordHasherWorkerPool.workerEntry))),
+);
+```
+
+`AUTH_PASSWORD_HASH_WORKER_POOL_SIZE` (default 4) sets the number of workers, one hash each at a time. Hashes are identical across both families, so switching is safe on live data.
+
+Where to run it: password hash/verify belongs on your origin (long-running) runtime. A verify at the default cost is tens of milliseconds of CPU, above a Cloudflare Workers free-tier budget; let the edge tier verify sessions/JWTs and redirect. There is deliberately no cheaper "edge" storage profile.
 
 ### Encryption keys
 
