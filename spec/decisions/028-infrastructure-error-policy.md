@@ -7,7 +7,7 @@
 > | Document ID | EFAUTH-ADR-028 |
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-29 |
-> | Status | Accepted — implemented for `Sessions` and `Verification`; rollout to `Users`, `Accounts` and `AuditLog` pending |
+> | Status | Accepted — implemented for `Sessions`, `Verification`, `Users` and `Accounts`; `AuditLog` pending |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
 > | Change History | 1.0 (2026-09-29): Initial release (MA-004, EEM-006) |
@@ -42,6 +42,6 @@ Core services fail in two different ways. A *domain* failure (`SessionNotFound`,
 
 **Negative**: every Shape that reaches a core service widens by one error, a one-time cascade through the plugin Shapes; `StoreUnavailable` is declared on the middleware rather than per endpoint, so a public endpoint behind neither cannot fail with it without declaring it itself (none does today).
 
-**Rollout**: `Sessions` (the hot path) and `Verification` are done. `Users`, `Accounts` and `AuditLog` still route `SqlError`/`SchemaError` through `Effect.orDie` and `Users.create` still surfaces the crypto `PlatformError`; converting them is mechanical with the same helper (`MA-004` stays open until then). A `Schedule`-based retry for `SQLITE_BUSY`/serialization failures on hot writes (SEA-002) builds on the typed error and is not part of this decision.
+**Rollout**: `Sessions` (the hot path), `Verification`, `VerificationLink`, `Users` and `Accounts` are done, in both layers (`Users.create`'s crypto `PlatformError` included). `AuditLog` (owned by the events program) still routes `SqlError`/`SchemaError` through `Effect.orDie`; converting it is mechanical with the same helper, and `MA-004` stays open until then. A `Schedule`-based retry for `SQLITE_BUSY`/serialization failures on hot writes (SEA-002) builds on the typed error and is not part of this decision.
 
 _Related: [ADR-EA-013](013-error-taxonomy-http-mapping.md), [BEH-EA-035](../behaviors/05-persistence-stratum.md#beh-ea-035-repositories-are-built-with-sqlmodelmakerepository-over-the-ambient-sqlclient-never-opening-their-own-transactions)._

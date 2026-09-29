@@ -102,10 +102,12 @@ const isUserAttributeName = (attribute: string): attribute is UserAttributeName 
 const userAttributeReaders: {
   readonly [N in UserAttributeName]: (
     user: Users.UserRecord,
-  ) => Schema.Schema.Type<(typeof UserAttributeSchemas)[N]>;
+  ) => Schema.Schema.Type<(typeof UserAttributeSchemas)[N]> | undefined;
 } = {
-  email: (user) => user.email,
-  emailVerified: (user) => user.emailVerified,
+  // FAMS-002: a Phone/Anonymous user has no email — "no value", like an unknown attribute.
+  email: (user) => Option.getOrUndefined(Users.emailOf(user)),
+  emailVerified: (user) =>
+    user.identity._tag === "Email" ? user.identity.emailVerified : undefined,
   name: (user) => user.name,
 };
 

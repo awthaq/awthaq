@@ -3,7 +3,7 @@ ID: "PV-005"
 Title: "GET /session/current returns 500 past 200 sessions (oldest-first capped list, expired rows included)"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `MEDIUM` · `correctness` · `core` · found during the 2026-09-29 plan validation (not in the original audit)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -31,3 +31,5 @@ Planned under: ESS-005-effect-stream-specialist / TIR-003 → session-list-corre
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29):** fixed under ESS-005-effect-stream-specialist / TIR-003 (P01: list correctness, keyed lookup); see that issue's Resolved comment for files, tests and gates.

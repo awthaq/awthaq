@@ -3,7 +3,7 @@ ID: "CTA-004"
 Title: "Credential storage is an open question — no keychain integration, no fallback decision, no prohibition"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/behaviors/09-authentication-middleware.md:55"
 Auditor: "cli-tool-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `—` · reported by **CLI Tool Auth Specialist** (`cli-tool-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Record a storage decision now, before implementation pressure exists: OS keychai
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-session-login-carveout`. Evidence at HEAD ec065a7: `spec/behaviors/09-authentication-middleware.md:55`. Fix: Record ticket 06's CredentialStore decision normatively (new behavior next to the session-command BEH) so the login implementation cannot default to a plaintext dotfile. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** BEH-EA-228 (CredentialStore: OS keychain first, 0600 file in a 0700 dir only as a warned fallback, AWTHAQ_TOKEN always wins and is never written, Redacted in memory) + cross-reference from 09-authentication-middleware.md. Implemented in packages/cli/src/CredentialStore.ts (macOS `security -i` / Linux `secret-tool` over an Exec port so the secret never rides argv), proven by packages/cli/test/CredentialStore.test.ts (fake security/secret-tool, real temp dir: mode 0600/0700 read off disk, single warning, env override never writes). Deferred: a Windows Credential Manager backend (Windows uses the warned file fallback; recorded in ADR-EA-027 and BEH-EA-228).

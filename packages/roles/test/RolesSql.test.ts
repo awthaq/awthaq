@@ -92,6 +92,19 @@ describe("Roles.Roles.layerSql", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  // ECS-006: `awthaq seed admin` finds an existing administrator through `holders`.
+  it.effect("holders lists exactly the users holding the role", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const userA = Users.UserId("66666666-6666-6666-6666-666666666666");
+      const userB = Users.UserId("77777777-7777-7777-7777-777777777777");
+      yield* roles.assign(userA, "owner");
+      yield* roles.assign(userB, "editor");
+      assert.deepStrictEqual(yield* roles.holders("owner"), [userA]);
+      assert.deepStrictEqual(yield* roles.holders("nobody"), []);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("a user with no assigned roles lists empty", () =>
     Effect.gen(function* () {
       const roles = yield* Roles.Roles;

@@ -3,7 +3,7 @@ ID: "FAMS-010"
 Title: "No bulk user-import tooling; the planned CLI import command is unimplemented"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "cli"
 Source: "packages/cli/src/index.ts:3"
 Auditor: "firebase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `cli` · reported by **Firebase Auth Migration Specialist** (`firebase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Ship the CLI import command ahead of M6 certification with a Firebase-shaped ada
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-manifest-tooling`. Evidence at HEAD ec065a7: `packages/cli/src/index.ts:3`. Fix: Ship a Firebase import recipe in @awthaq/migrate-firebase and expose it as `awthaq import --from firebase`. (effort M). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Firebase import recipe: packages/migrate-firebase/src/ImportFirebaseUser.ts (readUsers/readHashConfig/mapUser onto UserImport.ImportUserInput; password via FirebaseScryptVerifier.encodeHash, photoUrl -> image, google.com-style providerUserInfo -> accounts with the caller's issuer, email-less and disabled records reported as unmappable) registered as `awthaq import --from firebase --source users.json --source-option hash-config=hash_config.json`. Proof: migrate-firebase/test/ImportFirebaseUser.test.ts (the published firebase/scrypt vector verifies and is flagged for rehash) and cli/test/Import.test.ts (end to end through the CLI). Note: the fixtures follow Firebase's documented export shape around the published test vector; there is no real Firebase project export.

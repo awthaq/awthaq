@@ -240,7 +240,7 @@ export const signInAs = (input: {
     const users = yield* Users.Users;
     const sessions = yield* Sessions.Sessions;
     const user = yield* users
-      .create({ email: input.email, name: input.name ?? input.email })
+      .create({ identity: { _tag: "Email", email: input.email }, name: input.name ?? input.email })
       .pipe(Effect.orDie);
     if (input.onSignedUp !== undefined) {
       yield* input.onSignedUp(user.id);

@@ -39,8 +39,8 @@ Native mobile/desktop clients and machine-to-machine callers that cannot rely on
 - **Revocation:** bare `verify` lags session revocation by at most `JwtConfig.ttl` (default 15 minutes); `verifyLive`, `introspectLive` and `/jwt/introspect` (with `Sessions` composed) reflect it at once; a per-token denylist (`RevocationStore`, keyed by `jti`) is consulted by every `introspect*` path.
 
 ## What is missing
-- The **`Bearer` plugin** / a stateless JWT-as-credential strategy (wayfinder ticket 33): `Authentication` does not accept a JWT as a session credential yet.
-- A **machine-credential mint** (`client_credentials`-style issuance to a non-session principal).
+- ~~The **`Bearer` plugin**~~ (wayfinder ticket 33, MAPS-001/NAM-001): superseded by a built-in seam. There is no separate `Bearer` plugin: `bearer` is a built-in `Api.Authentication` scheme, and `@awthaq/server`'s `CredentialResolvers` registry lets `Jwt` (with `JwtConfig.acceptAsBearer`, default off) accept its own principal tokens statelessly at the origin; `Jwt.verify` still returns raw claims, not a `Principal`. Behaviour: BEH-EA-066; recipe: `packages/jwt/README.md`.
+- A **machine-credential mint** (`client_credentials`-style issuance to a non-session principal) is `@awthaq/api-key`'s job, not this plugin's ([07 — API Keys](07-api-keys.md), wayfinder ticket 10).
 - **Inbound token exchange** (RFC 8693 `POST /jwt/exchange` from a foreign issuer): `POST /jwt/token` is a self-decoration mint for an already-authenticated caller, not an exchange. Foreign tokens (e.g. Firebase RS256) are verified with `Verify.makeVerifier` during a dual-run.
 - A future `behaviors/` file must specify the claims mapping and revocation-check semantics normatively; none exists yet, so this document, the ADRs and `packages/jwt/test` are the record.
 

@@ -20,11 +20,14 @@
 // this plugin has no way to reach a fuller subject without the layering
 // violation above.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { AccountContract, Api, SessionContract } from "@awthaq/api";
 import {
+  AuditChain,
   AuthEvents,
   AuthPlugin,
+  ConfigDescriptor,
   Defects,
+  EffectiveConfig,
   Errors,
   Migrations,
   SessionCookie,
@@ -84,6 +87,12 @@ export interface AdminConfigShape {
    * (`canAdministerTenants`) get their own predicates when those capabilities land.
    */
   readonly canManageUsers: (input: UserAdminGateInput) => Effect.Effect<boolean>;
+  /**
+   * BAM-005/SCP-001: the fail-closed predicate behind `banUser`/`unbanUser` — its own
+   * capability, since locking an account out is a stronger act than editing it. Same
+   * `{ admin, target }` shape as `canManageUsers`.
+   */
+  readonly canBanUsers: (input: UserAdminGateInput) => Effect.Effect<boolean>;
 }
 
 /** BAM-005: what `canManageUsers` is asked — see there. */
@@ -105,6 +114,7 @@ const defaultAdminConfig: AdminConfigShape = {
   canImpersonate: () => Effect.succeed(false),
   canManageEpisode: episodeGateFrom(() => Effect.succeed(false)),
   canManageUsers: () => Effect.succeed(false),
+  canBanUsers: () => Effect.succeed(false),
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -192,6 +202,17 @@ export interface AdminShape {
    * `AdminSessionNotFound` (`revokeUserSession`: not one of that user's revocable
    * sessions — unknown, another user's, or an impersonation session, which `forceStop` owns).
    */
+  /**
+   * EP-009/BEH-EA-229: the effective configuration this application was *built* with — every
+   * descriptor in `EffectiveConfig.Catalog` (the application provides
+   * `EffectiveConfig.layer(auth.manifest)`; unprovided, core's own) read against the
+   * `Context` this plugin's layer was built in, so an override provided to the composed layer
+   * shows up as `override`. Sensitive values are `<redacted>`, never unwrapped. Same gate as
+   * `listUsers` (collection-level `canManageUsers`).
+   */
+  readonly effectiveConfig: (
+    caller: Api.UserPrincipal,
+  ) => Effect.Effect<ReadonlyArray<EffectiveConfig.Item>, AdminApi.AdminActionDenied>;
   readonly listUsers: (
     caller: Api.UserPrincipal,
     input?: {
@@ -208,7 +229,38 @@ export interface AdminShape {
     caller: Api.UserPrincipal,
     userId: Users.UserId,
     input: { readonly name: string; readonly metadata?: string | null | undefined },
-  ) => Effect.Effect<Users.UserRecord, AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound | Errors.StoreUnavailable>;
+  ) => Effect.Effect<
+    Users.UserRecord,
+    AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound | Errors.StoreUnavailable
+  >;
+  /**
+   * BAM-005/SCP-001: `Users.setStatus("suspended")` composed with `Sessions.revokeAll(userId,
+   * "suspended")` — every session, impersonation sessions issued *as* the user included, since
+   * the account's access ends as a whole. Behind `canBanUsers`; an admin cannot ban themselves.
+   * The block itself is `Users.assertCanSignIn`, the one gate password/passkey/oauth share.
+   */
+  readonly banUser: (
+    caller: Api.UserPrincipal,
+    userId: Users.UserId,
+    input: {
+      readonly reason?: string | undefined;
+      readonly until?: DateTime.Utc | undefined;
+    },
+  ) => Effect.Effect<
+    Users.UserRecord,
+    | AdminApi.AdminActionDenied
+    | AdminApi.AdminTargetNotFound
+    | AdminApi.AdminSelfBanRefused
+    | Errors.StoreUnavailable
+  >;
+  /** BAM-005: `Users.setStatus("active")`; accounts and session history are untouched (nothing was deleted), so the user simply signs in again. */
+  readonly unbanUser: (
+    caller: Api.UserPrincipal,
+    userId: Users.UserId,
+  ) => Effect.Effect<
+    Users.UserRecord,
+    AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound | Errors.StoreUnavailable
+  >;
   /** The user's own sessions — impersonation sessions issued *as* that user are not among them. */
   readonly listUserSessions: (
     caller: Api.UserPrincipal,
@@ -255,13 +307,31 @@ const toSessionListDto = (session: Sessions.SessionListItem): SessionContract.Se
     current: false,
   });
 
+/** FAMS-002: exhaustive over `Users.UserIdentity` (`@awthaq/server`'s `Account.ts` has the same mapping for the self-service DTO). */
+const identityDto = (identity: Users.UserIdentity): AccountContract.IdentityDto => {
+  switch (identity._tag) {
+    case "Email":
+      return { _tag: "Email", email: identity.email, emailVerified: identity.emailVerified };
+    case "Phone":
+      return { _tag: "Phone", phone: identity.phone, phoneVerified: identity.phoneVerified };
+    case "Anonymous":
+      return { _tag: "Anonymous" };
+  }
+};
+
 const toUserDto = (user: Users.UserRecord): AdminApi.UserDto =>
   new AdminApi.UserDto({
     id: user.id,
-    email: user.email,
-    emailVerified: user.emailVerified,
+    identity: identityDto(user.identity),
     name: user.name,
+    image: Option.getOrNull(user.image),
     metadata: Option.getOrNull(user.metadata),
+    status: user.status,
+    statusReason: Option.getOrNull(user.statusReason),
+    suspendedUntil: Option.match(user.suspendedUntil, {
+      onNone: () => null,
+      onSome: DateTime.formatIso,
+    }),
     createdAt: DateTime.formatIso(user.createdAt),
     updatedAt: DateTime.formatIso(user.updatedAt),
   });
@@ -328,6 +398,19 @@ export const AdminHandlers = HttpApiBuilder.group(
         // APS-006: ending one's own current episode must hand the browser back.
         if (params.sessionId === caller.sessionId) yield* clearImpersonationCookie;
       }),
+      effectiveConfig: Effect.fnUntraced(function* () {
+        const caller = yield* currentUserPrincipal;
+        const items = yield* admin.effectiveConfig(caller);
+        return items.map(
+          (item) =>
+            new AdminApi.ConfigItemDto({
+              owner: item.owner,
+              key: item.key,
+              source: item.source,
+              entries: item.entries.map((entry) => new AdminApi.ConfigEntryDto(entry)),
+            }),
+        );
+      }),
       listUsers: Effect.fnUntraced(function* ({ query }: { query: AdminApi.ListUsersQuery }) {
         const caller = yield* currentUserPrincipal;
         const page = yield* admin.listUsers(caller, { cursor: query.cursor, limit: query.limit });
@@ -350,6 +433,25 @@ export const AdminHandlers = HttpApiBuilder.group(
         const caller = yield* currentUserPrincipal;
         const updated = yield* admin.updateUser(caller, Users.UserId(params.userId), payload);
         return toUserDto(updated);
+      }),
+      banUser: Effect.fnUntraced(function* ({
+        params,
+        payload,
+      }: {
+        params: AdminApi.UserIdParams;
+        payload: AdminApi.BanUserPayload;
+      }) {
+        const caller = yield* currentUserPrincipal;
+        return toUserDto(
+          yield* admin.banUser(caller, Users.UserId(params.userId), {
+            reason: payload.reason,
+            until: payload.until,
+          }),
+        );
+      }),
+      unbanUser: Effect.fnUntraced(function* ({ params }: { params: AdminApi.UserIdParams }) {
+        const caller = yield* currentUserPrincipal;
+        return toUserDto(yield* admin.unbanUser(caller, Users.UserId(params.userId)));
       }),
       listUserSessions: Effect.fnUntraced(function* ({
         params,
@@ -589,6 +691,22 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
   contract: AdminApi.AdminApi,
   tables: ["admin_impersonation", "admin_impersonation_chain"],
   migrations: adminMigrations,
+  // The impersonation audit rows are hash-chained (`AuditChain`); the chain's key is this plugin's concern.
+  config: [
+    ConfigDescriptor.make(AdminConfig),
+    ConfigDescriptor.make(AuditChain.AuditChainConfig, {
+      audit: (value, environment) =>
+        environment.production && Option.isNone(value.key)
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "audit-chain-unkeyed",
+                "the impersonation audit hash chain has no key: an attacker with database write access can recompute it",
+              ),
+            ]
+          : [],
+    }),
+  ],
 }) {
   static readonly layer = AuthPlugin.layer(Admin, {
     handlers: AdminHandlers,
@@ -598,6 +716,10 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       const records = yield* ImpersonationRecords.ImpersonationRecords;
       const users = yield* Users.Users;
       const adminConfig = yield* AdminConfig;
+      // EP-009: captured at build, like every other configuration read — a request-time read would
+      // see only the router's own context, not the overrides the composed layer was built under.
+      const builtIn = yield* Effect.context<never>();
+      const catalog = Context.getOrElse(builtIn, EffectiveConfig.Catalog, () => EffectiveConfig.core);
 
       const deny = Effect.fnUntraced(function* (caller: Api.UserPrincipal) {
         yield* events.publish({
@@ -613,8 +735,9 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         caller: Api.UserPrincipal,
         action: string,
         target: Option.Option<Users.UserId>,
+        gate: "canManageUsers" | "canBanUsers" = "canManageUsers",
       ) {
-        const allowed = yield* adminConfig.canManageUsers({
+        const allowed = yield* adminConfig[gate]({
           admin: subjectOf(caller),
           target: Option.map(target, subjectOfUserId),
         });
@@ -633,8 +756,9 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         caller: Api.UserPrincipal,
         action: string,
         userId: Users.UserId,
+        gate: "canManageUsers" | "canBanUsers" = "canManageUsers",
       ) {
-        yield* authorizeUsers(caller, action, Option.some(userId));
+        yield* authorizeUsers(caller, action, Option.some(userId), gate);
         return yield* users
           .findById(userId)
           .pipe(
@@ -651,6 +775,11 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         return yield* Effect.filter(listed, (session) =>
           Effect.map(isImpersonationSession(session.id), (impersonation) => !impersonation),
         );
+      });
+
+      const effectiveConfig: AdminShape["effectiveConfig"] = Effect.fnUntraced(function* (caller) {
+        yield* authorizeUsers(caller, "effectiveConfig", Option.none());
+        return EffectiveConfig.read(builtIn, catalog);
       });
 
       const listUsers: AdminShape["listUsers"] = Effect.fnUntraced(function* (caller, input) {
@@ -682,6 +811,50 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           return updated;
         },
       );
+
+      const banUser: AdminShape["banUser"] = Effect.fnUntraced(function* (caller, userId, input) {
+        // Gate first (the caller learns nothing about ids or about the refusal rule), then the
+        // lock-out guard, then existence.
+        yield* authorizeUsers(caller, "banUser", Option.some(userId), "canBanUsers");
+        if (caller.ref.id === userId) return yield* Effect.fail(new AdminApi.AdminSelfBanRefused());
+        yield* users
+          .findById(userId)
+          .pipe(
+            Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
+          );
+        const suspended = yield* users
+          .setStatus(userId, "suspended", { reason: input.reason?.trim(), until: input.until })
+          .pipe(
+            Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
+          );
+        // Ordering: the flag first, so no sign-in can slip in between the revoke and the write
+        // (a session issued in that gap would be refused-then-revoked anyway; the reverse order
+        // could leave a fresh session behind).
+        yield* sessions.revokeAll(userId, "suspended");
+        yield* events.publish({
+          _tag: "auth.admin.userBanned",
+          adminUserId: Users.UserId(caller.ref.id),
+          userId,
+          reason: input.reason?.trim() ?? null,
+          until: input.until === undefined ? null : DateTime.formatIso(input.until),
+        });
+        return suspended;
+      });
+
+      const unbanUser: AdminShape["unbanUser"] = Effect.fnUntraced(function* (caller, userId) {
+        yield* authorizeUser(caller, "unbanUser", userId, "canBanUsers");
+        const reactivated = yield* users
+          .setStatus(userId, "active")
+          .pipe(
+            Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
+          );
+        yield* events.publish({
+          _tag: "auth.admin.userUnbanned",
+          adminUserId: Users.UserId(caller.ref.id),
+          userId,
+        });
+        return reactivated;
+      });
 
       const listUserSessions: AdminShape["listUserSessions"] = Effect.fnUntraced(
         function* (caller, userId) {
@@ -887,9 +1060,12 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         forceStop,
         list,
         sweepExpired,
+        effectiveConfig,
         listUsers,
         getUser,
         updateUser,
+        banUser,
+        unbanUser,
         listUserSessions,
         revokeUserSession,
         revokeUserSessions,

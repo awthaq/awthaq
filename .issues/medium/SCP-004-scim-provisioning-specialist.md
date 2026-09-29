@@ -58,3 +58,5 @@ Either widen UsersShape with a typed update accepting the SCIM-representable fie
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `users-profile-surface`. Duplicate of `BAM-009` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/Users.ts:96`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `BAM-009-better-auth-migration-specialist` — closed by its fix (see that issue's Resolved comment).

@@ -6,7 +6,7 @@
 // (including `list`) requires a real, already-authenticated caller, gated
 // again by `AdminConfig.canImpersonate` inside the handler itself.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { AccountContract, Api, SessionContract } from "@awthaq/api";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -63,6 +63,13 @@ export class AdminSessionNotFound extends Schema.TaggedError<AdminSessionNotFoun
   "AdminSessionNotFound",
   {},
   { httpApiStatus: 404 },
+) {}
+
+/** BAM-005/SCP-001: an administrator may not ban their own account (a lock-out no one asked for). */
+export class AdminSelfBanRefused extends Schema.TaggedError<AdminSelfBanRefused>()(
+  "AdminSelfBanRefused",
+  {},
+  { httpApiStatus: 400 },
 ) {}
 
 /** BEH-EA-213: non-empty after trimming, capped at 1000 characters (`archive/PRD.md` §18's "reason required"). */
@@ -127,6 +134,16 @@ export const UpdateUserPayload = Schema.Struct({
 export type UpdateUserPayload = typeof UpdateUserPayload.Type;
 
 /**
+ * BAM-005: `POST /admin/users/:userId/ban`. `reason` is the operator's note (never shown to the
+ * banned user); `until` makes the ban lapse by itself — left out, it lasts until `unban`.
+ */
+export const BanUserPayload = Schema.Struct({
+  reason: Schema.optional(ReasonSchema),
+  until: Schema.optional(Schema.DateTimeUtcFromString),
+});
+export type BanUserPayload = typeof BanUserPayload.Type;
+
+/**
  * ESS-006: the opaque page cursor — base64url of the JSON `(startedAt, id)` keyset
  * position. Decoding is a plain Schema transform, so a malformed or tampered cursor
  * is an ordinary 400 rather than a value the handler has to trust.
@@ -188,12 +205,34 @@ export class ImpersonationRecordDto extends Schema.Class<ImpersonationRecordDto>
 /** BAM-005: the wire shape of `@awthaq/core`'s `UserRecord`. */
 export class UserDto extends Schema.Class<UserDto>("AdminUserDto")({
   id: Schema.String,
-  email: Schema.String,
-  emailVerified: Schema.Boolean,
+  identity: AccountContract.IdentityDto,
   name: Schema.String,
+  image: Schema.NullOr(Schema.String),
   metadata: Schema.NullOr(Schema.String),
+  /** SCP-001: `suspended` users cannot sign in; `suspendedUntil` (ISO) is set for a timed suspension. */
+  status: Schema.Literals(["active", "suspended"]),
+  statusReason: Schema.NullOr(Schema.String),
+  suspendedUntil: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
+}) {}
+
+/**
+ * EP-009/BEH-EA-229: one leaf of an effective configuration value. `value` is `<redacted>` for a
+ * secret — declared sensitive, or held in a `Redacted` — and never the secret itself.
+ */
+export class ConfigEntryDto extends Schema.Class<ConfigEntryDto>("AdminConfigEntryDto")({
+  path: Schema.String,
+  value: Schema.String,
+  sensitive: Schema.Boolean,
+}) {}
+
+/** EP-009: one configuration descriptor's effective value: who owns it, whether it is the default or an override. */
+export class ConfigItemDto extends Schema.Class<ConfigItemDto>("AdminConfigItemDto")({
+  owner: Schema.String,
+  key: Schema.String,
+  source: Schema.Literals(["default", "override"]),
+  entries: Schema.Array(ConfigEntryDto),
 }) {}
 
 /** BAM-005: one page of `listUsers`; `nextCursor` is null on the last page. */
@@ -253,6 +292,14 @@ export const AdminGroup = HttpApiGroup.make("admin")
       error: AdminActionDenied,
     }),
   )
+  // EP-009/ECS-008 (BEH-EA-229): the running application's effective configuration, secrets
+  // redacted, behind the same fail-closed `canManageUsers` gate (collection-level: no target).
+  .add(
+    HttpApiEndpoint.get("effectiveConfig", "/admin/config", {
+      success: Schema.Array(ConfigItemDto),
+      error: AdminActionDenied,
+    }),
+  )
   .add(
     HttpApiEndpoint.get("getUser", "/admin/users/:userId", {
       params: UserIdParams,
@@ -264,6 +311,23 @@ export const AdminGroup = HttpApiGroup.make("admin")
     HttpApiEndpoint.patch("updateUser", "/admin/users/:userId", {
       params: UserIdParams,
       payload: UpdateUserPayload,
+      success: UserDto,
+      error: [AdminActionDenied, AdminTargetNotFound],
+    }),
+  )
+  // BAM-005/SCP-001: the ban capability has its own predicate (`canBanUsers`) — being allowed to
+  // administer users does not imply being allowed to lock them out.
+  .add(
+    HttpApiEndpoint.post("banUser", "/admin/users/:userId/ban", {
+      params: UserIdParams,
+      payload: BanUserPayload,
+      success: UserDto,
+      error: [AdminActionDenied, AdminTargetNotFound, AdminSelfBanRefused],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("unbanUser", "/admin/users/:userId/unban", {
+      params: UserIdParams,
       success: UserDto,
       error: [AdminActionDenied, AdminTargetNotFound],
     }),

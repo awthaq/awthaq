@@ -12,12 +12,12 @@ import {
   Accounts,
   AuthEvents,
   AuthPlugin,
+  ConfigDescriptor,
   Errors,
   HookPoint,
   Hooks,
   MailDispatch,
   RateLimits,
-  SessionCookie,
   Sessions,
   Users,
   Verification,
@@ -32,7 +32,7 @@ import {
   RateLimiter,
   SqlTransaction,
 } from "@awthaq/ports";
-import { Session } from "@awthaq/server";
+import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -210,6 +210,7 @@ export interface PasswordShape {
     IssuedSession,
     | Api.InvalidCredentials
     | PasswordApi.EmailNotVerified
+    | Users.UserSuspended
     | Api.RateLimited
     | Hooks.TwoFactorRequired | Errors.StoreUnavailable
   >;
@@ -393,12 +394,6 @@ const requestUserAgent = (request: HttpServerRequest.HttpServerRequest) =>
     onSome: (userAgent) => ({ userAgent }),
   });
 
-// RSC-005: the mapping is `@awthaq/server`'s `Session.toSessionDto`; the typed
-// wrapper also keeps `SessionContract` in scope so declaration emit can name
-// `SessionDto` in the handler group's inferred type (TS2883 otherwise).
-const sessionResponse = (view: Sessions.SessionView): SessionContract.SessionDto =>
-  Session.toSessionDto(view);
-
 /**
  * Resolves `Password` once here, in the group-builder generator itself —
  * not inside each handler body — the same `HttpApiBuilder.group` pattern
@@ -427,6 +422,8 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.SignUpPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
+        // MNA-001: validated before anything is minted.
+        const delivery = yield* SessionDelivery.mode(request);
         const resolvedAddress = yield* clientAddress.resolve(request);
         const signUpInput = {
           ...payload,
@@ -439,8 +436,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
           return yield* password.signUpConcealed(signUpInput);
         }
         const issued = yield* password.signUp(signUpInput);
-        yield* SessionCookie.set(issued.session, issued.token);
-        return sessionResponse(issued.session);
+        // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        return response;
       }),
 
       signIn: Effect.fnUntraced(function* ({
@@ -450,6 +448,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.SignInPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
+        const delivery = yield* SessionDelivery.mode(request);
         // AGA-001/NHS-003: resolved through the application-provided
         // `ClientAddress` port rather than `request.remoteAddress`
         // directly, so a trusted-proxy-aware composition gets a real
@@ -460,8 +459,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
           ...requestUserAgent(request),
         });
-        yield* SessionCookie.set(issued.session, issued.token);
-        return sessionResponse(issued.session);
+        // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        return response;
       }),
 
       requestReset: Effect.fnUntraced(function* ({
@@ -545,6 +545,7 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
         if (principal._tag !== "User") {
           return yield* Defects.invariantViolation("NonUserPrincipal", `awthaq: change-password reached with a non-User principal: ${principal._tag}`);
         }
+        const delivery = yield* SessionDelivery.mode(request);
         const resolvedAddress = yield* clientAddress.resolve(request);
         const issued = yield* password.changePassword({
           userId: Users.UserId(principal.ref.id),
@@ -554,8 +555,9 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
           ...requestUserAgent(request),
         });
-        yield* SessionCookie.set(issued.session, issued.token);
-        return sessionResponse(issued.session);
+        // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        return response;
       }),
 
       reauthenticate: Effect.fnUntraced(function* ({
@@ -583,6 +585,40 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
   // BEH-EA-044: a password credential is an ordinary `accounts` row — this
   // plugin owns no table of its own, so there is nothing to declare here.
   tables: [],
+  // ECS-008/BEH-EA-229: the policy knobs `doctor` audits and `config list` prints.
+  config: [
+    ConfigDescriptor.make(PasswordConfig, {
+      audit: (value, environment) => [
+        ...(value.minLength < 8
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "password-min-length",
+                `the minimum password length is ${value.minLength} (NIST SP 800-63B asks for at least 8)`,
+              ),
+            ]
+          : []),
+        ...(environment.production && value.breachCheck === false
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "password-breach-check-off",
+                "screening new passwords against the breached-password corpus is disabled",
+              ),
+            ]
+          : []),
+        ...(environment.production && !value.requireVerifiedEmail
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "password-unverified-sign-in",
+                "sign-in does not require a verified email address",
+              ),
+            ]
+          : []),
+      ],
+    }),
+  ],
 }) {
   /**
    * BEH-EA-001/008 (`AuthPlugin.ts`'s own doc comment): a plugin's `layer`
@@ -733,8 +769,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               { verification, crypto },
               { purpose: VERIFY_PURPOSE, ttl: VERIFY_TTL, userId: user.id },
             );
+            // FAMS-002: only an Email identity has an address to mail.
+            const to = Users.emailOf(user);
+            if (Option.isNone(to)) return;
             yield* mailer.send({
-              to: user.email,
+              to: to.value,
               template: "verify-email",
               data: VerificationLink.mailData({
                 token: issued.token,
@@ -792,9 +831,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           .withTransaction(
             Effect.gen(function* () {
               const user = yield* users
-                .create({ email: vetoedSignUp.email, name: vetoedSignUp.name })
+                .create({
+                  identity: { _tag: "Email", email: vetoedSignUp.email },
+                  name: vetoedSignUp.name,
+                })
                 .pipe(
                   Effect.catchTag("Users/EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
+                  // FAMS-002: `create` is Email-identity here, so a phone conflict is unreachable.
+                  Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
                 );
               yield* accounts
                 .link({
@@ -822,53 +866,64 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         return issued;
       });
 
-      const signUpConcealed: PasswordShape["signUpConcealed"] = Effect.fnUntraced(function* (input) {
-        const { vetoedSignUp, hash } = yield* prepareSignUp(input);
-        // TMS-005: the hash above is computed in both branches, so the
-        // expensive work does not depend on whether the address exists. The
-        // duplicate is caught outside the transaction (which rolls back), and
-        // no session is issued either way.
-        const created = yield* sqlTransaction
-          .withTransaction(
+      const signUpConcealed: PasswordShape["signUpConcealed"] = Effect.fnUntraced(
+        function* (input) {
+          const { vetoedSignUp, hash } = yield* prepareSignUp(input);
+          // TMS-005: the hash above is computed in both branches, so the
+          // expensive work does not depend on whether the address exists. The
+          // duplicate is caught outside the transaction (which rolls back), and
+          // no session is issued either way.
+          const created = yield* sqlTransaction
+            .withTransaction(
+              Effect.gen(function* () {
+                const user = yield* users
+                  .create({
+                    identity: { _tag: "Email", email: vetoedSignUp.email },
+                    name: vetoedSignUp.name,
+                  })
+                  .pipe(
+                    Effect.catchTag(
+                      "Users/EmailAlreadyExists",
+                      () => new PasswordApi.EmailAlreadyExists(),
+                    ),
+                    // FAMS-002: `create` is Email-identity here, so a phone conflict is unreachable.
+                    Effect.catchTag("Users/PhoneAlreadyExists", Effect.die),
+                  );
+                yield* accounts
+                  .link({
+                    userId: user.id,
+                    providerId: Accounts.PASSWORD_PROVIDER_ID,
+                    subject: user.id,
+                    credentialHash: Redacted.make(hash),
+                  })
+                  .pipe(Effect.orDie);
+                return user;
+              }),
+            )
+            .pipe(
+              Effect.map(Option.some),
+              Effect.catchTag("EmailAlreadyExists", () => Effect.succeed(Option.none())),
+              Effect.catchTag("SqlError", Effect.die),
+            );
+          if (Option.isSome(created)) {
+            yield* events.publish({ _tag: "auth.user.created", userId: created.value.id });
+            yield* dispatchVerificationMail(created.value);
+            return;
+          }
+          // The address is taken: tell its owner (no token, nothing to act on),
+          // looked up inside the background work so the response path is the same.
+          yield* mailDispatcher.dispatch(
+            { template: "account-exists" },
             Effect.gen(function* () {
-              const user = yield* users
-                .create({ email: vetoedSignUp.email, name: vetoedSignUp.name })
-                .pipe(
-                  Effect.catchTag("Users/EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
-                );
-              yield* accounts
-                .link({
-                  userId: user.id,
-                  providerId: Accounts.PASSWORD_PROVIDER_ID,
-                  subject: user.id,
-                  credentialHash: Redacted.make(hash),
-                })
-                .pipe(Effect.orDie);
-              return user;
+              const owner = yield* users.findByEmail(vetoedSignUp.email);
+              if (Option.isNone(owner)) return;
+              const to = Users.emailOf(owner.value);
+              if (Option.isNone(to)) return;
+              yield* mailer.send({ to: to.value, template: "account-exists" });
             }),
-          )
-          .pipe(
-            Effect.map(Option.some),
-            // The wire tag: the inner `catchTag` above already mapped the core error to it.
-            Effect.catchTag("EmailAlreadyExists", () => Effect.succeed(Option.none())),
-            Effect.catchTag("SqlError", Effect.die),
           );
-        if (Option.isSome(created)) {
-          yield* events.publish({ _tag: "auth.user.created", userId: created.value.id });
-          yield* dispatchVerificationMail(created.value);
-          return;
-        }
-        // The address is taken: tell its owner (no token, nothing to act on),
-        // looked up inside the background work so the response path is the same.
-        yield* mailDispatcher.dispatch(
-          { template: "account-exists" },
-          Effect.gen(function* () {
-            const owner = yield* users.findByEmail(vetoedSignUp.email);
-            if (Option.isNone(owner)) return;
-            yield* mailer.send({ to: owner.value.email, template: "account-exists" });
-          }),
-        );
-      });
+        },
+      );
 
       const signIn: PasswordShape["signIn"] = Effect.fnUntraced(function* (input) {
         // RBS-001/CSD-002: the per-IP budget runs first — cheaper to
@@ -887,7 +942,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
             });
             const hashOpt = yield* Option.match(accountOpt, {
-              onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
+              onNone: () =>
+                Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
               onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
             });
             // BEH-EA-114: this call happens on every attempt, real or not —
@@ -924,7 +980,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // Upstream-hardening ticket 04: checked only now that a genuinely
         // correct password is confirmed — never before, so this can't be
         // used to probe whether a guessed password is even close to right.
-        if (config.requireVerifiedEmail && !user.emailVerified) {
+        if (config.requireVerifiedEmail && !Users.isEmailVerified(user)) {
           yield* events.publish({
             _tag: "auth.user.signInFailed",
             strategy: "password",
@@ -932,6 +988,19 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           });
           return yield* Effect.fail(new PasswordApi.EmailNotVerified());
         }
+
+        // SCP-001/BAM-005: THE shared sign-in gate, likewise only after the
+        // password is proven correct (a wrong password never learns the
+        // account is suspended).
+        yield* Users.assertCanSignIn(user).pipe(
+          Effect.tapError(() =>
+            events.publish({
+              _tag: "auth.user.signInFailed",
+              strategy: "password",
+              reason: "suspended",
+            }),
+          ),
+        );
 
         if (config.rehashOnLogin && hasher.needsRehash(Redacted.value(hash))) {
           const rehashed = yield* hasher.hash(input.password);
@@ -986,12 +1055,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // reset — a token would only lead to a dead link. Looked up
               // here, inside the dispatched work, so both branches still cost
               // the same on the response path (BEH-EA-064).
+              const to = Users.emailOf(user);
+              if (Option.isNone(to)) return;
               const account = yield* accounts.findByProviderSubject(
                 Accounts.PASSWORD_PROVIDER_ID,
                 user.id,
               );
               if (Option.isNone(account)) {
-                yield* mailer.send({ to: user.email, template: "reset-password-unavailable" });
+                yield* mailer.send({ to: to.value, template: "reset-password-unavailable" });
                 return;
               }
               const issued = yield* VerificationLink.issue(
@@ -999,7 +1070,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 { purpose: RESET_PURPOSE, ttl: config.resetTtl, userId: user.id },
               );
               yield* mailer.send({
-                to: user.email,
+                to: to.value,
                 template: "reset-password",
                 data: VerificationLink.mailData({
                   token: issued.token,
@@ -1024,7 +1095,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           // with `requestReset`'s own timing) lets a caller classify any
           // address as unknown / known-unverified / known-verified purely
           // by latency.
-          if (Option.isSome(userOpt) && !userOpt.value.emailVerified) {
+          if (Option.isSome(userOpt) && !Users.isEmailVerified(userOpt.value)) {
             const user = userOpt.value;
             yield* dispatchVerificationMail(user);
           }
@@ -1097,13 +1168,17 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // ARF-008: consuming a token mailed to the address proves the
               // same mailbox control `verifyEmail` demands — otherwise a
               // user who resets is still refused at `signIn`. Idempotent.
-              yield* users
-                .verifyEmail(userId)
-                .pipe(
-                  Effect.catchTag("UserNotFound", () =>
-                    Defects.invariantViolation("RowVanished", "awthaq: reset token's own user missing"),
-                  ),
-                );
+              yield* users.verifyEmail(userId).pipe(
+                Effect.catchTags({
+                  UserNotFound: () =>
+                    Defects.invariantViolation(
+                      "ResetTokenUserMissing",
+                      "awthaq: reset token's own user missing",
+                    ),
+                  // FAMS-002: a password account's owner has an email identity.
+                  IdentityMismatch: Effect.die,
+                }),
+              );
 
               // BEH-EA-117: every session, no exceptions — the caller
               // isn't authenticated at all here, so there is no "current"
@@ -1166,13 +1241,16 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // `TokenConsumed`, which would misleadingly imply a
               // bad/replayed token rather than a genuine invariant
               // violation.
-              yield* users
-                .verifyEmail(userId)
-                .pipe(
-                  Effect.catchTag("UserNotFound", () =>
-                    Defects.invariantViolation("RowVanished", "awthaq: verify-email token's own user missing"),
-                  ),
-                );
+              yield* users.verifyEmail(userId).pipe(
+                Effect.catchTags({
+                  UserNotFound: () =>
+                    Defects.invariantViolation(
+                      "VerifyEmailTokenUserMissing",
+                      "awthaq: verify-email token's own user missing",
+                    ),
+                  IdentityMismatch: Effect.die,
+                }),
+              );
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));

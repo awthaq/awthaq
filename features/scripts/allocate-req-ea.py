@@ -50,6 +50,7 @@ ORDER = [
     "08-tooling/25-testing-harness.feature",
     "08-tooling/26-cli.feature",
     "09-admin-and-impersonation/27-admin-impersonation.feature",
+    "05-authentication-methods/28-device-authorization.feature",
 ]
 
 # Explicit feature-file -> source-behavior-md map (most basenames match
@@ -84,8 +85,15 @@ SOURCE_MD = {
     "27-admin-impersonation.feature": "27-admin-impersonation.md",
 }
 
+# DAG-007: a feature for a plugin that has no BEH-EA range yet traces to its model
+# (spec/models/) through `@MOD-EA-NNN` Rule tags instead of `@BEH-EA-NNN`.
+SOURCE_MODEL = {
+    "28-device-authorization.feature": "13-device-authorization.md",
+}
+
 RULE_RE = re.compile(r'^\s*Rule:')
-BEH_TAG_RE = re.compile(r'@BEH-EA-(\d{3})')
+BEH_TAG_RE = re.compile(r'@(?:BEH|MOD)-EA-(\d{3})')
+RULE_KIND_RE = re.compile(r'@(BEH|MOD)-EA-\d{3}')
 REQ_TAG_RE = re.compile(r'@REQ-EA-(\d{3})')
 SCEN_RE = re.compile(r'^(\s*)(Scenario( Outline)?):\s*(.*)$')
 HEADING_RE = re.compile(r'^##\s+(BEH-EA-\d{3}:.*)$')
@@ -183,12 +191,14 @@ def main():
         lines = path.read_text(encoding="utf-8").splitlines()
         out = []
         current_beh = None
+        current_kind = "BEH"
         for line in lines:
             if RULE_RE.match(line):
                 for prev in reversed(out):
                     m = BEH_TAG_RE.search(prev)
                     if m:
                         current_beh = m.group(1)
+                        current_kind = RULE_KIND_RE.search(prev).group(1)
                         break
             m = SCEN_RE.match(line)
             if m:
@@ -205,7 +215,9 @@ def main():
                     out.append(f"{indent}@REQ-EA-{req_id_num:03d}")
                 else:
                     req_id_num = int(existing_req)
-                manifest.append((f"REQ-EA-{req_id_num:03d}", f"BEH-EA-{current_beh}", rel, title.strip()))
+                manifest.append(
+                    (f"REQ-EA-{req_id_num:03d}", f"{current_kind}-EA-{current_beh}", rel, title.strip())
+                )
             out.append(line)
         path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
@@ -244,9 +256,12 @@ def main():
     for req_id, beh_id, rel, title in manifest:
         title_escaped = title.replace("|", "\\|")
         feature_basename = rel.split("/")[-1]
-        source_md = SOURCE_MD[feature_basename]
-        anchor = anchor_index.get(source_md, {}).get(beh_id, "")
-        beh_link = f"../spec/behaviors/{source_md}#{anchor}" if anchor else f"../spec/behaviors/{source_md}"
+        if beh_id.startswith("MOD-"):
+            beh_link = f"../spec/models/{SOURCE_MODEL[feature_basename]}"
+        else:
+            source_md = SOURCE_MD[feature_basename]
+            anchor = anchor_index.get(source_md, {}).get(beh_id, "")
+            beh_link = f"../spec/behaviors/{source_md}#{anchor}" if anchor else f"../spec/behaviors/{source_md}"
         out_lines.append(f"| {req_id} | [{beh_id}]({beh_link}) | [{rel}](features/{rel}) | {title_escaped} |")
 
     manifest_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")

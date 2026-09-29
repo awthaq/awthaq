@@ -1,23 +1,20 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignore": [".scratch/**"],
+  "ignore": [
+    ".scratch/**"
+  ],
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.mjs"],
-      "ignoreDependencies": ["@arethetypeswrong/cli"]
+      "entry": [
+        "scripts/*.mjs"
+      ],
+      "ignoreDependencies": [
+        "@arethetypeswrong/cli"
+      ]
     },
     "packages/ports": {
-      "entry": ["src/passwordHasherWorker.ts"]
-    },
-    "packages/api-key": {
-      "ignoreDependencies": [
-        "@awthaq/api",
-        "@awthaq/core",
-        "@awthaq/ports",
-        "@awthaq/server",
-        "@awthaq/sql",
-        "@effect/vitest",
-        "effect"
+      "entry": [
+        "src/passwordHasherWorker.ts"
       ]
     },
     "packages/two-factor": {
@@ -43,15 +40,14 @@
       ]
     },
     "packages/cli": {
-      "ignoreDependencies": [
-        "@awthaq/api",
-        "@awthaq/core",
-        "@awthaq/ports",
-        "@awthaq/qadi",
-        "@awthaq/server",
-        "@awthaq/sql",
-        "@effect/vitest",
-        "effect"
+      "entry": [
+        "test/fixtures/*.config.ts"
+      ],
+      "ignoreExportsUsedInFile": true
+    },
+    "packages/migrate-better-auth": {
+      "ignore": [
+        "test/fixtures/generate-better-auth-export.mjs"
       ]
     }
   }

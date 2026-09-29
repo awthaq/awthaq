@@ -3,7 +3,7 @@ ID: "CTA-003"
 Title: "No exit-code contract despite doctor being explicitly a CI tool"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/features/08-tooling/26-cli.feature:108"
 Auditor: "cli-tool-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `—` · reported by **CLI Tool Auth Specialist** (`cli-tool-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ Add an exit-code contract to 26-cli.md and 26-cli.feature: 0 = success; distinct
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-contract`. Evidence at HEAD ec065a7: `spec/behaviors/26-cli.md:32`. Fix: Add a normative exit-code contract to 26-cli.md (new cross-cutting section/requirement) and assert codes in 26-cli.feature; implement later via tagged errors carrying `Runtime.errorExitCode`. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** BEH-EA-225 exit-code table (0 ok, 1 defect, 2 usage, 3 doctor findings, 4 nothing to apply, 5 write failed, 6 refused without confirmation, 7 ledger drift, 8 auth required, 9 environment/capability unavailable). Implemented as Data.TaggedError classes carrying [Runtime.errorExitCode] in packages/cli/src/CliErrors.ts; bin.ts uses NodeRuntime.runMain. Proof: packages/cli/test/ExitCodes.test.ts, and the built binary (doctor exits 3, no database exits 9, an unknown command exits 2).

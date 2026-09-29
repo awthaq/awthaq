@@ -69,6 +69,8 @@ describe("OAuthPresets (IC-003)", () => {
             email: "ada@gmail.com",
             emailVerified: true,
             name: "Ada Lovelace",
+            // NAM-009: the avatar rides along on the profile.
+            image: "https://lh3.googleusercontent.com/a/x",
           },
         );
       }),
@@ -108,7 +110,11 @@ describe("OAuthPresets (IC-003)", () => {
             email: null,
             avatar_url: "https://avatars.githubusercontent.com/u/583231",
           }),
-          { subject: "583231", name: "The Octocat" },
+          {
+            subject: "583231",
+            name: "The Octocat",
+            image: "https://avatars.githubusercontent.com/u/583231",
+          },
         );
         // No login/name falls back to the handle; GitHub never asserts the email verified.
         assert.deepStrictEqual(

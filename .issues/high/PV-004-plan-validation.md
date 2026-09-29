@@ -3,7 +3,7 @@ ID: "PV-004"
 Title: "Decision 24 §2's CSRF exemption for bearer requests was never implemented — bearer/native clients get 403 on sign-out/revoke/delete"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Csrf.ts"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `HIGH` · `correctness` · `server` · found during the 2026-09-29 plan validation (not in the original audit)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -31,3 +31,5 @@ Planned under: MNA-008 → csrf-hardening (P01).
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29):** fixed under MNA-008 (P01: bearer requests exempt from CSRF); see that issue's Resolved comment for files, tests and gates.

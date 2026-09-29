@@ -20,6 +20,7 @@
 
 ```ts
 identifier = `verify-email:${token}` | `reset-password:${token}` | `oauth-state:${nonce}`
+           | `verify-phone:${token}` | `change-email:${token}`
 ```
 
 ```text
@@ -29,6 +30,8 @@ REQUIREMENT: A `VerificationToken` row MUST carry an identifier whose
              created for one purpose MUST NOT satisfy a check for another
              purpose, even if the raw token value were somehow reused.
 ```
+
+SOS-008/BAM-009: two purposes exist for the identity model (BEH-EA-041/042). `verify-phone` proves control of a phone number (an SMS/voice OTP or link): the token is keyed on the *user id* (`userId` on the row), and the normalized E.164 number being proven travels in the payload, so a stale token cannot verify a number the user has since changed. `change-email` proves control of a *new* address: the row's `userId` is the account, the payload carries the new address, the token is mailed to that new address, and its consumption commits together with `Users.changeEmail` + `Users.verifyEmail` (BEH-EA-058). Neither purpose's token can satisfy the other's — or `verify-email`'s — check.
 
 MLO-009/ARF-007/ARF-009: the mailed form is `<purpose>:<publicId>.<secret>`, built and parsed only by `VerificationLink` (`@awthaq/core`), which every plugin that mails a token uses. `publicId` is 128 random bits and identifies the token, never the user (the user is recovered from the consumed row's `userId`, so no mailed artifact carries a user id or a UUIDv7 timestamp); `decode(raw, purpose)` refuses a malformed token or another purpose's, before any rate limit or consume. Mail data for a token is `{ token: Redacted, expiresAt, url? }` (`VerificationLink.mailData`), the `url` present when the application configured a link builder.
 

@@ -17,8 +17,8 @@ describe("Principal (BEH-EA-025)", () => {
   it("decodes and encodes each of the four declared tags, keeping the tag", () => {
     const wire = [
       { _tag: "User", ref, sessionId: "s-1" },
-      { _tag: "ApiKey", ref: { type: "apiKey", id: "k-1" } },
-      { _tag: "Service", ref: { type: "service", id: "svc" } },
+      { _tag: "ApiKey", ref: { type: "apiKey", id: "k-1" }, scopes: ["read"] },
+      { _tag: "Service", ref: { type: "service", id: "svc" }, scopes: [] },
       { _tag: "Anonymous", ref: { type: "anonymous", id: "anonymous" } },
     ];
     for (const value of wire) {

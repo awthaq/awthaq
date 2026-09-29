@@ -90,8 +90,14 @@ const deny = () => Effect.succeed(false);
  */
 const seedUsers = Effect.gen(function* () {
   const users = yield* Users.Users;
-  const admin = yield* users.create({ email: "admin-1@example.com", name: "admin" });
-  const target = yield* users.create({ email: "target-1@example.com", name: "target" });
+  const admin = yield* users.create({
+    identity: { _tag: "Email", email: "admin-1@example.com" },
+    name: "admin",
+  });
+  const target = yield* users.create({
+    identity: { _tag: "Email", email: "target-1@example.com" },
+    name: "target",
+  });
   return { adminId: admin.id, targetId: target.id, users };
 });
 
@@ -369,7 +375,7 @@ describe("Admin", () => {
     Effect.gen(function* () {
       const { adminId, targetId, users } = yield* seedUsers;
       const protectedUser = yield* users.create({
-        email: "superadmin-2@example.com",
+        identity: { _tag: "Email", email: "superadmin-2@example.com" },
         name: "superadmin",
       });
       protectedIds.add(protectedUser.id);
@@ -405,7 +411,10 @@ describe("Admin", () => {
   it.effect("IDS-001: forceStop/list are filtered by canManageEpisode", () =>
     Effect.gen(function* () {
       const { adminId, targetId, users } = yield* seedUsers;
-      const other = yield* users.create({ email: "other@example.com", name: "other" });
+      const other = yield* users.create({
+        identity: { _tag: "Email", email: "other@example.com" },
+        name: "other",
+      });
       const admin = yield* Admin.Admin;
       const sessions = yield* Sessions.Sessions;
       const caller = asCaller({ id: adminId, sessionId: "admin-session" });

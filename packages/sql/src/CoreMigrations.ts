@@ -18,7 +18,7 @@
 // declare `migrations` on their own `AuthPlugin.Service` options; `Auth.ts`
 // already aggregates and dependency-orders those (`renumberMigrations`).
 
-// N11: these ids (1-17) live in the migrator's default `effect_sql_migrations`
+// N11: these ids (1-23) live in the migrator's default `effect_sql_migrations`
 // ledger. The plugin list (`@awthaq/core`'s `Migrations.run`) numbers from 1
 // too and therefore uses its own tracking table (`awthaq_plugin_migrations`);
 // the migrator skips any id at or below the newest one recorded, so two id
@@ -453,6 +453,76 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
     sql.onDialectOrElse({
       pg: () => sql`ALTER TABLE sessions ADD COLUMN amr TEXT NOT NULL DEFAULT '[]'`,
       sqlite: () => sql`ALTER TABLE sessions ADD COLUMN amr TEXT NOT NULL DEFAULT '[]'`,
+      orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
+  // FAMS-002/SAM-003 (wayfinder ticket 09): a user may have no email (a phone
+  // or anonymous identity). Postgres drops the constraint in place; SQLite has
+  // no `ALTER COLUMN`, so the table is rebuilt (create, copy, drop, rename,
+  // re-index) — kept *before* the identity columns are added (id 22), so this
+  // rebuild only ever names the columns that existed at id 20 and any later
+  // column is a plain `ADD COLUMN`. `users_email_unique` is a full index over
+  // `lower(email)`; NULLs are distinct in both engines, so any number of
+  // email-less rows coexist with it unchanged.
+  migration(21, "make_users_email_nullable", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`ALTER TABLE users ALTER COLUMN email DROP NOT NULL`,
+      sqlite: () =>
+        Effect.gen(function* () {
+          yield* sql`
+            CREATE TABLE users_rebuild (
+              id TEXT PRIMARY KEY,
+              email TEXT,
+              emailVerified INTEGER NOT NULL,
+              name TEXT NOT NULL,
+              createdAt TEXT NOT NULL,
+              updatedAt TEXT NOT NULL,
+              metadata TEXT
+            )`;
+          yield* sql`
+            INSERT INTO users_rebuild (id, email, emailVerified, name, createdAt, updatedAt, metadata)
+            SELECT id, email, emailVerified, name, createdAt, updatedAt, metadata FROM users`;
+          yield* sql`DROP TABLE users`;
+          yield* sql`ALTER TABLE users_rebuild RENAME TO users`;
+          yield* sql`CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email))`;
+        }),
+      orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
+  // FAMS-002/SCP-001/BAM-009: phone identity, suspension state and the profile
+  // image. Every existing row reads as an active, phone-less, image-less user
+  // — no backfill. `phoneVerified` mirrors `emailVerified`.
+  migration(22, "add_users_identity_status_image_columns", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        Effect.gen(function* () {
+          yield* sql`ALTER TABLE users ADD COLUMN phone TEXT`;
+          yield* sql`ALTER TABLE users ADD COLUMN "phoneVerified" BOOLEAN NOT NULL DEFAULT FALSE`;
+          yield* sql`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`;
+          yield* sql`ALTER TABLE users ADD COLUMN "statusReason" TEXT`;
+          yield* sql`ALTER TABLE users ADD COLUMN "suspendedUntil" TIMESTAMPTZ`;
+          yield* sql`ALTER TABLE users ADD COLUMN image TEXT`;
+        }),
+      sqlite: () =>
+        Effect.gen(function* () {
+          yield* sql`ALTER TABLE users ADD COLUMN phone TEXT`;
+          yield* sql`ALTER TABLE users ADD COLUMN phoneVerified INTEGER NOT NULL DEFAULT 0`;
+          yield* sql`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`;
+          yield* sql`ALTER TABLE users ADD COLUMN statusReason TEXT`;
+          yield* sql`ALTER TABLE users ADD COLUMN suspendedUntil TEXT`;
+          yield* sql`ALTER TABLE users ADD COLUMN image TEXT`;
+        }),
+      orElse: () => Defects.unsupportedDialect("migrations"),
+    }),
+  ),
+  // FAMS-002: phone numbers are unique across users; a partial index so the
+  // (many) email/anonymous rows with no phone never collide on NULL.
+  migration(23, "create_users_phone_unique_index", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique ON users (phone) WHERE phone IS NOT NULL`,
+      sqlite: () =>
+        sql`CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique ON users (phone) WHERE phone IS NOT NULL`,
       orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),

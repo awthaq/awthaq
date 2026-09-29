@@ -33,12 +33,20 @@ export class UserPrincipal extends Schema.TaggedClass<UserPrincipal>()("User", {
   emailVerified: Schema.optional(Schema.Boolean),
 }) {}
 
+/**
+ * OCM-002/BEH-EA-140: a long-lived API key (`@awthaq/api-key`). `scopes` are
+ * the credential's own grants — the one source `@awthaq/qadi`'s subject
+ * resolver maps onto `AuthSubject.permissions`; never derived from a user.
+ */
 export class ApiKeyPrincipal extends Schema.TaggedClass<ApiKeyPrincipal>()("ApiKey", {
   ref: PrincipalRef,
+  scopes: Schema.Array(Schema.String),
 }) {}
 
+/** MAPS-003/BEH-EA-141: a machine caller (`client_credentials`); `scopes` are the negotiated grant carried by its short-lived token. */
 export class ServicePrincipal extends Schema.TaggedClass<ServicePrincipal>()("Service", {
   ref: PrincipalRef,
+  scopes: Schema.Array(Schema.String),
 }) {}
 
 export class AnonymousPrincipal extends Schema.TaggedClass<AnonymousPrincipal>()("Anonymous", {
@@ -154,6 +162,27 @@ export const SESSION_COOKIE_NAME = "__Host-session";
  */
 export const ROTATED_TOKEN_HEADER = "set-auth-token";
 
+/**
+ * MNA-001 (decision ticket 17): the request header a native/bearer client sends
+ * to opt in to bearer delivery on every session-minting response — the raw
+ * token in the body's `token` field and no `Set-Cookie`. Absent (the browser
+ * default) keeps cookie-only delivery, byte-for-byte unchanged; `bearer` is the
+ * one recognised value.
+ */
+export const TOKEN_DELIVERY_HEADER = "x-awthaq-token-delivery";
+
+/**
+ * MNA-001: `TOKEN_DELIVERY_HEADER` carried a value other than `bearer`. Explicit
+ * rather than a silent cookie fallback: a native client that typo'd the header
+ * would otherwise be handed a `Set-Cookie` it can never read and a session it
+ * cannot use. Raised before any session is minted.
+ */
+export class InvalidTokenDelivery extends Schema.TaggedError<InvalidTokenDelivery>()(
+  "InvalidTokenDelivery",
+  {},
+  { httpApiStatus: 400 },
+) {}
+
 /** BEH-EA-065: cookie scheme keyed on `SESSION_COOKIE_NAME`. */
 export const SessionCookie = HttpApiSecurity.apiKey({ key: SESSION_COOKIE_NAME, in: "cookie" });
 /**
@@ -170,6 +199,14 @@ export const ImpersonationCookie = HttpApiSecurity.apiKey({
 });
 export const BearerToken = HttpApiSecurity.bearer;
 
+/**
+ * OCM-002/ADR-EA-022: where an API key travels. A header of its own rather than
+ * `Authorization: Bearer`, which stays reserved for JWTs (session-less
+ * propagation tokens, M2M tokens) so the two strategies never double-try.
+ */
+export const API_KEY_HEADER_NAME = "x-api-key";
+export const ApiKeyHeader = HttpApiSecurity.apiKey({ key: API_KEY_HEADER_NAME, in: "header" });
+
 /** BEH-EA-080: the CSRF cookie/header names are fixed, never per-plugin configurable. */
 export const CSRF_COOKIE_NAME = "__Host-csrf";
 export const CSRF_HEADER_NAME = "x-csrf-token";
@@ -183,12 +220,41 @@ export const CsrfCookie = HttpApiSecurity.apiKey({ key: CSRF_COOKIE_NAME, in: "c
  * matters). APS-006: `impersonation` is declared first of all, so an
  * impersonation cookie shadows the caller's own session cookie; its handler
  * only accepts a session carrying `actingAs` and otherwise falls through.
+ * OCM-002: this is the *user* tier. A credential a plugin claims through the
+ * `@awthaq/server` credential-resolver registry is admitted here only when it
+ * resolves to a `User` (a JWT re-entering, MAPS-001); an API key or a service
+ * token is never a session, so it does not reach the many handlers that assume
+ * one. Groups that serve machine callers declare `MachineAuthentication`.
  */
 export class Authentication extends HttpApiMiddleware.Service<
   Authentication,
   { provides: CurrentPrincipal }
 >()("Authentication", {
   security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
+  error: [Unauthenticated, StoreUnavailable],
+}) {}
+
+/**
+ * OCM-002/MAPS-003 (wayfinder ticket 10): the machine tier. Everything
+ * `Authentication` accepts plus `apiKey` (the `x-api-key` header, ADR-EA-022),
+ * and — unlike it — a claimed credential may resolve to an `ApiKey` or
+ * `Service` principal (`@awthaq/api-key`), not only a `User`. A group
+ * declares it when it is meant to be called by CI, scripts or other services;
+ * groups that assume a session (`session`, `password.account`, ...) keep
+ * `Authentication` and so can never receive a non-`User` principal. `apiKey` is
+ * declared before `bearer`, which stays last and owns the `WWW-Authenticate`
+ * challenge.
+ */
+export class MachineAuthentication extends HttpApiMiddleware.Service<
+  MachineAuthentication,
+  { provides: CurrentPrincipal }
+>()("MachineAuthentication", {
+  security: {
+    impersonation: ImpersonationCookie,
+    cookie: SessionCookie,
+    apiKey: ApiKeyHeader,
+    bearer: BearerToken,
+  },
   error: [Unauthenticated, StoreUnavailable],
 }) {}
 

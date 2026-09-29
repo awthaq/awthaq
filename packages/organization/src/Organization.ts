@@ -14,7 +14,16 @@
 // their shape.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Errors, HookPoint, Hooks, Migrations, Users } from "@awthaq/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  ConfigDescriptor,
+  Errors,
+  HookPoint,
+  Hooks,
+  Migrations,
+  Users,
+} from "@awthaq/core";
 import { Defects, Hmac, Mailer, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -599,6 +608,10 @@ const hexOf = (bytes: Uint8Array): string =>
 const NO_INVITATION_TOKEN_HASH = "0".repeat(64);
 
 // ---- dto mapping ----------------------------------------------------------------
+
+/** FAMS-002: an invitation names an email address; only an Email-identity user can own one (`emailOf` is already lower-cased, as invitation emails are stored). */
+const ownsEmail = (user: Users.UserRecord, email: string): boolean =>
+  Option.exists(Users.emailOf(user), (own) => own === email);
 
 const toOrganizationDto = (
   record: OrganizationRecords.OrganizationRecord,
@@ -1523,6 +1536,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     apiVersion: 1,
     contract: OrganizationApi.OrganizationApi,
     migrations: organizationMigrations,
+    config: [ConfigDescriptor.make(OrganizationConfig)],
     tables: [
       "organization_org",
       "organization_membership",
@@ -2489,10 +2503,10 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
           const callerId = Users.UserId(caller.ref.id);
           const user = yield* users.findById(callerId).pipe(Effect.orDie);
-          if (user.email.toLowerCase() !== record.email) {
+          if (!ownsEmail(user, record.email)) {
             return yield* Effect.fail(new OrganizationApi.InvitationEmailMismatch());
           }
-          if (orgConfig.requireEmailVerificationOnInvitation && !user.emailVerified) {
+          if (orgConfig.requireEmailVerificationOnInvitation && !Users.isEmailVerified(user)) {
             return yield* Effect.fail(new OrganizationApi.EmailVerificationRequired());
           }
 
@@ -2582,7 +2596,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           const record = yield* requirePendingInvitation(invitationId, token);
           const callerId = Users.UserId(caller.ref.id);
           const user = yield* users.findById(callerId).pipe(Effect.orDie);
-          if (user.email.toLowerCase() !== record.email) {
+          if (!ownsEmail(user, record.email)) {
             return yield* Effect.fail(new OrganizationApi.InvitationEmailMismatch());
           }
           yield* invitations.updateStatus(invitationId, "rejected").pipe(Effect.orDie);
@@ -2652,7 +2666,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           const user = yield* users
             .findById(callerId)
             .pipe(Effect.catchTag("UserNotFound", () => Effect.succeed(undefined)));
-          return user !== undefined && user.email.toLowerCase() === record.email;
+          return user !== undefined && ownsEmail(user, record.email);
         });
 
       const getInvitation: OrganizationShape["getInvitation"] = Effect.fnUntraced(
@@ -2674,7 +2688,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           const user = yield* users
             .findById(Users.UserId(caller.ref.id))
             .pipe(Effect.catchTag("UserNotFound", () => Effect.succeed(undefined)));
-          if (user === undefined || user.email.toLowerCase() !== found.value.email) {
+          if (user === undefined || !ownsEmail(user, found.value.email)) {
             return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
           }
           return found.value;
@@ -2694,7 +2708,11 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         function* (caller) {
           const callerId = Users.UserId(caller.ref.id);
           const user = yield* users.findById(callerId).pipe(Effect.orDie);
-          return yield* invitations.listByEmail(user.email);
+          // FAMS-002: a Phone/Anonymous user has no email, so no invitation can name them.
+          return yield* Option.match(Users.emailOf(user), {
+            onNone: () => Effect.succeed([]),
+            onSome: (email) => invitations.listByEmail(email),
+          });
         },
       );
 

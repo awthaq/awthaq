@@ -73,7 +73,12 @@ describe("wire shapes", () => {
   });
 
   it("AccountDto and SubjectDto round-trip", () => {
-    const account = { id: "u", email: "a@b.co", emailVerified: false, name: "A" };
+    const account = {
+      id: "u",
+      identity: { _tag: "Email", email: "a@b.co", emailVerified: false },
+      name: "A",
+      image: null,
+    };
     expect(
       Schema.encodeSync(Account.AccountDto)(Schema.decodeUnknownSync(Account.AccountDto)(account)),
     ).toEqual(account);

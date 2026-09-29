@@ -67,7 +67,7 @@ This document restates the milestone roadmap of `archive/PRD.md` §23 as this sp
 - `TwoFactor` (divert hook, hashed recovery codes).
 - `MagicLink`, `EmailOtp`.
 - `Organization` (membership, invitations, relationship resolver).
-- `ApiKey` (service principals).
+- `ApiKey` (service principals): long-lived API keys plus `client_credentials` clients minting short-lived service JWTs through `Jwt`. Scope note (wayfinder ticket 10): this pulls a slice of Phase 3's authorization-server capability — the `client_credentials` grant, a pure back-channel POST needing none of the browser, consent or discovery machinery of the `OidcProvider` plugin — into M7 ahead of schedule. It lives in `@awthaq/api-key`; `@awthaq/oauth` stays a client of external IdPs.
 - `Admin` (impersonation with hard expiry and `actingAs`).
 - `Jwt` (EdDSA, JWKS on `LayerRef`) and `Bearer`.
 

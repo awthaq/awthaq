@@ -6,6 +6,7 @@
 // — neither changes this service's public interface, the same deferral
 // `Migrations.ts` documents for the persistence stratum generally.
 
+import { Defects } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -19,9 +20,12 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import type { SqlError } from "effect/unstable/sql/SqlError";
 import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import * as HookPoint from "./HookPoint.ts";
 import * as Hooks from "./Hooks.ts";
+import type * as Phone from "./Phone.ts";
 
 /**
  * JH-001/PERS-001 (`packages/organization/src/OrganizationHooks.ts`'s own
@@ -49,11 +53,54 @@ const beforeUserDeleteVeto = <A>(
 export type UserId = SqlModels.UserId;
 export const UserId = Brand.nominal<UserId>();
 
-export interface UserRecord {
-  readonly id: UserId;
+/** FAMS-002: a user with an email address — BEH-EA-041/042 exactly as before (lower-cased, unique, monotone-verified, never client-settable). */
+export interface EmailIdentity {
+  readonly _tag: "Email";
   /** BEH-EA-041: always the lower-cased form of whatever email was given. */
   readonly email: string;
   readonly emailVerified: boolean;
+}
+
+/** FAMS-002/SOS-008: the same treatment for a phone number, stored as E.164. */
+export interface PhoneIdentity {
+  readonly _tag: "Phone";
+  readonly phone: Phone.E164;
+  readonly phoneVerified: boolean;
+}
+
+/**
+ * FAMS-002: a persisted account with neither email nor phone (Firebase
+ * `signInAnonymously`, an OAuth profile that supplied no email). Distinct from
+ * `Api.ts`'s `AnonymousPrincipal`, which is the wire marker for a caller with
+ * *no* user row at all. Upgradeable in place through `Users.promoteIdentity`.
+ */
+export interface AnonymousIdentity {
+  readonly _tag: "Anonymous";
+}
+
+/**
+ * FAMS-002/SAM-003 (wayfinder ticket 09): the identity a user is known by. A
+ * union rather than nullable fields, so "both null" and "phoneVerified without
+ * a phone" are not representable; the SQL layer stores it flattened
+ * (`email`/`phone` columns) so both uniqueness rules stay real constraints.
+ */
+export type UserIdentity = EmailIdentity | PhoneIdentity | AnonymousIdentity;
+
+/** What `create`/`promoteIdentity` accept: verified flags are never input (BEH-EA-042). */
+export type IdentityInput =
+  | { readonly _tag: "Email"; readonly email: string }
+  | { readonly _tag: "Phone"; readonly phone: Phone.E164 }
+  | { readonly _tag: "Anonymous" };
+
+/** What an Anonymous user can be promoted to. */
+export type PromotedIdentity = Exclude<IdentityInput, { readonly _tag: "Anonymous" }>;
+
+/** SCP-001: `suspended` is reversible and never a deletion (BEH-EA-046). */
+export type UserStatus = "active" | "suspended";
+
+export interface UserRecord {
+  readonly id: UserId;
+  readonly identity: UserIdentity;
   readonly name: string;
   /**
    * AOMS-002: free-form, opaque per-user metadata (e.g. a JSON-encoded
@@ -64,13 +111,67 @@ export interface UserRecord {
    * exactly the kind of caller that reads/writes it.
    */
   readonly metadata: Option.Option<string>;
+  /** BAM-009/NAM-009: an avatar URL, client-writable like `name`. */
+  readonly image: Option.Option<string>;
+  /** SCP-001: written only by `setStatus`; consulted by `assertCanSignIn`. */
+  readonly status: UserStatus;
+  /** SCP-001/BAM-005: the operator's note for a suspension; never sent to the suspended user. */
+  readonly statusReason: Option.Option<string>;
+  /** BAM-005: a timed suspension lapses by itself (`assertCanSignIn` compares against now); `None` means until reactivated. */
+  readonly suspendedUntil: Option.Option<DateTime.Utc>;
   readonly createdAt: DateTime.Utc;
   readonly updatedAt: DateTime.Utc;
 }
 
+/** FAMS-002: the user's email, if their identity is an email one. */
+export const emailOf = (user: UserRecord): Option.Option<string> =>
+  user.identity._tag === "Email" ? Option.some(user.identity.email) : Option.none();
+
+/** FAMS-002: the user's E.164 phone, if their identity is a phone one. */
+export const phoneOf = (user: UserRecord): Option.Option<Phone.E164> =>
+  user.identity._tag === "Phone" ? Option.some(user.identity.phone) : Option.none();
+
+/** FAMS-002: a human-readable account label — email, else phone, else the display name. For places that must show *some* handle (a WebAuthn `user.name`), never for lookups. */
+export const accountLabel = (user: UserRecord): string => {
+  switch (user.identity._tag) {
+    case "Email":
+      return user.identity.email;
+    case "Phone":
+      return user.identity.phone;
+    case "Anonymous":
+      return user.name;
+  }
+};
+
+/** BEH-EA-042: `false` for any identity that has no email to verify. */
+export const isEmailVerified = (user: UserRecord): boolean =>
+  user.identity._tag === "Email" && user.identity.emailVerified;
+
+/** FAMS-002: `false` for any identity that has no phone to verify. */
+export const isPhoneVerified = (user: UserRecord): boolean =>
+  user.identity._tag === "Phone" && user.identity.phoneVerified;
+
+/**
+ * BAM-005/SCP-001: whether the suspension is in force at `now` — a `suspended`
+ * user whose `suspendedUntil` has passed is treated as active without any
+ * write (no sweeper needed; `setStatus("active")` clears the stale marker).
+ */
+export const isSuspendedAt = (user: UserRecord, at: DateTime.Utc): boolean =>
+  user.status === "suspended" &&
+  Option.match(user.suspendedUntil, {
+    onNone: () => true,
+    onSome: (until) => DateTime.isGreaterThan(until, at),
+  });
+
 export class EmailAlreadyExists extends Data.TaggedError("Users/EmailAlreadyExists")<{
   readonly message: string;
   readonly email: string;
+}> {}
+
+/** FAMS-002: the phone counterpart of `EmailAlreadyExists`; reachable only for a `Phone` identity. */
+export class PhoneAlreadyExists extends Data.TaggedError("Users/PhoneAlreadyExists")<{
+  readonly message: string;
+  readonly phone: string;
 }> {}
 
 export class UserNotFound extends Data.TaggedError("UserNotFound")<{
@@ -78,34 +179,153 @@ export class UserNotFound extends Data.TaggedError("UserNotFound")<{
   readonly id: UserId;
 }> {}
 
+/** FAMS-002: an identity operation aimed at a user whose identity kind cannot take it (verifying the email of a phone user, promoting a user that already has an identity). */
+export class IdentityMismatch extends Data.TaggedError("IdentityMismatch")<{
+  readonly message: string;
+  readonly id: UserId;
+  /** The identity kind the operation needed. */
+  readonly expected: UserIdentity["_tag"];
+  readonly actual: UserIdentity["_tag"];
+}> {}
+
 /**
- * BEH-EA-041/042: no operation below accepts `emailVerified` as input —
- * `create` always starts it `false` (supplier-authority default), and
- * `verifyEmail` is the only transition, one-directional and idempotent.
- * `updateProfile`'s input type is `{ name }` alone, so there is no generic
- * write path a plugin-level caller could use to flip it back to `false`.
+ * SCP-001/BAM-005: the one refusal every sign-in-completing flow surfaces
+ * (`assertCanSignIn`). `403`, like `EmailNotVerified`: the credential was right,
+ * the account's state forbids proceeding. Carries nothing — the suspension's
+ * reason is an operator note, and callers check only after the credential
+ * proof, so a suspended target is never revealed to an unproven caller.
+ */
+export class UserSuspended extends Schema.TaggedError<UserSuspended>()(
+  "UserSuspended",
+  {},
+  { httpApiStatus: 403 },
+) {}
+
+/**
+ * SCP-001/BAM-005: THE sign-in gate (tickets 09/19: one gate, not one per
+ * plugin). A plain call, deliberately not a hook point — a tap could be left
+ * out of a composition and silently un-gate a flow. Every flow that turns a
+ * proven credential into a session (password, passkey, oauth) calls it with the
+ * `UserRecord` it already holds, *after* the credential check and *before*
+ * `Sessions.issue`. It is not inside `Users.findById`, so an admin can still
+ * resolve and reactivate a suspended user; admin impersonation deliberately does
+ * not consult it (an operator investigating a suspended account is not that
+ * account signing in).
+ */
+export const assertCanSignIn = (user: UserRecord): Effect.Effect<void, UserSuspended> =>
+  Effect.flatMap(now, (at) =>
+    isSuspendedAt(user, at) ? Effect.fail(new UserSuspended()) : Effect.void,
+  );
+
+export interface CreateInput {
+  readonly identity: IdentityInput;
+  readonly name: string;
+  readonly metadata?: string;
+  readonly image?: string;
+}
+
+/**
+ * BEH-EA-041/042: no operation below accepts `emailVerified`/`phoneVerified`
+ * as input — `create` always starts them `false` (supplier-authority default),
+ * and `verifyEmail`/`verifyPhone` are the only transitions, one-directional and
+ * idempotent (`changeEmail` alone lowers `emailVerified`, since a new address
+ * is unproven). `updateProfile`'s input has no identity or status field, so
+ * there is no generic write path a plugin-level caller could use to change
+ * either. SCP-001: `setStatus` is the only writer of `status`.
  */
 export interface UsersShape {
-  readonly create: (input: {
-    readonly email: string;
-    readonly name: string;
-    readonly metadata?: string;
-  }) => Effect.Effect<UserRecord, EmailAlreadyExists | StoreUnavailable>;
+  readonly create: (
+    input: CreateInput,
+  ) => Effect.Effect<UserRecord, EmailAlreadyExists | PhoneAlreadyExists | StoreUnavailable>;
+  /**
+   * SCP-003: idempotent create — an existing user holding the same email/phone
+   * is returned with `created: false` instead of failing, so an IdP retry or a
+   * re-run import converges. `Anonymous` never conflicts. Atomic in both
+   * layers (a concurrent pair yields exactly one `created: true`).
+   */
+  readonly createOrGet: (
+    input: CreateInput,
+  ) => Effect.Effect<{ readonly user: UserRecord; readonly created: boolean }, StoreUnavailable>;
   readonly findById: (id: UserId) => Effect.Effect<UserRecord, UserNotFound | StoreUnavailable>;
-  readonly findByEmail: (email: string) => Effect.Effect<Option.Option<UserRecord>, StoreUnavailable>;
-  /** AOMS-002: `metadata` left `undefined` leaves it untouched; `null` clears it. */
+  readonly findByEmail: (
+    email: string,
+  ) => Effect.Effect<Option.Option<UserRecord>, StoreUnavailable>;
+  /** FAMS-002: takes only the branded `E164` — see `Phone.normalizePhone`. */
+  readonly findByPhone: (
+    phone: Phone.E164,
+  ) => Effect.Effect<Option.Option<UserRecord>, StoreUnavailable>;
+  /** AOMS-002: `metadata` left `undefined` leaves it untouched; `null` clears it. BAM-009: `image` likewise. */
   readonly updateProfile: (
     id: UserId,
-    input: { readonly name: string; readonly metadata?: string | null },
+    input: {
+      readonly name: string;
+      readonly metadata?: string | null | undefined;
+      readonly image?: string | null | undefined;
+    },
   ) => Effect.Effect<UserRecord, UserNotFound | StoreUnavailable>;
-  readonly verifyEmail: (id: UserId) => Effect.Effect<UserRecord, UserNotFound | StoreUnavailable>;
+  readonly verifyEmail: (
+    id: UserId,
+  ) => Effect.Effect<UserRecord, UserNotFound | IdentityMismatch | StoreUnavailable>;
+  /** FAMS-002: `phoneVerified`'s only writer; monotone and idempotent like `verifyEmail`. */
+  readonly verifyPhone: (
+    id: UserId,
+  ) => Effect.Effect<UserRecord, UserNotFound | IdentityMismatch | StoreUnavailable>;
+  /**
+   * FAMS-002: Anonymous -> Email/Phone in place — same `UserId`, so every
+   * `Account`/`Session` row follows (Firebase `linkWithCredential`). The new
+   * identity starts unverified. Fails `IdentityMismatch` for a user that
+   * already has an identity, and with the respective `*AlreadyExists` when the
+   * address is taken.
+   */
+  readonly promoteIdentity: (
+    id: UserId,
+    identity: PromotedIdentity,
+  ) => Effect.Effect<
+    UserRecord,
+    | UserNotFound
+    | IdentityMismatch
+    | EmailAlreadyExists
+    | PhoneAlreadyExists
+    | StoreUnavailable
+  >;
+  /**
+   * BAM-009: replaces the email of an Email-identity user and resets
+   * `emailVerified` to `false` (BEH-EA-042's one permitted lowering). A
+   * *primitive*: it does not prove the caller owns the new address — the
+   * verified flow (mail a token to the new address, then call this and
+   * `verifyEmail`) belongs to the caller. Changing to the current address is a
+   * no-op.
+   */
+  readonly changeEmail: (
+    id: UserId,
+    email: string,
+  ) => Effect.Effect<
+    UserRecord,
+    UserNotFound | IdentityMismatch | EmailAlreadyExists | StoreUnavailable
+  >;
+  /**
+   * SCP-001/BAM-005: suspend or reactivate. The only writer of `status`; it
+   * leaves `Accounts`/`Sessions` alone (BEH-EA-046 discipline) — a suspending
+   * caller composes `Sessions.revokeAll(id, reason)` itself. `reason`/`until`
+   * describe a suspension and are cleared when reactivating.
+   */
+  readonly setStatus: (
+    id: UserId,
+    status: UserStatus,
+    options?: {
+      readonly reason?: string | undefined;
+      readonly until?: DateTime.Utc | undefined;
+    },
+  ) => Effect.Effect<UserRecord, UserNotFound | StoreUnavailable>;
   /**
    * AOMS-006/CSG-002 (.issues/high): consults `Hooks.BeforeUserDelete`
    * (BEH-EA-095's own worked example — an Invite-purge veto) after the
    * existence check, before the row is actually removed; a tap's abort
    * surfaces as `HookPoint.HookAborted`, never a bare defect.
    */
-  readonly delete: (id: UserId) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted | StoreUnavailable>;
+  readonly delete: (
+    id: UserId,
+  ) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted | StoreUnavailable>;
   /**
    * BAM-005/BEH-EA-036: the admin surface's user listing — keyset-paginated on
    * `(createdAt, id)`, oldest first, opaque cursor in / `nextCursor` out, never an
@@ -133,10 +353,128 @@ const DEFAULT_LIST_LIMIT = 50;
 
 export class Users extends Context.Service<Users, UsersShape>()("awthaq/core/Users") {}
 
+/** BEH-EA-041: the lower-cased form is the stored (and compared) form. */
+const normalizePromoted = (identity: PromotedIdentity): PromotedIdentity =>
+  identity._tag === "Email" ? { _tag: "Email", email: identity.email.toLowerCase() } : identity;
+
+const normalizeIdentity = (identity: IdentityInput): IdentityInput =>
+  identity._tag === "Anonymous" ? identity : normalizePromoted(identity);
+
+const emailExists = (email: string) =>
+  new EmailAlreadyExists({ message: "awthaq: email already exists", email });
+
+const alreadyExists = (identity: PromotedIdentity): EmailAlreadyExists | PhoneAlreadyExists =>
+  identity._tag === "Email"
+    ? emailExists(identity.email)
+    : new PhoneAlreadyExists({
+        message: "awthaq: phone already exists",
+        phone: identity.phone,
+      });
+
+// No uniqueness rule applies to an Anonymous user, so no layer reports a conflict for one.
+const identityAlreadyExists = (
+  identity: IdentityInput,
+): Effect.Effect<never, EmailAlreadyExists | PhoneAlreadyExists> =>
+  identity._tag === "Anonymous"
+    ? Defects.invariantViolation(
+        "AnonymousIdentityConflict",
+        "awthaq: an Anonymous identity cannot conflict",
+      )
+    : Effect.fail(alreadyExists(identity));
+
+const userNotFound = (id: UserId) =>
+  new UserNotFound({ message: "awthaq: no such user", id });
+
+const identityMismatch = (
+  id: UserId,
+  expected: UserIdentity["_tag"],
+  actual: UserIdentity["_tag"],
+) =>
+  new IdentityMismatch({
+    message: `awthaq: user has a ${actual} identity, not ${expected}`,
+    id,
+    expected,
+    actual,
+  });
+
+/** SCP-001: what `setStatus` stores — a reactivation clears any suspension note and expiry. */
+const statusFields = (
+  status: UserStatus,
+  options:
+    | { readonly reason?: string | undefined; readonly until?: DateTime.Utc | undefined }
+    | undefined,
+) =>
+  status === "suspended"
+    ? {
+        statusReason: Option.fromNullishOr(options?.reason),
+        suspendedUntil: Option.fromNullishOr(options?.until),
+      }
+    : { statusReason: Option.none<string>(), suspendedUntil: Option.none<DateTime.Utc>() };
+
+/** `Hooks.BeforeUserDelete`'s payload: an Anonymous/Phone user has no email to report. */
+const deleteHookInput = (record: UserRecord) =>
+  Option.match(emailOf(record), {
+    onNone: () => ({ id: record.id }),
+    onSome: (email) => ({ id: record.id, email }),
+  });
+
 interface State {
   readonly byId: HashMap.HashMap<UserId, UserRecord>;
   readonly byEmail: HashMap.HashMap<string, UserId>;
+  readonly byPhone: HashMap.HashMap<string, UserId>;
 }
+
+const indexRecord = (s: State, record: UserRecord): State => {
+  const byId = HashMap.set(s.byId, record.id, record);
+  switch (record.identity._tag) {
+    case "Email":
+      return { ...s, byId, byEmail: HashMap.set(s.byEmail, record.identity.email, record.id) };
+    case "Phone":
+      return { ...s, byId, byPhone: HashMap.set(s.byPhone, record.identity.phone, record.id) };
+    case "Anonymous":
+      return { ...s, byId };
+  }
+};
+
+const unindexRecord = (s: State, record: UserRecord): State => {
+  const byId = HashMap.remove(s.byId, record.id);
+  switch (record.identity._tag) {
+    case "Email":
+      return { ...s, byId, byEmail: HashMap.remove(s.byEmail, record.identity.email) };
+    case "Phone":
+      return { ...s, byId, byPhone: HashMap.remove(s.byPhone, record.identity.phone) };
+    case "Anonymous":
+      return { ...s, byId };
+  }
+};
+
+/** The user already holding `identity`'s uniqueness key, if any (never for Anonymous). */
+const holderOf = (s: State, identity: IdentityInput): Option.Option<UserRecord> => {
+  const id =
+    identity._tag === "Email"
+      ? HashMap.get(s.byEmail, identity.email)
+      : identity._tag === "Phone"
+        ? HashMap.get(s.byPhone, identity.phone)
+        : Option.none<UserId>();
+  return Option.flatMap(id, (userId) => HashMap.get(s.byId, userId));
+};
+
+const emptyState: State = {
+  byId: HashMap.empty(),
+  byEmail: HashMap.empty(),
+  byPhone: HashMap.empty(),
+};
+
+const identityFromInput = (identity: IdentityInput): UserIdentity => {
+  switch (identity._tag) {
+    case "Email":
+      return { _tag: "Email", email: identity.email, emailVerified: false };
+    case "Phone":
+      return { _tag: "Phone", phone: identity.phone, phoneVerified: false };
+    case "Anonymous":
+      return { _tag: "Anonymous" };
+  }
+};
 
 /**
  * AAPS-005: fires `Hooks.AfterUserAttributesChanged` (an observe point) when a
@@ -149,8 +487,6 @@ const attributesChangedAnnouncer = Effect.gen(function* () {
   return (userId: UserId, attributes: ReadonlyArray<string>): Effect.Effect<void> =>
     Option.isSome(hook) ? hook.value.run({ userId, attributes }) : Effect.void;
 });
-
-const emptyState: State = { byId: HashMap.empty(), byEmail: HashMap.empty() };
 
 /**
  * TRBS-005: single-process, test-grade storage — see `Sessions.layerMemory`. Use `layerSql` for any multi-instance deployment.
@@ -170,114 +506,227 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
         Ref.get(state).pipe(
           Effect.flatMap((s) =>
             Option.match(HashMap.get(s.byId, id), {
-              onNone: () =>
-                Effect.fail(new UserNotFound({ message: "awthaq: no such user", id })),
+              onNone: () => Effect.fail(userNotFound(id)),
               onSome: Effect.succeed,
             }),
           ),
         );
 
       const findByEmail: UsersShape["findByEmail"] = (email) =>
-        Ref.get(state)
-          .pipe(Effect.map((s) => HashMap.get(s.byEmail, email.toLowerCase())))
-          .pipe(
-            Effect.flatMap((userId) =>
-              Option.match(userId, {
-                onNone: () => Effect.succeed(Option.none()),
-                onSome: (id) => Ref.get(state).pipe(Effect.map((s) => HashMap.get(s.byId, id))),
-              }),
-            ),
-          );
+        Ref.get(state).pipe(
+          Effect.map((s) => holderOf(s, { _tag: "Email", email: email.toLowerCase() })),
+        );
 
-      const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
-        const email = input.email.toLowerCase();
-        const id = UserId(yield* crypto.randomUUIDv7);
+      const findByPhone: UsersShape["findByPhone"] = (phone) =>
+        Ref.get(state).pipe(Effect.map((s) => holderOf(s, { _tag: "Phone", phone })));
+
+      // SCP-003: one `Ref.modify` decides "insert or return the holder", so a
+      // concurrent pair cannot both insert. `Result.fail` carries the holder.
+      const insertOrHolder = Effect.fnUntraced(function* (input: CreateInput) {
+        const identity = normalizeIdentity(input.identity);
+        const id = UserId(
+          yield* crypto.randomUUIDv7.pipe(
+            Effect.catchTag("PlatformError", storeUnavailable("Users.create")),
+          ),
+        );
         const timestamp = yield* now;
         const record: UserRecord = {
           id,
-          email,
-          emailVerified: false,
+          identity: identityFromInput(identity),
           name: input.name,
           metadata: Option.fromNullishOr(input.metadata),
+          image: Option.fromNullishOr(input.image),
+          status: "active",
+          statusReason: Option.none(),
+          suspendedUntil: Option.none(),
           createdAt: timestamp,
           updatedAt: timestamp,
         };
         const outcome = yield* Ref.modify(
           state,
-          (s): readonly [Result.Result<UserRecord, EmailAlreadyExists>, State] => {
-            if (HashMap.has(s.byEmail, email)) {
-              return [
-                Result.fail(
-                  new EmailAlreadyExists({
-                    message: "awthaq: email already exists",
-                    email,
-                  }),
-                ),
-                s,
-              ] as const;
-            }
-            return [
-              Result.succeed(record),
-              { byId: HashMap.set(s.byId, id, record), byEmail: HashMap.set(s.byEmail, email, id) },
-            ] as const;
+          (s): readonly [Result.Result<UserRecord, UserRecord>, State] => {
+            const holder = holderOf(s, identity);
+            return Option.isSome(holder)
+              ? ([Result.fail(holder.value), s] as const)
+              : ([Result.succeed(record), indexRecord(s, record)] as const);
           },
         );
-        return yield* Effect.fromResult(outcome);
-      },
-      Effect.catchTag("PlatformError", storeUnavailable("Users.create")),
-      );
+        return { identity, outcome };
+      });
+
+      const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
+        const { identity, outcome } = yield* insertOrHolder(input);
+        return yield* Result.match(outcome, {
+          onFailure: () => identityAlreadyExists(identity),
+          onSuccess: Effect.succeed,
+        });
+      });
+
+      const createOrGet: UsersShape["createOrGet"] = Effect.fnUntraced(function* (input) {
+        const { outcome } = yield* insertOrHolder(input);
+        return Result.match(outcome, {
+          onFailure: (user) => ({ user, created: false }),
+          onSuccess: (user) => ({ user, created: true }),
+        });
+      });
+
+      /** One atomic read-check-write over a single user; `step` decides, `Ref.modify` applies. */
+      const transition = <E>(
+        id: UserId,
+        step: (
+          existing: UserRecord,
+          s: State,
+        ) => Result.Result<
+          { readonly next: State; readonly record: UserRecord; readonly changed: boolean },
+          E
+        >,
+      ): Effect.Effect<readonly [UserRecord, boolean], UserNotFound | E> =>
+        Ref.modify(
+          state,
+          (
+            s,
+          ): readonly [Result.Result<readonly [UserRecord, boolean], UserNotFound | E>, State] => {
+            const existing = HashMap.get(s.byId, id);
+            if (Option.isNone(existing)) return [Result.fail(userNotFound(id)), s] as const;
+            return Result.match(step(existing.value, s), {
+              onFailure: (error) => [Result.fail(error), s] as const,
+              onSuccess: ({ next, record, changed }) =>
+                [Result.succeed([record, changed] as const), next] as const,
+            });
+          },
+        ).pipe(Effect.flatMap(Effect.fromResult));
+
+      /** Rewrites the stored record, leaving both unique indexes untouched. */
+      const replaceRecord = (s: State, record: UserRecord): State => ({
+        ...s,
+        byId: HashMap.set(s.byId, record.id, record),
+      });
 
       const updateProfile: UsersShape["updateProfile"] = (id, input) =>
-        Ref.modify(state, (s): readonly [Result.Result<UserRecord, UserNotFound>, State] => {
-          const existing = HashMap.get(s.byId, id);
-          if (Option.isNone(existing)) {
-            return [
-              Result.fail(new UserNotFound({ message: "awthaq: no such user", id })),
-              s,
-            ] as const;
-          }
+        transition(id, (existing, s) => {
           const updated: UserRecord = {
-            ...existing.value,
+            ...existing,
             name: input.name,
             metadata:
               input.metadata === undefined
-                ? existing.value.metadata
+                ? existing.metadata
                 : Option.fromNullishOr(input.metadata),
+            image: input.image === undefined ? existing.image : Option.fromNullishOr(input.image),
           };
-          return [
-            Result.succeed(updated),
-            { ...s, byId: HashMap.set(s.byId, id, updated) },
-          ] as const;
+          return Result.succeed({
+            next: replaceRecord(s, updated),
+            record: updated,
+            changed: true,
+          });
         }).pipe(
-          Effect.flatMap(Effect.fromResult),
-          Effect.tap((record) => announce(record.id, ["name"])),
+          Effect.tap(([record]) => announce(record.id, ["name"])),
+          Effect.map(([record]) => record),
         );
 
       const verifyEmail: UsersShape["verifyEmail"] = (id) =>
-        Ref.modify(
-          state,
-          (s): readonly [Result.Result<readonly [UserRecord, boolean], UserNotFound>, State] => {
-            const existing = HashMap.get(s.byId, id);
-            if (Option.isNone(existing)) {
-              return [
-                Result.fail(new UserNotFound({ message: "awthaq: no such user", id })),
-                s,
-              ] as const;
-            }
-            if (existing.value.emailVerified) {
-              return [Result.succeed([existing.value, false] as const), s] as const;
-            }
-            const updated: UserRecord = { ...existing.value, emailVerified: true };
-            return [
-              Result.succeed([updated, true] as const),
-              { ...s, byId: HashMap.set(s.byId, id, updated) },
-            ] as const;
-          },
-        ).pipe(
-          Effect.flatMap(Effect.fromResult),
+        transition(id, (existing, s) => {
+          const identity = existing.identity;
+          if (identity._tag !== "Email") {
+            return Result.fail(identityMismatch(id, "Email", identity._tag));
+          }
+          if (identity.emailVerified) {
+            return Result.succeed({ next: s, record: existing, changed: false });
+          }
+          const updated: UserRecord = {
+            ...existing,
+            identity: { ...identity, emailVerified: true },
+          };
+          return Result.succeed({
+            next: replaceRecord(s, updated),
+            record: updated,
+            changed: true,
+          });
+        }).pipe(
           Effect.tap(([record, changed]) =>
             changed ? announce(record.id, ["emailVerified"]) : Effect.void,
           ),
+          Effect.map(([record]) => record),
+        );
+
+      const verifyPhone: UsersShape["verifyPhone"] = (id) =>
+        transition(id, (existing, s) => {
+          const identity = existing.identity;
+          if (identity._tag !== "Phone") {
+            return Result.fail(identityMismatch(id, "Phone", identity._tag));
+          }
+          if (identity.phoneVerified) {
+            return Result.succeed({ next: s, record: existing, changed: false });
+          }
+          const updated: UserRecord = {
+            ...existing,
+            identity: { ...identity, phoneVerified: true },
+          };
+          return Result.succeed({
+            next: replaceRecord(s, updated),
+            record: updated,
+            changed: true,
+          });
+        }).pipe(Effect.map(([record]) => record));
+
+      const promoteIdentity: UsersShape["promoteIdentity"] = (id, requested) => {
+        const wanted = normalizePromoted(requested);
+        return transition<IdentityMismatch | EmailAlreadyExists | PhoneAlreadyExists>(
+          id,
+          (existing, s) => {
+            if (existing.identity._tag !== "Anonymous") {
+              return Result.fail(identityMismatch(id, "Anonymous", existing.identity._tag));
+            }
+            if (Option.isSome(holderOf(s, wanted))) return Result.fail(alreadyExists(wanted));
+            const updated: UserRecord = { ...existing, identity: identityFromInput(wanted) };
+            return Result.succeed({
+              next: indexRecord(s, updated),
+              record: updated,
+              changed: true,
+            });
+          },
+        ).pipe(Effect.map(([record]) => record));
+      };
+
+      const changeEmail: UsersShape["changeEmail"] = (id, requested) => {
+        const email = requested.toLowerCase();
+        return transition<IdentityMismatch | EmailAlreadyExists>(id, (existing, s) => {
+          const identity = existing.identity;
+          if (identity._tag !== "Email") {
+            return Result.fail(identityMismatch(id, "Email", identity._tag));
+          }
+          if (identity.email === email) {
+            return Result.succeed({ next: s, record: existing, changed: false });
+          }
+          if (HashMap.has(s.byEmail, email)) {
+            return Result.fail(emailExists(email));
+          }
+          const updated: UserRecord = {
+            ...existing,
+            identity: { _tag: "Email", email, emailVerified: false },
+          };
+          return Result.succeed({
+            next: indexRecord(unindexRecord(s, existing), updated),
+            record: updated,
+            changed: identity.emailVerified,
+          });
+        }).pipe(
+          Effect.tap(([record, lowered]) =>
+            lowered ? announce(record.id, ["emailVerified"]) : Effect.void,
+          ),
+          Effect.map(([record]) => record),
+        );
+      };
+
+      const setStatus: UsersShape["setStatus"] = (id, status, options) =>
+        transition(id, (existing, s) => {
+          const updated: UserRecord = { ...existing, status, ...statusFields(status, options) };
+          return Result.succeed({
+            next: replaceRecord(s, updated),
+            record: updated,
+            changed: true,
+          });
+        }).pipe(
+          Effect.tap(([record]) => announce(record.id, ["status"])),
           Effect.map(([record]) => record),
         );
 
@@ -290,17 +739,9 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
       // tap itself yields to one).
       const delete_: UsersShape["delete"] = (id) =>
         Effect.gen(function* () {
-          const existing = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s.byId, id)));
-          if (Option.isNone(existing)) {
-            return yield* Effect.fail(
-              new UserNotFound({ message: "awthaq: no such user", id }),
-            );
-          }
-          yield* beforeUserDeleteVeto(beforeDelete.run({ id, email: existing.value.email }));
-          yield* Ref.update(state, (s) => ({
-            byId: HashMap.remove(s.byId, id),
-            byEmail: HashMap.remove(s.byEmail, existing.value.email),
-          }));
+          const existing = yield* findById(id);
+          yield* beforeUserDeleteVeto(beforeDelete.run(deleteHookInput(existing)));
+          yield* Ref.update(state, (s) => unindexRecord(s, existing));
         });
 
       const list: UsersShape["list"] = (input) =>
@@ -335,19 +776,67 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
           }),
         );
 
-      return { create, findById, findByEmail, updateProfile, verifyEmail, delete: delete_, list };
+      return {
+        create,
+        createOrGet,
+        findById,
+        findByEmail,
+        findByPhone,
+        updateProfile,
+        verifyEmail,
+        verifyPhone,
+        promoteIdentity,
+        changeEmail,
+        setStatus,
+        delete: delete_,
+        list,
+      };
     }),
   );
 
-const toUserRecord = (row: SqlModels.User): UserRecord => ({
-  id: UserId(row.id),
-  email: row.email,
-  emailVerified: row.emailVerified,
-  name: row.name,
-  metadata: Option.fromNullOr(row.metadata),
-  createdAt: row.createdAt,
-  updatedAt: row.updatedAt,
-});
+/**
+ * FAMS-002: folds the flattened `email`/`phone` columns into the identity union
+ * — the one place that reads them. A row with both set is not a state any
+ * writer here produces (the union says a user has one identity), so it dies
+ * with a defect rather than picking a side silently.
+ */
+const toIdentity = (row: SqlModels.User): Effect.Effect<UserIdentity> => {
+  if (row.email !== null && row.phone !== null) {
+    return Defects.invariantViolation(
+      "UserIdentityAmbiguous",
+      "awthaq: a user row has both an email and a phone",
+    );
+  }
+  if (row.email !== null) {
+    return Effect.succeed({ _tag: "Email", email: row.email, emailVerified: row.emailVerified });
+  }
+  if (row.phone !== null) {
+    return Effect.succeed({ _tag: "Phone", phone: row.phone, phoneVerified: row.phoneVerified });
+  }
+  return Effect.succeed({ _tag: "Anonymous" });
+};
+
+const toUserRecord = (row: SqlModels.User): Effect.Effect<UserRecord> =>
+  Effect.map(toIdentity(row), (identity) => ({
+    id: UserId(row.id),
+    identity,
+    name: row.name,
+    metadata: Option.fromNullOr(row.metadata),
+    image: Option.fromNullOr(row.image),
+    status: row.status,
+    statusReason: Option.fromNullOr(row.statusReason),
+    suspendedUntil: Option.fromNullOr(row.suspendedUntil),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
+
+const toUserRecordOption = (
+  row: Option.Option<SqlModels.User>,
+): Effect.Effect<Option.Option<UserRecord>> =>
+  Option.match(row, {
+    onNone: () => Effect.succeedNone,
+    onSome: (found) => Effect.map(toUserRecord(found), Option.some),
+  });
 
 /**
  * BEH-EA-041's uniqueness is a real database constraint here (a `UNIQUE`
@@ -357,7 +846,8 @@ const toUserRecord = (row: SqlModels.User): UserRecord => ({
  * reason, mapped to `EmailAlreadyExists`; every other repository failure
  * (a schema mismatch, a dropped connection) is a genuine defect, not a
  * domain error this service's callers are meant to recover from, so it is
- * left to `die`.
+ * left to `die`. FAMS-002: the same holds for the partial `users_phone_unique`
+ * index and `PhoneAlreadyExists`.
  */
 export const layerSql: Layer.Layer<
   Users,
@@ -370,56 +860,100 @@ export const layerSql: Layer.Layer<
     const beforeDelete = yield* Hooks.BeforeUserDelete;
     const announce = yield* attributesChangedAnnouncer;
 
-    const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
-      const email = input.email.toLowerCase();
-      const insert = yield* repo.models.User.insert
-        .makeEffect({ email, name: input.name, metadata: input.metadata ?? null })
+    const buildInsert = (input: CreateInput, identity: IdentityInput) =>
+      repo.models.User.insert
+        .makeEffect({
+          email: identity._tag === "Email" ? identity.email : null,
+          phone: identity._tag === "Phone" ? identity.phone : null,
+          name: input.name,
+          metadata: input.metadata ?? null,
+          image: input.image ?? null,
+        })
         .pipe(Effect.orDie);
-      const row = yield* repo.insert(insert).pipe(
-        Effect.catchTag("SqlError", (error) =>
-          Effect.fail(
-            error.reason._tag === "UniqueViolation"
-              ? new EmailAlreadyExists({
-                  message: "awthaq: email already exists",
-                  email,
-                })
-              : error,
-          ),
-        ),
-        Effect.catchTag("SqlError", storeUnavailable("Users.create")),
-        Effect.catchTag("SchemaError", Effect.die),
-      );
-      return toUserRecord(row);
+
+    /** A `UniqueViolation` is the domain conflict for `identity`; any other `SqlError` is an outage (`StoreUnavailable`). */
+    const conflictOrUnavailable = (operation: string, identity: IdentityInput) =>
+      Effect.fnUntraced(function* (error: SqlError) {
+        if (error.reason._tag === "UniqueViolation") return yield* identityAlreadyExists(identity);
+        return yield* storeUnavailable(operation)(error);
+      });
+
+    const emailConflictOrUnavailable = (operation: string, email: string) =>
+      Effect.fnUntraced(function* (error: SqlError) {
+        if (error.reason._tag === "UniqueViolation") return yield* Effect.fail(emailExists(email));
+        return yield* storeUnavailable(operation)(error);
+      });
+
+    const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
+      const identity = normalizeIdentity(input.identity);
+      const insert = yield* buildInsert(input, identity);
+      const row = yield* repo
+        .insert(insert)
+        .pipe(
+          Effect.catchTag("SqlError", conflictOrUnavailable("Users.create", identity)),
+          Effect.catchTag("SchemaError", Effect.die),
+        );
+      return yield* toUserRecord(row);
     });
 
     const findById: UsersShape["findById"] = (id) =>
       repo.findById(id).pipe(
         Effect.catchTags({
-          NoSuchElementError: () =>
-            Effect.fail(new UserNotFound({ message: "awthaq: no such user", id })),
+          NoSuchElementError: () => Effect.fail(userNotFound(id)),
           SchemaError: Effect.die,
           SqlError: storeUnavailable("Users.findById"),
         }),
-        Effect.map(toUserRecord),
+        Effect.flatMap(toUserRecord),
       );
 
     const findByEmail: UsersShape["findByEmail"] = (email) =>
       repo
         .findByEmail(email.toLowerCase())
-        .pipe(Effect.map(Option.map(toUserRecord)), orStoreUnavailable("Users.findByEmail"));
+        .pipe(orStoreUnavailable("Users.findByEmail"), Effect.flatMap(toUserRecordOption));
 
-    // GC-004: one targeted statement, so a row deleted between the caller's read and this write
-    // is `UserNotFound` — what `layerMemory` answers — not a defect, and `email` is never
-    // rewritten from a stale read.
+    const findByPhone: UsersShape["findByPhone"] = (phone) =>
+      repo
+        .findByPhone(phone)
+        .pipe(orStoreUnavailable("Users.findByPhone"), Effect.flatMap(toUserRecordOption));
+
+    // SCP-003: `INSERT ... ON CONFLICT DO NOTHING` (not catch-the-violation):
+    // a Postgres unique violation would abort an enclosing transaction, and an
+    // import runs one per user.
+    const createOrGet: UsersShape["createOrGet"] = Effect.fnUntraced(function* (input) {
+      const identity = normalizeIdentity(input.identity);
+      const insert = yield* buildInsert(input, identity);
+      const inserted = yield* repo.insertIfAbsent(insert).pipe(orStoreUnavailable("Users.createOrGet"));
+      if (Option.isSome(inserted)) {
+        return { user: yield* toUserRecord(inserted.value), created: true };
+      }
+      const holder =
+        identity._tag === "Email"
+          ? yield* findByEmail(identity.email)
+          : identity._tag === "Phone"
+            ? yield* findByPhone(identity.phone)
+            : Option.none<UserRecord>();
+      // `None` here means the holder vanished between the two statements, or an
+      // Anonymous insert hit a primary-key collision — neither is a domain state.
+      return yield* Option.match(holder, {
+        onNone: () =>
+          Defects.invariantViolation(
+            "CreateOrGetRowVanished",
+            "awthaq: createOrGet found no row after a conflict",
+          ),
+        onSome: (user) => Effect.succeed({ user, created: false }),
+      });
+    });
+
+    // GC-004: one targeted statement, so a row deleted between the caller's read and this write is
+    // `UserNotFound` — what `layerMemory` answers — not a defect, and no other column is rewritten
+    // from a stale read.
     const updateProfile: UsersShape["updateProfile"] = Effect.fnUntraced(function* (id, input) {
       const row = yield* repo
-        .updateProfile({ id, name: input.name, metadata: input.metadata })
+        .updateProfile({ id, name: input.name, metadata: input.metadata, image: input.image })
         .pipe(orStoreUnavailable("Users.updateProfile"));
-      if (Option.isNone(row)) {
-        return yield* Effect.fail(new UserNotFound({ message: "awthaq: no such user", id }));
-      }
+      if (Option.isNone(row)) return yield* Effect.fail(userNotFound(id));
       yield* announce(id, ["name"]);
-      return toUserRecord(row.value);
+      return yield* toUserRecord(row.value);
     });
 
     // `emailVerified` is excluded from the generic `update`/`jsonUpdate`
@@ -428,34 +962,131 @@ export const layerSql: Layer.Layer<
     // touch that column at all.
     const verifyEmail: UsersShape["verifyEmail"] = Effect.fnUntraced(function* (id) {
       const existing = yield* findById(id);
-      if (existing.emailVerified) return existing;
+      if (existing.identity._tag !== "Email") {
+        return yield* Effect.fail(identityMismatch(id, "Email", existing.identity._tag));
+      }
+      if (existing.identity.emailVerified) return existing;
       const row = yield* repo.verifyEmail(id).pipe(
         Effect.catchTags({
-          NoSuchElementError: () =>
-            Effect.fail(new UserNotFound({ message: "awthaq: no such user", id })),
+          NoSuchElementError: () => Effect.fail(userNotFound(id)),
           SchemaError: Effect.die,
           SqlError: storeUnavailable("Users.verifyEmail"),
         }),
       );
       yield* announce(id, ["emailVerified"]);
-      return toUserRecord(row);
+      return yield* toUserRecord(row);
+    });
+
+    const verifyPhone: UsersShape["verifyPhone"] = Effect.fnUntraced(function* (id) {
+      const existing = yield* findById(id);
+      if (existing.identity._tag !== "Phone") {
+        return yield* Effect.fail(identityMismatch(id, "Phone", existing.identity._tag));
+      }
+      if (existing.identity.phoneVerified) return existing;
+      const row = yield* repo.verifyPhone(id).pipe(
+        Effect.catchTags({
+          NoSuchElementError: () => Effect.fail(userNotFound(id)),
+          SchemaError: Effect.die,
+          SqlError: storeUnavailable("Users.verifyPhone"),
+        }),
+      );
+      return yield* toUserRecord(row);
+    });
+
+    const promoteIdentity: UsersShape["promoteIdentity"] = Effect.fnUntraced(
+      function* (id, requested) {
+        const wanted = normalizePromoted(requested);
+        const existing = yield* findById(id);
+        if (existing.identity._tag !== "Anonymous") {
+          return yield* Effect.fail(identityMismatch(id, "Anonymous", existing.identity._tag));
+        }
+        const promoted = yield* repo
+          .promoteIdentity(id, wanted)
+          .pipe(
+            Effect.catchTag("SqlError", conflictOrUnavailable("Users.promoteIdentity", wanted)),
+            Effect.catchTag("SchemaError", Effect.die),
+          );
+        if (Option.isNone(promoted)) {
+          // Lost a race: another promotion landed between the read and the guarded UPDATE.
+          const current = yield* findById(id);
+          return yield* Effect.fail(identityMismatch(id, "Anonymous", current.identity._tag));
+        }
+        return yield* toUserRecord(promoted.value);
+      },
+    );
+
+    const changeEmail: UsersShape["changeEmail"] = Effect.fnUntraced(function* (id, requested) {
+      const email = requested.toLowerCase();
+      const existing = yield* findById(id);
+      const identity = existing.identity;
+      if (identity._tag !== "Email") {
+        return yield* Effect.fail(identityMismatch(id, "Email", identity._tag));
+      }
+      if (identity.email === email) return existing;
+      const changed = yield* repo
+        .changeEmail(id, email)
+        .pipe(
+          Effect.catchTag("SqlError", emailConflictOrUnavailable("Users.changeEmail", email)),
+          Effect.catchTag("SchemaError", Effect.die),
+        );
+      if (Option.isNone(changed)) {
+        const current = yield* findById(id);
+        return yield* Effect.fail(identityMismatch(id, "Email", current.identity._tag));
+      }
+      if (identity.emailVerified) yield* announce(id, ["emailVerified"]);
+      return yield* toUserRecord(changed.value);
+    });
+
+    const setStatus: UsersShape["setStatus"] = Effect.fnUntraced(function* (id, status, options) {
+      const fields = statusFields(status, options);
+      const row = yield* repo
+        .setStatus(id, {
+          status,
+          reason: Option.getOrNull(fields.statusReason),
+          until: Option.getOrNull(fields.suspendedUntil),
+        })
+        .pipe(
+          Effect.catchTags({
+            NoSuchElementError: () => Effect.fail(userNotFound(id)),
+            SchemaError: Effect.die,
+            SqlError: storeUnavailable("Users.setStatus"),
+          }),
+        );
+      yield* announce(id, ["status"]);
+      return yield* toUserRecord(row);
     });
 
     const delete_: UsersShape["delete"] = Effect.fnUntraced(function* (id) {
       const found = yield* findById(id);
-      yield* beforeUserDeleteVeto(beforeDelete.run({ id, email: found.email }));
+      yield* beforeUserDeleteVeto(beforeDelete.run(deleteHookInput(found)));
       yield* repo.delete(id).pipe(orStoreUnavailable("Users.delete"));
     });
 
     const list: UsersShape["list"] = (input) =>
       repo.listPage(input?.cursor, input?.limit).pipe(
-        Effect.map((page) => ({
-          items: page.items.map(toUserRecord),
-          nextCursor: page.nextCursor,
-        })),
         orStoreUnavailable("Users.list"),
+        Effect.flatMap((page) =>
+          Effect.map(Effect.forEach(page.items, toUserRecord), (items) => ({
+            items,
+            nextCursor: page.nextCursor,
+          })),
+        ),
       );
 
-    return { create, findById, findByEmail, updateProfile, verifyEmail, delete: delete_, list };
+    return {
+      create,
+      createOrGet,
+      findById,
+      findByEmail,
+      findByPhone,
+      updateProfile,
+      verifyEmail,
+      verifyPhone,
+      promoteIdentity,
+      changeEmail,
+      setStatus,
+      delete: delete_,
+      list,
+    };
   }),
 );

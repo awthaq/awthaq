@@ -35,7 +35,10 @@ describe("Passkey", () => {
       const accounts = yield* Accounts.Accounts;
       const sessions = yield* Sessions.Sessions;
 
-      const user = yield* users.create({ email: "ada@example.com", name: "Ada" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "ada@example.com" },
+        name: "Ada",
+      });
       const issued = yield* sessions.issue({ userId: user.id });
 
       const options = yield* passkey.registerOptions(user.id, issued.session.id);
@@ -67,7 +70,10 @@ describe("Passkey", () => {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
 
-      const user = yield* users.create({ email: "bo@example.com", name: "Bo" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "bo@example.com" },
+        name: "Bo",
+      });
       const registerSession = yield* sessions.issue({ userId: user.id });
       const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
       yield* passkey.registerVerify(user.id, registerSession.session.id, {
@@ -112,7 +118,10 @@ describe("Passkey", () => {
       const passkey = yield* Passkey.Passkey;
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const user = yield* users.create({ email: "csd003-passkey@example.com", name: "C" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "csd003-passkey@example.com" },
+        name: "C",
+      });
       const registerSession = yield* sessions.issue({ userId: user.id });
       const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
       yield* passkey.registerVerify(user.id, registerSession.session.id, {
@@ -193,7 +202,10 @@ describe("Passkey", () => {
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
 
-        const user = yield* users.create({ email: "ghost@example.com", name: "Ghost" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "ghost@example.com" },
+          name: "Ghost",
+        });
         const registerSession = yield* sessions.issue({ userId: user.id });
         const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
         // `mockWebAuthn`'s `verifyRegistration` always reports
@@ -281,7 +293,10 @@ describe("Passkey", () => {
         const passkey = yield* Passkey.Passkey;
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ email: "uv@example.com", name: "UV" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "uv@example.com" },
+          name: "UV",
+        });
         const registerSession = yield* sessions.issue({ userId: user.id });
         const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
         yield* passkey.registerVerify(user.id, registerSession.session.id, {
@@ -390,7 +405,10 @@ describe("Passkey", () => {
       const passkey = yield* Passkey.Passkey;
       const users = yield* Users.Users;
       yield* registerNewUser("owner@example.com");
-      const other = yield* users.create({ email: "other@example.com", name: "Other" });
+      const other = yield* users.create({
+        identity: { _tag: "Email", email: "other@example.com" },
+        name: "Other",
+      });
 
       const failure = yield* passkey
         .renameCredential(other.id, "cred-mock-1", "Stolen")
@@ -406,7 +424,10 @@ describe("Passkey — origin/rpId (BEH-EA-133)", () => {
       const passkey = yield* Passkey.Passkey;
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const user = yield* users.create({ email: "origin@example.com", name: "Origin" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "origin@example.com" },
+        name: "Origin",
+      });
       const registerSession = yield* sessions.issue({ userId: user.id });
       const failure = yield* passkey
         .registerVerify(user.id, registerSession.session.id, {
@@ -438,7 +459,10 @@ describe("Passkey — Conditional Create (ticket 07)", () => {
         const passkey = yield* Passkey.Passkey;
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ email: "conditional@example.com", name: "Conditional" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "conditional@example.com" },
+          name: "Conditional",
+        });
         const issued = yield* sessions.issue({ userId: user.id });
 
         const options = yield* passkey.registerOptionsConditional(user.id, issued.session.id);
@@ -476,7 +500,10 @@ describe("Passkey — Conditional Create (ticket 07)", () => {
       const passkey = yield* Passkey.Passkey;
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const user = yield* users.create({ email: "disabled@example.com", name: "Disabled" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "disabled@example.com" },
+        name: "Disabled",
+      });
       const issued = yield* sessions.issue({ userId: user.id });
       const failure = yield* passkey
         .registerOptionsConditional(user.id, issued.session.id)
@@ -492,7 +519,10 @@ describe("Passkey — Conditional Create (ticket 07)", () => {
         const passkey = yield* Passkey.Passkey;
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ email: "preferred@example.com", name: "Preferred" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "preferred@example.com" },
+          name: "Preferred",
+        });
         const issued = yield* sessions.issue({ userId: user.id });
 
         const options = yield* passkey.registerOptions(user.id, issued.session.id);
@@ -529,7 +559,10 @@ describe("Passkey — Conditional Create (ticket 07)", () => {
         const passkey = yield* Passkey.Passkey;
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ email: "strict@example.com", name: "Strict" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "strict@example.com" },
+          name: "Strict",
+        });
         const issued = yield* sessions.issue({ userId: user.id });
 
         const options = yield* passkey.registerOptions(user.id, issued.session.id);
@@ -567,7 +600,10 @@ describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", 
       const passkey = yield* Passkey.Passkey;
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const user = yield* users.create({ email: "stale-options@example.com", name: "Stale" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "stale-options@example.com" },
+        name: "Stale",
+      });
       const issued = yield* sessions.issue({ userId: user.id });
 
       // `PasskeyConfig.reauthMaxAgeSeconds` defaults to 5 minutes.
@@ -584,7 +620,10 @@ describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", 
       const passkey = yield* Passkey.Passkey;
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const user = yield* users.create({ email: "stale-verify@example.com", name: "Stale" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "stale-verify@example.com" },
+        name: "Stale",
+      });
       const issued = yield* sessions.issue({ userId: user.id });
       const options = yield* passkey.registerOptions(user.id, issued.session.id);
 
@@ -685,7 +724,10 @@ describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", 
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
       yield* registerNewUser("owner@example.com");
-      const other = yield* users.create({ email: "other@example.com", name: "Other" });
+      const other = yield* users.create({
+        identity: { _tag: "Email", email: "other@example.com" },
+        name: "Other",
+      });
       const otherIssued = yield* sessions.issue({ userId: other.id });
 
       const options = yield* passkey.reauthenticateOptions(other.id, otherIssued.session.id);

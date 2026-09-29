@@ -283,7 +283,10 @@ describe("OAuth", () => {
     it.effect("records the client ip and user agent the handler passed", () =>
       Effect.gen(function* () {
         const oauth = yield* OAuth.OAuth;
-        const { state } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+        const { state } = yield* oauth.authorize("acme", {
+          callbackURL: undefined,
+          link: undefined,
+        });
         const outcome = yield* oauth.callback("acme", {
           code: "auth-code",
           state,
@@ -485,10 +488,7 @@ describe("OAuth", () => {
         assert.isDefined(outcome.session);
         assert.deepStrictEqual(outcome.session?.session.amr, ["fed"]);
         assert.deepStrictEqual(outcome.session?.session.ipAddress, Option.some("203.0.113.20"));
-        assert.deepStrictEqual(
-          outcome.session?.session.userAgent,
-          Option.some("OAuthBrowser/1.0"),
-        );
+        assert.deepStrictEqual(outcome.session?.session.userAgent, Option.some("OAuthBrowser/1.0"));
       }).pipe(
         Effect.provide(
           buildLayer({
@@ -509,7 +509,10 @@ describe("OAuth", () => {
       () =>
         Effect.gen(function* () {
           const users = yield* Users.Users;
-          yield* users.create({ email: "alice@example.com", name: "Alice" });
+          yield* users.create({
+            identity: { _tag: "Email", email: "alice@example.com" },
+            name: "Alice",
+          });
 
           const oauth = yield* OAuth.OAuth;
           const { state } = yield* oauth.authorize("acme", {
@@ -540,7 +543,10 @@ describe("OAuth", () => {
     it.effect("REQ-EA-338: a provider not named in trustedProviders never auto-links", () =>
       Effect.gen(function* () {
         const users = yield* Users.Users;
-        yield* users.create({ email: "carol@example.com", name: "Carol" });
+        yield* users.create({
+          identity: { _tag: "Email", email: "carol@example.com" },
+          name: "Carol",
+        });
 
         const oauth = yield* OAuth.OAuth;
         const { state } = yield* oauth.authorize("acme", {
@@ -570,7 +576,10 @@ describe("OAuth", () => {
       () =>
         Effect.gen(function* () {
           const users = yield* Users.Users;
-          const existing = yield* users.create({ email: "dave@example.com", name: "Dave" });
+          const existing = yield* users.create({
+            identity: { _tag: "Email", email: "dave@example.com" },
+            name: "Dave",
+          });
           // TMS-007: auto-link needs the local account's email proven too.
           yield* users.verifyEmail(existing.id);
 
@@ -610,7 +619,10 @@ describe("OAuth", () => {
       () =>
         Effect.gen(function* () {
           const users = yield* Users.Users;
-          yield* users.create({ email: "erin@example.com", name: "Erin" });
+          yield* users.create({
+            identity: { _tag: "Email", email: "erin@example.com" },
+            name: "Erin",
+          });
 
           const oauth = yield* OAuth.OAuth;
           const { state } = yield* oauth.authorize("github-like", {
@@ -654,7 +666,10 @@ describe("OAuth", () => {
       () =>
         Effect.gen(function* () {
           const users = yield* Users.Users;
-          const alice = yield* users.create({ email: "alice2@example.com", name: "Alice" });
+          const alice = yield* users.create({
+            identity: { _tag: "Email", email: "alice2@example.com" },
+            name: "Alice",
+          });
 
           const oauth = yield* OAuth.OAuth;
           const { state } = yield* oauth.authorize("acme", {
@@ -704,29 +719,37 @@ describe("OAuth", () => {
       return oauth.callback("acme", { code: "c1", state, iss: undefined, cookieState: state });
     });
 
-    it.effect("TMS-007: a trusted provider does not auto-link into an unverified local account", () =>
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        yield* users.create({ email: "squat@example.com", name: "Squatter" });
-        const callback = yield* callbackAsAcme;
-        const failure = yield* callback.pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "AccountExists");
-        const accounts = yield* Accounts.Accounts;
-        assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("acme", "squat-sub")));
-      }).pipe(
-        Effect.provide(
-          trustedAcme({
-            "/token": { access_token: "at-1" },
-            "/userinfo": { id: "squat-sub", email: "squat@example.com", email_verified: true },
-          }),
+    it.effect(
+      "TMS-007: a trusted provider does not auto-link into an unverified local account",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          yield* users.create({
+            identity: { _tag: "Email", email: "squat@example.com" },
+            name: "Squatter",
+          });
+          const callback = yield* callbackAsAcme;
+          const failure = yield* callback.pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "AccountExists");
+          const accounts = yield* Accounts.Accounts;
+          assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("acme", "squat-sub")));
+        }).pipe(
+          Effect.provide(
+            trustedAcme({
+              "/token": { access_token: "at-1" },
+              "/userinfo": { id: "squat-sub", email: "squat@example.com", email_verified: true },
+            }),
+          ),
         ),
-      ),
     );
 
     it.effect("TMS-007: a trusted provider still auto-links into a verified local account", () =>
       Effect.gen(function* () {
         const users = yield* Users.Users;
-        const local = yield* users.create({ email: "proven@example.com", name: "Proven" });
+        const local = yield* users.create({
+          identity: { _tag: "Email", email: "proven@example.com" },
+          name: "Proven",
+        });
         yield* users.verifyEmail(local.id);
         const callback = yield* callbackAsAcme;
         const outcome = yield* callback;
@@ -747,34 +770,157 @@ describe("OAuth", () => {
         yield* callback;
         const users = yield* Users.Users;
         const created = Option.getOrThrow(yield* users.findByEmail("jit-trusted@example.com"));
-        assert.isTrue(created.emailVerified);
+        assert.isTrue(Users.isEmailVerified(created));
       }).pipe(
         Effect.provide(
           trustedAcme({
             "/token": { access_token: "at-1" },
-            "/userinfo": { id: "jit-trusted-sub", email: "jit-trusted@example.com", email_verified: true },
+            "/userinfo": {
+              id: "jit-trusted-sub",
+              email: "jit-trusted@example.com",
+              email_verified: true,
+            },
           }),
         ),
       ),
     );
 
-    it.effect("AOMS-007: an untrusted provider asserting email_verified creates an unverified user", () =>
+    it.effect(
+      "AOMS-007: an untrusted provider asserting email_verified creates an unverified user",
+      () =>
+        Effect.gen(function* () {
+          const callback = yield* callbackAsAcme;
+          yield* callback;
+          const users = yield* Users.Users;
+          const created = Option.getOrThrow(yield* users.findByEmail("jit-untrusted@example.com"));
+          assert.isFalse(Users.isEmailVerified(created));
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                "/token": { access_token: "at-1" },
+                "/userinfo": {
+                  id: "jit-untrusted-sub",
+                  email: "jit-untrusted@example.com",
+                  email_verified: true,
+                },
+              },
+            }),
+          ),
+        ),
+    );
+
+    it.effect(
+      "AOMS-007: a trusted provider that does not assert email_verified creates an unverified user",
+      () =>
+        Effect.gen(function* () {
+          const callback = yield* callbackAsAcme;
+          yield* callback;
+          const users = yield* Users.Users;
+          const created = Option.getOrThrow(yield* users.findByEmail("jit-unasserted@example.com"));
+          assert.isFalse(Users.isEmailVerified(created));
+        }).pipe(
+          Effect.provide(
+            trustedAcme({
+              "/token": { access_token: "at-1" },
+              "/userinfo": { id: "jit-unasserted-sub", email: "jit-unasserted@example.com" },
+            }),
+          ),
+        ),
+    );
+
+    it.effect(
+      "FAMS-002: a provider profile without an email creates an Anonymous user, never a synthetic email",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const accounts = yield* Accounts.Accounts;
+          const first = yield* yield* callbackAsAcme;
+          assert.isDefined(first.session);
+          const linked = Option.getOrThrow(
+            yield* accounts.findByProviderSubject("acme", "no-email-sub"),
+          );
+          const user = yield* users.findById(linked.userId);
+          assert.deepStrictEqual(user.identity, { _tag: "Anonymous" });
+          assert.strictEqual(user.name, "no-email-sub");
+          // No row anywhere holds the old `${providerId}:${subject}` placeholder.
+          assert.isTrue(Option.isNone(yield* users.findByEmail("acme:no-email-sub")));
+
+          // The next sign-in resolves the same user through the linked account.
+          const second = yield* yield* callbackAsAcme;
+          assert.strictEqual(second.session?.session.userId, user.id);
+          assert.strictEqual((yield* users.list()).items.length, 1);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                "/token": { access_token: "at-1" },
+                "/userinfo": { id: "no-email-sub" },
+              },
+            }),
+          ),
+        ),
+    );
+
+    it.effect(
+      "NAM-009: an http(s) avatar from the profile lands on the created user; anything else is dropped",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          yield* yield* callbackAsAcme;
+          const good = Option.getOrThrow(yield* users.findByEmail("avatar@example.com"));
+          assert.deepStrictEqual(good.image, Option.some("https://cdn.example.com/a.png"));
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [
+                acme({
+                  mapProfile: (claims) => ({
+                    subject: claims["id"] as string,
+                    email: claims["email"] as string,
+                    image: claims["picture"] as string,
+                  }),
+                }),
+              ],
+              httpRoutes: {
+                "/token": { access_token: "at-1" },
+                "/userinfo": {
+                  id: "avatar-sub",
+                  email: "avatar@example.com",
+                  picture: "https://cdn.example.com/a.png",
+                },
+              },
+            }),
+          ),
+        ),
+    );
+
+    it.effect("NAM-009: a non-http(s) avatar claim (javascript:, data:) is never stored", () =>
       Effect.gen(function* () {
-        const callback = yield* callbackAsAcme;
-        yield* callback;
         const users = yield* Users.Users;
-        const created = Option.getOrThrow(yield* users.findByEmail("jit-untrusted@example.com"));
-        assert.isFalse(created.emailVerified);
+        yield* yield* callbackAsAcme;
+        const created = Option.getOrThrow(yield* users.findByEmail("evil-avatar@example.com"));
+        assert.isTrue(Option.isNone(created.image));
       }).pipe(
         Effect.provide(
           buildLayer({
-            providers: [acme()],
+            providers: [
+              acme({
+                mapProfile: (claims) => ({
+                  subject: claims["id"] as string,
+                  email: claims["email"] as string,
+                  image: claims["picture"] as string,
+                }),
+              }),
+            ],
             httpRoutes: {
               "/token": { access_token: "at-1" },
               "/userinfo": {
-                id: "jit-untrusted-sub",
-                email: "jit-untrusted@example.com",
-                email_verified: true,
+                id: "evil-avatar-sub",
+                email: "evil-avatar@example.com",
+                picture: "javascript:alert(1)",
               },
             },
           }),
@@ -782,52 +928,75 @@ describe("OAuth", () => {
       ),
     );
 
-    it.effect("AOMS-007: a trusted provider that does not assert email_verified creates an unverified user", () =>
-      Effect.gen(function* () {
-        const callback = yield* callbackAsAcme;
-        yield* callback;
-        const users = yield* Users.Users;
-        const created = Option.getOrThrow(yield* users.findByEmail("jit-unasserted@example.com"));
-        assert.isFalse(created.emailVerified);
-      }).pipe(
-        Effect.provide(
-          trustedAcme({
-            "/token": { access_token: "at-1" },
-            "/userinfo": { id: "jit-unasserted-sub", email: "jit-unasserted@example.com" },
-          }),
+    it.effect(
+      "SCP-001: a suspended user's callback is refused with UserSuspended and issues no session",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const sessions = yield* Sessions.Sessions;
+          const created = Option.getOrThrow(
+            yield* Effect.gen(function* () {
+              yield* yield* callbackAsAcme;
+              return yield* users.findByEmail("suspendable@example.com");
+            }),
+          );
+          yield* users.setStatus(created.id, "suspended", { reason: "abuse" });
+          const before = (yield* sessions.list(created.id)).length;
+          const refused = yield* (yield* callbackAsAcme).pipe(Effect.flip);
+          assert.strictEqual(refused._tag, "UserSuspended");
+          assert.strictEqual((yield* sessions.list(created.id)).length, before);
+
+          yield* users.setStatus(created.id, "active");
+          const restored = yield* yield* callbackAsAcme;
+          assert.strictEqual(restored.session?.session.userId, created.id);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                "/token": { access_token: "at-1" },
+                "/userinfo": { id: "suspendable-sub", email: "suspendable@example.com" },
+              },
+            }),
+          ),
         ),
-      ),
     );
 
     const seedPasskeyOnlyUser = Effect.gen(function* () {
       const users = yield* Users.Users;
       const accounts = yield* Accounts.Accounts;
-      const local = yield* users.create({ email: "passkey-only@example.com", name: "Passkey" });
+      const local = yield* users.create({
+        identity: { _tag: "Email", email: "passkey-only@example.com" },
+        name: "Passkey",
+      });
       yield* accounts.link({ userId: local.id, providerId: "passkey", subject: "credential-1" });
     });
 
-    it.effect("NAM-006: AccountExists lists the providers the user actually has (a passkey-only user)", () =>
-      Effect.gen(function* () {
-        yield* seedPasskeyOnlyUser;
-        const callback = yield* callbackAsAcme;
-        const failure = yield* callback.pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "AccountExists");
-        if (failure._tag === "AccountExists") assert.deepStrictEqual(failure.providers, ["passkey"]);
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [acme()],
-            httpRoutes: {
-              "/token": { access_token: "at-1" },
-              "/userinfo": {
-                id: "pk-sub",
-                email: "passkey-only@example.com",
-                email_verified: true,
+    it.effect(
+      "NAM-006: AccountExists lists the providers the user actually has (a passkey-only user)",
+      () =>
+        Effect.gen(function* () {
+          yield* seedPasskeyOnlyUser;
+          const callback = yield* callbackAsAcme;
+          const failure = yield* callback.pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "AccountExists");
+          if (failure._tag === "AccountExists")
+            assert.deepStrictEqual(failure.providers, ["passkey"]);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                "/token": { access_token: "at-1" },
+                "/userinfo": {
+                  id: "pk-sub",
+                  email: "passkey-only@example.com",
+                  email_verified: true,
+                },
               },
-            },
-          }),
+            }),
+          ),
         ),
-      ),
     );
 
     it.effect("NAM-006: AccountExists lists nothing when the provider's email is unverified", () =>
@@ -852,47 +1021,55 @@ describe("OAuth", () => {
   });
 
   describe("BEH-EA-125: (provider, subject, issuer) is the identity anchor", () => {
-    it.effect("FAMS-006: accountAnchorFor is exactly the key callback looks an imported account up by", () =>
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        const accounts = yield* Accounts.Accounts;
-        const imported = yield* users.create({ email: "imported@example.com", name: "Imported" });
-        // What an importer writes: the anchor, computed from the provider config.
-        yield* accounts.link({ userId: imported.id, ...(yield* OAuth.accountAnchorFor(okta(), "imported-sub")) });
+    it.effect(
+      "FAMS-006: accountAnchorFor is exactly the key callback looks an imported account up by",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const accounts = yield* Accounts.Accounts;
+          const imported = yield* users.create({
+            identity: { _tag: "Email", email: "imported@example.com" },
+            name: "Imported",
+          });
+          // What an importer writes: the anchor, computed from the provider config.
+          yield* accounts.link({
+            userId: imported.id,
+            ...(yield* OAuth.accountAnchorFor(okta(), "imported-sub")),
+          });
 
-        const oauth = yield* OAuth.OAuth;
-        const { state, location } = yield* oauth.authorize("okta", {
-          callbackURL: undefined,
-          link: undefined,
-        });
-        currentAnchorClaims = {
-          iss: "https://okta.example.com/oauth2/default",
-          aud: "okta-client-id",
-          sub: "imported-sub",
-          exp: Math.floor(Date.now() / 1000) + 3600,
-          nonce: new URL(location).searchParams.get("nonce"),
-        };
-        const outcome = yield* oauth.callback("okta", {
-          code: "c1",
-          state,
-          iss: undefined,
-          cookieState: state,
-        });
-        // Signed in as the imported user; no second user or account appeared.
-        assert.strictEqual(outcome.session?.session.userId, imported.id);
-        assert.strictEqual((yield* accounts.listByUser(imported.id)).length, 1);
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [okta()],
-            httpRoutes: {
-              ".well-known/openid-configuration": oktaDiscovery,
-              "/jwks": { keys: [jwk] },
-              "/token": () => ({ access_token: "at-1", id_token: signJwt(currentAnchorClaims) }),
-            },
-          }),
+          const oauth = yield* OAuth.OAuth;
+          const { state, location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          currentAnchorClaims = {
+            iss: "https://okta.example.com/oauth2/default",
+            aud: "okta-client-id",
+            sub: "imported-sub",
+            exp: Math.floor(Date.now() / 1000) + 3600,
+            nonce: new URL(location).searchParams.get("nonce"),
+          };
+          const outcome = yield* oauth.callback("okta", {
+            code: "c1",
+            state,
+            iss: undefined,
+            cookieState: state,
+          });
+          // Signed in as the imported user; no second user or account appeared.
+          assert.strictEqual(outcome.session?.session.userId, imported.id);
+          assert.strictEqual((yield* accounts.listByUser(imported.id)).length, 1);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta()],
+              httpRoutes: {
+                ".well-known/openid-configuration": oktaDiscovery,
+                "/jwks": { keys: [jwk] },
+                "/token": () => ({ access_token: "at-1", id_token: signJwt(currentAnchorClaims) }),
+              },
+            }),
+          ),
         ),
-      ),
     );
 
     it.effect(
@@ -1007,7 +1184,10 @@ describe("OAuth", () => {
     it.effect("oidc({ issuer, discoveryUrl, clientId }) given plain strings resolves", () =>
       Effect.gen(function* () {
         const oauth = yield* OAuth.OAuth;
-        const { location } = yield* oauth.authorize("okta", { callbackURL: undefined, link: undefined });
+        const { location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
         assert.strictEqual(new URL(location).searchParams.get("client_id"), "plain-client-id");
       }).pipe(
         Effect.provide(
@@ -1036,7 +1216,10 @@ describe("OAuth", () => {
         // @ts-expect-error a secret must be a Config<Redacted>, never a bare string.
         clientSecret: "hunter2",
         scopes: [],
-        endpoints: { authorizationEndpoint: "https://x.example.com/a", tokenEndpoint: "https://x.example.com/t" },
+        endpoints: {
+          authorizationEndpoint: "https://x.example.com/a",
+          tokenEndpoint: "https://x.example.com/t",
+        },
         mapProfile: () => ({ subject: "x" }),
       });
     });
@@ -1053,18 +1236,20 @@ describe("OAuth", () => {
         Effect.map((exit) => (exit._tag === "Failure" ? Cause.pretty(exit.cause) : undefined)),
       );
 
-    it.effect("ESS-002: a discovery token_endpoint that is not a string dies at boot naming the field", () =>
-      Effect.gen(function* () {
-        const message = yield* bootDefect({
-          providers: [okta()],
-          httpRoutes: {
-            ".well-known/openid-configuration": { ...oktaDiscovery, token_endpoint: 42 },
-          },
-        });
-        assert.isDefined(message);
-        assert.include(message, "okta");
-        assert.include(message, "token_endpoint");
-      }),
+    it.effect(
+      "ESS-002: a discovery token_endpoint that is not a string dies at boot naming the field",
+      () =>
+        Effect.gen(function* () {
+          const message = yield* bootDefect({
+            providers: [okta()],
+            httpRoutes: {
+              ".well-known/openid-configuration": { ...oktaDiscovery, token_endpoint: 42 },
+            },
+          });
+          assert.isDefined(message);
+          assert.include(message, "okta");
+          assert.include(message, "token_endpoint");
+        }),
     );
 
     it.effect("AOMS-005: discovery advertising only unsupported id_token algorithms dies at boot", () =>
@@ -1166,88 +1351,104 @@ describe("OAuth", () => {
       "/userinfo": { id: "acme-user-1", email: "ada@example.com" },
     };
 
-    it.effect("ECF-001: a token endpoint that never answers fails ProviderUnavailable at its deadline", () => {
-      const hang = hangingRoute();
-      return Effect.gen(function* () {
-        const failure = yield* afterAdvancing(hang, Duration.seconds(3), acmeCallback);
-        assert.strictEqual(failure._tag, "ProviderUnavailable");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [acme()],
-            httpRoutes: { ...acmeRoutes, "/token": hang.route },
-            httpTimeouts: { tokenExchange: Duration.seconds(3) },
-          }),
-        ),
-      );
-    });
-
-    it.effect("ECF-001: a userinfo endpoint that never answers fails ProviderUnavailable at its deadline", () => {
-      const hang = hangingRoute();
-      return Effect.gen(function* () {
-        const failure = yield* afterAdvancing(hang, Duration.seconds(3), acmeCallback);
-        assert.strictEqual(failure._tag, "ProviderUnavailable");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [acme()],
-            httpRoutes: { ...acmeRoutes, "/userinfo": hang.route },
-            httpTimeouts: { userinfo: Duration.seconds(3) },
-            retry: { times: 0 },
-          }),
-        ),
-      );
-    });
-
-    it.effect("ECF-001: a discovery endpoint that never answers dies at boot at its deadline", () => {
-      const hang = hangingRoute();
-      return Effect.gen(function* () {
-        const exit = yield* afterAdvancing(
-          hang,
-          Duration.seconds(3),
-          Effect.void.pipe(
-            Effect.provide(
-              buildLayer({
-                providers: [okta()],
-                httpRoutes: { ".well-known/openid-configuration": hang.route },
-                httpTimeouts: { discovery: Duration.seconds(3) },
-                retry: { times: 0 },
-              }),
-            ),
-            Effect.exit,
+    it.effect(
+      "ECF-001: a token endpoint that never answers fails ProviderUnavailable at its deadline",
+      () => {
+        const hang = hangingRoute();
+        return Effect.gen(function* () {
+          const failure = yield* afterAdvancing(hang, Duration.seconds(3), acmeCallback);
+          assert.strictEqual(failure._tag, "ProviderUnavailable");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: { ...acmeRoutes, "/token": hang.route },
+              httpTimeouts: { tokenExchange: Duration.seconds(3) },
+            }),
           ),
         );
-        if (exit._tag === "Success") return assert.fail("expected boot to die");
-        assert.include(Cause.pretty(exit.cause), "unreachable");
-      });
-    });
-
-    it.effect("EEM-004: a token endpoint answering 503 is ProviderUnavailable, not OAuthCallbackFailed", () =>
-      Effect.gen(function* () {
-        const failure = yield* acmeCallback;
-        assert.strictEqual(failure._tag, "ProviderUnavailable");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [acme()],
-            httpRoutes: { ...acmeRoutes, "/token": new FakeReply(503) },
-          }),
-        ),
-      ),
+      },
     );
 
-    it.effect("EEM-004: a token endpoint answering 400 invalid_grant is still OAuthCallbackFailed", () =>
-      Effect.gen(function* () {
-        const failure = yield* acmeCallback;
-        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [acme()],
-            httpRoutes: { ...acmeRoutes, "/token": new FakeReply(400, { error: "invalid_grant" }) },
-          }),
+    it.effect(
+      "ECF-001: a userinfo endpoint that never answers fails ProviderUnavailable at its deadline",
+      () => {
+        const hang = hangingRoute();
+        return Effect.gen(function* () {
+          const failure = yield* afterAdvancing(hang, Duration.seconds(3), acmeCallback);
+          assert.strictEqual(failure._tag, "ProviderUnavailable");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: { ...acmeRoutes, "/userinfo": hang.route },
+              httpTimeouts: { userinfo: Duration.seconds(3) },
+              retry: { times: 0 },
+            }),
+          ),
+        );
+      },
+    );
+
+    it.effect(
+      "ECF-001: a discovery endpoint that never answers dies at boot at its deadline",
+      () => {
+        const hang = hangingRoute();
+        return Effect.gen(function* () {
+          const exit = yield* afterAdvancing(
+            hang,
+            Duration.seconds(3),
+            Effect.void.pipe(
+              Effect.provide(
+                buildLayer({
+                  providers: [okta()],
+                  httpRoutes: { ".well-known/openid-configuration": hang.route },
+                  httpTimeouts: { discovery: Duration.seconds(3) },
+                  retry: { times: 0 },
+                }),
+              ),
+              Effect.exit,
+            ),
+          );
+          if (exit._tag === "Success") return assert.fail("expected boot to die");
+          assert.include(Cause.pretty(exit.cause), "unreachable");
+        });
+      },
+    );
+
+    it.effect(
+      "EEM-004: a token endpoint answering 503 is ProviderUnavailable, not OAuthCallbackFailed",
+      () =>
+        Effect.gen(function* () {
+          const failure = yield* acmeCallback;
+          assert.strictEqual(failure._tag, "ProviderUnavailable");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: { ...acmeRoutes, "/token": new FakeReply(503) },
+            }),
+          ),
         ),
-      ),
+    );
+
+    it.effect(
+      "EEM-004: a token endpoint answering 400 invalid_grant is still OAuthCallbackFailed",
+      () =>
+        Effect.gen(function* () {
+          const failure = yield* acmeCallback;
+          assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                ...acmeRoutes,
+                "/token": new FakeReply(400, { error: "invalid_grant" }),
+              },
+            }),
+          ),
+        ),
     );
 
     it.effect("EEM-004: a userinfo 401 is a protocol failure, never mistaken for a claim set", () =>
@@ -1258,7 +1459,10 @@ describe("OAuth", () => {
         Effect.provide(
           buildLayer({
             providers: [acme()],
-            httpRoutes: { ...acmeRoutes, "/userinfo": new FakeReply(401, { error: "invalid_token" }) },
+            httpRoutes: {
+              ...acmeRoutes,
+              "/userinfo": new FakeReply(401, { error: "invalid_token" }),
+            },
           }),
         ),
       ),
@@ -1286,139 +1490,162 @@ describe("OAuth", () => {
       );
     });
 
-    it.effect("ERS-003: a userinfo endpoint that 503s once then succeeds still completes the sign-in", () => {
-      let userinfoCalls = 0;
-      return Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const { state } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
-        const outcome = yield* oauth.callback("acme", {
-          code: "c1",
-          state,
-          iss: undefined,
-          cookieState: state,
-        });
-        assert.isDefined(outcome.session);
-        assert.strictEqual(userinfoCalls, 2);
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [acme()],
-            httpRoutes: {
-              ...acmeRoutes,
-              "/userinfo": () => {
-                userinfoCalls += 1;
-                return userinfoCalls === 1
-                  ? new FakeReply(503)
-                  : { id: "acme-user-1", email: "ada@example.com" };
+    it.effect(
+      "ERS-003: a userinfo endpoint that 503s once then succeeds still completes the sign-in",
+      () => {
+        let userinfoCalls = 0;
+        return Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state } = yield* oauth.authorize("acme", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          const outcome = yield* oauth.callback("acme", {
+            code: "c1",
+            state,
+            iss: undefined,
+            cookieState: state,
+          });
+          assert.isDefined(outcome.session);
+          assert.strictEqual(userinfoCalls, 2);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                ...acmeRoutes,
+                "/userinfo": () => {
+                  userinfoCalls += 1;
+                  return userinfoCalls === 1
+                    ? new FakeReply(503)
+                    : { id: "acme-user-1", email: "ada@example.com" };
+                },
               },
-            },
-          }),
-        ),
-      );
-    });
-
-    it.effect("ERS-003/NAM-004: a discovery endpoint that fails once at boot still registers the provider", () => {
-      let discoveryCalls = 0;
-      return Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const { location } = yield* oauth.authorize("okta", { callbackURL: undefined, link: undefined });
-        assert.include(location, "https://okta.example.com/authorize");
-        assert.strictEqual(discoveryCalls, 2);
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [okta()],
-            httpRoutes: {
-              ".well-known/openid-configuration": () => {
-                discoveryCalls += 1;
-                return discoveryCalls === 1 ? new FakeReply(503) : oktaDiscovery;
-              },
-            },
-          }),
-        ),
-      );
-    });
-
-    it.effect("NAM-004: a lazy provider whose discovery is down boots, answers 503, then recovers", () => {
-      let discoveryUp = false;
-      return Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        // The rest of the runtime is unaffected by the down provider.
-        const other = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
-        assert.include(other.location, "https://acme.example.com/authorize");
-        const down = yield* oauth
-          .authorize("okta", { callbackURL: undefined, link: undefined })
-          .pipe(Effect.flip);
-        assert.strictEqual(down._tag, "ProviderUnavailable");
-        discoveryUp = true;
-        const { location } = yield* oauth.authorize("okta", { callbackURL: undefined, link: undefined });
-        assert.include(location, "https://okta.example.com/authorize");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [acme(), okta({ discovery: { mode: "lazy" } })],
-            retry: { times: 0 },
-            httpRoutes: {
-              ".well-known/openid-configuration": () =>
-                discoveryUp ? oktaDiscovery : new FakeReply(503),
-            },
-          }),
-        ),
-      );
-    });
-
-    it.effect("NAM-004: a lazy provider whose fetched issuer mismatches never serves a request", () =>
-      Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const first = yield* oauth
-          .authorize("okta", { callbackURL: undefined, link: undefined })
-          .pipe(Effect.flip);
-        assert.strictEqual(first._tag, "ProviderUnavailable");
-        const second = yield* oauth
-          .authorize("okta", { callbackURL: undefined, link: undefined })
-          .pipe(Effect.flip);
-        assert.strictEqual(second._tag, "ProviderUnavailable");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [okta({ discovery: { mode: "lazy" } })],
-            httpRoutes: {
-              ".well-known/openid-configuration": {
-                ...oktaDiscovery,
-                issuer: "https://attacker.example.com/oauth2/default",
-              },
-            },
-          }),
-        ),
-      ),
+            }),
+          ),
+        );
+      },
     );
 
-    it.effect("NAM-004: OAuth and OAuthTokenAccess share one resolved registry (discovery fetched once)", () => {
-      let discoveryCalls = 0;
-      const both = Layer.merge(OAuth.OAuth.layer, OAuthTokenAccess.layer).pipe(
-        Layer.provide(Authentication.OptionalAuthenticationLive),
-        Layer.provide(Authentication.PrincipalResolverLive),
-        Layer.provideMerge(CoreLive),
-        Layer.provideMerge(RateLimiter.layerPermissive),
-        Layer.provideMerge(RateLimits.layer),
-        Layer.provideMerge(SqlTransaction.layerNoop),
-        Layer.provideMerge(ClientAddress.layerDirect),
-        Layer.provideMerge(EncryptionLive),
-        Layer.provide(
-          fakeHttpClient({
-            ".well-known/openid-configuration": () => {
-              discoveryCalls += 1;
-              return oktaDiscovery;
-            },
-          }),
+    it.effect(
+      "ERS-003/NAM-004: a discovery endpoint that fails once at boot still registers the provider",
+      () => {
+        let discoveryCalls = 0;
+        return Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          assert.include(location, "https://okta.example.com/authorize");
+          assert.strictEqual(discoveryCalls, 2);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta()],
+              httpRoutes: {
+                ".well-known/openid-configuration": () => {
+                  discoveryCalls += 1;
+                  return discoveryCalls === 1 ? new FakeReply(503) : oktaDiscovery;
+                },
+              },
+            }),
+          ),
+        );
+      },
+    );
+
+    it.effect(
+      "NAM-004: a lazy provider whose discovery is down boots, answers 503, then recovers",
+      () => {
+        let discoveryUp = false;
+        return Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          // The rest of the runtime is unaffected by the down provider.
+          const other = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+          assert.include(other.location, "https://acme.example.com/authorize");
+          const down = yield* oauth
+            .authorize("okta", { callbackURL: undefined, link: undefined })
+            .pipe(Effect.flip);
+          assert.strictEqual(down._tag, "ProviderUnavailable");
+          discoveryUp = true;
+          const { location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          assert.include(location, "https://okta.example.com/authorize");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme(), okta({ discovery: { mode: "lazy" } })],
+              retry: { times: 0 },
+              httpRoutes: {
+                ".well-known/openid-configuration": () =>
+                  discoveryUp ? oktaDiscovery : new FakeReply(503),
+              },
+            }),
+          ),
+        );
+      },
+    );
+
+    it.effect(
+      "NAM-004: a lazy provider whose fetched issuer mismatches never serves a request",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const first = yield* oauth
+            .authorize("okta", { callbackURL: undefined, link: undefined })
+            .pipe(Effect.flip);
+          assert.strictEqual(first._tag, "ProviderUnavailable");
+          const second = yield* oauth
+            .authorize("okta", { callbackURL: undefined, link: undefined })
+            .pipe(Effect.flip);
+          assert.strictEqual(second._tag, "ProviderUnavailable");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta({ discovery: { mode: "lazy" } })],
+              httpRoutes: {
+                ".well-known/openid-configuration": {
+                  ...oktaDiscovery,
+                  issuer: "https://attacker.example.com/oauth2/default",
+                },
+              },
+            }),
+          ),
         ),
-        Layer.provide(OAuth.config({ providers: [okta()], baseUrl })),
-      );
-      return Effect.gen(function* () {
-        yield* OAuthTokenAccess.OAuthTokenAccess;
-        assert.strictEqual(discoveryCalls, 1);
-      }).pipe(Effect.provide(both));
-    });
+    );
+
+    it.effect(
+      "NAM-004: OAuth and OAuthTokenAccess share one resolved registry (discovery fetched once)",
+      () => {
+        let discoveryCalls = 0;
+        const both = Layer.merge(OAuth.OAuth.layer, OAuthTokenAccess.layer).pipe(
+          Layer.provide(Authentication.OptionalAuthenticationLive),
+          Layer.provide(Authentication.PrincipalResolverLive),
+          Layer.provideMerge(CoreLive),
+          Layer.provideMerge(RateLimiter.layerPermissive),
+          Layer.provideMerge(RateLimits.layer),
+          Layer.provideMerge(SqlTransaction.layerNoop),
+          Layer.provideMerge(ClientAddress.layerDirect),
+          Layer.provideMerge(EncryptionLive),
+          Layer.provide(
+            fakeHttpClient({
+              ".well-known/openid-configuration": () => {
+                discoveryCalls += 1;
+                return oktaDiscovery;
+              },
+            }),
+          ),
+          Layer.provide(OAuth.config({ providers: [okta()], baseUrl })),
+        );
+        return Effect.gen(function* () {
+          yield* OAuthTokenAccess.OAuthTokenAccess;
+          assert.strictEqual(discoveryCalls, 1);
+        }).pipe(Effect.provide(both));
+      },
+    );
   });
 
   describe("OAP-008: authorize has its own registered rate-limit rule", () => {
@@ -1426,7 +1653,9 @@ describe("OAuth", () => {
       Effect.gen(function* () {
         const registry = yield* RateLimits.RateLimitsRegistry;
         const rules = yield* registry.registered;
-        const endpoints = rules.filter((rule) => rule.group === "oauth").map((rule) => rule.endpoint);
+        const endpoints = rules
+          .filter((rule) => rule.group === "oauth")
+          .map((rule) => rule.endpoint);
         assert.sameMembers([...endpoints], ["authorize", "callback"]);
       }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
     );
@@ -1478,13 +1707,18 @@ describe("OAuth", () => {
           baseUrl: "http://app.example.com",
         });
         assert.strictEqual(exit._tag, "Success");
-        assert.isTrue(logs.some((entry) => entry.level === "Warn" && entry.message.includes("plain http")));
+        assert.isTrue(
+          logs.some((entry) => entry.level === "Warn" && entry.message.includes("plain http")),
+        );
       }),
     );
 
     it.effect("a plain-http localhost baseUrl does not warn", () =>
       Effect.gen(function* () {
-        const { exit, logs } = yield* boot({ providers: [acme()], baseUrl: "http://localhost:3000" });
+        const { exit, logs } = yield* boot({
+          providers: [acme()],
+          baseUrl: "http://localhost:3000",
+        });
         assert.strictEqual(exit._tag, "Success");
         assert.isFalse(logs.some((entry) => entry.level === "Warn"));
       }),
@@ -1505,7 +1739,10 @@ describe("OAuth", () => {
     it.effect("a trailing slash on baseUrl does not double up in the authorize redirect_uri", () =>
       Effect.gen(function* () {
         const oauth = yield* OAuth.OAuth;
-        const { location } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+        const { location } = yield* oauth.authorize("acme", {
+          callbackURL: undefined,
+          link: undefined,
+        });
         assert.strictEqual(
           new URL(location).searchParams.get("redirect_uri"),
           "https://app.example.com/oauth/acme/callback",
@@ -1523,17 +1760,18 @@ describe("OAuth", () => {
       readonly accept: string | undefined;
       readonly form: URLSearchParams;
     }
-    const recordingTokenRoute = (seen: Array<SeenRequest>) => (request: HttpClientRequest.HttpClientRequest) => {
-      const body = request.body;
-      seen.push({
-        authorization: request.headers["authorization"],
-        accept: request.headers["accept"],
-        form: new URLSearchParams(
-          body._tag === "Uint8Array" ? new TextDecoder().decode(body.body) : "",
-        ),
-      });
-      return { access_token: "at-1" };
-    };
+    const recordingTokenRoute =
+      (seen: Array<SeenRequest>) => (request: HttpClientRequest.HttpClientRequest) => {
+        const body = request.body;
+        seen.push({
+          authorization: request.headers["authorization"],
+          accept: request.headers["accept"],
+          form: new URLSearchParams(
+            body._tag === "Uint8Array" ? new TextDecoder().decode(body.body) : "",
+          ),
+        });
+        return { access_token: "at-1" };
+      };
 
     const exchange = Effect.gen(function* () {
       const oauth = yield* OAuth.OAuth;
@@ -1554,105 +1792,125 @@ describe("OAuth", () => {
         Effect.exit,
       );
 
-    const layerAdvertising = (advertised: ReadonlyArray<string> | undefined, seen: Array<SeenRequest>) =>
+    const layerAdvertising = (
+      advertised: ReadonlyArray<string> | undefined,
+      seen: Array<SeenRequest>,
+    ) =>
       buildLayer({
         providers: [okta({ mapProfile: (claims) => ({ subject: String(claims["sub"]) }) })],
         httpRoutes: {
           ".well-known/openid-configuration": {
             ...oktaDiscovery,
-            ...(advertised === undefined ? {} : { token_endpoint_auth_methods_supported: advertised }),
+            ...(advertised === undefined
+              ? {}
+              : { token_endpoint_auth_methods_supported: advertised }),
           },
           "/jwks": { keys: [jwk] },
           "/token": recordingTokenRoute(seen),
         },
       });
 
-    it.effect("a provider advertising only client_secret_basic gets Authorization: Basic and no client_secret in the body", () => {
-      const seen: Array<SeenRequest> = [];
-      return Effect.gen(function* () {
-        yield* exchange;
-        assert.strictEqual(seen.length, 1);
-        assert.strictEqual(
-          seen[0]?.authorization,
-          `Basic ${btoa("okta-client-id:okta-secret")}`,
-        );
-        assert.isFalse(seen[0]?.form.has("client_secret"));
-        assert.strictEqual(seen[0]?.form.get("client_id"), "okta-client-id");
-        // Token requests ask for JSON (GitHub answers form-encoded otherwise).
-        assert.strictEqual(seen[0]?.accept, "application/json");
-      }).pipe(Effect.provide(layerAdvertising(["client_secret_basic"], seen)));
-    });
+    it.effect(
+      "a provider advertising only client_secret_basic gets Authorization: Basic and no client_secret in the body",
+      () => {
+        const seen: Array<SeenRequest> = [];
+        return Effect.gen(function* () {
+          yield* exchange;
+          assert.strictEqual(seen.length, 1);
+          assert.strictEqual(seen[0]?.authorization, `Basic ${btoa("okta-client-id:okta-secret")}`);
+          assert.isFalse(seen[0]?.form.has("client_secret"));
+          assert.strictEqual(seen[0]?.form.get("client_id"), "okta-client-id");
+          // Token requests ask for JSON (GitHub answers form-encoded otherwise).
+          assert.strictEqual(seen[0]?.accept, "application/json");
+        }).pipe(Effect.provide(layerAdvertising(["client_secret_basic"], seen)));
+      },
+    );
 
-    it.effect("a provider advertising only client_secret_post gets client_secret in the body and no Authorization", () => {
-      const seen: Array<SeenRequest> = [];
-      return Effect.gen(function* () {
-        yield* exchange;
-        assert.isUndefined(seen[0]?.authorization);
-        assert.strictEqual(seen[0]?.form.get("client_secret"), "okta-secret");
-      }).pipe(Effect.provide(layerAdvertising(["client_secret_post"], seen)));
-    });
+    it.effect(
+      "a provider advertising only client_secret_post gets client_secret in the body and no Authorization",
+      () => {
+        const seen: Array<SeenRequest> = [];
+        return Effect.gen(function* () {
+          yield* exchange;
+          assert.isUndefined(seen[0]?.authorization);
+          assert.strictEqual(seen[0]?.form.get("client_secret"), "okta-secret");
+        }).pipe(Effect.provide(layerAdvertising(["client_secret_post"], seen)));
+      },
+    );
 
-    it.effect("with no advertised list and no explicit method, the RFC 6749 default (basic) is used", () => {
-      const seen: Array<SeenRequest> = [];
-      return Effect.gen(function* () {
-        yield* exchange;
-        assert.strictEqual(seen[0]?.authorization, `Basic ${btoa("okta-client-id:okta-secret")}`);
-      }).pipe(Effect.provide(layerAdvertising(undefined, seen)));
-    });
+    it.effect(
+      "with no advertised list and no explicit method, the RFC 6749 default (basic) is used",
+      () => {
+        const seen: Array<SeenRequest> = [];
+        return Effect.gen(function* () {
+          yield* exchange;
+          assert.strictEqual(seen[0]?.authorization, `Basic ${btoa("okta-client-id:okta-secret")}`);
+        }).pipe(Effect.provide(layerAdvertising(undefined, seen)));
+      },
+    );
 
-    it.effect("when both are advertised, basic wins; an explicit method overrides discovery", () => {
-      const seen: Array<SeenRequest> = [];
-      return Effect.gen(function* () {
-        yield* exchange;
-        assert.isUndefined(seen[0]?.authorization);
-        assert.strictEqual(seen[0]?.form.get("client_secret"), "okta-secret");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [
-              okta({
-                tokenEndpointAuthMethod: "client_secret_post",
-                mapProfile: (claims) => ({ subject: String(claims["sub"]) }),
-              }),
-            ],
-            httpRoutes: {
-              ".well-known/openid-configuration": {
-                ...oktaDiscovery,
-                token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
+    it.effect(
+      "when both are advertised, basic wins; an explicit method overrides discovery",
+      () => {
+        const seen: Array<SeenRequest> = [];
+        return Effect.gen(function* () {
+          yield* exchange;
+          assert.isUndefined(seen[0]?.authorization);
+          assert.strictEqual(seen[0]?.form.get("client_secret"), "okta-secret");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [
+                okta({
+                  tokenEndpointAuthMethod: "client_secret_post",
+                  mapProfile: (claims) => ({ subject: String(claims["sub"]) }),
+                }),
+              ],
+              httpRoutes: {
+                ".well-known/openid-configuration": {
+                  ...oktaDiscovery,
+                  token_endpoint_auth_methods_supported: [
+                    "client_secret_basic",
+                    "client_secret_post",
+                  ],
+                },
+                "/jwks": { keys: [jwk] },
+                "/token": recordingTokenRoute(seen),
               },
-              "/jwks": { keys: [jwk] },
-              "/token": recordingTokenRoute(seen),
-            },
-          }),
-        ),
-      );
-    });
+            }),
+          ),
+        );
+      },
+    );
 
-    it.effect("client ids containing reserved characters are form-urlencoded before base64 (RFC 6749 2.3.1)", () => {
-      const seen: Array<SeenRequest> = [];
-      return Effect.gen(function* () {
-        yield* exchange;
-        assert.strictEqual(seen[0]?.authorization, `Basic ${btoa("my+app%3Aid:s%3Dcr%26t")}`);
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [
-              okta({
-                clientId: Config.succeed("my app:id"),
-                clientSecret: Config.succeed(Redacted.make("s=cr&t")),
-                tokenEndpointAuthMethod: "client_secret_basic",
-                mapProfile: (claims) => ({ subject: String(claims["sub"]) }),
-              }),
-            ],
-            httpRoutes: {
-              ".well-known/openid-configuration": oktaDiscovery,
-              "/jwks": { keys: [jwk] },
-              "/token": recordingTokenRoute(seen),
-            },
-          }),
-        ),
-      );
-    });
+    it.effect(
+      "client ids containing reserved characters are form-urlencoded before base64 (RFC 6749 2.3.1)",
+      () => {
+        const seen: Array<SeenRequest> = [];
+        return Effect.gen(function* () {
+          yield* exchange;
+          assert.strictEqual(seen[0]?.authorization, `Basic ${btoa("my+app%3Aid:s%3Dcr%26t")}`);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [
+                okta({
+                  clientId: Config.succeed("my app:id"),
+                  clientSecret: Config.succeed(Redacted.make("s=cr&t")),
+                  tokenEndpointAuthMethod: "client_secret_basic",
+                  mapProfile: (claims) => ({ subject: String(claims["sub"]) }),
+                }),
+              ],
+              httpRoutes: {
+                ".well-known/openid-configuration": oktaDiscovery,
+                "/jwks": { keys: [jwk] },
+                "/token": recordingTokenRoute(seen),
+              },
+            }),
+          ),
+        );
+      },
+    );
 
     it.effect("a configured method the discovery document does not advertise fails at boot", () =>
       Effect.gen(function* () {
@@ -1675,15 +1933,17 @@ describe("OAuth", () => {
       }),
     );
 
-    it.effect("a client-secret method with no clientSecret, or method none with one, fails at boot", () =>
-      Effect.gen(function* () {
-        const { clientSecret: _omitted, ...publicClient } = okta({
-          tokenEndpointAuthMethod: "client_secret_post",
-        });
-        assert.strictEqual((yield* boot([publicClient], oktaDiscovery))._tag, "Failure");
-        const withSecret = okta({ tokenEndpointAuthMethod: "none" });
-        assert.strictEqual((yield* boot([withSecret], oktaDiscovery))._tag, "Failure");
-      }),
+    it.effect(
+      "a client-secret method with no clientSecret, or method none with one, fails at boot",
+      () =>
+        Effect.gen(function* () {
+          const { clientSecret: _omitted, ...publicClient } = okta({
+            tokenEndpointAuthMethod: "client_secret_post",
+          });
+          assert.strictEqual((yield* boot([publicClient], oktaDiscovery))._tag, "Failure");
+          const withSecret = okta({ tokenEndpointAuthMethod: "none" });
+          assert.strictEqual((yield* boot([withSecret], oktaDiscovery))._tag, "Failure");
+        }),
     );
 
     it.effect("a public client (no clientSecret) authenticates with nothing but client_id", () => {
@@ -1957,30 +2217,32 @@ describe("OAuth", () => {
       ...extra,
     });
 
-    it.effect("OIT-001: a userinfo response whose sub differs from the id_token sub is rejected", () =>
-      Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const { state, location } = yield* oauth.authorize("okta", {
-          callbackURL: undefined,
-          link: undefined,
-        });
-        currentClaims = oidcClaims(location, { sub: "real-sub", email: "real@example.com" });
-        const failure = yield* oauth
-          .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+    it.effect(
+      "OIT-001: a userinfo response whose sub differs from the id_token sub is rejected",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state, location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          currentClaims = oidcClaims(location, { sub: "real-sub", email: "real@example.com" });
+          const failure = yield* oauth
+            .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "OAuthCallbackFailed");
 
-        const accounts = yield* Accounts.Accounts;
-        assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("okta", "victim-sub")));
-        assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("okta", "real-sub")));
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [oktaWithUserinfo()],
-            httpRoutes: { ...idTokenRoutes(), "/userinfo": { sub: "victim-sub" } },
-          }),
+          const accounts = yield* Accounts.Accounts;
+          assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("okta", "victim-sub")));
+          assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("okta", "real-sub")));
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [oktaWithUserinfo()],
+              httpRoutes: { ...idTokenRoutes(), "/userinfo": { sub: "victim-sub" } },
+            }),
+          ),
         ),
-      ),
     );
 
     it.effect(
@@ -1988,7 +2250,10 @@ describe("OAuth", () => {
       () =>
         Effect.gen(function* () {
           const users = yield* Users.Users;
-          yield* users.create({ email: "mallory-target@example.com", name: "Target" });
+          yield* users.create({
+            identity: { _tag: "Email", email: "mallory-target@example.com" },
+            name: "Target",
+          });
 
           const oauth = yield* OAuth.OAuth;
           const { state, location } = yield* oauth.authorize("okta", {
@@ -2540,68 +2805,74 @@ describe("OAuth", () => {
       }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() }))),
     );
 
-    it.effect("ECF-001: a JWKS endpoint that never answers fails ProviderUnavailable at its deadline", () => {
-      const hang = hangingRoute();
-      return Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const { state, location } = yield* oauth.authorize("okta", {
-          callbackURL: undefined,
-          link: undefined,
-        });
-        currentClaims = oidcClaims(location, { sub: "hang-sub" });
-        const fiber = yield* Effect.forkChild(
-          oauth
-            .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
-            .pipe(Effect.flip),
+    it.effect(
+      "ECF-001: a JWKS endpoint that never answers fails ProviderUnavailable at its deadline",
+      () => {
+        const hang = hangingRoute();
+        return Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state, location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          currentClaims = oidcClaims(location, { sub: "hang-sub" });
+          const fiber = yield* Effect.forkChild(
+            oauth
+              .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+              .pipe(Effect.flip),
+          );
+          yield* hang.reached;
+          yield* TestClock.adjust(Duration.seconds(3));
+          const failure = yield* Fiber.join(fiber);
+          assert.strictEqual(failure._tag, "ProviderUnavailable");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta()],
+              httpRoutes: { ...idTokenRoutes(), "/jwks": hang.route },
+              httpTimeouts: { jwks: Duration.seconds(3) },
+              retry: { times: 0 },
+            }),
+          ),
         );
-        yield* hang.reached;
-        yield* TestClock.adjust(Duration.seconds(3));
-        const failure = yield* Fiber.join(fiber);
-        assert.strictEqual(failure._tag, "ProviderUnavailable");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [okta()],
-            httpRoutes: { ...idTokenRoutes(), "/jwks": hang.route },
-            httpTimeouts: { jwks: Duration.seconds(3) },
-            retry: { times: 0 },
-          }),
-        ),
-      );
-    });
+      },
+    );
 
-    it.effect("ERS-003: a JWKS endpoint that 503s once then succeeds still verifies the id_token", () => {
-      let jwksCalls = 0;
-      return Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const { state, location } = yield* oauth.authorize("okta", {
-          callbackURL: undefined,
-          link: undefined,
-        });
-        currentClaims = oidcClaims(location, { sub: "retry-sub", email: "retry@example.com" });
-        const outcome = yield* oauth.callback("okta", {
-          code: "c1",
-          state,
-          iss: undefined,
-          cookieState: state,
-        });
-        assert.isDefined(outcome.session);
-        assert.strictEqual(jwksCalls, 2);
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [okta()],
-            httpRoutes: {
-              ...idTokenRoutes(),
-              "/jwks": () => {
-                jwksCalls += 1;
-                return jwksCalls === 1 ? new FakeReply(503) : { keys: [jwk] };
+    it.effect(
+      "ERS-003: a JWKS endpoint that 503s once then succeeds still verifies the id_token",
+      () => {
+        let jwksCalls = 0;
+        return Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state, location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          currentClaims = oidcClaims(location, { sub: "retry-sub", email: "retry@example.com" });
+          const outcome = yield* oauth.callback("okta", {
+            code: "c1",
+            state,
+            iss: undefined,
+            cookieState: state,
+          });
+          assert.isDefined(outcome.session);
+          assert.strictEqual(jwksCalls, 2);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta()],
+              httpRoutes: {
+                ...idTokenRoutes(),
+                "/jwks": () => {
+                  jwksCalls += 1;
+                  return jwksCalls === 1 ? new FakeReply(503) : { keys: [jwk] };
+                },
               },
-            },
-          }),
-        ),
-      );
-    });
+            }),
+          ),
+        );
+      },
+    );
 
     it.effect("EEM-004: a JWKS endpoint that keeps answering 503 is ProviderUnavailable", () =>
       Effect.gen(function* () {
@@ -2669,31 +2940,34 @@ describe("OAuth", () => {
       }).pipe(Effect.provide(oktaLayer())),
     );
 
-    it.effect("MA-002: the JWKS cache refetches only after the TestClock passes the 15 minute TTL", () => {
-      let jwksCalls = 0;
-      return Effect.gen(function* () {
-        yield* attempt((location) => claimsAtZero(location, { sub: "ttl-1" }));
-        yield* TestClock.adjust(Duration.minutes(1));
-        yield* attempt((location) => claimsAtZero(location, { sub: "ttl-2" }));
-        assert.strictEqual(jwksCalls, 1);
-        yield* TestClock.adjust(Duration.minutes(16));
-        yield* attempt((location) => claimsAtZero(location, { sub: "ttl-3" }));
-        assert.strictEqual(jwksCalls, 2);
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [okta()],
-            httpRoutes: {
-              ...idTokenRoutes(),
-              "/jwks": () => {
-                jwksCalls += 1;
-                return { keys: [jwk] };
+    it.effect(
+      "MA-002: the JWKS cache refetches only after the TestClock passes the 15 minute TTL",
+      () => {
+        let jwksCalls = 0;
+        return Effect.gen(function* () {
+          yield* attempt((location) => claimsAtZero(location, { sub: "ttl-1" }));
+          yield* TestClock.adjust(Duration.minutes(1));
+          yield* attempt((location) => claimsAtZero(location, { sub: "ttl-2" }));
+          assert.strictEqual(jwksCalls, 1);
+          yield* TestClock.adjust(Duration.minutes(16));
+          yield* attempt((location) => claimsAtZero(location, { sub: "ttl-3" }));
+          assert.strictEqual(jwksCalls, 2);
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [okta()],
+              httpRoutes: {
+                ...idTokenRoutes(),
+                "/jwks": () => {
+                  jwksCalls += 1;
+                  return { keys: [jwk] };
+                },
               },
-            },
-          }),
-        ),
-      );
-    });
+            }),
+          ),
+        );
+      },
+    );
 
     it.effect("OIT-003: an array aud containing the client id is accepted", () =>
       Effect.gen(function* () {
@@ -2731,17 +3005,21 @@ describe("OAuth", () => {
       }).pipe(Effect.provide(oktaLayer())),
     );
 
-    it.effect("OIT-003: an aud that does not contain the client id, or is not strings, is rejected", () =>
-      Effect.gen(function* () {
-        assert.strictEqual(
-          (yield* attempt((location) => claimsAtZero(location, { aud: ["another-client"] })))._tag,
-          "Failure",
-        );
-        assert.strictEqual(
-          (yield* attempt((location) => claimsAtZero(location, { aud: ["okta-client-id", 7] })))._tag,
-          "Failure",
-        );
-      }).pipe(Effect.provide(oktaLayer())),
+    it.effect(
+      "OIT-003: an aud that does not contain the client id, or is not strings, is rejected",
+      () =>
+        Effect.gen(function* () {
+          assert.strictEqual(
+            (yield* attempt((location) => claimsAtZero(location, { aud: ["another-client"] })))
+              ._tag,
+            "Failure",
+          );
+          assert.strictEqual(
+            (yield* attempt((location) => claimsAtZero(location, { aud: ["okta-client-id", 7] })))
+              ._tag,
+            "Failure",
+          );
+        }).pipe(Effect.provide(oktaLayer())),
     );
 
     it.effect("OIT-004: an id_token expired by less than the skew is accepted", () =>
@@ -2773,41 +3051,45 @@ describe("OAuth", () => {
       }).pipe(Effect.provide(oktaLayer())),
     );
 
-    it.effect("OIT-004: an id_token with nbf in the future is rejected; a non-numeric nbf/iat too", () =>
-      Effect.gen(function* () {
-        assert.strictEqual(
-          (yield* attempt((location) => claimsAtZero(location, { nbf: 300 })))._tag,
-          "Failure",
-        );
-        assert.strictEqual(
-          (yield* attempt((location) => claimsAtZero(location, { nbf: "soon" })))._tag,
-          "Failure",
-        );
-        assert.strictEqual(
-          (yield* attempt((location) => claimsAtZero(location, { iat: "yesterday" })))._tag,
-          "Failure",
-        );
-      }).pipe(Effect.provide(oktaLayer())),
+    it.effect(
+      "OIT-004: an id_token with nbf in the future is rejected; a non-numeric nbf/iat too",
+      () =>
+        Effect.gen(function* () {
+          assert.strictEqual(
+            (yield* attempt((location) => claimsAtZero(location, { nbf: 300 })))._tag,
+            "Failure",
+          );
+          assert.strictEqual(
+            (yield* attempt((location) => claimsAtZero(location, { nbf: "soon" })))._tag,
+            "Failure",
+          );
+          assert.strictEqual(
+            (yield* attempt((location) => claimsAtZero(location, { iat: "yesterday" })))._tag,
+            "Failure",
+          );
+        }).pipe(Effect.provide(oktaLayer())),
     );
 
-    it.effect("OIT-004: maxIdTokenAge rejects an old iat (and a missing one), driven by the TestClock", () =>
-      Effect.gen(function* () {
-        yield* TestClock.adjust(Duration.minutes(30));
-        // iat = 0 is 30 minutes old against a 10 minute cap.
-        assert.strictEqual(
-          (yield* attempt((location) => claimsAtZero(location, { iat: 0 })))._tag,
-          "Failure",
-        );
-        // A recent iat passes; no iat at all cannot be aged, so it fails.
-        assert.strictEqual(
-          (yield* attempt((location) => claimsAtZero(location, { iat: 30 * 60 - 5 })))._tag,
-          "Success",
-        );
-        assert.strictEqual(
-          (yield* attempt((location) => claimsAtZero(location)))._tag,
-          "Failure",
-        );
-      }).pipe(Effect.provide(oktaLayer({ maxIdTokenAge: Duration.minutes(10) }))),
+    it.effect(
+      "OIT-004: maxIdTokenAge rejects an old iat (and a missing one), driven by the TestClock",
+      () =>
+        Effect.gen(function* () {
+          yield* TestClock.adjust(Duration.minutes(30));
+          // iat = 0 is 30 minutes old against a 10 minute cap.
+          assert.strictEqual(
+            (yield* attempt((location) => claimsAtZero(location, { iat: 0 })))._tag,
+            "Failure",
+          );
+          // A recent iat passes; no iat at all cannot be aged, so it fails.
+          assert.strictEqual(
+            (yield* attempt((location) => claimsAtZero(location, { iat: 30 * 60 - 5 })))._tag,
+            "Success",
+          );
+          assert.strictEqual(
+            (yield* attempt((location) => claimsAtZero(location)))._tag,
+            "Failure",
+          );
+        }).pipe(Effect.provide(oktaLayer({ maxIdTokenAge: Duration.minutes(10) }))),
     );
 
     it.effect("OIT-006: an id_token without a nonce claim is rejected", () =>
@@ -2852,22 +3134,29 @@ describe("OAuth", () => {
       }).pipe(Effect.provide(oktaLayer())),
     );
 
-    it.effect("OIT-008: a wrong-nonce failure logs reason=nonce while the error stays field-less", () => {
-      const logs: Array<string> = [];
-      const capture = Logger.make((entry) => {
-        logs.push(JSON.stringify(entry.message));
-      });
-      return Effect.gen(function* () {
-        const result = yield* attempt((location) => claimsAtZero(location, { nonce: "wrong" }));
-        if (result._tag !== "Failure") return assert.fail("expected the nonce mismatch to fail");
-        // The wire error carries no reason at all.
-        assert.strictEqual(JSON.stringify(result.failure), '{"_tag":"OAuthCallbackFailed"}');
-        assert.isTrue(logs.some((line) => line.includes("oauth callback failed: nonce")));
-      }).pipe(Effect.provide(Layer.merge(oktaLayer(), Logger.layer([capture]))));
-    });
+    it.effect(
+      "OIT-008: a wrong-nonce failure logs reason=nonce while the error stays field-less",
+      () => {
+        const logs: Array<string> = [];
+        const capture = Logger.make((entry) => {
+          logs.push(JSON.stringify(entry.message));
+        });
+        return Effect.gen(function* () {
+          const result = yield* attempt((location) => claimsAtZero(location, { nonce: "wrong" }));
+          if (result._tag !== "Failure") return assert.fail("expected the nonce mismatch to fail");
+          // The wire error carries no reason at all.
+          assert.strictEqual(JSON.stringify(result.failure), '{"_tag":"OAuthCallbackFailed"}');
+          assert.isTrue(logs.some((line) => line.includes("oauth callback failed: nonce")));
+        }).pipe(Effect.provide(Layer.merge(oktaLayer(), Logger.layer([capture]))));
+      },
+    );
 
     // OIT-009: algorithm-confusion pins (both already fail at the RS256 gate).
-    const forgedToken = (header: Record<string, unknown>, claims: Record<string, unknown>, signature: string) => {
+    const forgedToken = (
+      header: Record<string, unknown>,
+      claims: Record<string, unknown>,
+      signature: string,
+    ) => {
       const head = toBase64Url(Buffer.from(JSON.stringify(header)));
       const body = toBase64Url(Buffer.from(JSON.stringify(claims)));
       return `${head}.${body}.${signature}`;
@@ -2895,17 +3184,22 @@ describe("OAuth", () => {
       },
     });
 
-    it.effect("OIT-009: an id_token with alg HS256 (signed with the RSA modulus as the HMAC key) is rejected", () =>
-      Effect.gen(function* () {
-        const failure = yield* forgedAttempt((claims) => {
-          const header = { alg: "HS256", typ: "JWT", kid: KID };
-          const unsigned = forgedToken(header, claims, "").slice(0, -1);
-          const key = Buffer.from(String(keyPair.publicKey.export({ format: "jwk" }).n), "base64url");
-          const mac = createHmac("sha256", key).update(unsigned).digest("base64url");
-          return `${unsigned}.${mac}`;
-        });
-        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
-      }).pipe(Effect.provide(forgedLayer)),
+    it.effect(
+      "OIT-009: an id_token with alg HS256 (signed with the RSA modulus as the HMAC key) is rejected",
+      () =>
+        Effect.gen(function* () {
+          const failure = yield* forgedAttempt((claims) => {
+            const header = { alg: "HS256", typ: "JWT", kid: KID };
+            const unsigned = forgedToken(header, claims, "").slice(0, -1);
+            const key = Buffer.from(
+              String(keyPair.publicKey.export({ format: "jwk" }).n),
+              "base64url",
+            );
+            const mac = createHmac("sha256", key).update(unsigned).digest("base64url");
+            return `${unsigned}.${mac}`;
+          });
+          assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+        }).pipe(Effect.provide(forgedLayer)),
     );
 
     it.effect("OIT-009: an alg:none id_token is rejected", () =>
@@ -2920,7 +3214,10 @@ describe("OAuth", () => {
     it.effect("a userinfo body that yields no subject never becomes an account (no-subject)", () =>
       Effect.gen(function* () {
         const oauth = yield* OAuth.OAuth;
-        const { state } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+        const { state } = yield* oauth.authorize("acme", {
+          callbackURL: undefined,
+          link: undefined,
+        });
         const failure = yield* oauth
           .callback("acme", { code: "c1", state, iss: undefined, cookieState: state })
           .pipe(Effect.flip);
@@ -2979,30 +3276,34 @@ describe("OAuth", () => {
       ),
     );
 
-    it.effect("ESS-003: a token response with expires_in as a numeric string persists the right expiry", () =>
-      Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const { state } = yield* oauth.authorize("acme", {
-          callbackURL: undefined,
-          link: undefined,
-        });
-        yield* oauth.callback("acme", { code: "c1", state, iss: undefined, cookieState: state });
+    it.effect(
+      "ESS-003: a token response with expires_in as a numeric string persists the right expiry",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state } = yield* oauth.authorize("acme", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          yield* oauth.callback("acme", { code: "c1", state, iss: undefined, cookieState: state });
 
-        const accounts = yield* Accounts.Accounts;
-        const account = Option.getOrThrow(yield* accounts.findByProviderSubject("acme", "str-sub"));
-        const tokens = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
-        assert.isTrue(Option.isSome(tokens.accessTokenExpiresAt));
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [acme()],
-            httpRoutes: {
-              "/token": { access_token: "at-str", expires_in: "3600" },
-              "/userinfo": { id: "str-sub", email: "str-expiry@example.com" },
-            },
-          }),
+          const accounts = yield* Accounts.Accounts;
+          const account = Option.getOrThrow(
+            yield* accounts.findByProviderSubject("acme", "str-sub"),
+          );
+          const tokens = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+          assert.isTrue(Option.isSome(tokens.accessTokenExpiresAt));
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                "/token": { access_token: "at-str", expires_in: "3600" },
+                "/userinfo": { id: "str-sub", email: "str-expiry@example.com" },
+              },
+            }),
+          ),
         ),
-      ),
     );
 
     it.effect(
@@ -3105,7 +3406,10 @@ describe("OAuth", () => {
     it.effect("an authenticated caller's explicit link also persists the exchanged token set", () =>
       Effect.gen(function* () {
         const users = yield* Users.Users;
-        const alice = yield* users.create({ email: "alice-tokens@example.com", name: "Alice" });
+        const alice = yield* users.create({
+          identity: { _tag: "Email", email: "alice-tokens@example.com" },
+          name: "Alice",
+        });
 
         const oauth = yield* OAuth.OAuth;
         const { state } = yield* oauth.authorize("acme", {
@@ -3138,7 +3442,7 @@ describe("OAuth", () => {
         Effect.gen(function* () {
           const users = yield* Users.Users;
           const existing = yield* users.create({
-            email: "auto-link-tokens@example.com",
+            identity: { _tag: "Email", email: "auto-link-tokens@example.com" },
             name: "Auto Link",
           });
           // TMS-007: auto-link needs the local account's email proven too.

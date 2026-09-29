@@ -65,6 +65,12 @@ export interface OAuthProfile {
   readonly email?: string;
   readonly emailVerified?: boolean;
   readonly name?: string;
+  /**
+   * NAM-009: the provider's avatar URL. Applied only when the sign-in creates
+   * the local user, and only if it is an `http(s)` URL (it is an untrusted
+   * claim that ends up in a client-visible field).
+   */
+  readonly image?: string;
 }
 
 /**

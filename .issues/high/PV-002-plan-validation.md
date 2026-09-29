@@ -3,7 +3,7 @@ ID: "PV-002"
 Title: "ReactAuthClient never provides the CSRF client middleware — every React mutation gets 403"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "react"
 Source: "packages/react/src"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `HIGH` · `correctness` · `react` · found during the 2026-09-29 plan validation (not in the original audit)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -31,3 +31,5 @@ Planned under: react-client-atoms-factory (P13), interim fix in its step 1.
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29):** fixed under BE-004 (P13: React mutations send x-csrf-token); see that issue's Resolved comment for files, tests and gates.

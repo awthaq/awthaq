@@ -113,7 +113,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `23-react.md` | 177–184 | React Bindings |
 | `24-nextjs-ssr.md` | 185–192 | Next.js Server Rendering |
 | `25-testing-harness.md` | 193–200 | Testing Harness |
-| `26-cli.md` | 201–208 | CLI |
+| `26-cli.md` | 201–208, 225–229 | CLI |
 
 ### `spec/process/`
 

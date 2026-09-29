@@ -44,6 +44,13 @@ export class SessionDto extends Schema.Class<SessionDto>("SessionDto")({
     Schema.withConstructorDefault(Effect.succeed<ReadonlyArray<string>>([])),
   ),
   current: Schema.Boolean,
+  /**
+   * MNA-001 (ticket 17): the raw session token, present only when the request
+   * opted in with `X-Awthaq-Token-Delivery: bearer` (and then no cookie is set).
+   * Never populated for a browser request, so the token stays out of JS-readable
+   * bodies there.
+   */
+  token: Schema.optional(Schema.String),
 }) {}
 
 /**

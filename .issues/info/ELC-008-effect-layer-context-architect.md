@@ -53,3 +53,5 @@ When M6 lands, make the first cli module read Auth.make's manifest (no runtime n
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `cli-manifest-tooling`. Duplicate of `BE-003` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/cli/src/index.ts:3`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `BE-003-bereket-engida` — closed by its fix (see that issue's Resolved comment).

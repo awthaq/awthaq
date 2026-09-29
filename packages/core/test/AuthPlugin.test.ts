@@ -337,9 +337,10 @@ describe("Auth.make", () => {
 
       assert.deepStrictEqual(auth.manifest, {
         plugins: [
-          { id: "ping", apiVersion: 1, tables: ["ping_state"], dependsOn: [] },
-          { id: "pong", apiVersion: 1, tables: [], dependsOn: ["ping"] },
+          { id: "ping", apiVersion: 1, tables: ["ping_state"], dependsOn: [], groups: ["ping"] },
+          { id: "pong", apiVersion: 1, tables: [], dependsOn: ["ping"], groups: ["pong"] },
         ],
+        config: [],
       });
     }),
   );

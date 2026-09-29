@@ -80,6 +80,36 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
       }).pipe(Effect.provide(layer)),
     );
 
+    // ECS-006/ECS-002: a CLI run has no session — the seeded target is in the payload, not the actor.
+    it.effect("records the CLI's admin-seed and import events with no actor", () =>
+      Effect.gen(function* () {
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* auditLog.record({
+          _tag: "auth.admin.seeded",
+          targetUserId: userId,
+          outcome: "created",
+          forced: false,
+          role: "admin",
+          via: "cli",
+        });
+        yield* auditLog.record({ _tag: "auth.admin.seedRefused", reason: "adminExists" });
+        yield* auditLog.record({
+          _tag: "auth.import.completed",
+          source: "better-auth",
+          runId: "run-1",
+          imported: 2,
+          skipped: 0,
+          failed: 0,
+          unmapped: 1,
+        });
+        const seeded = yield* auditLog.list({ eventTag: "auth.admin.seeded" });
+        assert.strictEqual(seeded.length, 1);
+        assert.deepStrictEqual(seeded[0]?.actorUserId, Option.none());
+        assert.strictEqual((yield* auditLog.list({ eventTag: "auth.admin.seedRefused" })).length, 1);
+        assert.strictEqual((yield* auditLog.list({ eventTag: "auth.import.completed" })).length, 1);
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("list narrows by eventTag", () =>
       Effect.gen(function* () {
         const auditLog = yield* AuditLog.AuditLog;

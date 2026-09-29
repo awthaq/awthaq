@@ -78,7 +78,10 @@ describe("attributeResolverRegistry (AAPS-002)", () => {
     () =>
       Effect.gen(function* () {
         const users = yield* Users.Users;
-        const user = yield* users.create({ email: "both@example.com", name: "Both" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "both@example.com" },
+          name: "Both",
+        });
         const subjectId = makeSubjectId(`user:${user.id}`);
 
         const resolver = yield* AttributeResolver;

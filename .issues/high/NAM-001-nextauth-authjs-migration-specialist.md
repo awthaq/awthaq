@@ -3,7 +3,7 @@ ID: "NAM-001"
 Title: "No stateless JWT session strategy: Jwt plugin still requires the live Sessions store"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/Jwt.ts:68"
 Auditor: "nextauth-authjs-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `jwt` · reported by **NextAuth.js/Auth.js Migration Specialist** (`nextauth-authjs-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [Stateless JWT-as-bearer session strategy](../../.scratch/resolve-ready-for-human-findings/issues/33-stateless-jwt-session-strategy.md) — the documented stateless profile is `Sessions.layerMemory` (no SQL) + `Jwt` with the new `acceptAsBearer: true` flag, so `Authentication`'s structural `Sessions.Sessions` requirement is satisfied without ever being exercised on the JWT-bearer request path; a README recipe in `packages/jwt` documents this plus the `verify`-alone revocation-lag bound. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jwt-stateless-bearer-reentry`. Evidence at HEAD ec065a7: `packages/jwt/src/JwtConfig.ts:25`. Fix: Implement .scratch/resolve-ready-for-human-findings/issues/33-stateless-jwt-session-strategy.md verbatim: a `BearerCredentialResolver` slot on `Authentication`, a default-off `JwtConfig.acceptAsBearer`, `signJWT({ audience })`, and a README stateless recipe. (effort L). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`.
+
+**Resolved (2026-09-29):** Decision 33 implemented as a registry (MAPS-004 option (a), see MAPS-001). @awthaq/jwt: JwtConfig.acceptAsBearer (default false); Jwt.layer adds a 'jwt' bearer contribution (claims: JOSE typ at+jwt via new JwtCodec.peekTyp; resolve: bare jwt.verify + Schema-decoded claimsToPrincipal sub/sid/act -> UserPrincipal, no casts; decode failure or any verify failure -> Unauthenticated). Opting in without Authentication.CredentialResolversLive dies at build (Jwt.layer's R unchanged for default-off users). signJWT({audience}) already existed (VB-005); a downstream-audience token is rejected by verify's aud check. README section 'JWT as a bearer credential' documents the flag, the ttl-bounded revocation lag and the stateless recipe (Sessions.layerMemory + memory key stores + acceptAsBearer). Tests (packages/jwt/test/BearerReentry.test.ts, 8): minted JWT authenticates; no session row needed; revoked session's JWT still works until exp (documented lag); default off -> 401; audience 'inventory-service' -> 401; expired -> 401; opaque bearer unaffected; missing registry fails build. Gates: typecheck 0, pnpm run test 1854+ passed, test:bdd, spec:verify:strict, oxlint. spec/models/08-jwt-bearer.md drift noted in its 'What is missing' (no separate Bearer plugin).

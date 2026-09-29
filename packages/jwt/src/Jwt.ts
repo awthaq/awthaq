@@ -61,6 +61,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
@@ -191,6 +192,40 @@ const principalClaims = (principal: Api.Principal): Record<string, unknown> =>
           : {}),
       }
     : { sub: principal.ref.id };
+
+/**
+ * MAPS-001: the inverse of `principalClaims` for the one principal kind a
+ * bearer JWT can stand for. `principalClaims` writes `sub` only for a non-User
+ * principal (its kind is not in the token), so a token without `sid` cannot be
+ * turned back into a principal and fails closed rather than guessing a type.
+ */
+const UserTokenClaims = Schema.Struct({
+  sub: Schema.String,
+  sid: Schema.String,
+  act: Schema.optional(
+    Schema.Struct({ sub: Schema.String, awthaq_actor_type: Schema.optional(Schema.String) }),
+  ),
+});
+
+const claimsToPrincipal = (claims: Record<string, unknown>) =>
+  Schema.decodeUnknownEffect(UserTokenClaims)(claims).pipe(
+    Effect.map(
+      (decoded) =>
+        new Api.UserPrincipal({
+          ref: new Api.PrincipalRef({ type: "user", id: decoded.sub }),
+          sessionId: decoded.sid,
+          ...(decoded.act !== undefined
+            ? {
+                actingAs: new Api.PrincipalRef({
+                  type: decoded.act.awthaq_actor_type ?? "user",
+                  id: decoded.act.sub,
+                }),
+              }
+            : {}),
+        }),
+    ),
+    Effect.mapError(() => new Api.Unauthenticated()),
+  );
 
 export const JwtHandlers = Layer.mergeAll(
   HttpApiBuilder.group(
@@ -345,6 +380,48 @@ const PostAuthResponseHookLive = Layer.effect(
 );
 
 /**
+ * MAPS-001/NAM-001 (wayfinder ticket 33): with `JwtConfig.acceptAsBearer`, a
+ * principal JWT (`typ: at+jwt`, the class `sign` mints) presented as
+ * `Authorization: Bearer` authenticates statelessly: bare `verify`, no session
+ * row, so no rotation and a revocation lag bounded by `ttl` (documented in the
+ * README). It contributes to `Authentication`'s bearer registry rather than
+ * overriding a slot, so `@awthaq/api-key` can claim service tokens next to it.
+ * Default off: with the flag unset this layer contributes nothing and a JWT
+ * bearer still answers 401. A token the plugin did not mint for this audience
+ * (`signJWT({ audience })`, another issuer, another `typ`) fails `verify` and is
+ * `Unauthenticated`; it is never retried as a session.
+ */
+const BearerCredentialContributionLive = Layer.unwrap(
+  Effect.gen(function* () {
+    const config = yield* JwtConfig;
+    if (!config.acceptAsBearer) return Layer.empty;
+    const jwt = yield* Jwt;
+    // Looked up as an optional service so a deployment that leaves the flag off
+    // (the default) never has to provide the registry, and `Jwt.layer`'s own
+    // requirements stay what they were. Opting in without one is a wiring
+    // mistake that would otherwise silently leave JWT bearers answering 401,
+    // so it fails the build instead.
+    const registry = yield* Effect.serviceOption(Authentication.CredentialResolvers);
+    if (Option.isNone(registry)) {
+      return yield* Defects.invalidConfiguration(
+        "acceptAsBearer",
+        "awthaq/jwt: acceptAsBearer needs Authentication.CredentialResolversLive in the composition",
+      );
+    }
+    return Authentication.contribute("bearer", {
+      id: "jwt",
+      claims: (raw) =>
+        Option.exists(JwtCodec.peekTyp(raw), (typ) => typ.toLowerCase() === PRINCIPAL_TYP),
+      resolve: (credential) =>
+        jwt.verify(Redacted.value(credential)).pipe(
+          Effect.mapError(() => new Api.Unauthenticated()),
+          Effect.flatMap(claimsToPrincipal),
+        ),
+    }).pipe(Layer.provide(Layer.succeed(Authentication.CredentialResolvers, registry.value)));
+  }),
+);
+
+/**
  * .scratch/resolve-ready-for-human-findings/issues/11-token-lifecycle-store.md:
  * no production migration existed anywhere for `jwt_signing_key` before
  * this — only `KeyRing.test.ts`'s own inline `CREATE TABLE` for that
@@ -449,7 +526,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
   migrations: jwtMigrations,
 }) {
   static readonly layer = Layer.provideMerge(
-    PostAuthResponseHookLive,
+    Layer.mergeAll(PostAuthResponseHookLive, BearerCredentialContributionLive),
     AuthPlugin.layer(Jwt, {
       handlers: JwtHandlers,
       make: Effect.gen(function* () {

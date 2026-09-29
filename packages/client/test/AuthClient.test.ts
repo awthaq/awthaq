@@ -284,4 +284,64 @@ describe("bearerTransformClient (MNA-005)", () => {
       assert.deepStrictEqual(seen, [undefined, "Bearer fresh"]);
     }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
   );
+
+  // MNA-006 (ticket 17): the request header that opts the server into body token delivery.
+  it.effect(
+    "every request carries X-Awthaq-Token-Delivery: bearer, with or without a stored token",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* AuthClient.BearerTokenStore;
+        const deliveries: Array<string | undefined> = [];
+        const transport = HttpClient.make((request) => {
+          deliveries.push(request.headers[Api.TOKEN_DELIVERY_HEADER]);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify("pong"), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            ),
+          );
+        });
+        yield* run(store, transport, 1);
+        yield* store.set(Redacted.make("token-0"));
+        yield* run(store, transport, 1);
+        assert.deepStrictEqual(deliveries, ["bearer", "bearer"]);
+      }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  it.effect("captureSessionToken stores the body token so the next request is authenticated", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      const seen: Array<string | undefined> = [];
+      const signedIn = yield* AuthClient.captureSessionToken(
+        Effect.succeed({ id: "s1", token: "from-body" }),
+      );
+      // The response is handed back unchanged, token included.
+      assert.deepStrictEqual(signedIn, { id: "s1", token: "from-body" });
+      assert.strictEqual(Option.getOrThrow(yield* store.get).pipe(Redacted.value), "from-body");
+      yield* run(store, fakeTransport(seen, [{}]), 1);
+      assert.deepStrictEqual(seen, ["Bearer from-body"]);
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  it.effect("captureSessionToken stores nothing when the response carries no token", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      yield* store.set(Redacted.make("kept"));
+      yield* AuthClient.captureSessionToken(Effect.succeed({ id: "s1" }));
+      yield* AuthClient.captureSessionToken(Effect.succeed({ id: "s2", token: "" }));
+      assert.strictEqual(Option.getOrThrow(yield* store.get).pipe(Redacted.value), "kept");
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  it.effect("captureSessionToken leaves a failed sign-in alone", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      const failure = yield* Effect.flip(AuthClient.captureSessionToken(Effect.fail("nope")));
+      assert.strictEqual(failure, "nope");
+      assert.isTrue(Option.isNone(yield* store.get));
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
 });

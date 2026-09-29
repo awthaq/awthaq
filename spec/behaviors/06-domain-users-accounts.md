@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-06 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001); 1.1 (2026-09-29): the identity union, phone identity, suspension state, profile image and email change (wayfinder ticket 09 — FAMS-002/SAM-003/SCP-001/SOS-008/BAM-009) revise BEH-EA-041/042/046 in place |
 
 ---
 
@@ -19,11 +19,32 @@
 ## BEH-EA-041: A User is identified by a case-insensitively unique email
 
 ```ts
+// Domain layer (Revision 1.1): the identity a user is known by is a tagged union.
+type UserIdentity =
+  | { _tag: "Email"; email: string; emailVerified: boolean }
+  | { _tag: "Phone"; phone: E164; phoneVerified: boolean }
+  | { _tag: "Anonymous" }
+
+interface UserRecord {
+  id: UserId
+  identity: UserIdentity
+  name: string
+  metadata: Option<string>
+  image: Option<string>
+  status: "active" | "suspended"        // BEH-EA-046
+  createdAt: DateTime.Utc
+  updatedAt: DateTime.Utc
+}
+
+// Storage: the union is stored flattened, so both uniqueness rules stay real constraints.
 class User extends Model.Class<User>("User")({
   id: Model.UuidV7Insert,
-  email: Schema.String,
+  email: Schema.NullOr(Schema.String),   // UNIQUE (lower(email)); NULL for Phone/Anonymous
   emailVerified: Schema.Boolean,
+  phone: Schema.NullOr(E164),            // UNIQUE (phone) WHERE phone IS NOT NULL
+  phoneVerified: Schema.Boolean,
   name: Schema.String
+  // …metadata, image, status…
 }) {}
 ```
 
@@ -32,7 +53,18 @@ REQUIREMENT: No two `User` rows MAY hold the same email compared
              case-insensitively; an email MUST be lower-cased before it is
              compared or stored, and the constraint MUST be enforced at the
              schema level, not by application-level lookup discipline alone.
+             (Revision 1.1) A user's identity MUST be exactly one of `Email`,
+             `Phone` (E.164) or `Anonymous`; no phone number MAY be held by
+             two users; `Anonymous` carries no uniqueness key, so any number
+             of anonymous users coexist. An `Anonymous` user MUST be
+             upgradeable in place to `Email` or `Phone` through
+             `Users.promoteIdentity` — same `UserId`, so every Account and
+             Session follows — and a user that already has an identity MUST
+             be refused (`IdentityMismatch`). No production code MAY
+             fabricate an email for a user that has none.
 ```
+
+**Revision 1.1 (wayfinder ticket 09; FAMS-002, SAM-003, SOS-008).** The paragraph below records that requiring email "is the current invariant, not an eternal one"; this revision is that explicit, versioned change. `Users.create` takes `{ identity, name, metadata?, image? }` with `identity` an `IdentityInput` (no verified flag, ever — BEH-EA-042) and fails `EmailAlreadyExists` / `PhoneAlreadyExists` only for its own kind. Phones are normalized at the boundary: `Phone.normalizePhone` (strip separators, `+`/`00` prefix or a configured default country code) is the only way to mint the branded `E164` that `create`/`promoteIdentity`/`findByPhone` accept, so three spellings of one number resolve to one stored value and the type system keeps raw strings out of storage; it is a well-formedness floor, not a dialability check. The SQL layer keeps `email`, `emailVerified`, `phone`, `phoneVerified` as columns and folds them into the union in one place (`toUserRecord`); a row with both an email and a phone is not a state any writer produces and reads as a defect. `Users.createOrGet` (SCP-003) is the idempotent create — an existing holder of the email/phone is returned with `created: false`, atomically in both layers (one `Ref.modify`; `INSERT … ON CONFLICT DO NOTHING RETURNING *`, which does not abort an enclosing Postgres transaction) — and `UserImport.importUser` (AOMS-008) builds the transactional, re-runnable import on it. An OAuth profile with no email creates an `Anonymous` user, not a synthetic address (FAMS-002). The verification-token identifier for phone proof is `verify-phone:<userId>` (BEH-EA-057), the payload carrying the normalized number.
 
 The one fold is JavaScript's `String.prototype.toLowerCase()`, applied at the domain boundary (ESR-003): `Users.create` stores the folded value, and `Users.findByEmail` folds its argument before the repository binds it, so lookups behave identically on the in-memory, SQLite and Postgres backends for non-ASCII addresses too (SQLite's own `lower()` folds ASCII only). The repository compares `lower(email)` on the column side against the already-folded parameter, so the `lower(email)` expression index still serves the lookup and the database never sees a non-normalized value.
 
@@ -44,8 +76,16 @@ The one fold is JavaScript's `String.prototype.toLowerCase()`, applied at the do
 REQUIREMENT: `emailVerified` MUST default to `false` at creation, MUST NOT
              be settable by a client through the ordinary create/update
              path, and MUST only transition `false → true` — no core
-             operation may reset it to `false` once true.
+             operation may reset it to `false` once true, with one
+             exception: replacing the address (`Users.changeEmail`), which
+             installs a new, unproven address and so starts `false`.
+             (Revision 1.1) `phoneVerified` follows the same rule for the
+             `Phone` identity, through `Users.verifyPhone`; "verified" is a
+             property of the identity variant, so it cannot be true while
+             there is no email/phone to verify.
 ```
+
+**Revision 1.1 additions.** The union shape makes "verified without an address" unrepresentable; `verifyEmail`/`verifyPhone` on the wrong identity kind fail `IdentityMismatch`. `Users.changeEmail(id, newEmail)` (BAM-009) is a *primitive*: it lower-cases, enforces uniqueness (`EmailAlreadyExists`) and resets `emailVerified`, but does not prove the caller owns the new address — the verified flow (mail a `change-email` token to the *new* address, then `changeEmail` + `verifyEmail` in one transaction, BEH-EA-058) belongs to the caller, and changing to the current address is a no-op that keeps the earned verification. The one sanctioned import exception (AOMS-008): `UserImport.importUser({ verified: true })` records that the *source* IdP already proved the address, through `verifyEmail`/`verifyPhone` (so it can never un-verify an existing user) — skipping it would lock every imported user out of a `requireVerifiedEmail` sign-in. The profile image (`image`, NAM-009/BAM-009) is client-writable like `name`, but only as a bounded `http(s)` URL: it is rendered by frontends, and a stored `javascript:`/`data:` value would be an XSS vector; OAuth avatars are applied only at first sign-up and pass the same check.
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §2.1-§2.2 documents this as a supplier-authority-only field, flipped only by specific, audited operations (consuming an email-verification token, an OAuth sign-in whose provider already verified a matching email), and monotone thereafter. The OAuth plugin is one sanctioned caller of `verifyEmail` (AOMS-007): a first-time (just-in-time) sign-up through a provider named in `trustedProviders` that asserts `email_verified` marks the new user verified inside the creating transaction — it is a plugin-mediated operation, not a client-settable write, and no other OAuth path (auto-link, explicit link) calls it. awthaq's plan carries the same invariant but intends to enforce the "never client-settable" half structurally, through `Model.Class`'s field-level write gating, rather than through the `input:false` convention better-auth's own §6.2 documents as a default a field author must opt into and can therefore forget.
 
@@ -98,6 +138,8 @@ REQUIREMENT: Deleting a `User` row MUST make every `Account` and `Session`
              or any Session belonging to the same User.
 ```
 
+**Suspension is never deletion (Revision 1.1; SCP-001, BAM-005).** A `User` also has `status: "active" | "suspended"` (with an operator-only reason and an optional expiry). `Users.setStatus(id, status, { reason?, until? })` is the *only* writer of `status`: `updateProfile` has no such field and the SQL `update` variant excludes the columns, so no generic write can reach it. `setStatus` leaves Accounts and Sessions alone (the caller — an admin, a SCIM handler — composes `Sessions.revokeAll(id, "suspended")`), and reactivating restores sign-in with every row intact; `delete` keeps the destructive cascade above unchanged, and SCIM `active:false` maps to suspension, not deletion. One shared gate, `Users.assertCanSignIn(user)`, fails `UserSuspended` (403, no body) for a user whose suspension is in force at the current instant (a `suspendedUntil` in the past has lapsed with no write); password sign-in, passkey `authenticateVerify` and the OAuth callback each call it with the `UserRecord` they already hold, *after* the credential proof and *before* `Sessions.issue`, so a wrong credential never learns whether an account is suspended. It is deliberately a plain call, not a hook point (a tap left out of a composition would silently un-gate a flow), and deliberately not inside `Users.findById` (an administrator must still resolve and reactivate a suspended user); admin impersonation does not consult it.
+
 `better-auth/01-core-domain/01-entities-and-invariants.md` §3.4 states the reasoning this design carries forward unchanged: "a Session's validity is tied to the User, not to any one linked identity." Unlinking the `google` account from a user who also has a password credential must leave every live session, and every other linked account, intact — a session's authority derives from the user record, never from the specific identity that happened to establish it.
 
 ## BEH-EA-047: A User may have any number of Accounts and any number of concurrent Sessions
@@ -127,6 +169,8 @@ REQUIREMENT: A field a plugin contributes to `User`, `Account`, or `Session`
 ```
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §6.2 documents this as the extension mechanism's sharpest edge and assigns blame precisely: a plugin that omits the write-gate on a system-authority field it contributes is the party responsible for the resulting corruption, "not the base system, and not whichever other plugin later trusts the now-corrupted field as authoritative." awthaq's plan inherits the same default and the same blame rule, while narrowing where a plugin may contribute such a field at all — per BEH-EA-040, a shared-table extension is scalar-only and mediated by a declared extension point, which shrinks, but does not eliminate, the surface this rule has to cover.
+
+**Interim guidance until the extension point ships (SAM-004).** The typed `userFields` extension point (`AuthPlugin` option, linker-enforced `${id}_${field}` columns, typed `getFields`/`setFields`, `clientWritable` gating of the HTTP profile payload) is not implemented: nothing in the shipped code contributes a field to `User`. Meanwhile application data belongs in `UserRecord.metadata` — an opaque, server-only-writable string that no HTTP payload can set (`UpdateProfilePayload` is `{ name, image }`; `metadata` is written only by trusted server code such as an import or the admin surface) — or in a plugin-prefixed side table keyed by `UserId`. Anything a policy or an authorization decision may rely on MUST live in one of those two server-only places and MUST NOT be a client-writable field; the only client-writable profile fields today are `name` and `image`.
 
 _Previous: [BEH-EA-040](05-persistence-stratum.md#beh-ea-040-a-plugin-migration-may-only-alter-tables-under-its-own-prefix-shared-tables-are-altered-only-through-a-declared-extension-point)_
 _Next: [BEH-EA-049](07-sessions.md#beh-ea-049-a-session-token-is-an-opaque-idsecret-pair)_

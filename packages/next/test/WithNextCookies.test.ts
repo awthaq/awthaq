@@ -147,7 +147,10 @@ describe("withNextCookies — a real HTTP response (BEH-EA-189)", () => {
         const sessions = yield* Sessions.Sessions;
         const users = yield* Users.Users;
         const user = yield* users
-          .create({ email: "with-next-cookies@example.com", name: "Cookie Test" })
+          .create({
+            identity: { _tag: "Email", email: "with-next-cookies@example.com" },
+            name: "Cookie Test",
+          })
           .pipe(Effect.orDie);
         const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
         yield* SessionCookie.set(session, token);

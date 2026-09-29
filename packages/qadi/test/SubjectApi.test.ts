@@ -48,7 +48,10 @@ const LoginHandlers = HttpApiBuilder.group(LoginApi, "login", (handlers) =>
       const sessions = yield* Sessions.Sessions;
       const users = yield* Users.Users;
       const user = yield* users
-        .create({ email: "subject-api@example.com", name: "Subject Api" })
+        .create({
+          identity: { _tag: "Email", email: "subject-api@example.com" },
+          name: "Subject Api",
+        })
         .pipe(Effect.orDie);
       const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
       yield* SessionCookie.set(session, token);

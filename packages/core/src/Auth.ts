@@ -17,6 +17,7 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthPlugin from "./AuthPlugin.ts";
+import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
 import * as Slots from "./Slots.ts";
 
@@ -269,11 +270,21 @@ export interface ManifestPlugin {
   readonly apiVersion: 1;
   readonly tables: ReadonlyArray<string>;
   readonly dependsOn: ReadonlyArray<string>;
+  /** BEH-EA-203: the contract groups this plugin owns, so `routes` can name the owning plugin of an endpoint. */
+  readonly groups: ReadonlyArray<string>;
+}
+
+/** ECS-008/BEH-EA-229: one configuration descriptor, tagged with the plugin that declared it. */
+export interface ManifestConfig {
+  readonly pluginId: string;
+  readonly descriptor: ConfigDescriptor;
 }
 
 /** BEH-EA-016: read off the composed classes, never authored (`archive/design/plugins-as-layers.md` §7). */
 export interface Manifest {
   readonly plugins: ReadonlyArray<ManifestPlugin>;
+  /** ECS-008: every installed plugin's configuration descriptors, in link order — static, no Layer evaluated. */
+  readonly config: ReadonlyArray<ManifestConfig>;
 }
 
 /**
@@ -514,7 +525,11 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
     apiVersion: plugin.apiVersion,
     tables: plugin.tables,
     dependsOn: plugin.dependsOn.map((dep) => dep.id),
+    groups: Object.values(plugin.contract.groups).map((group) => group.identifier),
   })),
+  config: order.flatMap((plugin) =>
+    (plugin.config ?? []).map((descriptor) => ({ pluginId: plugin.id, descriptor })),
+  ),
 });
 
 const hasRoute = (endpoint: object): endpoint is { readonly method: string; readonly path: string } =>

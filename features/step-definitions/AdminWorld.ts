@@ -62,10 +62,17 @@ const UsersLive = Layer.effect(
               ? Effect.fail(notFound)
               : Effect.succeed({
                   id,
-                  email: `${id}@example.com`,
-                  emailVerified: false,
+                  identity: {
+                    _tag: "Email" as const,
+                    email: `${id}@example.com`,
+                    emailVerified: false,
+                  },
                   name: id,
                   metadata: Option.none(),
+                  image: Option.none(),
+                  status: "active" as const,
+                  statusReason: Option.none(),
+                  suspendedUntil: Option.none(),
                   createdAt: DateTime.makeUnsafe(0),
                   updatedAt: DateTime.makeUnsafe(0),
                 }),
@@ -257,7 +264,7 @@ export const signIn = Effect.fn("features.admin.signIn")(function* (userId: stri
           return yield* Effect.gen(function* () {
             const users = yield* Users.Users;
             yield* users
-              .create({ email: `${userId}@example.com`, name: userId })
+              .create({ identity: { _tag: "Email", email: `${userId}@example.com` }, name: userId })
               .pipe(Effect.catchTag("Users/EmailAlreadyExists", () => Effect.void));
             const sessions = yield* Sessions.Sessions;
             const issued = yield* sessions.issue({ userId: Users.UserId(userId) });

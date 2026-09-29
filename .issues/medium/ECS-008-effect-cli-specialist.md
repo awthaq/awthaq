@@ -3,7 +3,7 @@ ID: "ECS-008"
 Title: "doctor's config-validation mandate conflicts with ADR-006 and the no-Layer boundary"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/decisions/006-runtime-config-separate-from-installation.md:33"
 Auditor: "effect-cli-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `—` · reported by **Effect CLI Specialist** (`effect-cli-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Reconcile the two: either enumerate the statically declared config surface docto
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cli-doctor-hardening`. Evidence at HEAD ec065a7: `spec/decisions/006-runtime-config-separate-from-installation.md:33`. Fix: Resolve the contradiction toward the richer option: introduce an effective-configuration descriptor that plugins declare statically (Schema + default + sensitivity), that `doctor` validates and a guarded operator view can dump, and amend ADR-006's Negative consequence accordingly. EP-009's per-tenant effective-config dump is folded in. (effort L). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Resolved toward the richer option: plugins (and core/server) declare configuration descriptors (ConfigDescriptor.make(reference, { sensitive, audit, project })); Auth.make exposes them as manifest.config, derived without evaluating any Layer; EffectiveConfig.read/audit/snapshot read them against a Context (a configuration Layer built on its own) or the ambient one; awthaq config list and doctor use them; GET /admin/config (fail-closed canManageUsers gate, secrets redacted, reads the configuration the layer was built under) is the runtime view; ADR-EA-006 revised to 1.2, BEH-EA-201 and new BEH-EA-229 aligned. Populated for Password, Passkey, Organization, Admin (+ AuditChain key), Roles, ApiKey, core Sessions/SessionCookie/MailDispatch and server BodyLimit. Tests: core/test/EffectiveConfig.test.ts, cli/test/Doctor.test.ts, admin/test/AdminConfig.test.ts (+ AuthHttp.test.ts 403 without the gate). Deviations: a descriptor carries an optional `audit` function and `sensitive` keys instead of a Schema (the reference's own type already validates shape; audits encode the insecure-default rules); config that is a Context.Service rather than a Reference (CSRF secret, JwtConfig) has no descriptor, covered by doctor --build reporting a build failure. Manifest tests in other packages gained the manifest plugin `groups` field.

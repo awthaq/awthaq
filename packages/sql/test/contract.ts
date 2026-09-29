@@ -105,6 +105,140 @@ export const contractCases = (
       }).pipe(Effect.provide(RepositoriesLive)),
     );
 
+    // ---- FAMS-002/SCP-001/SCP-003: the identity, status and idempotent-insert operations ----
+
+    it.effect(
+      "FAMS-002: email-less rows (phone / anonymous) persist; email and phone are each unique",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Repositories.UsersRepository;
+          const anonymous = yield* users.insert(yield* M.User.insert.makeEffect({ name: "Guest" }));
+          const anonymous2 = yield* users.insert(
+            yield* M.User.insert.makeEffect({ name: "Guest 2" }),
+          );
+          assert.strictEqual(anonymous.email, null);
+          assert.strictEqual(anonymous.phone, null);
+          assert.strictEqual(anonymous.status, "active");
+          assert.notStrictEqual(anonymous.id, anonymous2.id);
+
+          const phone = Schema.decodeUnknownSync(Models.E164)("+15550142");
+          const phoned = yield* users.insert(
+            yield* M.User.insert.makeEffect({ phone, name: "Phoned" }),
+          );
+          assert.strictEqual(phoned.phone, "+15550142");
+          assert.strictEqual(phoned.phoneVerified, false);
+          const duplicate = yield* users
+            .insert(yield* M.User.insert.makeEffect({ phone, name: "Dup" }))
+            .pipe(Effect.flip);
+          assert.strictEqual(duplicate._tag, "SqlError");
+          assert.strictEqual(
+            Option.getOrThrow(yield* users.findByPhone("+15550142")).id,
+            phoned.id,
+          );
+        }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect(
+      "SCP-003: insertIfAbsent returns None on any unique conflict instead of erroring",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Repositories.UsersRepository;
+          const first = yield* users.insertIfAbsent(
+            yield* M.User.insert.makeEffect({ email: "once@example.com", name: "Once" }),
+          );
+          assert.isTrue(Option.isSome(first));
+          const second = yield* users.insertIfAbsent(
+            yield* M.User.insert.makeEffect({ email: "ONCE@example.com", name: "Twice" }),
+          );
+          assert.isTrue(Option.isNone(second));
+          // Still usable afterwards — the conflict did not poison the connection/transaction.
+          const sql = yield* SqlClient.SqlClient;
+          const rows = yield* sql.withTransaction(
+            Effect.gen(function* () {
+              yield* users.insertIfAbsent(
+                yield* M.User.insert.makeEffect({ email: "once@example.com", name: "Again" }),
+              );
+              return yield* users.findByEmail("once@example.com");
+            }),
+          );
+          assert.strictEqual(Option.getOrThrow(rows).name, "Once");
+        }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect("FAMS-002: promoteIdentity sets an identity only on a row that has none", () =>
+      Effect.gen(function* () {
+        const users = yield* Repositories.UsersRepository;
+        const guest = yield* users.insert(yield* M.User.insert.makeEffect({ name: "Guest" }));
+        const promoted = yield* users.promoteIdentity(guest.id, {
+          _tag: "Email",
+          email: "promoted@example.com",
+        });
+        assert.strictEqual(Option.getOrThrow(promoted).email, "promoted@example.com");
+        assert.strictEqual(Option.getOrThrow(promoted).emailVerified, false);
+        // Already has one: the guarded UPDATE matches nothing.
+        const again = yield* users.promoteIdentity(guest.id, {
+          _tag: "Phone",
+          phone: Schema.decodeUnknownSync(Models.E164)("+15550143"),
+        });
+        assert.isTrue(Option.isNone(again));
+      }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect(
+      "BAM-009: changeEmail replaces the address and clears emailVerified in one statement",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Repositories.UsersRepository;
+          const created = yield* users.insert(
+            yield* M.User.insert.makeEffect({ email: "before@example.com", name: "Change" }),
+          );
+          yield* users.verifyEmail(created.id);
+          const changed = yield* users.changeEmail(created.id, "after@example.com");
+          assert.strictEqual(Option.getOrThrow(changed).email, "after@example.com");
+          assert.strictEqual(Option.getOrThrow(changed).emailVerified, false);
+          const guest = yield* users.insert(yield* M.User.insert.makeEffect({ name: "G" }));
+          assert.isTrue(Option.isNone(yield* users.changeEmail(guest.id, "g@example.com")));
+        }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect(
+      "SCP-001: setStatus is the only writer of status; the generic update leaves it alone",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Repositories.UsersRepository;
+          const created = yield* users.insert(
+            yield* M.User.insert.makeEffect({ email: "status@example.com", name: "Status" }),
+          );
+          const until = DateTime.makeUnsafe("2030-01-02T03:04:05.000Z");
+          const suspended = yield* users.setStatus(created.id, {
+            status: "suspended",
+            reason: "abuse",
+            until,
+          });
+          assert.strictEqual(suspended.status, "suspended");
+          assert.strictEqual(suspended.statusReason, "abuse");
+          assert.isTrue(
+            DateTime.Equivalence(suspended.suspendedUntil ?? DateTime.makeUnsafe(0), until),
+          );
+
+          const renamed = yield* users.update(
+            yield* M.User.update.makeEffect({ id: created.id, name: "Renamed" }),
+          );
+          assert.strictEqual(renamed.name, "Renamed");
+          assert.strictEqual(renamed.status, "suspended");
+          assert.strictEqual(renamed.statusReason, "abuse");
+          assert.isNotNull(renamed.suspendedUntil);
+
+          const active = yield* users.setStatus(created.id, {
+            status: "active",
+            reason: null,
+            until: null,
+          });
+          assert.strictEqual(active.status, "active");
+          assert.strictEqual(active.suspendedUntil, null);
+        }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
     it.effect(
       "BEH-EA-034: passwordHash/accessToken/refreshToken never appear in the JSON variant",
       () =>

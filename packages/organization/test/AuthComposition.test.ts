@@ -24,6 +24,7 @@ describe("Auth.make([Organization])", () => {
           "organization_active_context",
         ],
         dependsOn: [],
+        groups: ["organization"],
       },
     ]);
   });

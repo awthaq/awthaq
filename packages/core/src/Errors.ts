@@ -18,8 +18,7 @@ import * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
-export const StoreUnavailable = Api.StoreUnavailable;
-export type StoreUnavailable = Api.StoreUnavailable;
+export import StoreUnavailable = Api.StoreUnavailable;
 
 /**
  * The recovery for an infrastructure failure at a service boundary: log the cause once (the

@@ -27,16 +27,16 @@ import {
   Accounts,
   AuthEvents,
   AuthPlugin,
+  ConfigDescriptor,
   Errors,
   Hooks,
   Migrations,
   RateLimits,
-  SessionCookie,
   Sessions,
   Users,
 } from "@awthaq/core";
 import { ClientAddress, Defects, RateLimiter, WebAuthn } from "@awthaq/ports";
-import { Session } from "@awthaq/server";
+import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -457,12 +457,6 @@ export interface PasskeySignals {
   readonly allAcceptedCredentialIds: ReadonlyArray<string>;
 }
 
-// RSC-005: the mapping is `@awthaq/server`'s `Session.toSessionDto`; the typed
-// wrapper also keeps `SessionContract` in scope so declaration emit can name
-// `SessionDto` in the handler group's inferred type (TS2883 otherwise).
-const sessionResponse = (view: Sessions.SessionView): SessionContract.SessionDto =>
-  Session.toSessionDto(view);
-
 export interface IssuedSession {
   readonly session: Sessions.SessionView;
   readonly token: Redacted.Redacted<string>;
@@ -548,7 +542,9 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyChallengeInvalid
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCounterAnomaly
-    | Hooks.TwoFactorRequired | Errors.StoreUnavailable
+    | Users.UserSuspended
+    | Hooks.TwoFactorRequired
+    | Errors.StoreUnavailable
   >;
   readonly listCredentials: (
     userId: Users.UserId,
@@ -647,14 +643,16 @@ export const PasskeyHandlers = Layer.mergeAll(
         }) {
           // CSD-003: address via the application-provided `ClientAddress`
           // port (trusted-proxy aware), user agent from the header.
+          const delivery = yield* SessionDelivery.mode(request);
           const resolvedAddress = yield* clientAddress.resolve(request);
           const userAgent = Headers.get(request.headers, "user-agent");
           const issued = yield* passkey.authenticateVerify(
             { ...payload, ip: Option.getOrUndefined(resolvedAddress) },
             Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
           );
-          yield* SessionCookie.set(issued.session, issued.token);
-          return sessionResponse(issued.session);
+          // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+          const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+          return response;
         }),
       });
     }),
@@ -893,6 +891,32 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   contract: PasskeyApi.PasskeyApi,
   tables: ["passkey_credential", "passkey_challenge", "passkey_user_handle"],
   migrations: passkeyMigrations,
+  // ECS-008/BEH-EA-229: the dev defaults (`localhost`, an `http` origin) are the classic thing left in production.
+  config: [
+    ConfigDescriptor.make(PasskeyConfig, {
+      sensitive: [],
+      audit: (value, environment) => [
+        ...(environment.production && value.rpId === "localhost"
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "passkey-rp-id-localhost",
+                "the relying-party id is still the development default `localhost`",
+              ),
+            ]
+          : []),
+        ...(environment.production && value.origins.some((origin) => origin.startsWith("http://"))
+          ? [
+              ConfigDescriptor.finding(
+                "warning",
+                "passkey-origin-not-https",
+                "an allowed origin uses plain http",
+              ),
+            ]
+          : []),
+      ],
+    }),
+  ],
 }) {
   static readonly layer = AuthPlugin.layer(Passkey, {
     handlers: PasskeyHandlers,
@@ -1061,7 +1085,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           rpName: config.rpName,
           challenge: Redacted.value(challenge),
           userId: webauthnUserId,
-          userName: user.email,
+          userName: Users.accountLabel(user),
           userDisplayName: user.name,
           excludeCredentials: existing.map((row) => ({ id: row.id, transports: row.transports })),
           attestation: config.attestation,
@@ -1425,9 +1449,13 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // session for a dead `userId` with no existence check of its
           // own: same uniform `InvalidCredentials` collapse BEH-EA-136
           // already applies to every other failure in this ceremony.
-          yield* users
+          const user = yield* users
             .findById(stored.userId)
             .pipe(Effect.catchTag("UserNotFound", () => Effect.fail(new Api.InvalidCredentials())));
+
+          // SCP-001/BAM-005: THE shared sign-in gate, after the credential is
+          // proven and before any session exists.
+          yield* Users.assertCanSignIn(user);
 
           // BCR-004/THS-002: same canonical MFA attachment point
           // `@awthaq/password`'s own `signIn` consults, right before this
@@ -1470,7 +1498,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         return {
           rpId: config.rpId,
           userId: yield* handles.getOrCreate(userId),
-          name: user.email,
+          name: Users.accountLabel(user),
           displayName: user.name,
           allAcceptedCredentialIds: owned.map((row) => row.id),
         };

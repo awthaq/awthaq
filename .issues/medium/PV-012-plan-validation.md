@@ -3,7 +3,7 @@ ID: "PV-012"
 Title: "KeyRing.rotateNow keeps a compromised key valid for the full 30-day grace period (no revoke-now path)"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/KeyRing.ts"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `MEDIUM` · `security` · `jwt` · found during the 2026-09-29 plan validation (not in the original audit)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -31,3 +31,5 @@ Planned under: KRS-008 → jwt-key-rotation-integrity (P03).
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29):** fixed under KRS-008 (P03: KeyRing.revoke and rotateNow({gracePeriod: zero})); see that issue's Resolved comment for files, tests and gates.

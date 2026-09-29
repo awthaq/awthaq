@@ -31,17 +31,25 @@ const BEARER_PREFIX = "bearer ";
 /**
  * BEH-EA-065/072's own declaration order, replicated here since Path B runs
  * before any `HttpApiSecurity` scheme decodes anything: the session cookie
- * is tried first, the `Authorization` bearer header second. Matched
- * case-insensitively and trimmed, the same robustness `@qadi/http`'s own
- * `subjectExtractorBearer` documents for exactly this scheme.
+ * is tried first, the `x-api-key` header second (OCM-002), the `Authorization`
+ * bearer header last. Matched case-insensitively and trimmed, the same
+ * robustness `@qadi/http`'s own `subjectExtractorBearer` documents for exactly
+ * this scheme.
  */
 const extractCredential = (
   request: HttpServerRequest.HttpServerRequest,
   cookieName: string,
-): { readonly scheme: "cookie" | "bearer"; readonly credential: Redacted.Redacted<string> } => {
+): {
+  readonly scheme: "cookie" | "bearer" | "apiKey";
+  readonly credential: Redacted.Redacted<string>;
+} => {
   const cookie = request.cookies[cookieName];
   if (cookie !== undefined && cookie.length > 0) {
     return { scheme: "cookie", credential: Redacted.make(cookie) };
+  }
+  const apiKey = Headers.get(request.headers, Api.API_KEY_HEADER_NAME);
+  if (Option.isSome(apiKey) && apiKey.value.trim().length > 0) {
+    return { scheme: "apiKey", credential: Redacted.make(apiKey.value.trim()) };
   }
   const header = Headers.get(request.headers, "authorization");
   if (Option.isSome(header) && header.value.toLowerCase().startsWith(BEARER_PREFIX)) {

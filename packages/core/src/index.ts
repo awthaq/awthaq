@@ -33,6 +33,8 @@ export * as AuthPlugin from "./AuthPlugin.ts";
 export * as Errors from "./Errors.ts";
 // The tagged defect kinds (`Effect.die` with a name), defined in ports so ports and sql can use them too.
 export { Defects } from "@awthaq/ports";
+export * as ConfigDescriptor from "./ConfigDescriptor.ts";
+export * as EffectiveConfig from "./EffectiveConfig.ts";
 export * as HookPoint from "./HookPoint.ts";
 export * as Hooks from "./Hooks.ts";
 // MA-003: re-exported, not wrapped — see this file's own header comment
@@ -41,10 +43,13 @@ export * as Hooks from "./Hooks.ts";
 export * from "./HttpApiTypes.ts";
 export * as MailDispatch from "./MailDispatch.ts";
 export * as Migrations from "./Migrations.ts";
+export * as Phone from "./Phone.ts";
 export * as RateLimits from "./RateLimits.ts";
+export * as SecretHash from "./SecretHash.ts";
 export * as SessionCookie from "./SessionCookie.ts";
 export * as Sessions from "./Sessions.ts";
 export * as Slots from "./Slots.ts";
+export * as UserImport from "./UserImport.ts";
 export * as Users from "./Users.ts";
 export * as Verification from "./Verification.ts";
 export * as VerificationLink from "./VerificationLink.ts";

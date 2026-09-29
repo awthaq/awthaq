@@ -14,6 +14,7 @@ import type * as Record from "effect/Record";
 import type * as Scope from "effect/Scope";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
 
 /**
@@ -83,6 +84,8 @@ export interface Class<
   readonly dependsOn: ReadonlyArray<Any>;
   /** JH-007: tables owned by *other* plugins this one reads; `Auth.make` requires the owner in `dependsOn`. */
   readonly readsTables: ReadonlyArray<string>;
+  /** ECS-008/BEH-EA-229: the configuration inputs this plugin reads, declared statically (none when it has no policy knobs). */
+  readonly config: ReadonlyArray<ConfigDescriptor>;
 }
 
 /**
@@ -112,6 +115,8 @@ export interface Any {
   readonly dependsOn: ReadonlyArray<Any>;
   /** JH-007: optional here so a hand-built plugin value need not name it. */
   readonly readsTables?: ReadonlyArray<string>;
+  /** Optional here (a hand-built `Any` may have none); every plugin made with `Service` carries the list. */
+  readonly config?: ReadonlyArray<ConfigDescriptor>;
   readonly layer: Layer.Layer<never, unknown, unknown>;
 }
 
@@ -171,6 +176,8 @@ export const Service =
       readonly tables?: ReadonlyArray<`${Id}_${string}`>;
       readonly migrations?: Migrations;
       readonly readsTables?: ReadonlyArray<string>;
+      /** ECS-008/BEH-EA-229: descriptors of the `Context.Reference`s this plugin reads (`ConfigDescriptor.make`). */
+      readonly config?: ReadonlyArray<ConfigDescriptor>;
     },
   ): Class<Self, Id, Shape, Groups> => {
     const key: Key<Id> = `awthaq/plugin/${id}`;
@@ -190,6 +197,7 @@ export const Service =
       tables: options.tables ?? [],
       migrations: options.migrations ?? [],
       readsTables: options.readsTables ?? [],
+      config: options.config ?? [],
       dependsOn: noDependencies,
     });
     // A regular (not arrow) function, so `this` is whatever the getter is

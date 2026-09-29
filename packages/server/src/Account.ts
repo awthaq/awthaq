@@ -8,6 +8,7 @@ import { AuthCore, Api, AccountContract } from "@awthaq/api";
 import { Accounts, Sessions, Users, Verification } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { currentUser } from "./internal/CurrentUser.ts";
 import { HandlerInvariantViolation } from "./internal/Defects.ts";
@@ -21,12 +22,24 @@ import { expireSessionCookie } from "./internal/SessionCookie.ts";
  */
 export type AccountPrincipal = Api.UserPrincipal;
 
+/** FAMS-002: exhaustive over `Users.UserIdentity`; `phone` is an `E164` string on the wire. */
+const identityDto = (identity: Users.UserIdentity): AccountContract.IdentityDto => {
+  switch (identity._tag) {
+    case "Email":
+      return { _tag: "Email", email: identity.email, emailVerified: identity.emailVerified };
+    case "Phone":
+      return { _tag: "Phone", phone: identity.phone, phoneVerified: identity.phoneVerified };
+    case "Anonymous":
+      return { _tag: "Anonymous" };
+  }
+};
+
 const toDto = (user: Users.UserRecord): AccountContract.AccountDto =>
   new AccountContract.AccountDto({
     id: user.id,
-    email: user.email,
-    emailVerified: user.emailVerified,
+    identity: identityDto(user.identity),
     name: user.name,
+    image: Option.getOrNull(user.image),
   });
 
 export const AccountHandlers = HttpApiBuilder.group(

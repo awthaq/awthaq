@@ -70,9 +70,21 @@ Deliberately **not** validated, and why:
 
 - `httpTimeouts` — a deadline per outbound call class (`tokenExchange` 10s, `jwks` 5s, `userinfo` 5s, `discovery` 10s), covering request and body decode. An overrun answers `ProviderUnavailable` (503).
 - `retry` — jittered exponential backoff for the idempotent GETs only (JWKS, userinfo, discovery; default two retries from 50ms). The code exchange and the refresh grant are **never** retried.
-- `rateLimits` — per-IP limits for `authorize` (30/min) and `callback` (20/min).
+- `rateLimits` — per-IP limits for `authorize` (30/min), `callback` (20/min) and the native `token` redemption (20/min).
+- `nativeRedirectURLs` / `nativeExchangeTtl` — the native return leg (below); off by default.
 - `clockSkew` (default 60s) — leeway on an `id_token`'s `exp`/`nbf`/`iat`; `maxIdTokenAge` — optionally also reject an `id_token` whose `iat` is older than this.
 - Provider `discovery: { mode: "lazy", refresh }` resolves a provider's discovery document on first use instead of at boot, answering `ProviderUnavailable` while it is unreachable (an issuer mismatch still disables the provider permanently).
+
+## Native and mobile apps
+
+A native app's system browser (`ASWebAuthenticationSession`, Android Custom Tabs) keeps its own cookie jar, so the browser flow's `Set-Cookie` on the callback `302` never reaches the app. The native flow returns to a deep link with a one-time **exchange code** instead, which the app redeems for its session token. The token itself never appears in a URL.
+
+1. Allow the deep link: `OAuth.config({ nativeRedirectURLs: ["myapp://oauth/callback"] })`. Entries are private-use-scheme URLs (RFC 8252 §7.1: `myapp://oauth/callback`, or `com.example.app:/cb`); `http(s)`, `javascript`, `data`, `blob` and `file` entries are refused at boot. A requested `callbackURL` is matched on the normalized scheme, authority and path (an entry admits deeper paths at a `/`, `?` or `#` boundary, never a bare string prefix). Where the platform supports it, prefer a claimed `https` universal/app link listed in `trustedOrigins`.
+2. Start the flow with `GET /oauth/:provider/authorize?mode=native&callbackURL=myapp://oauth/callback[&code_challenge=<S256>]`. Anything not allowlisted (or a deep link without `mode=native`) falls back to `defaultCallbackURL` and logs one warning naming the reason; the request itself still succeeds.
+3. The callback redirects to `myapp://oauth/callback?code=<exchange code>` and sets no session cookie.
+4. Redeem it once: `POST /oauth/token` with `{ "code": "...", "codeVerifier": "..." }` answers the session with its `token` field set (`Cache-Control: no-store`); present it afterwards as `Authorization: Bearer <token>`. The code is single-use and expires after `nativeExchangeTtl` (60 seconds). Store the token in the Keychain/Keystore; that is the app's job.
+
+**Send a `code_challenge`.** A private-use scheme can be claimed by another app on the device, which would then receive the redirect and its code (RFC 8252 §8.1). With `code_challenge=base64url(SHA-256(verifier))` on the authorize request and the matching `codeVerifier` at redemption, an intercepted code is useless; without it, anyone who can read the redirect within the TTL can redeem it. A wrong or missing verifier spends the code.
 
 ## Known limitations
 

@@ -85,6 +85,11 @@ export interface ConsumeInput {
 /** BEH-EA-105: the port a plugin requires and the application provides — never bundled by a plugin (ADR-EA-010). */
 export interface RateLimiterShape {
   readonly consume: (input: ConsumeInput) => Effect.Effect<void, RateLimitExceeded>;
+  /**
+   * NHS-005/BEH-EA-201: set by `layerPermissive`, which disables every rule, so
+   * `awthaq doctor --build` can flag it left in a production composition.
+   */
+  readonly permissive?: true;
 }
 
 export class RateLimiter extends Context.Service<RateLimiter, RateLimiterShape>()(
@@ -355,6 +360,6 @@ export const layerPermissive = Layer.effect(
             "awthaq: RateLimiter.layerPermissive is active — every registered rate-limit rule is disabled (tests only; use RateLimiter.layerMemory or a shared store in production)",
           ),
     );
-    return RateLimiter.of({ consume: () => warnOnce });
+    return RateLimiter.of({ consume: () => warnOnce, permissive: true });
   }),
 );

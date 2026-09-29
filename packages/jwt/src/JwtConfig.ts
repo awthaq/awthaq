@@ -80,6 +80,19 @@ export interface JwtConfigShape {
    * database-verified `getSession` decides access (BEH-EA-188).
    */
   readonly sessionCookie: false | SessionMirrorCookie;
+  /**
+   * MAPS-001/NAM-001 (wayfinder ticket 33): whether a principal JWT this plugin
+   * minted (`GET /jwt/token`, the response mirror) is also accepted as a
+   * *bearer credential* by this API's `Authentication`, verified statelessly
+   * (`verify`, no session-store hit). Default `false`: installing `Jwt` mints a
+   * delegation token meant for downstream services, and quietly making that
+   * same token a valid origin credential would widen what a leaked or
+   * propagated token can do. On, a revoked session's JWT keeps authenticating
+   * until its own `exp`, so the revocation lag is bounded by `ttl`. A token
+   * minted with `signJWT(payload, { audience })` for a downstream service never
+   * re-enters (its `aud` is not this API's).
+   */
+  readonly acceptAsBearer: boolean;
   readonly definePayload: (principal: Api.Principal) => Effect.Effect<Record<string, unknown>>;
 }
 
@@ -140,6 +153,7 @@ export const config = (
         keyMinRefreshInterval: options.keyMinRefreshInterval ?? Duration.seconds(30),
         mirrorResponses: options.mirrorResponses ?? "off",
         sessionCookie: mirror,
+        acceptAsBearer: options.acceptAsBearer ?? false,
         definePayload: options.definePayload ?? emptyPayload,
       };
     }),
