@@ -204,6 +204,38 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     }
   });
 
+  // REQ-EA-159: a comparison over the raw, variable-length secrets could not survive a length
+  // mismatch; over SHA-256 digests every presented length is just another wrong value.
+  When(
+    "secrets of {int}, {int} and {int} characters are presented under {string}'s session id",
+    function* (short: number, medium: number, long: number, name: string) {
+      const { actors, texts } = yield* World;
+      const { id } = tokenParts((yield* actors.get(name)).cookie);
+      const statuses: Array<number> = [];
+      for (const length of [short, medium, long]) {
+        const secret = "x".repeat(length);
+        statuses.push((yield* getSession("/session", `__Host-session=${id}.${secret}`)).status);
+      }
+      yield* texts.set("statuses", statuses.join(","));
+    },
+  );
+
+  Then("each is refused as unauthenticated, never as a server error", function* () {
+    const { texts } = yield* World;
+    assert.equal(yield* texts.get("statuses"), "401,401,401");
+  });
+
+  Then(
+    "the stored digest keeps its fixed {int}-hex length, so the comparison is over digests and never over the presented secrets themselves",
+    function* (length: number) {
+      const { actors } = yield* World;
+      const { id } = tokenParts((yield* actors.get(yield* actors.current)).cookie);
+      const stored = column(yield* readSessionRow(id), "secretHash");
+      assert.equal(stored.length, length);
+      assert.match(stored, /^[0-9a-f]+$/);
+    },
+  );
+
   Given(
     "the Session table's rows have been disclosed, as by a backup or a compromised read replica",
     function* () {

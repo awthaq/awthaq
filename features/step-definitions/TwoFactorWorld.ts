@@ -106,13 +106,28 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
+/** A `PasswordHasher` over the cheap real one that counts every `hash`/`verify` it is asked for. */
+const countingHasher = (count: Ref.Ref<number>) =>
+  Layer.effect(
+    PasswordHasher.PasswordHasher,
+    Effect.gen(function* () {
+      const real = yield* PasswordHasher.PasswordHasher;
+      const tick = Ref.update(count, (n) => n + 1);
+      return PasswordHasher.PasswordHasher.of({
+        hash: (plain) => Effect.andThen(tick, real.hash(plain)),
+        verify: (plain, phc) => Effect.andThen(tick, real.verify(plain, phc)),
+        needsRehash: real.needsRehash,
+      });
+    }),
+  ).pipe(Layer.provide(cheapArgon2id));
+
 export interface AppOptions {
   readonly config?: Partial<TwoFactorConfig.TwoFactorConfigShape>;
   /** `true`: a real `RateLimiter` over the in-memory store — the lockout scenarios' budgets are real. */
   readonly enforceRateLimits?: boolean;
 }
 
-const buildAppLayer = (options: AppOptions) =>
+const buildAppLayer = (options: AppOptions, hashes: Ref.Ref<number>) =>
   Layer.mergeAll(
     Password.Password.layer,
     TwoFactor.TwoFactor.layer,
@@ -131,7 +146,7 @@ const buildAppLayer = (options: AppOptions) =>
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
       Layer.mergeAll(
-        cheapArgon2id,
+        countingHasher(hashes),
         Mailer.layerMemory,
         options.enforceRateLimits === true
           ? RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))
@@ -159,7 +174,7 @@ export const inTwoFactorApp = <A, E>(
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const context = yield* Layer.build(buildAppLayer(options));
+      const context = yield* Layer.build(buildAppLayer(options, Ref.makeUnsafe(0)));
       return yield* Effect.provide(effect, context);
     }),
   );
@@ -200,6 +215,8 @@ export interface WorldShape {
   readonly options: Ref.Ref<AppOptions>;
   readonly running: Ref.Ref<Option.Option<Context.Context<TwoFactorServices>>>;
   readonly scope: Scope.Closeable;
+  /** How many hash/verify calls the composition's `PasswordHasher` has served (REQ-EA-1065). */
+  readonly hashes: Ref.Ref<number>;
   readonly people: NamedRegistry<Person>;
   /** Outcomes of direct service calls, by the name a step chose. */
   readonly exits: NamedRegistry<Exit.Exit<unknown, unknown>>;
@@ -225,6 +242,7 @@ export const WorldLive = Layer.effect(
       options: yield* Ref.make<AppOptions>({}),
       running: yield* Ref.make<Option.Option<Context.Context<TwoFactorServices>>>(Option.none()),
       scope,
+      hashes: yield* Ref.make(0),
       people: makeNamedRegistry<Person>("person"),
       exits: makeNamedRegistry<Exit.Exit<unknown, unknown>>("outcome"),
       strings: makeNamedRegistry<string>("text"),
@@ -259,7 +277,11 @@ const running = Effect.gen(function* () {
   // Built on the real clock, outside the step's `TestClock` (see the header).
   const context = yield* Effect.promise(() =>
     Effect.runPromise(
-      Layer.buildWithMemoMap(buildAppLayer(options), Layer.makeMemoMapUnsafe(), world.scope),
+      Layer.buildWithMemoMap(
+        buildAppLayer(options, world.hashes),
+        Layer.makeMemoMapUnsafe(),
+        world.scope,
+      ),
     ),
   );
   yield* Ref.set(world.running, Option.some(context));

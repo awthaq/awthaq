@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import {
   advance,
   auditRows,
@@ -224,6 +225,40 @@ export const twoFactorSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Given("a registered user {string} with a verified mailbox", function* (name: string) {
     yield* register(name);
+  });
+
+  // REQ-EA-1065: the hasher is counted from before the string is presented, so enrolment's own hashing does not count.
+  When(
+    "a string that cannot be a recovery code is presented for {string}",
+    function* (name: string) {
+      const { numbers, hashes } = yield* World;
+      const person = yield* getPerson(name);
+      const before = yield* Ref.get(hashes);
+      const exit = yield* directExit(
+        Effect.flatMap(SecondFactor.SecondFactor, (second) =>
+          second.verifyRecoveryCode(person.userId, Redacted.make("not-a-code"), "signIn"),
+        ),
+      );
+      assert.equal(failureTag(exit), "InvalidTwoFactorCode");
+      yield* numbers.set("hashesForString", (yield* Ref.get(hashes)) - before);
+      // The control: a well-formed (but wrong) code does reach the hasher, so the counter sees what a real check costs.
+      const control = yield* Ref.get(hashes);
+      yield* directExit(
+        Effect.flatMap(SecondFactor.SecondFactor, (second) =>
+          second.verifyRecoveryCode(person.userId, Redacted.make("ABCDEFGHJK"), "signIn"),
+        ),
+      );
+      yield* numbers.set("hashesForWellFormed", (yield* Ref.get(hashes)) - control);
+    },
+  );
+
+  Then("it is refused and no password hash is computed", function* () {
+    const { numbers } = yield* World;
+    assert.equal(yield* numbers.get("hashesForString"), 0);
+    assert.ok(
+      (yield* numbers.get("hashesForWellFormed")) > 0,
+      "the counting hasher saw no hash at all",
+    );
   });
 
   Given("{string} has enrolled a second factor", function* (name: string) {

@@ -427,16 +427,13 @@ Feature: Two-Factor Authentication
       And "alice" has enrolled a second factor
       Then the status of "alice" reports a second factor with 10 recovery codes remaining
 
-    # @skip: "refused without running a password hash" is an internal-mechanism claim about work not
-    # done; a scenario cannot observe an absent hash computation through the service seam. Covered by
-    # packages/two-factor/test/RecoveryCodes.test.ts "rejects a string that cannot be a code without
-    # a hash being computed"
-    @skip
+    # Observed through a counting PasswordHasher in TwoFactorWorld (AppOptions.countHashes): the port is what a recovery-code check would call.
     @REQ-EA-1065
     Scenario: A string that cannot be a recovery code is refused without a password hash being computed
       Given a registered user "alice" with a verified mailbox
-      When a string that cannot be a recovery code is presented
-      Then no password hash is computed
+      And "alice" has enrolled a second factor
+      When a string that cannot be a recovery code is presented for "alice"
+      Then it is refused and no password hash is computed
 
   # BEH-EA-265 — spec/behaviors/31-two-factor.md; see also RFC 6238 section 5.2
   @BEH-EA-265

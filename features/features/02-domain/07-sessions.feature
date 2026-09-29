@@ -235,14 +235,13 @@ Feature: Sessions
       Then the comparison does not short-circuit on the first mismatched byte
       And the comparison time does not vary based on how many leading bytes matched
 
-    # @skip: an internal-mechanism claim (the operands are fixed-length digests) with no
-    # externally observable outcome; the digests are asserted fixed-length hex in REQ-EA-138
-    @skip
+    # Observed through its consequence: a comparison over raw variable-length secrets would trip on a length mismatch, so any presented length is refused the same way.
     @REQ-EA-159
     Scenario: The comparison operates over fixed-length hashes regardless of the original secret's length or content
-      Given two sessions whose secrets differ in length and content
-      When each token is presented for verification
-      Then the comparison is performed over the fixed-length "SHA-256" digests of both operands, never over the variable-length secrets themselves
+      Given a signed-in user "alice"
+      When secrets of 1, 64 and 4096 characters are presented under "alice"'s session id
+      Then each is refused as unauthenticated, never as a server error
+      And the stored digest keeps its fixed 64-hex length, so the comparison is over digests and never over the presented secrets themselves
 
   # BEH-EA-258 — spec/behaviors/07-sessions.md; see also ADR-EA-021, ADR-EA-012
   @BEH-EA-258
