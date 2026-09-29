@@ -21,6 +21,9 @@
     // here (this config never emits anyway) turns the check off with it.
     "declaration": false,
     "declarationMap": false,
-    "types": ["node"]
+    "types": ["node"],
+    // This one program also holds the browser-facing packages' tests (react `.tsx`, client),
+    // and the DOM `Response.json()`-style typings the wire tests lean on (AH-009).
+    "lib": ["ESNext", "DOM"]
   }
 }

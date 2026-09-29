@@ -35,6 +35,7 @@
 // already can for every other capability this codebase generates
 // randomly.
 
+import type { webcrypto } from "node:crypto";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -172,7 +173,7 @@ export const layer: Layer.Layer<Encryption, never, KeyProvider | Crypto.Crypto> 
     // bytes are unwrapped from `Redacted` once per kid instead of on every
     // call. `currentKey`/`getKey` are still consulted on every operation, so a
     // provider that stops knowing a kid stops decrypting under it at once.
-    const imported = yield* Ref.make(HashMap.empty<string, CryptoKey>());
+    const imported = yield* Ref.make(HashMap.empty<string, webcrypto.CryptoKey>());
     const aesKey = (material: KeyMaterial, usage: "encrypt" | "decrypt") =>
       Effect.gen(function* () {
         const cacheKey = `${usage}:${material.kid}`;

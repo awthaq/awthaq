@@ -43,6 +43,7 @@
 // error) — the spec's own "don't leak which check failed" posture, mirrored
 // from `better-auth/07-session-extensions/03-bearer-and-jwt.md` §B.2.
 
+import type { webcrypto } from "node:crypto";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -123,14 +124,14 @@ export const peekTyp = (token: string): Option.Option<string> => {
 interface AlgorithmSpec {
   /** `kty` a JWK for this algorithm must carry. */
   readonly kty: "OKP" | "EC" | "RSA";
-  readonly importParams: AlgorithmIdentifier | RsaHashedImportParams | EcKeyImportParams;
-  readonly signParams: AlgorithmIdentifier | RsaPssParams | EcdsaParams;
+  readonly importParams: webcrypto.AlgorithmIdentifier | webcrypto.RsaHashedImportParams | webcrypto.EcKeyImportParams;
+  readonly signParams: webcrypto.AlgorithmIdentifier | webcrypto.RsaPssParams | webcrypto.EcdsaParams;
   readonly generateParams: (
     rsaModulusLength: number,
-  ) => AlgorithmIdentifier | RsaHashedKeyGenParams | EcKeyGenParams;
+  ) => webcrypto.AlgorithmIdentifier | webcrypto.RsaHashedKeyGenParams | webcrypto.EcKeyGenParams;
 }
 
-const rsaGenerate = (name: string, rsaModulusLength: number): RsaHashedKeyGenParams => ({
+const rsaGenerate = (name: string, rsaModulusLength: number): webcrypto.RsaHashedKeyGenParams => ({
   name,
   modulusLength: rsaModulusLength,
   publicExponent: new Uint8Array([1, 0, 1]),
