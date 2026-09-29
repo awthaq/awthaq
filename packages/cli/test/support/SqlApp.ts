@@ -6,6 +6,8 @@
 import { Accounts, AuditLog, AuthEvents, Hooks, Migrations, Users } from "@awthaq/core";
 import { Encryption, KeyProvider, PasswordHasher } from "@awthaq/ports";
 import { Roles } from "@awthaq/roles";
+import { BetterAuthScryptVerifier } from "@awthaq/migrate-better-auth";
+import { FirebaseScryptVerifier } from "@awthaq/migrate-firebase";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -44,7 +46,16 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerSql.pipe(
     Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
   ),
-  PasswordHasher.layerArgon2id.pipe(Layer.provide(NodeCrypto.layer)),
+  // The imported better-auth / Firebase hashes verify through their legacy verifiers.
+  PasswordHasher.layerArgon2id.pipe(
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(
+      Layer.succeed(PasswordHasher.LegacyPasswordVerifiers, [
+        BetterAuthScryptVerifier.betterAuthScryptVerifier,
+        FirebaseScryptVerifier.firebaseScryptVerifier,
+      ]),
+    ),
+  ),
 ).pipe(
   Layer.provideMerge(
     AuthEvents.layer.pipe(
@@ -63,12 +74,13 @@ export const sqlApp = (sql: SqlClient.SqlClient) =>
   Roles.Roles.layerSql.pipe(
     Layer.provide(Roles.config([adminRole, editorRole])),
     Layer.provideMerge(CoreLive),
-    Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+    // Exposed as well as provided: `import` keeps its checkpoint ledger on the application's own client.
+    Layer.provideMerge(Layer.succeed(SqlClient.SqlClient, sql)),
   );
 
 /** The same without Roles: there is no administrative role concept to grant. */
 export const sqlAppWithoutRoles = (sql: SqlClient.SqlClient) =>
-  CoreLive.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)));
+  CoreLive.pipe(Layer.provideMerge(Layer.succeed(SqlClient.SqlClient, sql)));
 
 /** Applies core's migrations and the composition's plugin migrations to the current client, as `migration apply --yes` does. */
 export const migrate = Effect.gen(function* () {

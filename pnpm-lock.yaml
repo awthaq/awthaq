@@ -575,6 +575,9 @@ importers:
 
   packages/migrate-firebase:
     dependencies:
+      '@awthaq/core':
+        specifier: workspace:*
+        version: link:../core
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports

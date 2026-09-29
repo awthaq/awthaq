@@ -45,6 +45,7 @@ export * as RateLimits from "./RateLimits.ts";
 export * as SessionCookie from "./SessionCookie.ts";
 export * as Sessions from "./Sessions.ts";
 export * as Slots from "./Slots.ts";
+export * as UserImport from "./UserImport.ts";
 export * as Users from "./Users.ts";
 export * as Verification from "./Verification.ts";
 export * as VerificationLink from "./VerificationLink.ts";

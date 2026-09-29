@@ -14,6 +14,9 @@
 //     openapi [--out <file>]
 //     migration status | apply [--yes] [--dry-run] [--allow-empty]      (--database-url)
 //     seed admin --email <email> [--name] [--role] [--force] [--prompt-password]
+//     import --from <source> --source <export> [--yes] [--dry-run] [--continue-on-error]
+//            [--batch-size] [--report <file>] [--issuer p=i] [--source-option k=v]
+//     login [--token <t>] [--base-url <url>] | logout | whoami                    (AWTHAQ_TOKEN, AWTHAQ_BASE_URL)
 //
 // Every flag decodes through a Schema (BEH-EA-226): the email through the sign-up payload's own
 // Schema, `--database-url` through `Database.DatabaseUrl`, `--format` through a literal union.
@@ -35,12 +38,15 @@ import * as CliConfig from "./Config.ts";
 import * as ConfigList from "./ConfigList.ts";
 import * as Database from "./Database.ts";
 import * as Doctor from "./Doctor.ts";
+import * as Import from "./Import.ts";
 import * as Migration from "./Migration.ts";
 import * as Openapi from "./Openapi.ts";
 import * as Output from "./Output.ts";
 import * as Plugin from "./Plugin.ts";
 import * as Routes from "./Routes.ts";
 import * as Seed from "./Seed.ts";
+import * as Session from "./Session.ts";
+import * as Sources from "./Sources.ts";
 
 export const version = "0.1.0";
 
@@ -299,6 +305,103 @@ const seedCommand = Command.make("seed").pipe(
   Command.withSubcommands([seedAdmin]),
 );
 
+// ---- session commands (BEH-EA-208, class 3): outbound clients of a running server ----------
+
+const loginCommand = Command.make(
+  "login",
+  {
+    token: Flag.Redacted("token").pipe(
+      Flag.withDescription("A session token or service token (prefer AWTHAQ_TOKEN: argv shows in process listings)"),
+      Flag.withFallbackConfig(Config.Redacted("AWTHAQ_TOKEN")),
+      Flag.optional,
+    ),
+    baseUrl: Flag.String("base-url").pipe(
+      Flag.withSchema(Session.BaseUrl),
+      Flag.withDescription("The auth server (or AWTHAQ_BASE_URL)"),
+      Flag.withFallbackConfig(Config.String("AWTHAQ_BASE_URL")),
+      Flag.optional,
+    ),
+  },
+  (args) => withOutput(Session.login({ token: args.token, baseUrl: args.baseUrl })),
+).pipe(
+  Command.withDescription(
+    "Validate a token against the server and store it (OS keychain first, else a 0600 file); the interactive device flow needs the DeviceAuthorization plugin",
+  ),
+);
+
+const logoutCommand = Command.make("logout", {}, () => withOutput(Session.logout)).pipe(
+  Command.withDescription("Clear the stored credential and revoke the session server-side (best effort)"),
+);
+
+const whoamiCommand = Command.make("whoami", {}, () => withOutput(Session.whoami)).pipe(
+  Command.withDescription("Print who the stored credential resolves to (exit 8 when not logged in)"),
+);
+
+const importCommand = Command.make(
+  "import",
+  {
+    from: Flag.Literals("from", Sources.sourceNames).pipe(
+      Flag.withDescription(`The source framework: ${Sources.sourceNames.join(" | ")} (authjs and lucia are registered but not yet validated)`),
+    ),
+    source: Flag.String("source").pipe(
+      Flag.withDescription("The export: sqlite:<path> | postgres://… (better-auth), the users.json path (firebase)"),
+    ),
+    sourceOption: Flag.KeyValuePair("source-option").pipe(
+      Flag.withDescription("Adapter input, key=value (firebase: hash-config=<hash_config.json>)"),
+      Flag.withDefault({}),
+    ),
+    issuer: Flag.KeyValuePair("issuer").pipe(
+      Flag.withDescription("OAuth issuer per provider id, provider=issuer (the value your OAuth provider config sets)"),
+      Flag.withDefault({}),
+    ),
+    yes: Flag.Boolean("yes").pipe(
+      Flag.withDescription("Confirm: without it `import` only prints the plan and writes nothing"),
+      Flag.withDefault(false),
+    ),
+    dryRun: Flag.Boolean("dry-run").pipe(
+      Flag.withDescription("Plan only, even with --yes"),
+      Flag.withDefault(false),
+    ),
+    continueOnError: Flag.Boolean("continue-on-error").pipe(
+      Flag.withDescription("Keep going after a failed (rolled-back) batch"),
+      Flag.withDefault(false),
+    ),
+    batchSize: Flag.Int("batch-size").pipe(
+      Flag.withSchema(Import.BatchSize),
+      Flag.withDescription("Users per transaction (default 100)"),
+      Flag.withDefault(100),
+    ),
+    report: Flag.String("report").pipe(
+      Flag.withDescription("Write the per-row report (unmapped fields, unmappable rows, failures) to this JSON file"),
+      Flag.optional,
+    ),
+  },
+  (args) =>
+    withOutput(
+      load.pipe(
+        Effect.flatMap((config) =>
+          Import.importUsers(config, {
+            from: args.from,
+            source: {
+              location: args.source,
+              options: args.sourceOption,
+              issuers: args.issuer,
+              batchSize: args.batchSize,
+            },
+            yes: args.yes,
+            dryRun: args.dryRun,
+            continueOnError: args.continueOnError,
+            report: Option.getOrUndefined(args.report),
+          }),
+        ),
+      ),
+    ),
+).pipe(
+  Command.withDescription(
+    "Import users from another auth framework through Users/Accounts: plan by default, --yes to write (checkpointed, resumable)",
+  ),
+);
+
 // ---- the tree ---------------------------------------------------------------
 
 export const cli = root.pipe(
@@ -310,6 +413,10 @@ export const cli = root.pipe(
     openapi,
     migrationCommand,
     seedCommand,
+    importCommand,
+    loginCommand,
+    logoutCommand,
+    whoamiCommand,
   ]),
 );
 

@@ -48,6 +48,9 @@ export const DatabaseUrl = Schema.String.pipe(
   ),
 );
 
+/** Decodes a `--database-url` (or a source URL) through `DatabaseUrl`; throws a `SchemaError` on a bad one. */
+export const decodeUrl = Schema.decodeUnknownSync(DatabaseUrl);
+
 /** The OID-2205 codec `packages/sql/README.md` documents: registered on the client the CLI builds, never globally. */
 const regclassTypes = () => {
   const registry = PgTypes.makeRegistry();
@@ -69,10 +72,17 @@ const unavailable = (message: string): Layer.Layer<SqlClient.SqlClient, Database
   Layer.effectContext(Effect.fail(new DatabaseUnavailable({ message })));
 
 /** A `SqlClient` for `url` (already decoded by `DatabaseUrl`); a connection failure is `DatabaseUnavailable`, never the URL. */
-export const layerFor = (url: string): Layer.Layer<SqlClient.SqlClient, DatabaseUnavailable> => {
+export const layerFor = (
+  url: string,
+  options?: { readonly readonly?: boolean | undefined },
+): Layer.Layer<SqlClient.SqlClient, DatabaseUnavailable> => {
   const message = `could not open the ${describeUrl(url)} database`;
   if (isSqlite(url)) {
-    return SqliteClient.layer({ filename: url.slice(SQLITE_PREFIX.length) }).pipe(
+    return SqliteClient.layer({
+      filename: url.slice(SQLITE_PREFIX.length),
+      // A retained source database is only ever read: open it that way (and without WAL sidecars).
+      ...(options?.readonly === true ? { readonly: true, disableWAL: true } : {}),
+    }).pipe(
       Layer.catchCause(() => unavailable(message)),
     );
   }

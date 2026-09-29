@@ -28,15 +28,10 @@ import { PasswordHasher } from "@awthaq/ports";
 import { Roles } from "@awthaq/roles";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import {
-  ApplicationUnavailable,
-  ConfirmationRequired,
-  RolesNotInstalled,
-  UsageError,
-} from "./CliErrors.ts";
+import { requireService, withApplication } from "./Application.ts";
+import { ConfirmationRequired, RolesNotInstalled, UsageError } from "./CliErrors.ts";
 import type { CliConfig } from "./Config.ts";
 import * as Output from "./Output.ts";
 
@@ -62,50 +57,6 @@ export interface SeedResult {
   readonly forced: boolean;
 }
 
-const nameOf = (error: unknown) =>
-  typeof error === "object" && error !== null && "_tag" in error && typeof error._tag === "string"
-    ? error._tag
-    : "an unknown failure";
-
-const requireService = <I, S>(
-  context: Context.Context<never>,
-  key: Context.Key<I, S>,
-  name: string,
-) => {
-  const found = Context.getOption(context, key);
-  return found._tag === "Some"
-    ? Effect.succeed(found.value)
-    : Effect.fail(
-        new ApplicationUnavailable({
-          message: `the application Layer does not provide ${name}, which \`seed admin\` needs`,
-        }),
-      );
-};
-
-/** Builds the application Layer once for the duration of `use`; a build failure is named, never quoted. */
-export const withApplication = <A, E, R>(
-  config: CliConfig,
-  use: (context: Context.Context<never>) => Effect.Effect<A, E, R>,
-) =>
-  Effect.gen(function* () {
-    const app: Layer.Layer<never, unknown> | undefined = config.app;
-    if (app === undefined) {
-      return yield* new ApplicationUnavailable({
-        message:
-          "this command needs the application Layer: export `app` (auth.layer with every port and the SQL client provided) from the configuration module",
-      });
-    }
-    const context = yield* Layer.build(app).pipe(
-      Effect.mapError(
-        (error) =>
-          new ApplicationUnavailable({
-            message: `the application Layer failed to build (${nameOf(error)})`,
-          }),
-      ),
-    );
-    return yield* use(context);
-  }).pipe(Effect.scoped);
-
 /** BEH-EA-206: create or promote one account to the administrative role; refuse over an existing administrator without `--force`. */
 export const seedAdmin = (config: CliConfig, input: SeedInput) =>
   withApplication(config, (context) =>
@@ -122,8 +73,8 @@ export const seedAdmin = (config: CliConfig, input: SeedInput) =>
             "the Roles plugin is not installed: without it there is no administrative role for `seed admin` to grant (BEH-EA-137)",
         });
       }
-      const users = yield* requireService(context, Users.Users, "Users");
-      const events = yield* requireService(context, AuthEvents.AuthEvents, "AuthEvents");
+      const users = yield* requireService(context, Users.Users, "Users", "seed admin");
+      const events = yield* requireService(context, AuthEvents.AuthEvents, "AuthEvents", "seed admin");
 
       const holders = yield* roles.value.holders(input.role);
       if (holders.length > 0 && !input.force) {
@@ -149,8 +100,13 @@ export const seedAdmin = (config: CliConfig, input: SeedInput) =>
       yield* users.verifyEmail(user.id).pipe(Effect.orDie);
 
       if (Option.isSome(input.password)) {
-        const accounts = yield* requireService(context, Accounts.Accounts, "Accounts");
-        const hasher = yield* requireService(context, PasswordHasher.PasswordHasher, "PasswordHasher");
+        const accounts = yield* requireService(context, Accounts.Accounts, "Accounts", "seed admin");
+        const hasher = yield* requireService(
+          context,
+          PasswordHasher.PasswordHasher,
+          "PasswordHasher",
+          "seed admin",
+        );
         const linked = yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id);
         if (Option.isNone(linked)) {
           const hash = yield* hasher.hash(input.password.value);

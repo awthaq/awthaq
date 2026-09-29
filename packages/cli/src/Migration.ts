@@ -81,18 +81,32 @@ const hasDrift = (report: LedgerReport) => report.unknown.length > 0 || report.o
 const sqlFailure = () =>
   new DatabaseUnavailable({ message: "the database did not answer a ledger query" });
 
+/** Whether `table` exists on the current client (dialect-aware); `status` and `import` read, never create. */
+export const tableExists = Effect.fnUntraced(function* (table: string) {
+  const sql = yield* SqlClient.SqlClient;
+  const found = yield* sql
+    .onDialectOrElse({
+      pg: () =>
+        sql<{
+          readonly n: number;
+        }>`SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ${table}`,
+      orElse: () =>
+        sql<{
+          readonly n: number;
+        }>`SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ${table}`,
+    })
+    .pipe(Effect.mapError(sqlFailure));
+  return Number(found[0]?.n ?? 0) > 0;
+});
+
 /** A ledger table that has never been created is an empty ledger; `status` must not create it. */
 const readLedger = Effect.fnUntraced(function* (table: string) {
   const sql = yield* SqlClient.SqlClient;
-  const exists = yield* sql.onDialectOrElse({
-    pg: () =>
-      sql<{ readonly n: number }>`SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ${table}`,
-    orElse: () =>
-      sql<{ readonly n: number }>`SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ${table}`,
-  }).pipe(Effect.mapError(sqlFailure));
-  if ((exists[0]?.n ?? 0) === 0) return [];
-  const rows = yield* sql<{ readonly migration_id: number; readonly name: string }>`
-    SELECT migration_id, name FROM ${sql(table)} ORDER BY migration_id ASC`.pipe(
+  if (!(yield* tableExists(table))) return [];
+  const rows = yield* sql<{
+    readonly migration_id: number;
+    readonly name: string;
+  }>`SELECT migration_id, name FROM ${sql(table)} ORDER BY migration_id ASC`.pipe(
     Effect.mapError(sqlFailure),
   );
   return rows.map((row): Entry => ({ id: Number(row.migration_id), name: row.name }));

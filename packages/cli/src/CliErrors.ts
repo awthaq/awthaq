@@ -118,6 +118,30 @@ export class DatabaseUnavailable extends Data.TaggedError("DatabaseUnavailable")
   override readonly [Runtime.errorReported] = false;
 }
 
+/** BEH-EA-227: the auth server could not be reached (or answered something that is not the contract). */
+export class ServerUnavailable extends Data.TaggedError("ServerUnavailable")<{
+  readonly message: string;
+}> {
+  override readonly [Runtime.errorExitCode] = ExitCode.unavailable;
+  override readonly [Runtime.errorReported] = false;
+}
+
+/** BEH-EA-227: interactive `login` needs the DeviceAuthorization plugin, which does not exist yet; `login --token` is the path. */
+export class DeviceAuthorizationUnavailable extends Data.TaggedError("DeviceAuthorizationUnavailable")<{
+  readonly message: string;
+}> {
+  override readonly [Runtime.errorExitCode] = ExitCode.unavailable;
+  override readonly [Runtime.errorReported] = false;
+}
+
+/** BEH-EA-207: the import source (a database, an export file) could not be opened or read. */
+export class SourceUnavailable extends Data.TaggedError("SourceUnavailable")<{
+  readonly message: string;
+}> {
+  override readonly [Runtime.errorExitCode] = ExitCode.unavailable;
+  override readonly [Runtime.errorReported] = false;
+}
+
 /** BEH-EA-206: there is no administrative role concept without the Roles plugin installed. */
 export class RolesNotInstalled extends Data.TaggedError("RolesNotInstalled")<{
   readonly message: string;
@@ -161,6 +185,9 @@ export type CliError =
   | ConfigUnavailable
   | DatabaseUnavailable
   | RolesNotInstalled
+  | SourceUnavailable
+  | ServerUnavailable
+  | DeviceAuthorizationUnavailable
   | LinkProblem
   | ApplicationUnavailable;
 
@@ -177,6 +204,9 @@ const cliTags: ReadonlySet<string> = new Set([
   "ConfigUnavailable",
   "DatabaseUnavailable",
   "RolesNotInstalled",
+  "SourceUnavailable",
+  "ServerUnavailable",
+  "DeviceAuthorizationUnavailable",
   "LinkProblem",
   "ApplicationUnavailable",
 ]);

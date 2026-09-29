@@ -1,0 +1,43 @@
+{
+  "users": [
+    {
+      "localId": "fb-user-1",
+      "email": "user1@example.com",
+      "emailVerified": true,
+      "displayName": "User One",
+      "photoUrl": "https://example.com/u1.png",
+      "passwordHash": "lSrfV15cpx95/sZS2W9c9Kp6i/LVgQNDNC/qzrCnh1SAyZvqmZqAjTdn3aoItz+VHjoZilo78198JAdRuid5lQ==",
+      "salt": "42xEC+ixf3L2lw==",
+      "createdAt": "1700000000000",
+      "lastSignedInAt": "1710000000000",
+      "providerUserInfo": [
+        { "providerId": "password", "email": "user1@example.com", "rawId": "user1@example.com", "federatedId": "user1@example.com" }
+      ]
+    },
+    {
+      "localId": "fb-user-2",
+      "email": "google-user@example.com",
+      "emailVerified": true,
+      "displayName": "Google User",
+      "createdAt": "1700000000001",
+      "providerUserInfo": [
+        { "providerId": "google.com", "rawId": "112233445566778899", "email": "google-user@example.com", "federatedId": "112233445566778899" },
+        { "providerId": "phone", "rawId": "+15555550100" }
+      ],
+      "phoneNumber": "+15555550100"
+    },
+    {
+      "localId": "fb-user-3",
+      "emailVerified": false,
+      "providerUserInfo": [{ "providerId": "phone", "rawId": "+15555550101" }],
+      "phoneNumber": "+15555550101"
+    },
+    {
+      "localId": "fb-user-4",
+      "email": "disabled@example.com",
+      "emailVerified": true,
+      "disabled": true,
+      "providerUserInfo": []
+    }
+  ]
+}
