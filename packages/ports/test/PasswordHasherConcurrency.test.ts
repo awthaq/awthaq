@@ -12,6 +12,9 @@ import * as Ref from "effect/Ref";
 import { argon2id, scrypt } from "hash-wasm";
 import * as PasswordHasher from "../src/PasswordHasher.ts";
 
+// TTE-005: a bare string is not a stored hash; these tests mint the ones they hand the hasher.
+const mint = PasswordHasher.PhcHash;
+
 const withEnv = (env: Record<string, string>) =>
   Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })));
 
@@ -43,7 +46,7 @@ describe("calling-thread hashers bound their concurrency (ERS-001)", () => {
       return yield* Effect.gen(function* () {
         const hasher = yield* PasswordHasher.PasswordHasher;
         const fibers = yield* Effect.forEach([1, 2, 3], () =>
-          Effect.forkChild(hasher.verify(Redacted.make("pw"), "$probe$x"), {
+          Effect.forkChild(hasher.verify(Redacted.make("pw"), mint("$probe$x")), {
             startImmediately: true,
           }),
         );
@@ -121,8 +124,8 @@ describe("hand-encoded PHC output matches hash-wasm's own encoding", () => {
           }),
         );
         const hasher = yield* PasswordHasher.PasswordHasher;
-        assert.isTrue(yield* hasher.verify(Redacted.make("pw"), encoded));
-        assert.isFalse(hasher.needsRehash(encoded));
+        assert.isTrue(yield* hasher.verify(Redacted.make("pw"), mint(encoded)));
+        assert.isFalse(hasher.needsRehash(mint(encoded)));
       }).pipe(Effect.provide(PasswordHasher.layerArgon2id.pipe(Layer.provide(NodeCrypto.layer)))),
   );
 

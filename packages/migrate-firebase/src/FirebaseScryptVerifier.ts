@@ -69,8 +69,11 @@ export const encodeHash = (input: {
   readonly passwordHash: string;
   readonly salt: string;
   readonly config: FirebaseHashConfig;
-}): string =>
-  `$firebase-scrypt$k=${input.config.signerKey},ss=${input.config.saltSeparator},r=${input.config.rounds},mc=${input.config.memCost}$${input.salt}$${input.passwordHash}`;
+}): PasswordHasher.PhcHash =>
+  // TTE-005: the import trust boundary — this is where the credential is minted.
+  PasswordHasher.PhcHash(
+    `$firebase-scrypt$k=${input.config.signerKey},ss=${input.config.saltSeparator},r=${input.config.rounds},mc=${input.config.memCost}$${input.salt}$${input.passwordHash}`,
+  );
 
 const decode = (value: string | undefined): Uint8Array | undefined => {
   if (value === undefined) return undefined;

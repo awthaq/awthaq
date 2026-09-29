@@ -1360,7 +1360,7 @@ describe("Password signIn timing floor (TSS-006)", () => {
   const InstantHasher = Layer.succeed(
     PasswordHasher.PasswordHasher,
     PasswordHasher.PasswordHasher.of({
-      hash: () => Effect.succeed("instant-hash"),
+      hash: () => Effect.succeed(PasswordHasher.PhcHash("instant-hash")),
       verify: () => Effect.succeed(false),
       needsRehash: () => false,
     }),

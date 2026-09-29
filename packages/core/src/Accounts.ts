@@ -7,6 +7,7 @@
 // same deferral `Migrations.ts` documents for the persistence stratum
 // generally.
 
+import { PasswordHasher } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -126,7 +127,7 @@ export interface AccountsShape {
     readonly subject: string;
     /** BEH-EA-125: omitted for a non-federated provider (`password`); see `AccountRecord.issuer`. */
     readonly issuer?: string;
-    readonly credentialHash?: Redacted.Redacted<string>;
+    readonly credentialHash?: Redacted.Redacted<PasswordHasher.PhcHash>;
     readonly tokens?: ProviderTokenSet;
   }) => Effect.Effect<AccountRecord, AccountAlreadyLinked | PlatformError.PlatformError>;
   readonly findByProviderSubject: (
@@ -147,11 +148,11 @@ export interface AccountsShape {
   /** BEH-EA-044: reads back a credential hash `link` stored, if any. */
   readonly findCredentialHash: (
     id: AccountId,
-  ) => Effect.Effect<Option.Option<Redacted.Redacted<string>>, AccountNotFound>;
+  ) => Effect.Effect<Option.Option<Redacted.Redacted<PasswordHasher.PhcHash>>, AccountNotFound>;
   /** BEH-EA-116: rehash-on-login writes a fresh hash for the same row. */
   readonly updateCredentialHash: (
     id: AccountId,
-    hash: Redacted.Redacted<string>,
+    hash: Redacted.Redacted<PasswordHasher.PhcHash>,
   ) => Effect.Effect<void, AccountNotFound>;
   /**
    * BE-002: reads back the token set `link`'s own `tokens` stored, if any
@@ -190,7 +191,7 @@ interface State {
   readonly byId: HashMap.HashMap<AccountId, AccountRecord>;
   readonly byProviderSubject: HashMap.HashMap<string, AccountId>;
   /** Kept out of `AccountRecord` itself — see `AccountsShape.link`'s own comment. */
-  readonly credentialHashes: HashMap.HashMap<AccountId, Redacted.Redacted<string>>;
+  readonly credentialHashes: HashMap.HashMap<AccountId, Redacted.Redacted<PasswordHasher.PhcHash>>;
   /** BE-002: same reasoning as `credentialHashes`, for a federated provider's token pair. */
   readonly providerTokens: HashMap.HashMap<AccountId, ProviderTokenSet>;
 }
@@ -592,7 +593,13 @@ export const layerSql: Layer.Layer<
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
-        Effect.map((row) => Option.fromNullOr(row.passwordHash).pipe(Option.map(Redacted.make))),
+        // TTE-005: the trust boundary — a stored column is a `PhcHash` by
+        // construction, since only `Accounts.link`/`updateCredentialHash` write it.
+        Effect.map((row) =>
+          Option.fromNullOr(row.passwordHash).pipe(
+            Option.map((stored) => Redacted.make(PasswordHasher.PhcHash(stored))),
+          ),
+        ),
       );
 
     // SMS-002: a targeted `UPDATE ... SET "passwordHash"` — it neither reads

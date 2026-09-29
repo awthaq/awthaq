@@ -896,7 +896,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
             });
             const hashOpt = yield* Option.match(accountOpt, {
-              onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
+              onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
               onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
             });
             // BEH-EA-114: this call happens on every attempt, real or not —
@@ -1211,7 +1211,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           input.userId,
         );
         const hashOpt = yield* Option.match(accountOpt, {
-          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
+          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
           onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
         });
         // Same uniform-cost shape as `signIn`'s own `dummyHash` check —
@@ -1275,7 +1275,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           input.userId,
         );
         const hashOpt = yield* Option.match(accountOpt, {
-          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<string>>()),
+          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
           onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
         });
         // Same uniform-cost shape as `changePassword`'s own `dummyHash`

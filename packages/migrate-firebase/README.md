@@ -45,6 +45,10 @@ const credentialHash = FirebaseScryptVerifier.encodeHash({
 // "$firebase-scrypt$k=...,ss=...,r=8,mc=14$<salt>$<hash>" — self-describing.
 ```
 
+A stored hash is the branded `PasswordHasher.PhcHash`; `encodeHash` returns one
+(it is the import's trust boundary), so link it directly:
+`Accounts.link({ ..., credentialHash: Redacted.make(credentialHash) })`.
+
 Carry `emailVerified` across (`Users.verifyEmail` for the users Firebase had
 verified). `@awthaq/password` refuses to sign in an unverified account by
 default; if part of your population was never verified in Firebase, set

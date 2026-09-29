@@ -8,6 +8,9 @@ import * as Redacted from "effect/Redacted";
 import { scryptSync } from "node:crypto";
 import * as BetterAuthScryptVerifier from "../src/BetterAuthScryptVerifier.ts";
 
+// TTE-005: a bare string is not a stored hash; these tests mint the ones they hand the hasher.
+const mint = PasswordHasher.PhcHash;
+
 // Produced by better-auth's own recipe (NFKC password, the hex salt string as the
 // salt, N=16384 r=16 p=1, 64-byte key), via node:crypto rather than hash-wasm so the
 // verifier is checked against an independent implementation.
@@ -29,18 +32,18 @@ describe("BetterAuthScryptVerifier", () => {
   });
 
   it("recognizes a better-auth hash but not argon2id, scrypt or bcrypt strings", () => {
-    assert.isTrue(verifier.recognizes(FIXTURE));
-    assert.isFalse(verifier.recognizes("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"));
-    assert.isFalse(verifier.recognizes("$scrypt$ln=17,r=8,p=1$c2FsdA==$deadbeef"));
-    assert.isFalse(verifier.recognizes("$2b$10$abcdefghijklmnopqrstuv"));
-    assert.isFalse(verifier.recognizes(`${SALT}:short`));
-    assert.isFalse(verifier.recognizes(""));
+    assert.isTrue(verifier.recognizes(mint(FIXTURE)));
+    assert.isFalse(verifier.recognizes(mint("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA")));
+    assert.isFalse(verifier.recognizes(mint("$scrypt$ln=17,r=8,p=1$c2FsdA==$deadbeef")));
+    assert.isFalse(verifier.recognizes(mint("$2b$10$abcdefghijklmnopqrstuv")));
+    assert.isFalse(verifier.recognizes(mint(`${SALT}:short`)));
+    assert.isFalse(verifier.recognizes(mint("")));
   });
 
   it.effect("verifies the right password, rejects the wrong one", () =>
     Effect.gen(function* () {
-      assert.isTrue(yield* verifier.verify(Redacted.make("ExistingUser123!"), FIXTURE));
-      assert.isFalse(yield* verifier.verify(Redacted.make("existinguser123!"), FIXTURE));
+      assert.isTrue(yield* verifier.verify(Redacted.make("ExistingUser123!"), mint(FIXTURE)));
+      assert.isFalse(yield* verifier.verify(Redacted.make("existinguser123!"), mint(FIXTURE)));
     }),
   );
 
@@ -48,7 +51,7 @@ describe("BetterAuthScryptVerifier", () => {
     Effect.gen(function* () {
       // "pässwörd" written with combining marks normalizes to the precomposed form the fixture used.
       const decomposed = "pässwörd";
-      assert.isTrue(yield* verifier.verify(Redacted.make(decomposed), UNICODE_FIXTURE));
+      assert.isTrue(yield* verifier.verify(Redacted.make(decomposed), mint(UNICODE_FIXTURE)));
     }),
   );
 
@@ -57,9 +60,9 @@ describe("BetterAuthScryptVerifier", () => {
     () =>
       Effect.gen(function* () {
         const hasher = yield* PasswordHasher.PasswordHasher;
-        assert.isTrue(yield* hasher.verify(Redacted.make("ExistingUser123!"), FIXTURE));
-        assert.isFalse(yield* hasher.verify(Redacted.make("wrong"), FIXTURE));
-        assert.isTrue(hasher.needsRehash(FIXTURE));
+        assert.isTrue(yield* hasher.verify(Redacted.make("ExistingUser123!"), mint(FIXTURE)));
+        assert.isFalse(yield* hasher.verify(Redacted.make("wrong"), mint(FIXTURE)));
+        assert.isTrue(hasher.needsRehash(mint(FIXTURE)));
         const native = yield* hasher.hash(Redacted.make("native-password"));
         assert.isTrue(yield* hasher.verify(Redacted.make("native-password"), native));
         assert.isFalse(hasher.needsRehash(native));

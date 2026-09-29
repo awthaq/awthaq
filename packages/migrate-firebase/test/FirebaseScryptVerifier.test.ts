@@ -7,6 +7,9 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as FirebaseScryptVerifier from "../src/FirebaseScryptVerifier.ts";
 
+// TTE-005: a bare string is not a stored hash; these tests mint the ones they hand the hasher.
+const mint = PasswordHasher.PhcHash;
+
 // The published test vector from github.com/firebase/scrypt (and the
 // `firebase-scrypt` npm package's README): password, per-user salt, project
 // hash_config, and the hash Firebase produces for them.
@@ -26,22 +29,22 @@ const verifier = FirebaseScryptVerifier.firebaseScryptVerifier;
 
 describe("FirebaseScryptVerifier", () => {
   it("recognizes only its own tag", () => {
-    assert.isTrue(verifier.recognizes(stored));
-    assert.isFalse(verifier.recognizes("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"));
-    assert.isFalse(verifier.recognizes("$2b$10$abcdefghijklmnopqrstuv"));
-    assert.isFalse(verifier.recognizes("$scrypt$ln=17,r=8,p=1$c2FsdA==$deadbeef"));
+    assert.isTrue(verifier.recognizes(mint(stored)));
+    assert.isFalse(verifier.recognizes(mint("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA")));
+    assert.isFalse(verifier.recognizes(mint("$2b$10$abcdefghijklmnopqrstuv")));
+    assert.isFalse(verifier.recognizes(mint("$scrypt$ln=17,r=8,p=1$c2FsdA==$deadbeef")));
   });
 
   it.effect("verifies the published firebase/scrypt test vector", () =>
     Effect.gen(function* () {
-      assert.isTrue(yield* verifier.verify(Redacted.make("user1password"), stored));
+      assert.isTrue(yield* verifier.verify(Redacted.make("user1password"), mint(stored)));
     }),
   );
 
   it.effect("a wrong password is false", () =>
     Effect.gen(function* () {
-      assert.isFalse(yield* verifier.verify(Redacted.make("user1passwore"), stored));
-      assert.isFalse(yield* verifier.verify(Redacted.make(""), stored));
+      assert.isFalse(yield* verifier.verify(Redacted.make("user1passwore"), mint(stored)));
+      assert.isFalse(yield* verifier.verify(Redacted.make(""), mint(stored)));
     }),
   );
 
@@ -52,13 +55,13 @@ describe("FirebaseScryptVerifier", () => {
       const started = Date.now();
       // mc=30 would need 2^30 * r * 128 bytes; r=999 likewise. Both must return at once.
       assert.isFalse(
-        yield* verifier.verify(Redacted.make("user1password"), hostile({ memCost: 30 })),
+        yield* verifier.verify(Redacted.make("user1password"), mint(hostile({ memCost: 30 }))),
       );
       assert.isFalse(
-        yield* verifier.verify(Redacted.make("user1password"), hostile({ rounds: 999 })),
+        yield* verifier.verify(Redacted.make("user1password"), mint(hostile({ rounds: 999 }))),
       );
       assert.isFalse(
-        yield* verifier.verify(Redacted.make("user1password"), hostile({ memCost: 0 })),
+        yield* verifier.verify(Redacted.make("user1password"), mint(hostile({ memCost: 0 }))),
       );
       assert.isBelow(Date.now() - started, 500);
     }),
@@ -72,7 +75,7 @@ describe("FirebaseScryptVerifier", () => {
         `${stored}$extra`,
         stored.replace("mc=14", "mc=abc"),
       ]) {
-        assert.isFalse(yield* verifier.verify(Redacted.make("user1password"), bad), bad);
+        assert.isFalse(yield* verifier.verify(Redacted.make("user1password"), mint(bad)), bad);
       }
     }),
   );
@@ -82,9 +85,9 @@ describe("FirebaseScryptVerifier", () => {
     () =>
       Effect.gen(function* () {
         const hasher = yield* PasswordHasher.PasswordHasher;
-        assert.isTrue(yield* hasher.verify(Redacted.make("user1password"), stored));
-        assert.isFalse(yield* hasher.verify(Redacted.make("nope"), stored));
-        assert.isTrue(hasher.needsRehash(stored));
+        assert.isTrue(yield* hasher.verify(Redacted.make("user1password"), mint(stored)));
+        assert.isFalse(yield* hasher.verify(Redacted.make("nope"), mint(stored)));
+        assert.isTrue(hasher.needsRehash(mint(stored)));
         const native = yield* hasher.hash(Redacted.make("native-password"));
         assert.isTrue(yield* hasher.verify(Redacted.make("native-password"), native));
         assert.isFalse(hasher.needsRehash(native));

@@ -12,6 +12,7 @@
 // that otherwise only added columns: a hand-rolled fixture has no way to
 // pick up a new migration.
 import { Encryption, KeyProvider } from "@awthaq/ports";
+import { PasswordHasher } from "@awthaq/ports";
 import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
@@ -132,7 +133,7 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
           userId,
           providerId: Accounts.PASSWORD_PROVIDER_ID,
           subject: userId,
-          credentialHash: Redacted.make("phc-encoded-hash"),
+          credentialHash: Redacted.make(PasswordHasher.PhcHash("phc-encoded-hash")),
         });
         assert.isFalse("credentialHash" in account);
         const stored = yield* accounts.findCredentialHash(account.id);
@@ -157,9 +158,9 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
           userId,
           providerId: Accounts.PASSWORD_PROVIDER_ID,
           subject: userId,
-          credentialHash: Redacted.make("old-hash"),
+          credentialHash: Redacted.make(PasswordHasher.PhcHash("old-hash")),
         });
-        yield* accounts.updateCredentialHash(account.id, Redacted.make("new-hash"));
+        yield* accounts.updateCredentialHash(account.id, Redacted.make(PasswordHasher.PhcHash("new-hash")));
         const stored = yield* accounts.findCredentialHash(account.id);
         assert.strictEqual(Redacted.value(Option.getOrThrow(stored)), "new-hash");
       }).pipe(Effect.provide(layer)),
@@ -226,7 +227,7 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
         const findFailure = yield* accounts.findCredentialHash(unknown).pipe(Effect.flip);
         assert.strictEqual(findFailure._tag, "AccountNotFound");
         const updateFailure = yield* accounts
-          .updateCredentialHash(unknown, Redacted.make("x"))
+          .updateCredentialHash(unknown, Redacted.make(PasswordHasher.PhcHash("x")))
           .pipe(Effect.flip);
         assert.strictEqual(updateFailure._tag, "AccountNotFound");
       }).pipe(Effect.provide(layer)),
@@ -333,7 +334,7 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
             userId,
             providerId: "google",
             subject: "sub-tokens-4",
-            credentialHash: Redacted.make("hash-1"),
+            credentialHash: Redacted.make(PasswordHasher.PhcHash("hash-1")),
             tokens: {
               accessToken: Redacted.make("access-stays"),
               refreshToken: Option.some(Redacted.make("refresh-stays")),
@@ -343,7 +344,7 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
               tokenType: Option.some("stays-type"),
             },
           });
-          yield* accounts.updateCredentialHash(account.id, Redacted.make("hash-2"));
+          yield* accounts.updateCredentialHash(account.id, Redacted.make(PasswordHasher.PhcHash("hash-2")));
           const stored = yield* accounts.findProviderTokens(account.id);
           const tokens = Option.getOrThrow(stored);
           assert.strictEqual(Redacted.value(tokens.accessToken), "access-stays");
@@ -373,7 +374,7 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
             userId,
             providerId: Accounts.PASSWORD_PROVIDER_ID,
             subject: userId,
-            credentialHash: Redacted.make("hash-stays"),
+            credentialHash: Redacted.make(PasswordHasher.PhcHash("hash-stays")),
           });
           yield* accounts.updateProviderTokens(account.id, {
             accessToken: Redacted.make("access-1"),

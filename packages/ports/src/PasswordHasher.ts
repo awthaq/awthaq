@@ -8,6 +8,8 @@
 //     hash(plain: Redacted.Redacted<string>): Effect.Effect<string>            // PHC string
 //     verify(plain: Redacted.Redacted<string>, phc: string): Effect.Effect<boolean>
 //     needsRehash(phc: string): boolean
+//
+// (TTE-005: `phc` is now the branded `PhcHash` rather than a bare string.)
 //   }>()("awthaq/ports/PasswordHasher") { ... }
 //
 // No BEH-EA range is allocated for the Ports stratum yet
@@ -100,6 +102,7 @@
 // existing `needsRehash`/`rehashOnLogin` path, unchanged by this), never
 // something re-adopted as a standing target.
 
+import * as Brand from "effect/Brand";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -128,10 +131,22 @@ const requireCeiling = (name: string, ceiling: number, targetName: string, targe
         new Error(`awthaq: ${name} (${ceiling}) is below the configured ${targetName} (${target})`),
       );
 
+/**
+ * TTE-005: a stored password hash — a PHC-style string (or, for an imported
+ * account, a foreign format a `LegacyPasswordVerifier` recognizes) that
+ * `PasswordHasher` produced or an import minted. Branded so an arbitrary string
+ * (a plaintext password, an email, a token) cannot be passed to `verify` or
+ * `needsRehash`, or stored as a credential, without an explicit mint. The only
+ * places that mint one are trust boundaries: the hasher's own `hash`, a
+ * repository reading a stored column, and a migration import.
+ */
+export type PhcHash = string & Brand.Brand<"PhcHash">;
+export const PhcHash = Brand.nominal<PhcHash>();
+
 export interface PasswordHasherShape {
-  readonly hash: (plain: Redacted.Redacted<string>) => Effect.Effect<string>;
-  readonly verify: (plain: Redacted.Redacted<string>, phc: string) => Effect.Effect<boolean>;
-  readonly needsRehash: (phc: string) => boolean;
+  readonly hash: (plain: Redacted.Redacted<string>) => Effect.Effect<PhcHash>;
+  readonly verify: (plain: Redacted.Redacted<string>, phc: PhcHash) => Effect.Effect<boolean>;
+  readonly needsRehash: (phc: PhcHash) => boolean;
 }
 
 export class PasswordHasher extends Context.Service<PasswordHasher, PasswordHasherShape>()(
@@ -148,8 +163,8 @@ export class PasswordHasher extends Context.Service<PasswordHasher, PasswordHash
 export interface LegacyPasswordVerifierShape {
   /** e.g. "bcrypt", "firebase-scrypt" — observability only. */
   readonly id: string;
-  readonly recognizes: (phc: string) => boolean;
-  readonly verify: (plain: Redacted.Redacted<string>, phc: string) => Effect.Effect<boolean>;
+  readonly recognizes: (phc: PhcHash) => boolean;
+  readonly verify: (plain: Redacted.Redacted<string>, phc: PhcHash) => Effect.Effect<boolean>;
 }
 
 /**
@@ -365,7 +380,9 @@ export const makeArgon2id = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
           memorySize,
           hashLength: HASH_LENGTH,
         });
-        return `$argon2id$v=19$m=${memorySize},t=${iterations},p=${parallelism}$${encodeUnpaddedBase64(salt)}$${encodeUnpaddedBase64(digest)}`;
+        return PhcHash(
+          `$argon2id$v=19$m=${memorySize},t=${iterations},p=${parallelism}$${encodeUnpaddedBase64(salt)}$${encodeUnpaddedBase64(digest)}`,
+        );
       }).pipe(Effect.orDie);
 
     const verify: PasswordHasherShape["verify"] = (plain, phc) => {
@@ -487,7 +504,9 @@ export const makeScrypt = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
     const costFactor = 2 ** costLog2;
     const rehashPolicy = yield* rehashPolicyConfig;
     const maxCostLog2 = yield* Config.Int("AUTH_SCRYPT_MAX_COST_LOG2").pipe(Config.withDefault(20));
-    const maxBlockSize = yield* Config.Int("AUTH_SCRYPT_MAX_BLOCK_SIZE").pipe(Config.withDefault(32));
+    const maxBlockSize = yield* Config.Int("AUTH_SCRYPT_MAX_BLOCK_SIZE").pipe(
+      Config.withDefault(32),
+    );
     const maxParallelism = yield* Config.Int("AUTH_SCRYPT_MAX_PARALLELISM").pipe(
       Config.withDefault(16),
     );
@@ -527,7 +546,9 @@ export const makeScrypt = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
           parallelism,
           hashLength: HASH_LENGTH,
         });
-        return `$scrypt$ln=${costLog2},r=${blockSize},p=${parallelism}$${Encoding.encodeBase64(salt)}$${toHex(digest)}`;
+        return PhcHash(
+          `$scrypt$ln=${costLog2},r=${blockSize},p=${parallelism}$${Encoding.encodeBase64(salt)}$${toHex(digest)}`,
+        );
       }).pipe(Effect.orDie);
 
     const verify: PasswordHasherShape["verify"] = (plain, phc) => {
