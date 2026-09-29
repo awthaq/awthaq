@@ -1629,7 +1629,7 @@ const organizationMigrations: Migrations.Migrations = [
             "createdAt" TEXT NOT NULL,
             "updatedAt" TEXT NOT NULL
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
       yield* sql`CREATE INDEX organization_oauth_connection_organization_id ON organization_oauth_connection("organizationId")`;
       yield* sql`
@@ -1649,7 +1649,7 @@ const organizationMigrations: Migrations.Migrations = [
       yield* sql.onDialectOrElse({
         pg: () => sql`ALTER TABLE organization_org ADD COLUMN "suspendedAt" TIMESTAMPTZ`,
         sqlite: () => sql`ALTER TABLE organization_org ADD COLUMN "suspendedAt" TEXT`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
     }),
   },

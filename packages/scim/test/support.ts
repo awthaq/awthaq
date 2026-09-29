@@ -24,12 +24,13 @@ import * as ScimApi from "../src/ScimApi.ts";
 import * as ScimConnections from "../src/ScimConnections.ts";
 import * as ScimRecords from "../src/ScimRecords.ts";
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+const CoreLive = (users: typeof Users.layerMemory) =>
+  Layer.mergeAll(Sessions.layerMemory, users).pipe(
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(Hooks.HooksLive),
+    Layer.provideMerge(NodeCrypto.layer),
+  );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
@@ -61,6 +62,7 @@ const OrganizationLive = (options: Partial<Organization.OrganizationConfigShape>
 export const ScimLive = (
   scimConfig: Partial<Scim.ScimConfigShape> = {},
   organizationConfig: Partial<Organization.OrganizationConfigShape> = {},
+  users: typeof Users.layerMemory = Users.layerMemory,
 ) =>
   Scim.Scim.layer.pipe(
     Layer.provide(Scim.config(scimConfig)),
@@ -68,7 +70,7 @@ export const ScimLive = (
     Layer.provideMerge(ScimConnections.layerStore),
     Layer.provideMerge(OrganizationLive(organizationConfig)),
     Layer.provideMerge(ScimRecords.layerMemory),
-    Layer.provideMerge(CoreLive),
+    Layer.provideMerge(CoreLive(users)),
     Layer.provideMerge(OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(ActiveContextRecords.layerMemory),

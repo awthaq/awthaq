@@ -553,7 +553,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           yield* sql`ALTER TABLE verification_reservations ADD COLUMN tenantId TEXT`;
           yield* sql`ALTER TABLE auth_audit_log ADD COLUMN tenantId TEXT`;
         }),
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // DRS-001/DRS-005: a tenant-routed read prunes on `("tenantId", "userId")` for
@@ -581,7 +581,7 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
           yield* sql`CREATE INDEX IF NOT EXISTS verification_reservations_tenant_id ON verification_reservations(tenantId)`;
           yield* sql`CREATE INDEX IF NOT EXISTS auth_audit_log_tenant_id ON auth_audit_log(tenantId)`;
         }),
-      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
   // ALF-010: `AuditLog.list`'s `occurredAfter`/`occurredBefore` range and the

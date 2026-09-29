@@ -3,7 +3,7 @@
 // discovery documents — through `HttpRouter.toWebHandler`, the way a directory
 // service's HTTP client would reach the plugin.
 import { AuthHttp } from "@awthaq/server";
-import { Sessions, Users } from "@awthaq/core";
+import { Errors, Sessions, Users } from "@awthaq/core";
 import { Organization, OrganizationRecords } from "@awthaq/organization";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -27,9 +27,13 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
 
-const buildApp = (scimConfig: Partial<Scim.ScimConfigShape> = {}) => {
+const buildApp = (
+  scimConfig: Partial<Scim.ScimConfigShape> = {},
+  users: typeof Users.layerMemory = Users.layerMemory,
+) => {
+  const Live = ScimLive(scimConfig, {}, users);
   const AppLayer = AuthHttp.routes(ScimApi.ScimApi).pipe(
-    Layer.provide(ScimLive(scimConfig)),
+    Layer.provide(Live),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
   );
@@ -53,7 +57,7 @@ const buildApp = (scimConfig: Partial<Scim.ScimConfigShape> = {}) => {
       Effect.scoped(
         Effect.gen(function* () {
           const scope = yield* Effect.scope;
-          const context = yield* Layer.buildWithMemoMap(ScimLive(scimConfig), memoMap, scope);
+          const context = yield* Layer.buildWithMemoMap(Live, memoMap, scope);
           return yield* effect.pipe(Effect.provide(context));
         }),
       ),
@@ -333,6 +337,40 @@ describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
         call(handler, "DELETE", `/scim/v2/Groups/${id}`, { token }),
       );
       assert.strictEqual(deleted.status, 204);
+    }),
+  );
+});
+
+/** The real in-memory `Users`, except that reading by email reports an outage. */
+const UsersDownOnLookup: typeof Users.layerMemory = Layer.effect(
+  Users.Users,
+  Effect.gen(function* () {
+    const real = yield* Users.Users;
+    return Users.Users.of({
+      ...real,
+      findByEmail: () => Effect.fail(new Errors.StoreUnavailable({ operation: "Users.findByEmail" })),
+    });
+  }),
+).pipe(Layer.provide(Users.layerMemory));
+
+describe("SCIM over HTTP: a store outage (ADR-EA-028)", () => {
+  it.effect("is a 503 with the RFC 7644 error body and none of the internal error's detail", () =>
+    Effect.gen(function* () {
+      const { handler, inside } = buildApp({}, UsersDownOnLookup);
+      const seeded = yield* Effect.promise(() => inside(seedConnection()));
+      const response = yield* Effect.promise(() =>
+        call(handler, "POST", "/scim/v2/Users", {
+          token: seeded.token,
+          body: { userName: "ada@acme.example", emails: [{ value: "ada@acme.example", primary: true }] },
+        }),
+      );
+      assert.strictEqual(response.status, 503);
+      const body = yield* Effect.promise(() => json(response));
+      assert.strictEqual(body["status"], "503");
+      assert.deepStrictEqual(body["schemas"], [ScimApi.ERROR_SCHEMA]);
+      assert.strictEqual(body["_tag"], "ScimUnavailable");
+      assert.notInclude(JSON.stringify(body), "Users.findByEmail");
+      assert.notInclude(JSON.stringify(body), "StoreUnavailable");
     }),
   );
 });

@@ -36,6 +36,7 @@ import {
   Organization,
   TeamRecords,
 } from "@awthaq/organization";
+import { Defects } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -78,29 +79,38 @@ export const config = (partial: Partial<ScimConfigShape>) =>
 
 type Connection = ScimApi.ScimConnectionIdentity;
 
+/** ADR-EA-028: a core service's infrastructure failure, the one typed error every handler maps to a SCIM 503. */
+type StoreUnavailable = Errors.StoreUnavailable;
+
+/**
+ * RFC 7644 §3.12: an outage is a `503` with the SCIM error body, never the internal error and
+ * never its cause (which `Errors.storeUnavailable` already logged where it happened).
+ */
+const outage = () => Effect.fail(ScimApi.unavailable());
+
 export interface ScimShape {
   readonly listUsers: (
     connection: Connection,
     query: ScimApi.ListQuery,
-  ) => Effect.Effect<ScimApi.UserListResponse, ScimApi.ScimBadRequest>;
+  ) => Effect.Effect<ScimApi.UserListResponse, ScimApi.ScimBadRequest | StoreUnavailable>;
   readonly createUser: (
     connection: Connection,
     input: ScimApi.UserInput,
   ) => Effect.Effect<
     ScimApi.UserResource,
-    ScimApi.ScimBadRequest | ScimApi.ScimConflict | ScimApi.ScimForbidden
+    ScimApi.ScimBadRequest | ScimApi.ScimConflict | ScimApi.ScimForbidden | StoreUnavailable
   >;
   readonly getUser: (
     connection: Connection,
     id: string,
-  ) => Effect.Effect<ScimApi.UserResource, ScimApi.ScimNotFound>;
+  ) => Effect.Effect<ScimApi.UserResource, ScimApi.ScimNotFound | StoreUnavailable>;
   readonly replaceUser: (
     connection: Connection,
     id: string,
     input: ScimApi.UserInput,
   ) => Effect.Effect<
     ScimApi.UserResource,
-    ScimApi.ScimBadRequest | ScimApi.ScimNotFound | ScimApi.ScimConflict
+    ScimApi.ScimBadRequest | ScimApi.ScimNotFound | ScimApi.ScimConflict | StoreUnavailable
   >;
   readonly patchUser: (
     connection: Connection,
@@ -108,34 +118,34 @@ export interface ScimShape {
     patch: ScimApi.PatchRequest,
   ) => Effect.Effect<
     ScimApi.UserResource,
-    ScimApi.ScimBadRequest | ScimApi.ScimNotFound | ScimApi.ScimConflict
+    ScimApi.ScimBadRequest | ScimApi.ScimNotFound | ScimApi.ScimConflict | StoreUnavailable
   >;
   readonly deleteUser: (
     connection: Connection,
     id: string,
-  ) => Effect.Effect<void, ScimApi.ScimNotFound>;
+  ) => Effect.Effect<void, ScimApi.ScimNotFound | ScimApi.ScimForbidden | StoreUnavailable>;
   readonly listGroups: (
     connection: Connection,
     query: ScimApi.ListQuery,
-  ) => Effect.Effect<ScimApi.GroupListResponse, ScimApi.ScimBadRequest>;
+  ) => Effect.Effect<ScimApi.GroupListResponse, ScimApi.ScimBadRequest | StoreUnavailable>;
   readonly createGroup: (
     connection: Connection,
     input: ScimApi.GroupInput,
   ) => Effect.Effect<
     ScimApi.GroupResource,
-    ScimApi.ScimBadRequest | ScimApi.ScimConflict | ScimApi.ScimForbidden
+    ScimApi.ScimBadRequest | ScimApi.ScimConflict | ScimApi.ScimForbidden | StoreUnavailable
   >;
   readonly getGroup: (
     connection: Connection,
     id: string,
-  ) => Effect.Effect<ScimApi.GroupResource, ScimApi.ScimNotFound>;
+  ) => Effect.Effect<ScimApi.GroupResource, ScimApi.ScimNotFound | StoreUnavailable>;
   readonly replaceGroup: (
     connection: Connection,
     id: string,
     input: ScimApi.GroupInput,
   ) => Effect.Effect<
     ScimApi.GroupResource,
-    ScimApi.ScimBadRequest | ScimApi.ScimNotFound | ScimApi.ScimConflict | ScimApi.ScimForbidden
+    ScimApi.ScimBadRequest | ScimApi.ScimNotFound | ScimApi.ScimConflict | ScimApi.ScimForbidden | StoreUnavailable
   >;
   readonly patchGroup: (
     connection: Connection,
@@ -143,12 +153,12 @@ export interface ScimShape {
     patch: ScimApi.PatchRequest,
   ) => Effect.Effect<
     ScimApi.GroupResource,
-    ScimApi.ScimBadRequest | ScimApi.ScimNotFound | ScimApi.ScimConflict | ScimApi.ScimForbidden
+    ScimApi.ScimBadRequest | ScimApi.ScimNotFound | ScimApi.ScimConflict | ScimApi.ScimForbidden | StoreUnavailable
   >;
   readonly deleteGroup: (
     connection: Connection,
     id: string,
-  ) => Effect.Effect<void, ScimApi.ScimNotFound | ScimApi.ScimConflict>;
+  ) => Effect.Effect<void, ScimApi.ScimNotFound | ScimApi.ScimConflict | StoreUnavailable>;
 }
 
 // ---- pure helpers ----------------------------------------------------------------------------
@@ -341,7 +351,7 @@ const scimMigrations: Migrations.Migrations = [
             "createdAt" TEXT NOT NULL,
             "revokedAt" TEXT
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
       yield* sql`CREATE INDEX scim_connection_organization_id ON scim_connection("organizationId")`;
     }),
@@ -376,7 +386,7 @@ const scimMigrations: Migrations.Migrations = [
             "updatedAt" TEXT NOT NULL,
             PRIMARY KEY ("scimConnectionId", kind, "resourceId")
           )`,
-        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+        orElse: () => Defects.unsupportedDialect("migrations"),
       });
       yield* sql`CREATE UNIQUE INDEX scim_resource_name_unique ON scim_resource("scimConnectionId", kind, name)`;
       yield* sql`CREATE UNIQUE INDEX scim_resource_external_id_unique ON scim_resource("scimConnectionId", kind, "externalId")`;
@@ -402,13 +412,13 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
           resourceTypes: () => Effect.succeed(resourceTypes),
           schemas: () => Effect.succeed(schemaDescriptions),
           listUsers: Effect.fnUntraced(function* ({ query }: { query: ScimApi.ListQuery }) {
-            return yield* scim.listUsers(yield* ScimApi.CurrentScimConnection, query);
+            return yield* scim.listUsers(yield* ScimApi.CurrentScimConnection, query).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           createUser: Effect.fnUntraced(function* ({ payload }: { payload: ScimApi.UserInput }) {
-            return yield* scim.createUser(yield* ScimApi.CurrentScimConnection, payload);
+            return yield* scim.createUser(yield* ScimApi.CurrentScimConnection, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           getUser: Effect.fnUntraced(function* ({ params }: { params: ScimApi.IdParams }) {
-            return yield* scim.getUser(yield* ScimApi.CurrentScimConnection, params.id);
+            return yield* scim.getUser(yield* ScimApi.CurrentScimConnection, params.id).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           replaceUser: Effect.fnUntraced(function* ({
             params,
@@ -417,7 +427,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             params: ScimApi.IdParams;
             payload: ScimApi.UserInput;
           }) {
-            return yield* scim.replaceUser(yield* ScimApi.CurrentScimConnection, params.id, payload);
+            return yield* scim.replaceUser(yield* ScimApi.CurrentScimConnection, params.id, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           patchUser: Effect.fnUntraced(function* ({
             params,
@@ -426,19 +436,19 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             params: ScimApi.IdParams;
             payload: ScimApi.PatchRequest;
           }) {
-            return yield* scim.patchUser(yield* ScimApi.CurrentScimConnection, params.id, payload);
+            return yield* scim.patchUser(yield* ScimApi.CurrentScimConnection, params.id, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           deleteUser: Effect.fnUntraced(function* ({ params }: { params: ScimApi.IdParams }) {
-            yield* scim.deleteUser(yield* ScimApi.CurrentScimConnection, params.id);
+            yield* scim.deleteUser(yield* ScimApi.CurrentScimConnection, params.id).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           listGroups: Effect.fnUntraced(function* ({ query }: { query: ScimApi.ListQuery }) {
-            return yield* scim.listGroups(yield* ScimApi.CurrentScimConnection, query);
+            return yield* scim.listGroups(yield* ScimApi.CurrentScimConnection, query).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           createGroup: Effect.fnUntraced(function* ({ payload }: { payload: ScimApi.GroupInput }) {
-            return yield* scim.createGroup(yield* ScimApi.CurrentScimConnection, payload);
+            return yield* scim.createGroup(yield* ScimApi.CurrentScimConnection, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           getGroup: Effect.fnUntraced(function* ({ params }: { params: ScimApi.IdParams }) {
-            return yield* scim.getGroup(yield* ScimApi.CurrentScimConnection, params.id);
+            return yield* scim.getGroup(yield* ScimApi.CurrentScimConnection, params.id).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           replaceGroup: Effect.fnUntraced(function* ({
             params,
@@ -447,7 +457,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             params: ScimApi.IdParams;
             payload: ScimApi.GroupInput;
           }) {
-            return yield* scim.replaceGroup(yield* ScimApi.CurrentScimConnection, params.id, payload);
+            return yield* scim.replaceGroup(yield* ScimApi.CurrentScimConnection, params.id, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           patchGroup: Effect.fnUntraced(function* ({
             params,
@@ -456,10 +466,10 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             params: ScimApi.IdParams;
             payload: ScimApi.PatchRequest;
           }) {
-            return yield* scim.patchGroup(yield* ScimApi.CurrentScimConnection, params.id, payload);
+            return yield* scim.patchGroup(yield* ScimApi.CurrentScimConnection, params.id, payload).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
           deleteGroup: Effect.fnUntraced(function* ({ params }: { params: ScimApi.IdParams }) {
-            yield* scim.deleteGroup(yield* ScimApi.CurrentScimConnection, params.id);
+            yield* scim.deleteGroup(yield* ScimApi.CurrentScimConnection, params.id).pipe(Effect.catchTag("StoreUnavailable", outage));
           }),
         });
       }),
@@ -541,6 +551,10 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
 
       // ---- lifecycle ---------------------------------------------------------------------------
 
+      /** A user this code just read or wrote is gone: nothing a directory can cause, so a defect rather than a 404. */
+      const userVanished = () =>
+        Defects.invariantViolation("scim.userVanished", "awthaq: a provisioned user vanished mid-request");
+
       /**
        * BEH-EA-250: `active` is suspension. Deactivating suspends and ends every session; reactivating
        * lifts only a suspension this connection made. Returns the user as it stands afterwards.
@@ -554,7 +568,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         if (!active && user.status === "active") {
           const suspended = yield* users
             .setStatus(user.id, "suspended", { reason: marker })
-            .pipe(Effect.orDie);
+            .pipe(Effect.catchTag("UserNotFound", userVanished));
           yield* sessions.revokeAll(user.id, "suspended");
           yield* events.publish({
             _tag: "auth.scim.userDeactivated",
@@ -569,7 +583,9 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
           user.status === "suspended" &&
           Option.getOrNull(user.statusReason) === marker
         ) {
-          const reactivated = yield* users.setStatus(user.id, "active").pipe(Effect.orDie);
+          const reactivated = yield* users
+            .setStatus(user.id, "active")
+            .pipe(Effect.catchTag("UserNotFound", userVanished));
           yield* events.publish({
             _tag: "auth.scim.userReactivated",
             connectionId: connection.id,
@@ -583,7 +599,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
 
       // ---- Users ------------------------------------------------------------------------------------
 
-      const listUsers: WithOutage<ScimShape["listUsers"]> = Effect.fnUntraced(function* (connection, query) {
+      const listUsers: ScimShape["listUsers"] = Effect.fnUntraced(function* (connection, query) {
         const filter = yield* parseEqFilter(query.filter, ["userName", "externalId"]);
         const { startIndex, count, offset } = paging(query, cfg.maxResults);
         const { items, total } = yield* Option.match(filter, {
@@ -614,7 +630,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         };
       });
 
-      const createUser: WithOutage<ScimShape["createUser"]> = Effect.fnUntraced(function* (connection, input) {
+      const createUser: ScimShape["createUser"] = Effect.fnUntraced(function* (connection, input) {
         const userName = input.userName.trim();
         if (userName === "" || userName.length > 320) {
           return yield* ScimApi.badRequest("userName is required (at most 320 characters)");
@@ -657,7 +673,9 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             Effect.catchTags({
               "Users/EmailAlreadyExists": () =>
                 Effect.fail(ScimApi.conflict(`An account for ${Option.getOrElse(email, () => userName)} already exists`)),
-              "Users/PhoneAlreadyExists": (error) => Effect.die(error),
+              // An `Email` or `Anonymous` identity never carries a phone.
+              "Users/PhoneAlreadyExists": () =>
+                Defects.invariantViolation("scim.phoneConflict", "awthaq: a SCIM user was created with a phone"),
             }),
           );
 
@@ -716,7 +734,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         return userResource(settled, link);
       });
 
-      const getUser: WithOutage<ScimShape["getUser"]> = (connection, id) =>
+      const getUser: ScimShape["getUser"] = (connection, id) =>
         ownedUser(connection, id).pipe(Effect.map(({ user, link }) => userResource(user, link)));
 
       /** Applies `changes` to an owned user, in the order that leaves a consistent state if a step fails. */
@@ -771,7 +789,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         return { user, link };
       });
 
-      const replaceUser: WithOutage<ScimShape["replaceUser"]> = Effect.fnUntraced(function* (connection, id, input) {
+      const replaceUser: ScimShape["replaceUser"] = Effect.fnUntraced(function* (connection, id, input) {
         const owned = yield* ownedUser(connection, id);
         // PUT replaces the writable attributes: an absent `externalId` clears it.
         const externalId = stringOf(input.externalId);
@@ -786,21 +804,25 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         return userResource(user, link);
       });
 
-      const patchUser: WithOutage<ScimShape["patchUser"]> = Effect.fnUntraced(function* (connection, id, patch) {
+      const patchUser: ScimShape["patchUser"] = Effect.fnUntraced(function* (connection, id, patch) {
         const owned = yield* ownedUser(connection, id);
         const changes = yield* interpretUserPatch(patch);
         const { user, link } = yield* applyUserChanges(connection, owned, changes);
         return userResource(user, link);
       });
 
-      const deleteUser: WithOutage<ScimShape["deleteUser"]> = Effect.fnUntraced(function* (connection, id) {
+      const deleteUser: ScimShape["deleteUser"] = Effect.fnUntraced(function* (connection, id) {
         const owned = yield* ownedUser(connection, id);
         if (cfg.deleteBehavior === "erase") {
           yield* sessions.revokeAll(owned.user.id, "userDeleted");
           yield* records.unlink(connection.id, "User", owned.user.id);
-          yield* users
-            .delete(owned.user.id)
-            .pipe(Effect.catchTag("UserNotFound", () => Effect.void), Effect.orDie);
+          yield* users.delete(owned.user.id).pipe(
+            Effect.catchTags({
+              UserNotFound: () => Effect.void,
+              // A veto hook (ADR-EA-005 `beforeDelete`) refused the erasure: the directory may not do this.
+              HookAborted: (aborted) => Effect.fail(ScimApi.forbidden(aborted.message)),
+            }),
+          );
           yield* events.publish({
             _tag: "auth.scim.userDeleted",
             connectionId: connection.id,
@@ -906,7 +928,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         );
       });
 
-      const listGroups: WithOutage<ScimShape["listGroups"]> = Effect.fnUntraced(function* (connection, query) {
+      const listGroups: ScimShape["listGroups"] = Effect.fnUntraced(function* (connection, query) {
         const filter = yield* parseEqFilter(query.filter, ["displayName", "externalId"]);
         const { startIndex, count, offset } = paging(query, cfg.maxResults);
         const page = yield* records.list(connection.id, "Group", { offset: 0, limit: 10_000 });
@@ -936,7 +958,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         };
       });
 
-      const createGroup: WithOutage<ScimShape["createGroup"]> = Effect.fnUntraced(function* (connection, input) {
+      const createGroup: ScimShape["createGroup"] = Effect.fnUntraced(function* (connection, input) {
         const displayName = input.displayName.trim();
         if (displayName === "" || displayName.length > 255) {
           return yield* ScimApi.badRequest("displayName is required (at most 255 characters)");
@@ -991,7 +1013,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         });
       });
 
-      const getGroup: WithOutage<ScimShape["getGroup"]> = (connection, id) =>
+      const getGroup: ScimShape["getGroup"] = (connection, id) =>
         ownedGroup(connection, id).pipe(Effect.flatMap((owned) => groupResource(connection, owned)));
 
       const groupChanged = (connection: Connection, teamId: string, change: "updated" | "deleted") =>
@@ -1010,7 +1032,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
               .updateTeam(connection.organizationId, team.id, displayName)
               .pipe(Effect.catchTag("TeamRecordNotFound", () => Effect.fail(ScimApi.notFound())));
 
-      const replaceGroup: WithOutage<ScimShape["replaceGroup"]> = Effect.fnUntraced(function* (connection, id, input) {
+      const replaceGroup: ScimShape["replaceGroup"] = Effect.fnUntraced(function* (connection, id, input) {
         const owned = yield* ownedGroup(connection, id);
         const displayName = input.displayName.trim();
         if (displayName === "" || displayName.length > 255) {
@@ -1042,7 +1064,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         );
       };
 
-      const patchGroup: WithOutage<ScimShape["patchGroup"]> = Effect.fnUntraced(function* (connection, id, patch) {
+      const patchGroup: ScimShape["patchGroup"] = Effect.fnUntraced(function* (connection, id, patch) {
         const owned = yield* ownedGroup(connection, id);
         let team = owned.team;
         let link = owned.link;
@@ -1092,7 +1114,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         return yield* groupResource(connection, { link, team });
       });
 
-      const deleteGroup: WithOutage<ScimShape["deleteGroup"]> = Effect.fnUntraced(function* (connection, id) {
+      const deleteGroup: ScimShape["deleteGroup"] = Effect.fnUntraced(function* (connection, id) {
         yield* ownedGroup(connection, id);
         yield* teams.removeTeam(connection.organizationId, id).pipe(
           Effect.catchTags({
@@ -1108,39 +1130,22 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       });
 
       return Scim.of({
-        listUsers: outageAsDefect(listUsers),
-        createUser: outageAsDefect(createUser),
-        getUser: outageAsDefect(getUser),
-        replaceUser: outageAsDefect(replaceUser),
-        patchUser: outageAsDefect(patchUser),
-        deleteUser: outageAsDefect(deleteUser),
-        listGroups: outageAsDefect(listGroups),
-        createGroup: outageAsDefect(createGroup),
-        getGroup: outageAsDefect(getGroup),
-        replaceGroup: outageAsDefect(replaceGroup),
-        patchGroup: outageAsDefect(patchGroup),
-        deleteGroup: outageAsDefect(deleteGroup),
+        listUsers,
+        createUser,
+        getUser,
+        replaceUser,
+        patchUser,
+        deleteUser,
+        listGroups,
+        createGroup,
+        getGroup,
+        replaceGroup,
+        patchGroup,
+        deleteGroup,
       });
     }),
   });
 }
-
-/** What the implementations may fail with beyond the contract: an infrastructure outage, which `outageAsDefect` turns into a defect. */
-type WithOutage<F> = F extends (...args: infer Args) => Effect.Effect<infer A, infer E, infer R>
-  ? (...args: Args) => Effect.Effect<A, E | Errors.StoreUnavailable, R>
-  : never;
-
-/**
- * MA-004: `Users`/`Sessions`/... report an outage as the typed `StoreUnavailable`. The SCIM contract
- * declares no 503, so at this boundary it is a defect (a 500), exactly as it was before that
- * policy landed; widening the wire contract is a separate, deliberate change.
- */
-const outageAsDefect =
-  <Args extends ReadonlyArray<unknown>, A, E, R>(
-    f: (...args: Args) => Effect.Effect<A, E | Errors.StoreUnavailable, R>,
-  ) =>
-  (...args: Args) =>
-    f(...args).pipe(Effect.catchTag("StoreUnavailable", Effect.die));
 
 // ---- discovery documents -----------------------------------------------------------------------
 

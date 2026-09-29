@@ -102,7 +102,7 @@ REQUIREMENT: `DELETE /Users/:id` MUST, by default, behave as `active: false`
              resource stays readable as inactive. When `ScimConfig.deleteBehavior`
              is `"erase"`, it MUST revoke every session, remove the mapping and
              delete the user through `Users.delete` (so the `BeforeUserDelete`
-             erasure taps run); the user's external id is then free to be
+             erasure taps run, and a tap that vetoes is `403`); the user's external id is then free to be
              provisioned again as a new user.
 ```
 
@@ -140,7 +140,9 @@ REQUIREMENT: Responses MUST be `application/scim+json`; a request body MUST be
              support exactly the filters `userName eq "…"` / `externalId eq "…"`
              (users) and `displayName eq "…"` / `externalId eq "…"` (groups); any
              other filter is `400 invalidFilter`. Errors MUST be the RFC 7644
-             §3.12 body (`schemas`, `status` as a string, `scimType`, `detail`).
+             §3.12 body (`schemas`, `status` as a string, `scimType`, `detail`);
+             a backing store that is unavailable (ADR-EA-028 `StoreUnavailable`)
+             MUST be `503` in that same body, saying nothing of the cause.
              `/ServiceProviderConfig`, `/ResourceTypes` and `/Schemas` MUST be
              served behind the same token and truthfully report PATCH and filter
              supported and bulk, sort, ETag and password change not.
