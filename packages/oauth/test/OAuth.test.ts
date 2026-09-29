@@ -110,6 +110,9 @@ const CoreLive = Layer.mergeAll(
 
 const baseUrl = "https://app.example.com";
 
+/** The claims the FAMS-006 test's fake token endpoint signs (the nonce is only known after `authorize`). */
+let currentAnchorClaims: Record<string, unknown> = {};
+
 const buildLayer = (options: {
   readonly providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>;
   readonly linking?: "explicit" | { readonly trustedProviders: ReadonlyArray<string> };
@@ -475,6 +478,8 @@ describe("OAuth", () => {
         Effect.gen(function* () {
           const users = yield* Users.Users;
           const existing = yield* users.create({ email: "dave@example.com", name: "Dave" });
+          // TMS-007: auto-link needs the local account's email proven too.
+          yield* users.verifyEmail(existing.id);
 
           const oauth = yield* OAuth.OAuth;
           const { state } = yield* oauth.authorize("acme", {
@@ -592,7 +597,211 @@ describe("OAuth", () => {
     );
   });
 
+  describe("account-linking trust policy (TMS-007/AOMS-007/NAM-006)", () => {
+    const trustedAcme = (routes: FakeRoutes) =>
+      buildLayer({
+        providers: [acme()],
+        linking: { trustedProviders: ["acme"] },
+        httpRoutes: routes,
+      });
+
+    const callbackAsAcme = Effect.gen(function* () {
+      const oauth = yield* OAuth.OAuth;
+      const { state } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+      return oauth.callback("acme", { code: "c1", state, iss: undefined, cookieState: state });
+    });
+
+    it.effect("TMS-007: a trusted provider does not auto-link into an unverified local account", () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        yield* users.create({ email: "squat@example.com", name: "Squatter" });
+        const callback = yield* callbackAsAcme;
+        const failure = yield* callback.pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "AccountExists");
+        const accounts = yield* Accounts.Accounts;
+        assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("acme", "squat-sub")));
+      }).pipe(
+        Effect.provide(
+          trustedAcme({
+            "/token": { access_token: "at-1" },
+            "/userinfo": { id: "squat-sub", email: "squat@example.com", email_verified: true },
+          }),
+        ),
+      ),
+    );
+
+    it.effect("TMS-007: a trusted provider still auto-links into a verified local account", () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const local = yield* users.create({ email: "proven@example.com", name: "Proven" });
+        yield* users.verifyEmail(local.id);
+        const callback = yield* callbackAsAcme;
+        const outcome = yield* callback;
+        assert.strictEqual(outcome.session?.session.userId, local.id);
+      }).pipe(
+        Effect.provide(
+          trustedAcme({
+            "/token": { access_token: "at-1" },
+            "/userinfo": { id: "proven-sub", email: "proven@example.com", email_verified: true },
+          }),
+        ),
+      ),
+    );
+
+    it.effect("AOMS-007: a trusted provider asserting email_verified creates a verified user", () =>
+      Effect.gen(function* () {
+        const callback = yield* callbackAsAcme;
+        yield* callback;
+        const users = yield* Users.Users;
+        const created = Option.getOrThrow(yield* users.findByEmail("jit-trusted@example.com"));
+        assert.isTrue(created.emailVerified);
+      }).pipe(
+        Effect.provide(
+          trustedAcme({
+            "/token": { access_token: "at-1" },
+            "/userinfo": { id: "jit-trusted-sub", email: "jit-trusted@example.com", email_verified: true },
+          }),
+        ),
+      ),
+    );
+
+    it.effect("AOMS-007: an untrusted provider asserting email_verified creates an unverified user", () =>
+      Effect.gen(function* () {
+        const callback = yield* callbackAsAcme;
+        yield* callback;
+        const users = yield* Users.Users;
+        const created = Option.getOrThrow(yield* users.findByEmail("jit-untrusted@example.com"));
+        assert.isFalse(created.emailVerified);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": { access_token: "at-1" },
+              "/userinfo": {
+                id: "jit-untrusted-sub",
+                email: "jit-untrusted@example.com",
+                email_verified: true,
+              },
+            },
+          }),
+        ),
+      ),
+    );
+
+    it.effect("AOMS-007: a trusted provider that does not assert email_verified creates an unverified user", () =>
+      Effect.gen(function* () {
+        const callback = yield* callbackAsAcme;
+        yield* callback;
+        const users = yield* Users.Users;
+        const created = Option.getOrThrow(yield* users.findByEmail("jit-unasserted@example.com"));
+        assert.isFalse(created.emailVerified);
+      }).pipe(
+        Effect.provide(
+          trustedAcme({
+            "/token": { access_token: "at-1" },
+            "/userinfo": { id: "jit-unasserted-sub", email: "jit-unasserted@example.com" },
+          }),
+        ),
+      ),
+    );
+
+    const seedPasskeyOnlyUser = Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const accounts = yield* Accounts.Accounts;
+      const local = yield* users.create({ email: "passkey-only@example.com", name: "Passkey" });
+      yield* accounts.link({ userId: local.id, providerId: "passkey", subject: "credential-1" });
+    });
+
+    it.effect("NAM-006: AccountExists lists the providers the user actually has (a passkey-only user)", () =>
+      Effect.gen(function* () {
+        yield* seedPasskeyOnlyUser;
+        const callback = yield* callbackAsAcme;
+        const failure = yield* callback.pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "AccountExists");
+        if (failure._tag === "AccountExists") assert.deepStrictEqual(failure.providers, ["passkey"]);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": { access_token: "at-1" },
+              "/userinfo": {
+                id: "pk-sub",
+                email: "passkey-only@example.com",
+                email_verified: true,
+              },
+            },
+          }),
+        ),
+      ),
+    );
+
+    it.effect("NAM-006: AccountExists lists nothing when the provider's email is unverified", () =>
+      Effect.gen(function* () {
+        yield* seedPasskeyOnlyUser;
+        const callback = yield* callbackAsAcme;
+        const failure = yield* callback.pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "AccountExists");
+        if (failure._tag === "AccountExists") assert.deepStrictEqual(failure.providers, []);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": { access_token: "at-1" },
+              "/userinfo": { id: "pk-sub-2", email: "passkey-only@example.com" },
+            },
+          }),
+        ),
+      ),
+    );
+  });
+
   describe("BEH-EA-125: (provider, subject, issuer) is the identity anchor", () => {
+    it.effect("FAMS-006: accountAnchorFor is exactly the key callback looks an imported account up by", () =>
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const accounts = yield* Accounts.Accounts;
+        const imported = yield* users.create({ email: "imported@example.com", name: "Imported" });
+        // What an importer writes: the anchor, computed from the provider config.
+        yield* accounts.link({ userId: imported.id, ...(yield* OAuth.accountAnchorFor(okta(), "imported-sub")) });
+
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        currentAnchorClaims = {
+          iss: "https://okta.example.com/oauth2/default",
+          aud: "okta-client-id",
+          sub: "imported-sub",
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          nonce: new URL(location).searchParams.get("nonce"),
+        };
+        const outcome = yield* oauth.callback("okta", {
+          code: "c1",
+          state,
+          iss: undefined,
+          cookieState: state,
+        });
+        // Signed in as the imported user; no second user or account appeared.
+        assert.strictEqual(outcome.session?.session.userId, imported.id);
+        assert.strictEqual((yield* accounts.listByUser(imported.id)).length, 1);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [okta()],
+            httpRoutes: {
+              ".well-known/openid-configuration": oktaDiscovery,
+              "/jwks": { keys: [jwk] },
+              "/token": () => ({ access_token: "at-1", id_token: signJwt(currentAnchorClaims) }),
+            },
+          }),
+        ),
+      ),
+    );
+
     it.effect(
       "a returning user (same provider/subject) signs in without creating a second account",
       () =>
@@ -2004,6 +2213,8 @@ describe("OAuth", () => {
             email: "auto-link-tokens@example.com",
             name: "Auto Link",
           });
+          // TMS-007: auto-link needs the local account's email proven too.
+          yield* users.verifyEmail(existing.id);
 
           const oauth = yield* OAuth.OAuth;
           const { state } = yield* oauth.authorize("acme", {

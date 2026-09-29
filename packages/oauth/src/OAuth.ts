@@ -165,6 +165,18 @@ const generatePkce = (
     return { verifier, challenge: toBase64Url(digest) };
   }).pipe(Effect.orDie);
 
+/**
+ * FAMS-006: the `(providerId, subject, issuer)` anchor `callback` looks an
+ * account up by (BEH-EA-125), computed from the provider's own config — so a
+ * migration/import tool writes exactly the key a sign-in will read and never
+ * drifts from it (`issuer` is absent for a plain `"oauth2"` provider).
+ */
+export const accountAnchorFor = (provider: OAuthProvider.OAuthProviderConfig, subject: string) =>
+  Effect.gen(function* () {
+    const issuer = provider.issuer === undefined ? undefined : yield* provider.issuer;
+    return { providerId: provider.id, subject, ...(issuer === undefined ? {} : { issuer }) };
+  });
+
 /** Only present when there is an issuer — spreading this avoids ever assigning `issuer: undefined` under `exactOptionalPropertyTypes`. */
 const issuerField = (issuer: Option.Option<string>): { readonly issuer: string } | {} =>
   Option.isSome(issuer) ? { issuer: issuer.value } : {};
@@ -621,6 +633,18 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       const trustedProviders =
         config_.linking === "explicit" ? [] : config_.linking.trustedProviders;
 
+      /**
+       * NAM-006: the provider ids `userId` actually has — never asserted,
+       * always read — and only when the callback's own provider vouched for
+       * the email (`providerVerified`); otherwise nothing is revealed.
+       */
+      const conflictingProviders = (userId: Users.UserId, providerVerified: boolean) =>
+        providerVerified
+          ? accounts
+              .listByUser(userId)
+              .pipe(Effect.map((linked) => linked.map((account) => account.providerId)))
+          : Effect.succeed([]);
+
       const authorize: OAuthShape["authorize"] = Effect.fnUntraced(function* (providerId, input) {
         yield* limiter
           .consume({
@@ -861,11 +885,24 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                   : yield* users.findByEmail(profile.email);
 
               if (Option.isSome(existing)) {
+                // TMS-007: auto-link needs *both* sides proven — the provider
+                // asserts the email is verified AND the local account's own
+                // email is already verified. An unverified local account may
+                // have been registered by someone squatting the address, and
+                // linking a trusted identity into it would hand them the
+                // victim's account the moment anything verifies that email.
                 const autoLink =
-                  trustedProviders.includes(providerId) && profile.emailVerified === true;
+                  trustedProviders.includes(providerId) &&
+                  profile.emailVerified === true &&
+                  existing.value.emailVerified;
                 if (!autoLink) {
                   return yield* Effect.fail(
-                    new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),
+                    new OAuthApi.AccountExists({
+                      providers: yield* conflictingProviders(
+                        existing.value.id,
+                        profile.emailVerified === true,
+                      ),
+                    }),
                   );
                 }
                 yield* accounts
@@ -899,13 +936,40 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     const user = yield* users
                       .create({ email: profile.email ?? `${providerId}:${profile.subject}`, name })
                       .pipe(
-                        Effect.catchTag(
-                          "EmailAlreadyExists",
-                          () =>
-                            new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),
+                        Effect.catchTag("EmailAlreadyExists", () =>
+                          // A concurrent sign-up claimed the address between
+                          // our lookup and this insert: report whatever the
+                          // winner has, or nothing if it isn't visible yet.
+                          (profile.email === undefined
+                            ? Effect.succeed(Option.none())
+                            : users.findByEmail(profile.email)
+                          ).pipe(
+                            Effect.flatMap((winner) =>
+                              Option.isSome(winner)
+                                ? conflictingProviders(winner.value.id, profile.emailVerified === true)
+                                : Effect.succeed([]),
+                            ),
+                            Effect.flatMap(
+                              (providers) => new OAuthApi.AccountExists({ providers }),
+                            ),
+                          ),
                         ),
                         Effect.catchTag("PlatformError", Effect.die),
                       );
+                    // AOMS-007: a *trusted* provider's `email_verified` claim
+                    // is proof enough to mark the new local user verified, in
+                    // the same transaction. Deliberately not for an untrusted
+                    // provider — that claim must not flip local state TMS-007's
+                    // auto-link gate later relies on — and never on the
+                    // auto-link/explicit-link paths, whose local account keeps
+                    // its own verification state.
+                    if (
+                      profile.email !== undefined &&
+                      profile.emailVerified === true &&
+                      trustedProviders.includes(providerId)
+                    ) {
+                      yield* users.verifyEmail(user.id).pipe(Effect.orDie);
+                    }
                     yield* accounts
                       .link({
                         userId: user.id,

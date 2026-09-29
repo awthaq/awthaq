@@ -3,7 +3,7 @@ ID: "NAM-006"
 Title: "AccountExists always reports the conflicting provider as 'password'"
 Level: low
 Category: "correctness"
-Status: ready-for-human
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:655"
 Auditor: "nextauth-authjs-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `oauth` · reported by **NextAuth.js/Auth.js Migration Specialist** (`nextauth-authjs-migration-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Look up the existing accounts for the colliding user and report the real owning 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-account-linking-policy`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:762`. Fix: Report the actually-linked providers (or nothing), never a hardcoded 'password'. (effort S). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option C per plan; user may revisit. AccountExists is now { providers: ReadonlyArray<string> } (was { provider: string } hardcoded 'password'): read from accounts.listByUser of the matching user, populated only when the callback's provider asserted email_verified, else []. The EmailAlreadyExists race path looks the winner up and applies the same gating ([] if not visible). Tests: passkey-only user lists ['passkey'] (red before: type error/'password'), unverified provider email lists []. BEH-EA-123 sketch/text amended; BDD REQ-EA-335 step now reads 'listing provider "password"' and seeds a real password account. No packages/client pattern-match on AccountExists.provider existed. Gates as TMS-007.

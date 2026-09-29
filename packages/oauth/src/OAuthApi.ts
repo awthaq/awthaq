@@ -64,10 +64,18 @@ export class OAuthCallbackFailed extends Schema.TaggedError<OAuthCallbackFailed>
 /**
  * BEH-EA-123: the default, explicit-linking outcome — a callback whose
  * (verified) email matches an existing, unlinked account.
+ *
+ * NAM-006: `providers` are the provider ids the existing account really has
+ * (`"password"`, `"passkey"`, another OAuth provider, ...), so a client can
+ * drive its "sign in with X, then link" flow. Populated only when the
+ * callback's own provider asserted `email_verified` — someone holding an
+ * unverified identity for the victim's address is not handed a map of the
+ * victim's sign-in methods. Otherwise `[]`. The error's existence is already
+ * disclosed by BEH-EA-123 itself; this adds only the method list.
  */
 export class AccountExists extends Schema.TaggedError<AccountExists>()(
   "AccountExists",
-  { provider: Schema.String },
+  { providers: Schema.Array(Schema.String) },
   { httpApiStatus: 409 },
 ) {}
 

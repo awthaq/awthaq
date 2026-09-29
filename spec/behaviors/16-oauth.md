@@ -59,7 +59,7 @@ _Previous: [BEH-EA-121](16-oauth.md#beh-ea-121-pkce-s256-is-structural-not-optio
 
 ```ts
 oauth({ providers: [google()], linking: "explicit" })   // default
-// same-email sign-in, unlinked → 409 AccountExists { provider: "password" }
+// same-email sign-in, unlinked → 409 AccountExists { providers: ["password"] }
 ```
 
 ```text
@@ -70,6 +70,8 @@ REQUIREMENT: When a provider callback's email matches an existing account that
 ```
 
 Auth.js calls its opt-in flag `allowDangerousEmailAccountLinking` for a reason research/05-oauth-oidc.md documents directly: auto-linking by email is account-takeover-prone whenever any linked provider has weak email verification, and email at the provider can change without awthaq ever finding out. Defaulting to explicit linking follows the stricter of the two major frameworks' stances; the typed error drives a "sign in, then link" UI flow instead of a silent account merge the user never asked for.
+
+**`AccountExists` names the real providers (NAM-006).** The error's `providers` are the provider ids the matching account actually has (`"password"`, `"passkey"`, another OAuth provider, …), read from its account rows — never a hardcoded `"password"`. They are populated only when the callback's own provider asserted `email_verified`; otherwise `providers` is `[]`, so a caller holding an unverified identity for the victim's address is not handed a map of the victim's sign-in methods (the error's existence is already disclosed by this behavior itself). *Decision (2026-09-29): option C of the plan, adopted as recommended; the user may revisit.*
 
 _Previous: [BEH-EA-122](16-oauth.md#beh-ea-122-flow-state-lives-server-side-in-verification) | Next: [BEH-EA-124](16-oauth.md#beh-ea-124-trusted-provider-auto-link-is-opt-in-per-provider)_
 
@@ -86,7 +88,11 @@ REQUIREMENT: Automatic linking on a verified-email match MUST be disabled
              globally.
 ```
 
-Some deployments genuinely want the smoother OAuth-only onboarding better-auth's default-on stance provides; `trustedProviders` gives them that trade-off without lowering the bar for every provider at once. Scoping the opt-in per-provider matters because provider email trustworthiness varies — Google's is strong, but Apple only emits an email on first consent, and Facebook exposes no verification flag at all (research/05-oauth-oidc.md), so "trust this provider's email" is a per-provider judgment, not a global one.
+Some deployments genuinely want the smoother OAuth-only onboarding better-auth's default-on stance provides; `trustedProviders` gives them that trade-off without lowering the bar for every provider at once. **Both sides must be proven (TMS-007).** A verified-email match auto-links only when the provider asserts `email_verified` **and** the local account's own `emailVerified` is already `true`. An unverified local account may have been registered by someone squatting the victim's address; linking a trusted identity into it would hand that person the account the moment anything verifies the address. Otherwise the callback answers `AccountExists`, exactly as the explicit path does.
+
+**Just-in-time creation inherits a trusted provider's verification (AOMS-007).** When a first-time sign-in with no matching local account creates a user, and the provider is named in `trustedProviders` *and* asserts `email_verified`, the new user is marked verified in the same transaction. An untrusted provider's claim never flips local state (it would otherwise let a weak provider mint a "verified" squat account for TMS-007's gate to trust), and the auto-link and explicit-link paths never call `verifyEmail` — a local account keeps its own verification state.
+
+Scoping the opt-in per-provider matters because provider email trustworthiness varies — Google's is strong, but Apple only emits an email on first consent, and Facebook exposes no verification flag at all (research/05-oauth-oidc.md), so "trust this provider's email" is a per-provider judgment, not a global one.
 
 _Previous: [BEH-EA-123](16-oauth.md#beh-ea-123-linking-is-explicit-by-default) | Next: [BEH-EA-125](16-oauth.md#beh-ea-125-provider-subject-issuer-is-the-identity-anchor)_
 
