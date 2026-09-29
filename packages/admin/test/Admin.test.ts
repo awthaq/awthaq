@@ -10,12 +10,14 @@ import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
@@ -298,6 +300,7 @@ describe("Admin", () => {
         targetUserId: targetId,
         sessionId: ownSession.session.id,
         reason: "seed",
+        expiresAt: DateTime.addDuration(yield* DateTime.now, Duration.days(1)),
       });
       const anotherAdmin = asCaller({ id: "admin-2", sessionId: "admin-2-session" });
       const failure = yield* admin.forceStop(anotherAdmin, ownSession.session.id).pipe(Effect.flip);
@@ -325,10 +328,10 @@ describe("Admin", () => {
         );
         yield* admin.impersonate({ caller, targetUserId: targetId, reason: "second" });
 
-        const all = yield* admin.list(caller);
+        const all = (yield* admin.list(caller)).items;
         assert.strictEqual(all.length, 2);
 
-        const active = yield* admin.list(caller, { active: true });
+        const active = (yield* admin.list(caller, { active: true })).items;
         assert.strictEqual(active.length, 1);
         assert.strictEqual(active[0]?.reason, "second");
       }).pipe(Effect.provide(buildLayer(allow))),
@@ -344,9 +347,10 @@ describe("Admin", () => {
         targetUserId: targetId,
         sessionId: "seeded-session",
         reason: "seed",
+        expiresAt: DateTime.addDuration(yield* DateTime.now, Duration.days(1)),
       });
       const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-      const page = yield* admin.list(caller);
+      const page = (yield* admin.list(caller)).items;
       assert.strictEqual(page.length, 0);
     }).pipe(Effect.provide(buildLayer(deny))),
   );
@@ -399,7 +403,7 @@ describe("Admin", () => {
       const visible = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "a" });
       const hidden = yield* admin.impersonate({ caller, targetUserId: other.id, reason: "b" });
 
-      const page = yield* admin.list(caller);
+      const page = (yield* admin.list(caller)).items;
       assert.strictEqual(page.length, 1);
       assert.strictEqual(page[0]?.sessionId, visible.session.id);
 
@@ -445,7 +449,7 @@ describe("Admin", () => {
         assert.strictEqual(failure._tag, "AdminTargetNotFound");
 
         assert.strictEqual((yield* sessions.list(ghost)).length, 0);
-        assert.strictEqual((yield* records.list()).length, 0);
+        assert.strictEqual((yield* records.list()).items.length, 0);
         yield* TestClock.adjust(Duration.millis(10));
         assert.isUndefined(seen.pollUnsafe());
         yield* Fiber.interrupt(seen);
@@ -464,5 +468,152 @@ describe("Admin", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "AdminImpersonationDenied");
       }).pipe(Effect.provide(buildLayer(deny))),
+  );
+
+  /** Collects every `impersonationStopped` event published from now on (the fork is registered before it returns). */
+  const collectStopped = Effect.gen(function* () {
+    const events = yield* AuthEvents.AuthEvents;
+    const seen = yield* Ref.make<ReadonlyArray<{ sessionId: string; endedBy: string }>>([]);
+    yield* events.stream.pipe(
+      Stream.runForEach((event) =>
+        event._tag === "auth.admin.impersonationStopped"
+          ? Ref.update(seen, (all) => [
+              ...all,
+              { sessionId: event.sessionId, endedBy: event.endedBy },
+            ])
+          : Effect.void,
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    );
+    return seen;
+  });
+
+  it.effect(
+    "IDS-004: an episode past maxDuration is reported ended (expired) by list({active:true}), closed once with one stopped event",
+    () =>
+      Effect.gen(function* () {
+        const { adminId, targetId } = yield* seedUsers;
+        const admin = yield* Admin.Admin;
+        const seen = yield* collectStopped;
+        const caller = asCaller({ id: adminId, sessionId: "admin-session" });
+        const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "x" });
+
+        yield* TestClock.adjust(Duration.sum(Duration.hours(1), Duration.seconds(1)));
+        const active = (yield* admin.list(caller, { active: true })).items;
+        assert.strictEqual(active.length, 0);
+
+        const all = (yield* admin.list(caller)).items;
+        assert.strictEqual(all.length, 1);
+        assert.deepStrictEqual(all[0]?.endedBy, Option.some("expired"));
+        assert.deepStrictEqual(
+          all[0]?.endedAt,
+          Option.some(DateTime.addDuration(all[0]!.startedAt, Duration.hours(1))),
+        );
+
+        // A further read must not re-close or re-announce it.
+        yield* admin.list(caller);
+        yield* TestClock.adjust(Duration.millis(10));
+        assert.deepStrictEqual(yield* Ref.get(seen), [
+          { sessionId: issued.session.id, endedBy: "expired" },
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(buildLayer(allow))),
+  );
+
+  it.effect("IDS-004: sweepExpiredEpisodes closes expired episodes without any read", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seedUsers;
+      const admin = yield* Admin.Admin;
+      const records = yield* ImpersonationRecords.ImpersonationRecords;
+      const seen = yield* collectStopped;
+      const caller = asCaller({ id: adminId, sessionId: "admin-session" });
+      const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "x" });
+
+      assert.strictEqual(yield* Admin.sweepExpiredEpisodes, 0);
+      yield* TestClock.adjust(Duration.sum(Duration.hours(1), Duration.seconds(1)));
+      assert.strictEqual(yield* Admin.sweepExpiredEpisodes, 1);
+      assert.strictEqual(yield* Admin.sweepExpiredEpisodes, 0);
+
+      const row = yield* records.findBySessionId(issued.session.id);
+      assert.isTrue(Option.isSome(row));
+      if (Option.isSome(row)) assert.deepStrictEqual(row.value.endedBy, Option.some("expired"));
+      yield* TestClock.adjust(Duration.millis(10));
+      assert.strictEqual((yield* Ref.get(seen)).length, 1);
+    }).pipe(Effect.scoped, Effect.provide(buildLayer(allow))),
+  );
+
+  it.effect("IDS-007: stopImpersonating still revokes when the audit row was already ended", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seedUsers;
+      const admin = yield* Admin.Admin;
+      const sessions = yield* Sessions.Sessions;
+      const records = yield* ImpersonationRecords.ImpersonationRecords;
+      const caller = asCaller({ id: adminId, sessionId: "admin-session" });
+      const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "x" });
+      yield* records.endEpisode(issued.session.id, "forcedByAdmin");
+
+      yield* admin.stopImpersonating(
+        asCaller({
+          id: targetId,
+          sessionId: issued.session.id,
+          actingAs: { type: "user", id: adminId },
+        }),
+      );
+      const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
+      assert.strictEqual(revoked._tag, "SessionNotFound");
+    }).pipe(Effect.provide(buildLayer(allow))),
+  );
+
+  it.effect("IDS-007: forceStop after the target's revokeAll does not die", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seedUsers;
+      const admin = yield* Admin.Admin;
+      const sessions = yield* Sessions.Sessions;
+      const records = yield* ImpersonationRecords.ImpersonationRecords;
+      const caller = asCaller({ id: adminId, sessionId: "admin-session" });
+      const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "x" });
+      // e.g. the target's password reset: their own sessions, impersonation included, are gone.
+      yield* sessions.revokeAll(targetId);
+
+      yield* admin.forceStop(caller, issued.session.id);
+      const row = yield* records.findBySessionId(issued.session.id);
+      assert.isTrue(Option.isSome(row));
+      if (Option.isSome(row)) {
+        assert.deepStrictEqual(row.value.endedBy, Option.some("forcedByAdmin"));
+      }
+    }).pipe(Effect.provide(buildLayer(allow))),
+  );
+
+  it.effect("IDS-007: forceStop never revokes a session that has no episode row", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seedUsers;
+      const admin = yield* Admin.Admin;
+      const sessions = yield* Sessions.Sessions;
+      const ordinary = yield* sessions.issue({ userId: targetId });
+      const caller = asCaller({ id: adminId, sessionId: "admin-session" });
+
+      const failure = yield* admin.forceStop(caller, ordinary.session.id).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "AdminImpersonationNotFound");
+      const stillLive = yield* sessions.verify(ordinary.token);
+      assert.strictEqual(stillLive.session.id, ordinary.session.id);
+    }).pipe(Effect.provide(buildLayer(allow))),
+  );
+
+  it.effect(
+    "IDS-007: forceStop on an already-ended episode still revokes its live session, then reports it ended",
+    () =>
+      Effect.gen(function* () {
+        const { adminId, targetId } = yield* seedUsers;
+        const admin = yield* Admin.Admin;
+        const sessions = yield* Sessions.Sessions;
+        const records = yield* ImpersonationRecords.ImpersonationRecords;
+        const caller = asCaller({ id: adminId, sessionId: "admin-session" });
+        const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "x" });
+        yield* records.endEpisode(issued.session.id, "self");
+
+        const failure = yield* admin.forceStop(caller, issued.session.id).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "AdminImpersonationNotFound");
+        const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
+        assert.strictEqual(revoked._tag, "SessionNotFound");
+      }).pipe(Effect.provide(buildLayer(allow))),
   );
 });

@@ -370,15 +370,43 @@ describe("AuthHttp + Admin (real HTTP)", () => {
           handler(new Request(`${ORIGIN}/admin`, { headers: { cookie: adminCookie } })),
         );
         assert.strictEqual(all.status, 200);
-        const allRows = (yield* Effect.promise(() => all.json())) as ReadonlyArray<unknown>;
-        assert.strictEqual(allRows.length, 2);
+        type Page = { items: ReadonlyArray<{ reason: string }>; nextCursor: string | null };
+        const allPage = (yield* Effect.promise(() => all.json())) as Page;
+        assert.strictEqual(allPage.items.length, 2);
+        assert.isNull(allPage.nextCursor);
 
         const active = yield* Effect.promise(() =>
           handler(new Request(`${ORIGIN}/admin?active=true`, { headers: { cookie: adminCookie } })),
         );
         assert.strictEqual(active.status, 200);
-        const activeRows = (yield* Effect.promise(() => active.json())) as ReadonlyArray<unknown>;
-        assert.strictEqual(activeRows.length, 1);
+        const activePage = (yield* Effect.promise(() => active.json())) as Page;
+        assert.strictEqual(activePage.items.length, 1);
+
+        // ESS-006: keyset paging on the wire — newest first, opaque cursor, bounded limit.
+        const get = (query: string) =>
+          Effect.promise(() =>
+            handler(new Request(`${ORIGIN}/admin${query}`, { headers: { cookie: adminCookie } })),
+          );
+        const first = yield* get("?limit=1");
+        assert.strictEqual(first.status, 200);
+        const firstPage = (yield* Effect.promise(() => first.json())) as Page;
+        assert.strictEqual(firstPage.items.length, 1);
+        assert.isString(firstPage.nextCursor);
+        const second = yield* get(`?limit=1&cursor=${firstPage.nextCursor}`);
+        assert.strictEqual(second.status, 200);
+        const secondPage = (yield* Effect.promise(() => second.json())) as Page;
+        assert.strictEqual(secondPage.items.length, 1);
+        assert.isNull(secondPage.nextCursor);
+        // Two distinct episodes, no repeat and no gap (the order between them is the
+        // database's `startedAt DESC, id DESC`; both may share a millisecond here).
+        assert.deepStrictEqual(
+          [...firstPage.items, ...secondPage.items].map((row) => row.reason).sort(),
+          ["test", "test2"],
+        );
+
+        assert.strictEqual((yield* get("?limit=0")).status, 400);
+        assert.strictEqual((yield* get("?limit=201")).status, 400);
+        assert.strictEqual((yield* get("?cursor=not-a-cursor")).status, 400);
       }),
   );
 

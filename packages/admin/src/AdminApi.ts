@@ -79,9 +79,32 @@ export type UserIdParams = typeof UserIdParams.Type;
 export const SessionIdParams = Schema.Struct({ sessionId: PathIdSchema });
 export type SessionIdParams = typeof SessionIdParams.Type;
 
+/**
+ * ESS-006: the opaque page cursor — base64url of the JSON `(startedAt, id)` keyset
+ * position. Decoding is a plain Schema transform, so a malformed or tampered cursor
+ * is an ordinary 400 rather than a value the handler has to trust.
+ */
+export const CursorSchema = Schema.StringFromBase64Url.pipe(
+  Schema.decodeTo(
+    Schema.fromJsonString(
+      Schema.Struct({ startedAt: Schema.DateTimeUtcFromString, id: Schema.String }),
+    ),
+  ),
+);
+
+/** ESS-006: page size bounds on the wire; the server default (50) applies when omitted. */
+export const MAX_PAGE_SIZE = 200;
+export const LimitSchema = Schema.NumberFromString.pipe(
+  Schema.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: MAX_PAGE_SIZE })),
+);
+
 /** `GET /admin`'s own query params. */
-export const ListQuery = { active: Schema.optional(Schema.Literals(["true", "false"])) };
-export type ListQuery = { readonly active?: "true" | "false" | undefined };
+export const ListQuery = Schema.Struct({
+  active: Schema.optional(Schema.Literals(["true", "false"])),
+  cursor: Schema.optional(CursorSchema),
+  limit: Schema.optional(LimitSchema),
+});
+export type ListQuery = typeof ListQuery.Type;
 
 /** One row of `list` — the wire shape of `ImpersonationRecords.ImpersonationRecord`. */
 export class ImpersonationRecordDto extends Schema.Class<ImpersonationRecordDto>(
@@ -93,8 +116,18 @@ export class ImpersonationRecordDto extends Schema.Class<ImpersonationRecordDto>
   sessionId: Schema.String,
   reason: Schema.String,
   startedAt: Schema.String,
+  /** IDS-004: the impersonation session's hard expiry; null only for rows written before it was recorded. */
+  expiresAt: Schema.NullOr(Schema.String),
   endedAt: Schema.NullOr(Schema.String),
   endedBy: Schema.NullOr(Schema.Literals(["self", "forcedByAdmin", "expired"])),
+}) {}
+
+/** ESS-006: one page of `list`; `nextCursor` is null on the last page. */
+export class ImpersonationPageDto extends Schema.Class<ImpersonationPageDto>(
+  "ImpersonationPageDto",
+)({
+  items: Schema.Array(ImpersonationRecordDto),
+  nextCursor: Schema.NullOr(CursorSchema),
 }) {}
 
 export const AdminGroup = HttpApiGroup.make("admin")
@@ -127,7 +160,7 @@ export const AdminGroup = HttpApiGroup.make("admin")
   .add(
     HttpApiEndpoint.get("list", "/admin", {
       query: ListQuery,
-      success: Schema.Array(ImpersonationRecordDto),
+      success: ImpersonationPageDto,
     }),
   )
   // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `CsrfProtection`

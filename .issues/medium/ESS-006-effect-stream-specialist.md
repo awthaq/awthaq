@@ -3,7 +3,7 @@ ID: "ESS-006"
 Title: "Admin impersonation history query is unpaginated and unstreamed: SELECT * ordered, whole table per call"
 Level: medium
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/ImpersonationRecords.ts:252"
 Auditor: "effect-stream-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `performance` · `admin` · reported by **Effect Stream Specialist** (`effect-stream-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Add keyset cursor pagination to ImpersonationRecordsShape.list mirroring Session
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `admin-impersonation-lifecycle`. Evidence at HEAD ec065a7: `packages/admin/src/ImpersonationRecords.ts:249`. Fix: Keyset-paginate the impersonation history on (startedAt, id), newest-first, in both layers and on the wire. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ImpersonationRecords.list is now keyset-paginated on (startedAt, id) newest-first in both layers (limit default 50, reads at most limit+1 rows, an exactly-full last page yields no cursor); migration create_admin_impersonation_started_at_index; wire: GET /admin takes cursor (opaque base64url JSON decoded by a Schema transform, no casts) and limit (1..200) and answers ImpersonationPageDto { items, nextCursor } (BREAKING vs. the old bare array; pre-release). Admin.list applies canManageEpisode per page (a page may hold fewer than limit visible rows with nextCursor still set; documented). Tests red first: ImpersonationRecords.test.ts 'ESS-006: list pages newest-first with a stable cursor across equal startedAt' (5 rows same instant, limit 2 -> 3 pages, no dupes/gaps, both layers), AuthHttp.test.ts paging + 400 on limit=0/201/garbage cursor. Spec BEH-EA-219 amended. Skipped the optional ImpersonationRecords.stream export (no consumer yet).

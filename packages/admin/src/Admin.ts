@@ -144,8 +144,20 @@ export interface AdminShape {
   /** BEH-EA-219: rows are filtered through `canManageEpisode` (IDS-001); full history by default, `active` narrows to unended episodes. */
   readonly list: (
     caller: Api.UserPrincipal,
-    input?: { readonly active?: boolean },
-  ) => Effect.Effect<ReadonlyArray<ImpersonationRecords.ImpersonationRecord>>;
+    input?: {
+      readonly active?: boolean | undefined;
+      readonly cursor?: ImpersonationRecords.ImpersonationCursor | undefined;
+      readonly limit?: number | undefined;
+    },
+  ) => Effect.Effect<ImpersonationRecords.ImpersonationPage>;
+  /**
+   * IDS-004: closes every episode whose session hard-expired, as
+   * `endedBy: "expired"`, publishing one `impersonationStopped` per closed
+   * episode; resolves to how many it closed. `list`/`forceStop` already run
+   * this lazily, so a host only schedules it (`Effect.repeat`/`Schedule`) when
+   * it wants the audit trail closed without anyone reading it.
+   */
+  readonly sweepExpired: Effect.Effect<number>;
 }
 
 const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto =>
@@ -168,6 +180,7 @@ const toRecordDto = (
     sessionId: record.sessionId,
     reason: record.reason,
     startedAt: DateTime.formatIso(record.startedAt),
+    expiresAt: Option.match(record.expiresAt, { onNone: () => null, onSome: DateTime.formatIso }),
     endedAt: Option.match(record.endedAt, { onNone: () => null, onSome: DateTime.formatIso }),
     endedBy: Option.getOrNull(record.endedBy),
   });
@@ -233,8 +246,15 @@ export const AdminHandlers = HttpApiBuilder.group(
       }),
       list: Effect.fnUntraced(function* ({ query }: { query: AdminApi.ListQuery }) {
         const caller = yield* currentUserPrincipal;
-        const records = yield* admin.list(caller, { active: query.active === "true" });
-        return records.map(toRecordDto);
+        const page = yield* admin.list(caller, {
+          active: query.active === "true",
+          cursor: query.cursor,
+          limit: query.limit,
+        });
+        return new AdminApi.ImpersonationPageDto({
+          items: page.items.map(toRecordDto),
+          nextCursor: Option.getOrNull(page.nextCursor),
+        });
       }),
     });
   }),
@@ -296,6 +316,34 @@ const adminMigrations: Migrations.Migrations = [
           sql`CREATE INDEX admin_impersonation_session_id ON admin_impersonation(sessionId)`,
         sqlite: () =>
           sql`CREATE INDEX admin_impersonation_session_id ON admin_impersonation(sessionId)`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+  {
+    // IDS-004: each episode records its session's hard expiry so an expired episode can
+    // be closed as `endedBy = 'expired'`. Nullable: rows written before this migration
+    // have no recorded expiry and are simply never auto-closed (pre-release; no backfill).
+    name: "add_admin_impersonation_expires_at",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`ALTER TABLE admin_impersonation ADD COLUMN expiresAt TIMESTAMPTZ`,
+        sqlite: () => sql`ALTER TABLE admin_impersonation ADD COLUMN expiresAt TEXT`,
+        orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+      });
+    }),
+  },
+  {
+    // ESS-006: the keyset the history is paged on — `(startedAt, id)` newest-first.
+    name: "create_admin_impersonation_started_at_index",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () =>
+          sql`CREATE INDEX admin_impersonation_started_at ON admin_impersonation(startedAt, id)`,
+        sqlite: () =>
+          sql`CREATE INDEX admin_impersonation_started_at ON admin_impersonation(startedAt, id)`,
         orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
       });
     }),
@@ -365,6 +413,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           targetUserId,
           sessionId: issued.session.id,
           reason: trimmedReason,
+          expiresAt: issued.session.absoluteExpiresAt,
         });
         yield* events.publish({
           _tag: "auth.admin.impersonationStarted",
@@ -376,19 +425,47 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         return issued;
       });
 
+      /**
+       * IDS-004: closes every episode whose session hard-expired and announces each
+       * once — `closeExpired` returns only the rows *this* call closed, so concurrent
+       * readers never double-publish.
+       */
+      const sweepExpired: AdminShape["sweepExpired"] = Effect.gen(function* () {
+        const closed = yield* records.closeExpired(yield* DateTime.now);
+        yield* Effect.forEach(
+          closed,
+          (episode) =>
+            events.publish({
+              _tag: "auth.admin.impersonationStopped",
+              sessionId: episode.sessionId,
+              endedBy: "expired",
+            }),
+          { discard: true },
+        );
+        return closed.length;
+      });
+
+      /** IDS-007: idempotent — a session already gone (revokeAll, expiry sweep) is the desired end state. */
+      const revokeQuietly = (sessionId: string) =>
+        sessions
+          .revoke(Sessions.SessionId(sessionId))
+          .pipe(Effect.catchTag("SessionNotFound", () => Effect.void));
+
       const stopImpersonating: AdminShape["stopImpersonating"] = Effect.fnUntraced(
         function* (caller) {
           if (caller.actingAs === undefined) {
             return yield* Effect.fail(new AdminApi.AdminImpersonationNotFound());
           }
-          yield* records
-            .endEpisode(caller.sessionId, "self")
-            .pipe(
-              Effect.catchTag("ImpersonationRecordNotFound", () =>
-                Effect.fail(new AdminApi.AdminImpersonationNotFound()),
-              ),
+          // IDS-007: `actingAs` on the caller's own session is proof enough, so revocation
+          // is the primary act and never depends on the audit row's state.
+          yield* revokeQuietly(caller.sessionId);
+          const closed = yield* records.endEpisode(caller.sessionId, "self").pipe(Effect.option);
+          if (Option.isNone(closed)) {
+            yield* Effect.logWarning(
+              `awthaq: stopImpersonating revoked session ${caller.sessionId} but found no open audit episode for it`,
             );
-          yield* sessions.revoke(Sessions.SessionId(caller.sessionId)).pipe(Effect.orDie);
+            return;
+          }
           yield* events.publish({
             _tag: "auth.admin.impersonationStopped",
             sessionId: caller.sessionId,
@@ -398,6 +475,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       );
 
       const forceStop: AdminShape["forceStop"] = Effect.fnUntraced(function* (caller, sessionId) {
+        yield* sweepExpired;
         // IDS-001: the row is the only proof `sessionId` is an impersonation
         // session, and the per-episode gate needs its target.
         const episode = yield* records.findBySessionId(sessionId);
@@ -409,6 +487,10 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           episode: episode.value,
         });
         if (!allowed) return yield* deny(caller);
+        // IDS-007: revoke first and idempotently — the row proves this really is an
+        // impersonation session, so it is safe to revoke even if the row is already
+        // ended (which is then reported as not-found below).
+        yield* revokeQuietly(sessionId);
         yield* records
           .endEpisode(sessionId, "forcedByAdmin")
           .pipe(
@@ -416,7 +498,6 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
               Effect.fail(new AdminApi.AdminImpersonationNotFound()),
             ),
           );
-        yield* sessions.revoke(Sessions.SessionId(sessionId)).pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.admin.impersonationStopped",
           sessionId,
@@ -425,17 +506,28 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       });
 
       const list: AdminShape["list"] = Effect.fnUntraced(function* (caller, input) {
+        // IDS-004: lazy reconciliation — an expired episode is never reported active.
+        yield* sweepExpired;
         const admin = subjectOf(caller);
-        const rows = yield* records.list(input);
-        // IDS-001: per-row gate — a deny-all/unconfigured host exposes nothing.
-        return yield* Effect.filter(
-          rows,
+        const page = yield* records.list(input);
+        // IDS-001: per-row gate — a deny-all/unconfigured host exposes nothing. The gate
+        // runs after paging, so a page can hold fewer than `limit` visible rows while
+        // `nextCursor` still points onward.
+        const items = yield* Effect.filter(
+          page.items,
           (episode) => adminConfig.canManageEpisode({ admin, episode }),
           { concurrency: 8 },
         );
+        return { items, nextCursor: page.nextCursor };
       });
 
-      return Admin.of({ impersonate, stopImpersonating, forceStop, list });
+      return Admin.of({ impersonate, stopImpersonating, forceStop, list, sweepExpired });
     }),
   });
 }
+
+/** IDS-004: `Admin.sweepExpired` as a bare Effect — `Effect.repeat(Admin.sweepExpiredEpisodes, Schedule.spaced("1 minute"))`. */
+export const sweepExpiredEpisodes = Effect.gen(function* () {
+  const admin = yield* Admin;
+  return yield* admin.sweepExpired;
+});

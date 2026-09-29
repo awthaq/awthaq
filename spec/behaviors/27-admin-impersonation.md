@@ -150,6 +150,7 @@ interface ImpersonationRecord {
   readonly sessionId: SessionId
   readonly reason: string
   readonly startedAt: DateTime.Utc
+  readonly expiresAt: DateTime.Utc | null   // the session's hard expiry (IDS-004)
   readonly endedAt: DateTime.Utc | null
   readonly endedBy: "self" | "forcedByAdmin" | "expired" | null
 }
@@ -161,7 +162,16 @@ REQUIREMENT: `impersonate` MUST insert one `admin_impersonation` row per
              `endedAt`/`endedBy` MUST be populated exactly once, by
              whichever of `stopImpersonating` (BEH-EA-216), `forceStop`
              (BEH-EA-217), or hard-expiry observation sets them first.
+             The row MUST record the session's hard expiry (`expiresAt`).
+             Hard-expiry observation MUST close every open episode whose
+             `expiresAt` has passed as `endedBy: "expired"` (`endedAt` =
+             its `expiresAt`), lazily before `list`/`forceStop` run and via
+             an exported sweep (`Admin.sweepExpiredEpisodes`), publishing
+             one `auth.admin.impersonationStopped { endedBy: "expired" }`
+             per episode it closes, exactly once.
 ```
+
+IDS-004: before this, `"expired"` was declared but nothing produced it, so a naturally-expired episode stayed reported `active` forever and the audit trail never closed. The close is a single atomic statement that returns only the rows it closed, so concurrent readers cannot double-announce an episode.
 
 This is the table [MOD-EA-015](../models/15-admin-impersonation.md) named without specifying its shape. It exists independently of the `Session` row itself (BEH-EA-209): a session row can be deleted or expire out of any active-sessions view, but the audit record of who impersonated whom, when, and why must survive that, satisfying `archive/PRD.md` §18's "audit events" as real persisted history rather than only a transient event-bus emission.
 
@@ -177,7 +187,10 @@ yield* client.admin.stopImpersonating()   // acts on the caller's own current (i
 REQUIREMENT: `stopImpersonating` MUST revoke the caller's own current
              session (which MUST carry `actingAs`, or the call fails) and
              set the matching `admin_impersonation` row's `endedAt`/
-             `endedBy: "self"`. It MUST NOT issue any replacement session —
+             `endedBy: "self"`. Revocation is the primary, idempotent act:
+             it MUST NOT depend on the audit row (missing or already ended)
+             and MUST NOT fail when the session is already gone; recording
+             the episode end is best-effort after it (IDS-007). It MUST NOT issue any replacement session —
              the caller is expected to already hold their own original
              session's token from before `impersonate` was called. In
              cookie mode the response MUST expire `__Host-impersonation`
@@ -204,7 +217,12 @@ REQUIREMENT: `forceStop` MUST look the episode up by the named session id
              same `canImpersonate` decision over the episode's target).
              On success it MUST revoke the named session and set the
              matching `admin_impersonation` row's `endedAt`/`endedBy:
-             "forcedByAdmin"`.
+             "forcedByAdmin"`. Revocation is idempotent (an already-gone
+             session, e.g. after the target's `revokeAll`, is not an error
+             and never a defect) and MUST only ever be applied to a session
+             an episode row proves is an impersonation session; an episode
+             that had already ended is reported `AdminImpersonationNotFound`
+             (its live session, if any, is still revoked) (IDS-007).
 ```
 
 [MOD-EA-015](../models/15-admin-impersonation.md) named this explicitly as an undecided question. Resolved here: yes, an admin (any caller passing the same gate) can end another active impersonation episode, identified by the impersonation session's own id — the same id BEH-EA-219's listing endpoint surfaces — rather than inventing a second, parallel identifier space for it.
@@ -232,15 +250,22 @@ _Previous: [BEH-EA-217](27-admin-impersonation.md#beh-ea-217-forcestop-lets-anot
 ## BEH-EA-219: The audit trail is queryable
 
 ```ts
-yield* client.admin.list()                         // full history, newest first
+yield* client.admin.list()                         // first page of the history, newest first
 yield* client.admin.list({ urlParams: { active: "true" } })  // endedAt IS NULL only
+yield* client.admin.list({ urlParams: { limit: 50, cursor } }) // next page: { items, nextCursor }
 ```
 
 ```text
 REQUIREMENT: `Admin` MUST expose a listing endpoint over `admin_impersonation`,
              filtering each row through `canManageEpisode` (IDS-001),
-             returning full history ordered newest-first by default, with an `active`
-             filter narrowing to rows whose `endedAt` is still null.
+             returning history ordered newest-first by default, with an `active`
+             filter narrowing to rows whose `endedAt` is still null. The
+             listing MUST be keyset-paginated on `(startedAt, id)` — an
+             opaque cursor in, `{ items, nextCursor }` out, `limit`
+             defaulting to 50 and bounded to 1..200 on the wire, never an
+             offset and never more than `limit + 1` rows read (BEH-EA-036;
+             ESS-006). An expired episode MUST NOT be listed as active
+             (IDS-004).
 ```
 
 An audit trail nobody can query defeats much of its own purpose; both the "what happened" (full history) and "what's live right now" (support-ops needing a kill switch target for BEH-EA-217) shapes are real, distinct use cases over the same one table.

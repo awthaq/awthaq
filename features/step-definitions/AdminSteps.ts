@@ -25,6 +25,13 @@ const impersonate = Effect.fn("features.admin.impersonate")(function* (
   });
 });
 
+/** ESS-006: `GET /admin` answers a page `{ items, nextCursor }`; the scenarios only read the rows. */
+const listRows = <A>(response: Response) =>
+  Effect.promise(async () => {
+    const body: { readonly items: ReadonlyArray<A> } = await response.json();
+    return body.items;
+  });
+
 export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- BEH-EA-209: actingAs is a real field on session issuance (400) ----
 
@@ -323,12 +330,12 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       const impersonateResponse = (yield* getOutcome("impersonateResponse")) as Response;
       const sessionId = cookieFrom(impersonateResponse).split("=")[1]!.split(".")[0]!;
       const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
-      const rows = (yield* Effect.promise(() => listResponse.json())) as ReadonlyArray<{
+      const rows = yield* listRows<{
         readonly adminUserId: string;
         readonly targetUserId: string;
         readonly sessionId: string;
         readonly endedAt: string | null;
-      }>;
+      }>(listResponse);
       const match = rows.find((row) => row.sessionId === sessionId);
       if (match === undefined)
         throw new Error("expected an audit row for the new impersonation session");
@@ -365,11 +372,11 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       const adminCookie = (yield* getOutcome("adminCookie")) as string;
       const sessionId = (yield* getOutcome("sessionId")) as string;
       const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
-      const rows = (yield* Effect.promise(() => listResponse.json())) as ReadonlyArray<{
+      const rows = yield* listRows<{
         readonly sessionId: string;
         readonly endedAt: string | null;
         readonly endedBy: string | null;
-      }>;
+      }>(listResponse);
       const match = rows.find((row) => row.sessionId === sessionId);
       if (match === undefined) throw new Error("expected to find the matching audit row");
       if (match.endedAt === null || match.endedBy !== "self") {
@@ -525,10 +532,10 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       const adminCookie = (yield* getOutcome("adminCookie")) as string;
       const sessionId = (yield* getOutcome("sessionId")) as string;
       const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
-      const rows = (yield* Effect.promise(() => listResponse.json())) as ReadonlyArray<{
+      const rows = yield* listRows<{
         readonly sessionId: string;
         readonly endedBy: string | null;
-      }>;
+      }>(listResponse);
       const match = rows.find((row) => row.sessionId === sessionId);
       if (match === undefined || match.endedBy !== "forcedByAdmin") {
         throw new Error(`expected endedBy "forcedByAdmin", got ${match?.endedBy}`);
@@ -704,9 +711,9 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     "both episodes are returned, ordered newest first",
     Effect.fn(function* () {
       const response = (yield* getOutcome("listResponse")) as Response;
-      const rows = (yield* Effect.promise(() => response.json())) as ReadonlyArray<{
+      const rows = yield* listRows<{
         readonly startedAt: string;
-      }>;
+      }>(response);
       if (rows.length !== 2) throw new Error(`expected 2 rows, got ${rows.length}`);
       const [first, second] = rows;
       if (first!.startedAt < second!.startedAt) {
@@ -730,9 +737,9 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     "only the currently-active episode is returned",
     Effect.fn(function* () {
       const response = (yield* getOutcome("listResponse")) as Response;
-      const rows = (yield* Effect.promise(() => response.json())) as ReadonlyArray<{
+      const rows = yield* listRows<{
         readonly endedAt: string | null;
-      }>;
+      }>(response);
       if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
       if (rows[0]!.endedAt !== null)
         throw new Error("expected the active row's endedAt to be null");
@@ -826,7 +833,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.fn(function* () {
       const adminCookie = (yield* getOutcome("adminCookie")) as string;
       const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
-      const rows = (yield* Effect.promise(() => listResponse.json())) as ReadonlyArray<unknown>;
+      const rows = yield* listRows<unknown>(listResponse);
       if (rows.length !== 0) throw new Error(`expected an empty audit trail, got ${rows.length}`);
     }),
   );
@@ -852,7 +859,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       if (response.status !== 200) throw new Error(`expected 200, got ${response.status}`);
       applySetCookies(jar, response);
       const asTarget = yield* request("GET", "/admin", { headers: { cookie: jarHeader(jar) } });
-      const rows = (yield* Effect.promise(() => asTarget.json())) as ReadonlyArray<unknown>;
+      const rows = yield* listRows<unknown>(asTarget);
       if (rows.length !== 0) throw new Error("expected the jar to be served as the target");
     }),
   );
@@ -875,9 +882,9 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.fn(function* () {
       const jar = (yield* getOutcome("jar")) as Map<string, string>;
       const response = yield* request("GET", "/admin", { headers: { cookie: jarHeader(jar) } });
-      const rows = (yield* Effect.promise(() => response.json())) as ReadonlyArray<{
+      const rows = yield* listRows<{
         readonly endedBy: string | null;
-      }>;
+      }>(response);
       if (rows.length !== 1 || rows[0]?.endedBy !== "self") {
         throw new Error("expected the ended episode to be listed for the admin's own session");
       }
