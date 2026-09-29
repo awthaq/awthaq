@@ -42,6 +42,9 @@ const parseHeader = (text: string): readonly [string, string] => {
   return [text.slice(0, at).toLowerCase(), text.slice(at + 2)];
 };
 
+/** A cookie jar entry with no CSRF token: any `Cookie` header takes a request out of the cookie-less exemption. */
+const STALE_SESSION_COOKIE = "__Host-session=stale.secret";
+
 const cookieHeaderFor = (token: string) => `${Api.CSRF_COOKIE_NAME}=${token}`;
 
 /** The pair a browser client would send once the server has issued its cookie. */
@@ -319,9 +322,28 @@ export const csrfSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- REQ-EA-216: only unsafe methods ----
 
   Given(
-    "a request using the {string} method with no CSRF header, no double-submit cookie, and no Sec-Fetch-Site header",
+    "a request using the {string} method carrying a stale session cookie, with no CSRF header, no double-submit cookie, and no Sec-Fetch-Site header",
     function* (method: string) {
       yield* arrange({ method });
+      yield* arrange({ header: ["cookie", STALE_SESSION_COOKIE] });
+    },
+  );
+
+  Given(
+    "an unsafe {string} request with no {string} header and no CSRF pair, carrying {string}",
+    function* (method: string, header: string, signal: string) {
+      assert.equal(header, "Cookie");
+      yield* arrange({ method });
+      if (signal.startsWith("Sec-Fetch-Site: same-site")) {
+        yield* arrange({ header: ["sec-fetch-site", "same-site"] });
+        yield* arrange({ header: ["origin", EVIL_ORIGIN] });
+      } else if (signal.startsWith("Sec-Fetch-Site:")) {
+        yield* arrange({ header: parseHeader(signal) });
+      } else if (signal.startsWith("an Origin outside")) {
+        yield* arrange({ header: ["origin", EVIL_ORIGIN] });
+      } else {
+        assert.equal(signal, "no site signal at all (a native client)");
+      }
     },
   );
 
@@ -350,7 +372,9 @@ export const csrfSteps = defineSteps<World>(({ Given, When, Then }) => {
         yield* arrange({ header: ["origin", EVIL_ORIGIN] });
       } else {
         assert.equal(check, "double-submit cookie");
-        // No site signal at all, and no pair: only the double-submit check can reject.
+        // No site signal at all, and no pair: only the double-submit check can reject (a stale
+        // cookie is on the request, so the cookie-less exemption does not apply).
+        yield* arrange({ header: ["cookie", STALE_SESSION_COOKIE] });
       }
     },
   );
@@ -373,6 +397,7 @@ export const csrfSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.ok(middlewareKeys(AppApi.groups.app).includes(middleware));
       assert.ok(middlewareKeys(BillingApi.groups.billing).includes(middleware));
       yield* arrange({ method: "POST" });
+      yield* arrange({ header: ["cookie", STALE_SESSION_COOKIE] });
     },
   );
 
@@ -502,13 +527,13 @@ export const csrfSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   Then(
-    "an unsafe {string} request with an empty {string} header and no CSRF pair is still rejected",
+    "an unsafe {string} request with an empty {string} header, a session cookie and no CSRF pair is still rejected",
     function* (method: string, header: string) {
       assert.equal(header, "Authorization");
       const observed = yield* send({
         method,
         group: "app",
-        headers: { authorization: "   " },
+        headers: { authorization: "   ", cookie: STALE_SESSION_COOKIE },
       });
       assert.ok(isRejected(observed), `${observed.status} ${observed.body}`);
     },

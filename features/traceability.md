@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1186 `REQ-EA-NNN` ids allocated across 37 `.feature` files.
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1187 `REQ-EA-NNN` ids allocated across 37 `.feature` files.
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1204,3 +1204,4 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1184 | [BEH-EA-282](../spec/behaviors/34-webhooks.md#beh-ea-282-the-delivery-log-takes-part-in-erasure-and-export-and-is-pruned) | [15-webhooks/34-webhooks.feature](features/15-webhooks/34-webhooks.feature) | Finished rows are pruned after the retention period and pending rows never are |
 | REQ-EA-1185 | [BEH-EA-282](../spec/behaviors/34-webhooks.md#beh-ea-282-the-delivery-log-takes-part-in-erasure-and-export-and-is-pruned) | [15-webhooks/34-webhooks.feature](features/15-webhooks/34-webhooks.feature) | Over an endpoint's outbound budget a delivery waits and no attempt is spent |
 | REQ-EA-1186 | [BEH-EA-282](../spec/behaviors/34-webhooks.md#beh-ea-282-the-delivery-log-takes-part-in-erasure-and-export-and-is-pruned) | [15-webhooks/34-webhooks.feature](features/15-webhooks/34-webhooks.feature) | The auth.user.deleted delivery is queued after the erasure commits and names the erased id |
+| REQ-EA-1187 | [BEH-EA-077](../spec/behaviors/10-csrf.md#beh-ea-077-only-unsafe-methods-are-protected-safe-methods-are-exempt-by-construction) | [03-http-layer/10-csrf.feature](features/03-http-layer/10-csrf.feature) | An unsafe request with no Cookie header skips the double-submit pair but not the site checks |
