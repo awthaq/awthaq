@@ -23,6 +23,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
+import * as Tenant from "./Tenant.ts";
 import { UserId } from "./Users.ts";
 
 // MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
@@ -72,6 +73,24 @@ export class LastAccountRefusal extends Data.TaggedError("LastAccountRefusal")<{
   readonly message: string;
   readonly userId: UserId;
 }> {}
+
+/**
+ * PV-221/BEH-EA-045: whether a User may be left with zero Accounts. `false` (the default) refuses
+ * unlinking the last one (`LastAccountRefusal`); a deployment that deliberately wants a User to
+ * outlive its last credential (an account kept for its data, re-entered through recovery or an
+ * admin) opts in with `Accounts.config({ allowZeroAccounts: true })`. Like every core config it
+ * can also be applied to one call (`Effect.provideService`) or one tenant (`Tenant.configApplied`).
+ */
+export interface AccountsPolicyShape {
+  readonly allowZeroAccounts: boolean;
+}
+
+export const AccountsPolicy = Context.Reference<AccountsPolicyShape>("awthaq/core/AccountsPolicy", {
+  defaultValue: () => ({ allowZeroAccounts: false }),
+});
+
+export const config = (partial: Partial<AccountsPolicyShape>) =>
+  Layer.succeed(AccountsPolicy, { allowZeroAccounts: false, ...partial });
 
 /**
  * SMS-002: the stored provider tokens for an account cannot be decrypted —
@@ -245,6 +264,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
     const crypto = yield* Crypto.Crypto;
+    const policyNow = Tenant.configInForce(AccountsPolicy, yield* AccountsPolicy);
 
     const link: AccountsShape["link"] = Effect.fnUntraced(
       function* (input) {
@@ -320,47 +340,49 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
       );
 
     const unlink: AccountsShape["unlink"] = (id) =>
-      Ref.modify(
-        state,
-        (s): readonly [Result.Result<void, AccountNotFound | LastAccountRefusal>, State] => {
-          const existing = HashMap.get(s.byId, id);
-          if (Option.isNone(existing)) {
+      Effect.flatMap(policyNow, (policy) =>
+        Ref.modify(
+          state,
+          (s): readonly [Result.Result<void, AccountNotFound | LastAccountRefusal>, State] => {
+            const existing = HashMap.get(s.byId, id);
+            if (Option.isNone(existing)) {
+              return [
+                Result.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
+                s,
+              ] as const;
+            }
+            const siblingCount = Array.from(HashMap.values(s.byId)).filter(
+              (row) => row.userId === existing.value.userId,
+            ).length;
+            if (siblingCount <= 1 && !policy.allowZeroAccounts) {
+              return [
+                Result.fail(
+                  new LastAccountRefusal({
+                    message: "awthaq: refusing to unlink the last account",
+                    userId: existing.value.userId,
+                  }),
+                ),
+                s,
+              ] as const;
+            }
+            const key = providerSubjectKey(
+              existing.value.providerId,
+              existing.value.subject,
+              Option.getOrUndefined(existing.value.issuer),
+            );
+            const ok: Result.Result<void, AccountNotFound | LastAccountRefusal> =
+              Result.succeed(undefined);
             return [
-              Result.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
-              s,
+              ok,
+              {
+                byId: HashMap.remove(s.byId, id),
+                byProviderSubject: HashMap.remove(s.byProviderSubject, key),
+                credentialHashes: HashMap.remove(s.credentialHashes, id),
+                providerTokens: HashMap.remove(s.providerTokens, id),
+              },
             ] as const;
-          }
-          const siblingCount = Array.from(HashMap.values(s.byId)).filter(
-            (row) => row.userId === existing.value.userId,
-          ).length;
-          if (siblingCount <= 1) {
-            return [
-              Result.fail(
-                new LastAccountRefusal({
-                  message: "awthaq: refusing to unlink the last account",
-                  userId: existing.value.userId,
-                }),
-              ),
-              s,
-            ] as const;
-          }
-          const key = providerSubjectKey(
-            existing.value.providerId,
-            existing.value.subject,
-            Option.getOrUndefined(existing.value.issuer),
-          );
-          const ok: Result.Result<void, AccountNotFound | LastAccountRefusal> =
-            Result.succeed(undefined);
-          return [
-            ok,
-            {
-              byId: HashMap.remove(s.byId, id),
-              byProviderSubject: HashMap.remove(s.byProviderSubject, key),
-              credentialHashes: HashMap.remove(s.credentialHashes, id),
-              providerTokens: HashMap.remove(s.providerTokens, id),
-            },
-          ] as const;
-        },
+          },
+        ),
       ).pipe(Effect.flatMap(Effect.fromResult));
 
     const findById: AccountsShape["findById"] = (id) =>
@@ -538,6 +560,7 @@ export const layerSql: Layer.Layer<
   Effect.gen(function* () {
     const repo = yield* SqlRepositories.AccountsRepository;
     const sql = yield* SqlClient.SqlClient;
+    const policyNow = Tenant.configInForce(AccountsPolicy, yield* AccountsPolicy);
 
     const link: AccountsShape["link"] = Effect.fnUntraced(function* (input) {
       const insert = yield* repo.models.Account.insert
@@ -610,7 +633,8 @@ export const layerSql: Layer.Layer<
       const siblings = yield* repo
         .listByUser(account.userId)
         .pipe(orStoreUnavailable("Accounts.unlink"));
-      if (siblings.length <= 1) {
+      const policy = yield* policyNow;
+      if (siblings.length <= 1 && !policy.allowZeroAccounts) {
         return yield* Effect.fail(
           new LastAccountRefusal({
             message: "awthaq: refusing to unlink the last account",

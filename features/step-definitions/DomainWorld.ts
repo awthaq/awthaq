@@ -83,6 +83,8 @@ export interface Faults {
   failExportContribution: boolean;
   /** BEH-EA-254: switches every rate-limit rule from permissive to the real in-memory limiter (off by default: this composition is about identity rows). */
   enforceRateLimits: boolean;
+  /** PV-221: the deployment policy `Accounts.config({ allowZeroAccounts })`, applied to `unlink` calls. */
+  allowZeroAccounts: boolean;
 }
 
 export interface Probes {
@@ -242,6 +244,7 @@ const makeProbes = () => ({
     failCredentialUpdate: false,
     failExportContribution: false,
     enforceRateLimits: false,
+    allowZeroAccounts: false,
   }),
   sightings: Ref.makeUnsafe<ReadonlyArray<TransactionSighting>>([]),
   events: Ref.makeUnsafe<ReadonlyArray<AuthEvents.Published>>([]),

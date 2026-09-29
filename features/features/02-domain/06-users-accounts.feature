@@ -127,9 +127,7 @@ Feature: Users and Accounts
       Then the refusal is reported as an invalid request outcome
       And it is not reported as a system defect
 
-    # @skip: PV-221 — `Accounts.unlink` refuses the last Account unconditionally; no deployment policy
-    # (config, layer or option) exists to allow a zero-Account user, so there is nothing to wire.
-    @skip
+    # PV-221: the policy is `Accounts.config({ allowZeroAccounts })`, applied to the call here.
     @REQ-EA-125
     Scenario: A deployment that explicitly allows zero-credential accounts permits the unlink
       Given a signed-in user "grace" with exactly one Account, "password"

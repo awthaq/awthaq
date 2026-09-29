@@ -129,6 +129,8 @@ REQUIREMENT: Unlinking an Account MUST be refused when it is the User's
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §3.4 documents the identical rule and its blame assignment: the request is well-formed, but its effect — zero ways to authenticate — is exactly what the precondition exists to prevent. `archive/PRD.md` §11 (passkey removal, "refuses to remove the last credential when no other method exists") and §17 (unlink) both restate the same guarantee for their own credential types, so this is one rule enforced uniformly across every credential-bearing plugin, not re-derived per plugin.
 
+**As shipped (PV-221):** the deployment policy is `Accounts.config({ allowZeroAccounts: true })` (`Accounts.AccountsPolicy`, default `false`), read by both `layerMemory` and `layerSql`; it may also be applied to a single call with `Effect.provideService` or per tenant with `Tenant.configApplied`. `@awthaq/passkey`'s last-credential guard (BEH-EA-134) is the plugin-side twin and is unchanged (REQ-EA-125, `packages/core/test/Accounts.test.ts`).
+
 ## BEH-EA-046: Deleting a User cascades to its Accounts and Sessions; deleting or unlinking an Account never cascades to Sessions
 
 ```text

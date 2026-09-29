@@ -131,6 +131,31 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
       }).pipe(Effect.provide(layer)),
     );
 
+    // PV-221: BEH-EA-045's "unless the deployment's policy explicitly allows it".
+    it.effect("PV-221: a deployment that allows zero accounts may unlink the last one", () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts.Accounts;
+        const only = yield* accounts.link({ userId, providerId: "google", subject: "sub-zero" });
+        yield* accounts.unlink(only.id);
+        assert.strictEqual((yield* accounts.listByUser(userId)).length, 0);
+      }).pipe(
+        Effect.provide(layer.pipe(Layer.provide(Accounts.config({ allowZeroAccounts: true })))),
+      ),
+    );
+
+    it.effect("PV-221: the policy can also be applied to one call, like a tenant override", () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts.Accounts;
+        const only = yield* accounts.link({ userId, providerId: "google", subject: "sub-zero-2" });
+        const refusal = yield* accounts.unlink(only.id).pipe(Effect.flip);
+        assert.strictEqual(refusal._tag, "LastAccountRefusal");
+        yield* accounts
+          .unlink(only.id)
+          .pipe(Effect.provideService(Accounts.AccountsPolicy, { allowZeroAccounts: true }));
+        assert.strictEqual((yield* accounts.listByUser(userId)).length, 0);
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("BEH-EA-045/047: unlinking succeeds when another account remains", () =>
       Effect.gen(function* () {
         const accounts = yield* Accounts.Accounts;

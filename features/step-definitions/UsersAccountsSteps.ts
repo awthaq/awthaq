@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlError } from "effect/unstable/sql/SqlError";
 import { direct, directExit, World } from "./DomainWorld.ts";
@@ -128,13 +129,21 @@ const unlinkProvider = Effect.fn("features.usersAccounts.unlinkProvider")(functi
   name: string,
   provider: string,
 ) {
-  const { exits } = yield* World;
+  const { exits, probes } = yield* World;
   const userId = yield* userIdOf(name);
   const account = (yield* accountsOf(userId)).find((record) => record.providerId === provider);
   assert.ok(account !== undefined, `${name} has a ${provider} Account to unlink`);
+  // PV-221: the deployment policy a scenario states is applied to the call, the way a tenant
+  // override is (`Accounts.AccountsPolicy`).
+  const allowZero = (yield* Ref.get(probes.faults)).allowZeroAccounts;
+  const unlink = Effect.flatMap(Accounts.Accounts, (accounts) => accounts.unlink(account.id));
   yield* exits.set(
     "unlink",
-    yield* directExit(Effect.flatMap(Accounts.Accounts, (accounts) => accounts.unlink(account.id))),
+    yield* directExit(
+      allowZero
+        ? Effect.provideService(unlink, Accounts.AccountsPolicy, { allowZeroAccounts: true })
+        : unlink,
+    ),
   );
 });
 
@@ -623,6 +632,25 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
 
   When("{string} attempts to unlink his only Account", function* (name: string) {
     yield* unlinkProvider(name, Accounts.PASSWORD_PROVIDER_ID);
+  });
+
+  Given(
+    "the deployment's policy explicitly allows leaving a User with zero Accounts",
+    function* () {
+      const { probes } = yield* World;
+      yield* Ref.update(probes.faults, (faults) => ({ ...faults, allowZeroAccounts: true }));
+    },
+  );
+
+  When("{string} unlinks her only Account", function* (name: string) {
+    yield* unlinkProvider(name, Accounts.PASSWORD_PROVIDER_ID);
+  });
+
+  Then("the unlink succeeds", function* () {
+    const { exits } = yield* World;
+    assert.ok(Exit.isSuccess(yield* exits.get("unlink")), "the unlink must succeed");
+    const accounts = yield* accountsOf(yield* userIdOf(yield* currentName()));
+    assert.equal(accounts.length, 0);
   });
 
   Then("the unlink is refused", function* () {
