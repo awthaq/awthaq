@@ -43,7 +43,7 @@
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "@xmldom/xmldom": "0.8.15",
+    "@xmldom/xmldom": "0.9.12",
     "effect": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
