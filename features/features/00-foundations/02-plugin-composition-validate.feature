@@ -78,7 +78,7 @@ Feature: Plugin Composition and Validate<P>
       Then the rejection is a literal string naming both "Password" and "TwoFactor"
       And the rejection is not merely an opaque unsatisfied service requirement
 
-    @REQ-EA-641
+    @REQ-EA-681
     Scenario: A dependent listed before its dependency fails composition at compile time
       Given a plugin tuple listing "TwoFactor" before its declared dependency "Password"
       When "Auth.make" composes the tuple
@@ -108,7 +108,7 @@ Feature: Plugin Composition and Validate<P>
       When "Auth.make" composes the tuple
       Then composition succeeds
 
-    @REQ-EA-642
+    @REQ-EA-682
     Scenario: The slot-conflict check runs without the application providing a slots registry
       Given a plugin tuple containing "Roles" and "Organization", both overriding the "SubjectResolver" slot
       When the composed layer is built without any explicit "Slots.layer"

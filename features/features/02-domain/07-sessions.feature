@@ -121,6 +121,7 @@ Feature: Sessions
     # @skip: no changeEmail capability exists in any package (no changeEmail-shaped endpoint
     # or Users operation), so there is nothing to perform; un-skip when one ships (SMS-008)
     @skip
+    @REQ-EA-684
     Scenario: An email change issues a new session and tombstones the superseded row
       Given a signed-in user "alice" with session "s0"
       When "alice" performs a "email change"
@@ -153,6 +154,7 @@ Feature: Sessions
 
     # TIR-006: the sixth session endpoint (POST /session/revoke-all) kills the caller's own
     # session too and expires its cookie (CSS-002).
+    @REQ-EA-685
     Scenario: Revoking all sessions also ends the caller's current session
       Given "alice" has sessions "s1" (current), "s2", and "s3"
       When "alice" revokes all of her sessions

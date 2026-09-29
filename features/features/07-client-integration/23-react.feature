@@ -44,6 +44,7 @@ Feature: React Bindings
     # composition and their own makeReactClient atoms, and no such atoms ship in @awthaq/react; the
     # mechanism is the same reactivityKeys wiring REQ-EA-504's wired rows prove.
     @skip
+    @REQ-EA-698
     Scenario Outline: A plugin mutation that changes the current session tags reactivityKeys with session
       Given a signed-in user "alice"
       When "<mutation>" is performed

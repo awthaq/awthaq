@@ -251,6 +251,7 @@ Feature: Admin and Impersonation
       When a signed-in user calls "admin.listUsers"
       Then the user-administration call is denied with "403 Forbidden"
 
+    @REQ-EA-702
     Scenario: The gate runs before the target's existence is checked, so refusal and absence look the same
       Given "Admin" configured with a "canManageUsers" predicate that admits only the target "target-1"
       When a signed-in user calls "admin.getUser" for "unknown-user" and for "protected-1"
@@ -261,6 +262,7 @@ Feature: Admin and Impersonation
   @BEH-EA-222
   Rule: Users are listed keyset-paginated, read, and updated through the admin surface
 
+    @REQ-EA-703
     Scenario: Users are listed a page at a time through an opaque cursor
       Given "Admin" configured with a "canManageUsers" predicate that always resolves "true"
       And three users besides the admin
@@ -268,11 +270,13 @@ Feature: Admin and Impersonation
       Then the first page holds 2 users and a next cursor
       And the second page holds the remaining 2 users and no next cursor
 
+    @REQ-EA-704
     Scenario: A malformed cursor is a bad request
       Given "Admin" configured with a "canManageUsers" predicate that always resolves "true"
       When the admin calls "admin.listUsers" with "cursor=not-a-cursor"
       Then the user-administration call is denied with "400 Bad Request"
 
+    @REQ-EA-705
     Scenario: updateUser changes the name and never the email
       Given "Admin" configured with a "canManageUsers" predicate that always resolves "true"
       And a user with an active session of their own
@@ -296,11 +300,13 @@ Feature: Admin and Impersonation
   @BEH-EA-224
   Rule: Admin actions are audited by events
 
+    @REQ-EA-706
     Scenario: A refused user-administration call publishes an actionDenied event naming the caller
       Given an application composing "Admin" with no "canManageUsers" predicate configured
       When a signed-in user calls "admin.listUsers"
       Then an "auth.admin.actionDenied" event is published for the caller "admin-1"
 
+    @REQ-EA-707
     Scenario: Revoking a user's session publishes a sessionRevoked event
       Given "Admin" configured with a "canManageUsers" predicate that always resolves "true"
       And a user with an active session of their own

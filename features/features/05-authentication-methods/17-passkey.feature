@@ -119,6 +119,7 @@ Feature: Passkey and WebAuthn
       Then "rpId" is validated as a registrable-domain suffix of that origin
       And a bare substring or unrelated host match is not accepted in its place
 
+    @REQ-EA-696
     Scenario: rpId suffix validation applies even to an origin the deployment listed
       Given "passkey({ rpId: \"example.com\", origins: [\"https://example.com\", \"https://www.example.com\", \"https://evil-example.com\"] })"
       When ceremonies arrive from "https://www.example.com" and from "https://evil-example.com"

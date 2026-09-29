@@ -244,7 +244,7 @@ Feature: The Contract Stratum
       Then composition is rejected
       And the outcome does not depend on which plugin was added to the array last
 
-    @REQ-EA-640
+    @REQ-EA-683
     Scenario: The composed api is the one served document, carrying core's session and account groups
       Given a plugin tuple containing "password"
       When "Auth.make" composes the tuple

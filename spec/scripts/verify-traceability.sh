@@ -236,19 +236,18 @@ if [[ -d "$ROOT_DIR/features/features" && -f "$ROOT_DIR/features/traceability.md
     report PASS "features tags <-> manifest rows" "${row_count} tag(s) = ${row_count} manifest row(s), each used once"
   fi
 
-  # 4c. AH-006: the pre-implementation banner belongs to @unwired Features only.
+  # 4c. AH-006: the pre-implementation banner belongs to @unwired Features only
+  # (an @unwired Feature may carry a more specific note instead, as 28-device-authorization does).
   stale=""
   while IFS= read -r feature; do
     if grep -q 'does not exist yet' "$feature" && ! grep -qE '^[[:space:]]*@.*@unwired' "$feature"; then
       stale="${stale} ${feature#"$ROOT_DIR"/features/features/}"
-    elif ! grep -q 'does not exist yet' "$feature" && grep -qE '^[[:space:]]*@.*@unwired' "$feature"; then
-      stale="${stale} ${feature#"$ROOT_DIR"/features/features/}(@unwired without banner)"
     fi
   done < <(find "$ROOT_DIR/features/features" -name '*.feature' -type f | sort)
   if [[ -n "$stale" ]]; then
     report FAIL "features banner <-> @unwired" "inconsistent:${stale}"
   else
-    report PASS "features banner <-> @unwired" "the pre-implementation banner appears exactly on @unwired Features"
+    report PASS "features banner <-> @unwired" "the pre-implementation banner appears only on @unwired Features"
   fi
 fi
 

@@ -49,6 +49,7 @@ Feature: Testing Harness
     # @skip: the passkey challenge TTL is elapsed under TestClock by 17-passkey.feature ("five minutes
     # elapse, driven by TestClock") against the real passkey plugin; this World composes no passkey.
     @skip
+    @REQ-EA-699
     Scenario: A passkey challenge's expiry is asserted by advancing TestClock
       Given a whole-pipeline HTTP test asserting passkey challenge expiry
       When the test needs to elapse time to observe the boundary

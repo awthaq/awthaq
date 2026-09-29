@@ -238,6 +238,7 @@ Feature: Qadi Resolvers and Obligations
       Then the request still receives the Allow decision's outcome unchanged
       And only the audit trail, not the decision, is marked as degraded
 
+    @REQ-EA-697
     Scenario: A failing audit write never changes the decision it observed
       Given awthaq's DecisionSinkAudit whose durable audit write fails
       And qadi's evaluator would return a Deny decision for a request

@@ -90,6 +90,7 @@ Feature: Verification Tokens
     # @skip: PV-220 — the replayed consume fails inside the endpoint's SqlTransaction, so the
     # audit row `AuthEvents.publish` wrote inline rolls back with it; only the bus copy survives.
     @skip
+    @REQ-EA-686
     Scenario: A replay through a transactional endpoint leaves a durable audit row
       Given a VerificationToken that has already been consumed
       When the same token is presented for consumption again

@@ -31,6 +31,7 @@ Feature: CLI
 
     # A Mailer or RateLimiter is a service inside the application Layer, so doctor can only see it when it
     # builds that Layer (BEH-EA-201's `--build`); without the flag those two are invisible to it by design.
+    @REQ-EA-700
     Scenario Outline: doctor --build reports each insecure default that lives in the application Layer
       Given an application configured with <insecure default>
       When "awthaq doctor --build" runs
@@ -358,6 +359,7 @@ Feature: CLI
       When "awthaq import --from mystery" runs
       Then it fails with the usage exit code listing the supported sources
 
+    @REQ-EA-701
     Scenario Outline: import refuses a source whose adapter is registered but not yet validated
       Given a registered adapter for "<framework>" that has not been validated against a real export
       When "awthaq import --from <framework> --source ./no-such-export --yes" runs

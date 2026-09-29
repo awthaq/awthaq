@@ -35,6 +35,7 @@ Feature: OAuth and OIDC
       Then "state", "codeVerifier", and "nonce" are stored server-side under core Verification with purpose "oauth.flow"
       And the stored entry is single-use and TTL-bounded
 
+    @REQ-EA-693
     Scenario: Initiating an OIDC flow also stores the nonce server-side, encrypted at rest
       Given an OIDC flow configured for provider "okta"
       When an authorization request is built for "okta"
@@ -54,7 +55,7 @@ Feature: OAuth and OIDC
       When the same callback is replayed with the same "state" value
       Then the replayed callback fails, rather than re-running the token exchange
 
-    @REQ-EA-333
+    @REQ-EA-694
     Scenario: A user denying consent at the provider gets the typed denial outcome
       Given an OAuth flow initiated for provider "google"
       When the provider redirects back with the authorization error "access_denied"
@@ -108,7 +109,7 @@ Feature: OAuth and OIDC
       When the callback is handled
       Then the "google" Account is automatically linked to the existing account
 
-    @REQ-EA-339
+    @REQ-EA-695
     Scenario: A trusted provider never auto-links into a local account whose email is unverified
       Given "oauth({ providers: [google()], linking: { trustedProviders: [\"google\"] } })"
       And a "google" callback whose verified email matches an existing, unlinked account whose own email is unverified

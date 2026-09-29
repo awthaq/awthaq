@@ -165,9 +165,11 @@ def check_no_duplicate_req_ids(manifest):
     owner_by_req_id = {}
     for req_id, _beh_id, rel, _title in manifest:
         owner = owner_by_req_id.get(req_id)
-        if owner is not None and owner != rel:
+        if owner is not None:
+            # AH-010: a duplicate inside one file is as ambiguous as one across two.
+            where = f"twice in {rel}" if owner == rel else f"in both {owner} and {rel}"
             raise SystemExit(
-                f"allocate-req-ea.py: {req_id} is tagged in both {owner} and {rel} — "
+                f"allocate-req-ea.py: {req_id} is tagged {where} — "
                 "duplicate REQ-EA id, refusing to write an ambiguous manifest."
             )
         owner_by_req_id[req_id] = rel

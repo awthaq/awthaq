@@ -84,6 +84,7 @@ Feature: Rate Limiting
       Then the failure is not a generic or untyped error
       And a client can render a "try again in n seconds" message from "retryAfterMillis" alone, without parsing any message string
 
+    @REQ-EA-689
     Scenario: An HTTP client receives a 429 RateLimited body carrying retryAfterMillis
       Given the password plugin's sign-in rule enforced by a real limiter over the memory store
       When "alice" attempts to sign in with a wrong password more often than the rule allows

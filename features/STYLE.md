@@ -38,7 +38,7 @@ Do not merge two `BEH-EA` ids into one `Rule`, and do not split one `BEH-EA` id 
 
 ## Banner (top of an `@unwired` `.feature` file only)
 
-A Feature that is `@unwired` opens with this banner; **wiring the Feature removes it** (`27-admin-impersonation.feature` is the model of a wired file — it has no banner). The banner and the `@unwired` tag must appear together: `spec/scripts/verify-traceability.sh` fails when only one of them is present.
+A Feature that is `@unwired` opens with this banner; **wiring the Feature removes it** (`27-admin-impersonation.feature` is the model of a wired file — it has no banner). The banner may appear only on an `@unwired` Feature (`spec/scripts/verify-traceability.sh` fails otherwise); an `@unwired` Feature may instead open with a more specific note saying what blocks it, as `28-device-authorization.feature` does.
 
 ```gherkin
 # awthaq is pre-implementation (see spec/README.md). Every scenario in

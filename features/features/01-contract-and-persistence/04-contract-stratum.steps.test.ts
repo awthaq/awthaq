@@ -9,6 +9,6 @@ const feature = await loadFeature(
   fileURLToPath(new URL("./04-contract-stratum.feature", import.meta.url)),
 );
 
-describeFeature(feature, Layer.merge(ScratchWorld, AppWorld), ({ use }) => {
+describeFeature(feature, Layer.mergeAll(ScratchWorld, AppWorld), ({ use }) => {
   use(contractStratumSteps);
 });

@@ -39,6 +39,7 @@ Feature: HTTP Serving and Error Mapping
       When "Password" is composed alongside newly-added plugins "TwoFactor" and "OAuth"
       Then "Password"'s handler Layer continues to satisfy its own group's requirement unchanged
 
+    @REQ-EA-688
     Scenario: A plugin's group service is unchanged when another plugin is composed alongside it
       Given a plugin "Password" whose handlers were authored before any other plugin was chosen
       When "Password" is composed alongside a newly-added plugin "Invite"
