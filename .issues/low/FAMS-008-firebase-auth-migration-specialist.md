@@ -3,7 +3,7 @@ ID: "FAMS-008"
 Title: "Client SDK session model has no Firebase-style token surface or proactive refresh"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "client"
 Source: "packages/client/src/AuthClient.ts:168"
 Auditor: "firebase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `client` · reported by **Firebase Auth Migration Specialist** (`firebase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Document the session model mapping for Firebase migrants (cookie replaces Indexe
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `react-client-atoms-factory`. Evidence at HEAD ec065a7: `packages/client/src/AuthClient.ts:165`. Fix: Add opt-out window-focus revalidation of the session/subject queries and document the session model for Firebase/token-SDK migrants. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Providers revalidateOnFocus (default on, opt-out): window focus / visibilitychange refreshes the session query (sessionAtom's refresh delegates to the raw query), so an idle tab learns about expiry; test 'window focus revalidates the session' + opt-out test. Deviation from the dossier: only the session query is refreshed, and subjectAtom's gate ignores sessionAtom.waiting, so guarded controls do not blink to pending on every focus (a session that turned out gone settles to signed-out and closes them). Session-model sections in both READMEs.

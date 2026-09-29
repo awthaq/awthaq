@@ -3,7 +3,7 @@ ID: "MTS-008"
 Title: "Prose comments still cite effect rc.115 after the catalog moved to rc.116"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "client"
 Source: "packages/client/src/AuthClient.ts:17"
 Auditor: "monorepo-tooling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `client` · reported by **Monorepo Tooling Specialist** (`monorepo-tooling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Fix the two stale comments now, and add `grep -rn 'rc\.[0-9]' packages --include
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `frontend-docs-truthfulness`. Evidence at HEAD ec065a7: `packages/client/src/AuthClient.ts:17`. Fix: Remove literal versions from prose and guard against recurrence. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Removed the two literal rc.115 mentions (AuthClient.ts, AuthClientAtom.ts) and the stale 'M5, not yet built' text; CONTRIBUTING.md gained a 'Bumping the effect release candidate' note with the grep (empty now).

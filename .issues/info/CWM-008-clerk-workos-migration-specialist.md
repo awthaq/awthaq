@@ -3,7 +3,7 @@ ID: "CWM-008"
 Title: "Deliberate zero-component UI stance is undocumented in the packages themselves — migration scoping relies on reading header comments"
 Level: info
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "react"
 Source: "packages/react/src/Providers.tsx:88"
 Auditor: "clerk-workos-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `docs` · `react` · reported by **Clerk/WorkOS Migration Specialist** (`clerk-workos-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ State the headless positioning once normatively — in spec/overview.md's client
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `frontend-docs-truthfulness`. Evidence at HEAD ec065a7: `packages/react/README.md:5`. Fix: State the headless positioning normatively. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Headless stance stated normatively in packages/react/README.md ('What this package does not ship') and in the client row of spec/overview.md.

@@ -3,7 +3,7 @@ ID: "NAM-012"
 Title: "Next.js middleware parity is deliberately weaker — hasSessionCookie verifies nothing"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/src/HasSessionCookie.ts:17"
 Auditor: "nextauth-authjs-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `next` · reported by **NextAuth.js/Auth.js Migration Specialist** (`nextauth-authjs-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Add the proxy.ts + getSession migration pattern (with the middleware-is-not-a-bo
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `frontend-docs-truthfulness`. Evidence at HEAD ec065a7: `packages/next/src/HasSessionCookie.ts:17`. Fix: Add an Auth.js/next-auth migration note to the next README. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/next/README.md 'Migrating from Auth.js / next-auth' section: table of equivalents, explicit warning that export { auth as middleware } does NOT map to hasSessionCookie (presence only, verifies nothing) and that every page/action/route handler must call getSession.

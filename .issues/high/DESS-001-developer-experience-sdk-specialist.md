@@ -3,7 +3,7 @@ ID: "DESS-001"
 Title: "Client and React READMEs falsely claim the packages are pre-implementation"
 Level: high
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "client"
 Source: "packages/client/README.md:3"
 Auditor: "developer-experience-sdk-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `docs` · `client` · reported by **Developer Experience / SDK Specialist** (`developer-experience-sdk-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/client/README.md:3` matches the quoted banner verbatim, while `packages/client/src/AuthClient.ts` (226 lines) and `packages/react/src/` (4 real modules) ship real, tested source; the root `README.md:5` states the opposite. Rewriting both banners from shipped modules is a well-scoped mechanical change. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `frontend-docs-truthfulness`. Evidence at HEAD ec065a7: `packages/client/README.md:3`. Fix: Rewrite both READMEs from the shipped modules and add a drift guard. (effort M). Full dossier: `.plan/slices/11-frontend-next-react-client.md`.
+
+**Resolved (2026-09-29):** Rewrote packages/client/README.md and packages/react/README.md from the shipped modules (client: HttpApiClient bindings, CsrfClientLive + bootstrap retry, ErrorCodes, both Promise-facade modes, SessionStore, session model, PasskeyClient; react: single-registry Providers, seeds/decisions/onError/revalidateOnFocus, session-gated subject, useAuthStatus, makeReactClient + org-switcher recipe against real OrganizationApi endpoint names, provenance table, headless stance). Refreshed the 'planned behavior' banners in spec/behaviors/22-24. Drift guards in scripts/package-smoke.mjs: (1) fails on the pre-implementation README banner when src/ has >1 non-index module, with a STALE_README_ALLOWLIST of the 11 other packages that still carry it (they are outside this program; the list only shrinks) — proven red by temporarily appending the banner to the react README; (2) every '@awthaq/*' import in the client/react/next README snippets must name a real export of the built package. Bearer/native mode (MNA-006) is stated as not shipped.

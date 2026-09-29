@@ -3,7 +3,7 @@ ID: "DESS-007"
 Title: "@awthaq/react's description claims integration with @awthaq/client that does not exist"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "react"
 Source: "packages/react/package.json:5"
 Auditor: "developer-experience-sdk-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `react` · reported by **Developer Experience / SDK Specialist** (`developer-experience-sdk-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Reword the description (and index.ts header) to 'React provider glue over the @a
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `frontend-docs-truthfulness`. Evidence at HEAD ec065a7: `packages/react/package.json:5`. Fix: Make the claim true (BE-004 adds @awthaq/client as a real dependency for CsrfClientLive) or reword; fix the client package's own misleading description too. (effort S). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** package.json descriptions and index.ts headers reworded: react 'React bindings: reactive AtomHttpApi clients over the awthaq contract (CSRF via @awthaq/client) and Providers with QadiProvider integration' (true now that @awthaq/client is a dependency); client 'Effect HttpApiClient bindings for the awthaq contract: ...'.
