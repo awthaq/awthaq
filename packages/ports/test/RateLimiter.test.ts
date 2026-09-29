@@ -137,11 +137,71 @@ describe("RateLimiter.layerStoreMemoryWith (RBS-003 bounded memory store)", () =
   );
 });
 
+describe("RateLimiter.layer escalation (RBS-009)", () => {
+  const window = Duration.seconds(10);
+  const escalating = {
+    key: "signin:mallory",
+    limit: 1,
+    window,
+    escalation: { factor: 2, maxPenalty: Duration.minutes(5) },
+  };
+
+  it.effect("with escalation factor 2, the second limited window doubles retryAfterMillis", () =>
+    Effect.gen(function* () {
+      const limiter = yield* RateLimiter.RateLimiter;
+      yield* limiter.consume(escalating);
+      const first = yield* limiter.consume(escalating).pipe(Effect.flip);
+      assert.isTrue(first.retryAfterMillis <= 10_000);
+      yield* TestClock.adjust(window);
+      yield* limiter.consume(escalating);
+      const second = yield* limiter.consume(escalating).pipe(Effect.flip);
+      assert.strictEqual(second.retryAfterMillis, 20_000);
+      // The penalty outlasts the plain window: the fixed window would have reset by now.
+      yield* TestClock.adjust(window);
+      const stillBlocked = yield* limiter.consume(escalating).pipe(Effect.flip);
+      assert.strictEqual(stillBlocked.retryAfterMillis, 10_000);
+      yield* TestClock.adjust(window);
+      yield* limiter.consume(escalating);
+    }).pipe(Effect.provide(MemoryLive)),
+  );
+
+  it.effect("the penalty is capped at maxPenalty", () =>
+    Effect.gen(function* () {
+      const limiter = yield* RateLimiter.RateLimiter;
+      const capped = { ...escalating, escalation: { factor: 10, maxPenalty: Duration.seconds(30) } };
+      for (let i = 0; i < 4; i++) {
+        yield* limiter.consume(capped).pipe(Effect.ignore);
+        yield* limiter.consume(capped).pipe(Effect.ignore);
+        yield* TestClock.adjust(Duration.seconds(30));
+      }
+      yield* limiter.consume(capped);
+      const failure = yield* limiter.consume(capped).pipe(Effect.flip);
+      assert.isTrue(failure.retryAfterMillis <= 30_000);
+    }).pipe(Effect.provide(MemoryLive)),
+  );
+
+  it.effect("without escalation behaviour is unchanged: every window carries the same wait", () =>
+    Effect.gen(function* () {
+      const limiter = yield* RateLimiter.RateLimiter;
+      const plain = { key: "signin:plain", limit: 1, window };
+      yield* limiter.consume(plain);
+      yield* limiter.consume(plain).pipe(Effect.flip);
+      yield* TestClock.adjust(window);
+      yield* limiter.consume(plain);
+      const second = yield* limiter.consume(plain).pipe(Effect.flip);
+      assert.isTrue(second.retryAfterMillis <= 10_000);
+      yield* TestClock.adjust(window);
+      yield* limiter.consume(plain);
+    }).pipe(Effect.provide(MemoryLive)),
+  );
+});
+
 describe("RateLimiter.layer store outage (RBS-004, BEH-EA-105)", () => {
   const DownStore = Layer.succeed(
     RateLimiter.RateLimiterStore,
     RateLimiter.RateLimiterStore.of({
       increment: () => Effect.fail(new RateLimiter.RateLimiterStoreUnavailable({ cause: "down" })),
+      peek: () => Effect.fail(new RateLimiter.RateLimiterStoreUnavailable({ cause: "down" })),
     }),
   );
   const input = { key: "signin:alice", limit: 1, window: Duration.seconds(10) };

@@ -24,6 +24,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -125,6 +126,26 @@ export const layerStoreSqlWith = (options: StoreSqlOptions) =>
           };
         }).pipe(Effect.mapError((cause) => new RateLimiter.RateLimiterStoreUnavailable({ cause })));
 
+      const selectLive = SqlSchema.findOneOption({
+        Request: Schema.Struct({ key: Schema.String, nowMs: Schema.Number }),
+        Result: BucketRow,
+        execute: (request) => sql`
+          SELECT hit_count, reset_at_ms FROM rate_limit_buckets
+          WHERE bucket_key = ${request.key} AND reset_at_ms > ${request.nowMs}
+        `,
+      });
+
+      // RBS-009: a read-only look at a bucket, for escalation's block check.
+      const peek: RateLimiter.RateLimiterStoreShape["peek"] = (key) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const row = yield* selectLive({ key, nowMs: DateTime.toEpochMillis(now) });
+          return Option.map(row, (found) => ({
+            count: found.hit_count,
+            resetAt: DateTime.makeUnsafe(found.reset_at_ms),
+          }));
+        }).pipe(Effect.mapError((cause) => new RateLimiter.RateLimiterStoreUnavailable({ cause })));
+
       const sweep = Effect.gen(function* () {
         const now = yield* DateTime.now;
         yield* sql`DELETE FROM rate_limit_buckets WHERE reset_at_ms <= ${DateTime.toEpochMillis(now)}`;
@@ -137,7 +158,7 @@ export const layerStoreSqlWith = (options: StoreSqlOptions) =>
         Effect.forkScoped,
       );
 
-      return RateLimiter.RateLimiterStore.of({ increment });
+      return RateLimiter.RateLimiterStore.of({ increment, peek });
     }),
   );
 

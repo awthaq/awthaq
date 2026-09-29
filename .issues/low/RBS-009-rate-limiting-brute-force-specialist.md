@@ -3,7 +3,7 @@ ID: "RBS-009"
 Title: "Fixed-window algorithm plus zero escalation: attacker cost never rises across windows"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/RateLimiter.ts:121"
 Auditor: "rate-limiting-brute-force-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `ports` · reported by **Rate Limiting & Brute-Force Defense Specialist** (`rate-limiting-brute-force-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Track consecutive-limited windows per key in the plugin (not the store) and grow
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `ratelimit-signal-and-escalation`. Evidence at HEAD ec065a7: `packages/ports/src/RateLimiter.ts:121`. Fix: Opt-in per-rule exponential escalation. (effort M). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Opt-in escalation. ports RateLimiter.ts: Escalation {factor, maxPenalty} on ConsumeInput; RateLimiterStore gains read-only peek(key) (memory + SQL implementations); layer's consumeEscalating: blocked callers refused without touching the plain bucket, one strike per window (request crossing limit+1), penalty = window*factor^(strikes-1) capped at maxPenalty held as a block bucket, retryAfterMillis = max(remaining window, penalty); strike/block keys namespaced under 'ratelimit-escalation:' so caller-chosen keys cannot name another key's block row. core RateLimits RuleInput.escalation and EnforceInput.escalation pass-through. Tests: ports RateLimiter.test.ts (doubling, cap, unchanged default; red first: 10000 != 20000), sql RateLimiterStoreSql.test.ts (peek, end-to-end escalation). BEH-EA-105 spec addendum. Deferred: no plugin-shipped rule enables it (Password RATE_LIMITS unchanged; an app opts in per rule) and no PasswordConfig knob yet. Gates: typecheck (pre-existing react TS2883 only), test 843, bdd 104, spec:verify 19/19.

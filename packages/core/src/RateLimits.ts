@@ -65,6 +65,8 @@ export interface RuleInput {
   readonly key: RateLimitKey;
   readonly limit: number;
   readonly window: Duration.Input;
+  /** RBS-009: opt-in exponential penalty for repeat breaches. Off by default. */
+  readonly escalation?: RateLimiter.Escalation;
   readonly order?: number;
 }
 
@@ -178,6 +180,7 @@ export interface EnforceInput {
   readonly key: string;
   readonly limit: number;
   readonly window: Duration.Input;
+  readonly escalation?: RateLimiter.Escalation;
   readonly meta: EnforceMeta;
 }
 
@@ -195,7 +198,12 @@ export const enforce = (input: EnforceInput) =>
     const limiter = yield* RateLimiter.RateLimiter;
     const events = yield* AuthEvents.AuthEvents;
     return yield* limiter
-      .consume({ key: input.key, limit: input.limit, window: input.window })
+      .consume({
+        key: input.key,
+        limit: input.limit,
+        window: input.window,
+        escalation: input.escalation,
+      })
       .pipe(
         Effect.tapError((error) =>
           Effect.all(

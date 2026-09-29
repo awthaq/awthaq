@@ -61,10 +61,25 @@ export class RateLimiterStoreUnavailable extends Data.TaggedError("RateLimiterSt
   readonly cause: unknown;
 }> {}
 
+/**
+ * RBS-009: opt-in escalation for a rule. Each window in which the limit is
+ * exceeded is a strike; the caller is then refused for
+ * `window × factor^(strikes − 1)`, capped at `maxPenalty`, so an attacker who
+ * simply waits out the fixed window pays more each time. Strikes are counted
+ * over a `maxPenalty`-long window, so a caller who stays quiet that long
+ * starts again from the plain window. Without it, a rule is the plain fixed
+ * window BEH-EA-105 documents.
+ */
+export interface Escalation {
+  readonly factor: number;
+  readonly maxPenalty: Duration.Input;
+}
+
 export interface ConsumeInput {
   readonly key: string;
   readonly limit: number;
   readonly window: Duration.Input;
+  readonly escalation?: Escalation | undefined;
 }
 
 /** BEH-EA-105: the port a plugin requires and the application provides — never bundled by a plugin (ADR-EA-010). */
@@ -87,6 +102,8 @@ export interface RateLimiterStoreShape {
     key: string,
     window: Duration.Input,
   ) => Effect.Effect<Bucket, RateLimiterStoreUnavailable>;
+  /** RBS-009: read a bucket without advancing it — `None` when absent or its window has elapsed. */
+  readonly peek: (key: string) => Effect.Effect<Option.Option<Bucket>, RateLimiterStoreUnavailable>;
 }
 
 export class RateLimiterStore extends Context.Service<RateLimiterStore, RateLimiterStoreShape>()(
@@ -117,6 +134,11 @@ export const RateLimiterConfig = Context.Reference("awthaq/ports/RateLimiterConf
 export const config = (partial: Partial<RateLimiterConfigShape>) =>
   Layer.succeed(RateLimiterConfig, { ...defaultRateLimiterConfig, ...partial });
 
+// RBS-009: the strike and block buckets live in the same store as ordinary
+// ones; this namespace keeps a caller-chosen key (an email ending in "#block")
+// from ever naming another key's block row.
+const escalationKeyPrefix = "ratelimit-escalation:";
+
 /**
  * BEH-EA-105/109: the swappable half — `consume`'s logic (compare to
  * `limit`, compute `retryAfterMillis`) never changes; only the store
@@ -142,20 +164,56 @@ export const layer: Layer.Layer<RateLimiter, never, RateLimiterStore> = Layer.ef
               ),
         ),
       );
-    const consume: RateLimiterShape["consume"] = (input) =>
+    const untilMillis = (resetAt: DateTime.Utc, now: DateTime.Utc) =>
+      Math.max(0, DateTime.toEpochMillis(resetAt) - DateTime.toEpochMillis(now));
+
+    // Only the escalating path reaches these: a block is a bucket whose window is the penalty.
+    const blockKey = (key: string) => `${escalationKeyPrefix}block:${key}`;
+    const strikesKey = (key: string) => `${escalationKeyPrefix}strikes:${key}`;
+
+    const consumeEscalating = (input: ConsumeInput, escalation: Escalation) =>
       Effect.gen(function* () {
-        const bucket = yield* store
-          .increment(input.key, input.window)
-          .pipe(Effect.catchTag("RateLimiterStoreUnavailable", onUnavailable));
-        if (bucket === undefined) return;
+        const now = yield* DateTime.now;
+        const block = yield* store.peek(blockKey(input.key));
+        // Refused without touching the plain bucket: a blocked caller's retries must not extend anything.
+        if (Option.isSome(block)) {
+          return yield* new RateLimitExceeded({
+            retryAfterMillis: untilMillis(block.value.resetAt, now),
+          });
+        }
+        const bucket = yield* store.increment(input.key, input.window);
+        if (bucket.count <= input.limit) return;
+        const remaining = untilMillis(bucket.resetAt, now);
+        // One strike per window: only the request that first crosses the limit counts.
+        if (bucket.count > input.limit + 1) {
+          return yield* new RateLimitExceeded({ retryAfterMillis: remaining });
+        }
+        const strikes = yield* store.increment(strikesKey(input.key), escalation.maxPenalty);
+        const penalty = Math.min(
+          Duration.toMillis(input.window) * escalation.factor ** (strikes.count - 1),
+          Duration.toMillis(escalation.maxPenalty),
+        );
+        if (penalty > remaining) {
+          yield* store.increment(blockKey(input.key), Duration.millis(penalty));
+        }
+        return yield* new RateLimitExceeded({ retryAfterMillis: Math.max(remaining, penalty) });
+      });
+
+    const consumePlain = (input: ConsumeInput) =>
+      Effect.gen(function* () {
+        const bucket = yield* store.increment(input.key, input.window);
         if (bucket.count <= input.limit) return;
         const now = yield* DateTime.now;
-        const retryAfterMillis = Math.max(
-          0,
-          DateTime.toEpochMillis(bucket.resetAt) - DateTime.toEpochMillis(now),
-        );
-        return yield* Effect.fail(new RateLimitExceeded({ retryAfterMillis }));
+        return yield* new RateLimitExceeded({
+          retryAfterMillis: untilMillis(bucket.resetAt, now),
+        });
       });
+
+    const consume: RateLimiterShape["consume"] = (input) =>
+      (input.escalation === undefined
+        ? consumePlain(input)
+        : consumeEscalating(input, input.escalation)
+      ).pipe(Effect.catchTag("RateLimiterStoreUnavailable", onUnavailable), Effect.asVoid);
     return RateLimiter.of({ consume });
   }),
 );
@@ -237,6 +295,13 @@ export const layerStoreMemoryWith = (options: MemoryStoreOptions) =>
           });
         });
 
+      const peek: RateLimiterStoreShape["peek"] = (key) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const existing = HashMap.get(yield* Ref.get(buckets), key);
+          return Option.filter(existing, (bucket) => DateTime.isLessThan(now, bucket.resetAt));
+        });
+
       const sweep = Effect.gen(function* () {
         const now = yield* DateTime.now;
         yield* Ref.update(buckets, (state) => dropExpired(state, now));
@@ -247,7 +312,7 @@ export const layerStoreMemoryWith = (options: MemoryStoreOptions) =>
         Effect.forkScoped,
       );
 
-      return Context.make(RateLimiterStore, RateLimiterStore.of({ increment })).pipe(
+      return Context.make(RateLimiterStore, RateLimiterStore.of({ increment, peek })).pipe(
         Context.add(
           RateLimiterMemoryStats,
           RateLimiterMemoryStats.of({ size: Effect.map(Ref.get(buckets), HashMap.size) }),
