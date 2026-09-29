@@ -169,6 +169,36 @@ const cookieFrom = (response: Response): string => {
   return raw.split(";")[0] ?? raw;
 };
 
+/**
+ * APS-006: a real browser's cookie jar — one value per cookie name, every
+ * `Set-Cookie` applied (an expired one deletes) — so the flow is tested with
+ * browser semantics rather than by keeping the admin's raw cookie string aside.
+ */
+const makeJar = () => {
+  const cookies = new Map<string, string>();
+  return {
+    /** Adds a raw `name=value` pair (a `Cookie`-header style entry). */
+    set: (pair: string) => {
+      const eq = pair.indexOf("=");
+      cookies.set(pair.slice(0, eq), pair.slice(eq + 1));
+    },
+    has: (name: string) => cookies.has(name),
+    apply: (response: Response) => {
+      for (const line of response.headers.getSetCookie()) {
+        const [pair = "", ...attributes] = line.split(";");
+        const eq = pair.indexOf("=");
+        const name = pair.slice(0, eq).trim();
+        const value = pair.slice(eq + 1).trim();
+        const expired =
+          value === "" || attributes.some((attribute) => /^\s*max-age=0\s*$/i.test(attribute));
+        if (expired) cookies.delete(name);
+        else cookies.set(name, value);
+      }
+    },
+    header: () => [...cookies].map(([name, value]) => `${name}=${value}`).join("; "),
+  };
+};
+
 describe("AuthHttp + Admin (real HTTP)", () => {
   it.effect(
     "BEH-EA-213: a full impersonate call answers 200 with a session cookie for the target",
@@ -187,7 +217,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
           ),
         );
         assert.strictEqual(response.status, 200);
-        assert.match(cookieFrom(response), /^__Host-session=/);
+        assert.match(cookieFrom(response), /^__Host-impersonation=/);
       }),
   );
 
@@ -349,6 +379,59 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         assert.strictEqual(active.status, 200);
         const activeRows = (yield* Effect.promise(() => active.json())) as ReadonlyArray<unknown>;
         assert.strictEqual(activeRows.length, 1);
+      }),
+  );
+
+  it.effect(
+    "BEH-EA-213/216 (APS-006): a browser cookie jar returns to the admin session after stopImpersonating",
+    () =>
+      Effect.gen(function* () {
+        // `canManageEpisode` is the one place a request's resolved caller is observable
+        // over this API — `list` evaluates it once per row as the authenticated caller.
+        const callers: Array<string> = [];
+        const { handler, issueSessionCookieHeader, seedUser } = buildHandler({
+          canImpersonate: allow,
+          canManageEpisode: ({ admin }) => {
+            callers.push(admin.id);
+            return Effect.succeed(true);
+          },
+        });
+        const targetId = yield* Effect.promise(() => seedUser("target-1"));
+        const jar = makeJar();
+        jar.set(yield* Effect.promise(() => issueSessionCookieHeader("admin-1")));
+
+        const started = yield* Effect.promise(() =>
+          post(
+            handler,
+            `/admin/impersonate/${targetId}`,
+            { reason: "test" },
+            { cookie: jar.header() },
+          ),
+        );
+        assert.strictEqual(started.status, 200);
+        jar.apply(started);
+        // The impersonation token is a separate cookie; the admin's own is untouched.
+        assert.match(started.headers.get("set-cookie") ?? "", /^__Host-impersonation=/);
+        assert.isTrue(jar.has("__Host-session"));
+
+        const asTarget = yield* Effect.promise(() =>
+          handler(new Request(`${ORIGIN}/admin`, { headers: { cookie: jar.header() } })),
+        );
+        assert.strictEqual(asTarget.status, 200);
+        assert.strictEqual(callers.at(-1), targetId);
+
+        const stopped = yield* Effect.promise(() =>
+          post(handler, "/admin/stop-impersonating", {}, { cookie: jar.header() }),
+        );
+        assert.strictEqual(stopped.status, 204);
+        jar.apply(stopped);
+        assert.isFalse(jar.has("__Host-impersonation"));
+
+        const asAdmin = yield* Effect.promise(() =>
+          handler(new Request(`${ORIGIN}/admin`, { headers: { cookie: jar.header() } })),
+        );
+        assert.strictEqual(asAdmin.status, 200);
+        assert.strictEqual(callers.at(-1), "admin-1");
       }),
   );
 

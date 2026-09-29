@@ -184,12 +184,10 @@ export const resolveSession = (
     const memoized = yield* Effect.cached(
       raw === ""
         ? Effect.fail(new Api.Unauthenticated())
-        : sessions
-            .verify(Redacted.make(raw))
-            .pipe(
-              Effect.catchTag("PlatformError", Effect.die),
-              Effect.mapError(() => new Api.Unauthenticated()),
-            ),
+        : sessions.verify(Redacted.make(raw)).pipe(
+            Effect.catchTag("PlatformError", Effect.die),
+            Effect.mapError(() => new Api.Unauthenticated()),
+          ),
     );
     yield* Ref.update(cache, HashMap.set(raw, memoized));
     return yield* memoized;
@@ -222,7 +220,7 @@ export const resolvePrincipal = (
  * token rotated. A no-op when `verify` didn't rotate this call.
  */
 const deliverRotation = (
-  scheme: "cookie" | "bearer",
+  scheme: Scheme,
   rotated: Option.Option<Redacted.Redacted<string>>,
   response: HttpServerResponse.HttpServerResponse,
 ) => {
@@ -230,15 +228,31 @@ const deliverRotation = (
     return Effect.succeed(response);
   }
   const token = Redacted.value(rotated.value);
-  return scheme === "cookie"
-    ? HttpServerResponse.setCookie(
+  return scheme === "bearer"
+    ? Effect.succeed(HttpServerResponse.setHeader(response, "set-auth-token", token))
+    : HttpServerResponse.setCookie(
         response,
-        Sessions.SESSION_COOKIE_NAME,
+        scheme === "impersonation"
+          ? Sessions.IMPERSONATION_COOKIE_NAME
+          : Sessions.SESSION_COOKIE_NAME,
         token,
         Sessions.SESSION_COOKIE_ATTRIBUTES,
-      ).pipe(Effect.orDie)
-    : Effect.succeed(HttpServerResponse.setHeader(response, "set-auth-token", token));
+      ).pipe(Effect.orDie);
 };
+
+/** APS-006: the three credential carriers `Api.Authentication`'s security record declares, in chain order. */
+type Scheme = "impersonation" | "cookie" | "bearer";
+
+/**
+ * APS-006: an `__Host-impersonation` cookie is only ever an impersonation
+ * session — an ordinary session presented there (planted by an attacker who
+ * holds one, or a stale value) must not authenticate; failing here lets the
+ * chain fall through to `cookie`.
+ */
+const requireImpersonationSession = (scheme: Scheme, resolved: ResolvedSession) =>
+  scheme === "impersonation" && Option.isNone(resolved.session.actingAs)
+    ? Effect.fail(new Api.Unauthenticated())
+    : Effect.succeed(resolved);
 
 /**
  * BEH-EA-065 through 067/070: fails `Unauthenticated` only once every
@@ -258,7 +272,7 @@ export const AuthenticationLive: Layer.Layer<
     const sessions = yield* Sessions.Sessions;
     const resolver = yield* PrincipalResolver;
     const authenticate = (
-      scheme: "cookie" | "bearer",
+      scheme: Scheme,
       httpEffect: Effect.Effect<
         HttpServerResponse.HttpServerResponse,
         unhandled,
@@ -267,6 +281,7 @@ export const AuthenticationLive: Layer.Layer<
       credential: Redacted.Redacted<string>,
     ) =>
       resolveSession(sessions, credential).pipe(
+        Effect.flatMap((resolved) => requireImpersonationSession(scheme, resolved)),
         Effect.flatMap(({ session, rotated }) =>
           resolver.resolve(session).pipe(
             Effect.flatMap((principal) =>
@@ -297,14 +312,20 @@ export const AuthenticationLive: Layer.Layer<
         ),
       );
     const handle: HttpApiMiddleware.HttpApiMiddlewareSecurity<
-      { readonly cookie: typeof Api.SessionCookie; readonly bearer: typeof Api.BearerToken },
+      {
+        readonly impersonation: typeof Api.ImpersonationCookie;
+        readonly cookie: typeof Api.SessionCookie;
+        readonly bearer: typeof Api.BearerToken;
+      },
       Api.CurrentPrincipal,
       typeof Api.Unauthenticated,
       never
     >["cookie"] = (httpEffect, { credential }) => authenticate("cookie", httpEffect, credential);
+    const impersonation: typeof handle = (httpEffect, { credential }) =>
+      authenticate("impersonation", httpEffect, credential);
     const bearer: typeof handle = (httpEffect, { credential }) =>
       authenticate("bearer", httpEffect, credential);
-    return { cookie: handle, bearer };
+    return { impersonation, cookie: handle, bearer };
   }),
 );
 
@@ -324,7 +345,7 @@ export const OptionalAuthenticationLive: Layer.Layer<
     const sessions = yield* Sessions.Sessions;
     const resolver = yield* PrincipalResolver;
     const authenticate = (
-      scheme: "cookie" | "bearer",
+      scheme: Scheme,
       httpEffect: Effect.Effect<
         HttpServerResponse.HttpServerResponse,
         unhandled,
@@ -333,6 +354,7 @@ export const OptionalAuthenticationLive: Layer.Layer<
       credential: Redacted.Redacted<string>,
     ) =>
       resolveSession(sessions, credential).pipe(
+        Effect.flatMap((resolved) => requireImpersonationSession(scheme, resolved)),
         Effect.flatMap(({ session, rotated }) =>
           resolver.resolve(session).pipe(
             Effect.flatMap((principal) =>
@@ -354,11 +376,17 @@ export const OptionalAuthenticationLive: Layer.Layer<
         ),
       );
     const cookie: HttpApiMiddleware.HttpApiMiddlewareSecurity<
-      { readonly cookie: typeof Api.SessionCookie; readonly bearer: typeof Api.BearerToken },
+      {
+        readonly impersonation: typeof Api.ImpersonationCookie;
+        readonly cookie: typeof Api.SessionCookie;
+        readonly bearer: typeof Api.BearerToken;
+      },
       Api.CurrentPrincipal,
       typeof Api.Unauthenticated,
       never
     >["cookie"] = (httpEffect, { credential }) => authenticate("cookie", httpEffect, credential);
+    const impersonation: typeof cookie = (httpEffect, { credential }) =>
+      authenticate("impersonation", httpEffect, credential);
     const bearer: typeof cookie = (httpEffect, { credential }) =>
       authenticate("bearer", httpEffect, credential).pipe(
         // The anonymous fallback below is a *recovery* from resolution
@@ -371,6 +399,6 @@ export const OptionalAuthenticationLive: Layer.Layer<
           Effect.provideService(httpEffect, Api.CurrentPrincipal, Api.anonymousPrincipal),
         ),
       );
-    return { cookie, bearer };
+    return { impersonation, cookie, bearer };
   }),
 );

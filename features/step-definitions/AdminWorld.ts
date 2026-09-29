@@ -219,7 +219,7 @@ export const cookieFrom = (response: Response): string => {
 };
 
 export const tokenFromCookie = (cookie: string): string =>
-  decodeURIComponent(cookie.replace("__Host-session=", ""));
+  decodeURIComponent(cookie.replace(/^__Host-(session|impersonation)=/, ""));
 
 /**
  * Issues a real session directly against `Sessions`, reaching into the

@@ -100,6 +100,17 @@ export class RateLimited extends Schema.TaggedError<RateLimited>()(
  * than shared — both are `"__Host-session"` by construction, not by convention).
  */
 export const SessionCookie = HttpApiSecurity.apiKey({ key: "__Host-session", in: "cookie" });
+/**
+ * APS-006/BEH-EA-213: where `@awthaq/admin`'s `impersonate` delivers the
+ * impersonation session in cookie mode — a name of its own, so the admin's
+ * `__Host-session` is shadowed (not replaced) and restored by clearing this one.
+ * Literal repeated from `Sessions.IMPERSONATION_COOKIE_NAME` for the same
+ * `api`-cannot-import-`core` reason as `SessionCookie` above.
+ */
+export const ImpersonationCookie = HttpApiSecurity.apiKey({
+  key: "__Host-impersonation",
+  in: "cookie",
+});
 export const BearerToken = HttpApiSecurity.bearer;
 
 /** BEH-EA-080: the CSRF cookie/header names are fixed, never per-plugin configurable. */
@@ -109,13 +120,16 @@ export const CsrfCookie = HttpApiSecurity.apiKey({ key: CSRF_COOKIE_NAME, in: "c
 
 /**
  * BEH-EA-028/065/072: cookie is tried before bearer because it is declared
- * first — the record's own key order is the entire strategy chain.
+ * first — the record's own key order is the entire strategy chain. APS-006:
+ * `impersonation` is declared first of all, so an impersonation cookie shadows
+ * the caller's own session cookie; its handler only accepts a session carrying
+ * `actingAs` and otherwise falls through.
  */
 export class Authentication extends HttpApiMiddleware.Service<
   Authentication,
   { provides: CurrentPrincipal }
 >()("Authentication", {
-  security: { cookie: SessionCookie, bearer: BearerToken },
+  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
   error: Unauthenticated,
 }) {}
 
@@ -134,7 +148,7 @@ export class OptionalAuthentication extends HttpApiMiddleware.Service<
   OptionalAuthentication,
   { provides: CurrentPrincipal }
 >()("OptionalAuthentication", {
-  security: { cookie: SessionCookie, bearer: BearerToken },
+  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
   error: Unauthenticated,
 }) {}
 

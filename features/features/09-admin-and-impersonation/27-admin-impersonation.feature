@@ -157,6 +157,12 @@ Feature: Admin and Impersonation
       When that session calls "admin.stopImpersonating"
       Then the call fails, since the session carries no "actingAs" to end
 
+    @REQ-EA-630
+    Scenario: After stopping impersonation in a browser, the admin is still signed in
+      Given an admin actively impersonating a target user through one browser cookie jar
+      When the browser calls "admin.stopImpersonating"
+      Then the browser's next request is served as the admin, with no re-login
+
   # BEH-EA-217 — spec/behaviors/27-admin-impersonation.md
   @BEH-EA-217
   Rule: forceStop lets another admin end someone else's impersonation

@@ -98,6 +98,7 @@ _Previous: [BEH-EA-211](27-admin-impersonation.md#beh-ea-211-resolveprincipal-cl
 yield* client.admin.impersonate({ params: { userId }, payload: { reason: "support ticket #4821" } })
 // new session row: userId = target, actingAs = { type: "user", id: <admin's own id> }
 // hard expiry = now + AdminConfig.maxDuration; no sliding refresh (BEH-EA-210)
+// cookie mode: Set-Cookie __Host-impersonation=<token>; the admin's __Host-session is untouched
 ```
 
 ```text
@@ -112,10 +113,15 @@ REQUIREMENT: `impersonate` MUST reject a `reason` that is empty after
              404-versus-403 to probe which user ids exist). On success, it MUST issue a new session for the
              target user with `actingAs` set to the caller's own identity,
              and MUST leave the caller's own existing session untouched —
-             both sessions are valid and live at once.
+             both sessions are valid and live at once. In cookie mode the
+             new session MUST be delivered under `__Host-impersonation`
+             (same attributes as `__Host-session`), never by overwriting
+             `__Host-session` (APS-006).
 ```
 
-`archive/PRD.md` §18 names "reason required" as its own named security-model property, independent of the hard-expiry/dual-identity properties this file's earlier requirements already cover. The caller's own session is deliberately never revoked or modified by this call: the client is expected to already hold that session's own token, and switches to the newly-issued impersonation session's token to act as the target — see BEH-EA-216 for why no server-side "handback" step exists to reverse this.
+`archive/PRD.md` §18 names "reason required" as its own named security-model property, independent of the hard-expiry/dual-identity properties this file's earlier requirements already cover. The caller's own session is deliberately never revoked or modified by this call: a bearer client already holds that session's own token and switches to the newly-issued impersonation session's token to act as the target; a browser holds both cookies at once, with `__Host-impersonation` shadowing `__Host-session` (BEH-EA-065) — see BEH-EA-216 for why no server-side "handback" step exists to reverse this.
+
+**Decision (2026-09-29, APS-006):** adopted recommended option A (a distinct impersonation cookie) over handback/body-only/document-only; the user may revisit.
 
 _Previous: [BEH-EA-212](27-admin-impersonation.md#beh-ea-212-the-admin-gate-is-a-config-supplied-predicate-fail-closed-by-default) | Next: [BEH-EA-214](27-admin-impersonation.md#beh-ea-214-self-impersonation-and-nested-impersonation-are-refused)_
 
@@ -173,10 +179,14 @@ REQUIREMENT: `stopImpersonating` MUST revoke the caller's own current
              set the matching `admin_impersonation` row's `endedAt`/
              `endedBy: "self"`. It MUST NOT issue any replacement session —
              the caller is expected to already hold their own original
-             session's token from before `impersonate` was called.
+             session's token from before `impersonate` was called. In
+             cookie mode the response MUST expire `__Host-impersonation`
+             (`Max-Age=0`), which is what returns the browser to the
+             admin's own, still-live `__Host-session` (APS-006); `forceStop`
+             of the caller's own current episode does the same.
 ```
 
-Because BEH-EA-213 never touches the admin's original session, there is nothing to hand back: ending impersonation is purely a revocation of the session it added, not a restoration of one it never removed.
+Because BEH-EA-213 never touches the admin's original session, there is nothing to hand back: ending impersonation is purely a revocation of the session it added, not a restoration of one it never removed — clearing the shadowing cookie is all a browser needs.
 
 _Previous: [BEH-EA-215](27-admin-impersonation.md#beh-ea-215-admin_impersonation-is-a-durable-audit-trail) | Next: [BEH-EA-217](27-admin-impersonation.md#beh-ea-217-forcestop-lets-another-admin-end-someone-elses-impersonation)_
 

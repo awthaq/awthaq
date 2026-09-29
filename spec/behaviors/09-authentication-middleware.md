@@ -22,16 +22,22 @@
 
 ```ts
 export class Authentication extends HttpApiMiddleware.Service<Authentication>()("Authentication", {
-  security: { cookie: SessionCookie, bearer: BearerToken }
+  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken }
 }) {}
 ```
 
 ```text
 REQUIREMENT: `Authentication`'s cookie handler MUST attempt to resolve
-             `__Host-session` to a live, unexpired `Session` before any
-             other declared scheme is attempted, per BEH-EA-028's
-             declaration-order rule.
+             `__Host-session` to a live, unexpired `Session` before the
+             bearer scheme is attempted, per BEH-EA-028's
+             declaration-order rule. The `impersonation` handler, declared
+             ahead of it, MUST attempt `__Host-impersonation` first and MUST
+             accept only a session carrying `actingAs` (BEH-EA-209) — an
+             ordinary session presented in that cookie MUST NOT authenticate,
+             and the chain falls through to `__Host-session`.
 ```
+
+APS-006: `impersonation` exists so `@awthaq/admin`'s `impersonate` (BEH-EA-213) can deliver its session without overwriting the browser's single `__Host-session`; the admin's own cookie survives untouched and is restored the moment the impersonation cookie is cleared or its session hard-expires (a failed `impersonation` handler simply falls through). `OptionalAuthentication` declares the identical record. `@awthaq/qadi`'s Path B extractor and `@awthaq/next`'s `getSession` apply the same precedence so every entry point evaluates one identity per request.
 
 `archive/PRD.md` §10 places the cookie scheme first in the record shown throughout the design (`security: { cookie: SessionCookie, bearer }`), matching the browser-first cookie flow every worked example in `archive/design/usage-examples-v4.md` §1–§5 exercises. Because the record's own key order is the strategy chain (BEH-EA-028), moving bearer ahead of cookie is a one-line, explicit change to the middleware's definition, never an implicit precedence a caller has to infer.
 
@@ -146,7 +152,7 @@ REQUIREMENT: There MUST be no configuration, priority number, or runtime
              declaration itself.
 ```
 
-This entry closes the loop opened by BEH-EA-028 and BEH-EA-065: `archive/PRD.md` §10 states "the record *is* the strategy chain" as a design commitment, not merely a today's-default — there is deliberately no second, independent ordering knob to keep in sync with the declaration, which is exactly the kind of implicit, easy-to-desynchronize convention `research/09-plugin-architecture.md` Q27 documents Babel's plugin/preset ordering rules as a cautionary example of.
+This entry closes the loop opened by BEH-EA-028 and BEH-EA-065 (whose first entry, `impersonation`, is itself a declaration in the record — APS-006 needed no ordering knob to put it ahead of `cookie`): `archive/PRD.md` §10 states "the record *is* the strategy chain" as a design commitment, not merely a today's-default — there is deliberately no second, independent ordering knob to keep in sync with the declaration, which is exactly the kind of implicit, easy-to-desynchronize convention `research/09-plugin-architecture.md` Q27 documents Babel's plugin/preset ordering rules as a cautionary example of.
 
 _Previous: [BEH-EA-064](08-verification-tokens.md#beh-ea-064-purpose-scoped-flows-respond-uniformly-regardless-of-whether-their-target-exists)_
 _Next: [BEH-EA-073](10-csrf.md#beh-ea-073-sec-fetch-site-is-the-primary-csrf-signal)_

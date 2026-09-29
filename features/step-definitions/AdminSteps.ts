@@ -399,8 +399,16 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.fn(function* () {
       const response = (yield* getOutcome("stopResponse")) as Response;
       if (response.status !== 204) throw new Error(`expected 204, got ${response.status}`);
-      if (response.headers.get("set-cookie") !== null) {
-        throw new Error("expected no set-cookie header on stopImpersonating");
+      // APS-006: the one Set-Cookie allowed is the impersonation cookie's expiry —
+      // it hands the browser back to its own session; it never carries a token.
+      for (const line of response.headers.getSetCookie()) {
+        const [pair = "", ...attributes] = line.split(";");
+        const expiry =
+          pair.startsWith("__Host-impersonation=") &&
+          attributes.some((attribute) => /max-age=0/i.test(attribute));
+        if (!expiry) {
+          throw new Error(`expected only an impersonation-cookie expiry, got "${line}"`);
+        }
       }
     }),
   );
@@ -822,4 +830,75 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       if (rows.length !== 0) throw new Error(`expected an empty audit trail, got ${rows.length}`);
     }),
   );
+
+  // ---- APS-006: one real browser cookie jar ----
+
+  Given(
+    "an admin actively impersonating a target user through one browser cookie jar",
+    Effect.fn(function* () {
+      // Only "admin-1" passes the gate, so an episode is visible in `list` when the
+      // caller resolves as the admin and filtered out when it resolves as the target.
+      yield* configureApp({
+        canImpersonate: ({ admin }) => Effect.succeed(admin.id === "admin-1"),
+      });
+      const jar = new Map<string, string>();
+      const [name = "", value = ""] = (yield* signIn("admin-1")).split(/=(.*)/s);
+      jar.set(name, value);
+      yield* setOutcome("jar", jar);
+      const response = yield* request("POST", "/admin/impersonate/target-1", {
+        body: { reason: "support ticket #4821" },
+        headers: { cookie: jarHeader(jar) },
+      });
+      if (response.status !== 200) throw new Error(`expected 200, got ${response.status}`);
+      applySetCookies(jar, response);
+      const asTarget = yield* request("GET", "/admin", { headers: { cookie: jarHeader(jar) } });
+      const rows = (yield* Effect.promise(() => asTarget.json())) as ReadonlyArray<unknown>;
+      if (rows.length !== 0) throw new Error("expected the jar to be served as the target");
+    }),
+  );
+
+  When(
+    'the browser calls "admin.stopImpersonating"',
+    Effect.fn(function* () {
+      const jar = (yield* getOutcome("jar")) as Map<string, string>;
+      const response = yield* request("POST", "/admin/stop-impersonating", {
+        body: {},
+        headers: { cookie: jarHeader(jar) },
+      });
+      if (response.status !== 204) throw new Error(`expected 204, got ${response.status}`);
+      applySetCookies(jar, response);
+    }),
+  );
+
+  Then(
+    "the browser's next request is served as the admin, with no re-login",
+    Effect.fn(function* () {
+      const jar = (yield* getOutcome("jar")) as Map<string, string>;
+      const response = yield* request("GET", "/admin", { headers: { cookie: jarHeader(jar) } });
+      const rows = (yield* Effect.promise(() => response.json())) as ReadonlyArray<{
+        readonly endedBy: string | null;
+      }>;
+      if (rows.length !== 1 || rows[0]?.endedBy !== "self") {
+        throw new Error("expected the ended episode to be listed for the admin's own session");
+      }
+    }),
+  );
 });
+
+/** A browser cookie jar: one value per name, every `Set-Cookie` applied, an expired cookie deleted. */
+const jarHeader = (jar: ReadonlyMap<string, string>): string =>
+  [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+
+const applySetCookies = (jar: Map<string, string>, response: Response): void => {
+  for (const line of response.headers.getSetCookie()) {
+    const [pair = "", ...attributes] = line.split(";");
+    const eq = pair.indexOf("=");
+    const name = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    if (value === "" || attributes.some((attribute) => /^\s*max-age=0\s*$/i.test(attribute))) {
+      jar.delete(name);
+    } else {
+      jar.set(name, value);
+    }
+  }
+};

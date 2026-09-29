@@ -31,6 +31,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AdminApi from "./AdminApi.ts";
@@ -181,6 +183,15 @@ const currentUserPrincipal = Effect.gen(function* () {
   return principal;
 });
 
+/** APS-006: expires `__Host-impersonation` on the response so the browser reverts to the admin's own `__Host-session`. */
+const clearImpersonationCookie = HttpEffect.appendPreResponseHandler((_request, response) =>
+  HttpServerResponse.expireCookie(
+    response,
+    Sessions.IMPERSONATION_COOKIE_NAME,
+    Sessions.SESSION_COOKIE_ATTRIBUTES,
+  ).pipe(Effect.orDie),
+);
+
 export const AdminHandlers = HttpApiBuilder.group(
   AdminApi.AdminApi,
   "admin",
@@ -200,8 +211,10 @@ export const AdminHandlers = HttpApiBuilder.group(
           targetUserId: Users.UserId(params.userId),
           reason: payload.reason,
         });
+        // APS-006: a cookie of its own — the admin's `__Host-session` stays
+        // untouched and `Authentication` prefers this one while it lives.
         yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
+          Api.ImpersonationCookie,
           Redacted.value(issued.token),
           Sessions.SESSION_COOKIE_ATTRIBUTES,
         );
@@ -210,10 +223,13 @@ export const AdminHandlers = HttpApiBuilder.group(
       stopImpersonating: Effect.fnUntraced(function* () {
         const caller = yield* currentUserPrincipal;
         yield* admin.stopImpersonating(caller);
+        yield* clearImpersonationCookie;
       }),
       forceStop: Effect.fnUntraced(function* ({ params }: { params: AdminApi.SessionIdParams }) {
         const caller = yield* currentUserPrincipal;
         yield* admin.forceStop(caller, params.sessionId);
+        // APS-006: ending one's own current episode must hand the browser back.
+        if (params.sessionId === caller.sessionId) yield* clearImpersonationCookie;
       }),
       list: Effect.fnUntraced(function* ({ query }: { query: AdminApi.ListQuery }) {
         const caller = yield* currentUserPrincipal;

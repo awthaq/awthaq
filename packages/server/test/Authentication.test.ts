@@ -233,6 +233,55 @@ describe("Authentication", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  // APS-006: impersonation sessions travel under their own cookie so the
+  // admin's own `__Host-session` is never overwritten.
+  it.effect(
+    "APS-006: a session carrying actingAs authenticates from the __Host-impersonation cookie and shadows __Host-session",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const own = yield* sessions.issue({ userId: Users.UserId("admin-1") });
+        const impersonation = yield* sessions.issue({
+          userId,
+          actingAs: { type: "user", id: "admin-1" },
+        });
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+        const result = yield* client.required.whoAmI({
+          headers: {
+            cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(impersonation.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+          },
+        });
+        assert.strictEqual(result, userId);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "APS-006: an ordinary session planted in __Host-impersonation never authenticates and the chain falls through to __Host-session",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const own = yield* sessions.issue({ userId: Users.UserId("admin-1") });
+        const planted = yield* sessions.issue({ userId });
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+
+        const alone = yield* client.required
+          .whoAmI({
+            headers: {
+              cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(planted.token)}`,
+            },
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(alone._tag, "Unauthenticated");
+
+        const fallsThrough = yield* client.required.whoAmI({
+          headers: {
+            cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(planted.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+          },
+        });
+        assert.strictEqual(fallsThrough, "admin-1");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
   // .scratch/jwt/issues/16-automatic-response-mirroring.md: `PostAuthResponseHook`
   // defaults to a no-op (every test above already proves this — none of
   // them override it, and all pass unchanged). This is the one test
