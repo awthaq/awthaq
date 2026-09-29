@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-APP-02 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Appendix — Worked Example |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added inline BEH-EA citations per section and an ADR-EA-009 citation, beyond the header-only citation this appendix previously had (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added inline BEH-EA citations per section and an ADR-EA-009 citation, beyond the header-only citation this appendix previously had (CCR-EA-002) <br> 1.2 (2026-09-29): The reference wiring no longer merges `decisionCacheLayer` into the process-scoped `QadiLive`; the decision cache is per-request by default, with the application-scoped variant paired with `DecisionCacheInvalidationLive` (wayfinder ticket 12, PCS-001/RZS-002) |
 ---
 
 Every code block in this appendix is reproduced here as an uncompiled
@@ -47,8 +47,8 @@ import { Auth, Sessions, Users } from "@awthaq/core"
 import { Password } from "@awthaq/password"
 import { Organization } from "@awthaq/organization"
 import { Roles } from "@awthaq/roles"
-import { AuthorizedSubjectLive, SubjectExtractorLive } from "@awthaq/qadi"
-import { EvaluationIdLive, EvaluationServicesNone, decisionCacheLayer } from "@qadi/core"
+import { AuthorizedSubjectLive, RequestDecisionCache, SubjectExtractorLive } from "@awthaq/qadi"
+import { EvaluationIdLive, EvaluationServicesNone } from "@qadi/core"
 import { PermissionRegistryLive, RequirePermissionLive } from "@qadi/http"
 
 export const auth = Auth.make([Password, Organization, Roles])
@@ -56,7 +56,15 @@ export const auth = Auth.make([Password, Organization, Roles])
 //  Installing a second plugin that overrides SubjectResolver is a compile error at Auth.make.
 
 // qadi's own services. EvaluationServicesNone = every optional port's fail-closed default.
-export const QadiLive = Layer.mergeAll(EvaluationServicesNone, EvaluationIdLive, decisionCacheLayer({ capacity: 512 }))
+// No decisionCacheLayer here: this layer lives for the process, and a cache that lives
+// for the process serves a revoked membership until it is cleared (see "Decision cache
+// scope" below).
+export const QadiLive = Layer.mergeAll(EvaluationServicesNone, EvaluationIdLive)
+
+// The decision cache is provided per request instead, by one middleware declared
+// last (so outermost) on every guarded group:
+//   group.middleware(AuthorizedSubject).middleware(Authentication).middleware(RequestDecisionCache)
+export const RequestCacheLive = RequestDecisionCache.RequestDecisionCacheLive({ capacity: 512 })
 
 // The two bridges: one for handlers (path A), one for annotated endpoints (path B).
 export const AuthzLive = Layer.mergeAll(
@@ -64,6 +72,37 @@ export const AuthzLive = Layer.mergeAll(
   RequirePermissionLive.pipe(Layer.provide(SubjectExtractorLive))   // raw request → AuthSubject, for qadi's middleware
 ).pipe(Layer.provide(auth.layer))
 ```
+
+**Decision cache scope.** qadi's `DecisionCache` keys on the whole subject plus
+policy, resource and action, so a grant revoked *in the subject* (a role
+downgrade) misses the key and re-evaluates. A grant revoked in a *store the
+evaluation consults* — an `AttributeResolver` value, or the membership edge
+`OrganizationQadi.relationships` reads — is invisible to the key. The cache's own
+doc comment says it: an application-scoped cache is "safe against token downgrade
+and unsafe against backend revocation; per-request scope is safe against both."
+awthaq has the request boundary qadi lacks, so the reference wiring uses it:
+`RequestDecisionCache` provides a fresh cache around each request's whole handler
+pipeline, and a membership removed between two requests is denied on the second
+with no invalidation code to forget to wire.
+
+> **Application-scoped cache (opt-in).** A long-lived worker issuing decisions
+> outside any HTTP request, or a deployment that measured the per-request cache
+> build and wants a warmer cache, may provide `decisionCacheLayer` at application
+> scope — but **must** also provide `DecisionCacheInvalidationLive`, which clears
+> the cache from every organization/team observe hook. Providing the cache above
+> request scope without it knowingly accepts the backend-revocation staleness
+> window. The bridge covers only state awthaq's own plugins own (organization and
+> team membership, dynamic-role statements); an application-owned
+> `AttributeResolver`/`RelationshipResolver` — for example the
+> `hasResourceAttribute("ownerId", ...)` over your own `Project` table below — must
+> call `DecisionCache.clear` from its own mutations. Provide the bridge once,
+> application-wide: hook tap registries freeze at first use.
+>
+> ```ts
+> export const AppScopedCacheLive = Layer.mergeAll(
+>   DecisionCacheInvalidationLive,
+> ).pipe(Layer.provideMerge(decisionCacheLayer({ capacity: 512 })))
+> ```
 
 What subject a request resolves to depends entirely on the kind of principal
 awthaq handed it:

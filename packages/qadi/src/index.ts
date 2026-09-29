@@ -24,6 +24,8 @@
 
 export * as AttributeResolvers from "./AttributeResolvers.ts";
 export * as AuthorizedSubject from "./AuthorizedSubject.ts";
+export * as DecisionCacheInvalidation from "./DecisionCacheInvalidation.ts";
+export * as RequestDecisionCache from "./RequestDecisionCache.ts";
 export * as Resolvers from "./Resolvers.ts";
 export * as SubjectApi from "./SubjectApi.ts";
 export * as SubjectExtractor from "./SubjectExtractor.ts";

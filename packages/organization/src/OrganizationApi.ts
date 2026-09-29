@@ -522,7 +522,12 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
     HttpApiEndpoint.post("leave", "/organization/:organizationId/leave", {
       params: OrganizationIdParams,
       success: HttpApiSchema.Empty(204),
-      error: [OrganizationNotFound, MembershipNotFound, OwnerInvariantViolation],
+      error: [
+        OrganizationNotFound,
+        MembershipNotFound,
+        OwnerInvariantViolation,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(

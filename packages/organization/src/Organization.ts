@@ -199,6 +199,7 @@ export interface OrganizationShape {
     | OrganizationApi.OrganizationNotFound
     | OrganizationApi.MembershipNotFound
     | OrganizationApi.OwnerInvariantViolation
+    | HookPoint.HookAborted
   >;
   /** Server-only: no invitation round-trip, no HTTP endpoint — a trusted, app-driven direct add. */
   readonly addMember: (input: {
@@ -1699,6 +1700,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           );
           if (violates) return yield* Effect.fail(new OrganizationApi.OwnerInvariantViolation());
 
+          // PCS-002: `leave` removes a membership like `removeMember` does, so it
+          // runs the same remove-member hooks — `DecisionCacheInvalidationLive`
+          // (and any other observer) must see a member leaving.
+          yield* veto(
+            "organization.member.remove.before",
+            beforeRemove.run({ organizationId, userId: callerId }),
+          );
           yield* members
             .remove(callerId, organizationId)
             .pipe(
@@ -1711,6 +1719,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             organizationId,
             userId: callerId,
           });
+          yield* afterRemove.run({ organizationId, userId: callerId });
         },
       );
 

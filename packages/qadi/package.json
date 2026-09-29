@@ -27,6 +27,8 @@
   "dependencies": {
     "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
+    "@awthaq/organization": "workspace:*",
+    "@awthaq/ports": "workspace:*",
     "@awthaq/server": "workspace:*",
     "@qadi/core": "^0.7.0",
     "@qadi/http": "^0.7.0",

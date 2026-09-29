@@ -34,6 +34,17 @@ REQUIREMENT: The `AuthorizedSubject` middleware MUST require `CurrentPrincipal`
              `Authentication` before it in the middleware chain.
 ```
 
+```text
+REQUIREMENT: When the bridge's decision cache is enabled, it MUST be scoped to
+             one request (`RequestDecisionCache`, declared last on the group so
+             it wraps `AuthorizedSubject`), unless the application-scoped
+             `DecisionCache` is paired with `DecisionCacheInvalidationLive`.
+             A membership or role revoked in a store the evaluation consults
+             MUST be denied on the very next request under either wiring.
+```
+
+`DecisionCache`'s key is the whole subject plus policy/resource/action, so a revocation in a store the evaluation reads (the organization membership behind `OrganizationQadi.relationships`) is invisible to it; per-request scope is safe by construction and needs no invalidation. Wayfinder ticket 12 (PCS-001/PCS-002).
+
 `usage-qadi.md` §3 states this plainly: "`AuthorizedSubject` puts qadi's `CurrentSubject` in the environment of every endpoint in the group." This is the entire Path A bridge — one middleware, placed after `Authentication` so a `Principal` already exists to resolve, that hands every handler in the group qadi's evaluation context without the handler doing any resolution itself.
 
 _Previous: [BEH-EA-144](18-roles-subject-resolver.md#beh-ea-144-the-session-view-exposes-the-resolved-subject) | Next: [BEH-EA-146](19-qadi-bridge-path-a.md#beh-ea-146-one-call-per-need-not-one-call-for-everything)_

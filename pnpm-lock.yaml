@@ -688,6 +688,12 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
+      '@awthaq/organization':
+        specifier: workspace:*
+        version: link:../organization
+      '@awthaq/ports':
+        specifier: workspace:*
+        version: link:../ports
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
