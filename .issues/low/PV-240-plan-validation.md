@@ -3,7 +3,7 @@ ID: "PV-240"
 Title: "Rate-limit key strategies \"principal\" and \"ip\" are registry metadata only: nothing derives a bucket key from them"
 Level: low
 Category: "correctness"
-Status: open
+Status: resolved
 Package: "core"
 Source: "packages/core/src/RateLimits.ts:59"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `LOW` · `correctness` · `core` · found while wiring `features/features/04-cross-cutting/14-rate-limiting.feature` (P20a, REQ-EA-290)
 
-Status: **open**
+Status: **resolved**
 
 ## Summary
 
@@ -34,3 +34,5 @@ Either implement the resolvers (a `RateLimits.keyFor(rule, request)` that reads 
 _Triage notes and discussion append here._
 
 **Plan note (2026-09-29, P20a):** Left open: PV-240 (principal/ip key strategies are registry metadata only) needs the RateLimits key derivation to be designed against ClientAddress and CurrentPrincipal; not a small fix.
+
+**Resolved (2026-09-29):** packages/core/src/RateLimits.ts: RateLimits.bucketKey(rule, input?) resolves the rule's key strategy against the request (principal from CurrentPrincipal, ip from the ClientAddress port over the ambient HttpServerRequest with an explicit unknown bucket, or the function) and namespaces it per group.endpoint; RateLimits.enforceRule derives it and consumes through enforce (dimension from the strategy, never the key). Overloads keep each strategy's requirements precise (no casts). Red first: packages/core/test/RateLimitKeys.test.ts and REQ-EA-290 un-skipped in 14-rate-limiting.feature with new steps. BEH-EA-108 has an as-shipped paragraph. Plugins that enforce through their own keys (password) are unchanged and still register the same rules. Gates: typecheck, core suite (543), features 04-cross-cutting/14, spec:verify:strict, knip.

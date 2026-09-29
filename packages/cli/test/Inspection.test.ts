@@ -10,6 +10,7 @@ import * as Openapi from "../src/Openapi.ts";
 import * as Output from "../src/Output.ts";
 import * as Plugin from "../src/Plugin.ts";
 import * as Routes from "../src/Routes.ts";
+import { hookedApp } from "./support/HookedApp.ts";
 import { passwordAndRoles } from "./support/TestApp.ts";
 
 const captureStdout = <A, E>(effect: Effect.Effect<A, E, Output.Output>, json = false) =>
@@ -93,6 +94,51 @@ describe("plugin list --graph", () => {
         const [doc] = yield* Ref.get(captured.documents);
         assert.deepStrictEqual(doc, Plugin.graph(passwordAndRoles));
       }),
+  );
+});
+
+// PV-241/BEH-EA-096: `plugin list --hooks` prints `manifest.hooks`, the resolved per-point tap order.
+describe("plugin list --hooks", () => {
+  it.effect("prints each point's declared taps in the order the runtime chain runs them", () =>
+    Effect.gen(function* () {
+      const text = yield* captureStdout(
+        Plugin.show(hookedApp, { graph: false, hooks: true, format: "text" }),
+      );
+      assert.strictEqual(text[0], "cli.test.normalize");
+      // Beta depends on Alpha, so it runs second despite its lower declared order.
+      assert.match(text[1] ?? "", /^\s*1\. alpha \(order 5\)/);
+      assert.match(text[2] ?? "", /^\s*2\. beta \(order 0\)/);
+      assert.isTrue(text.some((line) => line.includes("application taps")));
+    }),
+  );
+
+  it.effect("--format json emits the same chains as data", () =>
+    Effect.gen(function* () {
+      const { captured, layer } = yield* Output.capture(false);
+      yield* Plugin.show(hookedApp, { graph: false, hooks: true, format: "json" }).pipe(
+        Effect.provide(layer),
+      );
+      const [doc] = yield* Ref.get(captured.documents);
+      assert.deepStrictEqual(doc, Plugin.hooks(hookedApp));
+      assert.deepStrictEqual(Plugin.hooks(hookedApp), [
+        {
+          point: "cli.test.normalize",
+          taps: [
+            { position: 1, plugin: "alpha", order: 5 },
+            { position: 2, plugin: "beta", order: 0 },
+          ],
+        },
+      ]);
+    }),
+  );
+
+  it.effect("says so when no installed plugin declares a tap", () =>
+    Effect.gen(function* () {
+      const text = yield* captureStdout(
+        Plugin.show(passwordAndRoles, { graph: false, hooks: true, format: "text" }),
+      );
+      assert.isTrue(text.some((line) => line.includes("no installed plugin declares a hook tap")));
+    }),
   );
 });
 

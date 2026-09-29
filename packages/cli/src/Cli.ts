@@ -9,7 +9,7 @@
 //   awthaq [--config <path>] [--json]
 //     doctor [--build] [--production]
 //     config list
-//     plugin list [--graph] [--format text|json|dot]
+//     plugin list [--graph | --hooks] [--format text|json|dot]
 //     routes
 //     openapi [--out <file>]
 //     migration status | apply [--yes] [--dry-run] [--allow-empty]      (--database-url)
@@ -167,6 +167,10 @@ const pluginList = Command.make(
       Flag.withDescription("Print dependency edges, groups and tables"),
       Flag.withDefault(false),
     ),
+    hooks: Flag.Boolean("hooks").pipe(
+      Flag.withDescription("Print each hook point's declared taps in the order they run"),
+      Flag.withDefault(false),
+    ),
     format: Flag.Literals("format", ["text", "json", "dot"]).pipe(
       Flag.withDescription("text | json | dot"),
       Flag.withDefault("text"),
@@ -176,7 +180,7 @@ const pluginList = Command.make(
     withOutput(
       load.pipe(
         Effect.flatMap((config) =>
-          Plugin.show(config.auth, { graph: args.graph, format: args.format }),
+          Plugin.show(config.auth, { graph: args.graph, hooks: args.hooks, format: args.format }),
         ),
       ),
     ),

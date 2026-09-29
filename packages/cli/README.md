@@ -6,7 +6,7 @@ The `awthaq` command line: inspect and operate an awthaq authentication runtime.
 awthaq [--config <path>] [--json]
   doctor [--build] [--production]                    link, configuration and insecure-default audit
   config list                                        every declared configuration input, default vs override
-  plugin list [--graph] [--format text|json|dot]     installed plugins in the linker's order
+  plugin list [--graph | --hooks] [--format text|json|dot]   installed plugins in the linker's order, or each hook point's declared taps
   routes                                             every endpoint, owning plugin, middleware
   openapi [--out <file>]                             the one aggregated OpenAPI document
   migration status | apply [--yes] [--dry-run] [--allow-empty]   (--database-url)
@@ -94,5 +94,5 @@ Interactive `awthaq login` is the device authorization grant (RFC 8628) and need
 
 ## Not done (and why)
 
-- `plugin list --graph` prints order, `dependsOn`, groups and tables. A plugin's *required ports* are its layer's requirements (a type-level fact) and its *hook-tap chain* is registered into a process-global registry only when the layer is built, so neither is derivable without evaluating layers, which manifest-only commands may not. Hook-tap introspection lands with per-composition hook registries.
+- `plugin list --graph` prints order, `dependsOn`, groups and tables. A plugin's *required ports* are its layer's requirements (a type-level fact), not derivable without evaluating layers, which manifest-only commands may not. `plugin list --hooks` prints each hook point's plugin-declared taps in the order the runtime chain runs them (`manifest.hooks`); application taps registered in the host run after those and are not listed.
 - `doctor` reports what descriptors and the built application Layer expose; an override computed dynamically per request or per tenant cannot be validated before deploy ([ADR-EA-006](../../spec/decisions/006-runtime-config-separate-from-installation.md)).
