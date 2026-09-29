@@ -75,6 +75,9 @@
     },
     {
       "path": "examples/memory-server"
+    },
+    {
+      "path": "examples/plugin-template"
     }
   ]
 }

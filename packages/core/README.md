@@ -10,4 +10,6 @@ Domain stratum (4): the plugin contract, `Auth.make` composition and the domain 
 - `HookPoint` / `Hooks` (BEH-EA-089–096): veto / observe / divert points and their taps.
 - `Slots`, `RateLimits`, `Migrations`, and the re-exported `HttpApi*` contract classes a plugin author imports from here.
 
+Writing a plugin? Start from [`docs/plugin-authoring.md`](../../docs/plugin-authoring.md) and copy [`examples/plugin-template/`](../../examples/plugin-template/) (a test-exercised template).
+
 See [`spec/overview.md`](../../spec/overview.md) and [`spec/behaviors/`](../../spec/behaviors/).

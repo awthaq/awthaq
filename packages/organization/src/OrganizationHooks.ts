@@ -4,7 +4,8 @@
 // (after) `HookPoint` per mutating operation this plugin exposes —
 // `Organization` is the first real plugin consumer of the core
 // `HookPoint` mechanism (`packages/core/src/HookPoint.ts`,
-// `BEH-EA-089`–`096`); there is no prior plugin example to mirror.
+// `BEH-EA-089`–`096`). For a minimal example of the same pattern, see
+// `examples/plugin-template/` and `docs/plugin-authoring.md`.
 //
 // Each `Input` is a plain `Schema.Struct` carrying that operation's own
 // payload/context (a type carrier only — `HookPoint.ts`'s own header
