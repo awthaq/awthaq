@@ -98,6 +98,8 @@ REQUIREMENT: No plugin's Layer MAY include a port service (`PasswordHasher`,
              it.
 ```
 
+JH-008 (as shipped): `Auth.make`'s `Validate<P>` enforces this at the type level — `PortProvidedByPlugin` inspects each plugin layer's `ROut` for a service keyed `awthaq/ports/*` (every awthaq port) or Effect's `SqlClient`/`Crypto`, and a hit narrows the tuple to `plugin "evil" provides port "awthaq/ports/Mailer" — a plugin may only require ports, never provide them`.
+
 `archive/design/plugins-as-layers.md` §3.3 states the consequence this rule is designed to produce: "a 'bcrypt plugin' is not a plugin at all; it is `BcryptHasher.layer`, which is what it should have been." Because two plugins can never both "provide" the same port, the whole class of conflict a naive plugin model needs a rule for — two plugins both claiming to be *the* password hasher — cannot arise; providing two Layers for one port in application code is a visible, ordinary `Layer.provide` shadow, not a plugin-system special case (`archive/design/usage-examples-v4.md` §17).
 
 ## BEH-EA-021: A slot is a `Context.Reference` with a fail-closed default that at most one plugin may override

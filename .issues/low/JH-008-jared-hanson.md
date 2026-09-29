@@ -3,7 +3,7 @@ ID: "JH-008"
 Title: "Ports-never-provided sandboxing rule is convention, not an enforced boundary"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/Jwt.ts:174"
 Auditor: "jared-hanson"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `jwt` · reported by **Jared Hanson — Creator of Passport.js** (`jared-hanson`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Keep the escape hatch but make it declarative: extend AuthPlugin.layer options w
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `plugin-port-boundary-enforcement`. Evidence at HEAD ec065a7: `packages/jwt/src/Jwt.ts:313`. Fix: Enforce BEH-EA-020 at the type level: `Auth.make`'s `Validate<P>` rejects any plugin whose layer's ROut contains a port tag. (effort M). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Validate<P> now reports PortProvidedByPlugin (refactored into FirstProblem<P>: duplicate id, missing dep, order, port): a plugin whose layer ROut contains a service keyed awthaq/ports/* or Effect's SqlClient/Crypto narrows the tuple to a literal naming plugin + port. Key-prefix instead of a hand-kept ReservedPort union in @awthaq/ports (every port already carries the prefix; nothing to drift). Test: @ts-expect-error on Auth.make([Evil]) (Evil merges Mailer.layerMemory into its layer; red = unused directive) + exact expectTypeOf on the message; every shipped composition still typechecks. ADR-EA-010 status + BEH-EA-020 sentence updated.

@@ -81,6 +81,8 @@ export interface Class<
   readonly tables: ReadonlyArray<`${Id}_${string}`>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
+  /** JH-007: tables owned by *other* plugins this one reads; `Auth.make` requires the owner in `dependsOn`. */
+  readonly readsTables: ReadonlyArray<string>;
 }
 
 /**
@@ -108,6 +110,8 @@ export interface Any {
   readonly tables: ReadonlyArray<string>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
+  /** JH-007: optional here so a hand-built plugin value need not name it. */
+  readonly readsTables?: ReadonlyArray<string>;
   readonly layer: Layer.Layer<never, unknown, unknown>;
 }
 
@@ -166,6 +170,7 @@ export const Service =
       readonly contract: HttpApi.HttpApi<"auth", Groups>;
       readonly tables?: ReadonlyArray<`${Id}_${string}`>;
       readonly migrations?: Migrations;
+      readonly readsTables?: ReadonlyArray<string>;
     },
   ): Class<Self, Id, Shape, Groups> => {
     const key: Key<Id> = `awthaq/plugin/${id}`;
@@ -184,6 +189,7 @@ export const Service =
       contract: options.contract,
       tables: options.tables ?? [],
       migrations: options.migrations ?? [],
+      readsTables: options.readsTables ?? [],
       dependsOn: noDependencies,
     });
     // A regular (not arrow) function, so `this` is whatever the getter is

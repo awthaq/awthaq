@@ -10,10 +10,12 @@
 // migration ordering (BEH-EA-016) — all exercised by `test/AuthPlugin.test.ts`.
 
 import { AuthCore } from "@awthaq/api";
+import type * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as Layer from "effect/Layer";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthPlugin from "./AuthPlugin.ts";
 import type { Migrations } from "./Migrations.ts";
 import * as Slots from "./Slots.ts";
@@ -74,6 +76,19 @@ export class RouteConflict extends Data.TaggedError("RouteConflict")<{
   readonly path: string;
   readonly firstPluginId: string;
   readonly secondPluginId: string;
+  readonly message: string;
+}> {}
+
+/**
+ * JH-007: a plugin declared (`readsTables`) that it reads a table another installed
+ * plugin owns, without listing that plugin in `dependsOn`. `dependsOn` is the sole
+ * source of migration order, so without it the reader's migrations could run before
+ * the table exists; composition refuses it instead of relying on a convention.
+ */
+export class UndeclaredTableDependency extends Data.TaggedError("UndeclaredTableDependency")<{
+  readonly pluginId: string;
+  readonly ownerId: string;
+  readonly table: string;
   readonly message: string;
 }> {}
 
@@ -182,17 +197,45 @@ type OutOfOrderDep<
   : never;
 
 /**
- * BEH-EA-009/010/011: a plugin tuple is accepted as-is only once it has no
- * duplicate id, no dependency missing from the same tuple, and every
- * dependency listed before its dependent (JH-006); otherwise the argument type
- * narrows to a literal object naming the problem, so passing the tuple to
- * `Auth.make` fails to type-check with a readable message
- * (`archive/design/plugins-as-layers.md` §4.3) instead of an opaque mismatch.
+ * JH-008 / BEH-EA-020: the ports a plugin's layer must only ever *require*. Every
+ * awthaq port's service key is `awthaq/ports/<Name>` (`PasswordHasher`, `Mailer`,
+ * `RateLimiter`, `WebAuthn`, `KeyProvider`, `Encryption`, `SqlTransaction`,
+ * `ClientAddress`, ...), so the key prefix names them all without a hand-kept
+ * list that a new port could be missing from; `SqlClient` and `Crypto` are
+ * Effect's own, listed by type.
  */
-export type Validate<P extends ReadonlyArray<AuthPlugin.Any>> = [DuplicateId<P>] extends [never]
+type ReservedPort =
+  | { readonly key: `awthaq/ports/${string}` }
+  | Crypto.Crypto
+  | SqlClient.SqlClient;
+
+type PortName<Port> = Port extends { readonly key: infer Key extends string }
+  ? Key
+  : "Crypto or SqlClient";
+
+/** JH-008: the first `[portName, pluginId]` where a plugin's layer provides a port in its `ROut`, or `never`. */
+type PortProvidedByPlugin<P extends ReadonlyArray<AuthPlugin.Any>> = P[number] extends infer Plugin
+  ? Plugin extends AuthPlugin.Any
+    ? [Extract<Layer.Success<Plugin["layer"]>, ReservedPort>] extends [never]
+      ? never
+      : readonly [PortName<Extract<Layer.Success<Plugin["layer"]>, ReservedPort>>, Plugin["id"]]
+    : never
+  : never;
+
+/** The one problem `Validate<P>` reports for `P`, in a fixed order (duplicate id, missing dependency, order, port), or `never`. */
+type FirstProblem<P extends ReadonlyArray<AuthPlugin.Any>> = [DuplicateId<P>] extends [never]
   ? [MissingDep<P>] extends [never]
     ? [OutOfOrderDep<P>] extends [never]
-      ? P
+      ? [PortProvidedByPlugin<P>] extends [never]
+        ? never
+        : PortProvidedByPlugin<P> extends readonly [
+              infer Port extends string,
+              infer By extends string,
+            ]
+          ? {
+              readonly awthaq: `plugin "${By}" provides port "${Port}" — a plugin may only require ports, never provide them`;
+            }
+          : never
       : OutOfOrderDep<P> extends readonly [infer Dep extends string, infer By extends string]
         ? {
             readonly awthaq: `plugin "${By}" depends on plugin "${Dep}", which must be listed before it`;
@@ -204,6 +247,18 @@ export type Validate<P extends ReadonlyArray<AuthPlugin.Any>> = [DuplicateId<P>]
         }
       : never
   : { readonly awthaq: `plugin id "${DuplicateId<P>}" appears more than once` };
+
+/**
+ * BEH-EA-009/010/011/020: a plugin tuple is accepted as-is only once it has no
+ * duplicate id, no dependency missing from the same tuple, every dependency
+ * listed before its dependent (JH-006), and no plugin providing a port (JH-008);
+ * otherwise the argument type narrows to a literal object naming the problem, so
+ * passing the tuple to `Auth.make` fails to type-check with a readable message
+ * (`archive/design/plugins-as-layers.md` §4.3) instead of an opaque mismatch.
+ */
+export type Validate<P extends ReadonlyArray<AuthPlugin.Any>> = [FirstProblem<P>] extends [never]
+  ? P
+  : FirstProblem<P>;
 
 // ---------------------------------------------------------------------------
 // Built<P> — BEH-EA-009, BEH-EA-013
@@ -382,6 +437,27 @@ const linkPlugins = (plugins: ReadonlyArray<AuthPlugin.Any>): ReadonlyArray<Auth
   return order.map((id) =>
     assertDefined(byId.get(id), `byId is missing plugin "${id}" from its own key set`),
   );
+};
+
+/** JH-007: every `readsTables` entry owned by an installed plugin needs that plugin in the reader's `dependsOn`. */
+const checkTableDependencies = (plugins: ReadonlyArray<AuthPlugin.Any>): void => {
+  const ownerOf = new Map<string, AuthPlugin.Any>();
+  for (const plugin of plugins) {
+    for (const table of plugin.tables) ownerOf.set(table, plugin);
+  }
+  for (const plugin of plugins) {
+    for (const table of plugin.readsTables ?? []) {
+      const owner = ownerOf.get(table);
+      if (owner === undefined || owner.id === plugin.id) continue;
+      if (plugin.dependsOn.some((dep) => dep.id === owner.id)) continue;
+      throw new UndeclaredTableDependency({
+        pluginId: plugin.id,
+        ownerId: owner.id,
+        table,
+        message: `awthaq: plugin "${plugin.id}" reads table "${table}" owned by plugin "${owner.id}" but does not list it in dependsOn`,
+      });
+    }
+  }
 };
 
 const findCycle = (
@@ -644,6 +720,7 @@ export function make(
   options?: MakeOptions<HttpApiGroup.Constraint>,
 ) {
   const order = linkPlugins(plugins);
+  checkTableDependencies(order);
   const extraGroups = options?.extraGroups ?? [];
   return {
     api: composeApi(order, extraGroups),

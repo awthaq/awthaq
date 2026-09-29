@@ -6,6 +6,7 @@
 // and fails just as loudly if a fix makes one of them compile when it
 // shouldn't (an unused `@ts-expect-error` is itself a `tsc` error).
 import { assert, describe, it } from "@effect/vitest";
+import { expectTypeOf } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -16,6 +17,7 @@ import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as Auth from "../src/Auth.ts";
 import * as AuthPlugin from "../src/AuthPlugin.ts";
 import * as Slots from "../src/Slots.ts";
+import { Mailer } from "@awthaq/ports";
 
 // --- Ping: a toy plugin with no dependencies -------------------------------
 
@@ -250,6 +252,47 @@ const fakePlugin = <const Id extends string>(
   layer: Layer.empty,
 });
 
+// --- JH-007: a plugin reading another plugin's table -----------------------
+
+class Reader extends AuthPlugin.Service<Reader, Record<string, never>>()("reader", {
+  apiVersion: 1,
+  contract: HttpApi.make("auth"),
+  // Reads `ping_state`, which the `ping` plugin owns.
+  readsTables: ["ping_state"],
+}) {
+  static readonly layer = AuthPlugin.layer(Reader, { make: Effect.succeed({}) });
+}
+
+class DeclaredReader extends AuthPlugin.Service<DeclaredReader, Record<string, never>>()(
+  "declaredReader",
+  {
+    apiVersion: 1,
+    contract: HttpApi.make("auth"),
+    readsTables: ["ping_state"],
+  },
+) {
+  static readonly layer = AuthPlugin.layer(DeclaredReader, {
+    dependsOn: [Ping],
+    make: Effect.gen(function* () {
+      yield* Ping;
+      return {};
+    }),
+  });
+}
+
+// --- JH-008 / BEH-EA-020: a plugin whose layer provides a port -----------------
+
+class Evil extends AuthPlugin.Service<Evil, Record<string, never>>()("evil", {
+  apiVersion: 1,
+  contract: HttpApi.make("auth"),
+}) {
+  // Smuggles a `Mailer` implementation into the composition through its own `ROut`.
+  static readonly layer = Layer.provideMerge(
+    Mailer.layerMemory,
+    AuthPlugin.layer(Evil, { make: Effect.succeed({}) }),
+  );
+}
+
 // --- BEH-EA-010: two plugins sharing an id refuses to type-check -----------
 
 class PingDuplicate extends AuthPlugin.Service<PingDuplicate, PingShape>()("ping", {
@@ -411,6 +454,35 @@ describe("Auth.make", () => {
   it("JH-006: a tuple listing a dependent before its dependency is refused at compile time, naming both", () => {
     // @ts-expect-error - plugin "pong" depends on plugin "ping", which must be listed before it
     assert.doesNotThrow(() => Auth.make([Pong, Ping]));
+  });
+
+  it("JH-007: a plugin reading another plugin's table without dependsOn is refused at composition", () => {
+    let thrown: unknown;
+    try {
+      Auth.make([Ping, Reader]);
+    } catch (error) {
+      thrown = error;
+    }
+    assert.instanceOf(thrown, Auth.UndeclaredTableDependency);
+    assert.strictEqual(thrown._tag, "UndeclaredTableDependency");
+    assert.strictEqual(thrown.pluginId, "reader");
+    assert.strictEqual(thrown.ownerId, "ping");
+    assert.strictEqual(thrown.table, "ping_state");
+    assert.match(thrown.message, /plugin "reader" reads table "ping_state" owned by plugin "ping"/);
+    // Declaring the dependency makes the same read legitimate, and orders the migrations.
+    assert.doesNotThrow(() => Auth.make([Ping, DeclaredReader]));
+    // A table no installed plugin owns is not this check's business.
+    assert.doesNotThrow(() => Auth.make([Reader]));
+  });
+
+  it("JH-008: a plugin whose layer provides a port is refused at compile time, naming plugin and port", () => {
+    // @ts-expect-error - plugin "evil" provides port "awthaq/ports/Mailer" (BEH-EA-020)
+    assert.doesNotThrow(() => Auth.make([Evil]));
+    expectTypeOf<Auth.Validate<readonly [typeof Evil]>>().toEqualTypeOf<{
+      readonly awthaq: 'plugin "evil" provides port "awthaq/ports/Mailer" — a plugin may only require ports, never provide them';
+    }>();
+    // Ports the plugin merely requires (Ping has none; Roles/Jwt compositions elsewhere) are fine.
+    assert.doesNotThrow(() => Auth.make([Ping, Pong]));
   });
 
   it("ELC-006: two AuthPlugin.layer calls for one class with different dependsOn throw ConflictingDependsOn", () => {

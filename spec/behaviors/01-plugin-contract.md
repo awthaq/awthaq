@@ -145,10 +145,10 @@ REQUIREMENT: No value passed to a plugin's configuration Layer (`Password.config
 ## BEH-EA-008: `dependsOn` declares both ordering and a typed requirement in one static array
 
 ```ts
-static readonly layer = AuthPlugin.layer(Password, {
-  dependsOn: [Sessions, Users],
-  make: Effect.gen(function*() { /* … */ }),
-  handlers: PasswordHandlers
+static readonly layer = AuthPlugin.layer(TwoFactor, {
+  dependsOn: [Password],                         // another plugin — core services are not listed
+  make: Effect.gen(function*() { const sessions = yield* Sessions /* … */ }),
+  handlers: TwoFactorHandlers
 })
 ```
 
@@ -158,6 +158,8 @@ REQUIREMENT: Every class listed in a plugin's `dependsOn` MUST join that
              a migration-ordering fact for the linker and a compile-time
              requirement for every consumer of the plugin's Layer.
 ```
+
+JH-007 (as shipped): `dependsOn` is reserved for *other plugins*. Core domain services (`Sessions`, `Users`, `AuthEvents`, `AuditLog`) are reached by a plain `yield*` in `make`, never listed, and `dependsOn` is the sole source of migration order. So that a data dependency cannot be forgotten, a plugin that reads a table another plugin owns declares it (`AuthPlugin.Service(..., { readsTables: ["owner_table"] })`), and `Auth.make` refuses the composition (`UndeclaredTableDependency`) when the owning plugin is installed but not in that plugin's `dependsOn`.
 
 `archive/design/plugins-as-layers.md` §2.1 folds what earlier plugin systems kept as two separate declarations — a structural dependency list for ordering, and a service requirement for the type checker — into the single `dependsOn` array, because `AuthPlugin.layer`'s type signature (`DepsOf<typeof options>` joining `RIn`) makes the two facts equivalent by construction. `research/09-plugin-architecture.md` Q21 explicitly considers keeping `requiresPlugins` (structural) and `Context.Tag` requirements (service-level) as two mechanisms an author must maintain in parallel, and recommends against it for exactly this reason: Effect's own Layer graph already validates the tag-level requirement, so `dependsOn` only needs to add what the graph cannot express on its own — migration ordering.
 

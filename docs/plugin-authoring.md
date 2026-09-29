@@ -29,7 +29,7 @@ A plugin is a class extending `AuthPlugin.Service` (ADR-EA-008) plus the pieces 
 
 ## Dependencies: `dependsOn` versus a direct `yield*`
 
-Core domain services (`Sessions`, `Users`, `AuthEvents`, `AuditLog`) and the plugin's own records are simply `yield*`ed inside `make`; nothing is declared. Declare `dependsOn: [OtherPlugin]` only when your plugin needs _another plugin's_ contribution to be composed first (it also orders migrations and makes `Auth.make` refuse cycles, BEH-EA-016). `admin/src/Admin.ts` explains why it needs no `dependsOn` despite using three core services.
+Core domain services (`Sessions`, `Users`, `AuthEvents`, `AuditLog`) and the plugin's own records are simply `yield*`ed inside `make`; nothing is declared. Declare `dependsOn: [OtherPlugin]` only when your plugin needs _another plugin's_ contribution to be composed first (it also orders migrations and makes `Auth.make` refuse cycles, BEH-EA-016). `admin/src/Admin.ts` explains why it needs no `dependsOn` despite using three core services. If your plugin also reads a table another plugin owns, list it in `readsTables` on `AuthPlugin.Service`; `Auth.make` then refuses the composition unless that plugin is in `dependsOn` (JH-007). Order the plugin tuple dependencies-first (`Auth.make([Password, TwoFactor])`): a dependent listed before its dependency does not type-check (JH-006). A plugin's layer may only _require_ ports (`PasswordHasher`, `Mailer`, ...), never provide one (JH-008), and two plugins overriding one slot fail the composed layer with `SlotConflict` (MA-005).
 
 ## Ports are required, never provided (ADR-EA-010)
 

@@ -7,7 +7,7 @@
 > | Document ID | EFAUTH-ADR-010 |
 > | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
-> | Status | Accepted — design; implementation deferred |
+> | Status | Accepted — enforced at the type level by `Auth.make` (JH-008) |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Corrected the bcrypt example to the shipped verify-only `LegacyPasswordVerifiers` mechanism (SAM-002) |
