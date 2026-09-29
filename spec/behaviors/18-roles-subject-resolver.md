@@ -61,7 +61,16 @@ export const owner  = role({ name: "owner",  permissions: [project.delete, billi
 REQUIREMENT: `SubjectResolver` MUST flatten a user's assigned roles through
              qadi's role inheritance graph into a pre-computed `permissions`
              set at resolution time; a policy evaluation MUST NOT walk the
-             role graph itself.
+             role graph itself. The role catalog MUST NOT define two roles
+             with the same name (the layer refuses to build, naming the
+             duplicates); assigning a name absent from the catalog MUST fail
+             with a typed `UnknownRole`; a stored assignment that has drifted
+             out of the catalog MUST be observable (a warning when a subject is
+             resolved, and `listUnknownAssignments`); and every real change to
+             a user's global role assignments MUST publish `auth.roles.assigned`
+             / `auth.roles.revoked` (durably audited, recording the actor when
+             the caller supplies one) — a no-op re-assign or revoke publishes
+             nothing.
 ```
 
 This is qadi's own house rule from `spec/behaviors/01-permissions.md`'s design ("a subject carries a pre-flattened `ReadonlySet` of permission keys, so a permission check is a set membership test rather than a graph walk") applied at the point awthaq hands qadi a subject: the DAG walk happens once, in `SubjectResolver`, so every downstream `check`/`enforce`/`filter` call is O(1) set membership rather than re-deriving inheritance on every request.

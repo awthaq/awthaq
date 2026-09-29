@@ -91,6 +91,10 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.admin.impersonationStarted":
     case "auth.admin.impersonationDenied":
       return Option.some(event.adminUserId);
+    case "auth.roles.assigned":
+    case "auth.roles.revoked":
+      // The actor is who *changed* the roles, not whose roles changed.
+      return Option.fromNullishOr(event.actorUserId);
     case "auth.authz.denied":
       // qadi's own subject id: only a `user:` subject names an awthaq user.
       return event.subjectId.startsWith("user:")

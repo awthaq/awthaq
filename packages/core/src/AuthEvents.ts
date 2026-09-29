@@ -309,6 +309,27 @@ export interface AuthorizationDeniedEvent {
   readonly reason: string;
 }
 
+/**
+ * Published by `@awthaq/roles`' `assign`/`revoke` on a *real* change of a
+ * user's global role assignments (RRM-005): a re-assign or a revoke of a role
+ * the user never held publishes nothing. `userId` is the user whose roles
+ * changed; `actorUserId` the operator who changed them, when the caller said —
+ * `Roles` is a trusted primitive, so an application-driven change has none.
+ */
+export interface RolesAssignedEvent {
+  readonly _tag: "auth.roles.assigned";
+  readonly userId: UserId;
+  readonly roleName: string;
+  readonly actorUserId?: UserId | undefined;
+}
+
+export interface RolesRevokedEvent {
+  readonly _tag: "auth.roles.revoked";
+  readonly userId: UserId;
+  readonly roleName: string;
+  readonly actorUserId?: UserId | undefined;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
@@ -343,7 +364,9 @@ export type AuthEvent =
   | OrganizationTeamMemberAddedEvent
   | OrganizationTeamMemberRemovedEvent
   | OrganizationPermissionDeniedEvent
-  | AuthorizationDeniedEvent;
+  | AuthorizationDeniedEvent
+  | RolesAssignedEvent
+  | RolesRevokedEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */
