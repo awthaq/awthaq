@@ -52,6 +52,8 @@ One row per `spec/behaviors/NN-*.md` file. The planned module column names a pla
 | [26 CLI](behaviors/26-cli.md) | 201-208 | `@awthaq/cli/src/cli.ts` |
 | [27 Admin and Impersonation](behaviors/27-admin-impersonation.md) | 209-224 | `@awthaq/admin/src/Admin.ts` (BEH-EA-209/210/211 also extend `@awthaq/core/src/Sessions.ts` and `@awthaq/server/src/Authentication.ts`) |
 | [28 Multi-Tenancy](behaviors/28-tenancy.md) | 225-232 | `@awthaq/ports/src/Tenant.ts`, `@awthaq/sql/src/TenantScope.ts`, `@awthaq/organization/src/Organization.ts` (`tenantMiddleware`) |
+| [29 SAML Service Provider](behaviors/29-saml-sp.md) | 233-240 | `@awthaq/saml/src/Saml.ts` (planned), `@awthaq/ports/src/SamlSigner.ts` (planned port) |
+| [30 SCIM Provisioning](behaviors/30-scim.md) | 241-248 | `@awthaq/scim/src/Scim.ts` |
 
 ---
 
@@ -152,6 +154,7 @@ One row per `spec/decisions/ADR-EA-NNN` file (`archive/PRD.md` §22).
 | [ADR-EA-017](decisions/017-jwt-signing-key-rotation.md) | JWT Signing Keys Rotate on a Grace Period Sized to Token Lifetime, With an Emergency Retire-Now Path | `packages/jwt/test/KeyRing.test.ts`, `packages/jwt/test/JwtCodec.test.ts` (no BEH-EA range; model [08](models/08-jwt-bearer.md)) |
 | [ADR-EA-018](decisions/018-tenancy-is-an-organization.md) | A Tenant Is an Organization Row; Core Carries an Opaque, Ambient Tenant Column | [BEH-EA-225 through 232](behaviors/28-tenancy.md), [ADR-EA-005](decisions/005-static-composition.md), [ADR-EA-009](decisions/009-authorization-delegated-to-qadi.md), [ADR-EA-010](decisions/010-plugins-require-ports-never-provide.md), [ADR-EA-011](decisions/011-configuration-service-with-default.md) |
 | [ADR-EA-019](decisions/019-encryption-key-rotation.md) | Encryption-at-Rest Keys Rotate by Retirement, With Lazy Re-Encryption | `packages/ports/test/KeyProvider.test.ts`, `packages/ports/test/Encryption.test.ts` (no BEH-EA range) |
+| [ADR-EA-023](decisions/023-enterprise-federation-packages.md) | Enterprise Federation Ships as Two First-Party Packages — saml (SP Only) and scim (Inbound) — Behind a Thin Sso Dispatcher | [BEH-EA-233 through 240](behaviors/29-saml-sp.md), [BEH-EA-241 through 248](behaviors/30-scim.md), [ADR-EA-018](decisions/018-tenancy-is-an-organization.md), [ADR-EA-010](decisions/010-plugins-require-ports-never-provide.md) |
 | [ADR-EA-024](decisions/024-read-replica-routing.md) | Read-Replica Routing Is Opt-In, Classified Per Read, and Guarded by a Causal Token | `packages/test/test/ReadRouting.test.ts`, `packages/sql/test/Repositories.postgres.test.ts` (no BEH-EA range; [BEH-EA-035](behaviors/05-persistence-stratum.md#beh-ea-035-repositories-are-built-with-sqlmodelmakerepository-over-the-ambient-sqlclient-never-opening-their-own-transactions) addendum) |
 | [ADR-EA-025](decisions/025-global-roles-vs-organization-roles.md) | Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority | [BEH-EA-139](behaviors/18-roles-subject-resolver.md#beh-ea-139-roles-flatten-through-the-dag-once-per-resolution), [BEH-EA-162](behaviors/21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership) |
 | [ADR-EA-026](decisions/026-signup-enumeration-posture.md) | Sign-Up Reveals an Existing Address by Default, With an Opt-In Conceal Mode | `packages/password/test/AuthHttp.test.ts` (no BEH-EA range) |

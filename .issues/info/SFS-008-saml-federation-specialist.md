@@ -47,3 +47,5 @@ Keep the phasing, but pull the SamlSigner port design and the SAML validation-ch
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence medium); workstream `enterprise-federation-saml-scim`. Duplicate of `AOMS-009` — closed by that issue's fix. Evidence at HEAD ec065a7: `spec/roadmap.md:125`. Full dossier: `.plan/slices/12-spec.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `AOMS-009-auth0-okta-migration-specialist` — closed by its fix (see that issue's Resolved comment).

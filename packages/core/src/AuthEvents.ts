@@ -257,6 +257,51 @@ export interface AdminOrganizationUnsuspendedEvent {
   readonly organizationId: string;
 }
 
+/**
+ * CWM-002 (ADR-EA-023): published by `@awthaq/scim` when a directory connection provisions a
+ * user (a repeat `POST` that converges on an existing one publishes nothing). `connectionId`
+ * names the SCIM connection, `organizationId` its organization.
+ */
+export interface ScimUserProvisionedEvent {
+  readonly _tag: "auth.scim.userProvisioned";
+  readonly connectionId: string;
+  readonly organizationId: string;
+  readonly userId: UserId;
+}
+
+/** CWM-002: published after a SCIM `active: false` (or `DELETE`, by default) suspended the user and revoked every session. */
+export interface ScimUserDeactivatedEvent {
+  readonly _tag: "auth.scim.userDeactivated";
+  readonly connectionId: string;
+  readonly organizationId: string;
+  readonly userId: UserId;
+}
+
+/** CWM-002: published after a SCIM `active: true` lifted a suspension that same connection made. */
+export interface ScimUserReactivatedEvent {
+  readonly _tag: "auth.scim.userReactivated";
+  readonly connectionId: string;
+  readonly organizationId: string;
+  readonly userId: UserId;
+}
+
+/** CWM-002: published after a SCIM `DELETE` configured to erase removed the user. */
+export interface ScimUserDeletedEvent {
+  readonly _tag: "auth.scim.userDeleted";
+  readonly connectionId: string;
+  readonly organizationId: string;
+  readonly userId: UserId;
+}
+
+/** CWM-002: published when a SCIM connection creates, updates or deletes a group (an organization team). */
+export interface ScimGroupChangedEvent {
+  readonly _tag: "auth.scim.groupChanged";
+  readonly connectionId: string;
+  readonly organizationId: string;
+  readonly teamId: string;
+  readonly change: "created" | "updated" | "deleted";
+}
+
 /** Published by `@awthaq/organization`'s `create`. */
 export interface OrganizationCreatedEvent {
   readonly _tag: "auth.organization.created";
@@ -522,6 +567,11 @@ export type AuthEvent =
   | AdminSessionRevokedEvent
   | AdminOrganizationSuspendedEvent
   | AdminOrganizationUnsuspendedEvent
+  | ScimUserProvisionedEvent
+  | ScimUserDeactivatedEvent
+  | ScimUserReactivatedEvent
+  | ScimUserDeletedEvent
+  | ScimGroupChangedEvent
   | OrganizationCreatedEvent
   | OrganizationUpdatedEvent
   | OrganizationDeletedEvent

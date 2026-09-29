@@ -49,3 +49,5 @@ Treat MOD-EA-010 as the entry ticket: when Phase 3 opens, seed packages/saml dir
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `enterprise-federation-saml-scim`. Duplicate of `AOMS-009` — closed by that issue's fix. Evidence at HEAD ec065a7: `spec/models/10-saml.md:24`. Full dossier: `.plan/slices/12-spec.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `AOMS-009-auth0-okta-migration-specialist` — closed by its fix (see that issue's Resolved comment).

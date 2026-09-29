@@ -43,3 +43,5 @@ Keep the phasing, but convert the model file's 'What is missing' list into track
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence medium); workstream `enterprise-federation-saml-scim`. Duplicate of `CWM-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `spec/models/12-scim.md:57`. Full dossier: `.plan/slices/12-spec.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `CWM-002-clerk-workos-migration-specialist` — closed by its fix (see that issue's Resolved comment).

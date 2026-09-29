@@ -32,6 +32,8 @@ Anything else, or an id that names no organization/team, answers `"Unknown"`. `r
 
 **Consistency, and bringing your own graph engine.** A relationship answer is exactly as fresh as this plugin's records layer; a per-request `DecisionCache` (the `@awthaq/qadi` default) preserves that, an application-scoped one needs `DecisionCacheInvalidationLive`. To use OpenFGA/SpiceDB instead, replace the `OrganizationQadi.relationships` layer with one backed by that engine and export membership tuples from the `AfterAddMember` / `AfterRemoveMember` hook points — no adapter ships.
 
+**Deprovisioning without SCIM.** An application with its own offboarding signal can end a departing member's access today: subscribe to `auth.organization.memberRemoved` (`AuthEvents.on`) and, when the user holds no remaining membership, call `Users.setStatus(userId, "suspended")` then `Sessions.revokeAll(userId, "suspended")` — exactly what a SCIM `active: false` does. `@awthaq/scim` ([ADR-EA-023](../../spec/decisions/023-enterprise-federation-packages.md)) does it from an identity provider directly.
+
 Erasure: `Organization.beforeUserDeleteErasure` (provide once, application-wide) sweeps a deleted user's memberships and active-context rows.
 
 Global roles versus organization roles: [ADR-EA-025](../../spec/decisions/025-global-roles-vs-organization-roles.md).

@@ -38,6 +38,7 @@ suites=(
   packages/passkey/test/PasskeyCredentials.test.ts
   packages/passkey/test/PasskeyUserHandle.test.ts
   packages/qadi/test/UserClaims.test.ts
+  packages/scim/test/ScimRecords.test.ts
   packages/roles/test/RolesSql.test.ts
 )
 

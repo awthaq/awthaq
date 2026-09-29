@@ -292,6 +292,7 @@ CORS never relaxes CSRF: cross-site mutations still need the double-submit cooki
 | OAuth | `@awthaq/oauth` | Third-party provider sign-in and account linking |
 | Organization | `@awthaq/organization` | Multi-tenant organizations, membership, roles |
 | Admin | `@awthaq/admin` | Impersonation, session force-stop, admin session listing |
+| SCIM | `@awthaq/scim` | Inbound SCIM 2.0 provisioning: directory sync of users and groups, deactivation ends sessions |
 | Passkey | `@awthaq/passkey` | WebAuthn registration and authentication |
 | Jwt | `@awthaq/jwt` | JWT issuance/verification for stateless callers |
 

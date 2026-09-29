@@ -118,6 +118,12 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.rateLimit.exceeded":
     case "auth.user.signInFailed":
     case "auth.admin.impersonationStopped":
+    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
+    case "auth.scim.userProvisioned":
+    case "auth.scim.userDeactivated":
+    case "auth.scim.userReactivated":
+    case "auth.scim.userDeleted":
+    case "auth.scim.groupChanged":
     case "auth.organization.updated":
     case "auth.organization.deleted":
     case "auth.organization.invitationCreated":

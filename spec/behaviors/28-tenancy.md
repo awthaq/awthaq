@@ -140,4 +140,4 @@ Suspension is reversible and never a deletion: every row stays, and reinstating 
 
 Impersonation records are stamped with the ambient tenant and confined to it unless the caller passes `canAdministerTenants` ([BEH-EA-215](27-admin-impersonation.md#beh-ea-215-admin_impersonation-is-a-durable-audit-trail), [BEH-EA-217](27-admin-impersonation.md#beh-ea-217-forcestop-lets-another-admin-end-someone-elses-impersonation), [BEH-EA-219](27-admin-impersonation.md#beh-ea-219-the-audit-trail-is-queryable)).
 
-_Previous: [BEH-EA-231](28-tenancy.md#beh-ea-231-per-tenant-configuration-applies-per-request-without-changing-the-plugin-tuple)_
+_Previous: [BEH-EA-231](28-tenancy.md#beh-ea-231-per-tenant-configuration-applies-per-request-without-changing-the-plugin-tuple) | Next: [BEH-EA-233](29-saml-sp.md#beh-ea-233-the-saml-response-is-size-capped-before-it-is-parsed)_

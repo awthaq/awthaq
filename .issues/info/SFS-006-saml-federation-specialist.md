@@ -3,7 +3,7 @@ ID: "SFS-006"
 Title: "SSO facade vs standalone Saml plugin dispatch is undecided"
 Level: info
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/09-sso.md:65"
 Auditor: "saml-federation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `api` · `—` · reported by **SAML Federation Specialist** (`saml-federation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Decide before either spec row is promoted: standalone Saml plugin behind an Sso 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `enterprise-federation-saml-scim`. Evidence at HEAD ec065a7: `spec/models/09-sso.md:65`. Fix: Record the dispatch shape implied by decisions 08 and 18 in ADR-EA-019: standalone `Saml` and `OAuth` plugins own their protocol routes; `Sso` is a thin connection-resolver plugin (routes under `sso.*`) that resolves an organization's connection (by email domain or org id) and redirects into the owning plugin. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Recorded in ADR-EA-023 Decision 4 and spec/models/09-sso.md: Saml and OAuth stay standalone plugins that own saml.* and oauth.* routes; Sso is a thin connection-resolver plugin (sso.* routes, POST /auth/sso/start { email | organizationId }) that resolves the organization connection and redirects into the owning plugin. The resolver half already exists (OrganizationConnectionStore.discover, BEH-EA-230). The open-question sentence in 09-sso.md is replaced with what exists and what is decided.

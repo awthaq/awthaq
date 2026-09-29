@@ -67,7 +67,8 @@
       "@awthaq/jwt/verify": ["./packages/jwt/src/verify.ts"],
       "@awthaq/migrate-auth0": ["./packages/migrate-auth0/src/index.ts"],
       "@awthaq/migrate-better-auth": ["./packages/migrate-better-auth/src/index.ts"],
-      "@awthaq/migrate-firebase": ["./packages/migrate-firebase/src/index.ts"]
+      "@awthaq/migrate-firebase": ["./packages/migrate-firebase/src/index.ts"],
+      "@awthaq/scim": ["./packages/scim/src/index.ts"]
     },
     "plugins": [
       {
