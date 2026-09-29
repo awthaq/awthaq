@@ -457,6 +457,49 @@ export interface MailFailedEvent {
   readonly userId?: UserId;
 }
 
+/**
+ * OCM-002/OCM-005 (`@awthaq/api-key`): the lifecycle of a long-lived API key and of a
+ * `client_credentials` client. `userId` is the owner who acted; `keyId`/`clientId`
+ * are the public ids (never a secret or a hash). `rotated` names the predecessor
+ * (`keyId`) and its successor.
+ */
+export interface ApiKeyCreatedEvent {
+  readonly _tag: "auth.apiKey.created";
+  readonly userId: UserId;
+  readonly keyId: string;
+}
+
+export interface ApiKeyRevokedEvent {
+  readonly _tag: "auth.apiKey.revoked";
+  readonly userId: UserId;
+  readonly keyId: string;
+}
+
+export interface ApiKeyRotatedEvent {
+  readonly _tag: "auth.apiKey.rotated";
+  readonly userId: UserId;
+  readonly keyId: string;
+  readonly successorKeyId: string;
+}
+
+export interface ApiKeyClientRegisteredEvent {
+  readonly _tag: "auth.apiKey.clientRegistered";
+  readonly userId: UserId;
+  readonly clientId: string;
+}
+
+export interface ApiKeyClientRevokedEvent {
+  readonly _tag: "auth.apiKey.clientRevoked";
+  readonly userId: UserId;
+  readonly clientId: string;
+}
+
+export interface ApiKeyClientSecretRotatedEvent {
+  readonly _tag: "auth.apiKey.clientSecretRotated";
+  readonly userId: UserId;
+  readonly clientId: string;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
@@ -502,7 +545,13 @@ export type AuthEvent =
   | UserClaimsUpdatedEvent
   | RolesRevokedEvent
   | RateLimitExceededEvent
-  | MailFailedEvent;
+  | MailFailedEvent
+  | ApiKeyCreatedEvent
+  | ApiKeyRevokedEvent
+  | ApiKeyRotatedEvent
+  | ApiKeyClientRegisteredEvent
+  | ApiKeyClientRevokedEvent
+  | ApiKeyClientSecretRotatedEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */

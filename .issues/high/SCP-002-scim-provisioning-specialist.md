@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — packages/api-key/src/index.ts:8-10 is exactly the cited empty placeholder (`export {}`), and spec/roadmap.md:97 confirms M7 Phase-2 plugins (including api-key) are "Not yet active". Designing the machine-credential primitive (format, hashing, rotation, scoping) is a genuine architecture decision, not a mechanical patch. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `apikey-machine-identity`. Duplicate of `OCM-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/api-key/src/index.ts:8`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `OCM-002-oauth2-client-credentials-m2m-specialist` — closed by its fix (see that issue's Resolved comment).

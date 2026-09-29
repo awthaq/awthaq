@@ -50,6 +50,16 @@ const TestApi = HttpApi.make("test")
         }),
       )
       .middleware(Api.OptionalAuthentication),
+  )
+  .add(
+    HttpApiGroup.make("machine")
+      .add(
+        HttpApiEndpoint.get("whoAmI", "/who-machine", {
+          headers: RequestHeaders,
+          success: Schema.String,
+        }),
+      )
+      .middleware(Api.MachineAuthentication),
   );
 
 const whoAmI = () =>
@@ -61,17 +71,28 @@ const whoAmI = () =>
 const Handlers = Layer.mergeAll(
   HttpApiBuilder.group(TestApi, "required", (handlers) => handlers.handle("whoAmI", whoAmI)),
   HttpApiBuilder.group(TestApi, "optional", (handlers) => handlers.handle("whoAmI", whoAmI)),
+  HttpApiBuilder.group(TestApi, "machine", (handlers) => handlers.handle("whoAmI", whoAmI)),
 );
 
 const servicePrincipal = (id: string) =>
   new Api.ServicePrincipal({ ref: new Api.PrincipalRef({ type: "service", id }), scopes: [] });
 
-/** Claims credentials starting with `prefix`; resolves to `Service:<id>` unless the credential ends `-bad`. */
+const userPrincipal = (id: string) =>
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id }),
+    sessionId: "stateless",
+  });
+
+/**
+ * Claims credentials starting with `prefix`; resolves to `Service:<id>` (or
+ * `User:<id>` when `asUser`) unless the credential ends `-bad`.
+ */
 const contribution = (
   carrier: Authentication.CredentialCarrier,
   id: string,
   prefix: string,
   order?: number,
+  asUser = false,
 ) =>
   Authentication.contribute(carrier, {
     id,
@@ -80,7 +101,7 @@ const contribution = (
     resolve: (credential) =>
       Redacted.value(credential).endsWith("-bad")
         ? Effect.fail(new Api.Unauthenticated())
-        : Effect.succeed(servicePrincipal(id)),
+        : Effect.succeed(asUser ? userPrincipal(id) : servicePrincipal(id)),
   });
 
 const layerWith = (...contributions: ReadonlyArray<ReturnType<typeof contribution>>) => {
@@ -90,6 +111,7 @@ const layerWith = (...contributions: ReadonlyArray<ReturnType<typeof contributio
   return Handlers.pipe(
     Layer.provideMerge(Authentication.AuthenticationLive),
     Layer.provideMerge(Authentication.OptionalAuthenticationLive),
+    Layer.provideMerge(Authentication.MachineAuthenticationLive),
     Layer.provide(Authentication.PrincipalResolverLive),
     Layer.provideMerge(registry),
     Layer.provideMerge(Sessions.layerMemory),
@@ -104,9 +126,11 @@ const userId = Users.UserId("44444444-4444-4444-4444-444444444444");
 const jwtShaped = (label: string) => `${label}.payload.signature`;
 
 describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
+  const groups = ["required", "optional", "machine"] as const;
+
   it.effect("with no contribution a JWT-shaped bearer is a session lookup miss: 401", () =>
     Effect.gen(function* () {
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      const client = yield* HttpApiTest.groups(TestApi, groups);
       const exit = yield* Effect.exit(
         client.required.whoAmI({ headers: { authorization: `Bearer ${jwtShaped("a")}` } }),
       );
@@ -114,25 +138,40 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
     }).pipe(Effect.provide(layerWith())),
   );
 
-  it.effect("a claimed bearer credential's principal becomes CurrentPrincipal", () =>
+  it.effect("a claimed bearer credential's User principal becomes CurrentPrincipal", () =>
     Effect.gen(function* () {
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      const client = yield* HttpApiTest.groups(TestApi, groups);
       const result = yield* client.required.whoAmI({
         headers: { authorization: `Bearer ${jwtShaped("a")}` },
       });
-      assert.strictEqual(result, "Service:jwt");
-    }).pipe(Effect.provide(layerWith(contribution("bearer", "jwt", "a.")))),
+      assert.strictEqual(result, "User:jwt");
+    }).pipe(Effect.provide(layerWith(contribution("bearer", "jwt", "a.", undefined, true)))),
+  );
+
+  it.effect("the user tier never admits a machine principal; the machine tier does", () =>
+    Effect.gen(function* () {
+      const client = yield* HttpApiTest.groups(TestApi, groups);
+      const refused = yield* Effect.exit(
+        client.required.whoAmI({ headers: { authorization: "Bearer svc.x.y" } }),
+      );
+      assert.isTrue(Exit.isFailure(refused));
+      // OptionalAuthentication (user tier) treats it as anonymous rather than serving it.
+      const optional = yield* client.optional.whoAmI({
+        headers: { authorization: "Bearer svc.x.y" },
+      });
+      assert.strictEqual(optional, "Anonymous:anonymous");
+      const admitted = yield* client.machine.whoAmI({
+        headers: { authorization: "Bearer svc.x.y" },
+      });
+      assert.strictEqual(admitted, "Service:svc");
+    }).pipe(Effect.provide(layerWith(contribution("bearer", "svc", "svc.")))),
   );
 
   it.effect("two contributions: the first whose claims() matches resolves", () =>
     Effect.gen(function* () {
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-      const first = yield* client.required.whoAmI({
-        headers: { authorization: "Bearer a.x.y" },
-      });
-      const second = yield* client.required.whoAmI({
-        headers: { authorization: "Bearer b.x.y" },
-      });
+      const client = yield* HttpApiTest.groups(TestApi, groups);
+      const first = yield* client.machine.whoAmI({ headers: { authorization: "Bearer a.x.y" } });
+      const second = yield* client.machine.whoAmI({ headers: { authorization: "Bearer b.x.y" } });
       assert.strictEqual(first, "Service:one");
       assert.strictEqual(second, "Service:two");
     }).pipe(
@@ -144,8 +183,8 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
 
   it.effect("contributions claiming the same shape run in (order, id) order", () =>
     Effect.gen(function* () {
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-      const result = yield* client.required.whoAmI({
+      const client = yield* HttpApiTest.groups(TestApi, groups);
+      const result = yield* client.machine.whoAmI({
         headers: { authorization: "Bearer shared.x.y" },
       });
       // `zeta` has the lower `order`, so it wins over the alphabetically-earlier `alpha`.
@@ -162,9 +201,9 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
 
   it.effect("a claiming contribution that fails is Unauthenticated: later ones are not tried", () =>
     Effect.gen(function* () {
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      const client = yield* HttpApiTest.groups(TestApi, groups);
       const exit = yield* Effect.exit(
-        client.required.whoAmI({ headers: { authorization: "Bearer shared.x-bad" } }),
+        client.machine.whoAmI({ headers: { authorization: "Bearer shared.x-bad" } }),
       );
       assert.isTrue(Exit.isFailure(exit));
     }).pipe(
@@ -181,7 +220,7 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
     Effect.gen(function* () {
       const sessions = yield* Sessions.Sessions;
       const { token } = yield* sessions.issue({ userId });
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      const client = yield* HttpApiTest.groups(TestApi, groups);
       const result = yield* client.required.whoAmI({
         headers: { authorization: `Bearer ${Redacted.value(token)}` },
       });
@@ -189,14 +228,14 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
     }).pipe(Effect.provide(layerWith(contribution("bearer", "jwt", "a.")))),
   );
 
-  it.effect("the apiKey carrier reads x-api-key; cookie still wins when both are present", () =>
+  it.effect("the apiKey carrier reads x-api-key on the machine tier; cookie still wins", () =>
     Effect.gen(function* () {
       const sessions = yield* Sessions.Sessions;
       const { token } = yield* sessions.issue({ userId });
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-      const viaKey = yield* client.required.whoAmI({ headers: { "x-api-key": "ak_1.secret" } });
+      const client = yield* HttpApiTest.groups(TestApi, groups);
+      const viaKey = yield* client.machine.whoAmI({ headers: { "x-api-key": "ak_1.secret" } });
       assert.strictEqual(viaKey, "Service:keys");
-      const both = yield* client.required.whoAmI({
+      const both = yield* client.machine.whoAmI({
         headers: {
           cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
           "x-api-key": "ak_1.secret",
@@ -208,32 +247,32 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
 
   it.effect("an unclaimed x-api-key is Unauthenticated (never treated as a session token)", () =>
     Effect.gen(function* () {
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      const client = yield* HttpApiTest.groups(TestApi, groups);
       const exit = yield* Effect.exit(
-        client.required.whoAmI({ headers: { "x-api-key": "not-a-key" } }),
+        client.machine.whoAmI({ headers: { "x-api-key": "not-a-key" } }),
       );
       assert.isTrue(Exit.isFailure(exit));
     }).pipe(Effect.provide(layerWith(contribution("apiKey", "keys", "ak_")))),
   );
 
-  it.effect(
-    "OptionalAuthentication: a claimed credential resolves, a failed one is anonymous",
-    () =>
-      Effect.gen(function* () {
-        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-        const ok = yield* client.optional.whoAmI({ headers: { "x-api-key": "ak_1" } });
-        assert.strictEqual(ok, "Service:keys");
-        const bad = yield* client.optional.whoAmI({ headers: { "x-api-key": "ak_1-bad" } });
-        assert.strictEqual(bad, "Anonymous:anonymous");
-        const bearer = yield* client.optional.whoAmI({
-          headers: { authorization: "Bearer a.x.y" },
-        });
-        assert.strictEqual(bearer, "Service:jwt");
-      }).pipe(
-        Effect.provide(
-          layerWith(contribution("apiKey", "keys", "ak_"), contribution("bearer", "jwt", "a.")),
-        ),
-      ),
+  it.effect("the user tier ignores x-api-key entirely: a valid key is not a session", () =>
+    Effect.gen(function* () {
+      const client = yield* HttpApiTest.groups(TestApi, groups);
+      const exit = yield* Effect.exit(client.required.whoAmI({ headers: { "x-api-key": "ak_1" } }));
+      assert.isTrue(Exit.isFailure(exit));
+      const optional = yield* client.optional.whoAmI({ headers: { "x-api-key": "ak_1" } });
+      assert.strictEqual(optional, "Anonymous:anonymous");
+    }).pipe(Effect.provide(layerWith(contribution("apiKey", "keys", "ak_")))),
+  );
+
+  it.effect("OptionalAuthentication: a claimed User credential resolves, a failed one is anonymous", () =>
+    Effect.gen(function* () {
+      const client = yield* HttpApiTest.groups(TestApi, groups);
+      const ok = yield* client.optional.whoAmI({ headers: { authorization: "Bearer a.x.y" } });
+      assert.strictEqual(ok, "User:jwt");
+      const bad = yield* client.optional.whoAmI({ headers: { authorization: "Bearer a.x-bad" } });
+      assert.strictEqual(bad, "Anonymous:anonymous");
+    }).pipe(Effect.provide(layerWith(contribution("bearer", "jwt", "a.", undefined, true)))),
   );
 
   it.effect("the post-auth hook is told the credential came in as apiKey", () => {
@@ -246,9 +285,9 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
       ) => Ref.update(schemes, (seen) => [...seen, context.scheme]).pipe(Effect.as(response)),
     });
     return Effect.gen(function* () {
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-      yield* client.required.whoAmI({ headers: { "x-api-key": "ak_1" } });
-      yield* client.required.whoAmI({ headers: { authorization: "Bearer a.x.y" } });
+      const client = yield* HttpApiTest.groups(TestApi, groups);
+      yield* client.machine.whoAmI({ headers: { "x-api-key": "ak_1" } });
+      yield* client.machine.whoAmI({ headers: { authorization: "Bearer a.x.y" } });
       assert.deepStrictEqual(yield* Ref.get(schemes), ["apiKey", "bearer"]);
     }).pipe(
       Effect.provide(
@@ -277,9 +316,10 @@ describe("credential resolvers (MAPS-001/MAPS-004/OCM-002)", () => {
     Effect.gen(function* () {
       const exit = yield* Effect.exit(
         Layer.build(
-          Layer.mergeAll(contribution("bearer", "x", "a."), contribution("apiKey", "x", "b.")).pipe(
-            Layer.provide(Authentication.CredentialResolversLive),
-          ),
+          Layer.mergeAll(
+            contribution("bearer", "x", "a."),
+            contribution("apiKey", "x", "b."),
+          ).pipe(Layer.provide(Authentication.CredentialResolversLive)),
         ),
       );
       assert.isTrue(Exit.isSuccess(exit));

@@ -9,17 +9,6 @@
     "packages/ports": {
       "entry": ["src/passwordHasherWorker.ts"]
     },
-    "packages/api-key": {
-      "ignoreDependencies": [
-        "@awthaq/api",
-        "@awthaq/core",
-        "@awthaq/ports",
-        "@awthaq/server",
-        "@awthaq/sql",
-        "@effect/vitest",
-        "effect"
-      ]
-    },
     "packages/two-factor": {
       "ignoreDependencies": [
         "@awthaq/api",

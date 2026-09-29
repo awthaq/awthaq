@@ -40,6 +40,7 @@ export * from "./HttpApiTypes.ts";
 export * as MailDispatch from "./MailDispatch.ts";
 export * as Migrations from "./Migrations.ts";
 export * as RateLimits from "./RateLimits.ts";
+export * as SecretHash from "./SecretHash.ts";
 export * as SessionCookie from "./SessionCookie.ts";
 export * as Sessions from "./Sessions.ts";
 export * as Slots from "./Slots.ts";

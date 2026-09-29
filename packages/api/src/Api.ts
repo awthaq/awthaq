@@ -204,15 +204,35 @@ export const CsrfCookie = HttpApiSecurity.apiKey({ key: CSRF_COOKIE_NAME, in: "c
  * matters). APS-006: `impersonation` is declared first of all, so an
  * impersonation cookie shadows the caller's own session cookie; its handler
  * only accepts a session carrying `actingAs` and otherwise falls through.
- * OCM-002: `apiKey` (the `x-api-key` header) sits between `cookie` and
- * `bearer`, so `bearer` stays the last scheme and still owns the final
- * `WWW-Authenticate` challenge. `AdminAuthentication` deliberately does not
- * declare it: the admin surface never accepts a long-lived API key by default.
+ * OCM-002: this is the *user* tier. A credential a plugin claims through the
+ * `@awthaq/server` credential-resolver registry is admitted here only when it
+ * resolves to a `User` (a JWT re-entering, MAPS-001); an API key or a service
+ * token is never a session, so it does not reach the many handlers that assume
+ * one. Groups that serve machine callers declare `MachineAuthentication`.
  */
 export class Authentication extends HttpApiMiddleware.Service<
   Authentication,
   { provides: CurrentPrincipal }
 >()("Authentication", {
+  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
+  error: Unauthenticated,
+}) {}
+
+/**
+ * OCM-002/MAPS-003 (wayfinder ticket 10): the machine tier. Everything
+ * `Authentication` accepts plus `apiKey` (the `x-api-key` header, ADR-EA-022),
+ * and — unlike it — a claimed credential may resolve to an `ApiKey` or
+ * `Service` principal (`@awthaq/api-key`), not only a `User`. A group
+ * declares it when it is meant to be called by CI, scripts or other services;
+ * groups that assume a session (`session`, `password.account`, ...) keep
+ * `Authentication` and so can never receive a non-`User` principal. `apiKey` is
+ * declared before `bearer`, which stays last and owns the `WWW-Authenticate`
+ * challenge.
+ */
+export class MachineAuthentication extends HttpApiMiddleware.Service<
+  MachineAuthentication,
+  { provides: CurrentPrincipal }
+>()("MachineAuthentication", {
   security: {
     impersonation: ImpersonationCookie,
     cookie: SessionCookie,
@@ -254,12 +274,7 @@ export class OptionalAuthentication extends HttpApiMiddleware.Service<
   OptionalAuthentication,
   { provides: CurrentPrincipal }
 >()("OptionalAuthentication", {
-  security: {
-    impersonation: ImpersonationCookie,
-    cookie: SessionCookie,
-    apiKey: ApiKeyHeader,
-    bearer: BearerToken,
-  },
+  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
 }) {}
 
 /** BEH-EA-030/076/079: a plain (non-security) middleware — CSRF is a request-property check, not a credential scheme. */

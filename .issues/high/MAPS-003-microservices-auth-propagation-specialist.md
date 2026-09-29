@@ -3,7 +3,7 @@ ID: "MAPS-003"
 Title: "Service identity is absent - ApiKey/Service principals are dead schema cases"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "api-key"
 Source: "packages/api-key/src/index.ts:10"
 Auditor: "microservices-auth-propagation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `api-key` · reported by **Microservices Auth Propagation Specialist** (`microservices-auth-propagation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/api-key/src/index.ts:1-10` matches the evidence verbatim, a literal empty placeholder. `packages/api/src/Api.ts:27-42` confirms `ApiKeyPrincipal`/`ServicePrincipal` exist in the `Principal` union, and `packages/server/src/Session.ts:29-30` labels such a principal reaching a session group "a wiring defect," confirming no resolution path exists. This is a whole-plugin ship decision (key format, scopes, hash-at-rest design per spec/models/07) requiring product/architecture judgment, not a mechanical fix. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `apikey-machine-identity`. Evidence at HEAD ec065a7: `packages/api-key/src/index.ts:8`. Fix: Give ServicePrincipal a construction path: client_credentials M2M clients in @awthaq/api-key minting short-lived JWTs via @awthaq/jwt, verified back into ServicePrincipal. (effort L). Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
+
+**Resolved (2026-09-29):** ServicePrincipal now has a construction path: client_credentials clients in @awthaq/api-key (registerClient/revokeClient/rotateClientSecret; table apikey_client, SHA-256 hashes, at most two valid secrets), POST /api-key/token (RFC 6749 §4.4; client_secret_post + client_secret_basic; scope = requested ∩ registered, disjoint -> invalid_scope; RFC 6749 §5.1/§5.2 bodies as typed Schema errors; per-IP and per-client_id throttles) minting a JWT through Jwt.signJWT (typ service+jwt, sub service:<clientId>, scope, exp = serviceTokenTtl default 15m, optional serviceTokenAudience); verified back through a bearer-carrier credential resolver (verifyJWT + Schema-decoded claims -> ServicePrincipal with scopes, stateless, no DB hit; distinct typ so it never collides with at+jwt principal tokens). Accepted revocation lag documented (README, model 07, ADR-EA-022). ApiKey dependsOn Jwt. Session.ts die-on-non-User left as is; the user tier never admits Service principals (Api.MachineAuthentication is the machine tier). Tests: packages/api-key/test/ServiceToken.test.ts (11x2 stores) and AuthHttp.test.ts (token endpoint, RFC error shapes, expired token 401, revoked client, rotate-secret, throttle). See OCM-002 for gates.

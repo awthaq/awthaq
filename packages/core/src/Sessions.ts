@@ -30,6 +30,7 @@ import * as Result from "effect/Result";
 import * as Model from "effect/unstable/schema/Model";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
+import * as SecretHash from "./SecretHash.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
@@ -42,12 +43,8 @@ export const SessionId = Brand.nominal<SessionId>();
 
 const { toHex } = Hmac;
 
-/** BEH-EA-050: the one hash both `Layer`s persist in place of the plaintext secret. */
-const hashSecret = (
-  crypto: Crypto.Crypto,
-  secret: string,
-): Effect.Effect<string, PlatformError.PlatformError> =>
-  crypto.digest("SHA-256", new TextEncoder().encode(secret)).pipe(Effect.map(toHex));
+/** BEH-EA-050: the one hash both `Layer`s persist in place of the plaintext secret (OCM-002: shared with `@awthaq/api-key`). */
+const hashSecret = SecretHash.digest;
 
 /**
  * PIL-007: the hash an unknown session id is compared against, so a miss does
@@ -65,12 +62,11 @@ export const MAX_USER_AGENT_LENGTH = 512;
 const cappedUserAgent = (userAgent: string | undefined): string | undefined =>
   userAgent?.slice(0, MAX_USER_AGENT_LENGTH);
 
-const UNKNOWN_SESSION_HASH = "0".repeat(64);
+const UNKNOWN_SESSION_HASH = SecretHash.NEVER_MATCHES;
 
 // BEH-EA-056/ACS-005: both operands are the fixed-length hex output of the
 // same digest, compared in constant time by the shared `Hmac` primitive.
-const secretMatches = (presentedHash: string, storedHash: string): boolean =>
-  Hmac.constantTimeEqualString(presentedHash, storedHash);
+const secretMatches = SecretHash.equals;
 
 /**
  * SMS-003: an opt-in cap on one user's simultaneously live sessions. Absent by
