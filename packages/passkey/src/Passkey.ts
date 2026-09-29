@@ -30,6 +30,7 @@ import {
   HookPoint,
   Hooks,
   Migrations,
+  Observability,
   RateLimits,
   SessionCookie,
   Sessions,
@@ -1495,6 +1496,11 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
                 })
               : Effect.void,
           ),
+          // EOTS-001: `awthaq.passkey.authenticateVerify`.
+          Observability.authSpan("awthaq.passkey.authenticateVerify", {
+            "awthaq.plugin": "passkey",
+            [Observability.Field.strategy]: "passkey",
+          }),
         );
 
       const listCredentials: PasskeyShape["listCredentials"] = (userId) =>

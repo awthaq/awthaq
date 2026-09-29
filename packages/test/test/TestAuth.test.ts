@@ -7,7 +7,7 @@
 // and that `signInAs`'s cookie really authenticates a subsequent request.
 //
 // `Authentication.AuthenticationLive` is passed as `TestAuth.layer`'s own
-// `middleware` argument (not merged in afterward) — see that function's own
+// `services` argument (not merged in afterward) — see that function's own
 // doc comment for why any other composition fails to type-check.
 // `@effect/vitest`'s own `layer(...)` builds the runtime once (only a
 // genuinely closed layer — `RIn` really `never` — type-checks here) and
@@ -18,12 +18,16 @@
 // second, unrelated `Users`/`Sessions` instance `signInAs`'s own session
 // would never be visible to.
 import { Api } from "@awthaq/api";
-import { Auth, AuthPlugin } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
+import { Auth, AuthPlugin, Users } from "@awthaq/core";
+import { Password } from "@awthaq/password";
+import { Authentication, Csrf } from "@awthaq/server";
 import { assert, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -114,6 +118,47 @@ layer(TestLayer)("TestAuth.layer (BEH-EA-193)", (it) => {
         onSignedUp: (userId) => Effect.sync(() => seen.push(userId)),
       });
       assert.deepStrictEqual(seen, [signedIn.userId]);
+    }),
+  );
+});
+
+// ETVS-004: the memory bundle is complete for a password-style composition — `Verification`
+// and a (low-cost, real) `PasswordHasher` ride in it, so a suite passes only the layers that
+// are genuinely its own (`Authentication`, `CsrfProtection`, an `HttpClient` for the breach
+// check) in `services`, never a second `Verification`/`PasswordHasher`.
+const PasswordLayer = TestAuth.layer(
+  Auth.make([Password.Password]),
+  Layer.mergeAll(
+    Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
+    Csrf.CsrfProtectionLive.pipe(
+      Layer.provide(
+        Layer.succeed(Csrf.CsrfConfig, {
+          secret: Redacted.make("test-auth-memory-bundle-csrf-secret-32-bytes!!"),
+          allowedOrigins: [],
+        }),
+      ),
+    ),
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(request, new Response(`${"F".repeat(35)}:1`, { status: 200 })),
+        ),
+      ),
+    ),
+  ),
+);
+
+layer(PasswordLayer)("TestAuth.layer — the memory bundle serves Password with no extra layers", (it) => {
+  it.effect("signUp then signIn work with only Authentication, CSRF and an HttpClient supplied", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const users = yield* Users.Users;
+      const secret = Redacted.make("a sufficiently long test password");
+      const issued = yield* password.signUp({ email: "bundle@example.com", password: secret });
+      yield* users.verifyEmail(issued.session.userId);
+      const again = yield* password.signIn({ email: "bundle@example.com", password: secret });
+      assert.strictEqual(again.session.userId, issued.session.userId);
     }),
   );
 });

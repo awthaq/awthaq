@@ -28,10 +28,10 @@
 //   by passing the tap in `TestAuth.layer`'s second parameter — it requires its
 //   point, which `MemoryPorts` provides.
 // - BEH-EA-199's "no `Redacted` value reaches a span or event" check is
-//   already, honestly, documented by that behavior file itself as "not
-//   mechanically verifiable today" (no tracer/logger interceptor exists) —
-//   `runPluginContractTests` below implements only its other half
-//   (contract-hash stability).
+//   mechanical (EOTS-002): `RedactionGuard` installs a recording tracer and
+//   logger (and an `AuthEvents` inspector) into `TestAuth.layer`, and
+//   `runPluginContractTests`' opt-in `redaction` option drives a plugin's flows
+//   against it with canary secrets.
 //
 // **`TestAuth.signInAs` targets `HttpRouter.toWebHandler`'s raw
 // `(Request) => Promise<Response>` shape, not `HttpApiTest.groups`'s
@@ -65,18 +65,29 @@ import {
   AuthEvents,
   AuthPlugin,
   Hooks,
+  Migrations,
   RateLimits,
   Sessions,
   Users,
+  Verification,
 } from "@awthaq/core";
-import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { AuthHttp } from "@awthaq/server";
+import { CoreMigrations } from "@awthaq/sql";
+import * as RedactionGuard from "./RedactionGuard.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
+import * as Cause from "effect/Cause";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
+import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 /**
  * BEH-EA-193: memory repositories, `Mailer.layerMemory`, and
@@ -92,10 +103,30 @@ import * as HttpServer from "effect/unstable/http/HttpServer";
  * same way, and a second, separately-named layer here would be a
  * distinction with no practical difference for callers of this module.
  */
+/**
+ * ETVS-004: a real argon2id hasher at the smallest legal cost, so a sign-up/sign-in suite
+ * does not pay production KDF time per hash (the algorithm, salt, PHC format and rehash
+ * path are the real ones; only m/t are lowered). A ConfigError here is a defect in this
+ * fixed table, not a runtime condition.
+ */
+const TestHasher = PasswordHasher.layerArgon2id.pipe(
+  Layer.provide(
+    ConfigProvider.layer(
+      ConfigProvider.fromEnv({
+        env: { AUTH_ARGON2_MEMORY_KIB: "1024", AUTH_ARGON2_ITERATIONS: "1" },
+      }),
+    ),
+  ),
+  Layer.orDie,
+);
+
 const MemoryPorts = Layer.mergeAll(
   Users.layerMemory,
   Accounts.layerMemory,
   Sessions.layerMemory,
+  // ETVS-004: what every password-style composition needs beyond the core stores.
+  Verification.layerMemory,
+  TestHasher,
   Mailer.layerMemory,
   RateLimiter.layerPermissive,
   RateLimits.layer,
@@ -119,6 +150,8 @@ const MemoryPorts = Layer.mergeAll(
   Layer.provideMerge(Hooks.HooksLive),
 );
 
+const GuardLive = RedactionGuard.layerEvents.pipe(Layer.provideMerge(RedactionGuard.layer));
+
 /**
  * BEH-EA-193: `TestAuth.layer(Auth.make(plugins))` — the whole pipeline over
  * memory.
@@ -138,8 +171,13 @@ const MemoryPorts = Layer.mergeAll(
  * the caller gets `Validate<P>`'s real compile-time checking exactly where
  * they'd get it if they called `Auth.make` for production use anyway.
  *
- * **`middleware` is a real, necessary second parameter, not an
- * afterthought.** The first version of this function had none, and folded
+ * **`services` is a real, necessary second parameter, not an
+ * afterthought** (ETVS-004: it was named `middleware` until it was clear it carries
+ * every support layer a plugin needs, not only `HttpApi` middleware — `Authentication`,
+ * `CsrfProtection`, a plugin's own record stores, an `HttpClient`). Do **not** provide a
+ * second copy of a service the bundled memory ports already supply (`Verification`,
+ * `PasswordHasher`, `Users`, ...): the plugin would use yours and a test's own
+ * `yield*` the bundle's, two instances of one store.** The first version of this function had none, and folded
  * `Layer.provideMerge(MemoryPorts)` immediately after `Layer.provide(built.layer)`.
  * That silently made any plugin using `Api.Authentication` (or any other
  * middleware whose *implementation* needs a service `MemoryPorts` itself
@@ -154,12 +192,12 @@ const MemoryPorts = Layer.mergeAll(
  * stale) surfaces a real `Missing 'Authentication'`/`Missing 'Sessions'`
  * error instead of the confusing `unknown` `HttpRouter.toWebHandler`'s own
  * far more permissive constraint let through. The fix is structural, not a
- * type annotation: `middleware` is folded in via `Layer.provide` *before*
+ * type annotation: `services` is folded in via `Layer.provide` *before*
  * `MemoryPorts` is `provideMerge`d — the identical position `CoreLive`
  * occupies in every wire-level `AuthHttp.test.ts` already in this
  * repository — so a middleware implementation's own requirement on a
  * memory-backed port is satisfied the same way theirs already is. Pass
- * `Layer.empty` when no middleware needs providing.
+ * `Layer.empty` when nothing needs providing.
  *
  * Declared as an overload for the same reason `Auth.make` itself is:
  * checked against an abstract `P` (inside this function's own body, `P` is
@@ -174,9 +212,11 @@ const MemoryPorts = Layer.mergeAll(
  */
 export function layer<P extends ReadonlyArray<AuthPlugin.Any>, MR, ME, MRIn>(
   built: Auth.Built<P>,
-  middleware: Layer.Layer<MR, ME, MRIn>,
+  services: Layer.Layer<MR, ME, MRIn>,
 ): Layer.Layer<
   | Layer.Success<typeof MemoryPorts>
+  | Layer.Success<typeof GuardLive>
+  | Layer.Success<Auth.Built<P>["layer"]>
   | Layer.Success<typeof HttpServer.layerServices>
   | Layer.Success<typeof HttpRouter.layer>
   | MR,
@@ -185,11 +225,16 @@ export function layer<P extends ReadonlyArray<AuthPlugin.Any>, MR, ME, MRIn>(
 >;
 export function layer(
   built: Auth.Built<ReadonlyArray<AuthPlugin.Any>>,
-  middleware: Layer.Layer<unknown, unknown, unknown>,
+  services: Layer.Layer<unknown, unknown, unknown>,
 ): Layer.Layer<never, unknown, unknown> {
+  // The plugins' own services stay in the output (`provideMerge`), so a test can
+  // `yield* Password.Password` from the same composition it serves over HTTP.
   return AuthHttp.routes(built.api, {}).pipe(
-    Layer.provide(built.layer),
-    Layer.provide(middleware),
+    Layer.provideMerge(built.layer),
+    Layer.provide(services),
+    // EOTS-002: the recording tracer/logger (and the `AuthEvents` inspector) are part
+    // of every `TestAuth` composition; they only record, `assertNoLeaks` is what fails.
+    Layer.provideMerge(GuardLive),
     Layer.provideMerge(MemoryPorts),
     Layer.provideMerge(HttpServer.layerServices),
     Layer.provideMerge(HttpRouter.layer),
@@ -236,18 +281,56 @@ export const signInAs = (input: {
 // BEH-EA-198/199 (second half): runPluginContractTests
 // ---------------------------------------------------------------------------
 
-export interface ContractTestOptions<O> {
+export interface ContractTestOptions<O, R = never> {
   readonly options: ReadonlyArray<O>;
   /** Other plugins to compose alongside the plugin under test — its own declared `dependsOn`, at minimum. */
   readonly host?: ReadonlyArray<AuthPlugin.Any>;
+  /**
+   * EOTS-002/BEH-EA-199: opt in to the mechanical redaction check. `app` is the
+   * composition to drive (normally `TestAuth.layer(Auth.make([...]), services)`, which
+   * installs the `RedactionGuard`), `exercise` runs the plugin's flows against it — call
+   * `guard.watch("password", canary)` first for every secret it will feed in. The check
+   * fails if any `Redacted` value or watched canary reaches a span, a log line or a
+   * published event (a leak names the channel and the canary's label, never the secret).
+   * Without it the check is not registered: the harness cannot build a plugin whose
+   * layer needs services it was not given.
+   */
+  readonly redaction?: {
+    readonly app: Layer.Layer<RedactionGuard.RedactionGuard | R, unknown>;
+    readonly exercise: (
+      guard: RedactionGuard.RedactionGuardShape,
+    ) => Effect.Effect<void, unknown, R | RedactionGuard.RedactionGuard>;
+  };
 }
 
-/** `describe`/`it`/`assert` — kept as an injected shape rather than importing `@effect/vitest` directly, so this harness has no hard dependency on which test runner a third-party plugin author uses. */
+/** `describe`/`it`/`assert` — kept as an injected shape rather than importing `@effect/vitest` directly, so this harness has no hard dependency on which test runner a third-party plugin author uses. `it`'s body may be async (the migration and redaction checks run real effects). */
 export interface TestFramework {
   readonly describe: (name: string, body: () => void) => void;
-  readonly it: (name: string, body: () => void) => void;
+  readonly it: (name: string, body: () => void | Promise<void>) => void;
   readonly fail: (message: string) => never;
 }
+
+/**
+ * SSMS-004: one fresh in-memory SQLite database, core migrations first, then `migrations`
+ * on the plugin ledger — applied a second time to prove the migrator skips what it has
+ * already applied — resolving to the resulting schema (every table/index and its SQL, minus
+ * the two ledgers) so two independent applications can be compared.
+ */
+const applyMigrations = (migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["migrations"]) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* Migrator.make({})({
+      loader: CoreMigrations.coreMigrations,
+      table: "effect_sql_migrations",
+    });
+    yield* Migrations.run(migrations);
+    const reapplied = yield* Migrations.run(migrations);
+    const schema = yield* sql<{ readonly type: string; readonly name: string; readonly sql: string }>`
+      SELECT type, name, sql FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%' AND name NOT IN ('effect_sql_migrations', ${Migrations.pluginMigrationsTable})
+      ORDER BY name`;
+    return { schema, reapplied: reapplied.length };
+  }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" })), Effect.scoped);
 
 const TABLE_PREFIX_PATTERN = (id: string): RegExp => new RegExp(`^${id}_`);
 
@@ -260,10 +343,10 @@ const TABLE_PREFIX_PATTERN = (id: string): RegExp => new RegExp(`^${id}_`);
  * factory with no dependency on `@awthaq/*`'s own test files — only on
  * this package and their own `AuthPlugin.Any`-shaped plugin classes.
  */
-export const runPluginContractTests = <O>(
+export const runPluginContractTests = <O, R = never>(
   framework: TestFramework,
   makePlugin: (options: O) => AuthPlugin.Any,
-  config: ContractTestOptions<O>,
+  config: ContractTestOptions<O, R>,
 ): void => {
   const host = config.host ?? [];
   const hostIds = new Set(host.map((plugin) => plugin.id));
@@ -300,23 +383,88 @@ export const runPluginContractTests = <O>(
         }
       });
 
-      framework.it(
-        `${label}: composes with its host plugins, and migrations apply deterministically`,
-        () => {
-          const [first, ...rest] = [...host, plugin];
-          if (first === undefined) {
-            framework.fail("runPluginContractTests: host plus plugin under test was empty");
-            return;
-          }
-          const builtA = Auth.make([first, ...rest]);
-          const builtB = Auth.make([first, ...rest]);
-          if (JSON.stringify(builtA.migrations) !== JSON.stringify(builtB.migrations)) {
-            framework.fail(
-              `plugin "${plugin.id}"'s migrations are not deterministic across two identical builds`,
+      framework.it(`${label}: migration declarations are deterministic across builds`, () => {
+        const [first, ...rest] = [...host, plugin];
+        if (first === undefined) {
+          framework.fail("runPluginContractTests: host plus plugin under test was empty");
+          return;
+        }
+        // Only what a build declares (names and their order) — the `up` effects are not
+        // comparable as data; the check below applies them.
+        const names = (built: ReturnType<typeof Auth.make>) =>
+          JSON.stringify(built.migrations.map((migration) => migration.name));
+        if (names(Auth.make([first, ...rest])) !== names(Auth.make([first, ...rest]))) {
+          framework.fail(
+            `plugin "${plugin.id}"'s migration declarations are not deterministic across two identical builds`,
+          );
+        }
+      });
+
+      // SSMS-004/REQ-EA-563: an actual double application, not a JSON comparison.
+      framework.it(`${label}: migrations apply identically on two fresh databases`, async () => {
+        const [first, ...rest] = [...host, plugin];
+        if (first === undefined) {
+          framework.fail("runPluginContractTests: host plus plugin under test was empty");
+          return;
+        }
+        const outcome = await Effect.runPromise(
+          Effect.exit(
+            Effect.all([
+              applyMigrations(Auth.make([first, ...rest]).migrations),
+              applyMigrations(Auth.make([first, ...rest]).migrations),
+            ]),
+          ),
+        );
+        if (Exit.isFailure(outcome)) {
+          framework.fail(
+            `plugin "${plugin.id}"'s migrations failed to apply: ${Cause.pretty(outcome.cause)}`,
+          );
+          return;
+        }
+        const [a, b] = outcome.value;
+        if (JSON.stringify(a.schema) !== JSON.stringify(b.schema)) {
+          framework.fail(
+            `plugin "${plugin.id}"'s migrations produced different schemas on two fresh databases — an \`up\` is not deterministic`,
+          );
+        }
+        if (a.reapplied !== 0) {
+          framework.fail(
+            `plugin "${plugin.id}"'s migrations were applied again on an already-migrated database (${a.reapplied} re-run)`,
+          );
+        }
+      });
+
+      const redaction = config.redaction;
+      if (redaction !== undefined) {
+        // EOTS-002/BEH-EA-199: the mechanical half — nothing secret reaches a span, log or event.
+        framework.it(
+          `${label}: no Redacted value or watched secret reaches a span, log line or event`,
+          async () => {
+            const outcome = await Effect.runPromise(
+              Effect.exit(
+                Effect.scoped(
+                  Effect.gen(function* () {
+                    const context = yield* Layer.build(redaction.app);
+                    const guard = Context.get(context, RedactionGuard.RedactionGuard);
+                    yield* redaction.exercise(guard).pipe(Effect.provide(context));
+                    // Let subscriber fibers drain what the flows just published.
+                    yield* Effect.sleep("10 millis");
+                    yield* guard.assertNoLeaks;
+                  }),
+                ),
+              ),
             );
-          }
-        },
-      );
+            if (Exit.isFailure(outcome)) {
+              const failure = Cause.squash(outcome.cause);
+              framework.fail(
+                failure instanceof RedactionGuard.RedactionLeak
+                  ? failure.message
+                  : `the redaction check could not run: ${Cause.pretty(outcome.cause)}`,
+              );
+            }
+          },
+        );
+      }
 
       framework.it(`${label}: this option value does not change the plugin's own contract`, () => {
         if (previousContract !== undefined && previousContract !== plugin.contract) {

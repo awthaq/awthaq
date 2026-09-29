@@ -26,8 +26,7 @@ import {
   TeamRecords,
 } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
-import { AuditLog, Auth, AuthEvents, Verification } from "@awthaq/core";
-import { PasswordHasher } from "@awthaq/ports";
+import { Auth } from "@awthaq/core";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
 import { AuthHttp, Authentication, BodyLimit, Csrf, RequestContext } from "@awthaq/server";
@@ -116,18 +115,13 @@ const OrganizationMemory = Layer.mergeAll(
   // once per composition, per `OrganizationHooksLive`'s own doc comment.
   OrganizationHooks.OrganizationHooksLive,
 );
-const PasswordExtras = Layer.mergeAll(
-  Verification.layerMemory,
-  PasswordHasher.layerArgon2id,
-  FetchHttpClient.layer,
-).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(AuditLog.layerMemory));
+// The one thing `Password` needs that `TestAuth`'s bundle deliberately leaves to the caller:
+// the HTTP transport for the breach-check lookup. `Verification`, the `PasswordHasher`,
+// `AuthEvents` and `AuditLog` all come from the bundle (ETVS-004) — `Roles` below is built
+// over that same `AuthEvents`/`AuditLog`, so its audit events land next to everyone else's.
+const PasswordExtras = FetchHttpClient.layer;
 
-// `Roles` publishes audit events, so it is built over the same `AuthEvents`/`AuditLog`
-// the Password extras provide.
-const RolesLive = Roles.Roles.layer.pipe(
-  Layer.provide(Roles.config([platformAdmin])),
-  Layer.provideMerge(PasswordExtras),
-);
+const RolesLive = Roles.Roles.layer.pipe(Layer.provide(Roles.config([platformAdmin])));
 
 // 3. `TestAuth.layer` is the whole pipeline over memory — the same
 //    machinery `packages/*/test/AuthHttp.test.ts` files and this repo's
@@ -139,6 +133,7 @@ const AppLayer = TestAuth.layer(
     AuthenticationLive,
     CsrfProtectionLive,
     OrganizationMemory,
+    PasswordExtras,
     RolesLive,
     GuardLive,
   ),

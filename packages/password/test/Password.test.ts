@@ -32,6 +32,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
@@ -477,6 +478,53 @@ describe("Password", () => {
           assert.strictEqual(event.reason, "emailNotVerified");
         }
       }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "EOTS-001: every operation is an awthaq.password.<operation> span (plugin, strategy, user.id on success) and no attribute holds the email or password",
+    () => {
+      const spans: Array<Tracer.Span> = [];
+      const base = Tracer.Tracer.defaultValue();
+      const TracerLive = Layer.succeed(
+        Tracer.Tracer,
+        Tracer.make({
+          span: (options) => {
+            const span = base.span(options);
+            spans.push(span);
+            return span;
+          },
+        }),
+      );
+      return Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const issued = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        yield* password.signIn({ email, password: strongPassword });
+        yield* password
+          .signIn({ email, password: Redacted.make("totally wrong password") })
+          .pipe(Effect.flip);
+
+        const named = (name: string) => spans.filter((span) => span.name === name);
+        assert.isAbove(named("awthaq.password.signUp").length, 0);
+        assert.isAbove(named("awthaq.password.verifyEmail").length, 0);
+        // Two sign-ins, and each does one real hash check under its own span.
+        assert.strictEqual(named("awthaq.password.signIn").length, 2);
+        assert.strictEqual(named("awthaq.password.verify").length, 2);
+        const [successful] = named("awthaq.password.signIn");
+        assert.strictEqual(successful?.attributes.get("awthaq.plugin"), "password");
+        assert.strictEqual(successful?.attributes.get("auth.strategy"), "password");
+        assert.strictEqual(successful?.attributes.get("user.id"), issued.session.userId);
+        // The failed attempt never learns the user id.
+        assert.isFalse(named("awthaq.password.signIn")[1]?.attributes.has("user.id") ?? true);
+
+        const values = spans.flatMap((span) =>
+          [...span.attributes.values()].map((value) => String(value)),
+        );
+        assert.isFalse(values.some((value) => value.includes(email)));
+        assert.isFalse(values.some((value) => value.includes("correct horse battery staple")));
+        assert.isFalse(values.some((value) => value.includes("totally wrong password")));
+      }).pipe(Effect.provide(TestLayer.pipe(Layer.provideMerge(TracerLive))));
+    },
   );
 
   it.effect(

@@ -85,6 +85,12 @@ export interface ConsumeInput {
 /** BEH-EA-105: the port a plugin requires and the application provides — never bundled by a plugin (ADR-EA-010). */
 export interface RateLimiterShape {
   readonly consume: (input: ConsumeInput) => Effect.Effect<void, RateLimitExceeded>;
+  /**
+   * RBS-007: `true` on a limiter that never limits (`layerPermissive`). The rate-limit
+   * registry reads it to warn, once, when rules are registered under a limiter that
+   * cannot enforce them — the composition looks protected and is not.
+   */
+  readonly permissive?: boolean;
 }
 
 export class RateLimiter extends Context.Service<RateLimiter, RateLimiterShape>()(
@@ -328,6 +334,13 @@ export const layerStoreMemory = layerStoreMemoryWith({
 });
 
 /**
+ * RBS-007: the documented default for a real deployment on one process — the limiter over
+ * the bounded in-memory store, in one line. A multi-replica deployment needs a shared
+ * store instead (`layer` over your own `RateLimiterStore`).
+ */
+export const layerMemory = layer.pipe(Layer.provide(layerStoreMemory));
+
+/**
  * BEH-EA-112: a limiter that never rejects, under any iteration count —
  * `TestAuth.layer`'s own default, so a test that signs in fifty times in a
  * loop doesn't fail for a reason that has nothing to do with what it tests.
@@ -337,5 +350,5 @@ export const layerStoreMemory = layerStoreMemoryWith({
  */
 export const layerPermissive: Layer.Layer<RateLimiter> = Layer.succeed(
   RateLimiter,
-  RateLimiter.of({ consume: () => Effect.void }),
+  RateLimiter.of({ consume: () => Effect.void, permissive: true }),
 );

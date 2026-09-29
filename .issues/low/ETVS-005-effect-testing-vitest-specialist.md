@@ -53,3 +53,5 @@ Add an effectful variant (it.effect running both builds' migrations against in-m
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `test-harness-completeness`. Duplicate of `SSMS-004` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/test/src/TestAuth.ts:310`. Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `SSMS-004-sql-schema-migration-specialist` — closed by its fix (see that issue's Resolved comment).

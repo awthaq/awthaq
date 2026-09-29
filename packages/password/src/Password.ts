@@ -15,6 +15,7 @@ import {
   Hooks,
   HookPoint,
   MailDispatch,
+  Observability,
   RateLimits,
   SessionCookie,
   Sessions,
@@ -638,6 +639,36 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           digestKey,
           new TextEncoder().encode(`signin-identifier:${config.rateLimitEmailKey(email)}`),
         ).pipe(Effect.map(Hmac.toHex), Effect.orDie);
+      /**
+       * EOTS-001/ticket 27 §2: the hash check is its own span (`awthaq.password.verify`),
+       * so a trace shows where sign-in latency goes. No attribute is derived from the
+       * password, the hash or the identifier.
+       */
+      const verifyPassword = (candidate: Redacted.Redacted<string>, hash: PasswordHasher.PhcHash) =>
+        hasher
+          .verify(candidate, hash)
+          .pipe(
+            Observability.authSpan(Observability.Span.passwordVerify, {
+              [Observability.Field.strategy]: "password",
+            }),
+          );
+      /**
+       * EOTS-001: every operation is one `awthaq.password.<operation>` span
+       * (`awthaq.plugin`, `auth.strategy`); the handlers annotate `user.id` once the
+       * user is known. Never the email, the password or a token.
+       */
+      const traced =
+        <Args extends ReadonlyArray<unknown>, A, E, R>(
+          operation: string,
+          run: (...args: Args) => Effect.Effect<A, E, R>,
+        ) =>
+        (...args: Args) =>
+          run(...args).pipe(
+            Observability.authSpan(`awthaq.password.${operation}`, {
+              "awthaq.plugin": "password",
+              [Observability.Field.strategy]: "password",
+            }),
+          );
       /** ALF-003/CSD-004: the failure signal, with the two dimensions a stuffing detector keys on. */
       const publishSignInFailed = Effect.fnUntraced(function* (
         reason: "invalidCredentials" | "emailNotVerified",
@@ -917,7 +948,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             });
             // BEH-EA-114: this call happens on every attempt, real or not —
             // see `dummyHash`'s own comment.
-            const verified = yield* hasher.verify(
+            const verified = yield* verifyPassword(
               input.password,
               Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
             );
@@ -941,6 +972,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const user = userOpt.value;
         const account = accountOpt.value;
         const hash = hashOpt.value;
+        // EOTS-001: the credential is proven, so the span may name the user (an id, never the email).
+        yield* Effect.annotateCurrentSpan("user.id", user.id);
 
         // Upstream-hardening ticket 04: checked only now that a genuinely
         // correct password is confirmed — never before, so this can't be
@@ -1237,7 +1270,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // timing, so the real hasher call always runs regardless (TSS-006:
         // held to the same timing floor as `signIn`).
         const verified = yield* withTimingFloor(
-          hasher.verify(
+          verifyPassword(
             input.currentPassword,
             Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
           ),
@@ -1291,7 +1324,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // password credential at all distinguish "wrong password" from
         // "no password set" by timing (TSS-006: same timing floor).
         const verified = yield* withTimingFloor(
-          hasher.verify(
+          verifyPassword(
             input.currentPassword,
             Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
           ),
@@ -1316,15 +1349,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       });
 
       return Password.of({
-        signUp,
-        signUpConcealed,
-        signIn,
-        requestReset,
-        resendVerification,
-        confirmReset,
-        verifyEmail,
-        changePassword,
-        reauthenticate,
+        signUp: traced("signUp", signUp),
+        signUpConcealed: traced("signUpConcealed", signUpConcealed),
+        signIn: traced("signIn", signIn),
+        requestReset: traced("requestReset", requestReset),
+        resendVerification: traced("resendVerification", resendVerification),
+        confirmReset: traced("confirmReset", confirmReset),
+        verifyEmail: traced("verifyEmail", verifyEmail),
+        changePassword: traced("changePassword", changePassword),
+        reauthenticate: traced("reauthenticate", reauthenticate),
       });
     }),
   });

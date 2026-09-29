@@ -3,7 +3,7 @@ ID: "EOTS-001"
 Title: "Zero auth-operation spans: planned auth.signin/auth.session.refresh span skeleton never implemented"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "password"
 Source: "packages/password/src/Password.ts:516"
 Auditor: "effect-observability-tracing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `password` · reported by **Effect Observability & Tracing Specialist** (`effect-observability-tracing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -58,3 +58,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — evidence quote matches `packages/password/src/Password.ts:516` exactly; `grep -rl "withSpan\|useSpan" packages --include="*.ts"` (excluding tests/lib) returns zero files repo-wide, confirming no auth-operation spans exist anywhere. The research corpus already specifies the exact span names/attributes to add, making this a mechanical (if cross-cutting) implementation task. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `auth-operation-tracing`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:794`. Fix: Add ticket 27's business-logic spans via one shared helper, starting with every Password operation. (effort M). Full dossier: `.plan/slices/07-password-mfa.md`.
+
+**Resolved (2026-09-29):** Every Password operation (signUp, signUpConcealed, signIn, requestReset, resendVerification, confirmReset, verifyEmail, changePassword, reauthenticate) is an awthaq.password.<operation> span with awthaq.plugin and auth.strategy via the shared Observability.authSpan; the hash check is its own awthaq.password.verify span; user.id is annotated only once the credential is proven (never on a failed sign-in); never the email, password or token. Same helper on OAuth.callback (awthaq.oauth.callback) and Passkey.authenticateVerify, and Sessions issue/verify (see MW-001). Test: Password.test.ts with a recording tracer.

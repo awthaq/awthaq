@@ -29,6 +29,7 @@ import {
   ConstantTime,
   HookPoint,
   Hooks,
+  Observability,
   RateLimits,
   SessionCookie,
   Sessions,
@@ -1094,6 +1095,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                 })
               : Effect.void,
           ),
+          // EOTS-001: `awthaq.oauth.callback`, with the provider id (a configured, bounded label).
+          Observability.authSpan("awthaq.oauth.callback", {
+            "awthaq.plugin": "oauth",
+            [Observability.Field.strategy]: providerId,
+          }),
         );
 
       return OAuth.of({ authorize, callback });

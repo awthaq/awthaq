@@ -3,7 +3,7 @@ ID: "ERAS-002"
 Title: "Only Crypto.Crypto provider in the repo is Node's — no WebCrypto-backed layer ships"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "test"
 Source: "packages/test/src/TestAuth.ts:92"
 Auditor: "edge-runtime-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `test` · reported by **Edge Runtime Auth Specialist** (`edge-runtime-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Ship a platform-neutral Crypto layer (Crypto.make over globalThis.crypto) next t
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `canonical-starter-defaults`. Evidence at HEAD ec065a7: `packages/test/src/TestAuth.ts:107`. Fix: Ship a tiny, dependency-free WebCrypto-backed Crypto layer in @awthaq/ports and document it for edge runtimes. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/ports/src/WebCrypto.ts: WebCrypto.layer, a Crypto.Crypto over globalThis.crypto (getRandomValues in 64 KiB chunks, subtle.digest, dies at build with no Web Crypto object; the Web Crypto object is a Context.Reference for tests), exported from @awthaq/ports without a browser-platform dependency. Docs: README ports table (Crypto row) and packages/next/README.md edge section. Tests: packages/ports/test/WebCrypto.test.ts (length/entropy, SHA-256 and HMAC-SHA256 parity with NodeCrypto, uuidv7, no-crypto dies) and packages/core/test/SessionsWebCrypto.test.ts (Sessions issue/verify round-trip under WebCrypto.layer).

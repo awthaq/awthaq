@@ -30,6 +30,7 @@ import * as Result from "effect/Result";
 import * as Model from "effect/unstable/schema/Model";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
+import * as Observability from "./Observability.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
@@ -532,6 +533,46 @@ const publishIssued = (
     familyId,
     ...(Option.isSome(actingAs) ? { actingAs: actingAs.value } : {}),
   });
+
+/**
+ * ticket 27 §2 (MW-001): `awthaq.session.issue`, annotated with the new session's
+ * id — the public half of the token, approved for spans; never the secret half.
+ */
+const traceIssue =
+  (issue: SessionsShape["issue"]): SessionsShape["issue"] =>
+  (input) =>
+    issue(input).pipe(
+      Effect.tap(({ session }) =>
+        Effect.annotateCurrentSpan(Observability.Field.sessionId, session.id),
+      ),
+      Effect.withSpan(Observability.Span.sessionIssue),
+    );
+
+/**
+ * ticket 27 §2/§4 (MW-001): `awthaq.session.verify`, its latency histogram and
+ * `awthaq_session_verify_failed_total{reason}` (`not-found` or `expired`). The
+ * span carries the id half of the presented token when it has one — never the
+ * secret half, never the whole token.
+ */
+const traceVerify =
+  (verify: SessionsShape["verify"]): SessionsShape["verify"] =>
+  (token) => {
+    const raw = Redacted.value(token);
+    const separator = raw.indexOf(".");
+    // A presented id is attacker-controlled: only an id-shaped, bounded one reaches a span.
+    const presentedId = separator > 0 ? raw.slice(0, separator) : "";
+    const announce = /^[A-Za-z0-9-]{1,64}$/.test(presentedId)
+      ? Effect.annotateCurrentSpan(Observability.Field.sessionId, presentedId)
+      : Effect.void;
+    return Observability.observeSessionVerify(
+      (error: SessionNotFound | SessionExpired | PlatformError.PlatformError) =>
+        error._tag === "SessionExpired"
+          ? "expired"
+          : error._tag === "SessionNotFound"
+            ? "not-found"
+            : "unavailable",
+    )(Effect.andThen(announce, verify(token)));
+  };
 
 interface SessionRow {
   readonly id: SessionId;
@@ -1045,8 +1086,8 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
       );
 
       return {
-        issue,
-        verify,
+        issue: traceIssue(issue),
+        verify: traceVerify(verify),
         revoke,
         revokeOwned,
         revokeOthers,
@@ -1539,8 +1580,8 @@ export const layerSql: Layer.Layer<
     });
 
     return {
-      issue,
-      verify,
+      issue: traceIssue(issue),
+      verify: traceVerify(verify),
       revoke,
       revokeOwned,
       revokeOthers,

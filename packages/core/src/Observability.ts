@@ -21,6 +21,7 @@
 // redaction-asserting Tracer/Logger in `@awthaq/test` checks exactly this).
 
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Metric from "effect/Metric";
 
@@ -98,11 +99,55 @@ export const loginFailures = Metric.counter("awthaq_login_failed_total", {
   incremental: true,
 });
 
+/** ticket 27 §4: how long `Sessions.verify` took (seconds), success or failure. */
+export const sessionVerifyDuration = Metric.histogram("awthaq_session_verify_duration_seconds", {
+  description: "Session verification latency in seconds",
+  boundaries: Metric.exponentialBoundaries({ start: 0.001, factor: 2, count: 16 }),
+});
+
 /** CSG-008: an incident raised by `SecuritySignals`, tagged by rule. */
 export const securityIncidents = Metric.counter("awthaq_security_incident_total", {
   description: "Security incidents raised by SecuritySignals, tagged by rule",
   incremental: true,
 });
+
+/**
+ * ticket 27 §2: a business-logic span. Attributes are restricted to
+ * `string | number | boolean` on purpose — a `Redacted` value or a token
+ * object does not type-check as an attribute, so a secret cannot reach a span
+ * through this helper by accident (BEH-EA-199).
+ */
+export const authSpan = (
+  name: string,
+  attributes: Readonly<Record<string, string | number | boolean>>,
+) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(Effect.withSpan(name, { attributes }));
+
+/**
+ * ticket 27 §2/§4: what wraps `Sessions.verify` — its span, its latency histogram
+ * and (per failure) `awthaq_session_verify_failed_total{reason}`. `reasonOf` maps
+ * the caller's own error type to a fixed reason label (never caller input).
+ */
+export const observeSessionVerify =
+  <E>(reasonOf: (error: E) => string) =>
+  <A, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const startedAt = yield* Clock.currentTimeMillis;
+      return yield* effect.pipe(
+        Effect.tapError((error) =>
+          Metric.update(
+            Metric.withAttributes(sessionVerifyFailures, { reason: reasonOf(error) }),
+            1,
+          ),
+        ),
+        Effect.ensuring(
+          Effect.flatMap(Clock.currentTimeMillis, (endedAt) =>
+            Metric.update(sessionVerifyDuration, (endedAt - startedAt) / 1000),
+          ),
+        ),
+      );
+    }).pipe(Effect.withSpan(Span.sessionVerify));
 
 const MESSAGE_LIMIT = 200;
 

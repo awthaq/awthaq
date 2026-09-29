@@ -3,7 +3,7 @@ ID: "RBS-007"
 Title: "Every canonical entry point ships the permissive limiter — out of the box there is no brute-force defense"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "test"
 Source: "packages/test/src/TestAuth.ts:89"
 Auditor: "rate-limiting-brute-force-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `test` · reported by **Rate Limiting & Brute-Force Defense Specialist** (`rate-limiting-brute-force-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Ship a RateLimiter.layerMemory convenience composite (layer + layerStoreMemory, 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `canonical-starter-defaults`. Evidence at HEAD ec065a7: `README.md:216`. Fix: Ship a real in-memory limiter composite as the documented default, reserve permissive for tests, and warn when rules are registered under a permissive limiter. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** RateLimiter.layerMemory (layer over the bounded in-memory store) is the documented one-line real limiter; RateLimiterShape gains an optional permissive marker set by layerPermissive; RateLimits' registry warns 'auth.ratelimit.permissive' once per registry when a rule is registered under a permissive limiter, from inside the registering plugin's build, and stays quiet under NODE_ENV=test (Config.String, where the permissive limiter is the intended default). README ports table updated (the quickstart already used the SQL limiter). Tests: ports RateLimiter.test.ts (layerMemory enforces; permissive marker) and core RateLimits.test.ts (warns once; quiet under a real limiter; quiet under NODE_ENV=test). Deviation: examples/memory-server still composes through TestAuth (permissive bundle default); a host wanting real limiting there passes RateLimiter.layerMemory in TestAuth.layer's services.

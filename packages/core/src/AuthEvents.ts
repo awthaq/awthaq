@@ -136,6 +136,25 @@ const makeEventIds = Effect.gen(function* () {
 });
 
 /**
+ * ticket 27 §4: the two counters that are exactly "an event happened" are kept
+ * here, at the one choke point every strategy's event passes through, rather
+ * than at every publisher.
+ */
+const countEvent = (event: AuthEvent) => {
+  switch (event._tag) {
+    case "auth.session.issued":
+      return Metric.update(Observability.sessionsIssued, 1);
+    case "auth.user.signInFailed":
+      return Metric.update(
+        Metric.withAttributes(Observability.loginFailures, { strategy: event.strategy }),
+        1,
+      );
+    default:
+      return Effect.void;
+  }
+};
+
+/**
  * BEH-EA-100: `AuditLog` is a hard dependency — `publish` writes the
  * durable row inline, before the event ever reaches the `PubSub`. This is
  * what actually satisfies "MUST NOT depend on any `AuthEvents` subscriber":
@@ -178,6 +197,7 @@ export const layer = Layer.effect(
           userAgent: request.userAgent,
         };
         yield* auditLog.record(published);
+        yield* countEvent(event);
         const accepted = yield* PubSub.publish(pubsub, published);
         if (!accepted) {
           yield* Ref.update(dropped, (n) => n + 1);

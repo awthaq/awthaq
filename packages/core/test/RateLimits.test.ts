@@ -3,6 +3,7 @@
 // per-composition service rather than module-level state, and for what
 // BEH-EA-111's full dependency-aware ordering still needs.
 import { assert, describe, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -194,4 +195,66 @@ describe("RateLimits.enforce (EOTS-007)", () => {
       assert.strictEqual((yield* Metric.value(counter)).count, before);
     }).pipe(Effect.provide(EnforceLive)),
   );
+});
+
+// RBS-007: rules registered under a limiter that cannot enforce them are inert.
+describe("RateLimits registry under a permissive limiter (RBS-007)", () => {
+  const rule = (endpoint: string): RateLimits.RuleInput => ({
+    group: "invite",
+    endpoint,
+    key: "principal",
+    limit: 10,
+    window: Duration.minutes(10),
+  });
+  const warnings = () => {
+    const seen: Array<string> = [];
+    const layer = Logger.layer([
+      Logger.make((options) => {
+        if (options.logLevel === "Warn" && JSON.stringify(options.message).includes("permissive")) {
+          seen.push(String(options.message));
+        }
+      }),
+    ]);
+    return { seen, layer };
+  };
+  const env = (NODE_ENV: string) => ConfigProvider.layer(ConfigProvider.fromEnv({ env: { NODE_ENV } }));
+
+  it.effect("warns once, however many rules register, when the limiter is permissive", () => {
+    const capture = warnings();
+    return Effect.gen(function* () {
+      const invite = fakePlugin("invite", ["invite"]);
+      yield* install(invite, rule("create"));
+      yield* install(invite, rule("resend"));
+      yield* install(invite, rule("cancel"));
+      assert.strictEqual(capture.seen.length, 1);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(RateLimits.layer, RateLimiter.layerPermissive, capture.layer, env("production")),
+      ),
+    );
+  });
+
+  it.effect("stays quiet under a real limiter", () => {
+    const capture = warnings();
+    return Effect.gen(function* () {
+      yield* install(fakePlugin("invite", ["invite"]), rule("create"));
+      assert.strictEqual(capture.seen.length, 0);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(RateLimits.layer, RateLimiter.layerMemory, capture.layer, env("production")),
+      ),
+    );
+  });
+
+  it.effect("stays quiet under NODE_ENV=test, where the permissive limiter is the intended default", () => {
+    const capture = warnings();
+    return Effect.gen(function* () {
+      yield* install(fakePlugin("invite", ["invite"]), rule("create"));
+      assert.strictEqual(capture.seen.length, 0);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(RateLimits.layer, RateLimiter.layerPermissive, capture.layer, env("test")),
+      ),
+    );
+  });
 });

@@ -239,7 +239,8 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 |---|---|---|
 | `PasswordHasher` | `layerArgon2id` | `layerScrypt`; `PasswordHasherWorkerPool.layerArgon2id`/`layerScrypt` run the KDF in worker threads (Node), see [Password hashing](#password-hashing) |
 | `Mailer` | a one-line `console.log` stand-in | bring your own (`Mailer.Mailer.of({ send })`, any provider) |
-| `RateLimiter` | `layer` over `RateLimiterStoreSql.layerStoreSql` (shared across replicas) | `layer` over the bounded, single-process `layerStoreMemory`, or your own `RateLimiterStore`; `layerPermissive` disables limiting (tests only) |
+| `RateLimiter` | `layer` over `RateLimiterStoreSql.layerStoreSql` (shared across replicas) | `RateLimiter.layerMemory` (one line: the limiter over the bounded, single-process store), or `layer` over your own `RateLimiterStore`; `layerPermissive` disables limiting (**tests only**: registering rate-limit rules under it logs `auth.ratelimit.permissive` once, outside `NODE_ENV=test`) |
+| `Crypto` | `NodeCrypto.layer` (Node) | `WebCrypto.layer` from `@awthaq/ports`: backed by `globalThis.crypto`, no `node:crypto`, for Workers/Edge runtimes (password hashing still belongs on the origin) |
 | `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS` + `AWTHAQ_ENCRYPTION_KEY_ID`) | a KMS-backed `KeyProvider` (implement the port directly; keeps raw key bytes out of the process) |
 | `Csrf.CsrfConfig` | `Csrf.layerConfig` (`AWTHAQ_CSRF_SECRET`, at least 32 bytes; optional `AWTHAQ_CSRF_ALLOWED_ORIGINS`, comma-separated) | `Layer.succeed(Csrf.CsrfConfig, { secret, allowedOrigins })` with a secret loaded from your own secret store |
 
@@ -283,6 +284,16 @@ const AppLayer = Layer.mergeAll(
 ```
 
 CORS never relaxes CSRF: cross-site mutations still need the double-submit cookie and `x-csrf-token` header, which the SPA must send with `credentials: "include"`.
+
+### Observability
+
+awthaq reuses Effect's HTTP middleware and adds spans, a field vocabulary and metric definitions below it; the sinks (a log format, an OTLP/Prometheus exporter) are yours (`spec/decisions/027-observability-substrate.md`).
+
+- **Requests.** `HttpRouter.serve` already writes one structured log line per request. If you serve through `toWebHandler`, or want a span per request, wrap the app once: `AuthHttp.tracer(AuthHttp.requestLogger(app))` (a host that already runs its own tracer/logger over the whole router must not add these). Merge `AuthHttp.layerRedactedHeaders` so the rotated-token header is never logged, and `RequestContext.layer` (a global router middleware, like `BodyLimit.layer`) so every audit row a request causes carries its correlation id (`x-request-id`, else the W3C trace id), client address and user agent.
+- **Spans** are named `awthaq.<domain>.<operation>` (`awthaq.session.verify`, `awthaq.password.signIn`, `awthaq.hook.dispatch`, `awthaq.event.publish`, ...) and carry ids only: a user id, a valid session's id, the strategy. Never an email, password or token.
+- **Metrics** are plain `Metric` values exported from `@awthaq/core`'s `Observability` (`sessionsIssued`, `sessionVerifyFailures`, `loginFailures`, `eventsDropped`, ...); wire them to your exporter.
+- **Logs**: `Logger.layer([Logger.consoleJson])` in production, `Logger.consolePretty()` in development (see `examples/memory-server`). A failing subscriber or hook tap is logged as `auth.event.observer.error` / `auth.hook.observer.error` with a sanitized summary; the raw cause only at debug level.
+- **Testing**: `TestAuth.layer` installs a `RedactionGuard` (in `@awthaq/test`) that records every span, log line and event; `runPluginContractTests`' `redaction` option runs a plugin's flows with canary secrets and fails if one reaches any of them.
 
 ## Plugins
 
