@@ -5,10 +5,9 @@
 // spec/behaviors/23-react.md, BEH-EA-177/178.
 //
 // `effect` itself ships `AtomHttpApi`/`Atom`/`AtomRegistry` natively at
-// `effect/unstable/reactivity` (confirmed present in this repo's installed
-// `effect@4.0.0-rc.115` dependency) — no external, v3-pinned
-// `@effect-atom/atom` needed; see `@awthaq/client`'s `AuthClient.ts`
-// header comment for the corrected history of that reasoning.
+// `effect/unstable/reactivity` (in this repo's catalog-pinned `effect`) — no
+// external, v3-pinned `@effect-atom/atom` needed; see `@awthaq/client`'s
+// `AuthClient.ts` header comment for the corrected history of that reasoning.
 //
 // `ReactAuthClient` is built against `@awthaq/api`'s `AuthCore.AuthCoreApi`
 // specifically — the one fixed contract every awthaq composition serves

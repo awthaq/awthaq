@@ -12,7 +12,7 @@
 > | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
+> Implemented in `@awthaq/react` — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md). Some of its BDD scenarios are still `@skip @unwired`.
 
 ## BEH-EA-177: `RegistryProvider` seeds the session atom for SSR
 

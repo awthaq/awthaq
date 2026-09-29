@@ -5,7 +5,7 @@
 // `Providers`, so a Server Component importing anything from here gets client
 // references rather than evaluating hook-bearing modules on the server.
 //
-// React provider glue over @awthaq/client, including QadiProvider integration.
+// React bindings: reactive AtomHttpApi clients over the awthaq contract (CSRF via @awthaq/client) and Providers with QadiProvider integration.
 //
 // Implemented: AuthClientAtom.ts (spec/behaviors/22-client-effect.md's
 // BEH-EA-169 reactive `AtomHttpApi.Service` alternative; BEH-EA-177/178),

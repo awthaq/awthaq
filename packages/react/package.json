@@ -2,7 +2,7 @@
   "name": "@awthaq/react",
   "version": "0.1.0",
   "private": true,
-  "description": "React provider glue over @awthaq/client, including QadiProvider integration.",
+  "description": "React bindings: reactive AtomHttpApi clients over the awthaq contract (CSRF via @awthaq/client) and Providers with QadiProvider integration.",
   "license": "MIT",
   "files": [
     "lib",

@@ -50,7 +50,7 @@ The system is organized into seven strata plus client, tooling, and plugin packa
 | 5 HTTP | `@awthaq/server` | Middleware implementations, core handlers, `AuthHttp`. |
 | 6 Authorization | `@awthaq/qadi` | `AuthorizedSubject` middleware, `SubjectExtractor` layer, obligation handlers — the bridge to qadi, not an authorizer. |
 | 7 Composition | (application code) | `Auth.make([...])` and the application's own `Layer.provide` stack. |
-| client | `@awthaq/client`, `@awthaq/react`, `@awthaq/next` | `AtomHttpApi` client, session atom, provider glue, framework adapters. |
+| client | `@awthaq/client`, `@awthaq/react`, `@awthaq/next` | `HttpApiClient` bindings, reactive atoms, provider glue, framework adapters. Headless by design: no drop-in sign-in/sign-up/user-button/organization-switcher components, ever — apps build their own UI against typed contract errors and atoms. |
 | tools | `@awthaq/test`, `@awthaq/cli` | `TestAuth`, contract tests, `doctor`, migrations, `openapi`. |
 | plugins | `@awthaq/password`, `oauth`, `passkey`, `magic-link`, `two-factor`, `organization`, `roles`, `api-key`, `admin`, `jwt` | One `AuthPlugin.Service` class each. |
 

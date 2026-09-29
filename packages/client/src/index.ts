@@ -1,6 +1,6 @@
 // @awthaq/client — Client
 //
-// AtomHttpApi client and session atom — the isomorphic Effect client derived from the merged contract.
+// Effect HttpApiClient bindings for the awthaq contract: CSRF client middleware, error-code derivation, session store, Promise facade, passkey ceremony helper.
 //
 // Implemented: AuthClient.ts (spec/behaviors/22-client-effect.md, BEH-EA-169
 // through BEH-EA-176 — see that module's own header comment for what is

@@ -287,6 +287,23 @@ themselves: it only harvests a `Set-Cookie` that awthaq's own
 `HttpApiBuilder.securitySetCookie` calls already produce (sign-in, sign-up,
 CSRF rotation) — it takes a `Response` and a cookie jar, nothing more.
 
+## Migrating from Auth.js / next-auth
+
+The mapping is not one-to-one, and one line of it is a security trap:
+
+| next-auth | awthaq |
+| --- | --- |
+| `export { auth as middleware }` | `proxy.ts` (or `middleware.ts`) with `hasSessionCookie` — **presence only, it verifies nothing** — *plus* `getSession` in every page, server action and route handler. Do not treat a passing `proxy.ts` as authentication: `auth()` in middleware verified the session, `hasSessionCookie` does not. With `@awthaq/jwt`'s session mirror, `@awthaq/next/edge`'s `verifySessionJwt` adds a signature check, still not the boundary. |
+| `auth()` in a page/action | `getSession(await headers(), runtime)` (database-verified) |
+| `signIn()` / `signOut()` server actions | `serverActionClient(...)` — `client.password.signIn(...)`, `client.session.signOut()` — typed for your composed api |
+| `<SessionProvider session={session}>` | `Providers` from `@awthaq/react` seeded with `toInitialSession(session)` |
+| `useSession()` | `useAtomValue(AuthClientAtom.sessionAtom)` / `useAuthStatus()` |
+| `callbacks.session` / `jwt` | `definePayload` on `@awthaq/jwt`, or your qadi `SubjectResolver` for permissions |
+
+Everything that must be safe re-verifies against the database: a page or action
+that skips `getSession` because `proxy.ts` "already checked" is the failure mode
+this package's design exists to make hard to write.
+
 ## Session rotation and `applyRotatedSession`
 
 `Sessions.verify` may rotate the session's secret on a throttled idle touch

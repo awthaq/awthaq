@@ -14,15 +14,13 @@
 // implemented in this module, but is no longer blocked.** An earlier
 // revision of this comment said the only published `AtomHttpApi` was
 // `@effect-atom/atom`, pinned to `effect: ^3.22.1` and therefore unusable
-// against this project's `effect@4.0.0-rc.115` — that reasoning no longer
+// against this project's catalog-pinned `effect` — that reasoning no longer
 // holds: `effect` itself now ships `AtomHttpApi`/`Atom`/`AtomRegistry`
-// natively at `effect/unstable/reactivity` (confirmed present in this
-// repo's own installed `effect` dependency, no external package needed).
-// `@awthaq/react`'s own reactive bindings (M5, not yet built) are the
-// right place to build the actual `AtomHttpApiClient` service over this
-// package's `Api` contract — this module stays the plain, non-reactive
-// `HttpApiClient` binding either way (BEH-EA-169 offers both forms; this
-// file is only the first of them).
+// natively at `effect/unstable/reactivity` (no external package needed).
+// `@awthaq/react`'s `ReactClient.makeReactClient` builds the actual
+// `AtomHttpApiClient` service over an application's composed api — this
+// module stays the plain, non-reactive `HttpApiClient` binding either way
+// (BEH-EA-169 offers both forms; this file is only the first of them).
 //
 // **BEH-EA-171's `{ csrf: false }` contract variant is still unbuilt** —
 // `Auth.make` has no composition-level CSRF opt-out yet (decision ticket 24),

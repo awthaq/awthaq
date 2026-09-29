@@ -15,7 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import * as glob from "glob";
 import { publint } from "publint";
 import { formatMessage } from "publint/utils";
@@ -35,6 +35,71 @@ if (packageJsonPaths.length === 0) {
 const attwBin = path.join(rootDir, "node_modules", ".bin", "attw");
 
 let failed = false;
+
+// DESS-001 drift guards — a README must not describe a package as unbuilt once
+// `src/` holds real modules, and a rewritten README's snippets must only import
+// what the package actually exports.
+const STALE_README_BANNER = "no line of source in this package has shipped yet";
+// Packages whose README still carries the pre-implementation banner although
+// `src/` has modules. Rewrite the README and delete the entry: this list only
+// ever shrinks.
+const STALE_README_ALLOWLIST = new Set([
+  "admin",
+  "api",
+  "core",
+  "oauth",
+  "organization",
+  "passkey",
+  "password",
+  "ports",
+  "qadi",
+  "server",
+  "sql",
+]);
+// READMEs whose ```ts/```tsx `@awthaq/*` imports are checked against the built
+// package's real exports.
+const SNIPPET_CHECKED_READMES = new Set(["client", "react", "next"]);
+
+/** The runtime export names of `@awthaq/<name>[/<subpath>]`, from its built `exports` entry. */
+const builtExports = async (specifier) => {
+  const [, name, ...rest] = specifier.split("/");
+  const dir = path.join(rootDir, "packages", name);
+  const manifest = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"));
+  const entry = manifest.exports[rest.length === 0 ? "." : `./${rest.join("/")}`];
+  if (entry === undefined) return undefined;
+  return Object.keys(await import(pathToFileURL(path.join(dir, entry.import)).href));
+};
+
+/** Problems in one README's snippets: an imported name that the package does not export. */
+const snippetImportProblems = async (readme) => {
+  const problems = [];
+  for (const block of readme.matchAll(/```(?:ts|tsx)\n([\s\S]*?)```/g)) {
+    for (const found of block[1].matchAll(
+      /^import\s+(?!type\b)([^;"]*?)\s+from\s+"(@awthaq\/[^"]+)";/gm,
+    )) {
+      const [, clause, specifier] = found;
+      const exported = await builtExports(specifier);
+      if (exported === undefined) {
+        problems.push(`README imports from "${specifier}", which the package does not export`);
+        continue;
+      }
+      const named = clause.match(/\{([\s\S]*)\}/);
+      const names =
+        named === null
+          ? []
+          : named[1]
+              .split(",")
+              .map((part) => part.trim().split(/\s+as\s+/)[0])
+              .filter(Boolean);
+      for (const name of names) {
+        if (!exported.includes(name)) {
+          problems.push(`README imports { ${name} } from "${specifier}", which is not exported`);
+        }
+      }
+    }
+  }
+  return problems;
+};
 
 for (const packageJsonPath of packageJsonPaths) {
   const pkgDir = path.dirname(packageJsonPath);
@@ -107,6 +172,25 @@ for (const packageJsonPath of packageJsonPaths) {
         problems.push(`lib/${file} does not start with "use client"`);
       }
     }
+  }
+
+  // 5. DESS-001: README drift.
+  const readme = readFileSync(path.join(pkgDir, "README.md"), "utf8");
+  const srcModules = glob
+    .globSync(["src/**/*.{ts,tsx}"], { cwd: pkgDir })
+    .filter((file) => file !== "src/index.ts").length;
+  if (
+    readme.includes(STALE_README_BANNER) &&
+    srcModules > 1 &&
+    !STALE_README_ALLOWLIST.has(pkgName)
+  ) {
+    problems.push(
+      `README still says "${STALE_README_BANNER}" — rewrite it from the shipped modules ` +
+        "(packages whose README is not yet rewritten are listed in STALE_README_ALLOWLIST)",
+    );
+  }
+  if (SNIPPET_CHECKED_READMES.has(pkgName)) {
+    problems.push(...(await snippetImportProblems(readme)));
   }
 
   if (problems.length > 0) {

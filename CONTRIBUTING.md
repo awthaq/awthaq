@@ -45,6 +45,16 @@ verification) — the same checks CI runs on every pull request.
   opening a pull request. `pnpm check` runs everything CI does, including
   the BDD suite and spec traceability check.
 
+## Bumping the `effect` release candidate
+
+`effect` is pinned exact in `pnpm-workspace.yaml`'s catalog. Comments and docs
+must not repeat that version (they go stale — MTS-008); refer to "the
+catalog-pinned `effect`" instead. After a bump this must print nothing:
+
+```sh
+grep -rnE 'rc\.[0-9]+' packages --include='*.ts' --include='*.tsx' | grep -v -e /lib/ -e node_modules
+```
+
 ## Commit and changeset conventions
 
 This repository uses [Changesets](https://github.com/changesets/changesets)
