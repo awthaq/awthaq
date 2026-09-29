@@ -15,6 +15,8 @@
 
 import { Api } from "@awthaq/api";
 import * as Effect from "effect/Effect";
+import type * as Schema from "effect/Schema";
+import type { SqlError } from "effect/unstable/sql/SqlError";
 
 export const StoreUnavailable = Api.StoreUnavailable;
 export type StoreUnavailable = Api.StoreUnavailable;
@@ -29,3 +31,19 @@ export const storeUnavailable = (operation: string) => (cause: unknown) =>
   Effect.logWarning("awthaq: store unavailable", operation, cause).pipe(
     Effect.andThen(Effect.fail(new StoreUnavailable({ operation }))),
   );
+
+/**
+ * A repository call with nothing else to recover from: an outage is `StoreUnavailable`, a row that
+ * no longer decodes (`SchemaError`) is a defect. Use it where the effect's `E` is exactly the
+ * repository's `SqlError | SchemaError`; where a domain outcome shares the `catchTags`, map
+ * `SqlError: storeUnavailable(operation)` and `SchemaError: Effect.die` beside it instead.
+ */
+export const orStoreUnavailable =
+  (operation: string) =>
+  <A, R>(self: Effect.Effect<A, SqlError | Schema.SchemaError, R>) =>
+    self.pipe(
+      Effect.catchTags({
+        SqlError: storeUnavailable(operation),
+        SchemaError: Effect.die,
+      }),
+    );

@@ -126,8 +126,11 @@ export const UserAttributes: Layer.Layer<AttributeResolver, never, Users.Users> 
       users.findById(userId).pipe(
         Effect.map(Option.some),
         // A deleted user stays "no opinion" (as documented); only a genuine
-        // outage (a defect) becomes a typed failure naming the attribute.
+        // outage (`StoreUnavailable`, or a defect) becomes a typed failure naming the attribute.
         Effect.catchTag("UserNotFound", () => Effect.succeed(Option.none<Users.UserRecord>())),
+        Effect.catchTag("StoreUnavailable", (cause) =>
+          Effect.fail(new AttributeResolveError({ attribute, cause })),
+        ),
         Effect.catchDefect((cause) => Effect.fail(new AttributeResolveError({ attribute, cause }))),
       );
 

@@ -162,7 +162,7 @@ export interface PasswordShape {
     | PasswordApi.WeakPassword
     | PasswordApi.EmailAlreadyExists
     | Api.RateLimited
-    | HookPoint.HookAborted
+    | HookPoint.HookAborted | Errors.StoreUnavailable
   >;
   /**
    * TMS-005: the `signUpEnumeration: "conceal"` flavour of `signUp` — the same
@@ -178,7 +178,7 @@ export interface PasswordShape {
     readonly ip?: string;
   }) => Effect.Effect<
     void,
-    PasswordApi.WeakPassword | Api.RateLimited | HookPoint.HookAborted
+    PasswordApi.WeakPassword | Api.RateLimited | HookPoint.HookAborted | Errors.StoreUnavailable
   >;
   /**
    * BEH-EA-114/116: uniform `InvalidCredentials`, constant real hashing cost
@@ -210,14 +210,14 @@ export interface PasswordShape {
     | Api.InvalidCredentials
     | PasswordApi.EmailNotVerified
     | Api.RateLimited
-    | Hooks.TwoFactorRequired
+    | Hooks.TwoFactorRequired | Errors.StoreUnavailable
   >;
   /** BEH-EA-064/117: identical response whether or not `email` resolves to an account — the caller (the HTTP handler) always answers 202. */
   readonly requestReset: (input: {
     readonly email: string;
     /** AGA-001/NHS-003: same per-source dimension as `signIn`'s own `ip`. */
     readonly ip?: string;
-  }) => Effect.Effect<void, Api.RateLimited>;
+  }) => Effect.Effect<void, Api.RateLimited | Errors.StoreUnavailable>;
   /**
    * Upstream-hardening ticket 04: identical response whether `email`
    * doesn't exist, the account is already verified, or a mail genuinely
@@ -227,7 +227,7 @@ export interface PasswordShape {
     readonly email: string;
     /** MLO-003: same per-source dimension as `requestReset`'s own `ip`. */
     readonly ip?: string;
-  }) => Effect.Effect<void, Api.RateLimited>;
+  }) => Effect.Effect<void, Api.RateLimited | Errors.StoreUnavailable>;
   /** BEH-EA-117: consumes the reset token and sets the new password in one call, then revokes every other session. */
   readonly confirmReset: (input: {
     readonly token: Redacted.Redacted<string>;
@@ -802,7 +802,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 .create({ email: vetoedSignUp.email, name: vetoedSignUp.name })
                 .pipe(
                   Effect.catchTag("Users/EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
-                  Effect.catchTag("PlatformError", Effect.die),
                 );
               yield* accounts
                 .link({
@@ -843,7 +842,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 .create({ email: vetoedSignUp.email, name: vetoedSignUp.name })
                 .pipe(
                   Effect.catchTag("Users/EmailAlreadyExists", () => new PasswordApi.EmailAlreadyExists()),
-                  Effect.catchTag("PlatformError", Effect.die),
                 );
               yield* accounts
                 .link({

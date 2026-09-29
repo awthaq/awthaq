@@ -28,7 +28,9 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
  * principal without touching `Authentication` itself.
  */
 export interface PrincipalResolverShape {
-  readonly resolve: (session: Sessions.SessionView) => Effect.Effect<Api.Principal>;
+  readonly resolve: (
+    session: Sessions.SessionView,
+  ) => Effect.Effect<Api.Principal, Api.StoreUnavailable>;
 }
 
 export class PrincipalResolver extends Context.Service<PrincipalResolver, PrincipalResolverShape>()(

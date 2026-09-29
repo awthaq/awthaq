@@ -535,7 +535,7 @@ export interface PasskeyShape {
       readonly ceremonyId: string;
       readonly options: PasskeyApi.PublicKeyCredentialRequestOptions;
     },
-    Api.RateLimited
+    Api.RateLimited | Errors.StoreUnavailable
   >;
   readonly authenticateVerify: (
     input: PasskeyApi.AuthenticateVerifyPayload & { readonly ip?: string | undefined },
@@ -548,7 +548,7 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyChallengeInvalid
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCounterAnomaly
-    | Hooks.TwoFactorRequired
+    | Hooks.TwoFactorRequired | Errors.StoreUnavailable
   >;
   readonly listCredentials: (
     userId: Users.UserId,
@@ -566,7 +566,7 @@ export interface PasskeyShape {
   readonly removeCredential: (
     userId: Users.UserId,
     id: string,
-  ) => Effect.Effect<void, PasskeyApi.PasskeyCredentialNotFound | PasskeyApi.PasskeyLastCredential>;
+  ) => Effect.Effect<void, PasskeyApi.PasskeyCredentialNotFound | PasskeyApi.PasskeyLastCredential | Errors.StoreUnavailable>;
 }
 
 /** Same forward-reference pattern `@awthaq/password`'s own `PasswordHandlers` documents. */

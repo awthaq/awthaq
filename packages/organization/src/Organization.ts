@@ -14,7 +14,7 @@
 // their shape.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, HookPoint, Hooks, Migrations, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, Errors, HookPoint, Hooks, Migrations, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -278,7 +278,7 @@ export interface OrganizationShape {
     | OrganizationApi.TeamNotFound
     | OrganizationApi.RolePermissionEscalation
     | OrganizationApi.UnknownOrgRole
-    | HookPoint.HookAborted
+    | HookPoint.HookAborted | Errors.StoreUnavailable
   >;
   /** MTI-010: `token` is the emailed capability; the invitation id alone accepts nothing. */
   readonly acceptInvitation: (
@@ -325,12 +325,12 @@ export interface OrganizationShape {
   readonly getInvitation: (
     caller: Api.UserPrincipal,
     invitationId: string,
-  ) => Effect.Effect<InvitationRecords.InvitationRecord, OrganizationApi.InvitationNotFound>;
+  ) => Effect.Effect<InvitationRecords.InvitationRecord, OrganizationApi.InvitationNotFound | Errors.StoreUnavailable>;
   /** MTI-010: the landing-page lookup — resolves the emailed token, for the invitee only. */
   readonly getInvitationByToken: (
     caller: Api.UserPrincipal,
     token: string,
-  ) => Effect.Effect<InvitationRecords.InvitationRecord, OrganizationApi.InvitationNotFound>;
+  ) => Effect.Effect<InvitationRecords.InvitationRecord, OrganizationApi.InvitationNotFound | Errors.StoreUnavailable>;
   readonly listInvitationsForOrganization: (
     caller: Api.UserPrincipal,
     organizationId: string,

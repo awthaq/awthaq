@@ -14,7 +14,7 @@
 // resolves, and a port in `@awthaq/ports` cannot depend on a plugin
 // package.
 
-import { Accounts } from "@awthaq/core";
+import { Accounts, Errors } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -58,7 +58,11 @@ export interface OAuthTokenAccessShape {
   readonly withAccessToken: <A, E, R>(
     accountId: Accounts.AccountId,
     use: (token: Redacted.Redacted<string>) => Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | OAuthTokenUnavailable | OAuthRefreshFailed, R>;
+  ) => Effect.Effect<
+    A,
+    E | OAuthTokenUnavailable | OAuthRefreshFailed | Errors.StoreUnavailable,
+    R
+  >;
 }
 
 export class OAuthTokenAccess extends Context.Service<OAuthTokenAccess, OAuthTokenAccessShape>()(

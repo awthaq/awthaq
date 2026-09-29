@@ -962,7 +962,6 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                             ),
                           ),
                         ),
-                        Effect.catchTag("PlatformError", Effect.die),
                       );
                     // AOMS-007: a *trusted* provider's `email_verified` claim
                     // is proof enough to mark the new local user verified, in
@@ -987,10 +986,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                         ...issuerField(provider.issuer),
                       })
                       .pipe(
-                        Effect.catchTags({
-                          AccountAlreadyLinked: Effect.die,
-                          PlatformError: Effect.die,
-                        }),
+                        Effect.catchTag("AccountAlreadyLinked", Effect.die),
                       );
                     return user;
                   }),

@@ -25,6 +25,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as Accounts from "../src/Accounts.ts";
 import * as Users from "../src/Users.ts";
 
@@ -531,5 +532,37 @@ describe("Accounts (layerSql) undecryptable provider tokens (SMS-002)", () => {
       const healed = yield* accounts.findProviderTokens(account.id);
       assert.strictEqual(Redacted.value(Option.getOrThrow(healed).accessToken), "access");
     }).pipe(Effect.provide(SqlTestLayer)),
+  );
+});
+
+// MA-004: an infrastructure failure is the typed `StoreUnavailable`, never a defect.
+describe("Accounts infrastructure failures (MA-004)", () => {
+  const DownRepository = Layer.effect(
+    Repositories.AccountsRepository,
+    Effect.gen(function* () {
+      const real = yield* Repositories.AccountsRepository;
+      return {
+        ...real,
+        listByUser: () =>
+          Effect.fail(
+            new SqlError({ reason: new UnknownError({ cause: new Error("connection reset") }) }),
+          ),
+      };
+    }),
+  ).pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))));
+
+  const DownLayer = Accounts.layerSql.pipe(
+    Layer.provide(DownRepository),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
+
+  it.effect("layerSql: a SqlError from the repository surfaces as StoreUnavailable", () =>
+    Effect.gen(function* () {
+      const accounts = yield* Accounts.Accounts;
+      const failure = yield* accounts.listByUser(userId).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+      assert.strictEqual(failure.operation, "Accounts.listByUser");
+    }).pipe(Effect.provide(DownLayer)),
   );
 });

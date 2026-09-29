@@ -153,7 +153,7 @@ export interface AdminShape {
     | AdminApi.AdminImpersonationDenied
     | AdminApi.AdminSelfImpersonationRefused
     | AdminApi.AdminAlreadyImpersonating
-    | AdminApi.AdminTargetNotFound
+    | AdminApi.AdminTargetNotFound | Errors.StoreUnavailable
   >;
   /** BEH-EA-216: `caller`'s own session must itself carry `actingAs`, or there is nothing to stop. */
   readonly stopImpersonating: (
@@ -197,17 +197,17 @@ export interface AdminShape {
       readonly cursor?: Users.UserCursor | undefined;
       readonly limit?: number | undefined;
     },
-  ) => Effect.Effect<Users.UsersPage, AdminApi.AdminActionDenied>;
+  ) => Effect.Effect<Users.UsersPage, AdminApi.AdminActionDenied | Errors.StoreUnavailable>;
   readonly getUser: (
     caller: Api.UserPrincipal,
     userId: Users.UserId,
-  ) => Effect.Effect<Users.UserRecord, AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound>;
+  ) => Effect.Effect<Users.UserRecord, AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound | Errors.StoreUnavailable>;
   /** `metadata` left out leaves it untouched; `null` clears it (`Users.updateProfile`'s own rule). */
   readonly updateUser: (
     caller: Api.UserPrincipal,
     userId: Users.UserId,
     input: { readonly name: string; readonly metadata?: string | null | undefined },
-  ) => Effect.Effect<Users.UserRecord, AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound>;
+  ) => Effect.Effect<Users.UserRecord, AdminApi.AdminActionDenied | AdminApi.AdminTargetNotFound | Errors.StoreUnavailable>;
   /** The user's own sessions — impersonation sessions issued *as* that user are not among them. */
   readonly listUserSessions: (
     caller: Api.UserPrincipal,

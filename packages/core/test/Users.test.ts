@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as Hooks from "../src/Hooks.ts";
 import * as Users from "../src/Users.ts";
 
@@ -265,5 +266,38 @@ describe("Users (layerSql) profile update racing a delete (GC-004)", () => {
       const cleared = yield* users.updateProfile(created.id, { name: "Kept again", metadata: null });
       assert.deepStrictEqual(cleared.metadata, Option.none());
     }).pipe(Effect.provide(SqlTestLayer)),
+  );
+});
+
+// MA-004: an infrastructure failure is the typed `StoreUnavailable`, never a defect.
+describe("Users infrastructure failures (MA-004)", () => {
+  const DownRepository = Layer.effect(
+    Repositories.UsersRepository,
+    Effect.gen(function* () {
+      const real = yield* Repositories.UsersRepository;
+      return {
+        ...real,
+        findByEmail: () =>
+          Effect.fail(
+            new SqlError({ reason: new UnknownError({ cause: new Error("connection reset") }) }),
+          ),
+      };
+    }),
+  ).pipe(Layer.provide(Repositories.UsersRepositoryLive));
+
+  const DownLayer = Users.layerSql.pipe(
+    Layer.provide(DownRepository),
+    Layer.provide(Hooks.BeforeUserDelete.layer),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
+
+  it.effect("layerSql: a SqlError from the repository surfaces as StoreUnavailable", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const failure = yield* users.findByEmail("anyone@example.com").pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+      assert.strictEqual(failure.operation, "Users.findByEmail");
+    }).pipe(Effect.provide(DownLayer)),
   );
 });

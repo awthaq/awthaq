@@ -17,9 +17,9 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import * as HookPoint from "./HookPoint.ts";
 import * as Hooks from "./Hooks.ts";
 
@@ -90,22 +90,22 @@ export interface UsersShape {
     readonly email: string;
     readonly name: string;
     readonly metadata?: string;
-  }) => Effect.Effect<UserRecord, EmailAlreadyExists | PlatformError.PlatformError>;
-  readonly findById: (id: UserId) => Effect.Effect<UserRecord, UserNotFound>;
-  readonly findByEmail: (email: string) => Effect.Effect<Option.Option<UserRecord>>;
+  }) => Effect.Effect<UserRecord, EmailAlreadyExists | StoreUnavailable>;
+  readonly findById: (id: UserId) => Effect.Effect<UserRecord, UserNotFound | StoreUnavailable>;
+  readonly findByEmail: (email: string) => Effect.Effect<Option.Option<UserRecord>, StoreUnavailable>;
   /** AOMS-002: `metadata` left `undefined` leaves it untouched; `null` clears it. */
   readonly updateProfile: (
     id: UserId,
     input: { readonly name: string; readonly metadata?: string | null },
-  ) => Effect.Effect<UserRecord, UserNotFound>;
-  readonly verifyEmail: (id: UserId) => Effect.Effect<UserRecord, UserNotFound>;
+  ) => Effect.Effect<UserRecord, UserNotFound | StoreUnavailable>;
+  readonly verifyEmail: (id: UserId) => Effect.Effect<UserRecord, UserNotFound | StoreUnavailable>;
   /**
    * AOMS-006/CSG-002 (.issues/high): consults `Hooks.BeforeUserDelete`
    * (BEH-EA-095's own worked example — an Invite-purge veto) after the
    * existence check, before the row is actually removed; a tap's abort
    * surfaces as `HookPoint.HookAborted`, never a bare defect.
    */
-  readonly delete: (id: UserId) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted>;
+  readonly delete: (id: UserId) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted | StoreUnavailable>;
   /**
    * BAM-005/BEH-EA-036: the admin surface's user listing — keyset-paginated on
    * `(createdAt, id)`, oldest first, opaque cursor in / `nextCursor` out, never an
@@ -114,7 +114,7 @@ export interface UsersShape {
   readonly list: (input?: {
     readonly cursor?: UserCursor | undefined;
     readonly limit?: number | undefined;
-  }) => Effect.Effect<UsersPage>;
+  }) => Effect.Effect<UsersPage, StoreUnavailable>;
 }
 
 /** BAM-005/BEH-EA-036: the keyset position of `Users.list`. */
@@ -223,7 +223,9 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
           },
         );
         return yield* Effect.fromResult(outcome);
-      });
+      },
+      Effect.catchTag("PlatformError", storeUnavailable("Users.create")),
+      );
 
       const updateProfile: UsersShape["updateProfile"] = (id, input) =>
         Ref.modify(state, (s): readonly [Result.Result<UserRecord, UserNotFound>, State] => {
@@ -375,15 +377,16 @@ export const layerSql: Layer.Layer<
         .pipe(Effect.orDie);
       const row = yield* repo.insert(insert).pipe(
         Effect.catchTag("SqlError", (error) =>
-          error.reason._tag === "UniqueViolation"
-            ? Effect.fail(
-                new EmailAlreadyExists({
+          Effect.fail(
+            error.reason._tag === "UniqueViolation"
+              ? new EmailAlreadyExists({
                   message: "awthaq: email already exists",
                   email,
-                }),
-              )
-            : Effect.die(error),
+                })
+              : error,
+          ),
         ),
+        Effect.catchTag("SqlError", storeUnavailable("Users.create")),
         Effect.catchTag("SchemaError", Effect.die),
       );
       return toUserRecord(row);
@@ -395,7 +398,7 @@ export const layerSql: Layer.Layer<
           NoSuchElementError: () =>
             Effect.fail(new UserNotFound({ message: "awthaq: no such user", id })),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Users.findById"),
         }),
         Effect.map(toUserRecord),
       );
@@ -403,7 +406,7 @@ export const layerSql: Layer.Layer<
     const findByEmail: UsersShape["findByEmail"] = (email) =>
       repo
         .findByEmail(email.toLowerCase())
-        .pipe(Effect.map(Option.map(toUserRecord)), Effect.orDie);
+        .pipe(Effect.map(Option.map(toUserRecord)), orStoreUnavailable("Users.findByEmail"));
 
     // GC-004: one targeted statement, so a row deleted between the caller's read and this write
     // is `UserNotFound` — what `layerMemory` answers — not a defect, and `email` is never
@@ -411,7 +414,7 @@ export const layerSql: Layer.Layer<
     const updateProfile: UsersShape["updateProfile"] = Effect.fnUntraced(function* (id, input) {
       const row = yield* repo
         .updateProfile({ id, name: input.name, metadata: input.metadata })
-        .pipe(Effect.orDie);
+        .pipe(orStoreUnavailable("Users.updateProfile"));
       if (Option.isNone(row)) {
         return yield* Effect.fail(new UserNotFound({ message: "awthaq: no such user", id }));
       }
@@ -431,7 +434,7 @@ export const layerSql: Layer.Layer<
           NoSuchElementError: () =>
             Effect.fail(new UserNotFound({ message: "awthaq: no such user", id })),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Users.verifyEmail"),
         }),
       );
       yield* announce(id, ["emailVerified"]);
@@ -441,7 +444,7 @@ export const layerSql: Layer.Layer<
     const delete_: UsersShape["delete"] = Effect.fnUntraced(function* (id) {
       const found = yield* findById(id);
       yield* beforeUserDeleteVeto(beforeDelete.run({ id, email: found.email }));
-      yield* repo.delete(id).pipe(Effect.orDie);
+      yield* repo.delete(id).pipe(orStoreUnavailable("Users.delete"));
     });
 
     const list: UsersShape["list"] = (input) =>
@@ -450,7 +453,7 @@ export const layerSql: Layer.Layer<
           items: page.items.map(toUserRecord),
           nextCursor: page.nextCursor,
         })),
-        Effect.orDie,
+        orStoreUnavailable("Users.list"),
       );
 
     return { create, findById, findByEmail, updateProfile, verifyEmail, delete: delete_, list };

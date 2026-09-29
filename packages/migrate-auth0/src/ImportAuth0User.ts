@@ -11,7 +11,7 @@
 // (never the email — `AccountRecord.subject`'s uniqueness key is scoped
 // per-provider, and email is already `User.email`'s own job).
 
-import { Accounts, Users } from "@awthaq/core";
+import { Accounts, Errors, Users } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
@@ -40,15 +40,13 @@ export const importUser = (
   input: Auth0ExportUser,
 ): Effect.Effect<
   ImportedAuth0User,
-  Users.EmailAlreadyExists | Accounts.AccountAlreadyLinked,
+  Users.EmailAlreadyExists | Accounts.AccountAlreadyLinked | Errors.StoreUnavailable,
   Users.Users | Accounts.Accounts
 > =>
   Effect.gen(function* () {
     const users = yield* Users.Users;
     const accounts = yield* Accounts.Accounts;
-    const created = yield* users
-      .create({ email: input.email, name: input.name })
-      .pipe(Effect.catchTag("PlatformError", Effect.die));
+    const created = yield* users.create({ email: input.email, name: input.name });
     const user = input.emailVerified
       ? yield* users.verifyEmail(created.id).pipe(Effect.orDie)
       : created;
@@ -59,7 +57,6 @@ export const importUser = (
         subject: user.id,
         // TTE-005: the trust boundary for an imported hash — minted explicitly.
         credentialHash: Redacted.make(PasswordHasher.PhcHash(input.passwordHash)),
-      })
-      .pipe(Effect.catchTag("PlatformError", Effect.die));
+      });
     return { user, account };
   });

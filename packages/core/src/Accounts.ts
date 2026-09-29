@@ -18,11 +18,11 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import { UserId } from "./Users.ts";
 
 // MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
@@ -138,13 +138,13 @@ export interface AccountsShape {
     readonly issuer?: string;
     readonly credentialHash?: Redacted.Redacted<PasswordHasher.PhcHash>;
     readonly tokens?: ProviderTokenSet;
-  }) => Effect.Effect<AccountRecord, AccountAlreadyLinked | PlatformError.PlatformError>;
+  }) => Effect.Effect<AccountRecord, AccountAlreadyLinked | StoreUnavailable>;
   readonly findByProviderSubject: (
     providerId: string,
     subject: string,
     issuer?: string,
-  ) => Effect.Effect<Option.Option<AccountRecord>>;
-  readonly listByUser: (userId: UserId) => Effect.Effect<ReadonlyArray<AccountRecord>>;
+  ) => Effect.Effect<Option.Option<AccountRecord>, StoreUnavailable>;
+  readonly listByUser: (userId: UserId) => Effect.Effect<ReadonlyArray<AccountRecord>, StoreUnavailable>;
   /**
    * BE-002: `OAuthTokenAccess.withAccessToken` (`@awthaq/oauth`) is the
    * first caller that needs an account's own `providerId` given only an
@@ -153,16 +153,16 @@ export interface AccountsShape {
    * lookup direction (`findByProviderSubject` needs the provider/subject
    * to find the id, not the other way around).
    */
-  readonly findById: (id: AccountId) => Effect.Effect<AccountRecord, AccountNotFound>;
+  readonly findById: (id: AccountId) => Effect.Effect<AccountRecord, AccountNotFound | StoreUnavailable>;
   /** BEH-EA-044: reads back a credential hash `link` stored, if any. */
   readonly findCredentialHash: (
     id: AccountId,
-  ) => Effect.Effect<Option.Option<Redacted.Redacted<PasswordHasher.PhcHash>>, AccountNotFound>;
+  ) => Effect.Effect<Option.Option<Redacted.Redacted<PasswordHasher.PhcHash>>, AccountNotFound | StoreUnavailable>;
   /** BEH-EA-116: rehash-on-login writes a fresh hash for the same row. */
   readonly updateCredentialHash: (
     id: AccountId,
     hash: Redacted.Redacted<PasswordHasher.PhcHash>,
-  ) => Effect.Effect<void, AccountNotFound>;
+  ) => Effect.Effect<void, AccountNotFound | StoreUnavailable>;
   /**
    * BE-002: reads back the token set `link`'s own `tokens` stored, if any
    * — `None` for a `password` account, a provider `@awthaq/oauth` never
@@ -170,7 +170,7 @@ export interface AccountsShape {
    */
   readonly findProviderTokens: (
     id: AccountId,
-  ) => Effect.Effect<Option.Option<ProviderTokenSet>, AccountNotFound | ProviderTokensUnreadable>;
+  ) => Effect.Effect<Option.Option<ProviderTokenSet>, AccountNotFound | ProviderTokensUnreadable | StoreUnavailable>;
   /**
    * BE-002: every successful OAuth sign-in against an already-linked
    * account writes a fresh token set here — the re-authentication branch
@@ -181,9 +181,9 @@ export interface AccountsShape {
   readonly updateProviderTokens: (
     id: AccountId,
     tokens: ProviderTokenSet,
-  ) => Effect.Effect<void, AccountNotFound>;
+  ) => Effect.Effect<void, AccountNotFound | StoreUnavailable>;
   /** BEH-EA-045: refused when `id` is the user's only remaining Account. */
-  readonly unlink: (id: AccountId) => Effect.Effect<void, AccountNotFound | LastAccountRefusal>;
+  readonly unlink: (id: AccountId) => Effect.Effect<void, AccountNotFound | LastAccountRefusal | StoreUnavailable>;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 09/10: whole-user
    * deletion's own cascade — deliberately bypasses `unlink`'s last-account
@@ -191,7 +191,7 @@ export interface AccountsShape {
    * *otherwise-still-existing* account, not to block deleting the account
    * entirely along with the user it belongs to.
    */
-  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void>;
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, StoreUnavailable>;
 }
 
 export class Accounts extends Context.Service<Accounts, AccountsShape>()("awthaq/core/Accounts") {}
@@ -280,7 +280,9 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
         },
       );
       return yield* Effect.fromResult(outcome);
-    });
+    },
+    Effect.catchTag("PlatformError", storeUnavailable("Accounts.link")),
+    );
 
     const findByProviderSubject: AccountsShape["findByProviderSubject"] = (
       providerId,
@@ -538,16 +540,17 @@ export const layerSql: Layer.Layer<
         .pipe(Effect.orDie);
       const row = yield* repo.insert(insert).pipe(
         Effect.catchTag("SqlError", (error) =>
-          error.reason._tag === "UniqueViolation"
-            ? Effect.fail(
-                new AccountAlreadyLinked({
+          Effect.fail(
+            error.reason._tag === "UniqueViolation"
+              ? new AccountAlreadyLinked({
                   message: "awthaq: account already linked",
                   providerId: input.providerId,
                   subject: input.subject,
-                }),
-              )
-            : Effect.die(error),
+                })
+              : error,
+          ),
         ),
+        Effect.catchTag("SqlError", storeUnavailable("Accounts.link")),
         Effect.catchTag("SchemaError", Effect.die),
       );
       return toAccountRecord(row);
@@ -560,12 +563,15 @@ export const layerSql: Layer.Layer<
     ) =>
       repo
         .findByProviderSubject(providerId, subject, issuer ?? "")
-        .pipe(Effect.map(Option.map(toAccountRecord)), Effect.orDie);
+        .pipe(
+          Effect.map(Option.map(toAccountRecord)),
+          orStoreUnavailable("Accounts.findByProviderSubject"),
+        );
 
     const listByUser: AccountsShape["listByUser"] = (userId) =>
       repo.listByUser(userId).pipe(
         Effect.map((rows) => rows.map(toAccountRecord)),
-        Effect.orDie,
+        orStoreUnavailable("Accounts.listByUser"),
       );
 
     const findById: AccountsShape["findById"] = (id) =>
@@ -574,7 +580,7 @@ export const layerSql: Layer.Layer<
           NoSuchElementError: () =>
             Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Accounts.findById"),
         }),
         Effect.map(toAccountRecord),
       );
@@ -585,10 +591,10 @@ export const layerSql: Layer.Layer<
           NoSuchElementError: () =>
             Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Accounts.unlink"),
         }),
       );
-      const siblings = yield* repo.listByUser(account.userId).pipe(Effect.orDie);
+      const siblings = yield* repo.listByUser(account.userId).pipe(orStoreUnavailable("Accounts.unlink"));
       if (siblings.length <= 1) {
         return yield* Effect.fail(
           new LastAccountRefusal({
@@ -597,14 +603,14 @@ export const layerSql: Layer.Layer<
           }),
         );
       }
-      yield* repo.delete(id).pipe(Effect.orDie);
+      yield* repo.delete(id).pipe(orStoreUnavailable("Accounts.unlink"));
     });
 
     const unlink: AccountsShape["unlink"] = (id) =>
-      sql.withTransaction(performUnlink(id)).pipe(Effect.catchTag("SqlError", Effect.die));
+      sql.withTransaction(performUnlink(id)).pipe(Effect.catchTag("SqlError", storeUnavailable("Accounts.unlink")));
 
     const deleteAllByUser: AccountsShape["deleteAllByUser"] = (userId) =>
-      repo.deleteAllByUser(userId).pipe(Effect.orDie);
+      repo.deleteAllByUser(userId).pipe(orStoreUnavailable("Accounts.deleteAllByUser"));
 
     const findCredentialHash: AccountsShape["findCredentialHash"] = (id) =>
       repo.findById(id).pipe(
@@ -612,7 +618,7 @@ export const layerSql: Layer.Layer<
           NoSuchElementError: () =>
             Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Accounts.findCredentialHash"),
         }),
         // TTE-005: the trust boundary — a stored column is a `PhcHash` by
         // construction, since only `Accounts.link`/`updateCredentialHash` write it.
@@ -632,7 +638,7 @@ export const layerSql: Layer.Layer<
           NoSuchElementError: () =>
             Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Accounts.updateCredentialHash"),
         }),
         Effect.asVoid,
       );
@@ -647,7 +653,7 @@ export const layerSql: Layer.Layer<
               new ProviderTokensUnreadable({ id, field: error.field, reason: error.reason }),
             ),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Accounts.findProviderTokens"),
         }),
         Effect.map(rowToProviderTokenSet),
       );
@@ -662,7 +668,7 @@ export const layerSql: Layer.Layer<
           NoSuchElementError: () =>
             Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Accounts.updateProviderTokens"),
         }),
         Effect.asVoid,
       );
