@@ -27,6 +27,7 @@ import {
   AuthEvents,
   AuthPlugin,
   Accounts,
+  Erasure,
   HookPoint,
   Hooks,
   Migrations,
@@ -888,6 +889,25 @@ const passkeyMigrations: Migrations.Migrations = [
   },
 ];
 
+/**
+ * CSG-001/DRS-002 (.issues/high), wayfinder ticket 30: this plugin's part of
+ * `AccountErasure.eraseAccount`, part of `Passkey.layer` itself (it requires
+ * `Erasure.ErasureRegistry`, so a composition without one does not compile). It
+ * removes the user's `passkey_credential` rows and — since BPAS-003 — their
+ * stable WebAuthn user handle, inside `eraseAccount`'s transaction.
+ */
+export const passkeyErasure = Erasure.contribute({
+  id: "passkey",
+  make: Effect.gen(function* () {
+    const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+    const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
+    return (subject: Erasure.ErasureSubject) =>
+      credentials
+        .deleteAllByUser(subject.userId)
+        .pipe(Effect.andThen(handles.deleteByUser(subject.userId)));
+  }),
+});
+
 export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passkey", {
   apiVersion: 1,
   contract: PasskeyApi.PasskeyApi,
@@ -896,6 +916,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
 }) {
   static readonly layer = AuthPlugin.layer(Passkey, {
     handlers: PasskeyHandlers,
+    contributes: passkeyErasure,
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
@@ -1680,39 +1701,3 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
     }),
   });
 }
-
-/**
- * CSG-001/DRS-002 (.issues/high): a real tap on the core
- * `Hooks.BeforeUserDelete` veto point (CSG-002, already wired into
- * `Users.ts`'s own `delete_` for both layers) that sweeps this plugin's
- * own `passkey_credential` rows — and, since BPAS-003, the user's stable
- * WebAuthn handle — for the deleted user. `PasskeyCredentials`/
- * `PasskeyUserHandles` are resolved once at layer-build time so the tap
- * handler itself carries no further service requirement, matching
- * `VetoTap`'s own fixed-`R` signature. Fires from inside `Users.delete_`,
- * which `@awthaq/server`'s `Account.ts` already calls from within its own
- * `SqlTransaction` — this tap's own write joins that same transaction.
- *
- * **Still a separate export, pending the erasure registry** (CSG-001,
- * wayfinder ticket 30): the original reason it could not join
- * `Passkey.layer` — a module-level tap registry that froze process-wide — is
- * gone (ELC-001: registries are per composition), but the taps are being
- * replaced by a core `ErasureRegistry` entry rather than folded in.
- */
-export const beforeUserDeleteErasure: Layer.Layer<
-  never,
-  never,
-  | PasskeyCredentials.PasskeyCredentials
-  | PasskeyUserHandles.PasskeyUserHandles
-  | Hooks.BeforeUserDelete
-> = Layer.unwrap(
-  Effect.gen(function* () {
-    const credentials = yield* PasskeyCredentials.PasskeyCredentials;
-    const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
-    return Hooks.BeforeUserDelete.tap((input) =>
-      credentials
-        .deleteAllByUser(Users.UserId(input.id))
-        .pipe(Effect.andThen(handles.deleteByUser(Users.UserId(input.id))), Effect.as(input)),
-    );
-  }),
-);

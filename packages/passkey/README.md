@@ -17,7 +17,7 @@ Behavior is specified in [`spec/behaviors/17-passkey.md`](../../spec/behaviors/1
 | `RateLimiter` + `RateLimits.layer`, `ClientAddress`      | as for every plugin (`@awthaq/ports`, `@awthaq/core`)                                                                           |
 | Core `Users`/`Accounts`/`Sessions`/`AuthEvents`/`Crypto` | your `Auth.make` composition                                                                                                    |
 
-Run `Passkey.Passkey.migrations` (tables `passkey_credential`, `passkey_challenge`, `passkey_user_handle`) with your other plugin migrations. Provide `Passkey.beforeUserDeleteErasure` once, application-wide, to erase a deleted user's credentials and handle (it is a separate layer because `Hooks.BeforeUserDelete` freezes after its first run).
+Run `Passkey.Passkey.migrations` (tables `passkey_credential`, `passkey_challenge`, `passkey_user_handle`) with your other plugin migrations. `Passkey.layer` contributes to core's `Erasure.ErasureRegistry`, so account erasure removes the user's credentials and WebAuthn handle in its transaction; there is nothing to provide separately.
 
 ```ts
 const PasskeyLive = Passkey.Passkey.layer.pipe(

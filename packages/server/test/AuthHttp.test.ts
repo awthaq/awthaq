@@ -7,7 +7,16 @@
 // "any host that hands the application a `Request`" path), and `httpApiStatus`
 // annotations landing on the real response status (BEH-EA-088).
 import { Api, AuthCore } from "@awthaq/api";
-import { Accounts, AuditLog, Hooks, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  Erasure,
+  Hooks,
+  AuthEvents,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -90,6 +99,8 @@ const makeAppLayer = (sessionsLayer: typeof Sessions.layerMemory) =>
     Layer.provideMerge(Authentication.AuthenticationLive),
     Layer.provide(Authentication.PrincipalResolverLive),
     Layer.provide(CsrfProtectionLive),
+    // CSG-001: `Account.deleteUser` runs core's `AccountErasure`.
+    Layer.provide(Erasure.layer),
     // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
     // `SqlTransaction` — a no-op wrapper for this in-memory composition.
     Layer.provide(SqlTransaction.layerNoop),
@@ -694,6 +705,18 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
             userId: user.id,
             deletedBy: "self",
           });
+
+          // CSG-001/ESA-005: every other audit row that named the user (the session issued
+          // above) was pseudonymized in the same transaction — only the erasure receipt
+          // above still carries the id.
+          const stillNaming = yield* audit.list({ actorUserId: user.id });
+          assert.deepStrictEqual(
+            stillNaming.map((row) => row.payload._tag),
+            ["auth.user.deleted"],
+          );
+          const issuedRows = yield* audit.list({ eventTag: "auth.session.issued" });
+          assert.strictEqual(issuedRows.length, 1);
+          assert.isFalse(JSON.stringify(issuedRows).includes(user.id));
 
           const stillHasUser = yield* Effect.exit(users.findById(user.id));
           assert.isTrue(stillHasUser._tag === "Failure");

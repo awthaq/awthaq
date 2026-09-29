@@ -36,7 +36,7 @@ const HANDLE_BYTES = 32;
 export interface PasskeyUserHandlesShape {
   /** The user's one stable handle (base64url of its raw bytes) — minted on first use, the same value ever after, even under concurrent first calls. */
   readonly getOrCreate: (userId: UserId) => Effect.Effect<string>;
-  /** GDPR erasure (`Passkey.beforeUserDeleteErasure`): forgets the user's handle. Idempotent. */
+  /** GDPR erasure (`Passkey.passkeyErasure`): forgets the user's handle. Idempotent. */
   readonly deleteByUser: (userId: UserId) => Effect.Effect<void>;
 }
 

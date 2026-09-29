@@ -14,7 +14,7 @@
 // their shape.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, HookPoint, Hooks, Migrations, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, Erasure, HookPoint, Migrations, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -1529,6 +1529,37 @@ const organizationMigrations: Migrations.Migrations = [
   },
 ];
 
+// ---- erasure --------------------------------------------------------------------
+
+/**
+ * CSG-001/DRS-002 (.issues/high), wayfinder ticket 30: this plugin's part of
+ * `AccountErasure.eraseAccount`, part of `Organization.layer` itself (it requires
+ * `Erasure.ErasureRegistry`, so a composition without one does not compile). It
+ * removes every row that names the erased user: their memberships, their team
+ * memberships (`memberCount`s decremented), the invitations they sent or that
+ * were addressed to their email (the row holds it in plaintext), and their
+ * active-context rows (DRS-008). It runs inside `eraseAccount`'s transaction.
+ */
+export const organizationErasure = Erasure.contribute({
+  id: "organization",
+  make: Effect.gen(function* () {
+    const members = yield* MembershipRecords.MembershipRecords;
+    const teams = yield* TeamRecords.TeamRecords;
+    const invitations = yield* InvitationRecords.InvitationRecords;
+    const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
+    return (subject: Erasure.ErasureSubject) =>
+      Effect.all(
+        [
+          teams.removeUserFromAllTeams(subject.userId),
+          members.deleteAllByUser(subject.userId),
+          activeContext.deleteAllByUser(subject.userId),
+          invitations.removeAllForUser(subject.userId, subject.email),
+        ],
+        { discard: true },
+      );
+  }),
+});
+
 // ---- plugin ---------------------------------------------------------------------
 
 export class Organization extends AuthPlugin.Service<Organization, OrganizationShape>()(
@@ -1551,6 +1582,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 ) {
   static readonly layer = AuthPlugin.layer(Organization, {
     handlers: OrganizationHandlers,
+    contributes: organizationErasure,
     make: Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
       const orgs = yield* OrganizationRecords.OrganizationRecords;
@@ -3289,46 +3321,3 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     }),
   });
 }
-
-/**
- * CSG-001/DRS-002 (.issues/high): a real tap on the core
- * `Hooks.BeforeUserDelete` veto point (CSG-002) that sweeps this plugin's
- * own `organization_membership` rows for the deleted user.
- * `MembershipRecords` is resolved once at layer-build time so the tap
- * handler carries no further service requirement, matching `VetoTap`'s
- * own fixed-`R` signature.
- *
- * **Still a separate export, pending the erasure registry** (CSG-001,
- * wayfinder ticket 30): the original reason it could not join
- * `Organization.layer` — a module-level tap registry that froze process-wide
- * — is gone (ELC-001: registries are per composition), but the taps are being
- * replaced by a core `ErasureRegistry` entry rather than folded in.
- *
- * Deliberately scoped to membership (plus, since DRS-008, the user's
- * `organization_active_context` rows) in this pass —
- * `organization_team_membership` and `organization_invitation` (the
- * latter matched by both `inviterId` and the deleted user's own email)
- * are real, still-open gaps this same mechanism can close, tracked as
- * explicit follow-up rather than silently left undone (CSG-001's own
- * resolution comment).
- */
-export const beforeUserDeleteErasure: Layer.Layer<
-  never,
-  never,
-  | MembershipRecords.MembershipRecords
-  | ActiveContextRecords.ActiveContextRecords
-  | Hooks.BeforeUserDelete
-> = Layer.unwrap(
-  Effect.gen(function* () {
-    const membershipRecords = yield* MembershipRecords.MembershipRecords;
-    const activeContextRecords = yield* ActiveContextRecords.ActiveContextRecords;
-    return Hooks.BeforeUserDelete.tap((input) => {
-      const userId = Users.UserId(input.id);
-      // DRS-008: the active-context rows are keyed by session but indexed by
-      // user, so erasure reaches them too.
-      return membershipRecords
-        .deleteAllByUser(userId)
-        .pipe(Effect.andThen(activeContextRecords.deleteAllByUser(userId)), Effect.as(input));
-    });
-  }),
-);

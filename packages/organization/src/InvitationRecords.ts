@@ -80,6 +80,12 @@ export interface InvitationRecordsShape {
   ) => Effect.Effect<InvitationRecord, InvitationRecordNotFound>;
   /** Deletes every invitation row for an organization — used by `Organization.delete`'s cascade. */
   readonly removeAllForOrganization: (organizationId: string) => Effect.Effect<void>;
+  /**
+   * CSG-001: deletes every invitation that names an erased user — one they sent
+   * (`inviterId`) or one addressed to their email (compared case-insensitively;
+   * the row holds the invitee's address in plaintext). Idempotent.
+   */
+  readonly removeAllForUser: (userId: Users.UserId, email: string) => Effect.Effect<void>;
 }
 
 export class InvitationRecords extends Context.Service<InvitationRecords, InvitationRecordsShape>()(
@@ -208,6 +214,17 @@ export const layerMemory = Layer.effect(
         ),
       );
 
+    const removeAllForUser: InvitationRecordsShape["removeAllForUser"] = (userId, email) =>
+      Ref.update(state, (s) =>
+        Array.from(HashMap.entries(s)).reduce(
+          (acc, [key, row]) =>
+            row.inviterId === userId || row.email.toLowerCase() === email.toLowerCase()
+              ? HashMap.remove(acc, key)
+              : acc,
+          s,
+        ),
+      );
+
     return {
       create,
       findById,
@@ -219,6 +236,7 @@ export const layerMemory = Layer.effect(
       countPendingByInviter,
       updateStatus,
       removeAllForOrganization,
+      removeAllForUser,
     };
   }),
 );
@@ -422,6 +440,12 @@ export const layerSql = Layer.effect(
         Effect.asVoid,
       );
 
+    const removeAllForUser: InvitationRecordsShape["removeAllForUser"] = (userId, email) =>
+      sql`DELETE FROM organization_invitation WHERE "inviterId" = ${userId} OR lower("email") = lower(${email})`.pipe(
+        Effect.orDie,
+        Effect.asVoid,
+      );
+
     return {
       create,
       findById,
@@ -433,6 +457,7 @@ export const layerSql = Layer.effect(
       countPendingByInviter,
       updateStatus,
       removeAllForOrganization,
+      removeAllForUser,
     };
   }),
 );

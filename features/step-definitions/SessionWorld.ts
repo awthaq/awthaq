@@ -12,6 +12,7 @@ import {
   AuditLog,
   AuthEvents,
   Accounts,
+  Erasure,
   Hooks,
   RateLimits,
   Sessions,
@@ -40,12 +41,17 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
 
-const CoreLive = Layer.mergeAll(
-  Users.layerMemory,
-  Accounts.layerMemory,
-  Sessions.layerMemory,
-  Verification.layerMemory,
-).pipe(
+const CoreLive = Erasure.layer.pipe(
+  // CSG-001: the account handler runs `AccountErasure` over these same stores (and
+  // over the registry `Hooks.HooksLive` provides).
+  Layer.provideMerge(
+    Layer.mergeAll(
+      Users.layerMemory,
+      Accounts.layerMemory,
+      Sessions.layerMemory,
+      Verification.layerMemory,
+    ),
+  ),
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Hooks.HooksLive),

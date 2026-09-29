@@ -85,6 +85,8 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `025-*.md` | ADR-EA-025 | Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority |
 | `027-*.md` | ADR-EA-027 | Observability Reuses Effect's HTTP Middleware, Adds Business-Logic Spans and a Fixed Field Vocabulary, and Ships Metric Definitions Without a Backend |
 | `028-*.md` | ADR-EA-028 | Hook Registries Belong to the Composition, and a Tap Requires Its Point |
+| `029-*.md` | ADR-EA-029 | Events Carry Identifiers, Not Personal Data, and the Audit Trail Is Pseudonymized on Erasure |
+| `031-*.md` | ADR-EA-031 | Erasure Is a Core Domain Service over an Aggregating Registry, and Retention Is a Separate, Opt-In Sweep |
 
 ### `spec/behaviors/` — twenty-six files, eight behaviors per file
 

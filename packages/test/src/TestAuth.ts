@@ -64,6 +64,7 @@ import {
   AuditLog,
   AuthEvents,
   AuthPlugin,
+  Erasure,
   Hooks,
   Migrations,
   RateLimits,
@@ -120,7 +121,7 @@ const TestHasher = PasswordHasher.layerArgon2id.pipe(
   Layer.orDie,
 );
 
-const MemoryPorts = Layer.mergeAll(
+const MemoryStores = Layer.mergeAll(
   Users.layerMemory,
   Accounts.layerMemory,
   Sessions.layerMemory,
@@ -136,7 +137,16 @@ const MemoryPorts = Layer.mergeAll(
   // by default; `layerTrustedProxy` is an opt-in an application makes for
   // itself when it actually sits behind a gateway/load balancer.
   ClientAddress.layerDirect,
-).pipe(
+);
+
+/**
+ * CSG-001: the `AccountErasure` service the account handler calls, built over these same
+ * stores and over the erasure registry `Hooks.HooksLive` provides (the one every plugin's
+ * erasure contribution registers into), so a plugin installed in a `TestAuth` composition is
+ * erased like any other.
+ */
+const MemoryPorts = Erasure.layer.pipe(
+  Layer.provideMerge(MemoryStores),
   Layer.provideMerge(NodeCrypto.layer),
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
@@ -325,7 +335,11 @@ const applyMigrations = (migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["
     });
     yield* Migrations.run(migrations);
     const reapplied = yield* Migrations.run(migrations);
-    const schema = yield* sql<{ readonly type: string; readonly name: string; readonly sql: string }>`
+    const schema = yield* sql<{
+      readonly type: string;
+      readonly name: string;
+      readonly sql: string;
+    }>`
       SELECT type, name, sql FROM sqlite_master
       WHERE name NOT LIKE 'sqlite_%' AND name NOT IN ('effect_sql_migrations', ${Migrations.pluginMigrationsTable})
       ORDER BY name`;

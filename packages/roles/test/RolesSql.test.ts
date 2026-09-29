@@ -8,7 +8,7 @@
 // `layerMemory`'s own "assigning an already-held role name is a no-op"
 // contract — the one property `Roles.test.ts`'s in-memory suite cannot
 // itself prove.
-import { AuditLog, AuthEvents, Migrations, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Erasure, Migrations, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -36,7 +36,10 @@ const owner = role({
 
 // `Roles` publishes `auth.roles.assigned/revoked` (RRM-005) and validates
 // assignments against the catalog (RRM-003), so it needs `AuthEvents` and a catalog.
-const CoreLive = AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory));
+const CoreLive = AuthEvents.layer.pipe(
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(Erasure.registryLayer),
+);
 
 const TestLayer = Roles.Roles.layerSql.pipe(
   Layer.provide(Roles.config([editor, owner])),
@@ -158,6 +161,29 @@ describe("Roles.Roles.layerSql", () => {
       assert.strictEqual(revoked.length, 1);
       assert.deepStrictEqual(assigned[0]?.actorUserId, Option.some(actor));
       assert.deepStrictEqual(revoked[0]?.actorUserId, Option.some(actor));
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // CSG-001: the plugin's own erasure contribution is registered by its layer.
+  it.effect("registers a `roles` erasure that revokes every role the user holds", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const registry = yield* Erasure.ErasureRegistry;
+      const erased = Users.UserId("dddddddd-dddd-dddd-dddd-dddddddddddd");
+      const kept = Users.UserId("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
+      yield* roles.assign(erased, "owner");
+      yield* roles.assign(erased, "editor");
+      yield* roles.assign(kept, "editor");
+
+      const contributions = yield* registry.contributions;
+      assert.deepStrictEqual(
+        contributions.map((c) => c.id),
+        ["roles"],
+      );
+      for (const c of contributions) yield* c.erase({ userId: erased, email: "erase@example.com" });
+
+      assert.deepStrictEqual(yield* roles.listRoleNames(erased), []);
+      assert.deepStrictEqual(yield* roles.listRoleNames(kept), ["editor"]);
     }).pipe(Effect.provide(TestLayer)),
   );
 });

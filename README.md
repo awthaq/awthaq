@@ -295,6 +295,10 @@ awthaq reuses Effect's HTTP middleware and adds spans, a field vocabulary and me
 - **Logs**: `Logger.layer([Logger.consoleJson])` in production, `Logger.consolePretty()` in development (see `examples/memory-server`). A failing subscriber or hook tap is logged as `auth.event.observer.error` / `auth.hook.observer.error` with a sanitized summary; the raw cause only at debug level.
 - **Testing**: `TestAuth.layer` installs a `RedactionGuard` (in `@awthaq/test`) that records every span, log line and event; `runPluginContractTests`' `redaction` option runs a plugin's flows with canary secrets and fails if one reaches any of them.
 
+### Erasing an account (GDPR Art. 17)
+
+`DELETE /user` calls core's `Erasure.AccountErasure.eraseAccount(userId)`, which an admin console or a job can call directly. It runs the `BeforeUserDelete` veto first (a legal hold), then, in **one transaction**, every plugin's registered erasure (`Organization`, `Passkey`, `Roles` and `UserClaims` ship one), the core rows (accounts, sessions, verification tokens, the user) and the pseudonymization of every audit row that names the user, and only after the commit publishes `auth.user.deleted`. A plugin that stores personal data contributes with `AuthPlugin.layer(Self, { contributes: Erasure.contribute({ id, make }) })`; the layer requires `Erasure.ErasureRegistry` (part of `Hooks.HooksLive`), so leaving it out does not compile. Set `Erasure.config({ auditLog: "retain" })` to keep audit rows verbatim under a legal-obligation basis. The schema has no foreign keys by design, so no database cascade does this for you; the admin impersonation ledger is retained on purpose (`spec/decisions/031-erasure-registry-and-retention.md`).
+
 ## Plugins
 
 | Plugin | Package | What it adds |

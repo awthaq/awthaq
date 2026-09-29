@@ -5,8 +5,7 @@
 // the same way `Session.SessionHandlers` is.
 
 import { AuthCore, Api, AccountContract } from "@awthaq/api";
-import { Accounts, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import { Erasure, Users } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { currentUser } from "./internal/CurrentUser.ts";
@@ -34,11 +33,7 @@ export const AccountHandlers = HttpApiBuilder.group(
   "account",
   Effect.fnUntraced(function* (handlers) {
     const users = yield* Users.Users;
-    const accounts = yield* Accounts.Accounts;
-    const sessions = yield* Sessions.Sessions;
-    const verification = yield* Verification.Verification;
-    const events = yield* AuthEvents.AuthEvents;
-    const sqlTransaction = yield* SqlTransaction.SqlTransaction;
+    const erasure = yield* Erasure.AccountErasure;
 
     return handlers.handleAll({
       updateProfile: Effect.fnUntraced(function* ({
@@ -63,70 +58,28 @@ export const AccountHandlers = HttpApiBuilder.group(
         return toDto(updated);
       }),
 
-      // Deletes the caller's own account: the user row, every linked
-      // credential (bypassing `unlink`'s last-account refusal — the whole
-      // user is going away, so ending up with zero accounts is expected,
-      // not a lockout), and every session including the one making this
-      // very request (`revokeAll`, not `revokeOthers` plus a sentinel
-      // empty `SessionId` standing in for "keep none" — CSG-007/TRBS-008).
-      //
-      // CSG-001/DRS-002: the three-call cascade now runs inside one
-      // `SqlTransaction` — a failure partway through used to strand the
-      // user with, e.g., accounts deleted but the row itself still live,
-      // an unrecoverable partial-erasure state no retry can distinguish
-      // from a fresh delete request. `layerNoop` (an in-memory
-      // composition, where every write already lands atomically in its
-      // own `Ref.modify`) makes this a no-op wrapper there, same as every
-      // other `SqlTransaction` consumer in this codebase.
-      //
-      // BCR-003 (.issues/high): `verification.deleteAllByUser` closes this
-      // cascade's own verification-token gap — see `Verification.ts`'s own
-      // `userId` column comment for why not every row is reachable this
-      // way (a not-yet-authenticated OAuth flow's own state token has no
-      // real user at issue time). CSG-001/DRS-002: the rest of
-      // plugin-owned PII no longer needs `@awthaq/server` to reach into an
-      // optional plugin's own tables directly — `Users.delete` (called
-      // below) itself fires the core `Hooks.BeforeUserDelete` veto point
-      // (CSG-002), which `@awthaq/passkey`'s and `@awthaq/organization`'s
-      // own `.layer` each tap to sweep their own PII (`passkey_credential`,
-      // `organization_membership`) inside this same transaction. Still
-      // open, deliberately scoped out (see CSG-001's own resolution
-      // comment): `organization_team_membership`, `organization_invitation`,
-      // and `admin_impersonation` (the last a genuine audit-retention
-      // tension, not a mechanical gap).
+      // Deletes the caller's own account. The cascade itself — every registered
+      // plugin's erasure, the core rows (accounts, sessions, verification tokens, the
+      // user), the audit pseudonymization, all in one transaction, and the
+      // `BeforeUserDelete` veto before any of it — is core's `AccountErasure`
+      // (CSG-001/DRS-002, wayfinder ticket 30), so an admin console or a CLI runs the
+      // same guaranteed-complete cascade; this handler is only the HTTP edge.
       deleteUser: Effect.fnUntraced(function* () {
         const { userId } = yield* currentUser;
-        yield* sqlTransaction
-          .withTransaction(
-            Effect.gen(function* () {
-              yield* accounts.deleteAllByUser(userId);
-              // CSG-007/TRBS-008 (.issues/low): `revokeAll` directly, not
-              // `revokeOthers` with a sentinel empty `SessionId` standing
-              // in for "no session to keep" — that trick predates
-              // `revokeAll` existing at all; bundled here since this line
-              // was already being rewritten for CSG-001/DRS-002.
-              yield* sessions.revokeAll(userId, "userDeleted");
-              yield* verification.deleteAllByUser(userId);
-              yield* users.delete(userId).pipe(
-                Effect.catchTag("UserNotFound", () =>
-                  Effect.die(
-                    new HandlerInvariantViolation({
-                      invariant: "AuthenticatedUserMissing",
-                      message: `awthaq: authenticated user missing: ${userId}`,
-                    }),
-                  ),
-                ),
-              );
-            }),
-          )
-          // A `SqlError` rolling back the transaction is a defect here,
-          // the same way every other unexpected-persistence-failure
-          // `.pipe(Effect.orDie)` in this codebase already treats one
-          // (see `OAuth.ts`'s identical `SqlTransaction` usage).
-          .pipe(Effect.orDie);
-        // SCP-006: published only once the deletion has committed (a rolled-back
-        // one publishes nothing), and carrying no email — the row is gone.
-        yield* events.publish({ _tag: "auth.user.deleted", userId, deletedBy: "self" });
+        yield* erasure.eraseAccount(userId, { deletedBy: "self" }).pipe(
+          // `@awthaq/api` (the contract stratum) sits below core and cannot name core's
+          // `HookAborted`, so the endpoint declares no error for a `BeforeUserDelete` veto
+          // (a legal hold): as before this refactor, it surfaces as a server defect.
+          Effect.catchTag("HookAborted", Effect.die),
+          Effect.catchTag("UserNotFound", () =>
+            Effect.die(
+              new HandlerInvariantViolation({
+                invariant: "AuthenticatedUserMissing",
+                message: `awthaq: authenticated user missing: ${userId}`,
+              }),
+            ),
+          ),
+        );
         // CSS-002: the account (and this request's own session) is gone, so
         // the browser's now-dead cookie is expired with the response.
         yield* expireSessionCookie;

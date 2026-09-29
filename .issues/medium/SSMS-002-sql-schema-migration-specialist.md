@@ -55,3 +55,7 @@ Require SqlTransaction in AccountHandlers and wrap the three-way cascade, mirror
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `gdpr-erasure-export`. Duplicate of `SEA-001` — closed by that issue's fix. Already fixed by commit e940a12. Evidence at HEAD ec065a7: `packages/server/src/Account.ts:103`. Full dossier: `.plan/slices/06-server-api.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `SEA-001-sqlite-embedded-auth-specialist` — closed by its fix (see that issue's Resolved comment).
+
+**Resolved (2026-09-29):** Duplicate of SEA-001: the transactional erasure and the documented FK-less invariant (BEH-EA-040 note, ADR-EA-031) close it. See CSG-001.

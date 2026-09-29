@@ -3,7 +3,7 @@ ID: "ESA-005"
 Title: "Event payloads embed PII (email, login identifier, free-text reason) with no redaction or retention design for a durable sink"
 Level: medium
 Category: "compliance"
-Status: ready-for-human
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:129"
 Auditor: "event-sourcing-audit-trail-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `compliance` · `core` · reported by **Event Sourcing & Audit Trail Specialist** (`event-sourcing-audit-trail-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Decide the PII posture before the table exists: either store opaque references (
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `auth-event-pii-posture`. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:192`. Fix: Adopt a PII posture for events + audit rows (see decision D1), then implement: identifiers-only payloads, redacted observer-error logs, audit-row pseudonymization on erasure, and documented stream privilege. (effort M). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option D1 per plan; user may revisit - ADR-EA-029. Events carry identifiers only: auth.user.invitationCreated no longer carries the invitee's email (runtime assertion in Organization.test.ts plus the type test), signInFailed carries a keyed identifierDigest + clientIp instead of the identifier, auth.user.deleted carries no email. AuditLog.pseudonymizeActor rewrites every row naming the erased user to one random alias and blanks PII_FIELDS; it runs last inside AccountErasure's transaction (server test: after DELETE /user only the erasure receipt still carries the id; other rows do not contain it). ErasureConfig.auditLog: 'retain' is the opt-out for a legal-obligation basis. The auth.user.deleted row keeps the orphan opaque id as the erasure receipt (subscribers/relay need it). Optional audit retention windows are ALF-010 (P11).

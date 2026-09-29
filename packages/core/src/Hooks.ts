@@ -29,6 +29,7 @@
 
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as ErasureRegistry from "./ErasureRegistry.ts";
 import * as HookPoint from "./HookPoint.ts";
 
 // BEH-EA-090: veto — a plugin may reject a sign-up outright (e.g. an
@@ -148,4 +149,8 @@ export const HooksLive = Layer.mergeAll(
   BeforeSessionIssue.layer,
   BeforeUserDelete.layer,
   AfterUserAttributesChanged.layer,
+  // CSG-001: the erasure registry rides here too — every composition already
+  // provides `HooksLive`, and each plugin holding personal data contributes its
+  // erasure to it (`Erasure.contribute`), so erasure is not something a host opts into.
+  ErasureRegistry.registryLayer,
 );

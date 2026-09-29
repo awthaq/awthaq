@@ -56,6 +56,14 @@ const ALLOWLIST: ReadonlyArray<{ readonly match: RegExp; readonly why: string }>
     why: "erasure sweep (CSG-001/DRS-002): deleting a user removes them everywhere",
   },
   {
+    match: /^DELETE FROM organization_invitation WHERE inviterId = .* OR lower\(email\) = /,
+    why: "erasure sweep (CSG-001): removes every invitation an erased user sent or received, across organizations",
+  },
+  {
+    match: /^SELECT teamId AS teamId FROM organization_team_membership WHERE userId = /,
+    why: "erasure sweep (CSG-001): the teams an erased user belongs to, across organizations",
+  },
+  {
     match: /^DELETE FROM organization_active_context WHERE userId = /,
     why: "erasure sweep (DRS-008): deleting a user removes their session rows everywhere",
   },

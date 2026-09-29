@@ -3,7 +3,7 @@ ID: "SEA-001"
 Title: "Zero referential integrity: no FK constraints, no foreign_keys pragma, untransactional deleteUser cascade"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Account.ts:76"
 Auditor: "sqlite-embedded-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `server` · reported by **SQLite Embedded Auth Specialist** (`sqlite-embedded-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Either declare REFERENCES ... ON DELETE CASCADE in both dialect branches plus PR
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `gdpr-erasure-export`. Already fixed by commit e940a12. Evidence at HEAD ec065a7: `packages/server/src/Account.ts:103`. Fix: The untransactional cascade is fixed (e940a12). What remains is making the FK-less design an explicit, tested invariant, not adding FKs, since spec/behaviors/12-hooks.md:133 deliberately prefers hook-driven erasure to DB-level cascades. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Resolved by CSG-001: the deleteUser cascade is transactional (AccountErasure inside SqlTransaction, rollback proven with a dying contribution and a late veto over SQLite). The schema stays FK-less on purpose - documented as a design invariant in spec/behaviors/05-persistence-stratum.md (BEH-EA-040 note) and ADR-EA-031 (no database cascade exists or is intended; referential cleanup is application-level and atomic; every plugin table keyed by user id must contribute an erasure). Not adopted: enabling PRAGMA foreign_keys, which would have no constraints to enforce.

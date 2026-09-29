@@ -261,18 +261,25 @@ export function layer<
   HR,
   Deps extends ReadonlyArray<Any> = readonly [],
   Taps extends ReadonlyArray<HookPoint.TapDeclaration<unknown>> = readonly [],
+  CE = never,
+  CR = never,
 >(
   plugin: Class<Self, Id, Shape, Groups>,
   options: {
     readonly dependsOn?: Deps;
     readonly taps?: Taps;
+    readonly contributes?: Layer.Layer<never, CE, CR>;
     readonly make: Effect.Effect<Shape, E, R>;
     readonly handlers: Layer.Layer<HttpApiGroup.ToService<"auth", Groups>, HE, HR>;
   },
 ): Layer.Layer<
   Self | HttpApiGroup.ToService<"auth", Groups>,
-  E | HE,
-  Exclude<R, Scope.Scope> | Exclude<HR, Self> | InstanceOf<Deps[number]> | TapPoints<Taps>
+  E | HE | CE,
+  | Exclude<R, Scope.Scope>
+  | Exclude<HR, Self>
+  | InstanceOf<Deps[number]>
+  | TapPoints<Taps>
+  | Exclude<CR, Self | HttpApiGroup.ToService<"auth", Groups>>
 >;
 export function layer<
   Self,
@@ -283,14 +290,21 @@ export function layer<
   R,
   Deps extends ReadonlyArray<Any> = readonly [],
   Taps extends ReadonlyArray<HookPoint.TapDeclaration<unknown>> = readonly [],
+  CE = never,
+  CR = never,
 >(
   plugin: Class<Self, Id, Shape, Groups>,
   options: {
     readonly dependsOn?: Deps;
     readonly taps?: Taps;
+    readonly contributes?: Layer.Layer<never, CE, CR>;
     readonly make: Effect.Effect<Shape, E, R>;
   },
-): Layer.Layer<Self, E, Exclude<R, Scope.Scope> | InstanceOf<Deps[number]> | TapPoints<Taps>>;
+): Layer.Layer<
+  Self,
+  E | CE,
+  Exclude<R, Scope.Scope> | InstanceOf<Deps[number]> | TapPoints<Taps> | Exclude<CR, Self>
+>;
 export function layer<
   Self,
   Id extends string,
@@ -302,11 +316,14 @@ export function layer<
   HR = never,
   Deps extends ReadonlyArray<Any> = readonly [],
   Taps extends ReadonlyArray<HookPoint.TapDeclaration<unknown>> = readonly [],
+  CE = never,
+  CR = never,
 >(
   plugin: Class<Self, Id, Shape, Groups>,
   options: {
     readonly dependsOn?: Deps;
     readonly taps?: Taps;
+    readonly contributes?: Layer.Layer<never, CE, CR>;
     readonly make: Effect.Effect<Shape, E, R>;
     readonly handlers?: Layer.Layer<HttpApiGroup.ToService<"auth", Groups>, HE, HR>;
   },
@@ -319,12 +336,19 @@ export function layer<
   );
   const own = Layer.effect<Self, Shape, E, R>(plugin, options.make);
   const withHandlers = options.handlers ? Layer.provideMerge(options.handlers, own) : own;
-  if (taps.length === 0) return withHandlers;
+  // A plugin's other registry contributions (its erasure/export sections, rate-limit
+  // rules, ...): built over the plugin's own service, and what else they require joins
+  // this layer's `RIn`.
+  const withContributions =
+    options.contributes === undefined
+      ? withHandlers
+      : Layer.provideMerge(options.contributes, withHandlers);
+  if (taps.length === 0) return withContributions;
   // PERS-003: the plugin installs its own taps as its own owner, so the
   // runtime chain orders them by this plugin's place in the composition.
   const installed = taps.reduce<Layer.Layer<never, never, unknown>>(
     (acc, declaration) => Layer.merge(acc, declaration.install(plugin)),
     Layer.empty,
   );
-  return Layer.merge(withHandlers, installed);
+  return Layer.merge(withContributions, installed);
 }

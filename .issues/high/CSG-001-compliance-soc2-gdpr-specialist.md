@@ -3,7 +3,7 @@ ID: "CSG-001"
 Title: "Erasure cascade covers only core tables; plugin-owned PII survives account deletion"
 Level: high
 Category: "compliance"
-Status: ready-for-human
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Account.ts:76"
 Auditor: "compliance-soc2-gdpr-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `compliance` · `server` · reported by **Compliance (SOC2/GDPR) Specialist** (`compliance-soc2-gdpr-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -65,3 +65,5 @@ _Triage notes and discussion append here._
 **Still open, deliberately scoped out of this pass:** `organization_team_membership` and `organization_invitation` (`@awthaq/organization`) — the same mechanism closes these too; invitations need matching by both `inviterId` and the deleted user's own email (`Hooks.BeforeUserDelete`'s input already carries both). `organization_active_context` has no `userId` column at all (keyed by `sessionId` only) — orphaned once sessions are revoked, but reaching it needs either a schema change or capturing the user's live session ids before `sessions.revokeAll` runs; not attempted here. `admin_impersonation` is deliberately left alone: it names an admin's own actions (an audit trail), and SOC2 audit-log retention expectations often *require* keeping exactly this kind of record regardless of subject deletion — bulk-deleting it on erasure is a real compliance-policy call this pass does not make unilaterally, not an oversight. Status unchanged: ready-for-agent (genuinely closer, not fully closed).
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `gdpr-erasure-export`. Evidence at HEAD ec065a7: `packages/server/src/Account.ts:103`. Fix: Finish the erasure cascade per decision 30: move it into a core domain service, populate the remaining plugin taps, make the taps part of every default composition, and settle audit-record retention. (effort L). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Erasure is now a core domain service over an aggregating registry (wayfinder ticket 30; ADR-EA-031). packages/core/src/Erasure.ts: AccountErasure.eraseAccount runs the BeforeUserDelete veto FIRST (nothing touched on a legal hold), then in ONE SqlTransaction every registered contribution (ordered by order then id), accounts, sessions, verification tokens, the user row and, last, AuditLog.pseudonymizeActor; auth.user.deleted is published only after the commit. ErasureRegistry (packages/core/src/ErasureRegistry.ts, carried by Hooks.HooksLive so no composition needs editing) is frozen at first read. Erasure.contribute layers REQUIRE the registry, and AuthPlugin.layer gained a `contributes` option, so a composition that installs a plugin holding personal data without the registry does not compile. Contributions shipped: organization (memberships, NEW team memberships with memberCount decrement, NEW invitations sent by or addressed to the user, active context), passkey (credentials, WebAuthn handle), roles (revokes every role through the plugin's own revoke), claims (deletes the claims document). The opt-in beforeUserDeleteErasure exports are removed. packages/server/src/Account.ts deleteUser is now only the HTTP edge (HookAborted -> defect, as before; UserNotFound -> HandlerInvariantViolation). Tests: core AccountErasure.test.ts (11 cases over memory and SQLite incl. rollback when a contribution dies and when a late veto fires inside Users.delete, veto-first, registry freeze, ErasureConfig retain), OrganizationErasure/PasskeyErasure/Roles/RolesSql/UserClaims contribution tests, server AuthHttp DELETE /user asserts the audit rows are pseudonymized, TenantScoping allowlist for the two new sweep statements. Spec: BEH-EA-095 As-shipped, BEH-EA-040 persistence note (FK-less), ADR-EA-029/031, README 'Erasing an account'. Decision (2026-09-29): adopted recommended option D per plan (pseudonymize AuditLog rows; keep the impersonation ledger); user may revisit. admin_impersonation and its hash chain are RETAINED under a legal-obligation basis (DB triggers + ledger payloads embed the ids); a ledger designed to survive erasure (per-user keyed digests) is the documented follow-up. Not covered, documented in ADR-EA-031: passkey challenge rows (minutes TTL), JWT revocation ids, and any plugin store outside the SQL transaction (must be idempotent). Any plugin added later (api-key, two-factor) MUST contribute an erasure.

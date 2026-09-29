@@ -3,7 +3,16 @@
 // `CsrfConfig.allowedOrigins`, the same value the CSRF origin check reads, so the edge
 // policy and the CSRF policy cannot drift; opening CORS never relaxes `CsrfProtection`.
 import { Api, AuthCore } from "@awthaq/api";
-import { Accounts, AuditLog, AuthEvents, Hooks, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  Erasure,
+  AuthEvents,
+  Hooks,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -46,6 +55,8 @@ const appLayer = (allowedOrigins: ReadonlyArray<string>) =>
     Layer.provideMerge(Authentication.AuthenticationLive),
     Layer.provide(Authentication.PrincipalResolverLive),
     Layer.provide(Csrf.CsrfProtectionLive),
+    // CSG-001: `Account.deleteUser` runs core's `AccountErasure`.
+    Layer.provide(Erasure.layer),
     Layer.provide(SqlTransaction.layerNoop),
     Layer.provideMerge(Sessions.layerMemory),
     Layer.provideMerge(Users.layerMemory),
@@ -78,17 +89,19 @@ const preflight = (origin: string) =>
   });
 
 describe("AuthHttp.cors (AGA-002)", () => {
-  it.effect("a preflight from an allowed origin is echoed with credentials and the CSRF header", () =>
-    Effect.gen(function* () {
-      const response = yield* send([APP_ORIGIN], preflight(APP_ORIGIN));
-      assert.strictEqual(response.status, 204);
-      assert.strictEqual(response.headers.get("access-control-allow-origin"), APP_ORIGIN);
-      assert.strictEqual(response.headers.get("access-control-allow-credentials"), "true");
-      const allowedHeaders = response.headers.get("access-control-allow-headers") ?? "";
-      assert.include(allowedHeaders, Api.CSRF_HEADER_NAME);
-      assert.include(allowedHeaders, "authorization");
-      assert.include(response.headers.get("access-control-allow-methods") ?? "", "PATCH");
-    }),
+  it.effect(
+    "a preflight from an allowed origin is echoed with credentials and the CSRF header",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* send([APP_ORIGIN], preflight(APP_ORIGIN));
+        assert.strictEqual(response.status, 204);
+        assert.strictEqual(response.headers.get("access-control-allow-origin"), APP_ORIGIN);
+        assert.strictEqual(response.headers.get("access-control-allow-credentials"), "true");
+        const allowedHeaders = response.headers.get("access-control-allow-headers") ?? "";
+        assert.include(allowedHeaders, Api.CSRF_HEADER_NAME);
+        assert.include(allowedHeaders, "authorization");
+        assert.include(response.headers.get("access-control-allow-methods") ?? "", "PATCH");
+      }),
   );
 
   it.effect("a preflight from a disallowed origin gets no Access-Control-Allow-Origin", () =>
@@ -117,17 +130,19 @@ describe("AuthHttp.cors (AGA-002)", () => {
     }),
   );
 
-  it.effect("installing CORS never relaxes CSRF: a cross-site POST without the pair is still 403", () =>
-    Effect.gen(function* () {
-      const response = yield* send(
-        [APP_ORIGIN],
-        new Request("http://localhost/session/sign-out", {
-          method: "POST",
-          headers: { origin: OTHER_ORIGIN, "sec-fetch-site": "cross-site" },
-        }),
-      );
-      assert.strictEqual(response.status, 403);
-      assert.isNull(response.headers.get("access-control-allow-origin"));
-    }),
+  it.effect(
+    "installing CORS never relaxes CSRF: a cross-site POST without the pair is still 403",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* send(
+          [APP_ORIGIN],
+          new Request("http://localhost/session/sign-out", {
+            method: "POST",
+            headers: { origin: OTHER_ORIGIN, "sec-fetch-site": "cross-site" },
+          }),
+        );
+        assert.strictEqual(response.status, 403);
+        assert.isNull(response.headers.get("access-control-allow-origin"));
+      }),
   );
 });
