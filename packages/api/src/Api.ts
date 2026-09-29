@@ -138,6 +138,27 @@ export const SESSION_COOKIE_NAME = "__Host-session";
  */
 export const ROTATED_TOKEN_HEADER = "set-auth-token";
 
+/**
+ * MNA-001 (decision ticket 17): the request header a native/bearer client sends
+ * to opt in to bearer delivery on every session-minting response — the raw
+ * token in the body's `token` field and no `Set-Cookie`. Absent (the browser
+ * default) keeps cookie-only delivery, byte-for-byte unchanged; `bearer` is the
+ * one recognised value.
+ */
+export const TOKEN_DELIVERY_HEADER = "x-awthaq-token-delivery";
+
+/**
+ * MNA-001: `TOKEN_DELIVERY_HEADER` carried a value other than `bearer`. Explicit
+ * rather than a silent cookie fallback: a native client that typo'd the header
+ * would otherwise be handed a `Set-Cookie` it can never read and a session it
+ * cannot use. Raised before any session is minted.
+ */
+export class InvalidTokenDelivery extends Schema.TaggedError<InvalidTokenDelivery>()(
+  "InvalidTokenDelivery",
+  {},
+  { httpApiStatus: 400 },
+) {}
+
 /** BEH-EA-065: cookie scheme keyed on `SESSION_COOKIE_NAME`. */
 export const SessionCookie = HttpApiSecurity.apiKey({ key: SESSION_COOKIE_NAME, in: "cookie" });
 /**

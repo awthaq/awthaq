@@ -16,7 +16,6 @@ import {
   HookPoint,
   MailDispatch,
   RateLimits,
-  SessionCookie,
   Sessions,
   Users,
   Verification,
@@ -30,7 +29,7 @@ import {
   RateLimiter,
   SqlTransaction,
 } from "@awthaq/ports";
-import { Session } from "@awthaq/server";
+import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -388,12 +387,6 @@ const requestUserAgent = (request: HttpServerRequest.HttpServerRequest) =>
     onSome: (userAgent) => ({ userAgent }),
   });
 
-// RSC-005: the mapping is `@awthaq/server`'s `Session.toSessionDto`; the typed
-// wrapper also keeps `SessionContract` in scope so declaration emit can name
-// `SessionDto` in the handler group's inferred type (TS2883 otherwise).
-const sessionResponse = (view: Sessions.SessionView): SessionContract.SessionDto =>
-  Session.toSessionDto(view);
-
 /**
  * Resolves `Password` once here, in the group-builder generator itself —
  * not inside each handler body — the same `HttpApiBuilder.group` pattern
@@ -422,6 +415,8 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.SignUpPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
+        // MNA-001: validated before anything is minted.
+        const delivery = yield* SessionDelivery.mode(request);
         const resolvedAddress = yield* clientAddress.resolve(request);
         const signUpInput = {
           ...payload,
@@ -434,8 +429,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
           return yield* password.signUpConcealed(signUpInput);
         }
         const issued = yield* password.signUp(signUpInput);
-        yield* SessionCookie.set(issued.session, issued.token);
-        return sessionResponse(issued.session);
+        // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        return response;
       }),
 
       signIn: Effect.fnUntraced(function* ({
@@ -445,6 +441,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.SignInPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
+        const delivery = yield* SessionDelivery.mode(request);
         // AGA-001/NHS-003: resolved through the application-provided
         // `ClientAddress` port rather than `request.remoteAddress`
         // directly, so a trusted-proxy-aware composition gets a real
@@ -455,8 +452,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
           ...requestUserAgent(request),
         });
-        yield* SessionCookie.set(issued.session, issued.token);
-        return sessionResponse(issued.session);
+        // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        return response;
       }),
 
       requestReset: Effect.fnUntraced(function* ({
@@ -544,6 +542,7 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
             ),
           );
         }
+        const delivery = yield* SessionDelivery.mode(request);
         const resolvedAddress = yield* clientAddress.resolve(request);
         const issued = yield* password.changePassword({
           userId: Users.UserId(principal.ref.id),
@@ -553,8 +552,9 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
           ...requestUserAgent(request),
         });
-        yield* SessionCookie.set(issued.session, issued.token);
-        return sessionResponse(issued.session);
+        // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
+        const response: SessionContract.SessionDto = yield* SessionDelivery.deliver(delivery, issued);
+        return response;
       }),
 
       reauthenticate: Effect.fnUntraced(function* ({

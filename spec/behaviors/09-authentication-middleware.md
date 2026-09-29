@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-09 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): BEH-EA-066's native-client paragraph restated as shipped behaviour — opt-in bearer delivery (MNA-001), `set-auth-token` rotation, CSRF bootstrap (MNA-009) |
 
 ---
 
@@ -58,7 +58,7 @@ REQUIREMENT: The bearer handler MUST resolve an `Authorization: Bearer
              recognized identically to a browser presenting the cookie.
 ```
 
-`archive/design/usage-examples-v4.md` §11.3 documents the native-client path this handler serves: a mobile or CLI client with no cookie jar reaches the same contract via `Auth.api(..., { csrf: false })` and a bearer token pulled from a keychain, and is expected to be resolved to the same `Principal` shape a browser session would be.
+**Native clients (MNA-001/MNA-009, wayfinder ticket 17).** A mobile or CLI client with no cookie jar reaches the same contract with a bearer token, and the whole path now exists. *Acquisition:* every session-minting response (password sign-up/sign-in/change-password, passkey authenticate, the OAuth native exchange — BEH-EA-128) honours the request header `X-Awthaq-Token-Delivery: bearer`; the session token is then the response DTO's optional `token` field, no `Set-Cookie` is written, and the response is `Cache-Control: no-store`. The header is opt-in per request — absent, the cookie-only behaviour is byte-for-byte unchanged, and a live token never appears in a body a browser's JS can read — and any other value is a `400 InvalidTokenDelivery` raised before a session is minted. `@awthaq/server`'s `SessionDelivery` (`mode` + `deliver`) is the one implementation every issuing handler routes through, so cookie and body token are mutually exclusive per request and a plugin never sets the session cookie itself. *Presentation:* `Authorization: Bearer <token>` resolves as above. *Rotation:* when `Sessions.verify` rotates a bearer-presented session's secret the new token is returned in the `set-auth-token` response header (`Api.ROTATED_TOKEN_HEADER`). Storing the token (Keychain/Keystore) is the application's responsibility. The `{ csrf: false }` contract variant (BEH-EA-171) is not built yet: a native client's *first* mutating request (sign-in has no `Authorization` header yet) still passes CSRF by obtaining the `__Host-csrf` cookie and echoing it in `x-csrf-token`; every later request carries `Authorization` and is exempt (MNA-008). Magic-link sign-in is unimplemented.
 
 ## BEH-EA-067: When no scheme succeeds under required authentication, the request fails `Unauthenticated`
 

@@ -174,7 +174,15 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // Wayfinder ticket 03 (AOMS-006/BCR-004): `HookPoint.HookAborted`
       // from a `Hooks.BeforeSignUp` veto tap (e.g. an email-domain
       // allow-list).
-      error: [WeakPassword, EmailAlreadyExists, Api.RateLimited, HookPoint.HookAborted],
+      // MNA-001: `Api.InvalidTokenDelivery` (400) for an unrecognised
+      // `X-Awthaq-Token-Delivery` value.
+      error: [
+        WeakPassword,
+        EmailAlreadyExists,
+        Api.RateLimited,
+        HookPoint.HookAborted,
+        Api.InvalidTokenDelivery,
+      ],
     }),
   )
   .add(
@@ -185,7 +193,13 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // an unverified account. Wayfinder ticket 03 (BCR-004/THS-002):
       // `Hooks.TwoFactorRequired` when a `Hooks.BeforeSessionIssue` tap
       // (a future `TwoFactor` plugin) diverts.
-      error: [Api.InvalidCredentials, EmailNotVerified, Api.RateLimited, Hooks.TwoFactorRequired],
+      error: [
+        Api.InvalidCredentials,
+        EmailNotVerified,
+        Api.RateLimited,
+        Hooks.TwoFactorRequired,
+        Api.InvalidTokenDelivery,
+      ],
     }),
   )
   .add(
@@ -260,7 +274,7 @@ export const PasswordAccountGroup = HttpApiGroup.make("password.account")
       // response carries the new session the same way signUp/signIn's do.
       success: SessionContract.SessionDto,
       // Ticket 14: rate-limited.
-      error: [WrongPassword, WeakPassword, Api.RateLimited],
+      error: [WrongPassword, WeakPassword, Api.RateLimited, Api.InvalidTokenDelivery],
     }),
   )
   .add(

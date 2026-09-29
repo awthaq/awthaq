@@ -77,8 +77,10 @@ const view = yield* client.passkey.authenticateVerify({ payload: { assertion } }
 ```text
 REQUIREMENT: A verified authentication assertion MUST create a session
              through the same core `Sessions` capability every other sign-in
-             method uses; the passkey plugin MUST NOT set a session cookie
-             itself.
+             method uses, and MUST deliver that session only through the
+             shared `SessionDelivery` helper (cookie by default, or the body
+             `token` under `X-Awthaq-Token-Delivery: bearer`, BEH-EA-066);
+             the passkey plugin MUST NOT write the session cookie itself.
 ```
 
 Routing every credential-issuing path through one `Sessions` service is what keeps session behavior (idle/absolute expiry, sliding refresh, new-session-on-sign-in) uniform across password, OAuth and passkey sign-in without three separate implementations to keep in sync — a plugin contributes the *authentication*, core owns the *session*.

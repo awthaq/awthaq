@@ -26,6 +26,8 @@ REQUIREMENT: `password.signUp` MUST create the user and session in one
              blocking the response on delivery.
 ```
 
+MNA-001/WPS-004: `signUp`, `signIn` and `changePassword` deliver the session through `@awthaq/server`'s shared `SessionDelivery` — the session cookie by default, or, when the request carries `X-Awthaq-Token-Delivery: bearer`, the raw token in the response's optional `token` field with no cookie (an unrecognised value answers `400 InvalidTokenDelivery` before anything is minted; BEH-EA-066).
+
 CSD-003: every session the password plugin mints (`signUp`, `signIn`, and the rotated one `changePassword` returns) records the request's resolved client address (through the `ClientAddress` port) and its `User-Agent`, bounded to 512 characters, so the session device list (BEH-EA-054) has data; `@awthaq/oauth`'s callback and `@awthaq/passkey`'s `authenticateVerify` do the same.
 
 ERS-002/EEM-002: the dispatch is owned, not fire-and-forget: `@awthaq/core`'s `MailDispatch` runs each mail in a `FiberSet` in the plugin's scope, retries a `retryable` `MailDeliveryFailed` (`Mailer.send`'s typed failure) with jittered exponential backoff, bounds concurrent sends, publishes `auth.mail.failed` (template and user id, never the recipient or token) when a mail is lost, and on shutdown waits up to `drainTimeout` for in-flight mail before interrupting the rest. The three background mails (sign-up verification, reset, resend) share it; an authenticated flow such as an organization invitation surfaces `MailDeliveryFailed` to its caller instead.
