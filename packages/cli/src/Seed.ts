@@ -90,12 +90,18 @@ export const seedAdmin = (config: CliConfig, input: SeedInput) =>
       const user = Option.isSome(existing)
         ? existing.value
         : yield* users
-            .create({ email: input.email, name: input.name })
+            .create({ identity: { _tag: "Email", email: input.email }, name: input.name })
             .pipe(
-              Effect.catchTag("EmailAlreadyExists", () =>
-                Effect.fail(new UsageError({ message: "an account with that email appeared while seeding; re-run" })),
-              ),
-              Effect.catchTag("PlatformError", Effect.die),
+              // An email create can only lose to a concurrent creation of the same address (the phone
+              // arm is the union's other case and cannot fire for an Email identity).
+              Effect.catchTags({
+                EmailAlreadyExists: () =>
+                  Effect.fail(
+                    new UsageError({ message: "an account with that email appeared while seeding; re-run" }),
+                  ),
+                PhoneAlreadyExists: Effect.die,
+                PlatformError: Effect.die,
+              }),
             );
       yield* users.verifyEmail(user.id).pipe(Effect.orDie);
 

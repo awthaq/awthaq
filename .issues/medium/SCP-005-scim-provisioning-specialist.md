@@ -3,7 +3,7 @@ ID: "SCP-005"
 Title: "External-id mapping substrate exists in Accounts but the SCIM id/externalId mapping decision is undocumented"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Accounts.ts:33"
 Auditor: "scim-provisioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `core` · reported by **SCIM Provisioning Specialist** (`scim-provisioning-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Record the mapping decision in spec/models/12-scim.md: SCIM resource id = intern
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `users-identity-model`. Evidence at HEAD ec065a7: `packages/core/src/Accounts.ts:33`. Fix: Record ticket 08/09's SCIM identity decisions in spec/models/12-scim.md (docs only). (effort S). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Closed by commit 4b63d9e (docs only): spec/models/12-scim.md rev 1.1 records the ticket 08/09 decisions — resource id = UserId; externalId in a scim-owned scim_external_id table (not an Accounts link); active:false -> Users.setStatus('suspended') + Sessions.revokeAll; DELETE -> unlink + configurable erase vs suspend with observably different postconditions; email-less directory users -> Anonymous/Phone identity, POST idempotent via createOrGet. spec:verify:strict PASS.

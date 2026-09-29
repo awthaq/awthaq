@@ -40,7 +40,12 @@ export type CallbackFailureReason =
   | "userinfo-sub-mismatch"
   | "no-subject"
   | "account-already-linked"
-  | "provider-unavailable";
+  | "provider-unavailable"
+  // MNA-003: the native exchange-code redemption.
+  | "exchange-malformed"
+  | "exchange-consumed"
+  | "exchange-invalid"
+  | "exchange-verifier";
 
 /**
  * Logs why a callback failed (level warn, `reason` annotated, plus an optional

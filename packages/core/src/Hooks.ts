@@ -76,7 +76,8 @@ export class BeforeSessionIssue extends HookPoint.divert<BeforeSessionIssue>()(
 // not observe: a plugin must be able to block a delete outright (a GDPR
 // legal hold, an org-ownership-transfer requirement), not just react
 // after the fact.
-const UserDeleteInput = Schema.Struct({ id: Schema.String, email: Schema.String });
+// FAMS-002: `email` is absent for a Phone/Anonymous user (`Users.emailOf` is `None`).
+const UserDeleteInput = Schema.Struct({ id: Schema.String, email: Schema.optional(Schema.String) });
 export class BeforeUserDelete extends HookPoint.veto<BeforeUserDelete>()(
   "auth.user.beforeDelete",
   UserDeleteInput,

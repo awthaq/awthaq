@@ -3,7 +3,7 @@ ID: "NAM-009"
 Title: "User.image / OAuth picture dropped: avatar data has no destination"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuthProvider.ts:33"
 Auditor: "nextauth-authjs-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `oauth` · reported by **NextAuth.js/Auth.js Migration Specialist** (`nextauth-authjs-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Either add an optional image column to User and picture to OAuthProfile, or docu
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `user-profile-image`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuthProvider.ts:33`. Fix: Add an optional `image` to OAuthProfile and the User model so mapProfile can carry avatars (Auth.js/better-auth parity). (effort M). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Closed by commit 4b63d9e. OAuthProfile.image (optional) + profileOf(image) + google (picture), github (avatar_url), gitlab (picture) presets; OAuth JIT sign-up stores it as User.image only when it passes AccountContract.ImageUrl (http(s), <= 2048 chars — an untrusted claim ending up in a client-visible field); User.image column (migration 22); Users.updateProfile image?: string|null (omitted keeps, null clears). Tests: oauth 'an http(s) avatar from the profile lands on the created user', 'a non-http(s) avatar claim (javascript:, data:) is never stored', OAuthPresets image mapping.

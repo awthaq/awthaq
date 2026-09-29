@@ -3,7 +3,7 @@ ID: "PV-009"
 Title: "removeMember/leave leave team memberships behind (qadi still answers team-member) and leave() runs no remove-member hooks"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `MEDIUM` · `correctness` · `organization` · found during the 2026-09-29 plan validation (not in the original audit)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -31,3 +31,5 @@ Planned under: CWM-003 / PCS-002 → org-active-context-lifecycle (P04).
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29):** fixed under CWM-003 / PCS-002 (P04: leave() runs remove hooks; team memberships cleaned); see that issue's Resolved comment for files, tests and gates.

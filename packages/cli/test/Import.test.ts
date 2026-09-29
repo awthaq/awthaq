@@ -69,7 +69,6 @@ describe("import: plan mode (the default)", () => {
         assert.include(text, "table session: 2 row(s) — not imported: live sessions are bridged");
         assert.include(text, "users: 3 read, 3 to import, 0 already imported, 0 email conflict(s), 0 unmappable, 0 failed");
         assert.include(text, "user.plan (1 row(s))");
-        assert.include(text, "user.image (1 row(s))");
         assert.strictEqual(yield* count(sql, "users"), 0);
         assert.strictEqual(yield* count(sql, "accounts"), 0);
         assert.isFalse(yield* hasLedger(sql));
@@ -127,6 +126,9 @@ describe("import --yes", () => {
         const github = accounts[0];
         assert.strictEqual(github?.subject, "1815");
         assert.strictEqual(github?.issuer, "https://github.com");
+        // The avatar has a destination (`users.image`), so it is carried, not reported.
+        const grace = yield* sql<{ readonly image: string | null }>`SELECT image FROM users WHERE email = 'grace@example.com'`;
+        assert.strictEqual(grace[0]?.image, "https://avatars.example.com/grace.png");
         // A password account is keyed by the new user id (`Password.signUp`'s convention).
         const ada = yield* sql<{ readonly id: string }>`SELECT id FROM users WHERE email = 'ada@example.com'`;
         assert.isTrue(accounts.some((a) => a.providerId === "password" && a.subject === ada[0]?.id));

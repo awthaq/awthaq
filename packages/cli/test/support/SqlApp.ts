@@ -4,7 +4,7 @@
 // Layer over a `SqlClient` the *test* owns, so state survives across the separate builds each CLI
 // invocation performs (a fresh runtime per command), the way a database does.
 import { Accounts, AuditLog, AuthEvents, Hooks, Migrations, Users } from "@awthaq/core";
-import { Encryption, KeyProvider, PasswordHasher } from "@awthaq/ports";
+import { Encryption, KeyProvider, PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { Roles } from "@awthaq/roles";
 import { BetterAuthScryptVerifier } from "@awthaq/migrate-better-auth";
 import { FirebaseScryptVerifier } from "@awthaq/migrate-firebase";
@@ -46,6 +46,8 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerSql.pipe(
     Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
   ),
+  // `UserImport.importUser` runs each user in a `SqlTransaction` (nested inside the CLI's batch one).
+  SqlTransaction.layerSql,
   // The imported better-auth / Firebase hashes verify through their legacy verifiers.
   PasswordHasher.layerArgon2id.pipe(
     Layer.provide(NodeCrypto.layer),

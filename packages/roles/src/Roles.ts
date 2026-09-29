@@ -8,9 +8,9 @@
 // — `Anonymous`, `ApiKey`, `Service`, and a `UserPrincipal`'s own
 // `actingAs` — is delegated to `@awthaq/qadi`'s own
 // `resolveIdentityOnly`, so installing this plugin never changes how those
-// kinds resolve (BEH-EA-140's/141's real gap — no `scopes` field exists yet
-// on `ApiKeyPrincipal`/`ServicePrincipal` — is documented once, in
-// `@awthaq/qadi`'s `SubjectResolver.ts`, not repeated here).
+// kinds resolve (BEH-EA-140/141's scope-to-permission mapping for `ApiKey`/
+// `Service` principals lives once, in `@awthaq/qadi`'s `SubjectResolver.ts`,
+// which this delegation reaches — not repeated here).
 //
 // **Global, not tenant-scoped (ADR-EA-025, MTI-007).** `Roles` answers "is
 // this user a *platform* admin/support/operator" — `AuthSubject.roles`/

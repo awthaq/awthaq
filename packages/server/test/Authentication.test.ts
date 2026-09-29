@@ -341,7 +341,7 @@ describe("Authentication", () => {
       decorate: (
         _principal: Api.Principal,
         response: HttpServerResponse.HttpServerResponse,
-        context: { readonly scheme: "cookie" | "bearer" | "impersonation" },
+        context: { readonly scheme: "cookie" | "bearer" | "impersonation" | "apiKey" },
       ) => Ref.update(schemes, (seen) => [...seen, context.scheme]).pipe(Effect.as(response)),
     });
     return Effect.gen(function* () {
@@ -742,11 +742,18 @@ describe("Authentication per-request cache (TS-003/NHS-006)", () => {
 
 // EHA-006/NHS-010: the contract and the wire.
 describe("Authentication contract (EHA-006, NHS-010)", () => {
-  it("NHS-010: the security middlewares declare their keys in order impersonation, cookie, bearer (APS-006)", () => {
+  it("NHS-010: the security middlewares declare their keys in order impersonation, cookie, [apiKey,] bearer (APS-006, OCM-002)", () => {
     const order = ["impersonation", "cookie", "bearer"];
     assert.deepStrictEqual(Object.keys(Api.Authentication.security), order);
     assert.deepStrictEqual(Object.keys(Api.AdminAuthentication.security), order);
     assert.deepStrictEqual(Object.keys(Api.OptionalAuthentication.security), order);
+    // OCM-002: the machine tier alone adds `x-api-key`, ahead of `bearer`.
+    assert.deepStrictEqual(Object.keys(Api.MachineAuthentication.security), [
+      "impersonation",
+      "cookie",
+      "apiKey",
+      "bearer",
+    ]);
   });
 
   it("EHA-006: the OpenAPI document lists a 401 for Authentication endpoints but none for OptionalAuthentication", () => {
@@ -868,7 +875,10 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
       const resolver = yield* Authentication.PrincipalResolver;
-      const user = yield* users.create({ email: "facts@example.com", name: "Facts" });
+      const user = yield* users.create({
+        identity: { _tag: "Email", email: "facts@example.com" },
+        name: "Facts",
+      });
       const { session } = yield* sessions.issue({ userId: user.id, amr: ["pwd"] });
       const principal = yield* resolver.resolve(session);
       assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);

@@ -2,14 +2,14 @@
 //
 // FAMS-010 (BEH-EA-207): the Firebase half of `awthaq import --from firebase`, mirroring
 // `@awthaq/migrate-auth0`'s `ImportAuth0User` — but split the way decision 07 §6 asks: this module
-// is the *mapping* (an `auth:export` user record onto `@awthaq/core`'s `UserImport.ImportedUser`, pure,
-// decoded through Schemas, reporting what it could not map), and `UserImport.write` is the one writer
+// is the *mapping* (an `auth:export` user record onto `@awthaq/core`'s `UserImport.ImportUserInput`, pure,
+// decoded through Schemas, reporting what it could not map), and `UserImport.importUser` is the one writer
 // that puts it through `Users`/`Accounts` (the CLI drives that inside its checkpointed batches).
 //
 // What maps, and how:
 //
 //   user            email, displayName (else the address's local part), emailVerified -> Users.create +
-//                   verifyEmail. `photoUrl`, `phoneNumber`, `customAttributes`, `createdAt`,
+//                   verifyEmail; `photoUrl` -> the avatar `image`. `phoneNumber`, `customAttributes`, `createdAt`,
 //                   `lastSignedInAt` and every other field with data have no destination and are reported.
 //   password        `passwordHash` + `salt` + the project's `hash_config` -> a `password` account whose
 //                   credential is `FirebaseScryptVerifier.encodeHash(...)`, verified by
@@ -31,6 +31,7 @@
 import type { UserImport } from "@awthaq/core";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -66,6 +67,7 @@ const ExportUser = Schema.Struct({
   email: Schema.optional(Schema.String),
   emailVerified: Schema.optional(Schema.Boolean),
   displayName: Schema.optional(Schema.String),
+  photoUrl: Schema.optional(Schema.String),
   passwordHash: Schema.optional(Schema.String),
   salt: Schema.optional(Schema.String),
   disabled: Schema.optional(Schema.Boolean),
@@ -81,7 +83,7 @@ const decodeUser = Schema.decodeUnknownEffect(ExportUser);
 export interface MappedUser {
   /** Firebase's `localId`: the key of the import's checkpoint. */
   readonly sourceRowId: string;
-  readonly user: UserImport.ImportedUser;
+  readonly user: UserImport.ImportUserInput;
   /** Source fields that hold data and have no awthaq destination, as `field` or `providerUserInfo.<id>`. */
   readonly unmapped: ReadonlyArray<string>;
 }
@@ -91,6 +93,7 @@ const MAPPED_FIELDS = new Set([
   "email",
   "emailVerified",
   "displayName",
+  "photoUrl",
   "passwordHash",
   "salt",
   "disabled",
@@ -182,7 +185,7 @@ export const mapUser = (
       }
     }
 
-    const accounts: Array<UserImport.ImportedAccount> = [];
+    const credentials: Array<UserImport.ImportCredential> = [];
     if (user.passwordHash !== undefined && user.passwordHash !== "") {
       if (user.salt === undefined || options.config === undefined) {
         return yield* new UnmappableRow({
@@ -191,14 +194,16 @@ export const mapUser = (
             "the user has a password hash but the salt or the project's hash config is missing, so the hash cannot be verified",
         });
       }
-      accounts.push({
+      // `subject` omitted: a password account is keyed by the new user's own id (`Password.signUp`).
+      credentials.push({
         providerId: "password",
-        subject: undefined,
-        credentialHash: FirebaseScryptVerifier.encodeHash({
-          passwordHash: user.passwordHash,
-          salt: user.salt,
-          config: options.config,
-        }),
+        credentialHash: Redacted.make(
+          FirebaseScryptVerifier.encodeHash({
+            passwordHash: user.passwordHash,
+            salt: user.salt,
+            config: options.config,
+          }),
+        ),
       });
     }
 
@@ -212,16 +217,17 @@ export const mapUser = (
         continue;
       }
       const issuer = options.issuers?.[providerId];
-      accounts.push({ providerId, subject, ...(issuer === undefined ? {} : { issuer }) });
+      credentials.push({ providerId, subject, ...(issuer === undefined ? {} : { issuer }) });
     }
 
     const mapped: MappedUser = {
       sourceRowId: user.localId,
       user: {
-        email: user.email,
+        identity: { _tag: "Email", email: user.email },
         name: user.displayName !== undefined && user.displayName !== "" ? user.displayName : (user.email.split("@")[0] ?? user.email),
-        emailVerified: user.emailVerified === true,
-        accounts,
+        verified: user.emailVerified === true,
+        ...(user.photoUrl !== undefined && user.photoUrl !== "" ? { image: user.photoUrl } : {}),
+        credentials,
       },
       unmapped: Array.from(unmapped).sort(),
     };

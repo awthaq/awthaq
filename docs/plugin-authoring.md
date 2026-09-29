@@ -42,6 +42,20 @@ A plugin that needs a mailer, a crypto source, a rate limiter or a transaction b
 - The tap registry is a module-level singleton that **freezes at the first run of a point** (BEH-EA-024). Install every tap once, at composition time, for the whole process. A tap layer built after its point has already run fails with `HookPointFrozen`. In tests, that means one shared layer per test file, as `Template.test.ts` does.
 - Provide each point's own `.layer` once; `NotesHooksLive` merges them.
 
+## Contributing a credential type
+
+A plugin that authenticates callers a session cannot represent (an API key, a service token, a SCIM directory token) does not add a scheme to `Api.Authentication`. It contributes to `@awthaq/server`'s credential-resolver registry, an aggregating registry (ADR-EA-012):
+
+```ts
+Authentication.contribute("apiKey", {                       // or "bearer" for an `Authorization: Bearer` credential
+  id: "my-plugin.token",
+  claims: (raw) => raw.startsWith("mp_"),                   // a cheap shape check, never a verification
+  resolve: (credential) => /* Effect<Api.Principal, Api.Unauthenticated, HttpServerRequest> */,
+});
+```
+
+The first contribution whose `claims` matches resolves the credential (and a claimed credential that fails is `Unauthenticated`; later contributions are not tried), so make `claims` narrow: a key prefix, or a JOSE `typ` read with `JwtCodec.peekTyp`. Build the resolving `Layer` inside the plugin's own layer (it needs the registry, so the composition provides `Authentication.CredentialResolversLive` below it). Resolve to the principal kind that fits (`ApiKeyPrincipal`, `ServicePrincipal`, or a `User` for a stateless session), carrying its own `scopes`; qadi's default subject resolver maps them to permissions. Declare `Api.MachineAuthentication` on groups meant for such callers: `Api.Authentication` is the user tier and only admits a `User`. `@awthaq/api-key` is the worked example.
+
 ## Migrations
 
 - Append only. Never edit a migration that has shipped; add a new entry (BEH-EA-033 to 040). Names are re-keyed per plugin by `Auth.make`.

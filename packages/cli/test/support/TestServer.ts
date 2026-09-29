@@ -66,7 +66,7 @@ export const serveAuth = Effect.gen(function* () {
   /** A fresh user with one live session; the returned token is what `AWTHAQ_TOKEN` / `login --token` carries. */
   const issue = (email: string) =>
     Effect.gen(function* () {
-      const user = yield* users.create({ email, name: "Test" }).pipe(Effect.orDie);
+      const user = yield* users.create({ identity: { _tag: "Email", email }, name: "Test" }).pipe(Effect.orDie);
       const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
       return { userId: user.id, sessionId: issued.session.id, token: Redacted.value(issued.token) };
     });

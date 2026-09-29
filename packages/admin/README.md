@@ -14,6 +14,7 @@ Admin.config({
   canImpersonate: ({ admin, target }) => Effect.succeed(/* your policy */ false),
   canManageEpisode: ({ admin, episode }) => Effect.succeed(false), // optional; defaults to canImpersonate(admin, episode.target)
   canManageUsers: ({ admin, target }) => Effect.succeed(false), // target is None for listUsers
+  canBanUsers: ({ admin, target }) => Effect.succeed(false), // banUser / unbanUser
 });
 ```
 
@@ -37,7 +38,9 @@ Every predicate defaults to "deny", and every one **sees the target** — so a h
 
 `GET /admin/users` (keyset-paginated), `GET`/`PATCH /admin/users/:userId`, `GET /admin/users/:userId/sessions`, `DELETE /admin/users/:userId/sessions/:sessionId`, `DELETE /admin/users/:userId/sessions`. All behind `canManageUsers`; an unknown user is a 404 only after the gate passes. Impersonation sessions are never listed or revoked by these routes (use `force-stop`). Actions publish `auth.admin.*` events, recorded durably by `AuditLog`.
 
-Not shipped yet (tracked under BAM-005): ban/unban and the sign-in gate, user deletion, admin email/password change, and the superadmin tenant-administration surface. **There is deliberately no `setRole` endpoint** — role assignment is a qadi/application concern (ADR-EA-009), not the admin plugin's.
+**Ban and unban** (`POST /admin/users/:userId/ban` `{ reason?, until? }`, `POST /admin/users/:userId/unban`) sit behind their own predicate, `canBanUsers` — being allowed to edit a user does not imply being allowed to lock them out. `banUser` is `Users.setStatus(userId, "suspended", …)` plus `Sessions.revokeAll(userId, "suspended")` (every session, impersonation sessions issued as the user included), publishes `auth.admin.userBanned`, and refuses to ban the calling admin (`AdminSelfBanRefused`). The block is the one shared sign-in gate, `Users.assertCanSignIn`, which password, passkey and OAuth sign-in each consult, so a banned user is refused `UserSuspended` (403) everywhere while `getUser`/`unbanUser` still resolve them; `until` makes a ban lapse by itself and `reason` is an operator note the banned user never sees. `unbanUser` is `setStatus("active")` — nothing was deleted, so the user just signs in again.
+
+Not shipped yet (tracked under BAM-005): user deletion (needs the single shared erasure cascade), admin email/password change (an admin-set address must itself be verified by its owner; `Users.changeEmail` exists as a primitive), and the superadmin tenant-administration surface. **There is deliberately no `setRole` endpoint** — role assignment is a qadi/application concern (ADR-EA-009), not the admin plugin's: who holds which role belongs next to the authorization library, and a second authority here would drift from it.
 
 ## Serving the admin surface separately
 
@@ -51,16 +54,17 @@ The `admin` group is an admin-tier group (any group id with an `admin` segment i
 
 better-auth swaps the session cookie server-side and restores it on stop; awthaq never touches the admin's session, audits every episode, and adds force-stop and history.
 
-| better-auth                                                                      | awthaq                                                                                     |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `impersonateUser`                                                                | `POST /admin/impersonate/:userId` (a `reason` is required)                                 |
-| `stopImpersonating`                                                              | `POST /admin/stop-impersonating`                                                           |
-| `listUsers`                                                                      | `GET /admin/users`                                                                         |
-| `getUser`                                                                        | `GET /admin/users/:userId`                                                                 |
-| `adminUpdateUser`                                                                | `PATCH /admin/users/:userId` (`name`, `metadata`)                                          |
-| `listUserSessions`                                                               | `GET /admin/users/:userId/sessions`                                                        |
-| `revokeUserSession` / `revokeUserSessions`                                       | `DELETE /admin/users/:userId/sessions/:sessionId` / `DELETE /admin/users/:userId/sessions` |
-| `banUser`, `unbanUser`, `removeUser`, `setUserPassword`, `setRole`, `createUser` | not shipped (see above)                                                                    |
+| better-auth                                              | awthaq                                                                                     |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `impersonateUser`                                        | `POST /admin/impersonate/:userId` (a `reason` is required)                                 |
+| `stopImpersonating`                                      | `POST /admin/stop-impersonating`                                                           |
+| `listUsers`                                              | `GET /admin/users`                                                                         |
+| `getUser`                                                | `GET /admin/users/:userId`                                                                 |
+| `adminUpdateUser`                                        | `PATCH /admin/users/:userId` (`name`, `metadata`)                                          |
+| `listUserSessions`                                       | `GET /admin/users/:userId/sessions`                                                        |
+| `revokeUserSession` / `revokeUserSessions`               | `DELETE /admin/users/:userId/sessions/:sessionId` / `DELETE /admin/users/:userId/sessions` |
+| `banUser` / `unbanUser`                                  | `POST /admin/users/:userId/ban` `{ reason?, until? }` / `POST /admin/users/:userId/unban`  |
+| `removeUser`, `setUserPassword`, `setRole`, `createUser` | not shipped (see above)                                                                    |
 
 ## Impersonation authority and the JWT `act` claim
 

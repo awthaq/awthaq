@@ -65,14 +65,18 @@ describe("ImportFirebaseUser.mapUser", () => {
       assert.strictEqual(first?._tag, "Success");
       if (first?._tag !== "Success") return;
       assert.strictEqual(first.success.sourceRowId, "fb-user-1");
-      assert.strictEqual(first.success.user.email, "user1@example.com");
+      assert.deepStrictEqual(first.success.user.identity, { _tag: "Email", email: "user1@example.com" });
       assert.strictEqual(first.success.user.name, "User One");
-      assert.isTrue(first.success.user.emailVerified);
-      assert.strictEqual(first.success.user.accounts.length, 1);
-      const [account] = first.success.user.accounts;
+      assert.isTrue(first.success.user.verified);
+      assert.strictEqual((first.success.user.credentials ?? []).length, 1);
+      const [account] = first.success.user.credentials ?? [];
       assert.strictEqual(account?.providerId, "password");
-      assert.match(account?.credentialHash ?? "", /^\$firebase-scrypt\$/);
-      assert.deepStrictEqual(first.success.unmapped, ["createdAt", "lastSignedInAt", "photoUrl"]);
+      assert.match(
+        account?.credentialHash === undefined ? "" : Redacted.value(account.credentialHash),
+        /^\$firebase-scrypt\$/,
+      );
+      assert.strictEqual(first.success.user.image, "https://example.com/u1.png");
+      assert.deepStrictEqual(first.success.unmapped, ["createdAt", "lastSignedInAt"]);
     }),
   );
 
@@ -80,12 +84,13 @@ describe("ImportFirebaseUser.mapUser", () => {
     Effect.gen(function* () {
       const [first] = yield* mapAll();
       if (first?._tag !== "Success") return assert.fail("user 1 did not map");
-      const hash = first.success.user.accounts[0]?.credentialHash;
+      const hash = first.success.user.credentials?.[0]?.credentialHash;
       if (hash === undefined) return assert.fail("no credential hash");
       const hasher = yield* PasswordHasher.PasswordHasher;
-      assert.isTrue(yield* hasher.verify(Redacted.make("user1password"), hash));
-      assert.isFalse(yield* hasher.verify(Redacted.make("user1passwore"), hash));
-      assert.isTrue(hasher.needsRehash(hash));
+      const phc = Redacted.value(hash);
+      assert.isTrue(yield* hasher.verify(Redacted.make("user1password"), phc));
+      assert.isFalse(yield* hasher.verify(Redacted.make("user1passwore"), phc));
+      assert.isTrue(hasher.needsRehash(phc));
     }).pipe(
       Effect.provide(
         PasswordHasher.layerArgon2id.pipe(
@@ -101,7 +106,7 @@ describe("ImportFirebaseUser.mapUser", () => {
       const results = yield* mapAll({ google: "https://accounts.google.com" });
       const second = results[1];
       if (second?._tag !== "Success") return assert.fail("user 2 did not map");
-      const [account] = second.success.user.accounts;
+      const [account] = second.success.user.credentials ?? [];
       assert.strictEqual(account?.providerId, "google");
       assert.strictEqual(account?.subject, "112233445566778899");
       assert.strictEqual(account?.issuer, "https://accounts.google.com");

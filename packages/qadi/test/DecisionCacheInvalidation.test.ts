@@ -221,7 +221,10 @@ describe("DecisionCacheInvalidationLive (application-scoped DecisionCache)", () 
       () =>
         Effect.gen(function* () {
           const users = yield* Users.Users;
-          const user = yield* users.create({ email: "verify-cache@example.com", name: "Verify" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "verify-cache@example.com" },
+            name: "Verify",
+          });
           const policy = hasAttribute(Resolvers.userAttr("emailVerified"), eq(literal(true)));
           const ask = evaluate(policy).pipe(
             Effect.provide(currentSubjectLayer(makeSubject({ id: `user:${user.id}` }))),

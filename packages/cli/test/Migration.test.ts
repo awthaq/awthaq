@@ -2,6 +2,7 @@
 // in-memory SQLite database and a real `Auth.make` composition — core's ledger
 // (`effect_sql_migrations`) and the plugin ledger (`awthaq_plugin_migrations`) are two id spaces
 // and neither may hide the other.
+import { CoreMigrations } from "@awthaq/sql";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -48,6 +49,10 @@ const ledgerRows = (table: string) =>
 
 const yes = { yes: true, dryRun: false, allowEmpty: false };
 
+/** However many core migrations exist today (other programs add them), and the two the Roles plugin adds. */
+const coreCount = CoreMigrations.coreMigrations.pipe(Effect.map((all) => all.length));
+const PLUGIN_COUNT = 2;
+
 const failureCode = <A, E>(exit: Exit.Exit<A, E>) => {
   if (!Exit.isFailure(exit)) return -1;
   const error = Exit.findErrorOption(exit);
@@ -61,7 +66,11 @@ describe("Migration.status", () => {
       Effect.gen(function* () {
         const { exit, stdout } = yield* run(Migration.status(passwordAndRoles));
         assert.isTrue(Exit.isSuccess(exit));
-        assert.match(stdout[0] ?? "", /^core \(effect_sql_migrations\): 0 applied, 20 pending/);
+        const core = yield* coreCount;
+        assert.strictEqual(
+          stdout[0],
+          `core (effect_sql_migrations): 0 applied, ${core} pending`,
+        );
         assert.isTrue(
           stdout.some((line) =>
             /plugins \(awthaq_plugin_migrations\): 0 applied, 2 pending/.test(line),
@@ -126,7 +135,10 @@ describe("Migration.apply", () => {
         Migration.apply(passwordAndRoles, { yes: false, dryRun: true, allowEmpty: false }),
       );
       assert.isTrue(Exit.isSuccess(exit));
-      assert.strictEqual(stdout.filter((line) => line.includes("pending  ")).length, 22);
+      assert.strictEqual(
+        stdout.filter((line) => line.includes("pending  ")).length,
+        (yield* coreCount) + PLUGIN_COUNT,
+      );
       assert.deepStrictEqual(yield* tableNames, []);
     }).pipe(Effect.provide(Sql)),
   );
@@ -135,11 +147,11 @@ describe("Migration.apply", () => {
     Effect.gen(function* () {
       const { exit } = yield* run(Migration.apply(passwordAndRoles, yes));
       assert.isTrue(Exit.isSuccess(exit));
-      assert.strictEqual((yield* ledgerRows("effect_sql_migrations")).length, 20);
+      assert.strictEqual((yield* ledgerRows("effect_sql_migrations")).length, yield* coreCount);
       assert.deepStrictEqual(yield* ledgerRows("awthaq_plugin_migrations"), [1, 2]);
       const after = yield* run(Migration.status(passwordAndRoles));
       assert.isTrue(Exit.isSuccess(after.exit));
-      assert.isTrue(after.stdout[0]?.includes("20 applied, 0 pending") ?? false);
+      assert.isTrue(after.stdout[0]?.includes(`${yield* coreCount} applied, 0 pending`) ?? false);
     }).pipe(Effect.provide(Sql)),
   );
 

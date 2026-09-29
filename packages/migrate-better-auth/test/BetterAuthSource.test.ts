@@ -30,7 +30,9 @@ const mapAll = (issuers?: Readonly<Record<string, string>>) =>
   });
 
 const byEmail = (mapped: ReadonlyArray<BetterAuthSource.MappedUser>, email: string) => {
-  const found = mapped.find((item) => item.user.email === email);
+  const found = mapped.find(
+    (item) => item.user.identity._tag === "Email" && item.user.identity.email === email,
+  );
   if (found === undefined) throw new TypeError(`the export has no user ${email}`);
   return found;
 };
@@ -73,13 +75,16 @@ describe("BetterAuthSource.mapUser", () => {
     Effect.gen(function* () {
       const ada = byEmail(yield* mapAll(), "ada@example.com");
       assert.strictEqual(ada.user.name, "Ada Lovelace");
-      assert.isTrue(ada.user.emailVerified);
-      assert.strictEqual(ada.user.accounts.length, 1);
-      const [account] = ada.user.accounts;
+      assert.isTrue(ada.user.verified);
+      assert.strictEqual((ada.user.credentials ?? []).length, 1);
+      const [account] = ada.user.credentials ?? [];
       assert.strictEqual(account?.providerId, "password");
       // `undefined` subject = the new user's own id (`Password.signUp`'s convention).
       assert.isUndefined(account?.subject);
-      assert.match(account?.credentialHash ?? "", /^[0-9a-f]{32}:[0-9a-f]{128}$/);
+      assert.match(
+        account?.credentialHash === undefined ? "" : Redacted.value(account.credentialHash),
+        /^[0-9a-f]{32}:[0-9a-f]{128}$/,
+      );
       // A plugin-style column with data, and the bookkeeping columns, have no destination: reported.
       assert.deepStrictEqual(ada.unmapped, [
         "account.createdAt",
@@ -94,7 +99,7 @@ describe("BetterAuthSource.mapUser", () => {
   it.effect("keeps an unverified address unverified and reports no plugin column that is empty", () =>
     Effect.gen(function* () {
       const alan = byEmail(yield* mapAll(), "alan@example.com");
-      assert.isFalse(alan.user.emailVerified);
+      assert.isFalse(alan.user.verified);
       assert.notInclude(alan.unmapped, "user.plan");
     }),
   );
@@ -102,8 +107,8 @@ describe("BetterAuthSource.mapUser", () => {
   it.effect("maps a social user: provider id, subject and tokens carried, image reported", () =>
     Effect.gen(function* () {
       const grace = byEmail(yield* mapAll({ github: "https://github.com" }), "grace@example.com");
-      assert.isTrue(grace.user.emailVerified);
-      const [account] = grace.user.accounts;
+      assert.isTrue(grace.user.verified);
+      const [account] = grace.user.credentials ?? [];
       assert.strictEqual(account?.providerId, "github");
       assert.strictEqual(account?.subject, "1815");
       assert.strictEqual(account?.issuer, "https://github.com");
@@ -117,14 +122,16 @@ describe("BetterAuthSource.mapUser", () => {
         "read:user,user:email",
       );
       assert.isTrue(Option.isSome(account?.tokens?.accessTokenExpiresAt ?? Option.none()));
-      assert.include(grace.unmapped, "user.image");
+      // The avatar has a destination now (BAM-009): carried, not reported.
+      assert.strictEqual(grace.user.image, "https://avatars.example.com/grace.png");
+      assert.notInclude(grace.unmapped, "user.image");
     }),
   );
 
   it.effect("carries no issuer unless the caller names one (a plain OAuth2 provider has none)", () =>
     Effect.gen(function* () {
       const grace = byEmail(yield* mapAll(), "grace@example.com");
-      assert.isUndefined(grace.user.accounts[0]?.issuer);
+      assert.isUndefined(grace.user.credentials?.[0]?.issuer);
     }),
   );
 
@@ -164,16 +171,18 @@ describe("an imported better-auth credential", () => {
     Effect.gen(function* () {
       const ada = byEmail(yield* mapAll(), "ada@example.com");
       const alan = byEmail(yield* mapAll(), "alan@example.com");
-      const adaHash = ada.user.accounts[0]?.credentialHash;
-      const alanHash = alan.user.accounts[0]?.credentialHash;
+      const adaHash = ada.user.credentials?.[0]?.credentialHash;
+      const alanHash = alan.user.credentials?.[0]?.credentialHash;
       assert.isDefined(adaHash);
       assert.isDefined(alanHash);
       if (adaHash === undefined || alanHash === undefined) return;
       const hasher = yield* PasswordHasher.PasswordHasher;
-      assert.isTrue(yield* hasher.verify(Redacted.make("ExistingUser123!"), adaHash));
-      assert.isFalse(yield* hasher.verify(Redacted.make("not-her-password"), adaHash));
-      assert.isTrue(yield* hasher.verify(Redacted.make("Enigma-Breaker-1912"), alanHash));
-      assert.isTrue(hasher.needsRehash(adaHash));
+      const ada_ = Redacted.value(adaHash);
+      const alan_ = Redacted.value(alanHash);
+      assert.isTrue(yield* hasher.verify(Redacted.make("ExistingUser123!"), ada_));
+      assert.isFalse(yield* hasher.verify(Redacted.make("not-her-password"), ada_));
+      assert.isTrue(yield* hasher.verify(Redacted.make("Enigma-Breaker-1912"), alan_));
+      assert.isTrue(hasher.needsRehash(ada_));
     }).pipe(Effect.provide(HasherLive)),
   );
 });

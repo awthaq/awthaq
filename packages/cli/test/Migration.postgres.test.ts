@@ -6,6 +6,7 @@
 //
 // Skips (not fails) without `AWTHAQ_POSTGRES_URL`, like every Postgres suite here; `pnpm run test:pg`
 // runs it. It works in its own schema (`search_path` in the URL) so it never touches another suite's tables.
+import { CoreMigrations } from "@awthaq/sql";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -53,12 +54,13 @@ describe.skipIf(postgresUrl === undefined)("migration status|apply on Postgres",
 
       const first = yield* run(Migration.apply(passwordAndRoles, yes), url);
       assert.strictEqual(code(first.exit), 0);
-      assert.isTrue(first.stdout.some((line) => line.startsWith("applied 22 migration(s)")));
+      const core = (yield* CoreMigrations.coreMigrations).length;
+      assert.isTrue(first.stdout.some((line) => line.startsWith(`applied ${core + 2} migration(s)`)));
 
       // The ledgers now exist. This is the call that used to fail: status reads them...
       const status = yield* run(Migration.status(passwordAndRoles), url);
       assert.strictEqual(code(status.exit), 0);
-      assert.include(status.stdout[0] ?? "", "20 applied, 0 pending");
+      assert.include(status.stdout[0] ?? "", `${core} applied, 0 pending`);
 
       // ... and a later apply runs the migrator again over the *existing* ledgers. Leave one plugin
       // migration pending (as if a newer release added it), so the migrator really does run

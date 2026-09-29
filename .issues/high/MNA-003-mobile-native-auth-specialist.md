@@ -3,7 +3,7 @@ ID: "MNA-003"
 Title: "OAuth callback hands the session to the client only via Set-Cookie on a 302 - unreachable from a native app"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:338"
 Auditor: "mobile-native-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `oauth` · reported by **Mobile/Native Auth Specialist** (`mobile-native-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [Native/mobile app session bootstrap (non-cookie delivery)](../../.scratch/resolve-ready-for-human-findings/issues/17-native-mobile-session-bootstrap.md) — Resolved via a one-time, single-use exchange code (stored in the existing `KeyValueStore` port) embedded in the native-mode OAuth callback's deep-link redirect, redeemed at a new `/oauth/token` endpoint for the real session token — never the live token itself in the URL. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `native-session-bootstrap`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:431`. Fix: Implement decision ticket 17: native-mode authorize, an exchange code minted at callback, and a JSON redemption endpoint returning the session token. (effort L). Full dossier: `.plan/slices/03-oauth-flow.md`.
+
+**Resolved (2026-09-29):** Native return leg (ticket 17). OAuthApi: AuthorizeQuery gains mode=native + optional S256 code_challenge (400 InvalidNativeRequest for a challenge without native mode / not an S256 digest); new group 'oauth.exchange' with POST /oauth/token { code, codeVerifier? } -> SessionDto with token (anonymous, no CSRF since the single-use code is the authorization; Cache-Control no-store; per-IP rate limit rule oauth.exchange/token, config rateLimits.token). OAuth.ts: flow payload gains native/nativeChallenge; the native callback issues the session, seals the token with Encryption under the record identifier and stores a single-use Verification record (identifier prefix oauth.exchange:, TTL nativeExchangeTtl=60s, userId attached so erasure sweeps it) then redirects to the callbackURL with ?code=<identifier.value> — no cookie, no token in the URL; OAuth.exchange checks the identifier prefix BEFORE consume (so a flow's state can neither be redeemed nor burned), then optional verifier check in constant time (a wrong verifier still spends the code). Deviation from the ticket text (already noted in the dossier): Verification, not a KeyValueStore. Addition: optional PKCE-style code binding (RFC 8252 §8.1). Tests (packages/oauth/test/OAuthNative.test.ts 16 + AuthHttp.test.ts 2 wire tests; all written against the absent API): redirect carries code and no session, redeem once, second redemption fails, expired after 61s (TestClock), state not redeemable, verifier binding, browser mode unchanged, sealed-at-rest. BDD scenario REQ-EA-633 (16-oauth.feature + steps). BEH-EA-128 amended (rev 1.2), README 'Native and mobile apps'. Gates: typecheck 0, pnpm run test 1875 passed, test:bdd, spec:verify:strict, oxlint.

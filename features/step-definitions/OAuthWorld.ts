@@ -151,6 +151,8 @@ export interface BuildOptions {
   readonly trustedOrigins?: ReadonlyArray<string>;
   readonly httpRoutes?: FakeRoutes;
   readonly baseUrl?: string;
+  /** MNA-004: private-use-scheme deep links a native-mode flow may return to. */
+  readonly nativeRedirectURLs?: ReadonlyArray<string>;
 }
 
 const buildLayer = (options: BuildOptions) =>
@@ -181,6 +183,9 @@ const buildLayer = (options: BuildOptions) =>
         linking: options.linking ?? "explicit",
         trustedOrigins: options.trustedOrigins ?? [],
         baseUrl: options.baseUrl ?? "https://app.example.com",
+        ...(options.nativeRedirectURLs === undefined
+          ? {}
+          : { nativeRedirectURLs: options.nativeRedirectURLs }),
       }),
     ),
   );

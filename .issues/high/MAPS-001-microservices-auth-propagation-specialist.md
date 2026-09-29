@@ -3,7 +3,7 @@ ID: "MAPS-001"
 Title: "Propagated JWTs cannot re-enter the awthaq boundary - bearer resolves only opaque session tokens"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Authentication.ts:288"
 Auditor: "microservices-auth-propagation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `server` · reported by **Microservices Auth Propagation Specialist** (`microservices-auth-propagation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -60,3 +60,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [Stateless JWT-as-bearer session strategy](../../.scratch/resolve-ready-for-human-findings/issues/33-stateless-jwt-session-strategy.md) — adds an optional `Authentication.BearerCredentialResolver` extension point (same pattern as `PostAuthResponseHook`) that `@awthaq/jwt` wires only when a new `JwtConfig.acceptAsBearer` flag is enabled, routing bearer credentials shaped like a JWT (3 dot-separated segments) to a stateless `jwt.verify` check instead of `Sessions.verify`, with audience scoping (`signJWT({ audience })`) letting downstream-only propagation tokens be minted that are rejected by construction if presented back as bearer. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bearer-credential-extensibility`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:299`. Fix: Implement decision 33 (stateless JWT-as-bearer): an optional `BearerCredentialResolver` seam in Authentication, opted into by @awthaq/jwt via JwtConfig.acceptAsBearer, with audience scoping for downstream-only tokens. (effort L). Full dossier: `.plan/slices/06-server-api.md`.
+
+**Resolved (2026-09-29):** Bearer-credential seam in @awthaq/server/src/Authentication.ts, implemented as the ADR-EA-012 registry (Decision (2026-09-29): adopted recommended option (a) of MAPS-004 per plan; user may revisit): CredentialResolvers service + CredentialResolversLive, Authentication.contribute(carrier, {id, order?, claims, resolve}), resolveClaimed; bearer handler offers the credential to contributions first (first claiming contribution wins; a claimed failure is Unauthenticated, later contributions not tried), unclaimed bearer falls back to Sessions.verify; claimed principals skip rotation but still run PostAuthResponseHook (scheme bearer|apiKey). Registry read per request via Effect.serviceOption so AuthenticationLive R is unchanged. resolvePrincipal (qadi Path B) uses the same path; qadi extractor also reads x-api-key. Tests: packages/server/test/CredentialResolvers.test.ts (13), packages/jwt/test/BearerReentry.test.ts, packages/qadi/test/SubjectExtractor.test.ts. BEH-EA-065/066/072 amended (rev 1.2). Gates green.

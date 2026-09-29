@@ -3,7 +3,7 @@ ID: "OCM-002"
 Title: "The M2M credential package is an empty placeholder — no key format, hash-at-rest, expiry, or revocation"
 Level: high
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "api-key"
 Source: "packages/api-key/src/index.ts:8"
 Auditor: "oauth2-client-credentials-m2m-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `security` · `api-key` · reported by **OAuth2 Client Credentials / M2M Specialist** (`oauth2-client-credentials-m2m-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/api-key/src/index.ts` is still exactly `export {};` behind a comment reading "Empty placeholder — awthaq is pre-implementation. No exported symbols yet." (line 8 verbatim as quoted); no other source file exists under `packages/api-key/src/`, and `lib/index.d.ts` reflects the same empty export. `package.json` is wired to build/typecheck/test normally. `spec/models/07-api-keys.md` confirms the design is still prose-only with explicitly undecided questions (key format, transport, rotation behavior — see its "What is missing" section), so this is a greenfield feature build needing product/design decisions, not a mechanical implementation task. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `apikey-machine-identity`. Evidence at HEAD ec065a7: `packages/api-key/src/index.ts:8`. Fix: Implement the long-lived API-key credential kind of @awthaq/api-key exactly as decision 10 specifies, and make it a third Authentication scheme. (effort L). Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
+
+**Resolved (2026-09-29):** Implemented @awthaq/api-key (ticket 10, API-key half; plugin id 'apikey' so its tables are apikey_key/apikey_client per the plugin table-prefix rule). New: ApiKey.ts (ApiKey AuthPlugin.Service, ApiKeyConfig Reference, create/list/revoke/rotate/resolve, migrations, handlers), ApiKeyApi.ts (groups apikey / apikey.client / apikey.token; typed errors), ApiKeyRecords.ts (layerMemory + layerSql, SQLite+Postgres via Models.dialectFields). Format ak_<uuidv7>.<64hex>; only SHA-256(secret) stored via new core SecretHash (extracted from Sessions.ts, pure refactor; constant-time compare, NEVER_MATCHES for unknown ids); show-once Redacted; expiry (default/max), grantableScopes, revoke immediate, no cross-request cache (TRBS-009), lastUsedAt throttled. Contract: ApiKeyPrincipal/ServicePrincipal gain scopes; Api.ApiKeyHeader/API_KEY_HEADER_NAME. Deviation from the dossier (Decision (2026-09-29): safer variant of recommended option, user may revisit): x-api-key is NOT a third scheme on Api.Authentication — that would make every Authentication group reachable by API keys whose handlers die on non-User principals (500s). Instead a separate Api.MachineAuthentication (same chain + apiKey before bearer) + MachineAuthenticationLive; the user tier admits claimed credentials only as User. Resolution via the credential-resolver registry (MAPS-004). qadi default resolver maps resource:action scopes to AuthSubject.permissions (BEH-EA-140/141; the helper subjectForPrincipal is unnecessary — Roles/Organization already delegate non-User kinds to that resolver, ADR-EA-012); qadi Path B reads x-api-key. Per-IP resolve throttle (all attempts, high default: RateLimiter has no peek — documented). SCIM token = key scoped scim:*. Events auth.apiKey.* (core AuthEvents + AuditLog actor). Tests: packages/api-key/test/ApiKey.test.ts (18x2 stores incl. hash-only-at-rest, revoke/expiry TestClock, ownership, policy, rotation), AuthHttp.test.ts (17x2), Plugin.test.ts; mutation-checked (removing the secret compare turns 4 tests red). Docs: README, spec/models/07 rewritten, BEH-EA-140/141 amended, ADR-EA-022, roadmap M7 scope note, plugin-authoring 'Contributing a credential type'. Gates: typecheck 0, pnpm run test 1976 passed, test:bdd, spec:verify:strict, check:readmes, circular, package:smoke, oxlint clean for api-key. Deferred: BEH-EA-140/141 BDD wiring (whole 18-roles-subject-resolver feature is @skip @unwired, ticket 36), erasure cascade for keys/clients (ticket 30).

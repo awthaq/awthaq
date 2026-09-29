@@ -6,7 +6,7 @@
 //   - `read` streams a better-auth database's `user` rows with their `account` rows (keyset
 //     pagination on the user id, so a large table is never held in memory), and `counts` reports
 //     the four tables' sizes for the plan;
-//   - `mapUser` decodes one such row through Schemas and maps it onto `UserImport.ImportedUser`
+//   - `mapUser` decodes one such row through Schemas and maps it onto `UserImport.ImportUserInput`
 //     (`@awthaq/core`) — the shape `Users.create` + `verifyEmail` + `Accounts.link` takes —
 //     *reporting* every source column that has data and no awthaq destination instead of dropping it.
 //
@@ -17,7 +17,7 @@
 //
 // What maps, and how:
 //
-//   user            email, name, emailVerified -> Users.create + verifyEmail. `image`, `createdAt`,
+//   user            email, name, emailVerified, image -> Users.create + verifyEmail. `createdAt`,
 //                   `updatedAt` and any extra column (a plugin's or `additionalFields`) have no
 //                   destination and are reported (`user.image`, ...) when they hold data.
 //   account         `providerId = "credential"` is better-auth's password: its `password`
@@ -67,7 +67,7 @@ export interface RawUser {
 export interface MappedUser {
   /** The source row id (the better-auth `user.id`): the key of the import's checkpoint. */
   readonly sourceRowId: string;
-  readonly user: UserImport.ImportedUser;
+  readonly user: UserImport.ImportUserInput;
   /** Source columns that hold data and have no awthaq destination, as `table.column`. */
   readonly unmapped: ReadonlyArray<string>;
 }
@@ -79,6 +79,7 @@ const UserRow = Schema.Struct({
   name: Schema.String,
   email: Schema.String,
   emailVerified: BooleanLike,
+  image: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const AccountRow = Schema.Struct({
@@ -95,7 +96,7 @@ const AccountRow = Schema.Struct({
  * Columns `mapUser` carries over; everything else with data is reported — `createdAt`/`updatedAt`
  * included: `Users.create` stamps its own timestamps, so better-auth's are not preserved.
  */
-const MAPPED_USER_COLUMNS = new Set(["id", "name", "email", "emailVerified"]);
+const MAPPED_USER_COLUMNS = new Set(["id", "name", "email", "emailVerified", "image"]);
 const MAPPED_ACCOUNT_COLUMNS = new Set([
   // structural: the account's own id, and the foreign key the read groups it under
   "id",
@@ -158,7 +159,7 @@ export const mapUser = (
     }
     const unmapped = new Set<string>(unmappedColumns("user", raw.user, MAPPED_USER_COLUMNS));
 
-    const accounts: Array<UserImport.ImportedAccount> = [];
+    const credentials: Array<UserImport.ImportCredential> = [];
     for (const rawAccount of raw.accounts) {
       const account = yield* decodeAccount(rawAccount).pipe(
         Effect.mapError(
@@ -184,18 +185,15 @@ export const mapUser = (
               "a credential account's password is not a better-auth <saltHex>:<keyHex> scrypt hash; refusing to import a hash nothing can verify",
           });
         }
-        accounts.push({
-          providerId: "password",
-          subject: undefined,
-          credentialHash: hash,
-        });
+        // `subject` omitted: a password account is keyed by the new user's own id (`Password.signUp`).
+        credentials.push({ providerId: "password", credentialHash: Redacted.make(hash) });
         continue;
       }
 
       if (hasData(account.password)) unmapped.add("account.password");
       const accessToken = optionalSecret(account.accessToken);
       const issuer = options?.issuers?.[account.providerId];
-      accounts.push({
+      credentials.push({
         providerId: account.providerId,
         subject: account.accountId,
         ...(issuer === undefined ? {} : { issuer }),
@@ -218,10 +216,13 @@ export const mapUser = (
     const mapped: MappedUser = {
       sourceRowId: decodedUser.id,
       user: {
-        email: decodedUser.email,
+        identity: { _tag: "Email", email: decodedUser.email },
         name: decodedUser.name,
-        emailVerified: decodedUser.emailVerified === true || decodedUser.emailVerified === 1,
-        accounts,
+        verified: decodedUser.emailVerified === true || decodedUser.emailVerified === 1,
+        ...(hasData(decodedUser.image) && decodedUser.image !== null && decodedUser.image !== undefined
+          ? { image: decodedUser.image }
+          : {}),
+        credentials,
       },
       unmapped: Array.from(unmapped).sort(),
     };

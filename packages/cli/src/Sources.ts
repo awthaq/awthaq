@@ -4,7 +4,7 @@
 // interface and the registry `awthaq import --from <source>` is derived from.
 //
 // An adapter *opens* a source and yields rows, each carrying its own lazily-run mapping onto
-// `UserImport.ImportedUser` (the shape `Users.create` + `verifyEmail` + `Accounts.link` takes). The
+// `UserImport.ImportUserInput` (what `UserImport.importUser` takes: an identity, a verified flag, credentials). The
 // mapping closes over the row's own decoded type, so the registry is heterogeneous without a cast:
 // the CLI never sees a source's row type, only `{ id, map }`. Everything a source needs to be open
 // (a database client, a parsed hash config) is acquired in `open` and released with the scope.
@@ -41,7 +41,7 @@ export interface ImportSource {
 /** What one source row becomes: the write shape plus what had no destination. */
 export interface MappedInput {
   readonly sourceRowId: string;
-  readonly user: UserImport.ImportedUser;
+  readonly user: UserImport.ImportUserInput;
   /** `table.column` (or `field`) of source data with no awthaq equivalent — reported, never dropped. */
   readonly unmapped: ReadonlyArray<string>;
 }

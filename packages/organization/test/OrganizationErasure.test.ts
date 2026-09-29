@@ -55,8 +55,14 @@ describe("Organization.beforeUserDeleteErasure", () => {
         const users = yield* Users.Users;
         const members = yield* MembershipRecords.MembershipRecords;
         const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
-        const user = yield* users.create({ email: "erase@example.com", name: "Erase" });
-        const other = yield* users.create({ email: "keep@example.com", name: "Keep" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "erase@example.com" },
+          name: "Erase",
+        });
+        const other = yield* users.create({
+          identity: { _tag: "Email", email: "keep@example.com" },
+          name: "Keep",
+        });
         const mine = yield* members.create({
           userId: user.id,
           organizationId: "org-1",

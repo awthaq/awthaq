@@ -335,7 +335,7 @@ export const signIn = Effect.fn("features.passkey.signIn")(function* (email: str
           return yield* Effect.gen(function* () {
             const users = yield* Users.Users;
             const sessions = yield* Sessions.Sessions;
-            const user = yield* users.create({ email, name: email });
+            const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
             const issued = yield* sessions.issue({ userId: user.id });
             return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
           }).pipe(Effect.provide(context));

@@ -1,88 +1,173 @@
 // @awthaq/core — UserImport
 //
-// spec/behaviors/26-cli.md BEH-EA-207 (BAM-001, FAMS-010; decision 07 §6). What a foreign-IdP
-// importer (`@awthaq/migrate-better-auth`, `@awthaq/migrate-firebase`, ...) *produces*, and the one
-// writer that turns it into rows through the domain services — never raw INSERTs, so an imported
-// account holds the same invariants a runtime-created one does (email uniqueness, the
-// `(providerId, subject, issuer)` anchor, an imported hash stored verbatim for the legacy verifier
-// to check and `rehashOnLogin` to retire).
+// AOMS-008 (SAM-008): the one import primitive every IdP migration
+// (`@awthaq/migrate-auth0`, a Firebase/Supabase/Auth.js export script) builds
+// on, so each does not re-derive the create + verify + link recipe — and its
+// two hazards — by hand:
 //
-// `ImportedUser` is deliberately the same shape as `Users.create` + `verifyEmail` + one
-// `Accounts.link` per account: a source package's job is the *mapping* from its own rows (pure,
-// decoded through Schemas, reporting what it could not map); this module's job is the write.
-// `@awthaq/migrate-auth0`'s `importUser` is the same recipe hard-wired to one source.
+// - idempotent: a re-run of the same export converges (`Users.createOrGet`,
+//   then each credential is linked only if it is not already), so a crashed
+//   batch is simply run again;
+// - transactional: the user row, its verified flag and its credential accounts
+//   commit together (`SqlTransaction`), so no user without its credential
+//   survives a failed row.
+//
+// It is an explicit, import-only entry point and is deliberately not exposed
+// over HTTP. It is also the documented exception to BEH-EA-042's "no operation
+// accepts a verified flag as input": `verified` says the *source* IdP already
+// proved the address, and skipping it locks every such user out of a
+// `requireVerifiedEmail` sign-in. It goes through `verifyEmail`/`verifyPhone`
+// (monotone, never lowers), so it can never un-verify an existing user.
 
+import { SqlTransaction } from "@awthaq/ports";
 import type { PasswordHasher } from "@awthaq/ports";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as Redacted from "effect/Redacted";
+import * as Option from "effect/Option";
+import type * as Redacted from "effect/Redacted";
+import * as Result from "effect/Result";
 import * as Accounts from "./Accounts.ts";
 import * as Users from "./Users.ts";
 
-/** One linked account of an imported user. */
-export interface ImportedAccount {
+/** One credential account to attach to the imported user. */
+export interface ImportCredential {
   readonly providerId: string;
+  /** Omitted means the user's own id — `Password.ts`'s convention for the `password` provider, whose account is keyed by the user, never the email. */
+  readonly subject?: string;
+  /** BEH-EA-125: omitted for a non-federated provider (`password`). */
+  readonly issuer?: string;
+  /** The source system's hash, stored verbatim (TTE-005: the caller mints the `PhcHash` explicitly). */
+  readonly credentialHash?: Redacted.Redacted<PasswordHasher.PhcHash>;
   /**
-   * The provider-side subject. `undefined` means "the new user's own id", which is how a password
-   * credential is keyed (`Password.signUp`'s convention, BEH-EA-044): it cannot be known before the
-   * user row exists.
+   * BAM-008: a federated provider's tokens carried over from the source (better-auth's `account` row),
+   * encrypted at rest by the accounts repository. Omitted for a password credential and for a source
+   * that exports none.
    */
-  readonly subject: string | undefined;
-  /** BEH-EA-125: the third part of the anchor; absent for a plain OAuth2 provider and for `password`. */
-  readonly issuer?: string | undefined;
-  /** An imported hash, stored verbatim (`PasswordHasher.PhcHash` is the trust boundary, minted by the source package). */
-  readonly credentialHash?: PasswordHasher.PhcHash | undefined;
-  /** BAM-008: provider tokens carried over, encrypted at rest by the accounts repository. */
-  readonly tokens?: Accounts.ProviderTokenSet | undefined;
+  readonly tokens?: Accounts.ProviderTokenSet;
+}
+
+export interface ImportUserInput {
+  readonly identity: Users.IdentityInput;
+  readonly name: string;
+  /** Whether the source IdP had already verified the identity (see the header). */
+  readonly verified?: boolean;
+  readonly metadata?: string;
+  readonly image?: string;
+  readonly credentials?: ReadonlyArray<ImportCredential>;
 }
 
 export interface ImportedUser {
-  readonly email: string;
-  readonly name: string;
-  /** The source vouched for the address: applied through `Users.verifyEmail`, the sanctioned one-way transition. */
-  readonly emailVerified: boolean;
-  readonly metadata?: string | undefined;
-  readonly accounts: ReadonlyArray<ImportedAccount>;
-}
-
-export interface WrittenUser {
   readonly user: Users.UserRecord;
+  /** `false` on a re-run: the user already existed and was left as it was. */
+  readonly created: boolean;
+  /** Every credential account the user holds for this input, whether linked now or on an earlier run. */
   readonly accounts: ReadonlyArray<Accounts.AccountRecord>;
 }
 
 /**
- * Writes one imported user through `Users` and `Accounts`. Not idempotent: an existing address fails
- * `EmailAlreadyExists` and an already-linked anchor `AccountAlreadyLinked`, so a caller driving a
- * bulk import (the CLI's `import`, with its checkpoint ledger) decides what "already there" means —
- * and runs it inside a transaction so a failure leaves nothing half-written.
+ * A credential this import names is already linked to a *different* user — the
+ * export and the target disagree, which no retry resolves. The whole row rolls
+ * back (nothing of it is imported).
  */
-export const write = (input: ImportedUser) =>
+export class ImportConflict extends Data.TaggedError("ImportConflict")<{
+  readonly message: string;
+  readonly providerId: string;
+  readonly subject: string;
+  readonly ownerUserId: Users.UserId;
+}> {}
+
+/**
+ * Imports one user, idempotently and atomically. An existing user keeps its
+ * name/metadata (a re-run is not an update); the verified flag and the
+ * credentials are the only things a re-run may add.
+ */
+export const importUser = (input: ImportUserInput) =>
   Effect.gen(function* () {
     const users = yield* Users.Users;
     const accounts = yield* Accounts.Accounts;
-    const created = yield* users
-      .create({
-        email: input.email,
-        name: input.name,
-        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
-      })
-      .pipe(Effect.catchTag("PlatformError", Effect.die));
-    const user = input.emailVerified
-      ? yield* users.verifyEmail(created.id).pipe(Effect.orDie)
-      : created;
-    const linked = yield* Effect.forEach(input.accounts, (account) =>
-      accounts
-        .link({
-          userId: user.id,
-          providerId: account.providerId,
-          subject: account.subject ?? user.id,
-          ...(account.issuer === undefined ? {} : { issuer: account.issuer }),
-          ...(account.credentialHash === undefined
-            ? {}
-            : { credentialHash: Redacted.make(account.credentialHash) }),
-          ...(account.tokens === undefined ? {} : { tokens: account.tokens }),
+    const sqlTransaction = yield* SqlTransaction.SqlTransaction;
+
+    const importRow = Effect.gen(function* () {
+      const { user: found, created } = yield* users
+        .createOrGet({
+          identity: input.identity,
+          name: input.name,
+          ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+          ...(input.image === undefined ? {} : { image: input.image }),
         })
-        .pipe(Effect.catchTag("PlatformError", Effect.die)),
-    );
-    const written: WrittenUser = { user, accounts: linked };
-    return written;
+        .pipe(Effect.catchTag("PlatformError", Effect.die));
+
+      const user =
+        input.verified === true && found.identity._tag === "Email"
+          ? yield* users.verifyEmail(found.id).pipe(Effect.orDie)
+          : input.verified === true && found.identity._tag === "Phone"
+            ? yield* users.verifyPhone(found.id).pipe(Effect.orDie)
+            : found;
+
+      const linked = yield* Effect.forEach(input.credentials ?? [], (credential) =>
+        Effect.gen(function* () {
+          const subject = credential.subject ?? user.id;
+          const existing = yield* accounts.findByProviderSubject(
+            credential.providerId,
+            subject,
+            credential.issuer,
+          );
+          if (Option.isSome(existing)) {
+            return existing.value.userId === user.id
+              ? existing.value
+              : yield* Effect.fail(
+                  new ImportConflict({
+                    message: `awthaq: ${credential.providerId} credential ${subject} already belongs to another user`,
+                    providerId: credential.providerId,
+                    subject,
+                    ownerUserId: existing.value.userId,
+                  }),
+                );
+          }
+          return yield* accounts
+            .link({
+              userId: user.id,
+              providerId: credential.providerId,
+              subject,
+              ...(credential.issuer === undefined ? {} : { issuer: credential.issuer }),
+              ...(credential.credentialHash === undefined
+                ? {}
+                : { credentialHash: credential.credentialHash }),
+              ...(credential.tokens === undefined ? {} : { tokens: credential.tokens }),
+            })
+            // Checked absent just above, so a violation here is a concurrent import of the
+            // same credential — not a state this row can resolve.
+            .pipe(
+              Effect.catchTags({ AccountAlreadyLinked: Effect.die, PlatformError: Effect.die }),
+            );
+        }),
+      );
+
+      return { user, created, accounts: linked } satisfies ImportedUser;
+    });
+
+    return yield* sqlTransaction
+      .withTransaction(importRow)
+      .pipe(Effect.catchTag("SqlError", Effect.die));
   });
+
+/**
+ * Imports many users with bounded concurrency, one transaction per row, and
+ * reports each row's outcome in input order instead of aborting the batch on
+ * the first conflict — the shape a migration script needs (re-run the failures
+ * after fixing the export). `concurrency` defaults to 1 (sequential: predictable
+ * against a live database; raise it deliberately).
+ */
+export const importUsers = (
+  inputs: ReadonlyArray<ImportUserInput>,
+  options?: { readonly concurrency?: number },
+) =>
+  Effect.forEach(inputs, (input) => importUser(input).pipe(Effect.result), {
+    concurrency: options?.concurrency ?? 1,
+  }).pipe(
+    Effect.map((results) => ({
+      results,
+      imported: results.filter(Result.isSuccess).length,
+      failed: results.filter(Result.isFailure).length,
+    })),
+  );

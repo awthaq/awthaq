@@ -372,7 +372,10 @@ describe("Password", () => {
           .pipe(Effect.flip);
         assert.strictEqual(wrongPassword._tag, "InvalidCredentials");
 
-        const oauthOnly = yield* users.create({ email: "oauth@example.com", name: "Oauth" });
+        const oauthOnly = yield* users.create({
+          identity: { _tag: "Email", email: "oauth@example.com" },
+          name: "Oauth",
+        });
         yield* accounts.link({
           userId: oauthOnly.id,
           providerId: "github",
@@ -396,6 +399,53 @@ describe("Password", () => {
           .signIn({ email, password: strongPassword })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "EmailNotVerified");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "SCP-001: a suspended user's correct-password signIn is refused with UserSuspended and issues no session; reactivating restores it",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const mailer = yield* Mailer.Mailer;
+        const events = yield* AuthEvents.AuthEvents;
+        yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        const user = Option.getOrThrow(yield* users.findByEmail(email));
+        const before = (yield* sessions.list(user.id)).length;
+
+        yield* users.setStatus(user.id, "suspended", { reason: "fraud" });
+        const collected = yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((event) => event._tag === "auth.user.signInFailed"),
+            Stream.take(2),
+            Stream.runCollect,
+          ),
+        );
+        yield* Effect.yieldNow;
+
+        const refused = yield* password
+          .signIn({ email, password: strongPassword })
+          .pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "UserSuspended");
+        assert.strictEqual((yield* sessions.list(user.id)).length, before);
+
+        // The gate sits after the credential proof: a wrong password on the same
+        // suspended account still reads as InvalidCredentials (no suspension oracle).
+        const wrong = yield* password
+          .signIn({ email, password: Redacted.make("totally wrong password") })
+          .pipe(Effect.flip);
+        assert.strictEqual(wrong._tag, "InvalidCredentials");
+
+        const reasons = Array.from(yield* Fiber.join(collected)).map((event) =>
+          event._tag === "auth.user.signInFailed" ? event.reason : "?",
+        );
+        assert.deepStrictEqual(reasons, ["suspended", "invalidCredentials"]);
+
+        yield* users.setStatus(user.id, "active");
+        const restored = yield* password.signIn({ email, password: strongPassword });
+        assert.strictEqual(restored.session.userId, user.id);
       }).pipe(Effect.provide(TestLayer)),
   );
 
@@ -1097,10 +1147,7 @@ describe("Password", () => {
         const breaches = yield* auditLog.list({ eventTag: "auth.rateLimit.exceeded" });
         assert.strictEqual(breaches.length, 1);
         assert.isFalse(JSON.stringify(breaches[0]?.payload).includes(email));
-        assert.strictEqual(
-          JSON.stringify(breaches[0]?.payload).includes('"rule":"signIn"'),
-          true,
-        );
+        assert.strictEqual(JSON.stringify(breaches[0]?.payload).includes('"rule":"signIn"'), true);
       }).pipe(
         // A real, enforcing limiter for this one test — every other test
         // in this file uses `RateLimiter.layerPermissive` via `TestLayer`'s
@@ -1455,7 +1502,9 @@ describe("Password signIn timing floor (TSS-006)", () => {
     Effect.gen(function* () {
       const password = yield* Password.Password;
       const fiber = yield* Effect.forkChild(
-        password.signIn({ email: "nobody@example.com", password: strongPassword }).pipe(Effect.flip),
+        password
+          .signIn({ email: "nobody@example.com", password: strongPassword })
+          .pipe(Effect.flip),
         { startImmediately: true },
       );
       yield* TestClock.adjust(Duration.millis(60));

@@ -83,7 +83,10 @@ describe("Passkey authenticateVerify hook (BEH-EA-093)", () => {
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
 
-        const user = yield* users.create({ email: "bo@example.com", name: "Bo" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "bo@example.com" },
+          name: "Bo",
+        });
         const registerSession = yield* sessions.issue({ userId: user.id });
         const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
         yield* passkey.registerVerify(user.id, registerSession.session.id, {

@@ -44,14 +44,14 @@ Feature: CLI
       Then it produces its full report
       And no running application instance is required
 
-    @REQ-EA-633
+    @REQ-EA-647
     Scenario: doctor never prints a secret configuration value
       Given an OAuth client secret "sk-canary-123" and a database URL containing a password
       When "awthaq doctor" runs with human and JSON output
       Then the output contains neither the secret nor the password
       And the client secret is reported as present and valid
 
-    @REQ-EA-634
+    @REQ-EA-648
     Scenario: doctor --build reports a build failure as a finding
       Given an application Layer that fails to build because a required port is not provided
       When "awthaq doctor --build" runs
@@ -136,33 +136,33 @@ Feature: CLI
       When "awthaq migration apply --yes" runs
       Then the migrations are applied in that exact fixed order
 
-    @REQ-EA-635
+    @REQ-EA-649
     Scenario: migration apply prints the ordered pending plan before applying
       Given pending migrations reported by "awthaq migration status"
       When "awthaq migration apply --yes" runs
       Then the ordered pending set is printed before any migration is applied
 
-    @REQ-EA-636
+    @REQ-EA-650
     Scenario: migration apply --dry-run applies nothing
       Given pending migrations reported by "awthaq migration status"
       When "awthaq migration apply --dry-run" runs
       Then the ordered pending set is printed
       And no migration is applied
 
-    @REQ-EA-637
+    @REQ-EA-651
     Scenario: migration status reports drift when a ledger has an applied id the linker does not know
       Given a ledger holding an applied migration the linker's record does not contain
       When "awthaq migration status" runs
       Then it fails with the drift exit code
 
-    @REQ-EA-638
+    @REQ-EA-652
     Scenario: migration apply refuses on drift
       Given a ledger holding an applied migration the linker's record does not contain
       When "awthaq migration apply --yes" runs
       Then it refuses to apply any migration
       And it fails with the drift exit code
 
-    @REQ-EA-639
+    @REQ-EA-653
     Scenario: migration apply with nothing pending exits with the nothing-to-apply code
       Given no pending migrations
       When "awthaq migration apply --yes" runs
@@ -225,19 +225,19 @@ Feature: CLI
       When "awthaq seed admin" runs
       Then there is no administrative role concept for it to grant
 
-    @REQ-EA-640
+    @REQ-EA-654
     Scenario: seed admin records an auth.admin.seeded audit entry
       Given no administrative account exists yet
       When "awthaq seed admin" runs for account "ops@acme.com"
       Then an "auth.admin.seeded" event is published and recorded in the audit table
 
-    @REQ-EA-641
+    @REQ-EA-655
     Scenario: a refused seed records auth.admin.seedRefused
       Given an administrative account already exists
       When "awthaq seed admin" runs without a force flag
       Then an "auth.admin.seedRefused" event is published and recorded in the audit table
 
-    @REQ-EA-642
+    @REQ-EA-656
     Scenario: seed admin rejects a malformed email with a usage error
       Given an installed plugin set with "Roles"
       When "awthaq seed admin --email not-an-email" runs
@@ -281,20 +281,20 @@ Feature: CLI
       Then it is expected to have been built and validated against a real export from that source first
       And it is not assumed correct from this specification alone
 
-    @REQ-EA-643
+    @REQ-EA-657
     Scenario: import without --yes reports a plan and writes nothing
       Given a better-auth export with users and accounts
       When "awthaq import --from better-auth" runs without "--yes"
       Then per-table row counts, the unmapped-field report and conflict counts are printed
       And no row is written
 
-    @REQ-EA-644
+    @REQ-EA-658
     Scenario: import --yes writes the previewed rows
       Given a better-auth export with users and accounts
       When "awthaq import --from better-auth --yes" runs
       Then the previewed rows are written through the Users and Accounts domain services
 
-    @REQ-EA-645
+    @REQ-EA-659
     Scenario: a failing batch is rolled back and reported with its source row ids
       Given an import whose second batch fails
       When "awthaq import --from better-auth --yes" runs
@@ -302,19 +302,19 @@ Feature: CLI
       And it is reported with its source row ids and error tag
       And the checkpoint stays at the last committed batch
 
-    @REQ-EA-646
+    @REQ-EA-660
     Scenario: a re-run resumes from the last committed batch without duplicating rows
       Given an import that stopped after a failed batch
       When "awthaq import --from better-auth --yes" runs again against the same source
       Then rows already imported are skipped and never inserted twice
 
-    @REQ-EA-647
+    @REQ-EA-661
     Scenario: a completed import publishes auth.import.completed
       Given a better-auth export with users and accounts
       When "awthaq import --from better-auth --yes" completes
       Then one "auth.import.completed" event carrying the run id and counts is published
 
-    @REQ-EA-648
+    @REQ-EA-662
     Scenario: import rejects an unknown --from value listing the supported sources
       Given no adapter registered under "mystery"
       When "awthaq import --from mystery" runs
@@ -360,7 +360,7 @@ Feature: CLI
       Then "auth.manifest" is available for the CLI to read
       And no HTTP listener needs to be started and no database connection needs to be live for a manifest-only CLI command to answer correctly
 
-    @REQ-EA-649
+    @REQ-EA-663
     Scenario: database-backed commands construct only SqlClient and domain-service Layers, never the HTTP server Layer
       Given a database-backed command among "migration status", "migration apply", "seed admin" and "import"
       When the command runs
@@ -371,7 +371,7 @@ Feature: CLI
   @BEH-EA-225
   Rule: Every CLI command exits with a stable, typed exit code
 
-    @REQ-EA-650
+    @REQ-EA-664
     Scenario Outline: A typed failure maps to its exit code
       Given a CLI command that fails with "<error>"
       When it exits
@@ -386,19 +386,19 @@ Feature: CLI
         | AuthenticationRequired | 8  |
         | ConfigUnavailable    | 9    |
 
-    @REQ-EA-651
+    @REQ-EA-665
     Scenario: doctor on a clean configuration exits 0
       Given a configuration with no findings
       When "awthaq doctor" runs
       Then the process exits with status 0
 
-    @REQ-EA-652
+    @REQ-EA-666
     Scenario: a bad flag exits with the usage code
       Given a command invoked with an unknown flag
       When it runs
       Then the process exits with the usage code
 
-    @REQ-EA-653
+    @REQ-EA-667
     Scenario: --json output carries the failure tag and code
       Given a failing command run with "--json"
       When it fails
@@ -408,13 +408,13 @@ Feature: CLI
   @BEH-EA-226
   Rule: CLI arguments decode through the contract's Schemas
 
-    @REQ-EA-654
+    @REQ-EA-668
     Scenario: every flag and argument is declared with a Schema
       Given the CLI's command tree
       When its flags and arguments are inspected
       Then each one decodes through a Schema
 
-    @REQ-EA-655
+    @REQ-EA-669
     Scenario: seed admin --email reuses the sign-up payload's email Schema
       Given the password sign-up payload's email Schema
       When "awthaq seed admin --email <value>" decodes its argument
@@ -424,41 +424,41 @@ Feature: CLI
   @BEH-EA-227
   Rule: Session commands are outbound-only clients of a running auth server
 
-    @REQ-EA-656
+    @REQ-EA-670
     Scenario: login polls the device endpoint as an outbound client and never opens a listener
       Given a running auth server offering the device authorization endpoints
       When "awthaq login" runs
       Then it polls "/device/token" as an outbound client
       And it never starts a listener
 
-    @REQ-EA-657
+    @REQ-EA-671
     Scenario: login honors slow_down
       Given a device token endpoint that answers "slow_down"
       When "awthaq login" polls
       Then the poll interval widens
 
-    @REQ-EA-658
+    @REQ-EA-672
     Scenario: login exits non-zero on expired_token
       Given a device token endpoint that answers "expired_token"
       When "awthaq login" polls
       Then it exits with the authentication code
       And it tells the user to run "awthaq login" again
 
-    @REQ-EA-659
+    @REQ-EA-673
     Scenario: AWTHAQ_TOKEN bypasses the device flow and the credential store
       Given "AWTHAQ_TOKEN" is set to a valid token
       When "awthaq whoami" runs
       Then it uses that token without contacting the device endpoints
       And it never writes the credential store
 
-    @REQ-EA-660
+    @REQ-EA-674
     Scenario: login --token stores nothing when the token is invalid
       Given a token the server rejects
       When "awthaq login --token" runs
       Then it fails with the authentication code
       And nothing is stored
 
-    @REQ-EA-661
+    @REQ-EA-675
     Scenario: whoami exits with the authentication code when not logged in
       Given no stored credential and no "AWTHAQ_TOKEN"
       When "awthaq whoami" runs
@@ -468,20 +468,20 @@ Feature: CLI
   @BEH-EA-228
   Rule: CLI credentials live in a CredentialStore, never a plaintext dotfile by default
 
-    @REQ-EA-662
+    @REQ-EA-676
     Scenario: login stores the credential in the OS keychain when available
       Given a reachable OS-native credential store
       When "awthaq login --token" succeeds
       Then the credential is stored there and no credentials file is written
 
-    @REQ-EA-663
+    @REQ-EA-677
     Scenario: the fallback credentials file is created 0600 and a warning is printed
       Given no reachable OS-native credential store
       When "awthaq login --token" succeeds
       Then "credentials.json" is created with mode 0600 in a 0700 directory
       And a warning is printed once
 
-    @REQ-EA-664
+    @REQ-EA-678
     Scenario: AWTHAQ_TOKEN is never persisted
       Given "AWTHAQ_TOKEN" is set
       When any session command runs
@@ -491,13 +491,13 @@ Feature: CLI
   @BEH-EA-229
   Rule: Plugins declare their configuration statically, and config list prints it redacted
 
-    @REQ-EA-665
+    @REQ-EA-679
     Scenario: the manifest lists a plugin's configuration descriptors without building any Layer
       Given an installed plugin that declares a configuration descriptor
       When "Auth.make" is evaluated
       Then "auth.manifest.config" lists the descriptor without evaluating any Layer
 
-    @REQ-EA-666
+    @REQ-EA-680
     Scenario: config list never prints a sensitive value
       Given a configuration Layer setting a value declared sensitive
       When "awthaq config list" runs

@@ -14,7 +14,7 @@
 //   - The checkpoint is the `awthaq_import_runs` table (one row per source row; the ledger row is
 //     written inside the same transaction as the user it records, so a rollback un-records it too).
 //     Re-running against the same source skips every row already `done` and never inserts one twice.
-//   - Rows go through `Users`/`Accounts` (`UserImport.write`), never raw INSERTs. An address that
+//   - Rows go through `Users`/`Accounts` (`UserImport.importUser`: idempotent and atomic per user), never raw INSERTs. An address that
 //     already exists in the target is a *conflict*: reported and skipped, not a failure.
 //   - A row that can never be imported as it stands (an email-less Firebase user, a better-auth hash
 //     nothing can verify) is *unmappable*: reported, skipped, re-evaluated on the next run.
@@ -26,6 +26,7 @@
 // and plan mode only reads it when it exists.
 
 import { Accounts, AuthEvents, UserImport, Users } from "@awthaq/core";
+import { SqlTransaction } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -179,6 +180,7 @@ const processBatch = (
   env: {
     readonly users: Users.UsersShape;
     readonly accounts: Accounts.AccountsShape;
+    readonly sqlTransaction: SqlTransaction.SqlTransactionShape;
     readonly source: string;
     readonly runId: string;
     readonly write: boolean;
@@ -206,7 +208,10 @@ const processBatch = (
       for (const field of outcome.mapped.unmapped) {
         tally.unmapped.set(field, (tally.unmapped.get(field) ?? 0) + 1);
       }
-      const existing = yield* env.users.findByEmail(outcome.mapped.user.email);
+      const existing =
+        outcome.mapped.user.identity._tag === "Email"
+          ? yield* env.users.findByEmail(outcome.mapped.user.identity.email)
+          : Option.none<Users.UserRecord>();
       if (Option.isSome(existing)) {
         tally.emailConflicts += 1;
         conflicts.push({ id: outcome.id });
@@ -215,7 +220,7 @@ const processBatch = (
       candidates.push({ id: outcome.id, mapped: outcome.mapped });
     }
     tally.toImport += candidates.length;
-    tally.accounts += candidates.reduce((n, c) => n + c.mapped.user.accounts.length, 0);
+    tally.accounts += candidates.reduce((n, c) => n + (c.mapped.user.credentials?.length ?? 0), 0);
     if (!env.write) return true;
 
     const sql = yield* SqlClient.SqlClient;
@@ -224,9 +229,12 @@ const processBatch = (
       sql.withTransaction(
         Effect.gen(function* () {
           for (const candidate of candidates) {
-            const written = yield* UserImport.write(candidate.mapped.user).pipe(
+            // `importUser` is itself atomic and idempotent (`createOrGet`, credentials linked only if
+            // absent); the batch transaction around it is what makes the ledger rows part of the batch.
+            const written = yield* UserImport.importUser(candidate.mapped.user).pipe(
               Effect.provideService(Users.Users, env.users),
               Effect.provideService(Accounts.Accounts, env.accounts),
+              Effect.provideService(SqlTransaction.SqlTransaction, env.sqlTransaction),
             );
             yield* record({
               source: env.source,
@@ -341,6 +349,12 @@ export const importUsers = (config: CliConfig, options: ImportOptions) =>
           Effect.gen(function* () {
             const users = yield* requireService(context, Users.Users, "Users", "import");
             const accounts = yield* requireService(context, Accounts.Accounts, "Accounts", "import");
+            const sqlTransaction = yield* requireService(
+              context,
+              SqlTransaction.SqlTransaction,
+              "SqlTransaction",
+              "import",
+            );
             const sql = yield* requireService(context, SqlClient.SqlClient, "SqlClient", "import");
             const events = write
               ? yield* requireService(context, AuthEvents.AuthEvents, "AuthEvents", "import")
@@ -353,6 +367,7 @@ export const importUsers = (config: CliConfig, options: ImportOptions) =>
               const env = {
                 users,
                 accounts,
+                sqlTransaction,
                 source: options.from,
                 runId: runId ?? "",
                 write,

@@ -96,35 +96,38 @@ describe("@awthaq/next public entry (RRS-002)", () => {
 describe("getSession — impersonation precedence (APS-006)", () => {
   it("APS-006: an impersonation cookie shadows the session cookie; an ordinary session planted in it is ignored", () =>
     withRuntime(TestLayer, async (runtime) => {
-    const { own, planted, impersonation, target } = await runtime.runPromise(
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        const sessions = yield* Sessions.Sessions;
-        const admin = yield* users.create({ email: "aps006-admin@example.com", name: "Admin" });
-        const targetUser = yield* users.create({
-          email: "aps006-target@example.com",
-          name: "Target",
-        });
-        return {
-          target: targetUser,
-          own: yield* sessions.issue({ userId: admin.id }),
-          planted: yield* sessions.issue({ userId: admin.id }),
-          impersonation: yield* sessions.issue({
-            userId: targetUser.id,
-            actingAs: { type: "user", id: admin.id },
-          }),
-        };
-      }),
-    );
-    const cookie = (impersonationToken: Redacted.Redacted<string>) =>
-      `${Api.ImpersonationCookie.key}=${Redacted.value(impersonationToken)}; ${cookieHeaderFor(own.token)}`;
+      const { own, planted, impersonation, target } = await runtime.runPromise(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const sessions = yield* Sessions.Sessions;
+          const admin = yield* users.create({
+            identity: { _tag: "Email", email: "aps006-admin@example.com" },
+            name: "Admin",
+          });
+          const targetUser = yield* users.create({
+            identity: { _tag: "Email", email: "aps006-target@example.com" },
+            name: "Target",
+          });
+          return {
+            target: targetUser,
+            own: yield* sessions.issue({ userId: admin.id }),
+            planted: yield* sessions.issue({ userId: admin.id }),
+            impersonation: yield* sessions.issue({
+              userId: targetUser.id,
+              actingAs: { type: "user", id: admin.id },
+            }),
+          };
+        }),
+      );
+      const cookie = (impersonationToken: Redacted.Redacted<string>) =>
+        `${Api.ImpersonationCookie.key}=${Redacted.value(impersonationToken)}; ${cookieHeaderFor(own.token)}`;
 
-    const shadowed = await getSession(headersWithCookie(cookie(impersonation.token)), runtime);
-    assert.strictEqual(shadowed?.user.id, target.id);
+      const shadowed = await getSession(headersWithCookie(cookie(impersonation.token)), runtime);
+      assert.strictEqual(shadowed?.user.id, target.id);
 
-    const ignored = await getSession(headersWithCookie(cookie(planted.token)), runtime);
-    assert.strictEqual(ignored?.session.id, own.session.id);
-  }));
+      const ignored = await getSession(headersWithCookie(cookie(planted.token)), runtime);
+      assert.strictEqual(ignored?.session.id, own.session.id);
+    }));
 });
 
 describe("getSession (BEH-EA-185)", () => {
@@ -158,7 +161,10 @@ describe("getSession (BEH-EA-185)", () => {
         Effect.gen(function* () {
           const users = yield* Users.Users;
           const sessions = yield* Sessions.Sessions;
-          const user = yield* users.create({ email: "getsession@example.com", name: "Getter" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "getsession@example.com" },
+            name: "Getter",
+          });
           const { token } = yield* sessions.issue({ userId: user.id });
           return { user, token };
         }),
@@ -183,7 +189,10 @@ describe("getSession (BEH-EA-185)", () => {
         Effect.gen(function* () {
           const users = yield* Users.Users;
           const sessions = yield* Sessions.Sessions;
-          const user = yield* users.create({ email: "expired@example.com", name: "Expired" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "expired@example.com" },
+            name: "Expired",
+          });
           const { token } = yield* sessions.issue({ userId: user.id });
           return token;
         }),
@@ -202,7 +211,10 @@ describe("getSession (BEH-EA-185)", () => {
         Effect.gen(function* () {
           const users = yield* Users.Users;
           const sessions = yield* Sessions.Sessions;
-          const user = yield* users.create({ email: "rotate@example.com", name: "Rotator" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "rotate@example.com" },
+            name: "Rotator",
+          });
           const { token } = yield* sessions.issue({ userId: user.id });
           return token;
         }),
@@ -241,7 +253,10 @@ describe("getSession (BEH-EA-185)", () => {
         Effect.gen(function* () {
           const users = yield* Users.Users;
           const sessions = yield* Sessions.Sessions;
-          const user = yield* users.create({ email: "apply-rotate@example.com", name: "Applier" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "apply-rotate@example.com" },
+            name: "Applier",
+          });
           const { token } = yield* sessions.issue({ userId: user.id });
           return token;
         }),
@@ -307,7 +322,10 @@ describe("getSession (BEH-EA-185)", () => {
           Effect.gen(function* () {
             const base = yield* Users.Users;
             const sessions = yield* Sessions.Sessions;
-            const user = yield* base.create({ email: "concurrent@example.com", name: "Conc" });
+            const user = yield* base.create({
+              identity: { _tag: "Email", email: "concurrent@example.com" },
+              name: "Conc",
+            });
             const { token } = yield* sessions.issue({ userId: user.id });
             return token;
           }),

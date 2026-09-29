@@ -22,6 +22,8 @@ suites=(
   packages/sql/test/Repositories.postgres.test.ts
   packages/sql/test/RateLimiterStoreSql.postgres.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
+  packages/core/test/Users.test.ts
+  packages/core/test/UserImport.test.ts
   packages/jwt/test/KeyRing.test.ts
   packages/jwt/test/RevocationStore.test.ts
   packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts

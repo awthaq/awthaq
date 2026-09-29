@@ -56,7 +56,8 @@ export interface UserSignedInEvent {
 export interface UserSignInFailedEvent {
   readonly _tag: "auth.user.signInFailed";
   readonly strategy: string;
-  readonly reason: "invalidCredentials" | "emailNotVerified";
+  // SCP-001: `suspended` — the credential was right but `Users.assertCanSignIn` refused.
+  readonly reason: "invalidCredentials" | "emailNotVerified" | "suspended";
 }
 
 /**
@@ -97,6 +98,8 @@ export type SessionRevocationReason =
   | "userDeleted"
   | "impersonationStopped"
   | "admin"
+  /** SCP-001/BAM-005: every session of a user ended because the account was suspended/banned. */
+  | "suspended"
   | "reuseDetected"
   /** SMS-003: evicted by `SessionConfig.maxConcurrent` when the user's newest session was issued. */
   | "limitEvicted";
@@ -199,6 +202,26 @@ export interface AdminActionDeniedEvent {
 /** BAM-005: published by `@awthaq/admin`'s `updateUser`, after the profile change is persisted. */
 export interface AdminUserUpdatedEvent {
   readonly _tag: "auth.admin.userUpdated";
+  readonly adminUserId: UserId;
+  readonly userId: UserId;
+}
+
+/**
+ * BAM-005/SCP-001: published by `@awthaq/admin`'s `banUser`, after `Users.setStatus("suspended")`
+ * and `Sessions.revokeAll(userId, "suspended")` both completed. `reason`/`until` are the
+ * operator's note and the optional expiry (ISO instant), `null` when not given.
+ */
+export interface AdminUserBannedEvent {
+  readonly _tag: "auth.admin.userBanned";
+  readonly adminUserId: UserId;
+  readonly userId: UserId;
+  readonly reason: string | null;
+  readonly until: string | null;
+}
+
+/** BAM-005: published by `@awthaq/admin`'s `unbanUser`, after `Users.setStatus("active")`. */
+export interface AdminUserUnbannedEvent {
+  readonly _tag: "auth.admin.userUnbanned";
   readonly adminUserId: UserId;
   readonly userId: UserId;
 }
@@ -500,6 +523,49 @@ export interface MailFailedEvent {
   readonly userId?: UserId;
 }
 
+/**
+ * OCM-002/OCM-005 (`@awthaq/api-key`): the lifecycle of a long-lived API key and of a
+ * `client_credentials` client. `userId` is the owner who acted; `keyId`/`clientId`
+ * are the public ids (never a secret or a hash). `rotated` names the predecessor
+ * (`keyId`) and its successor.
+ */
+export interface ApiKeyCreatedEvent {
+  readonly _tag: "auth.apiKey.created";
+  readonly userId: UserId;
+  readonly keyId: string;
+}
+
+export interface ApiKeyRevokedEvent {
+  readonly _tag: "auth.apiKey.revoked";
+  readonly userId: UserId;
+  readonly keyId: string;
+}
+
+export interface ApiKeyRotatedEvent {
+  readonly _tag: "auth.apiKey.rotated";
+  readonly userId: UserId;
+  readonly keyId: string;
+  readonly successorKeyId: string;
+}
+
+export interface ApiKeyClientRegisteredEvent {
+  readonly _tag: "auth.apiKey.clientRegistered";
+  readonly userId: UserId;
+  readonly clientId: string;
+}
+
+export interface ApiKeyClientRevokedEvent {
+  readonly _tag: "auth.apiKey.clientRevoked";
+  readonly userId: UserId;
+  readonly clientId: string;
+}
+
+export interface ApiKeyClientSecretRotatedEvent {
+  readonly _tag: "auth.apiKey.clientSecretRotated";
+  readonly userId: UserId;
+  readonly clientId: string;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
@@ -518,6 +584,8 @@ export type AuthEvent =
   | AdminImpersonationDeniedEvent
   | AdminActionDeniedEvent
   | AdminUserUpdatedEvent
+  | AdminUserBannedEvent
+  | AdminUserUnbannedEvent
   | AdminSessionRevokedEvent
   | AdminSeededEvent
   | AdminSeedRefusedEvent
@@ -549,7 +617,13 @@ export type AuthEvent =
   | UserClaimsUpdatedEvent
   | RolesRevokedEvent
   | RateLimitExceededEvent
-  | MailFailedEvent;
+  | MailFailedEvent
+  | ApiKeyCreatedEvent
+  | ApiKeyRevokedEvent
+  | ApiKeyRotatedEvent
+  | ApiKeyClientRegisteredEvent
+  | ApiKeyClientRevokedEvent
+  | ApiKeyClientSecretRotatedEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */

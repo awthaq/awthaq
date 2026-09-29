@@ -66,7 +66,10 @@ describe("TC-001: allowCredentials does not reveal which emails are registered",
   it.effect("a known user with no credentials is indistinguishable from an unknown email", () =>
     Effect.gen(function* () {
       const users = yield* Users.Users;
-      yield* users.create({ email: "empty@example.com", name: "Empty" });
+      yield* users.create({
+        identity: { _tag: "Email", email: "empty@example.com" },
+        name: "Empty",
+      });
       const decoys = yield* decoysFor("empty@example.com");
       assert.isAbove(decoys.length, 0);
     }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),

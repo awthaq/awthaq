@@ -56,6 +56,24 @@ installing this in a real cutover — this package was written against
 better-auth's documented, stable `session` table shape, not against a copy
 of better-auth's own source.
 
+## Field mapping (BAM-009)
+
+Import users through `@awthaq/core`'s `UserImport.importUser` (idempotent,
+transactional) with these mappings from better-auth's `user`/`account` tables:
+
+| better-auth                                                     | awthaq                                                                                                                                                                                          |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user.email`, `user.emailVerified`                              | `identity: { _tag: "Email", email }`, `verified: emailVerified`                                                                                                                                 |
+| `user.name`                                                     | `name`                                                                                                                                                                                          |
+| `user.image`                                                    | `image` (an `http(s)` URL; anything else is refused by the profile schema, so drop or re-host non-URL values)                                                                                   |
+| `user.phoneNumber`, `phoneNumberVerified` (phone-number plugin) | `identity: { _tag: "Phone", phone }` (normalize with `Phone.normalizePhone`), `verified: phoneNumberVerified`                                                                                   |
+| anonymous plugin users (`isAnonymous`)                          | `identity: { _tag: "Anonymous" }`                                                                                                                                                               |
+| `user.banned`, `banReason`, `banExpires` (admin plugin)         | after import: `Users.setStatus(id, "suspended", { reason: banReason, until: banExpires })` — the shared `Users.assertCanSignIn` gate then refuses sign-in; a lapsed `banExpires` needs no write |
+| `user.role` (admin plugin)                                      | not a user field: assign through `@awthaq/roles`/your qadi policy (ADR-EA-009)                                                                                                                  |
+| `account.password`                                              | credential hash, verbatim, with `BetterAuthScryptVerifier` installed (above)                                                                                                                    |
+| `account.providerId`, `accountId`                               | `credentials: [{ providerId, subject: accountId }]`                                                                                                                                             |
+| `session.*`                                                     | bridged live by `LegacySessionBridgeLive` (below); never imported                                                                                                                               |
+
 ## Install
 
 **1. Point a `SqlClient` at the retained better-auth database** (a
@@ -77,10 +95,9 @@ naming better-auth's own configured cookie name:
 ```ts
 import { AliasLegacyCookieMiddleware } from "@awthaq/migrate-better-auth";
 
-const handler = HttpRouter.toWebHandler(
-  AppLive,
-  { middleware: AliasLegacyCookieMiddleware.make({ legacyCookieName: "better-auth.session_token" }) },
-);
+const handler = HttpRouter.toWebHandler(AppLive, {
+  middleware: AliasLegacyCookieMiddleware.make({ legacyCookieName: "better-auth.session_token" }),
+});
 ```
 
 **3. Nothing else.** The first request a still-live better-auth session

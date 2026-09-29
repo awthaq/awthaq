@@ -3,7 +3,7 @@ ID: "OCM-001"
 Title: "No client-credentials grant or token-issuing authorization server exists for machine callers"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:199"
 Auditor: "oauth2-client-credentials-m2m-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `oauth` · reported by **OAuth2 Client Credentials / M2M Specialist** (`oauth2-client-credentials-m2m-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `grant_type: "authorization_code"` is the only grant-type literal in `packages/oauth/src/OAuth.ts:199`, and a repo-wide grep for `client_credentials`/`grant_type` across all `*.ts` files (excluding tests) finds no other match anywhere in the codebase; there is no token endpoint, client registration, or client-secret model for M2M callers. This is a real, confirmed gap, but the two remediation paths the issue itself lists (a Phase-3 `OidcProvider` authorization-server plugin, or an authenticated mint path off the JWT signer for `ApiKey` principals) are alternative architectures requiring a product/design decision, not a mechanical patch. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `m2m-client-credentials`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:238`. Fix: Implement ticket 10's M2M half in packages/api-key. Nothing changes in packages/oauth. (effort XL). Full dossier: `.plan/slices/03-oauth-flow.md`.
+
+**Resolved (2026-09-29):** Nothing changed in packages/oauth for M2M: the client_credentials grant lives in @awthaq/api-key as decided (ticket 10) — see MAPS-003 for the implementation (POST /api-key/token, registerClient/revokeClient, scoped 15-minute service JWT via @awthaq/jwt) and packages/api-key/test/ServiceToken.test.ts + AuthHttp.test.ts ('a registered client obtains a scoped JWT'; requested scopes beyond the registered set are dropped, disjoint -> invalid_scope; 'a revoked client cannot mint' but a minted token verifies until exp). Roadmap M7 records that this pulls a slice of Phase 3 forward (spec/roadmap.md).

@@ -200,7 +200,7 @@ export const BearerTokenStoreMemory = Layer.effect(
 );
 
 /**
- * MNA-005: `make(api, { baseUrl, transformClient: bearerTransformClient(store) })`
+ * MNA-005/MNA-006: `make(api, { baseUrl, transformClient: bearerTransformClient(store) })`
  * — attaches `Authorization: Bearer <token>` from the store on every request
  * and captures a rotated token (`Api.ROTATED_TOKEN_HEADER`, the server's
  * throttled-touch rotation, BEH-EA-052 — there is no grace window, so a missed
@@ -208,6 +208,12 @@ export const BearerTokenStoreMemory = Layer.effect(
  * response without the header leaves the stored token unchanged. Contract for
  * callers: an idle-expired or revoked token surfaces as the typed
  * `Unauthenticated`; re-authenticate and `set` a fresh token.
+ *
+ * MNA-006 (ticket 17): every request also carries
+ * `X-Awthaq-Token-Delivery: bearer`, which is what makes a session-minting
+ * response (password sign-in, passkey verify, the OAuth exchange) return its
+ * token in the body instead of a cookie this client has no jar for. Pair the
+ * sign-in call with `captureSessionToken` to put that token in the store.
  */
 export const bearerTransformClient =
   (store: BearerTokenStoreShape) =>
@@ -215,12 +221,17 @@ export const bearerTransformClient =
     client.pipe(
       HttpClient.mapRequestEffect((request) =>
         store.get.pipe(
-          Effect.map(
-            Option.match({
-              onNone: () => request,
-              onSome: (token) => HttpClientRequest.bearerToken(request, Redacted.value(token)),
-            }),
-          ),
+          Effect.map((stored) => {
+            const optedIn = HttpClientRequest.setHeader(
+              request,
+              Api.TOKEN_DELIVERY_HEADER,
+              "bearer",
+            );
+            return Option.match(stored, {
+              onNone: () => optedIn,
+              onSome: (token) => HttpClientRequest.bearerToken(optedIn, Redacted.value(token)),
+            });
+          }),
         ),
       ),
       HttpClient.tap((response) => {
@@ -230,6 +241,24 @@ export const bearerTransformClient =
           : Effect.void;
       }),
     );
+
+/**
+ * MNA-006: runs a session-minting call (password sign-in/up, passkey verify, the
+ * OAuth `POST /oauth/token` exchange) made through a `bearerTransformClient` and
+ * stores the `token` its response body carries in the ambient `BearerTokenStore`,
+ * so the next request is authenticated. The response is returned unchanged
+ * (including its `token`); a response without one (a cookie-mode server, or a
+ * concealed sign-up) stores nothing.
+ */
+export const captureSessionToken = <A extends object, E, R>(signIn: Effect.Effect<A, E, R>) =>
+  signIn.pipe(
+    Effect.tap((session) => {
+      const token: unknown = Reflect.get(session, "token");
+      return typeof token === "string" && token !== ""
+        ? Effect.flatMap(BearerTokenStore, (store) => store.set(Redacted.make(token)))
+        : Effect.void;
+    }),
+  );
 
 // ---------------------------------------------------------------------------
 // BEH-EA-172: error codes are derived from the contract
