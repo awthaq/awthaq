@@ -3,7 +3,7 @@ ID: "RZS-001"
 Title: "BEH-EA-162's depth-2 resource-to-organization walk is unimplemented; the depth parameter is ignored"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/OrganizationQadi.ts:89"
 Auditor: "rebac-zanzibar-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `correctness` · `organization` · reported by **ReBAC / Zanzibar-style Specialist** (`rebac-zanzibar-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [ReBAC depth-N resource-to-organization walk](../../.scratch/resolve-ready-for-human-findings/issues/13-rebac-depth-n-resource-walk.md) — Resolved via a new required `ResourceOrganizationLookup` port (app-provided, with a `layerNone` default) that `OrganizationQadi.relationships` consults when `depth >= 1`; a missing/unresolved lookup now fails closed with `RelationshipResolveError`, never silently returns `"Unrelated"`. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-qadi-relationships`. Evidence at HEAD ec065a7: `packages/organization/src/OrganizationQadi.ts:89`. Fix: Implement the ticket-13 decision: a required, app-provided ResourceOrganizationLookup port consulted for member at depth >= 1; unresolved fails closed with RelationshipResolveError. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`.
+
+**Resolved (2026-09-29):** OrganizationQadi.ts: new ResourceOrganizationLookup Context.Service (organizationOf: resourceId -> Effect<Option<orgId>, unknown>) with static layerNone; relationships requires it and check now reads depth: member at depth >= 1 asks the lookup, None or a lookup failure -> RelationshipResolveError (never Unrelated), depth undefined/0 unchanged; only member walks (ticket 13 scope). Header comment and BEH-EA-162 prose rewritten. Tests: OrganizationQadi.test.ts 'member at depth >= 1 (RZS-001)' x3 (Related through the app lookup, Unknown at depth 0 for a project id, orphan/failing lookup and layerNone -> RelationshipResolveError). Deferred: BDD wiring of REQ-EA-454/455 (the feature file is @skip @unwired at Feature level; not cheap). Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 896 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.
