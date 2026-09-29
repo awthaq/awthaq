@@ -3,7 +3,7 @@ ID: "OIT-001"
 Title: "Userinfo claims override the signed id_token with no sub cross-check"
 Level: high
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:612"
 Auditor: "oidc-id-token-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `security` · `oauth` · reported by **OIDC ID Token Specialist** (`oidc-id-token-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — packages/oauth/src/OAuth.ts:612 still reads `const profile = provider.mapProfile({ ...idClaims, ...userinfoClaims });` exactly as quoted, with userinfo spread last so it wins on key overlap. `idClaims` comes from `verifyIdToken` (line 590) and `userinfoClaims` from the provider's userinfo endpoint (lines 598-610); a grep of the whole file for `"sub"`/`.sub`/`userinfoClaims`/`idClaims` shows no comparison between the two anywhere, and `profile.subject` (from the merged object) feeds `accounts.findByProviderSubject` at line 614-620, so a mismatched userinfo `sub` would silently re-anchor account lookup/linking. No OIDC Core 5.3.2 sub equality check exists in this flow or any nearby helper. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-oidc-claims-integrity`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:717`. Fix: For oidc providers, fail when userinfo.sub differs from the verified id_token sub, and let the signed id_token win for identity-bearing claims (sub, email, email_verified). userinfo only enriches the profile. (effort M). Full dossier: `.plan/slices/03-oauth-flow.md`.
+
+**Resolved (2026-09-29):** For `oidc` providers the userinfo `sub` must now equal the verified id_token `sub` (mismatch → `OAuthCallbackFailed`, nothing created/linked), and `sub`/`email`/`email_verified` are taken from the signed id_token whenever it carries them (`mergeClaims` in `packages/oauth/src/OAuth.ts`); userinfo only enriches (name etc.). The userinfo body is now decoded with a Schema (`UserinfoSchema`) instead of a `body as Record<string, unknown>` cast. Spec: BEH-EA-127 gains a claim-precedence paragraph. TDD: `packages/oauth/test/OAuth.test.ts` — 'OIT-001: a userinfo response whose sub differs…is rejected' and '…id_token's email_verified wins over userinfo for the trusted auto-link decision' (both confirmed red before the fix), plus an enrichment regression guard. Gates: typecheck, test (812), test:bdd (104), spec:verify:strict green. Note: the dossier's optional BDD scenario is deferred (needs new step infrastructure).

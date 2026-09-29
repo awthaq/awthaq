@@ -43,6 +43,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as HttpBody from "effect/unstable/http/HttpBody";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
@@ -294,6 +295,29 @@ interface JwksCacheEntry {
   readonly jwks: Jwt.Jwks;
   readonly fetchedAt: number;
 }
+
+const UserinfoSchema = Schema.Record(Schema.String, Schema.Unknown);
+
+/**
+ * OIT-001 (OIDC Core 5.3.2): identity-bearing claims come from the *signed*
+ * id_token whenever it carries them; userinfo (an unsigned-by-us bearer
+ * response) only enriches the profile (name, picture, …) and can never
+ * re-anchor the subject or flip `email_verified`.
+ */
+const IDENTITY_CLAIMS: ReadonlyArray<string> = ["sub", "email", "email_verified"];
+
+const mergeClaims = (
+  idClaims: Record<string, unknown> | undefined,
+  userinfoClaims: Record<string, unknown> | undefined,
+): Record<string, unknown> => {
+  const signedIdentity: Record<string, unknown> = {};
+  if (idClaims !== undefined) {
+    for (const claim of IDENTITY_CLAIMS) {
+      if (claim in idClaims) signedIdentity[claim] = idClaims[claim];
+    }
+  }
+  return { ...idClaims, ...userinfoClaims, ...signedIdentity };
+};
 
 const verifyIdToken = (
   httpClient: HttpClient.HttpClient,
@@ -697,9 +721,10 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
         // A plain `"oauth2"` provider (no `id_token` at all, e.g. GitHub)
         // gets its claims from `userinfoEndpoint` instead; an `"oidc"`
-        // provider that also exposes one gets both merged, userinfo
-        // winning on overlap (the more current of the two — an `id_token`
-        // can be minutes old by the time this call happens).
+        // provider that also exposes one gets both merged — userinfo
+        // enriches (it is the more current of the two), but the signed
+        // `id_token` wins identity-bearing claims and userinfo's `sub`
+        // must equal it (OIT-001, OIDC Core 5.3.2).
         const userinfoClaims: Record<string, unknown> | undefined = Option.isSome(
           provider.userinfoEndpoint,
         )
@@ -709,12 +734,20 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
               })
               .pipe(
                 Effect.flatMap((response) => response.json),
-                Effect.map((body) => body as Record<string, unknown>),
+                Effect.flatMap(Schema.decodeUnknownEffect(UserinfoSchema)),
                 Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),
               )
           : undefined;
 
-        const profile = provider.mapProfile({ ...idClaims, ...userinfoClaims });
+        if (
+          idClaims !== undefined &&
+          userinfoClaims !== undefined &&
+          userinfoClaims["sub"] !== idClaims["sub"]
+        ) {
+          return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());
+        }
+
+        const profile = provider.mapProfile(mergeClaims(idClaims, userinfoClaims));
 
         const accountIfLinked = yield* accounts.findByProviderSubject(
           providerId,

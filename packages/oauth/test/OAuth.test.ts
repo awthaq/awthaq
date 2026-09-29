@@ -937,6 +937,124 @@ describe("OAuth", () => {
       }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() }))),
     );
 
+    // OIT-001 (OIDC Core 5.3.2): the userinfo `sub` MUST equal the verified
+    // id_token `sub`, and the signed id_token wins identity-bearing claims.
+    const oktaWithUserinfo = (overrides?: Partial<OAuthProvider.OAuthProviderConfig>) =>
+      okta({
+        endpoints: {
+          authorizationEndpoint: oktaDiscovery.authorization_endpoint,
+          tokenEndpoint: oktaDiscovery.token_endpoint,
+          userinfoEndpoint: "https://okta.example.com/userinfo",
+        },
+        ...overrides,
+      });
+
+    const oidcClaims = (location: string, extra: Record<string, unknown>) => ({
+      iss: "https://okta.example.com/oauth2/default",
+      aud: "okta-client-id",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      nonce: nonceFrom(location),
+      ...extra,
+    });
+
+    it.effect("OIT-001: a userinfo response whose sub differs from the id_token sub is rejected", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        currentClaims = oidcClaims(location, { sub: "real-sub", email: "real@example.com" });
+        const failure = yield* oauth
+          .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+
+        const accounts = yield* Accounts.Accounts;
+        assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("okta", "victim-sub")));
+        assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("okta", "real-sub")));
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [oktaWithUserinfo()],
+            httpRoutes: { ...idTokenRoutes(), "/userinfo": { sub: "victim-sub" } },
+          }),
+        ),
+      ),
+    );
+
+    it.effect(
+      "OIT-001: the id_token's email_verified wins over userinfo for the trusted auto-link decision",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          yield* users.create({ email: "mallory-target@example.com", name: "Target" });
+
+          const oauth = yield* OAuth.OAuth;
+          const { state, location } = yield* oauth.authorize("okta", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          currentClaims = oidcClaims(location, {
+            sub: "same-sub",
+            email: "mallory-target@example.com",
+            email_verified: false,
+          });
+          const failure = yield* oauth
+            .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+            .pipe(Effect.flip);
+          // The signed id_token says the email is NOT verified; userinfo's
+          // contradicting `true` must not turn on auto-link.
+          assert.strictEqual(failure._tag, "AccountExists");
+        }).pipe(
+          Effect.provide(
+            buildLayer({
+              providers: [oktaWithUserinfo()],
+              linking: { trustedProviders: ["okta"] },
+              httpRoutes: {
+                ...idTokenRoutes(),
+                "/userinfo": {
+                  sub: "same-sub",
+                  email: "mallory-target@example.com",
+                  email_verified: true,
+                },
+              },
+            }),
+          ),
+        ),
+    );
+
+    it.effect("OIT-001: userinfo still enriches the profile (name) when the subs match", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        currentClaims = oidcClaims(location, { sub: "enrich-sub", email: "enrich@example.com" });
+        const outcome = yield* oauth.callback("okta", {
+          code: "c1",
+          state,
+          iss: undefined,
+          cookieState: state,
+        });
+        assert.isDefined(outcome.session);
+        const users = yield* Users.Users;
+        const user = yield* users.findByEmail("enrich@example.com");
+        assert.strictEqual(Option.getOrThrow(user).name, "Enriched Name");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [oktaWithUserinfo()],
+            httpRoutes: {
+              ...idTokenRoutes(),
+              "/userinfo": { sub: "enrich-sub", name: "Enriched Name" },
+            },
+          }),
+        ),
+      ),
+    );
+
     it.effect("a tampered id_token signature (a different, unregistered key) is rejected", () =>
       Effect.gen(function* () {
         const oauth = yield* OAuth.OAuth;
