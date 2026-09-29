@@ -807,6 +807,7 @@ export interface VerificationRepositoryShape {
   readonly findById: (
     id: VerificationTokenId,
   ) => Effect.Effect<VerificationToken, Cause.NoSuchElementError | RepositoryError>;
+  /** PPS-003: the current live (unconsumed) token for `identifier`, if any. */
   readonly findByIdentifier: (
     identifier: string,
   ) => Effect.Effect<Option.Option<VerificationToken>, RepositoryError>;
@@ -837,6 +838,10 @@ export interface VerificationRepositoryShape {
    * all checked and written in a single `UPDATE ... RETURNING`, so unknown,
    * expired, wrong-secret, and already-consumed all collapse into the same
    * "no row back" result without a separate read racing the write.
+   *
+   * ACS-002: the digest equality happens inside this predicate rather than
+   * through `ConstantTime` — an accepted exception, since both sides are
+   * SHA-256 of a 256-bit random secret (BEH-EA-060).
    */
   readonly tryConsume: (input: {
     readonly identifier: string;
@@ -869,8 +874,14 @@ export const VerificationRepositoryLive: Layer.Layer<
     const findByIdentifier = SqlSchema.findOneOption({
       Request: Schema.String,
       Result: VerificationToken,
+      // PPS-003: the live row only — the partial unique index
+      // `verification_tokens_live_identifier` (`WHERE "consumedAt" IS NULL`)
+      // holds at most one such row per identifier, so no sort and no scan of
+      // the consumed history the table keeps. Nothing needs "the latest
+      // including consumed": ADR-EA-016's `upsertLive`/`tryConsume` own the
+      // write paths.
       execute: (identifier) =>
-        sql`SELECT * FROM verification_tokens WHERE identifier = ${identifier} ORDER BY "createdAt" DESC LIMIT 1`,
+        sql`SELECT * FROM verification_tokens WHERE identifier = ${identifier} AND "consumedAt" IS NULL`,
     });
 
     const upsertLive = SqlSchema.findOne({

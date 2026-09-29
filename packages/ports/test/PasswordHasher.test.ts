@@ -114,15 +114,6 @@ const salt = new Uint8Array(16).fill(7);
 const argon2String = (params: string) =>
   `$argon2id$v=19$${params}$c29tZXNhbHRzb21lc2FsdA$${"A".repeat(43)}`;
 
-describe("timingSafeEqualBytes (PHS-001)", () => {
-  it("is true for equal bytes and false for a differing byte or a different length", () => {
-    const abc = new Uint8Array([1, 2, 3]);
-    assert.isTrue(PasswordHasher.timingSafeEqualBytes(abc, new Uint8Array([1, 2, 3])));
-    assert.isFalse(PasswordHasher.timingSafeEqualBytes(abc, new Uint8Array([1, 2, 4])));
-    assert.isFalse(PasswordHasher.timingSafeEqualBytes(abc, new Uint8Array([1, 2])));
-  });
-});
-
 describe("layerArgon2id own parse/compare path (PHS-001)", () => {
   it.effect("accepts a hash with a non-default digest length and rejects a bit-flipped digest", () =>
     Effect.gen(function* () {

@@ -239,6 +239,8 @@ describe.skipIf(postgresUrl === undefined)("Repositories (real Postgres)", () =>
           now,
         });
         assert.isTrue(Option.isSome(consumed));
+        // PPS-003: a consumed token is history, not the live row.
+        assert.isTrue(Option.isNone(yield* verification.findByIdentifier("verify-email:pg-user")));
 
         const replay = yield* verification.tryConsume({
           identifier: "verify-email:pg-user",

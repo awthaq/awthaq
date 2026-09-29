@@ -49,7 +49,7 @@
 // PHS-001: `verify` never calls hash-wasm's `argon2Verify`, whose digest
 // comparison is a plain `===` on the encoded strings. Both layers parse the
 // stored string themselves, recompute with the stored salt, and compare the
-// digest bytes with `timingSafeEqualBytes`.
+// digest with `ConstantTime` (the workspace's one shared comparator, ACS-002).
 //
 // ACS-006/PHS-007: a stored hash is untrusted input (an imported or
 // corrupted row) yet its embedded cost parameters drive the recomputation,
@@ -81,40 +81,10 @@ import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import { argon2id, scrypt } from "hash-wasm";
+import * as ConstantTime from "./ConstantTime.ts";
 
 const SALT_LENGTH = 16;
 const HASH_LENGTH = 32;
-
-/**
- * Constant-time equality for two equal-length hex digests — `hash-wasm`'s
- * `scrypt` has no built-in verify, so `layerScrypt`'s own `verify`
- * needs one: an early `!==` return on length or an ordinary `===` on the
- * digest would leak timing information a constant-time comparison is
- * specifically meant to deny an attacker.
- */
-const timingSafeEqualHex = (a: string, b: string): boolean => {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
-};
-
-/**
- * PHS-001: the same for raw digest bytes, which `layerArgon2id.verify` now
- * compares itself (hash-wasm's `argon2Verify` ends in a plain `===`). A
- * length mismatch is not secret (the stored digest length is public), so it
- * returns early; content differences never do.
- */
-export const timingSafeEqualBytes = (a: Uint8Array, b: Uint8Array): boolean => {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
-  }
-  return diff === 0;
-};
 
 /** PHS-002: `floor` (default) rewrites only hashes weaker than the target; `exact` rewrites any that differ. */
 const rehashPolicyConfig = Config.Literals(["floor", "exact"], "AUTH_PASSWORD_REHASH_POLICY").pipe(
@@ -316,7 +286,7 @@ export const layerArgon2id: Layer.Layer<PasswordHasher, Config.ConfigError, Cryp
               outputType: "binary",
             }),
           );
-          return timingSafeEqualBytes(digest, parsed.digest);
+          return ConstantTime.equalBytes(digest, parsed.digest);
         }).pipe(Effect.orElseSucceed(() => false));
       };
 
@@ -478,7 +448,7 @@ export const layerScrypt: Layer.Layer<PasswordHasher, Config.ConfigError, Crypto
               outputType: "hex",
             }),
           );
-          return timingSafeEqualHex(digest, parsed.hash);
+          return ConstantTime.equalHex(digest, parsed.hash);
         }).pipe(Effect.orElseSucceed(() => false));
       };
 

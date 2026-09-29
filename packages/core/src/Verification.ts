@@ -30,6 +30,7 @@
 // comment) and so should be indistinguishable to whatever is watching that
 // event too.
 
+import { ConstantTime } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -95,6 +96,7 @@ export interface VerificationShape {
   readonly issue: (input: {
     readonly identifier: string;
     readonly ttl: Duration.Duration;
+    /** ESS-010: `undefined` and an explicit `null` both mean "no payload". */
     readonly payload?: unknown;
     /** BCR-003: attached when the caller already knows the real user this token concerns — lets a later account deletion sweep it. */
     readonly userId?: UserId;
@@ -168,7 +170,10 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           valueHash,
           createdAt: now,
           expiresAt: DateTime.addDuration(now, input.ttl),
-          payload: input.payload,
+          // ESS-010: an explicit `null` is treated as absent, exactly as
+          // `layerSql` stores it (a JSON `null` column decodes to `undefined`),
+          // so both layers hand back the same `payload`.
+          payload: input.payload === null ? undefined : input.payload,
         };
         // TMS-004: an unconsumed token was never removed; prune expired rows once the map is large.
         yield* Ref.update(state, (s) =>
@@ -211,7 +216,9 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
               if (
                 Option.isNone(row) ||
                 isExpired(row.value, now) ||
-                row.value.valueHash !== presentedHash
+                // ACS-002: the digest is compared in constant time, like
+                // `Sessions`' secret hash; `layerSql` does it in the DB predicate.
+                !ConstantTime.equalHex(row.value.valueHash, presentedHash)
               ) {
                 return [
                   Result.fail(

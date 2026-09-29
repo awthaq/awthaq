@@ -198,13 +198,10 @@ export class Session extends Model.Class<Session>("Session")({
  * missing payload is stored as the encoded literal `null`, decoded back to
  * `undefined` by the caller (`Verification.layerSql`'s own `toTokenView`),
  * matching `layerMemory`'s omitted-payload case (`undefined` in, `undefined`
- * out). This only covers "no payload was passed" — an *explicit*
- * `payload: null` is indistinguishable from omission once round-tripped
- * through this column (both decode back to `undefined`), whereas
- * `layerMemory` stores and returns whatever was passed verbatim, `null`
- * included. No current caller ever passes an explicit `null` (only a real
- * object or nothing at all), so this asymmetry is latent, not reachable
- * today — flagged here rather than silently relied upon.
+ * out). An *explicit* `payload: null` is indistinguishable from omission once
+ * round-tripped through this column, so `Verification.layerMemory` normalizes
+ * it to `undefined` at `issue` too (ESS-010): both layers return the same
+ * `payload` for omitted, `null` and object.
  */
 export class VerificationToken extends Model.Class<VerificationToken>("VerificationToken")({
   id: Model.UuidV7Insert(VerificationTokenId),

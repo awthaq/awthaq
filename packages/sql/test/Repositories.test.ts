@@ -502,7 +502,45 @@ describe("Repositories", () => {
           yield* Models.VerificationToken.update.makeEffect({ id: token.id, consumedAt: now }),
         );
         assert.isNotNull(consumed.consumedAt);
+
+        // PPS-003: the lookup is scoped to the *live* row, so a consumed
+        // token (kept as history) is no longer "the token for this identifier".
+        const afterConsume = yield* verification.findByIdentifier("verify-email:user-1");
+        assert.isTrue(Option.isNone(afterConsume));
       }).pipe(Effect.provide(RepositoriesLive)),
+  );
+
+  // MLO-006: the atomic `UPDATE ... RETURNING` decides a concurrent race.
+  it.effect("BEH-EA-062: two concurrent tryConsume calls for one live token yield exactly one row", () =>
+    Effect.gen(function* () {
+      const verification = yield* Repositories.VerificationRepository;
+      const now = yield* DateTime.now;
+      yield* verification.upsertLive(
+        yield* Models.VerificationToken.insert.makeEffect({
+          identifier: "verify-email:race",
+          valueHash: "hash-race",
+          expiresAt: DateTime.add(now, { minutes: 10 }),
+          consumedAt: null,
+        }),
+      );
+      const claim = verification.tryConsume({
+        identifier: "verify-email:race",
+        valueHash: "hash-race",
+        now,
+      });
+      const results = yield* Effect.all([claim, claim], { concurrency: "unbounded" });
+      assert.strictEqual(results.filter(Option.isSome).length, 1);
+    }).pipe(Effect.provide(RepositoriesLive)),
+  );
+
+  it.effect("PPS-003: findByIdentifier's query plan uses the partial unique live-identifier index", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const plan = yield* sql`EXPLAIN QUERY PLAN SELECT * FROM verification_tokens WHERE identifier = ${"verify-email:user-1"} AND "consumedAt" IS NULL`;
+      const detail = plan.map((row) => String(row["detail"])).join(" | ");
+      assert.include(detail, "verification_tokens_live_identifier");
+      assert.notInclude(detail, "TEMP B-TREE");
+    }).pipe(Effect.provide(RepositoriesLive)),
   );
 
   it.effect(
