@@ -3,7 +3,7 @@ ID: "GC-007"
 Title: "AuthEvent union mixes branded and unbranded id fields"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:60"
 Auditor: "giulio-canti"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `core` · reported by **Giulio Canti — Creator of fp-ts and io-ts** (`giulio-canti`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Type the field as `SessionId` (a type-only import avoids any runtime cycle) and 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `auth-event-schema`. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:68`. Fix: Brand session ids in the event union (type-only import to avoid a runtime cycle), as part of the ESA-007 schema migration. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** sessionId/supersededBy/adminUserId etc. are branded (UserIdSchema/SessionIdSchema via Schema.brand under the same brand names Users.ts/Sessions.ts use, so no runtime import cycle). Publishers wrapped with Sessions.SessionId(...) (Admin.ts, Sessions.ts evicted). Type test: packages/core/test/AuthEvents.types.test.ts (@ts-expect-error on a bare-string sessionId).

@@ -45,6 +45,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as PasswordApi from "./PasswordApi.ts";
 import * as PasswordRateLimits from "./PasswordRateLimits.ts";
 
@@ -113,6 +114,14 @@ export interface PasswordConfigShape {
    * notice. See ADR-EA-018.
    */
   readonly signUpEnumeration: "reveal" | "conceal";
+  /**
+   * CSD-004: the secret `auth.user.signInFailed.identifierDigest` is keyed
+   * with. `None` (default) generates a random key per process — enough for a
+   * single-process detector, but digests do not survive a restart or match
+   * across instances; set a stable secret (>= 32 bytes) to correlate attempts
+   * across a fleet and over time.
+   */
+  readonly identifierDigestKey: Option.Option<Redacted.Redacted<string>>;
 }
 
 const defaultPasswordConfig: PasswordConfigShape = {
@@ -126,6 +135,7 @@ const defaultPasswordConfig: PasswordConfigShape = {
   links: {},
   requireVerifiedEmail: true,
   signUpEnumeration: "reveal",
+  identifierDigestKey: Option.none(),
 };
 
 /** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
@@ -615,6 +625,32 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // dispatcher this layer owns — supervised, retried, bounded, observable
       // and drained on shutdown — in place of unowned `forkDetach` fibers.
       const mailDispatcher = yield* MailDispatch.make;
+      // CSD-004: a keyed, non-reversible digest of the *attempted* identifier,
+      // for the failure event. Computed identically for a real and a
+      // nonexistent account, so it is no existence oracle; keyed so it cannot
+      // be dictionary-reversed from the audit table.
+      const digestKey = Option.isSome(config.identifierDigestKey)
+        ? new TextEncoder().encode(Redacted.value(config.identifierDigestKey.value))
+        : yield* crypto.randomBytes(32).pipe(Effect.orDie);
+      const identifierDigest = (email: string) =>
+        Hmac.hmacSha256(
+          crypto,
+          digestKey,
+          new TextEncoder().encode(`signin-identifier:${config.rateLimitEmailKey(email)}`),
+        ).pipe(Effect.map(Hmac.toHex), Effect.orDie);
+      /** ALF-003/CSD-004: the failure signal, with the two dimensions a stuffing detector keys on. */
+      const publishSignInFailed = Effect.fnUntraced(function* (
+        reason: "invalidCredentials" | "emailNotVerified",
+        input: { readonly email: string; readonly ip?: string },
+      ) {
+        yield* events.publish({
+          _tag: "auth.user.signInFailed",
+          strategy: "password",
+          reason,
+          identifierDigest: yield* identifierDigest(input.email),
+          ...(input.ip === undefined ? {} : { clientIp: input.ip }),
+        });
+      });
       // AOMS-006/BCR-004 (.issues/high, wayfinder ticket 03): the mechanism
       // an Auth0-Rule-style sign-up policy, and the MFA divert point a
       // future `TwoFactor` plugin taps, both attach through.
@@ -899,11 +935,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           // `UserSignInFailedEvent`'s own doc comment for why this
           // carries no `userId`/email despite the wire response's own
           // uniform-response discipline not applying here.
-          yield* events.publish({
-            _tag: "auth.user.signInFailed",
-            strategy: "password",
-            reason: "invalidCredentials",
-          });
+          yield* publishSignInFailed("invalidCredentials", input);
           return yield* Effect.fail(new Api.InvalidCredentials());
         }
         const user = userOpt.value;
@@ -914,11 +946,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // correct password is confirmed — never before, so this can't be
         // used to probe whether a guessed password is even close to right.
         if (config.requireVerifiedEmail && !user.emailVerified) {
-          yield* events.publish({
-            _tag: "auth.user.signInFailed",
-            strategy: "password",
-            reason: "emailNotVerified",
-          });
+          yield* publishSignInFailed("emailNotVerified", input);
           return yield* Effect.fail(new PasswordApi.EmailNotVerified());
         }
 
@@ -975,9 +1003,17 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // regardless of mail-provider health.
         if (Option.isSome(userOpt)) {
           const user = userOpt.value;
+          // ARF-006: the earliest takeover signal, published from *inside* the
+          // detached branch (an audit write on the response path would make an
+          // existing account slower than an unknown one) and at most once even
+          // if the mail work is retried.
+          const announced = Ref.makeUnsafe(false);
           yield* mailDispatcher.dispatch(
             { template: "reset-password", userId: user.id },
             Effect.gen(function* () {
+              if (!(yield* Ref.getAndSet(announced, true))) {
+                yield* events.publish({ _tag: "auth.password.resetRequested", userId: user.id });
+              }
               // ARF-004: an OAuth-/passkey-only account has no password to
               // reset — a token would only lead to a dead link. Looked up
               // here, inside the dispatched work, so both branches still cost
@@ -1143,7 +1179,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // retry. `resendVerification` mints a fresh token, so it isn't
         // fatal, but it's still the identical consume-then-apply
         // atomicity gap `SqlTransaction` exists to close.
-        yield* sqlTransaction
+        const verifiedUserId = yield* sqlTransaction
           .withTransaction(
             Effect.gen(function* () {
               const consumed = yield* verification.consume(identifier, value).pipe(
@@ -1173,9 +1209,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                     ),
                   ),
                 );
+              return userId;
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
+        // ARF-006: after the commit, like `resetCompleted`.
+        yield* events.publish({ _tag: "auth.user.emailVerified", userId: verifiedUserId });
       });
 
       const changePassword: PasswordShape["changePassword"] = Effect.fnUntraced(function* (input) {

@@ -5,7 +5,7 @@
 // the same way `Session.SessionHandlers` is.
 
 import { AuthCore, Api, AccountContract } from "@awthaq/api";
-import { Accounts, Sessions, Users, Verification } from "@awthaq/core";
+import { Accounts, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -37,6 +37,7 @@ export const AccountHandlers = HttpApiBuilder.group(
     const accounts = yield* Accounts.Accounts;
     const sessions = yield* Sessions.Sessions;
     const verification = yield* Verification.Verification;
+    const events = yield* AuthEvents.AuthEvents;
     const sqlTransaction = yield* SqlTransaction.SqlTransaction;
 
     return handlers.handleAll({
@@ -123,6 +124,9 @@ export const AccountHandlers = HttpApiBuilder.group(
           // `.pipe(Effect.orDie)` in this codebase already treats one
           // (see `OAuth.ts`'s identical `SqlTransaction` usage).
           .pipe(Effect.orDie);
+        // SCP-006: published only once the deletion has committed (a rolled-back
+        // one publishes nothing), and carrying no email — the row is gone.
+        yield* events.publish({ _tag: "auth.user.deleted", userId, deletedBy: "self" });
         // CSS-002: the account (and this request's own session) is gone, so
         // the browser's now-dead cookie is expired with the response.
         yield* expireSessionCookie;

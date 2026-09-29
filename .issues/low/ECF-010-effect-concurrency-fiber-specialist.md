@@ -3,7 +3,7 @@ ID: "ECF-010"
 Title: "Event subscription fibers have no restart policy"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:298"
 Auditor: "effect-concurrency-fiber-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `core` · reported by **Effect Concurrency & Fiber Specialist** (`effect-concurrency-fiber-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Restart the subscription with a bounded retry (Stream.retry or forkDaemon + repe
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `auth-events-subscription`. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:405`. Fix: Supervise each `on()` subscription: log when the drain fiber ends for any reason other than scope close, and resubscribe with bounded backoff. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** on()/onBatch supervise their drain fiber: if it ends for any reason other than the Layer's scope closing it is logged as auth.event.subscription.died (sanitized) and resubscribed with bounded exponential backoff (Schedule.min of exponential 100ms and spaced 30s); awthaq_event_subscriptions_active gauge tracks live drains. Test: a fake bus whose first subscription dies (Stream.die) is resubscribed, delivers, and logs the death.

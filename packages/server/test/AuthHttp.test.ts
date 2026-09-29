@@ -685,6 +685,16 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
           const response = yield* del;
           assert.strictEqual(response.status, 204);
 
+          // SCP-006: exactly one `auth.user.deleted`, after the commit, with no email.
+          const audit = yield* AuditLog.AuditLog;
+          const deleted = yield* audit.list({ eventTag: "auth.user.deleted" });
+          assert.strictEqual(deleted.length, 1);
+          assert.deepStrictEqual(deleted[0]?.payload, {
+            _tag: "auth.user.deleted",
+            userId: user.id,
+            deletedBy: "self",
+          });
+
           const stillHasUser = yield* Effect.exit(users.findById(user.id));
           assert.isTrue(stillHasUser._tag === "Failure");
 

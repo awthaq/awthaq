@@ -30,6 +30,7 @@ export * as AuditChain from "./AuditChain.ts";
 export * as AuditLog from "./AuditLog.ts";
 export * as AuthEvents from "./AuthEvents.ts";
 export * as AuthPlugin from "./AuthPlugin.ts";
+export * as AuthRequestContext from "./AuthRequestContext.ts";
 export * as ConstantTime from "./ConstantTime.ts";
 export * as HookPoint from "./HookPoint.ts";
 export * as Hooks from "./Hooks.ts";

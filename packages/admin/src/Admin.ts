@@ -583,10 +583,22 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       const users = yield* Users.Users;
       const adminConfig = yield* AdminConfig;
 
-      const deny = Effect.fnUntraced(function* (caller: Api.UserPrincipal) {
+      // IDS-006: the denied event names the refused call and, when the call named one,
+      // the attempted target/session, so a SIEM need not join `ImpersonationRecords`.
+      const deny = Effect.fnUntraced(function* (
+        caller: Api.UserPrincipal,
+        attempt: {
+          readonly operation: "impersonate" | "forceStop" | "list";
+          readonly targetUserId?: Users.UserId;
+          readonly sessionId?: Sessions.SessionId;
+        },
+      ) {
         yield* events.publish({
           _tag: "auth.admin.impersonationDenied",
           adminUserId: Users.UserId(caller.ref.id),
+          operation: attempt.operation,
+          ...(attempt.targetUserId === undefined ? {} : { targetUserId: attempt.targetUserId }),
+          ...(attempt.sessionId === undefined ? {} : { sessionId: attempt.sessionId }),
         });
         return yield* Effect.fail(new AdminApi.AdminImpersonationDenied());
       });
@@ -691,7 +703,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
             _tag: "auth.admin.sessionRevoked",
             adminUserId: Users.UserId(caller.ref.id),
             userId,
-            sessionId,
+            sessionId: Sessions.SessionId(sessionId),
           });
         },
       );
@@ -735,7 +747,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           admin: subjectOf(caller),
           target: subjectOfUserId(targetUserId),
         });
-        if (!allowed) return yield* deny(caller);
+        if (!allowed) return yield* deny(caller, { operation: "impersonate", targetUserId });
 
         // IDS-003: only a gate-passing caller learns whether the target exists.
         yield* users
@@ -781,7 +793,9 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           (episode) =>
             events.publish({
               _tag: "auth.admin.impersonationStopped",
-              sessionId: episode.sessionId,
+              sessionId: Sessions.SessionId(episode.sessionId),
+              adminUserId: episode.adminUserId,
+              targetUserId: episode.targetUserId,
               endedBy: "expired",
             }),
           { discard: true },
@@ -812,7 +826,9 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           }
           yield* events.publish({
             _tag: "auth.admin.impersonationStopped",
-            sessionId: caller.sessionId,
+            sessionId: Sessions.SessionId(caller.sessionId),
+            adminUserId: closed.value.adminUserId,
+            targetUserId: closed.value.targetUserId,
             endedBy: "self",
           });
         },
@@ -830,12 +846,18 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           admin: subjectOf(caller),
           episode: episode.value,
         });
-        if (!allowed) return yield* deny(caller);
+        if (!allowed) {
+          return yield* deny(caller, {
+            operation: "forceStop",
+            sessionId: Sessions.SessionId(sessionId),
+            targetUserId: episode.value.targetUserId,
+          });
+        }
         // IDS-007: revoke first and idempotently — the row proves this really is an
         // impersonation session, so it is safe to revoke even if the row is already
         // ended (which is then reported as not-found below).
         yield* revokeQuietly(sessionId);
-        yield* records
+        const ended = yield* records
           .endEpisode(sessionId, "forcedByAdmin")
           .pipe(
             Effect.catchTag("ImpersonationRecordNotFound", () =>
@@ -844,7 +866,9 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           );
         yield* events.publish({
           _tag: "auth.admin.impersonationStopped",
-          sessionId,
+          sessionId: Sessions.SessionId(sessionId),
+          adminUserId: ended.adminUserId,
+          targetUserId: ended.targetUserId,
           endedBy: "forcedByAdmin",
         });
       });

@@ -56,3 +56,5 @@ Stamp events with a correlation id (e.g. the ambient span/trace id at publish ti
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `auth-event-envelope`. Duplicate of `ALF-006` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:405`. Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `ALF-006-audit-logging-forensics-specialist` — closed by its fix (see that issue's Resolved comment).

@@ -3,7 +3,7 @@ ID: "ESS-004"
 Title: "No batching or buffering stage anywhere — the designed heavy sinks write one event per round trip"
 Level: medium
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:291"
 Auditor: "effect-stream-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `performance` · `core` · reported by **Effect Stream Specialist** (`effect-stream-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Establish a canonical batched-consumer pattern (e.g. events.stream.pipe(Stream.g
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `auth-events-subscription`. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:363`. Fix: Add a batched-subscription sugar next to `on()` and document it as the pattern for secondary sinks. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** AuthEvents.onBatch(select, { size, within }, handler) built on subscribe + Stream.groupedWithin, same isolation/supervision as on(); documented as the secondary-sink pattern in spec BEH-EA-102/103. Test: onBatch groups up to size or flushes after within (TestClock).

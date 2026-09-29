@@ -3,7 +3,7 @@ ID: "MA-009"
 Title: "Bounded AuthEvents PubSub converts event saturation into stalled authentication requests"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:263"
 Auditor: "michael-arnaldi"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `core` · reported by **Michael Arnaldi — Creator of Effect** (`michael-arnaldi`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Either document and bound the blast radius (default subscriber that drains to a 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `auth-events-subscription`. Already fixed by commit 4b48cb2. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:363`. Fix: Apply wayfinder ticket 02's BEH-EA-098 rewording and document the dropping/droppedCount semantics in BEH-EA-097. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/behaviors/13-events.md BEH-EA-098 reworded per wayfinder ticket 02 (publish MUST NOT suspend on a subscriber or on the bus's own capacity; returns immediately whether or not the event was accepted); BEH-EA-097 documents the dropping semantics, droppedCount and the awthaq_event_dropped_total metric; features 13-events.feature REQ-EA-261 wording updated. The stress test additionally asserts no AuditLog row is ever dropped.

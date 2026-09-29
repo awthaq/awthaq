@@ -2412,7 +2412,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
                 _tag: "auth.organization.invitationCreated",
                 invitationId: rotated.id,
                 organizationId,
-                email: rotated.email,
               });
               return rotated;
             } else {
@@ -2437,7 +2436,6 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
             _tag: "auth.organization.invitationCreated",
             invitationId: record.id,
             organizationId,
-            email: record.email,
           });
           yield* afterCreateInvitation.run({
             organizationId,

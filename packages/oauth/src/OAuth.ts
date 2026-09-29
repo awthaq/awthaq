@@ -687,7 +687,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         return { location, state };
       });
 
-      const callback: OAuthShape["callback"] = Effect.fnUntraced(function* (providerId, input) {
+      const callbackFlow: OAuthShape["callback"] = Effect.fnUntraced(function* (providerId, input) {
         // EOTS-007: `RateLimits.enforce` also publishes the breach event, logs and counts it.
         yield* RateLimits.enforce({
           key: `oauth:callback:${input.ip ?? "unknown"}`,
@@ -1075,6 +1075,26 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         yield* afterSignIn.run({ userId: targetUserId, strategy: providerId });
         return { callbackURL: flow.callbackURL, session: issued };
       });
+
+      /**
+       * CSD-004: a rejected callback (bad state, cookie mismatch, replayed flow,
+       * failed token exchange or ID-token check) is the OAuth strategy's failure
+       * signal — `auth.user.signInFailed`, so a detector sees every strategy. The
+       * provider's own "user said no" redirect and an availability failure are not.
+       */
+      const callback: OAuthShape["callback"] = (providerId, input) =>
+        callbackFlow(providerId, input).pipe(
+          Effect.tapError((error) =>
+            error._tag === "OAuthCallbackFailed"
+              ? events.publish({
+                  _tag: "auth.user.signInFailed",
+                  strategy: providerId,
+                  reason: "callbackRejected",
+                  ...(input.ip === undefined ? {} : { clientIp: input.ip }),
+                })
+              : Effect.void,
+          ),
+        );
 
       return OAuth.of({ authorize, callback });
     }),

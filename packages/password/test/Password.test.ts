@@ -480,6 +480,72 @@ describe("Password", () => {
   );
 
   it.effect(
+    "CSD-004: the failure event carries the source ip and a keyed identifierDigest — stable per identifier (existing account or not), distinct across identifiers, never the identifier itself",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* password.signUp({ email, password: strongPassword });
+        const wrong = Redacted.make("totally wrong password");
+        const attempt = (who: string) =>
+          password.signIn({ email: who, password: wrong, ip: "203.0.113.7" }).pipe(Effect.flip);
+        yield* attempt(email); // an existing account
+        yield* attempt(email.toUpperCase()); // the same identifier, differently cased
+        yield* attempt("nobody@example.com"); // no such account
+        yield* attempt("nobody@example.com");
+
+        const rows = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+        const failures = rows.flatMap((row) =>
+          row.payload._tag === "auth.user.signInFailed" ? [row.payload] : [],
+        );
+        assert.strictEqual(failures.length, 4);
+        for (const failure of failures) {
+          assert.strictEqual(failure.clientIp, "203.0.113.7");
+          assert.isString(failure.identifierDigest);
+          assert.notProperty(failure, "userId");
+          assert.notProperty(failure, "email");
+        }
+        const digests = new Set(failures.map((failure) => failure.identifierDigest));
+        // {email, EMAIL} share one digest (normalized), {nobody} is another: two distinct values.
+        assert.strictEqual(digests.size, 2);
+        assert.isFalse(JSON.stringify(failures).includes("nobody"));
+        assert.isFalse(JSON.stringify(failures).includes(email));
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "ARF-006: requestReset publishes auth.password.resetRequested for a real account only; verifyEmail publishes auth.user.emailVerified",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const auditLog = yield* AuditLog.AuditLog;
+        const issued = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+
+        const verified = yield* auditLog.list({ eventTag: "auth.user.emailVerified" });
+        assert.strictEqual(verified.length, 1);
+        assert.strictEqual(verified[0]?.actorUserId._tag, "Some");
+
+        yield* password.requestReset({ email: "nobody@example.com" });
+        yield* letForkedFibersRun;
+        assert.strictEqual(
+          (yield* auditLog.list({ eventTag: "auth.password.resetRequested" })).length,
+          0,
+        );
+
+        yield* password.requestReset({ email });
+        yield* letForkedFibersRun;
+        const requested = yield* auditLog.list({ eventTag: "auth.password.resetRequested" });
+        assert.strictEqual(requested.length, 1);
+        const [row] = requested;
+        assert.strictEqual(
+          row?.payload._tag === "auth.password.resetRequested" ? row.payload.userId : "",
+          issued.session.userId,
+        );
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
     "ALF-004: signUp and signIn each publish auth.session.issued for the session they mint",
     () =>
       Effect.gen(function* () {

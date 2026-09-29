@@ -32,6 +32,20 @@ import * as Csrf from "./Csrf.ts";
 export const routes: typeof HttpApiBuilder.layer = HttpApiBuilder.layer;
 
 /**
+ * MW-001/EOTS-006 (wayfinder ticket 27 §1): Effect's own HTTP request tracer
+ * (a W3C-`traceparent`-aware server span per request) and request logger
+ * (structured `http.method`/`http.url`/`http.status` per request), re-exported
+ * rather than re-implemented: the decision leaves logging and metrics backends
+ * to the host. Wrap the served app once, at the composition point:
+ * `AuthHttp.tracer(AuthHttp.requestLogger(app))`. An app already running its
+ * own tracer/logger over the whole router must not add these (it would trace
+ * and log every request twice). Pair with `layerRedactedHeaders` so no
+ * credential header is logged.
+ */
+export const tracer: typeof HttpMiddleware.tracer = HttpMiddleware.tracer;
+export const requestLogger: typeof HttpMiddleware.logger = HttpMiddleware.logger;
+
+/**
  * BEH-EA-084: serves generated OpenAPI/Scalar documentation from the same
  * `api` value `routes` registers — the two can never diverge, since both
  * read from the one `HttpApi` value a caller passes to each.

@@ -3,7 +3,7 @@ ID: "ESS-007"
 Title: "Every subscriber filters all 25 event types itself; no per-tag channel for the one-tag-one-handler case"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthEvents.ts:285"
 Auditor: "effect-stream-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `core` · reported by **Effect Stream Specialist** (`effect-stream-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Keep the shared bus, but consider offering partitioned reads (per-tag derived Pu
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `auth-events-subscription`. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:398`. Fix: Let `on`/`onBatch` accept a tag array (one subscription, narrowed union type) and document the fan-out characteristic on `stream`; do not build per-tag PubSubs (speculative). (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** on()/onBatch accept a tag or an array of tags (one subscription, handler typed as the narrowed union, membership via a Set type guard, no assertion); stream/on docs state each consumer is a full subscriber. Test: on([a,b], h) delivers both tags and nothing else.

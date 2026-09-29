@@ -1592,6 +1592,34 @@ export interface AuditLogRepositoryShape {
     },
     options?: ReadRouting.ReadOptions,
   ) => Effect.Effect<ReadonlyArray<AuditLogRow>, RepositoryError>;
+  /**
+   * ESA-003: one page of the log in ascending `id` order (ids are time-ordered),
+   * strictly after `after` when given — the cursor read `AuditLog.replay` pages
+   * with. Replica-eligible like `list`.
+   */
+  readonly page: (
+    input: {
+      readonly after: string | null;
+      readonly eventTag: string | null;
+      readonly limit: number;
+    },
+    options?: ReadRouting.ReadOptions,
+  ) => Effect.Effect<ReadonlyArray<AuditLogRow>, RepositoryError>;
+  /**
+   * ESA-005: every row that names `userId` — as its actor, or anywhere in its
+   * payload — read from the primary (an erasure must see every row). The
+   * payload match is a substring test over the stored JSON text; ids are
+   * uuid-shaped, so a hit is a reference.
+   */
+  readonly listReferencing: (
+    userId: string,
+  ) => Effect.Effect<ReadonlyArray<AuditLogRow>, RepositoryError>;
+  /** ESA-005: rewrites one row's actor and payload in place (erasure pseudonymization); id, tag, time and correlation are untouched. */
+  readonly rewrite: (input: {
+    readonly id: string;
+    readonly actorUserId: string | null;
+    readonly payload: unknown;
+  }) => Effect.Effect<void, RepositoryError>;
 }
 
 export class AuditLogRepository extends Context.Service<
@@ -1643,10 +1671,47 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
               ...(r.occurredAfter === null ? [] : [client`"occurredAt" >= ${r.occurredAfter}`]),
               ...(r.occurredBefore === null ? [] : [client`"occurredAt" <= ${r.occurredBefore}`]),
             ];
-            return client`SELECT * FROM auth_audit_log WHERE ${client.and(conditions)} ORDER BY "occurredAt" DESC`;
+            // ESA-002: `id` (a time-ordered uuidv7, monotonic within a process) breaks
+            // ties, so two events in one millisecond list in a deterministic order.
+            return client`SELECT * FROM auth_audit_log WHERE ${client.and(conditions)} ORDER BY "occurredAt" DESC, id DESC`;
           },
         }),
       );
+
+      const pageOn = router.route((client) =>
+        SqlSchema.findAll({
+          Request: Schema.Struct({
+            after: Schema.NullOr(Schema.String),
+            eventTag: Schema.NullOr(Schema.String),
+            limit: Schema.Number,
+          }),
+          Result: models.AuditLogRow,
+          execute: (r) => {
+            const conditions = [
+              ...(r.after === null ? [] : [client`id > ${r.after}`]),
+              ...(r.eventTag === null ? [] : [client`"eventTag" = ${r.eventTag}`]),
+            ];
+            return client`SELECT * FROM auth_audit_log WHERE ${client.and(conditions)} ORDER BY id ASC LIMIT ${r.limit}`;
+          },
+        }),
+      );
+
+      const referencingQuery = SqlSchema.findAll({
+        Request: Schema.Struct({ userId: Schema.String, pattern: Schema.String }),
+        Result: models.AuditLogRow,
+        execute: (r) =>
+          sql`SELECT * FROM auth_audit_log WHERE "actorUserId" = ${r.userId} OR payload LIKE ${r.pattern} ESCAPE '\\'`,
+      });
+
+      const rewriteQuery = SqlSchema.void({
+        Request: Schema.Struct({
+          id: Schema.String,
+          actorUserId: Schema.NullOr(Schema.String),
+          payload: Schema.fromJsonString(Schema.Unknown),
+        }),
+        execute: (r) =>
+          sql`UPDATE auth_audit_log SET "actorUserId" = ${r.actorUserId}, payload = ${r.payload} WHERE id = ${r.id}`,
+      });
 
       const insert: AuditLogRepositoryShape["insert"] = (input) =>
         insertQuery(input).pipe(
@@ -1659,6 +1724,23 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
           traced("AuditLog.list"),
         );
 
-      return { insert, list };
+      const page: AuditLogRepositoryShape["page"] = (input, options) =>
+        pageOn(options?.consistency ?? "eventual").pipe(
+          Effect.flatMap((query) => query(input)),
+          traced("AuditLog.page"),
+        );
+
+      // The id is matched as a literal substring of the JSON text: escape LIKE's own wildcards.
+      const likeEscape = (value: string): string => value.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+      const listReferencing: AuditLogRepositoryShape["listReferencing"] = (userId) =>
+        referencingQuery({ userId, pattern: `%${likeEscape(userId)}%` }).pipe(
+          traced("AuditLog.listReferencing"),
+        );
+
+      const rewrite: AuditLogRepositoryShape["rewrite"] = (input) =>
+        rewriteQuery(input).pipe(traced("AuditLog.rewrite", { id: input.id }));
+
+      return { insert, list, page, listReferencing, rewrite };
     }),
   );

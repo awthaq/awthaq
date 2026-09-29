@@ -3,7 +3,7 @@ ID: "ETVS-001"
 Title: "Real wall-clock sleeps in the AuthEvents subscription test"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/test/AuthEvents.test.ts:81"
 Auditor: "effect-testing-vitest-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `core` · reported by **Effect Testing & @effect/vitest Specialist** (`effect-testing-vitest-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Make the handshake deterministic instead of timed: publish a first 'probe' event
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `auth-events-subscription`. Evidence at HEAD ec065a7: `packages/core/test/AuthEvents.test.ts:112`. Fix: Once ALF-007 makes `on()` register synchronously, rewrite the test as `it.effect` with a handler-completed Deferred/Queue instead of sleeps. (effort S). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** The BEH-EA-103 test is rewritten as it.effect with Queue.take, no sleeps (grep 'it.live\|sleep("20 millis")' packages/core/test/AuthEvents.test.ts is empty).

@@ -521,7 +521,7 @@ const evictionOrder = (
 /** ESA-006: the one `auth.session.issued` both layers publish. */
 const publishIssued = (
   events: AuthEvents.AuthEventsShape,
-  session: { readonly id: string; readonly userId: UserId },
+  session: { readonly id: SessionId; readonly userId: UserId },
   familyId: string,
   actingAs: Option.Option<ActingAs>,
 ) =>
@@ -624,12 +624,16 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         // alarm and a family revocation). RRS-003: tombstoned, not deleted —
         // the ancestor's own `familyId` is what this row inherits; a row with
         // no live `supersedes` ancestor founds a fresh family, `familyId = id`.
-        const { row, evicted } = yield* Ref.modify(
+        const { row, evicted, superseded } = yield* Ref.modify(
           state,
           (
             s,
           ): readonly [
-            { readonly row: SessionRow; readonly evicted: ReadonlyArray<SessionRow> },
+            {
+              readonly row: SessionRow;
+              readonly evicted: ReadonlyArray<SessionRow>;
+              readonly superseded: Option.Option<SessionRow>;
+            },
             HashMap.HashMap<SessionId, SessionRow>,
           ] => {
             // TMS-004: rows are otherwise removed only on revoke; prune
@@ -688,11 +692,22 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             const evictedRows = existing.filter((r) => evictedIds.has(r.id));
             const kept = HashMap.filter(withAncestor, (r) => !evictedIds.has(r.id));
             return [
-              { row: created, evicted: evictedRows },
+              { row: created, evicted: evictedRows, superseded: ancestor },
               HashMap.set(kept, id, created),
             ] as const;
           },
         );
+        // RRS-008: the rotation's own event, published from `Sessions` so every
+        // strategy's `supersedes` is covered, only when a live ancestor was tombstoned.
+        if (Option.isSome(superseded)) {
+          yield* events.publish({
+            _tag: "auth.session.superseded",
+            sessionId: superseded.value.id,
+            supersededBy: id,
+            familyId: superseded.value.familyId,
+            userId: superseded.value.userId,
+          });
+        }
         for (const gone of evicted) {
           yield* events.publish({
             _tag: "auth.session.revoked",
@@ -872,6 +887,14 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           }
           return { session: toView(current.value), rotated: Option.none() };
         }
+        // RRS-008: only the call that won the rotation announces it — the
+        // concurrent loser took the branch above and reports `rotated: none`.
+        yield* events.publish({
+          _tag: "auth.session.rotated",
+          sessionId: id,
+          familyId: touched.value.familyId,
+          userId: touched.value.userId,
+        });
         return {
           session: toView(touched.value),
           rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
@@ -1098,6 +1121,7 @@ export const layerSql: Layer.Layer<
         // what this new row inherits; no live `supersedes` ancestor founds a
         // fresh family, `familyId = id`.
         let familyId = id;
+        let superseded: { readonly id: SessionId; readonly familyId: string } | undefined;
         if (input.supersedes !== undefined) {
           const ancestor = yield* repo
             .tombstone({ id: input.supersedes, supersededBy: id, supersededAt: now })
@@ -1108,7 +1132,10 @@ export const layerSql: Layer.Layer<
                 SqlError: Effect.die,
               }),
             );
-          if (ancestor !== undefined) familyId = SessionId(ancestor.familyId);
+          if (ancestor !== undefined) {
+            familyId = SessionId(ancestor.familyId);
+            superseded = { id: input.supersedes, familyId: ancestor.familyId };
+          }
         }
         const insert = yield* repo.models.Session.insert
           .makeEffect({
@@ -1146,17 +1173,27 @@ export const layerSql: Layer.Layer<
             evicted.push(goneId);
           }
         }
-        return { inserted, evicted };
+        return { inserted, evicted, superseded };
       });
-      const { inserted: row, evicted } = yield* input.supersedes === undefined &&
+      const { inserted: row, evicted, superseded } = yield* input.supersedes === undefined &&
       config.maxConcurrent === undefined
         ? persist
         : sql.withTransaction(persist).pipe(Effect.catchTag("SqlError", Effect.die));
+      // RRS-008: see `layerMemory.issue`.
+      if (superseded !== undefined) {
+        yield* events.publish({
+          _tag: "auth.session.superseded",
+          sessionId: superseded.id,
+          supersededBy: id,
+          familyId: superseded.familyId,
+          userId: input.userId,
+        });
+      }
       for (const goneId of evicted) {
         yield* events.publish({
           _tag: "auth.session.revoked",
           userId: input.userId,
-          sessionId: goneId,
+          sessionId: SessionId(goneId),
           scope: "one",
           reason: "limitEvicted",
         });
@@ -1319,6 +1356,13 @@ export const layerSql: Layer.Layer<
         );
         return { session: toSessionView(current), rotated: Option.none() };
       }
+      // RRS-008: only the call that won the rotation announces it.
+      yield* events.publish({
+        _tag: "auth.session.rotated",
+        sessionId: id,
+        familyId: touched.value.familyId,
+        userId: UserId(touched.value.userId),
+      });
       return {
         session: toSessionView(touched.value),
         rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),

@@ -1327,7 +1327,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           }
         });
 
-      const authenticateVerify: PasskeyShape["authenticateVerify"] = Effect.fnUntraced(
+      const authenticateCeremony: PasskeyShape["authenticateVerify"] = Effect.fnUntraced(
         function* (input, context) {
           // Per-source budget first: cheap to enforce, bounds signature work
           // and challenge probing from one address.
@@ -1473,6 +1473,29 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           return issued;
         },
       );
+
+      /**
+       * CSD-004: a failed assertion is the passkey strategy's failure signal —
+       * `auth.user.signInFailed`, so a stuffing/probing detector sees every
+       * strategy. Only the ceremony's own refusals count; a rate-limit, a
+       * `BeforeSignIn` veto or a second-factor divert are not failed assertions.
+       */
+      const authenticateVerify: PasskeyShape["authenticateVerify"] = (input, context) =>
+        authenticateCeremony(input, context).pipe(
+          Effect.tapError((error) =>
+            error._tag === "InvalidCredentials" ||
+            error._tag === "PasskeyChallengeInvalid" ||
+            error._tag === "PasskeyUserVerificationRequired" ||
+            error._tag === "PasskeyCounterAnomaly"
+              ? events.publish({
+                  _tag: "auth.user.signInFailed",
+                  strategy: "passkey",
+                  reason: "assertionInvalid",
+                  ...(input.ip === undefined ? {} : { clientIp: input.ip }),
+                })
+              : Effect.void,
+          ),
+        );
 
       const listCredentials: PasskeyShape["listCredentials"] = (userId) =>
         credentials.listByUser(userId);

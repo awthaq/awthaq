@@ -130,4 +130,34 @@ describe("Passkey authenticateVerify BeforeSignIn hook (NAM-002)", () => {
         assert.strictEqual(aborted.code, "PASSKEY_DENIED:passkey");
       }).pipe(Effect.provide(TestLayer)),
   );
+
+  // CSD-004: a refused assertion is the passkey strategy's failure signal.
+  it.effect(
+    "a refused assertion publishes auth.user.signInFailed (strategy passkey, reason assertionInvalid)",
+    () =>
+      Effect.gen(function* () {
+        const passkey = yield* Passkey.Passkey;
+        const auditLog = yield* AuditLog.AuditLog;
+        const refused = yield* passkey
+          .authenticateVerify({
+            ceremonyId: "no-such-ceremony",
+            ip: "203.0.113.4",
+            credential: {
+              id: "cred-x",
+              rawId: "cred-x",
+              type: "public-key",
+              response: { clientDataJSON: "not-client-data", authenticatorData: "", signature: "" },
+            },
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "PasskeyChallengeInvalid");
+        const [failure] = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+        assert.deepStrictEqual(failure?.payload, {
+          _tag: "auth.user.signInFailed",
+          strategy: "passkey",
+          reason: "assertionInvalid",
+          clientIp: "203.0.113.4",
+        });
+      }).pipe(Effect.provide(TestLayer)),
+  );
 });
