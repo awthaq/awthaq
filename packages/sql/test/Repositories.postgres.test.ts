@@ -16,6 +16,7 @@ import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Models from "../src/Models.ts";
+import * as ReadRouting from "../src/ReadRouting.ts";
 import * as Repositories from "../src/Repositories.ts";
 import { contractCases, repositoriesLayer } from "./contract.ts";
 
@@ -249,6 +250,35 @@ describe.skipIf(skip)("Repositories (real Postgres)", () => {
           now,
         });
         assert.isFalse(second);
+      }).pipe(Effect.provide(RepositoriesLive)),
+  );
+
+  // RRC-001: the default `ReplicationPosition` speaks Postgres LSNs. The
+  // "replica" here is the primary itself (there is no streaming replica in
+  // this environment), which is never in recovery, so `pg_last_wal_replay_lsn()`
+  // is NULL and it can never prove it caught up — exactly the safe direction.
+  it.effect(
+    "ReadRouting: captureToken reads a real LSN; an eventual read then pins the primary",
+    () =>
+      Effect.gen(function* () {
+        const replicaLive = ReadRouting.replica(SqlLive);
+        const users = yield* Repositories.UsersRepository;
+        const inFiber = Effect.gen(function* () {
+          const router = yield* ReadRouting.makeRouter;
+          assert.strictEqual(yield* router.target("eventual"), "replica"); // no token yet
+          yield* ReadRouting.captureToken(
+            users.insert(yield* M.User.insert.makeEffect({ email: "lsn@example.com", name: "L" })),
+          );
+          const token = yield* ReadRouting.CurrentCausalToken;
+          assert.isTrue(Option.isSome(token));
+          assert.match(Option.getOrThrow(token), /^[0-9A-F]+\/[0-9A-F]+$/);
+          assert.strictEqual(yield* router.target("eventual"), "primary");
+          assert.strictEqual(yield* router.target("authoritative"), "primary");
+        });
+        yield* inFiber.pipe(
+          Effect.provideService(ReadRouting.CurrentCausalToken, Option.none()),
+          Effect.provide(replicaLive),
+        );
       }).pipe(Effect.provide(RepositoriesLive)),
   );
 });

@@ -876,6 +876,9 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
@@ -886,6 +889,9 @@ importers:
       '@awthaq/password':
         specifier: workspace:*
         version: link:../password
+      '@effect/sql-sqlite-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)

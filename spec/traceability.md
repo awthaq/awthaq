@@ -148,6 +148,7 @@ One row per `spec/decisions/ADR-EA-NNN` file (`archive/PRD.md` §22).
 | [ADR-EA-016](decisions/016-verification-sql-claiming.md) | Verification Reservations Are a Dedicated Table, Claimed by a Conditional Upsert | [BEH-EA-057 through 064](behaviors/08-verification-tokens.md) |
 | [ADR-EA-017](decisions/017-jwt-signing-key-rotation.md) | JWT Signing Keys Rotate on a Grace Period Sized to Token Lifetime, With an Emergency Retire-Now Path | `packages/jwt/test/KeyRing.test.ts`, `packages/jwt/test/JwtCodec.test.ts` (no BEH-EA range; model [08](models/08-jwt-bearer.md)) |
 | [ADR-EA-019](decisions/019-encryption-key-rotation.md) | Encryption-at-Rest Keys Rotate by Retirement, With Lazy Re-Encryption | `packages/ports/test/KeyProvider.test.ts`, `packages/ports/test/Encryption.test.ts` (no BEH-EA range) |
+| [ADR-EA-024](decisions/024-read-replica-routing.md) | Read-Replica Routing Is Opt-In, Classified Per Read, and Guarded by a Causal Token | `packages/test/test/ReadRouting.test.ts`, `packages/sql/test/Repositories.postgres.test.ts` (no BEH-EA range; [BEH-EA-035](behaviors/05-persistence-stratum.md#beh-ea-035-repositories-are-built-with-sqlmodelmakerepository-over-the-ambient-sqlclient-never-opening-their-own-transactions) addendum) |
 
 ---
 

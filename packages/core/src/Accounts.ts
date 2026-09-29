@@ -625,18 +625,12 @@ export const layerSql: Layer.Layer<
         Effect.map(rowToProviderTokenSet),
       );
 
-    // SMS-002: a targeted write of the whole token group. It needs the row's
-    // `providerId`/`userId` only as encryption AAD (a plain, token-free read),
-    // never the old token values.
+    // SMS-002/RRS-006: a targeted write of the whole token group. It needs the
+    // row's `providerId`/`userId` only as encryption AAD, read through
+    // `findAad` (no decrypt, no lazy re-encrypt), never the old token values.
     const updateProviderTokens: AccountsShape["updateProviderTokens"] = (id, tokens) =>
-      repo.findById(id).pipe(
-        Effect.flatMap((existing) =>
-          repo.updateProviderTokens(
-            id,
-            { providerId: existing.providerId, userId: existing.userId },
-            tokenSetToRow(tokens),
-          ),
-        ),
+      repo.findAad(id).pipe(
+        Effect.flatMap((aad) => repo.updateProviderTokens(id, aad, tokenSetToRow(tokens))),
         Effect.catchTags({
           NoSuchElementError: () =>
             Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),

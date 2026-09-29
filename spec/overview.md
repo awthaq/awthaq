@@ -129,7 +129,11 @@ export const AuthLive = auth.layer.pipe(
   Layer.provide(WebAuthn.layerSimpleWebAuthn({ rpId: "example.com", origins: ["https://example.com"] })),
   Layer.provide(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
   Layer.provide(PgMigrator.layer({ loader: PgMigrator.fromRecord(auth.migrations) }).pipe(
-    Layer.provideMerge(PgClient.layerConfig({ url: Config.Redacted("DATABASE_URL") })))),
+    Layer.provideMerge(PgClient.layerConfig({
+      url: Config.Redacted("DATABASE_URL"),
+      maxConnections: 10,        // (server max_connections - headroom) / app instances
+      idleTimeout: "30 seconds", // prepare: false behind pgbouncer transaction pooling
+    })))),
   Layer.provide(NodeServices.layer)
 )
 // Delete the Mailer line: AuthLive no longer compiles.

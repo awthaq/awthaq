@@ -12,3 +12,4 @@
 // See spec/overview.md for the full package map.
 
 export * as TestAuth from "./TestAuth.ts";
+export * as LaggingReplica from "./LaggingReplica.ts";

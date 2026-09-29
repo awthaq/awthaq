@@ -8,6 +8,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
@@ -198,6 +199,27 @@ describe("AccountsRepository token read path (SMS-002)", () => {
       assert.strictEqual(healed.refreshToken, "fresh-refresh");
       assert.strictEqual(healed.scope, "read");
     }).pipe(Effect.provide(over(RepoK1))),
+  );
+
+  // RRS-006: the AAD for a token write is (providerId, userId); reading it must
+  // not decrypt, log, or lazily re-encrypt the token columns about to be replaced.
+  it.effect("findAad returns the encryption AAD without touching the token columns", () =>
+    Effect.gen(function* () {
+      const account = yield* seedAccount("aad").pipe(Effect.provide(RepoK1));
+      const before = yield* rawColumns(account.id);
+      yield* tamper(account.id);
+      const tampered = yield* rawColumns(account.id);
+      const accounts = yield* Repositories.AccountsRepository;
+      const aad = yield* accounts.findAad(account.id);
+      assert.deepStrictEqual(aad, { providerId: "github", userId: account.userId });
+      // Even on a row whose ciphertext is unreadable (where `findById` would decrypt and log).
+      assert.deepStrictEqual(yield* rawColumns(account.id), tampered);
+      assert.notStrictEqual(before.accessToken, tampered.accessToken);
+      const missing = yield* accounts
+        .findAad(Schema.decodeUnknownSync(Models.AccountId)("nope"))
+        .pipe(Effect.flip);
+      assert.strictEqual(missing._tag, "NoSuchElementError");
+    }).pipe(Effect.provide(over(RepoRotated))),
   );
 
   it.effect("updatePasswordHash never touches the token columns", () =>

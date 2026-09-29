@@ -74,3 +74,7 @@ entries:
     file: "019-encryption-key-rotation.md"
     title: "Encryption-at-Rest Keys Rotate by Retirement, With Lazy Re-Encryption"
     status: "Accepted — implemented"
+  - id: "ADR-EA-024"
+    file: "024-read-replica-routing.md"
+    title: "Read-Replica Routing Is Opt-In, Classified Per Read, and Guarded by a Causal Token"
+    status: "Accepted — implemented"

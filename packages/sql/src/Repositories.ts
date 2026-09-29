@@ -24,6 +24,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlModel from "effect/unstable/sql/SqlModel";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as ReadRouting from "./ReadRouting.ts";
 import {
   AccountId,
   SessionId,
@@ -211,6 +212,18 @@ export interface AccountsRepositoryShape {
     id: AccountId,
     passwordHash: string,
   ) => Effect.Effect<Account, Cause.NoSuchElementError | RepositoryError>;
+  /**
+   * RRS-006: the row's encryption AAD (`providerId`/`userId`, immutable) via a
+   * token-free read — it neither decrypts nor lazily re-encrypts the token
+   * columns, so a caller about to overwrite them (`updateProviderTokens`) never
+   * reads a secret it is not going to keep.
+   */
+  readonly findAad: (
+    id: AccountId,
+  ) => Effect.Effect<
+    { readonly providerId: string; readonly userId: string },
+    Cause.NoSuchElementError | RepositoryError
+  >;
   /**
    * SMS-002: overwrites the whole provider-token group without decrypting the
    * previous value, so a row whose old ciphertext is unreadable heals on the
@@ -494,6 +507,15 @@ export const AccountsRepositoryLive: Layer.Layer<
         traced("Accounts.updatePasswordHash", { id }),
       );
 
+    const findAadQuery = SqlSchema.findOne({
+      Request: AccountId,
+      Result: Schema.Struct({ providerId: Schema.String, userId: Schema.String }),
+      execute: (id) => sql`SELECT "providerId", "userId" FROM accounts WHERE id = ${id}`,
+    });
+
+    const findAad: AccountsRepositoryShape["findAad"] = (id) =>
+      findAadQuery(id).pipe(traced("Accounts.findAad", { id }));
+
     const updateProviderTokensQuery = SqlSchema.findOne({
       Request: Schema.Struct({
         id: AccountId,
@@ -579,6 +601,7 @@ export const AccountsRepositoryLive: Layer.Layer<
       findById,
       findTokensById,
       updatePasswordHash,
+      findAad,
       updateProviderTokens,
       delete: repo.delete,
       // `subject`/`issuer` identify a person at an IdP: only `providerId` is
@@ -613,11 +636,18 @@ export interface SessionsRepositoryShape {
   readonly findById: (
     id: SessionId,
   ) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
-  /** BEH-EA-036: `cursor` is opaque and derived from `(createdAt, id)`. */
+  /**
+   * BEH-EA-036: `cursor` is opaque and derived from `(createdAt, id)`.
+   *
+   * RRC-001: reads the primary unless `options.consistency` is `"eventual"`,
+   * which a display-only caller (a device list) passes to allow a configured
+   * read replica. Never pass it for a liveness or authorization decision.
+   */
   readonly listByUser: (
     userId: UserId,
     cursor?: Cursor,
     limit?: number,
+    options?: ReadRouting.ReadOptions,
   ) => Effect.Effect<Page<Session>, RepositoryError>;
   /**
    * Upstream-hardening map, ticket 01: the throttled touch/rotation
@@ -703,33 +733,43 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
       // is also what makes `Sessions.verifyLive`/`Jwt.introspectLive`
       // correctly reject a reused/family-revoked session's JWT for free —
       // both call this same `list`.
-      const page = SqlSchema.findAll({
-        Request: Schema.Struct({
-          userId: UserId,
-          cursorCreatedAt: models.wire.nullableDateTime,
-          cursorId: Schema.NullOr(Schema.String),
-          limit: Schema.Int,
-        }),
-        Result: models.Session,
-        execute: (request) =>
-          request.cursorCreatedAt === null || request.cursorId === null
-            ? sql`SELECT * FROM sessions WHERE "userId" = ${request.userId}
+      //
+      // RRC-001: the one replica-eligible session read. Built once per client
+      // (primary, and the replica when `ReadRouting.replica` is provided); the
+      // default `consistency` is `"authoritative"`, i.e. the primary.
+      const router = yield* ReadRouting.makeRouter;
+      const pageOn = router.route((client) =>
+        SqlSchema.findAll({
+          Request: Schema.Struct({
+            userId: UserId,
+            cursorCreatedAt: models.wire.nullableDateTime,
+            cursorId: Schema.NullOr(Schema.String),
+            limit: Schema.Int,
+          }),
+          Result: models.Session,
+          execute: (request) =>
+            request.cursorCreatedAt === null || request.cursorId === null
+              ? client`SELECT * FROM sessions WHERE "userId" = ${request.userId}
                   AND "supersededAt" IS NULL
                   ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit}`
-            : sql`SELECT * FROM sessions WHERE "userId" = ${request.userId}
+              : client`SELECT * FROM sessions WHERE "userId" = ${request.userId}
                   AND "supersededAt" IS NULL
                   AND ("createdAt" > ${request.cursorCreatedAt}
                        OR ("createdAt" = ${request.cursorCreatedAt} AND id > ${request.cursorId}))
                   ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit}`,
-      });
+        }),
+      );
 
-      const listByUser: SessionsRepositoryShape["listByUser"] = (userId, cursor, limit) =>
-        page({
-          userId,
-          cursorCreatedAt: cursor?.createdAt ?? null,
-          cursorId: cursor?.id ?? null,
-          limit: limit ?? DEFAULT_PAGE_SIZE,
-        }).pipe(
+      const listByUser: SessionsRepositoryShape["listByUser"] = (userId, cursor, limit, options) =>
+        pageOn(options?.consistency ?? "authoritative").pipe(
+          Effect.flatMap((page) =>
+            page({
+              userId,
+              cursorCreatedAt: cursor?.createdAt ?? null,
+              cursorId: cursor?.id ?? null,
+              limit: limit ?? DEFAULT_PAGE_SIZE,
+            }),
+          ),
           Effect.map((items): Page<Session> => {
             const effectiveLimit = limit ?? DEFAULT_PAGE_SIZE;
             const last = items.at(-1);
@@ -1119,12 +1159,16 @@ export interface AuditLogRepositoryShape {
     readonly correlationId: string | null;
     readonly payload: unknown;
   }) => Effect.Effect<AuditLogRow, Cause.NoSuchElementError | RepositoryError>;
-  readonly list: (input: {
-    readonly eventTag: string | null;
-    readonly actorUserId: string | null;
-    readonly occurredAfter: DateTime.Utc | null;
-    readonly occurredBefore: DateTime.Utc | null;
-  }) => Effect.Effect<ReadonlyArray<AuditLogRow>, RepositoryError>;
+  /** RRC-001: a history listing — `"eventual"` (replica-eligible) unless `options.consistency` says otherwise. */
+  readonly list: (
+    input: {
+      readonly eventTag: string | null;
+      readonly actorUserId: string | null;
+      readonly occurredAfter: DateTime.Utc | null;
+      readonly occurredBefore: DateTime.Utc | null;
+    },
+    options?: ReadRouting.ReadOptions,
+  ) => Effect.Effect<ReadonlyArray<AuditLogRow>, RepositoryError>;
 }
 
 export class AuditLogRepository extends Context.Service<
@@ -1156,32 +1200,41 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
       `,
       });
 
-      const listQuery = SqlSchema.findAll({
-        Request: Schema.Struct({
-          eventTag: Schema.NullOr(Schema.String),
-          actorUserId: Schema.NullOr(Schema.String),
-          occurredAfter: models.wire.nullableDateTime,
-          occurredBefore: models.wire.nullableDateTime,
+      // RRC-001: a history listing — replica-eligible, and `"eventual"` by
+      // default (a fiber that just wrote is held to the primary by its causal
+      // token; pass `"authoritative"` to force the primary regardless).
+      const router = yield* ReadRouting.makeRouter;
+      const listOn = router.route((client) =>
+        SqlSchema.findAll({
+          Request: Schema.Struct({
+            eventTag: Schema.NullOr(Schema.String),
+            actorUserId: Schema.NullOr(Schema.String),
+            occurredAfter: models.wire.nullableDateTime,
+            occurredBefore: models.wire.nullableDateTime,
+          }),
+          Result: models.AuditLogRow,
+          execute: (r) => {
+            const conditions = [
+              ...(r.eventTag === null ? [] : [client`"eventTag" = ${r.eventTag}`]),
+              ...(r.actorUserId === null ? [] : [client`"actorUserId" = ${r.actorUserId}`]),
+              ...(r.occurredAfter === null ? [] : [client`"occurredAt" >= ${r.occurredAfter}`]),
+              ...(r.occurredBefore === null ? [] : [client`"occurredAt" <= ${r.occurredBefore}`]),
+            ];
+            return client`SELECT * FROM auth_audit_log WHERE ${client.and(conditions)} ORDER BY "occurredAt" DESC`;
+          },
         }),
-        Result: models.AuditLogRow,
-        execute: (r) => {
-          const conditions = [
-            ...(r.eventTag === null ? [] : [sql`"eventTag" = ${r.eventTag}`]),
-            ...(r.actorUserId === null ? [] : [sql`"actorUserId" = ${r.actorUserId}`]),
-            ...(r.occurredAfter === null ? [] : [sql`"occurredAt" >= ${r.occurredAfter}`]),
-            ...(r.occurredBefore === null ? [] : [sql`"occurredAt" <= ${r.occurredBefore}`]),
-          ];
-          return sql`SELECT * FROM auth_audit_log WHERE ${sql.and(conditions)} ORDER BY "occurredAt" DESC`;
-        },
-      });
+      );
 
       const insert: AuditLogRepositoryShape["insert"] = (input) =>
         insertQuery(input).pipe(
           traced("AuditLog.insert", { id: input.id, eventTag: input.eventTag }),
         );
 
-      const list: AuditLogRepositoryShape["list"] = (input) =>
-        listQuery(input).pipe(traced("AuditLog.list"));
+      const list: AuditLogRepositoryShape["list"] = (input, options) =>
+        listOn(options?.consistency ?? "eventual").pipe(
+          Effect.flatMap((query) => query(input)),
+          traced("AuditLog.list"),
+        );
 
       return { insert, list };
     }),
