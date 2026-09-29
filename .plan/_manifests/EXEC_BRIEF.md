@@ -5,7 +5,11 @@ Your program file is `.plan/programs/<PNN>-*.md` (workstreams → issue tables).
 `.plan/slices/<slice>.md` (evidence at old HEAD `ec065a7`, fix steps, files, tests to write first, acceptance criteria,
 BEH-EA refs). `.plan/README.md` §2/§4/§5/§8 explain the method; `.plan/DECISIONS.md` holds the open design calls.
 
-Already done on the base branch (do not redo): PIL-007, OIT-001 (+AP-004, APS-008), RRM-001, RRM-002.
+Already done on the base branch (do not redo): programs P01, P02, P03, P04, P05 (mostly), P06, P07, P08, P09, P13 are merged (see `git log`
+and the `.issues/` comments — an issue with `Status: resolved` is done). Read the **Resolved** comments of neighbouring issues before touching a
+shared file; they describe APIs that changed (e.g. `Sessions.revoke*` require a `reason`; `Authentication.resolveSession` takes a `scheme`;
+CSRF secrets must be >= 32 bytes; core migration ids up to 20 and ADR ids 017/019/024/025/026 are taken; BEH-EA-221..224 are taken).
+Remaining open work is in `.plan/programs/*.md` rows whose `.issues/` file is not `resolved`.
 
 ## Setup (first thing)
 
@@ -61,6 +65,15 @@ work on an issue if the recommendation is missing or you find it unsafe — then
   the issue open with a Plan note listing exactly what remains.
 - Do not stop early: work through **every workstream in your program** in the order given, highest severity first. Budget your effort so the
   high-severity items are finished properly before the long tail of low/info items; for low/info doc items batch several per commit.
+
+## Final integration step (mandatory, before the report)
+
+Other agents keep landing on `plan/resolve-audit-issues` while you work. When your program is done: `git merge plan/resolve-audit-issues` INTO YOUR
+worktree branch (real merge, no rebase/force), resolve every conflict keeping BOTH sides' intent (renumber your ADR/BEH/INV/migration ids if
+they collide; regenerate `pnpm-lock.yaml` with `pnpm install --offline` after merging it), then re-run ALL gates from a CLEAN build (delete
+`packages/*/lib`, `examples/*/lib`, `features/lib`, every `*.tsbuildinfo`): `pnpm run typecheck` (must be 0 errors) + `npx tsc -p tsconfig.test.json`,
+full `pnpm run test` (timing flakes under load: `--testTimeout=120000`), `pnpm run test:bdd`, `pnpm run spec:verify:strict`, `pnpm run check:readmes`,
+`pnpm run circular`, `pnpm run package:smoke`, oxlint on touched packages. Commit the merge. The orchestrator then fast-forwards your branch.
 
 ## Final report (≤ 25 lines)
 
