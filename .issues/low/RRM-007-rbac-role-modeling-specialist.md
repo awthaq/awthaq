@@ -49,3 +49,5 @@ Either strip organization:delete and role create/update/delete from the admin de
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `org-role-escalation-guards`. Duplicate of `OHS-005` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/organization/src/PermissionEngine.ts:32`. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `OHS-005-organization-hierarchy-specialist` — closed by its fix (see that issue's Resolved comment).
