@@ -5,21 +5,22 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-08 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 
 ---
 
-> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §13, `archive/design/usage-examples-v4.md` §6.2, and `better-auth/01-core-domain/01-entities-and-invariants.md` §5 — not code that has shipped.
+> Implemented in `@awthaq/core` (`Verification.ts`; tests `packages/core/test/Verification.test.ts`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/PRD.md` §13, `archive/design/usage-examples-v4.md` §6.2, and `better-auth/01-core-domain/01-entities-and-invariants.md` §5.
 
 ## BEH-EA-057: A verification token is scoped to one purpose
 
 ```ts
 identifier = `verify-email:${token}` | `reset-password:${token}` | `oauth-state:${nonce}`
+           | `verify-phone:${token}` | `change-email:${token}`
 ```
 
 ```text
@@ -30,7 +31,14 @@ REQUIREMENT: A `VerificationToken` row MUST carry an identifier whose
              purpose, even if the raw token value were somehow reused.
 ```
 
+SOS-008/BAM-009: two purposes exist for the identity model (BEH-EA-041/042). `verify-phone` proves control of a phone number (an SMS/voice OTP or link): the token is keyed on the *user id* (`userId` on the row), and the normalized E.164 number being proven travels in the payload, so a stale token cannot verify a number the user has since changed. `change-email` proves control of a *new* address: the row's `userId` is the account, the payload carries the new address, the token is mailed to that new address, and its consumption commits together with `Users.changeEmail` + `Users.verifyEmail` (BEH-EA-058). Neither purpose's token can satisfy the other's — or `verify-email`'s — check.
+
+MLO-009/ARF-007/ARF-009: the mailed form is `<purpose>:<publicId>.<secret>`, built and parsed only by `VerificationLink` (`@awthaq/core`), which every plugin that mails a token uses. `publicId` is 128 random bits and identifies the token, never the user (the user is recovered from the consumed row's `userId`, so no mailed artifact carries a user id or a UUIDv7 timestamp); `decode(raw, purpose)` refuses a malformed token or another purpose's, before any rate limit or consume. Mail data for a token is `{ token: Redacted, expiresAt, url? }` (`VerificationLink.mailData`), the `url` present when the application configured a link builder.
+
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 documents `Verification` as "a generic, single-purpose ephemeral keyed value store," whose `identifier` is an arbitrary string whose meaning is defined entirely by the caller that created the row. awthaq's plan adopts the same generic entity but requires the purpose to be encoded in the identifier's own naming convention, so a password-reset token and an email-verification token are structurally distinct rows even when both happen to exist for the same user at once.
+
+**Caller-formatted values (BCR-005).** `issue` mints the value itself: 256-bit hex by default, or — with `format: { _tag: "Numeric", digits }` (4 to 10 digits) — a uniformly random decimal code drawn by rejection sampling over `Crypto.randomBytes`, never a string the caller supplies, so hashing and single-use cannot be bypassed. The input type requires `maxAttempts` whenever a `format` is given (a short value without a guess budget does not type-check). `@awthaq/magic-link`'s `EmailOtp` is the consumer (BEH-EA-271).
+
 
 ## BEH-EA-058: A verification token's consumption and the state change it authorizes commit in one transaction
 
@@ -65,6 +73,8 @@ REQUIREMENT: A consumption attempt against a token that has already been
 
 `archive/design/usage-examples-v4.md` §6.2 documents the exact response shape (`410 TokenConsumed`) alongside the event. Without a distinguishable, queryable signal, an attacker probing stale reset or verification links is indistinguishable from ordinary user error in any downstream monitoring; publishing the event is designed to make replay attempts a first-class operational signal, independent of whatever the audit table separately records (see [13-events.md](13-events.md#beh-ea-100-the-audit-table-is-the-durable-record-of-record-independent-of-the-pubsub-stream)).
 
+**As shipped (PV-220):** an endpoint that consumes inside its own transaction (`Password.confirmReset`/`verifyEmail`/`confirmEmailChange`) fails that transaction with the replay itself, so a row written inline would roll back with it. Such a caller passes `consume(identifier, value, { deferMiss: true })` (which then records nothing) and calls `Verification.recordMiss(identifier)` after the transaction has ended; `recordMiss` writes the `auth.token.replay` event and durable audit row and, over SQL, spends the attempt a budgeted token is owed (REQ-EA-688, `packages/core/test/Verification.test.ts`).
+
 ## BEH-EA-060: A verification token is hashed at rest
 
 ```text
@@ -85,6 +95,8 @@ REQUIREMENT: A verification token past its `expiresAt` MUST be treated as
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.1 states this as a lifecycle property of the entity, not of whatever garbage-collection process eventually removes expired rows: "rows past this instant are treated as already invalid by every read operation, even before they are physically removed." awthaq's plan follows the same rule so that expiry enforcement never depends on the timeliness of a background sweep.
 
+**As shipped (CSG-003, ADR-EA-033):** the physical removal that rule anticipates is `Retention.sweep`, an explicit, opt-in operation (`Retention.layerScheduled` runs it on `RetentionConfig.sweepInterval`; nothing else calls it). `Verification.purgeExpired(before)` deletes tokens consumed or expired before the cutoff and reservations expired before it, in bounded batches, in both layers; the sweep passes `now - verificationForensicWindow` (default 90 days), so a consumed row stays as replay evidence (BEH-EA-058) for that window and a live token is never touched. Ordinary reads and `issue` still never delete history (`packages/core/test/Retention.test.ts`).
+
 ## BEH-EA-062: Consuming a verification token is race-safe — at most one concurrent caller succeeds
 
 ```text
@@ -96,6 +108,9 @@ REQUIREMENT: When multiple callers race to consume the same token
 ```
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as the `consume-verification-value` operation's core guarantee, with an explicit blame rule alongside it: a caller that proceeds with a state change without gating on a non-null consume result is responsible for the resulting violation — the race-safety guarantee protects only callers that actually check the result. awthaq's plan carries the same operation and the same blame assignment into its own `Verification` domain service.
+
+**Bounded guesses (SOS-004).** An issued token may carry a `maxAttempts` budget. A wrong presentation against the *live* row spends one attempt — in the same atomic step as the consume (`layerMemory`'s `Ref.modify`; `layerSql`'s single `UPDATE attempts = attempts + 1, consumedAt = CASE WHEN attempts + 1 >= maxAttempts ...`, core migration 28) — and the row is burned at the budget, so the right value no longer works. The failure is still the uniform `TokenConsumed`; a token with no budget, an unknown identifier and an expired row are untouched, exactly as before.
+
 
 ## BEH-EA-063: A reservation-style identifier answers "who claimed this first," independent of any column-level uniqueness
 
@@ -110,6 +125,9 @@ REQUIREMENT: A caller that needs to claim an identifier exclusively (a
 
 `better-auth/01-core-domain/01-entities-and-invariants.md` §5.2 documents this as a distinct operation from ordinary consumption — `reserve-verification-value` — used, for example, to serialize the "promote an unverified user on email proof" operation (§2.3) against a concurrent second promotion of the same user. awthaq's plan reuses the same generic `Verification` entity for this purpose rather than introducing a second, lock-specific table.
 
+**The resend window (MLO-002).** `reserve` is the resend-window primitive: `MagicLink` and `EmailOtp` reserve `<purpose>-resend:<normalised address>` for their `resendWindow` before minting and mailing a second artifact, so two concurrent requests (or a client hammering "resend") send one message, below and independent of the rate limiter (BEH-EA-268, BEH-EA-272).
+
+
 ## BEH-EA-064: Purpose-scoped flows respond uniformly regardless of whether their target exists
 
 ```ts
@@ -120,7 +138,11 @@ yield* client.password.requestReset({ payload: { email } })   // always 202, eve
 REQUIREMENT: A verification-token-issuing endpoint (password reset,
              email-verification resend) MUST return the same status and
              body whether or not the submitted identifier (email) resolves
-             to an existing account.
+             to an existing account. Uniformity extends to latency: the token
+             issue and mail send for the "exists" branch MUST run outside the
+             response path (dispatched in the background), so both branches do
+             the same work before responding and a slow or failing mail
+             provider changes neither the response time nor its status.
 ```
 
 `archive/design/usage-examples-v4.md` §6.1 fixes the concrete response: `requestReset` always answers `202`, whether the email belongs to a real account or not. This is the verification-token analogue of BEH-EA-027's uniform `InvalidCredentials`: an endpoint that answered differently for "no such account" would let an attacker enumerate registered emails one request at a time, defeating the same enumeration-safety goal `archive/PRD.md` §18 states for the sign-in path.

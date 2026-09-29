@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-06 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Reworded the banner: the plugin is unbuilt, not the whole project (DTWS-001, CCR-EA-006) |
 ---
 
 ## What it is
@@ -18,7 +18,7 @@ A second authentication factor layered on top of Password (or any first
 factor): after the first factor succeeds, the plugin diverts sign-in to a
 challenge state instead of issuing a session, and only a valid time-based
 one-time code (RFC 6238 TOTP) or a hashed, single-use recovery code completes
-sign-in. Nothing described here exists yet — awthaq is pre-implementation.
+sign-in. Nothing described here is implemented yet: `@awthaq/two-factor` is a placeholder package with no exports.
 
 ## Who asks for it
 
@@ -36,7 +36,7 @@ authenticator-app second factor as table stakes.
 
 | Property | Value |
 |---|---|
-| Status | Planned-Phase2 |
+| Status | Shipped (`@awthaq/two-factor`; normative behaviors in [behaviors/31-two-factor.md](../behaviors/31-two-factor.md), state decisions in [ADR-EA-020](../decisions/020-two-factor-state.md)) |
 | Priority | P1 |
 | Enabler(s) | E4 — Hook-point step-up/divert wiring |
 | Breaking? | Purely additive to Password as planned — `archive/PRD.md` §9.3 already describes "divert" as a hook-point kind "used by two-factor," so the MVP hook-point design anticipates this method; no MVP plugin needs to be reopened. |

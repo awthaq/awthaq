@@ -1,0 +1,2845 @@
+{
+  "slice": "05-sql",
+  "validated_at_sha": "ec065a7",
+  "validated_on": "2026-09-29",
+  "notes": [
+    "Id collision: two manifest rows share id SMS-002. They are keyed by issue_file (.issues/high/SMS-002-secrets-management-specialist.md vs .issues/medium/SMS-002-session-management-specialist.md). All references to AH-/ESS-/SMS-/TS- ids in duplicate_of/duplicates/depends_on and workstream ids use the issue-file stem (e.g. SMS-002-secrets-management-specialist).",
+    "Cross-slice references used: KRS-002 (ports), CSG-003 (retention), BE-003 (cli), AOMS-003 (two-factor build), BAM-005 (admin banned gate, co-design with SCP-001)."
+  ],
+  "issues": [
+    {
+      "id": "ESR-008",
+      "level": "medium",
+      "category": "docs",
+      "package": "sql",
+      "title": "Package README and quality-metrics JSON contradict the shipped implementation",
+      "issue_file": ".issues/medium/ESR-008-effect-sql-repository-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/README.md",
+          "line": 3,
+          "snippet": "> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.",
+          "note": ""
+        },
+        {
+          "path": ".quality-metrics/sql.json",
+          "line": 42,
+          "snippet": "      \"fileCount\": 1,\n      \"totalLoc\": 9,",
+          "note": "Stale. The package now has 4 src files and about 1,538 LOC (wc -l). The collector that produced it is not in the repo: scripts/ has only generate-quality-dashboard.mjs, which reads this file."
+        },
+        {
+          "path": "packages/sql/src/index.ts",
+          "line": 10,
+          "snippet": "// Planned next: migration records/linker input (BEH-EA-037/038).",
+          "note": "The index header is also partly stale: CoreMigrations is exported on line 13 but not described."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-docs-operations",
+      "fix": {
+        "summary": "Rewrite the package README as the operations home for the persistence stratum. The docs-only findings in this slice (ERAS-006, PPS-004, PPS-009, SSMS-006, NAM-007, CSG-006, CSG-009, SAM-006) land as sections of it. Refresh or delete the stale metrics JSON.",
+        "steps": [
+          "Rewrite packages/sql/README.md. Cover: what ships (Models, Repositories: Users/Accounts/Sessions/Verification/VerificationReservations/AuditLog, and CoreMigrations with 17 migrations); how to run migrations (until BE-003's CLI lands); supported dialects and drivers (ERAS-006); Postgres client configuration (PPS-004); the encryption boundary (CSG-006); data location (CSG-009); the migration runbook for populated tables (SSMS-006); JSON-as-TEXT (PPS-009); and the Auth.js/Supabase migration notes (NAM-007, SAM-006).",
+          "Update the packages/sql/src/index.ts header: describe CoreMigrations and drop 'Planned next'.",
+          "Regenerate .quality-metrics/sql.json with the external audit collector, or delete it so the dashboard shows 'no data' rather than false data. Note in the commit that the collector is not in-repo."
+        ],
+        "files": [
+          "packages/sql/README.md",
+          "packages/sql/src/index.ts",
+          ".quality-metrics/sql.json"
+        ],
+        "tests": [
+          "`pnpm lint` passes. scripts/package-smoke.mjs still passes."
+        ],
+        "acceptance": [
+          "The README describes shipped behavior only, and every docs finding in this slice links to its section."
+        ],
+        "spec_refs": [
+          "BEH-EA-033",
+          "BEH-EA-035",
+          "BEH-EA-037"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "NAM-011",
+      "level": "info",
+      "category": "architecture",
+      "package": "sql",
+      "title": "Edge-runtime core is WebCrypto-clean, but SQL persistence ships Node-only drivers",
+      "issue_file": ".issues/info/NAM-011-nextauth-authjs-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/package.json",
+          "line": 31,
+          "snippet": "  \"devDependencies\": {\n    \"@effect/platform-node\": \"catalog:\",\n    \"@effect/sql-pg\": \"catalog:\",\n    \"@effect/sql-sqlite-node\": \"catalog:\",",
+          "note": "Its title ('SQL persistence ships Node-only drivers') is overstated: the drivers are devDependencies, not shipped runtime deps. The real gap is the undocumented edge/HTTP-driver story, which is ERAS-006. The MySQL/PlanetScale remark is covered by ERAS-006's driver matrix."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "ERAS-006",
+      "duplicates": [],
+      "workstream": "sql-docs-operations",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "PPS-009",
+      "level": "info",
+      "category": "architecture",
+      "package": "sql",
+      "title": "jsonb is used nowhere: opaque JSON payloads are stored as TEXT in Postgres",
+      "issue_file": ".issues/info/PPS-009-postgres-performance-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 155,
+          "snippet": "          payload TEXT NOT NULL",
+          "note": "Still TEXT. auth_audit_log.payload (:313) and users.metadata (:347) follow the same choice."
+        },
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 298,
+          "snippet": "  // (ALF-001/ESA-001/ESS-002/CSG-004/EP-002): BEH-EA-100's durable audit\n  // table. `payload` is an opaque JSON envelope, the same\n  // `verification_tokens.payload` precedent migration 4 already",
+          "note": "The choice is reasoned in code comments but not in an ADR."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-docs-operations",
+      "fix": {
+        "summary": "Record 'opaque JSON is TEXT on every dialect' as a deliberate decision. Plan no jsonb migration until a server-side query need exists.",
+        "steps": [
+          "Add a short 'Consequences' paragraph to ADR-EA-004 (database-neutral models), or a new mini-ADR. Opaque, app-validated JSON columns (verification_tokens.payload, auth_audit_log.payload, users.metadata, organization metadata) are TEXT on both dialects via `Schema.fromJsonString`. A pg-only JSONB+GIN branch is added only when a feature must query payload contents server-side.",
+          "Reference it from the README 'Schema conventions' section (ESR-008)."
+        ],
+        "files": [
+          "spec/decisions/004-database-neutral-models.md",
+          "packages/sql/README.md"
+        ],
+        "tests": [
+          "`pnpm run spec:verify:strict` passes."
+        ],
+        "acceptance": [
+          "The decision is discoverable, so it isn't re-reported as a bug."
+        ],
+        "spec_refs": [
+          "ADR-EA-004"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "CSG-009",
+      "level": "info",
+      "category": "architecture",
+      "package": "sql",
+      "title": "No residency, region, or subprocessor hooks; data location is undocumented deployer choice",
+      "issue_file": ".issues/info/CSG-009-compliance-soc2-gdpr-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 222,
+          "snippet": "  migration(8, \"create_accounts_user_id_index\", (sql) =>\n    sql.onDialectOrElse({\n      pg: () => sql`CREATE INDEX accounts_user_id ON accounts(\"userId\")`,",
+          "note": "No region or placement hooks exist."
+        },
+        {
+          "path": "packages/sql/README.md",
+          "line": 3,
+          "snippet": "> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet.",
+          "note": "There is no deployer-facing statement of the data-location model anywhere (spec/overview.md, docs/ and the README have none)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "tenancy-residency",
+      "fix": {
+        "summary": "Document the data-location model. Point multi-region at the seams that exist or are decided: the injected SqlClient, DRS-001's tenant column, and ADR-EA-005's `LayerMap.Service` for per-tenant/per-region SqlClient routing. Don't add per-table logic.",
+        "steps": [
+          "Add a 'Data location & residency' section to packages/sql/README.md (rewritten under ESR-008) and a short paragraph in spec/overview.md's persistence section. It should say that storage location is whatever database the deployer's SqlClient points at. Multi-region is expressed as a `LayerMap.Service` keyed by region/tenant that yields a SqlClient, selected from DRS-001's `TenantContext`. The encryption boundary is cross-referenced to CSG-006.",
+          "Cross-link the GDPR erasure (ec065a7 / ErasureRegistry) and retention (CSG-003) mechanisms. research/00-questions.md:74's 'deletion cascades' open question is now answered and should be marked so."
+        ],
+        "files": [
+          "packages/sql/README.md",
+          "spec/overview.md",
+          "research/00-questions.md"
+        ],
+        "tests": [
+          "`pnpm run spec:verify:strict` passes. No code test."
+        ],
+        "acceptance": [
+          "A deployer can answer 'where does my users' data live and how do I pin it to a region' from the docs."
+        ],
+        "spec_refs": [
+          "ADR-EA-005"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "DRS-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "PPS-002",
+      "level": "medium",
+      "category": "performance",
+      "package": "sql",
+      "title": "Sessions keyset pagination is not index-aligned: single-column userId index forces sort of the user's full row set",
+      "issue_file": ".issues/medium/PPS-002-postgres-performance-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 231,
+          "snippet": "  migration(9, \"create_sessions_user_id_index\", (sql) =>\n    sql.onDialectOrElse({\n      pg: () => sql`CREATE INDEX sessions_user_id ON sessions(\"userId\")`,\n      sqlite: () => sql`CREATE INDEX sessions_user_id ON sessions(userId)`,",
+          "note": "Still the only userId index (migration 11 added only sessions_family_id)."
+        },
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 438,
+          "snippet": "            : sql`SELECT * FROM sessions WHERE \"userId\" = ${request.userId}\n                  AND \"supersededAt\" IS NULL\n                  AND (\"createdAt\" > ${request.cursorCreatedAt}\n                       OR (\"createdAt\" = ${request.cursorCreatedAt} AND id > ${request.cursorId}))\n                  ORDER BY \"createdAt\" ASC, id ASC LIMIT ${request.limit}`",
+          "note": "The OR-form cursor with an unindexed sort key."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "SEA-006",
+        "SSMS-008"
+      ],
+      "workstream": "session-list-liveness-and-pagination",
+      "fix": {
+        "summary": "Add a partial composite index that matches the page query's filter and order, and rewrite the cursor as a row-value comparison.",
+        "steps": [
+          "Add a new CoreMigrations migration at the next free id (18 at HEAD; coordinate ordering with the other workstreams): `create_sessions_user_created_live_index` running `CREATE INDEX IF NOT EXISTS sessions_user_created_live ON sessions(\"userId\", \"createdAt\", id) WHERE \"supersededAt\" IS NULL`. Use the same DDL for both dialects (quoted form, as migration 13 does). `IF NOT EXISTS` keeps SSMS-006's out-of-band CONCURRENTLY runbook possible.",
+          "Keep `sessions_user_id`. `deleteAllByUser`/`deleteAllForUserExcept` also delete tombstoned rows, which the partial index excludes.",
+          "Rewrite the cursor branch as `AND (\"createdAt\", id) > (${request.cursorCreatedAt}, ${request.cursorId})`. Postgres and SQLite ≥3.15 both support row values; node:sqlite bundles a newer SQLite.",
+          "SMS-002(session)'s expiry predicate stays a residual filter on the index scan. That is acceptable."
+        ],
+        "files": [
+          "packages/sql/src/CoreMigrations.ts",
+          "packages/sql/src/Repositories.ts",
+          "packages/sql/test/Repositories.test.ts"
+        ],
+        "tests": [
+          "First failing test, packages/sql/test/Repositories.test.ts: \"listByUser's page query is served by sessions_user_created_live with no temp B-tree sort\". Run `EXPLAIN QUERY PLAN` on the exact statement and assert it contains `sessions_user_created_live` and not `USE TEMP B-TREE FOR ORDER BY`.",
+          "The existing \"BEH-EA-036: Sessions.listByUser pages by (createdAt, id), never an offset\" stays green, including same-millisecond tie-breaks.",
+          "Optional pg: an EXPLAIN assertion in Repositories.postgres.test.ts."
+        ],
+        "acceptance": [
+          "No sort node for the session page query on either dialect.",
+          "Keyset semantics unchanged."
+        ],
+        "spec_refs": [
+          "BEH-EA-036"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SEA-006",
+      "level": "low",
+      "category": "performance",
+      "package": "sql",
+      "title": "Keyset pagination orders by (createdAt, id) but only a single-column userId index exists",
+      "issue_file": ".issues/low/SEA-006-sqlite-embedded-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 234,
+          "snippet": "      sqlite: () => sql`CREATE INDEX sessions_user_id ON sessions(userId)`,",
+          "note": "Same root cause as PPS-002 (a single-column index under a (createdAt, id) keyset). Its accounts remark doesn't apply: `AccountsRepository.listByUser` (Repositories.ts:299) has no ORDER BY, so there is no sort to avoid."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "PPS-002",
+      "duplicates": [],
+      "workstream": "session-list-liveness-and-pagination",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ALF-010",
+      "level": "low",
+      "category": "compliance",
+      "package": "sql",
+      "title": "No retention policy or mechanism exists for any audit data",
+      "issue_file": ".issues/low/ALF-010-audit-logging-forensics-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 303,
+          "snippet": "  migration(13, \"create_auth_audit_log\", (sql) =>\n    sql.onDialectOrElse({\n      pg: () =>\n        sql`\n        CREATE TABLE auth_audit_log (",
+          "note": "FIXED part: a durable audit table now exists (6bd3f1d, ALF-001)."
+        },
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 860,
+          "snippet": "            ...(r.occurredAfter === null ? [] : [sql`\"occurredAt\" >= ${r.occurredAfter}`]),\n            ...(r.occurredBefore === null ? [] : [sql`\"occurredAt\" <= ${r.occurredBefore}`]),",
+          "note": "FIXED part: a time-range query API exists. STILL TRUE: `AuditLogRepositoryShape` has only insert/list, with no purge. There is no occurredAt index (only eventTag and actorUserId, :315-317). admin_impersonation has no purge (ImpersonationRecords.ts)."
+        }
+      ],
+      "fixed_by_commit": "6bd3f1d",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "retention-sweeps",
+      "fix": {
+        "summary": "Extend ticket 30's `Retention` service (CSG-003) with per-event-class audit retention. The default is retain-forever (forensics-safe), and operators opt in to purge windows. Add the missing occurredAt index.",
+        "steps": [
+          "Repositories.ts AuditLogRepository: add `deleteOccurredBefore(cutoff: DateTime.Utc, eventTags: ReadonlyArray<string> | null): Effect<number, SqlError>` as a single DELETE.",
+          "CoreMigrations (next free id): `CREATE INDEX IF NOT EXISTS auth_audit_log_occurred_at ON auth_audit_log (\"occurredAt\")`. This serves both the range `list` and the sweep.",
+          "core Retention (CSG-003): `RetentionConfig.auditLog: { default: Option<Duration>, byEventTag: ReadonlyRecord<string, Duration> }`, defaulting to `{ default: Option.none(), byEventTag: {} }` (keep indefinitely). `Retention.sweep` issues one delete per configured tag plus one for the default over the remaining tags.",
+          "admin plugin (cross-slice): `ImpersonationRecords.deleteEndedBefore(cutoff)`, registered as a retention contribution with the same config shape (key `admin.impersonation`).",
+          "Spec: add a BEH-EA-100 addendum on retention classes, and note in ticket 30's planned ADR that audit rows are purged only by explicit operator config."
+        ],
+        "files": [
+          "packages/sql/src/Repositories.ts",
+          "packages/sql/src/CoreMigrations.ts",
+          "packages/core/src/Retention.ts (CSG-003)",
+          "packages/admin/src/ImpersonationRecords.ts",
+          "spec/behaviors/13-events.md"
+        ],
+        "tests": [
+          "First failing test, packages/sql/test/Repositories.test.ts: \"AuditLog.deleteOccurredBefore removes only rows older than the cutoff for the given tags\".",
+          "core: \"Retention.sweep with no audit config deletes no audit rows\"; \"a 90-day auth.user.signInFailed window purges only that tag\"."
+        ],
+        "acceptance": [
+          "Operators can bound audit retention per event class.",
+          "The default keeps everything.",
+          "Range queries are indexed."
+        ],
+        "spec_refs": [
+          "BEH-EA-100"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "CSG-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "DRS-001",
+      "level": "high",
+      "category": "architecture",
+      "package": "sql",
+      "title": "No tenant/org/shard key exists on any core table — residency-by-tenant partitioning is impossible without schema change",
+      "issue_file": ".issues/high/DRS-001-data-residency-sharding-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 58,
+          "snippet": "      pg: () => sql`\n        CREATE TABLE users (\n          id TEXT PRIMARY KEY,\n          email TEXT NOT NULL,",
+          "note": "`grep -rn tenantId packages` finds nothing. The core table count has grown to 6 since the audit: auth_audit_log, migration 13, also lacks a tenancy column."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "SSMS-009"
+      ],
+      "workstream": "tenancy-residency",
+      "fix": {
+        "summary": "Implement ticket 18's decision: an opaque, nullable, indexed tenant column on every core table, stamped from an ambient `TenantContext` Context.Reference (default `Option.none()`, zero-cost for single-tenant), with optional Postgres RLS policies underneath.",
+        "steps": [
+          "core: add a new module `packages/core/src/Tenant.ts` with `TenantContext = Context.Reference<Option.Option<string>>`, default `Option.none()` (the SessionConfig pattern, ADR-EA-011).",
+          "CoreMigrations (next free id): `add_tenant_columns`. Add a nullable tenant column plus a single-column index to users, accounts, sessions, verification_tokens, verification_reservations and auth_audit_log. Ticket 18 wrote `tenant_id`; this repo uses quoted camelCase everywhere (`\"userId\"`, `\"familyId\"`), so use `\"tenantId\"` and note the deviation in the ADR.",
+          "Models.ts: `tenantId: Schema.NullOr(Schema.String)` with a constructor default of null and FieldExcept update/jsonUpdate on every model. Stamp it in one choke point, the sql repositories' insert paths (`repo.insert` wrappers, `upsertLive`, `claim`, `AuditLog.insert`), which read `TenantContext` ambiently. Core service signatures don't change.",
+          "Postgres RLS: a pg-only opt-in migration set, `CoreMigrations.rlsMigrations` (sqlite: none). Run `ALTER TABLE <t> ENABLE ROW LEVEL SECURITY; ALTER TABLE <t> FORCE ROW LEVEL SECURITY; CREATE POLICY awthaq_tenant ON <t> USING (\"tenantId\" = current_setting('awthaq.tenant_id', true) OR current_setting('awthaq.tenant_id', true) IS NULL)`. FORCE is needed because the app role usually owns the tables and owners bypass RLS otherwise.",
+          "Add a `TenantScope.withTenant(effect)` combinator in @awthaq/sql that wraps the caller's `sql.withTransaction` and first issues `SELECT set_config('awthaq.tenant_id', ${tenantId}, true)` (transaction-local, pool-safe). Document that non-transactional queries see no setting and pass the `IS NULL` clause, which is fail-open by design for single-tenant compatibility.",
+          "organization plugin (cross-slice): a `TenantResolver` port and `Organization.tenantMiddleware` providing `TenantContext` per request.",
+          "Write ADR `spec/decisions/0NN-tenancy-column-and-rls.md` and add a BEH-EA-033/035 addendum."
+        ],
+        "files": [
+          "packages/core/src/Tenant.ts (new)",
+          "packages/sql/src/CoreMigrations.ts",
+          "packages/sql/src/Models.ts",
+          "packages/sql/src/Repositories.ts",
+          "packages/sql/src/TenantScope.ts (new)",
+          "packages/organization/src/Organization.ts",
+          "spec/decisions/0NN-tenancy-column-and-rls.md"
+        ],
+        "tests": [
+          "First failing test, packages/sql/test/Repositories.test.ts: \"inserts stamp tenantId from TenantContext and NULL when unset\" (for every repository).",
+          "Postgres (test:pg): \"with RLS migrations applied, a query inside TenantScope.withTenant('t1') cannot read t2's session rows\".",
+          "core: \"single-tenant deployment behavior unchanged\". The existing suites pass with no TenantContext provided."
+        ],
+        "acceptance": [
+          "Every core row carries the tenant attribution when a tenant is in context.",
+          "Zero behavior change when no tenant is provided.",
+          "RLS fails closed across tenants on Postgres when enabled."
+        ],
+        "spec_refs": [
+          "BEH-EA-033",
+          "BEH-EA-035",
+          "ADR-EA-005",
+          "ADR-EA-011",
+          "ADR (new): tenancy column & RLS"
+        ],
+        "effort": "XL"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SSMS-009",
+      "level": "info",
+      "category": "architecture",
+      "package": "sql",
+      "title": "No tenant column anywhere in the core schema",
+      "issue_file": ".issues/info/SSMS-009-sql-schema-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 59,
+          "snippet": "        CREATE TABLE users (\n          id TEXT PRIMARY KEY,\n          email TEXT NOT NULL,",
+          "note": "Same gap as DRS-001. The isolation model it asks to be recorded as an ADR is decided in ticket 18 (shared schema plus tenant column), and that ADR is part of DRS-001's plan."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "DRS-001",
+      "duplicates": [],
+      "workstream": "tenancy-residency",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "SAM-003",
+      "level": "high",
+      "category": "correctness",
+      "package": "sql",
+      "title": "User model cannot represent anonymous or phone-only Supabase users",
+      "issue_file": ".issues/high/SAM-003-supabase-auth-migration-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 58,
+          "snippet": "      pg: () => sql`\n        CREATE TABLE users (\n          id TEXT PRIMARY KEY,\n          email TEXT NOT NULL,\n          \"emailVerified\" BOOLEAN NOT NULL,",
+          "note": ""
+        },
+        {
+          "path": "packages/sql/src/Models.ts",
+          "line": 40,
+          "snippet": "export class User extends Model.Class<User>(\"User\")({\n  id: Model.UuidV7Insert(UserId),\n  email: Schema.String,",
+          "note": "Still non-null and phone-less. `grep -rn phoneVerified packages` finds nothing. Only `metadata` (AOMS-002) was added."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "user-identity-lifecycle",
+      "fix": {
+        "summary": "Implement ticket 09's decision: a `UserIdentity` tagged union (Email | Phone | Anonymous) at the domain layer, flattened to nullable email/phone columns plus phoneVerified in SQL, with a `promoteIdentity` upgrade path. Ticket 09's migration ids 10-12 are already taken; use the next free ids.",
+        "steps": [
+          "Models.ts `User`: `email: Schema.NullOr(Schema.String)`, `phone: Schema.NullOr(Schema.String)` (constructor default null), and `phoneVerified` built with TS-001's dialect boolean field, excluded from update/jsonUpdate like emailVerified.",
+          "CoreMigrations (next free ids, 18+ at HEAD). (a) `add_users_phone_columns`: `phone TEXT`, and `\"phoneVerified\" BOOLEAN NOT NULL DEFAULT false` on pg / `phoneVerified INTEGER NOT NULL DEFAULT 0` on sqlite. (b) `make_users_email_nullable`: pg runs `ALTER TABLE users ALTER COLUMN email DROP NOT NULL`. sqlite rebuilds the table: CREATE users_new with every current column including metadata/phone/phoneVerified (plus status/tenantId if those workstreams landed first), INSERT SELECT, DROP, RENAME, then recreate `users_email_unique` on lower(email). (c) `create_users_phone_unique_index`: `CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique ON users (phone) WHERE phone IS NOT NULL`.",
+          "Repositories.ts UsersRepository: add `findByPhone`, and `promoteIdentity(id, {email}|{phone})` as a targeted UPDATE ... RETURNING that maps UniqueViolation to the domain error in core.",
+          "core Users.ts: add `UserIdentity`. `UserRecord` gets `identity` in place of email/emailVerified. `create({ identity, name })`, `promoteIdentity`, and a `PhoneAlreadyExists` error. `toUserRecord` folds the columns into the union.",
+          "Update every `users.create(` / `.email` call site across oauth (retire OAuth.ts's synthetic `${providerId}:${subject}` email), password, passkey, organization, server Account.ts, admin, migrate-auth0, migrate-better-auth and next/client DTOs.",
+          "Spec: revise BEH-EA-041/042 (the identity union; phone parity), plus the matching feature scenarios in features/features/02-domain/06-users-accounts.feature."
+        ],
+        "files": [
+          "packages/sql/src/Models.ts",
+          "packages/sql/src/CoreMigrations.ts",
+          "packages/sql/src/Repositories.ts",
+          "packages/core/src/Users.ts",
+          "packages/oauth/src/OAuth.ts",
+          "packages/password/src/Password.ts",
+          "packages/passkey/src/Passkey.ts",
+          "packages/organization/src/Organization.ts",
+          "packages/server/src/Account.ts",
+          "packages/migrate-auth0/src/*",
+          "packages/migrate-better-auth/src/*",
+          "spec/behaviors/06-domain-users-accounts.md",
+          "features/features/02-domain/06-users-accounts.feature"
+        ],
+        "tests": [
+          "First failing tests, packages/core/test/Users.test.ts (both layers): \"create an Anonymous user with no email or phone\", \"create a Phone user; a second create with the same phone fails PhoneAlreadyExists\", \"promoteIdentity upgrades Anonymous→Email in place, keeping the UserId\".",
+          "packages/sql/test/Repositories.test.ts: \"the email-nullable migration preserves existing rows and the lower(email) unique index on SQLite\" (insert under the old schema, migrate, assert).",
+          "oauth: \"a provider profile with no email creates an Anonymous user, not a synthetic email\"."
+        ],
+        "acceptance": [
+          "Anonymous and phone-only users are representable and importable.",
+          "The email uniqueness semantics of BEH-EA-041 are unchanged for Email identities.",
+          "No synthetic-email fallback remains."
+        ],
+        "spec_refs": [
+          "BEH-EA-041",
+          "BEH-EA-042",
+          "BEH-EA-046"
+        ],
+        "effort": "XL"
+      },
+      "depends_on": [
+        "TS-001-tim-smart"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SSMS-006",
+      "level": "low",
+      "category": "architecture",
+      "package": "sql",
+      "title": "Transactional, forward-only Migrator leaves no online index-creation path for post-GA migrations",
+      "issue_file": ".issues/low/SSMS-006-sql-schema-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "node_modules/.pnpm/effect@4.0.0-rc.116/node_modules/effect/src/unstable/sql/Migrator.ts",
+          "line": 308,
+          "snippet": "      sql.withTransaction(run),",
+          "note": "The whole pending batch runs in one transaction. Migrator.make's options (loader/schemaDirectory/table) have no per-migration non-transactional flag, so CREATE INDEX CONCURRENTLY is impossible through it."
+        },
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 233,
+          "snippet": "      pg: () => sql`CREATE INDEX sessions_user_id ON sessions(\"userId\")`,",
+          "note": "Indexes are created plainly, without IF NOT EXISTS, so an out-of-band pre-build would make the recorded migration fail."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-docs-operations",
+      "fix": {
+        "summary": "Document an expand-phase runbook and adopt `IF NOT EXISTS` for every new index migration, so an operator can pre-build with CONCURRENTLY out of band and the recorded migration becomes a no-op.",
+        "steps": [
+          "Convention: from now on, every new index migration uses `CREATE [UNIQUE] INDEX IF NOT EXISTS`. PPS-002, ALF-010 and SAM-003 already follow it in this plan. Add a comment block at the top of CoreMigrations.ts stating the convention.",
+          "README 'Migrating a populated database' runbook: (1) run `CREATE INDEX CONCURRENTLY IF NOT EXISTS <same name> ...` manually on the primary; (2) deploy, and Migrator records the migration while the `IF NOT EXISTS` no-ops; (3) for new NOT NULL columns, expand (nullable plus backfill) and then contract.",
+          "Don't fork Migrator. A non-transactional migration flag is an upstream Effect feature request, which this plan notes but does not include."
+        ],
+        "files": [
+          "packages/sql/src/CoreMigrations.ts (comment)",
+          "packages/sql/README.md"
+        ],
+        "tests": [
+          "packages/sql/test/Repositories.test.ts: \"an index pre-created out of band does not break the recorded migration\" (pre-create the PPS-002 index, then run coreMigrations and expect success)."
+        ],
+        "acceptance": [
+          "A documented, tested zero-downtime index path exists."
+        ],
+        "spec_refs": [
+          "BEH-EA-037"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "NAM-007",
+      "level": "medium",
+      "category": "dx",
+      "package": "sql",
+      "title": "Existing Auth.js sessions cannot be migrated — forced global re-authentication",
+      "issue_file": ".issues/medium/NAM-007-nextauth-authjs-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/ports/src/LegacySessionBridge.ts",
+          "line": 3,
+          "snippet": "// BAM-003 (.issues/high): an optional, additive fallback `Sessions.verify`\n// consults only on a primary-store miss (a malformed token, or an id it\n// doesn't recognize) — the exact shape a \"still-live better-auth session\"\n// takes once effect-auth's own `id.secret` parsing rejects it outright.",
+          "note": "FIXED in mechanism (19a3e00): a generic legacy-session bridge port exists, so forced global re-login is no longer the only option. An Auth.js `sessions.sessionToken` lookup fits `resolve(rawToken)`."
+        },
+        {
+          "path": "packages/ports/src/PasswordHasher.ts",
+          "line": 43,
+          "snippet": "// `LegacyPasswordVerifiers` below closes the \"Known non-goal\" this comment",
+          "note": "FIXED in mechanism (60947ff): dual-format password verification exists, and migrate-auth0 ships a BcryptVerifier. STILL MISSING: an Auth.js-specific runbook/recipe. `grep -ri 'auth.js|nextauth' packages spec` finds only OAuth prose."
+        }
+      ],
+      "fixed_by_commit": "19a3e00",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-docs-operations",
+      "fix": {
+        "summary": "Publish an Auth.js migration runbook built on the now-existing ports. No new package unless demand appears.",
+        "steps": [
+          "Write docs/migrations/authjs.md (linked from the README). Cover: users/accounts ETL (Auth.js `provider` + `providerAccountId` → `providerId` + `subject`, with `issuer = ''` for non-OIDC and the provider issuer for OIDC); sessions, either dropped with a forced re-login or bridged with a ~30-line `LegacySessionBridge` implementation reading Auth.js's `sessions` table by `sessionToken` and checking `expires`, then minting an awthaq session (show the Layer); and Credentials-provider bcrypt hashes via `LegacyPasswordVerifiers` plus migrate-auth0's `BcryptVerifier`, with rehashOnLogin (Password.ts:850) upgrading them.",
+          "If a second Auth.js adopter appears, promote the recipe to `@awthaq/migrate-authjs`, mirroring migrate-better-auth. That is out of scope now."
+        ],
+        "files": [
+          "docs/migrations/authjs.md (new)",
+          "packages/sql/README.md"
+        ],
+        "tests": [
+          "Optional: a doc-snippet typecheck, i.e. put the bridge recipe in an examples/ file compiled by `pnpm run typecheck`."
+        ],
+        "acceptance": [
+          "An Auth.js adopter can migrate without forced re-login by following the doc."
+        ],
+        "spec_refs": [
+          "BEH-EA-049",
+          "BEH-EA-050"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "MA-008",
+      "level": "low",
+      "category": "architecture",
+      "package": "sql",
+      "title": "Identity brands are declared twice (core and sql); drift is silently bridged by string-typed re-wrap constructors",
+      "issue_file": ".issues/low/MA-008-michael-arnaldi.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/core/src/Users.ts",
+          "line": 48,
+          "snippet": "export type UserId = string & Brand.Brand<\"UserId\">;\nexport const UserId = Brand.nominal<UserId>();",
+          "note": ""
+        },
+        {
+          "path": "packages/sql/src/Models.ts",
+          "line": 21,
+          "snippet": "export const UserId = Schema.String.pipe(Schema.brand(\"UserId\"));\nexport type UserId = typeof UserId.Type;",
+          "note": "There are two independent declarations. core already depends on @awthaq/sql (core/package.json:29), so core can alias sql's type directly with no new package."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "ESS-011-effect-schema-specialist"
+      ],
+      "workstream": "sql-repository-hygiene",
+      "fix": {
+        "summary": "Declare each id type once, in @awthaq/sql, the lower stratum core already imports. Core re-exports the type and keeps a nominal constructor over it, so a key rename on either side breaks every bridge at compile time.",
+        "steps": [
+          "core Users.ts: `export type UserId = SqlModels.UserId` (replacing the local `string & Brand.Brand<\"UserId\">`), keeping `export const UserId = Brand.nominal<UserId>()`. Do the same for AccountId (Accounts.ts:28), SessionId (Sessions.ts:31) and VerificationTokenId.",
+          "Add a type-level test (ESS-011's ask) in packages/core/test/Brands.test.ts: `expectTypeOf<Users.UserId>().toEqualTypeOf<SqlModels.UserId>()`, and likewise for the other three ids.",
+          "Update the Models.ts:9-15 header comment: core aliases these types rather than redeclaring them."
+        ],
+        "files": [
+          "packages/core/src/Users.ts",
+          "packages/core/src/Accounts.ts",
+          "packages/core/src/Sessions.ts",
+          "packages/core/src/Verification.ts",
+          "packages/sql/src/Models.ts",
+          "packages/core/test/Brands.test.ts (new)"
+        ],
+        "tests": [
+          "packages/core/test/Brands.test.ts: \"core ids are the same types as @awthaq/sql's branded schemas\" (expectTypeOf)."
+        ],
+        "acceptance": [
+          "`pnpm run typecheck` fails if either brand key changes.",
+          "No `as` is introduced."
+        ],
+        "spec_refs": [
+          "BEH-EA-033"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "CSG-006",
+      "level": "medium",
+      "category": "compliance",
+      "package": "sql",
+      "title": "Core PII columns are plaintext at rest with no documented encryption boundary",
+      "issue_file": ".issues/medium/CSG-006-compliance-soc2-gdpr-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Models.ts",
+          "line": 142,
+          "snippet": "  ipAddress: Schema.NullOr(Schema.String).pipe(Model.FieldExcept([\"update\", \"jsonUpdate\"])),\n  userAgent: Schema.NullOr(Schema.String).pipe(Model.FieldExcept([\"update\", \"jsonUpdate\"])),",
+          "note": ""
+        },
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 76,
+          "snippet": "export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.SqlClient> =",
+          "note": "Only AccountsRepositoryLive requires Encryption (Repositories.ts:192-196). email, name, ipAddress, userAgent and metadata are plaintext, and no deployer doc states the boundary."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-docs-operations",
+      "fix": {
+        "summary": "Document the encryption boundary now. Depending on the decision, add opt-in application-level encryption for the non-lookup PII columns (ipAddress, userAgent, users.metadata) through the existing Encryption port, with row AAD.",
+        "steps": [
+          "Docs (always): add a README 'Encryption at rest' section. Only accounts.accessToken/refreshToken are app-encrypted (AES-256-GCM, AAD `providerId:userId:field`). Password/session/verification secrets are hash-only. Every other column relies on the deployer's disk/DB encryption, which is a stated deployer responsibility for SOC 2/GDPR, along with TLS to the DB.",
+          "(Option B) Add a `SqlPiiEncryption` Context.Reference, default `{ sessions: false, userMetadata: false }`. When enabled, SessionsRepositoryLive/UsersRepositoryLive also require `Encryption` and encrypt/decrypt `ipAddress`/`userAgent` (AAD `session:<id>:<field>`) and `metadata` (AAD `user:<id>:metadata`) exactly as AccountsRepositoryLive does. This reuses SMS-002's typed-undecryptable degrade policy.",
+          "(Option C, deferred) Deterministic or blind-index encryption of email would change the lower(email) uniqueness semantics (ESR-003/DRS-005). Don't plan it without a customer."
+        ],
+        "files": [
+          "packages/sql/README.md",
+          "packages/sql/src/Repositories.ts (option B)",
+          "packages/sql/test/Repositories.test.ts (option B)"
+        ],
+        "tests": [
+          "(B) \"with SqlPiiEncryption.sessions enabled, the raw sessions.ipAddress column is ciphertext and listByUser returns plaintext\"."
+        ],
+        "acceptance": [
+          "The boundary is documented.",
+          "(B) An operator can switch on PII column encryption without code changes."
+        ],
+        "spec_refs": [
+          "BEH-EA-034"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "SMS-002-secrets-management-specialist"
+      ],
+      "needs_decision": true,
+      "decision_options": [
+        "A — Documentation only: state the boundary and make full-disk/DB encryption a deployer requirement.",
+        "B — A plus opt-in app-level encryption of non-lookup PII columns (sessions.ipAddress/userAgent, users.metadata) via the existing Encryption port, off by default.",
+        "C — B plus deterministic/blind-index encryption of users.email, preserving lookups via an HMAC index column."
+      ],
+      "recommendation": "B. It is the richer, configurable option and costs little: the Encryption port, AAD scheme and (after SMS-002) the undecryptable-degrade policy already exist in AccountsRepositoryLive. Defer C, since it changes the email-uniqueness semantics that ESR-003 and DRS-005 are settling and has no current customer.",
+      "recommended_status": "ready-for-human"
+    },
+    {
+      "id": "ESS-011",
+      "level": "info",
+      "category": "architecture",
+      "package": "sql",
+      "title": "core/sql brand bridging is runtime-unchecked by design",
+      "issue_file": ".issues/info/ESS-011-effect-schema-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Models.ts",
+          "line": 11,
+          "snippet": "// own `UserId`/`SessionId`/`AccountId`/`VerificationTokenId` — the two are\n// structurally compatible (a `Brand<Keys>`'s uniqueness comes from the\n// literal string key, not a runtime symbol), and it is core's eventual",
+          "note": "Same double declaration as MA-008. Its type-level-test ask is folded into MA-008's plan. The AdminApi.ListQuery side remark belongs to the admin slice."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "MA-008",
+      "duplicates": [],
+      "workstream": "sql-repository-hygiene",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ESS-010",
+      "level": "low",
+      "category": "correctness",
+      "package": "sql",
+      "title": "Documented latent decode asymmetry in VerificationToken.payload",
+      "issue_file": ".issues/low/ESS-010-effect-schema-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/core/src/Verification.ts",
+          "line": 170,
+          "snippet": "          payload: input.payload,",
+          "note": "layerMemory stores an explicit `null` verbatim."
+        },
+        {
+          "path": "packages/core/src/Verification.ts",
+          "line": 271,
+          "snippet": "  payload: row.payload === null ? undefined : row.payload,",
+          "note": "layerSql folds null to undefined, so the two layers diverge on explicit null."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "verification-store-hygiene",
+      "fix": {
+        "summary": "Make the divergence unreachable: layerMemory normalizes explicit `null` to `undefined` at issue, matching the SQL encoding. Enforce it with a shared two-layer contract test.",
+        "steps": [
+          "Verification.ts layerMemory issue (:170): `payload: input.payload === null ? undefined : input.payload`.",
+          "Update the Models.ts:198-207 comment: remove the 'latent asymmetry' paragraph and state that both layers normalize null to undefined.",
+          "Optionally tighten `VerificationShape.issue`'s `payload?: unknown` doc to say null is treated as absent."
+        ],
+        "files": [
+          "packages/core/src/Verification.ts",
+          "packages/sql/src/Models.ts",
+          "packages/core/test/Verification.test.ts"
+        ],
+        "tests": [
+          "First failing test, packages/core/test/Verification.test.ts, run over both layerMemory and layerSql: \"an explicit null payload round-trips as undefined\"."
+        ],
+        "acceptance": [
+          "Both layers return identical `payload` for {omitted, null, object}."
+        ],
+        "spec_refs": [
+          "BEH-EA-122"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "BCR-009",
+      "level": "low",
+      "category": "correctness",
+      "package": "sql",
+      "title": "Backup codes must be long-lived but expiresAt is NOT NULL and expiry fails as replay",
+      "issue_file": ".issues/low/BCR-009-backup-codes-recovery-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "WONTFIX-CANDIDATE",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Models.ts",
+          "line": 225,
+          "snippet": "  expiresAt: Schema.DateTimeUtcFromString.pipe(Model.FieldExcept([\"update\", \"jsonUpdate\"])),",
+          "note": "True, but only relevant if backup codes are stored as verification tokens."
+        },
+        {
+          "path": ".scratch/resolve-ready-for-human-findings/issues/05-mfa-two-factor-subsystem.md",
+          "line": 38,
+          "snippet": "   - **Recovery codes**: table `two_factor_recovery_code` (`id`, `userId`, `codeHash`, `usedAt` nullable)",
+          "note": "Ticket 05's decision gives recovery codes their own table with no expiresAt, so the TTL problem never arises. Verification tokens are meant to expire. The low-remaining warning ask is carried by BCR-002's `countUnused`."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "two-factor-recovery-codes",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "wontfix"
+    },
+    {
+      "id": "SCP-001",
+      "level": "high",
+      "category": "architecture",
+      "package": "sql",
+      "title": "No user deactivation state: SCIM active:false is unrepresentable, only hard delete exists",
+      "issue_file": ".issues/high/SCP-001-scim-provisioning-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Models.ts",
+          "line": 40,
+          "snippet": "export class User extends Model.Class<User>(\"User\")({\n  id: Model.UuidV7Insert(UserId),\n  email: Schema.String,",
+          "note": "There is no status/active/suspended/banned field. `grep -rn setStatus packages` finds nothing."
+        },
+        {
+          "path": ".scratch/resolve-ready-for-human-findings/issues/19-admin-api-surface-expansion.md",
+          "line": 61,
+          "snippet": "- **`banned` as a real, core-level gate, not just an admin-side flag.**",
+          "note": "A sibling decision (ticket 19, BAM-005, admin slice) adds an overlapping sign-in gate on the same record (`banned`/`bannedReason`/`bannedUntil`). Implement both together."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "user-identity-lifecycle",
+      "fix": {
+        "summary": "Implement ticket 09's decision: `status: \"active\" | \"suspended\"` with a dedicated `Users.setStatus` (never a generic write), composed with `Sessions.revokeAll` at the caller. Co-design the sign-in gate and migration with ticket 19's `banned` fields (BAM-005) so there is one gate and one migration.",
+        "steps": [
+          "Models.ts `User`: `status: Schema.Literals([\"active\", \"suspended\"])`, FieldExcept update/jsonUpdate, constructor default \"active\". If BAM-005 lands in the same pass, also add `banned` (dialect bool), `bannedReason` (NullOr String) and `bannedUntil` (NullOr dialect DateTime).",
+          "CoreMigrations (next free id): `add_users_status_columns` adds `status TEXT NOT NULL DEFAULT 'active'` (plus the ban columns if co-landing). Every existing row becomes active, and no backfill is needed.",
+          "Repositories.ts UsersRepository: `setStatus(id, status)` as a targeted `UPDATE users SET status = ..., \"updatedAt\" = ... WHERE id = ... RETURNING *`.",
+          "core Users.ts: add `UserRecord.status` and `Users.setStatus(id, status)`. `delete` is unchanged. Add a single `Users.assertCanSignIn(user)` helper (failing a typed `UserSuspended`/`UserBanned`) and call it from every `Sessions.issue` caller ticket 19 enumerates: password signIn, passkey authenticateVerify, the oauth callback, and magic-link when it lands.",
+          "The caller composes `setStatus(id, \"suspended\")` with `Sessions.revokeAll(id)` (the admin/SCIM handler), inside `SqlTransaction.withTransaction`.",
+          "SCIM external-id tombstones stay in ticket 08's packages/scim, not here.",
+          "Spec: add a new BEH in 06-domain-users-accounts.md, 'Suspension is never deletion', plus feature scenarios."
+        ],
+        "files": [
+          "packages/sql/src/Models.ts",
+          "packages/sql/src/CoreMigrations.ts",
+          "packages/sql/src/Repositories.ts",
+          "packages/core/src/Users.ts",
+          "packages/password/src/Password.ts",
+          "packages/passkey/src/Passkey.ts",
+          "packages/oauth/src/OAuth.ts",
+          "spec/behaviors/06-domain-users-accounts.md",
+          "features/features/02-domain/06-users-accounts.feature"
+        ],
+        "tests": [
+          "First failing test, packages/core/test/Users.test.ts (both layers): \"setStatus(suspended) persists and is not reachable via updateProfile\".",
+          "packages/password/test: \"a suspended user's correct-password signIn is refused with UserSuspended and issues no session\". Mirror it for passkey and oauth.",
+          "\"reactivating (setStatus active) restores sign-in; accounts and sessions history retained\"."
+        ],
+        "acceptance": [
+          "A deactivated user keeps every row but cannot obtain a session.",
+          "Only `setStatus` writes `status`."
+        ],
+        "spec_refs": [
+          "BEH-EA-042",
+          "BEH-EA-046",
+          "BEH-EA-053"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "TS-001",
+      "level": "high",
+      "category": "correctness",
+      "package": "sql",
+      "title": "Postgres row decode cannot succeed: BooleanFromBit and string-DateTime model variants contradict the pinned pg driver's binary codecs",
+      "issue_file": ".issues/high/TS-001-tim-smart.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Models.ts",
+          "line": 47,
+          "snippet": "  emailVerified: Model.Field({\n    select: Schema.BooleanFromBit,\n    insert: Schema.BooleanFromBit.pipe(Schema.withConstructorDefault(Effect.succeed(false))),\n    json: Schema.Boolean,\n    jsonCreate: Schema.Boolean,\n  }),",
+          "note": "Unchanged since the audit: the DB variants accept only 0|1."
+        },
+        {
+          "path": "node_modules/.pnpm/effect@4.0.0-rc.116/node_modules/effect/src/Schema.ts",
+          "line": 9910,
+          "snippet": "export const BooleanFromBit: BooleanFromBit = Literals([0, 1]).pipe(\n  decodeTo(\n    Boolean,",
+          "note": "Installed rc.116: a JS boolean from the pg driver fails this decode."
+        },
+        {
+          "path": "node_modules/.pnpm/@effect+sql-pg@4.0.0-rc.116_effect@4.0.0-rc.116/node_modules/@effect/sql-pg/src/PgTypes.ts",
+          "line": 1169,
+          "snippet": "        return bytes[offset] !== 0",
+          "note": "Pinned @effect/sql-pg decodes OID 16 (bool) to a JS boolean; timestamptz decodes to a Date (PgTypes.ts:1056 `new Date(...)`)."
+        },
+        {
+          "path": "node_modules/.pnpm/effect@4.0.0-rc.116/node_modules/effect/src/unstable/schema/Model.ts",
+          "line": 505,
+          "snippet": "export const DateTimeInsert: DateTimeInsert = Field({\n  select: Schema.DateTimeUtcFromString,\n  insert: DateTimeWithNow,\n  json: Schema.DateTimeUtcFromString\n})",
+          "note": "String-only select decode; every createdAt/updatedAt uses it."
+        },
+        {
+          "path": "packages/sql/src/Models.ts",
+          "line": 114,
+          "snippet": "  accessTokenExpiresAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(\n    Schema.withConstructorDefault(Effect.succeed(null)),\n  ),",
+          "note": "BE-002 (e773cf1) added two more string-DateTime columns since the audit, so the affected surface has grown. TS-002's resolution note (b8d6177) confirms the pg suite still fails end-to-end on this bug."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-dialect-neutral-models",
+      "fix": {
+        "summary": "Follow ticket 29's decision: `Models.ts` becomes a `makeModels(dialect)` factory that selects Effect's own per-dialect Model field variants for the dialect-sensitive columns (boolean and DateTime). `Repositories.ts` resolves `sql.dialect` once at layer construction. The pg client's codecs are never overridden globally.",
+        "steps": [
+          "In `packages/sql/src/Models.ts`, add an internal field table keyed by dialect. pg uses a `Model.Field` over `Schema.Boolean` (select/insert with constructor default, json/jsonCreate `Schema.Boolean`), `Model.DateTimeInsertFromDate`, `Model.DateTimeUpdateFromDate`, and `Schema.DateTimeUtcFromDate` / `Schema.NullOr(Schema.DateTimeUtcFromDate)` for plain timestamps. sqlite keeps today's `Schema.BooleanFromBit`, `Model.DateTimeInsert`, `Model.DateTimeUpdate`, and `Schema.DateTimeUtcFromString`. The json/jsonCreate/jsonUpdate variants stay byte-identical across the two branches. Build the table without `as const` or any other assertion, as two plain functions, one per dialect.",
+          "Export `makeModels(dialect: \"pg\" | \"sqlite\")`, which returns `{ User, Account, Session, VerificationToken, VerificationReservation, AuditLogRow }`. Route every dialect-sensitive column through the table: User.emailVerified/createdAt/updatedAt; Account.accessTokenExpiresAt/refreshTokenExpiresAt/createdAt/updatedAt; Session.absoluteExpiresAt/idleExpiresAt/createdAt/authenticatedAt/lastActiveAt/supersededAt/reusedAt; VerificationToken.expiresAt/consumedAt/createdAt; VerificationReservation.expiresAt. Also move `AuditLogRowSchema.occurredAt` (Repositories.ts:816-823) into the factory. Keep ids, strings, `Model.Sensitive` and payload fields declared once and shared.",
+          "Export dialect-independent *type* aliases for the shape interfaces (e.g. `export type User = InstanceType<ReturnType<typeof makeModels>[\"User\"]>` and the insert/update variant Types). The decoded `Type` side is identical across dialects; only `Encoded` differs. Keep the aliases type-level and never cast.",
+          "In `packages/sql/src/Repositories.ts`, in each `Layer.effect`, resolve `const models = yield* resolveModels(sql)` right after `const sql = yield* SqlClient.SqlClient`. `resolveModels` uses `sql.onDialectOrElse({ pg: () => Effect.succeed(makeModels(\"pg\")), sqlite: () => Effect.succeed(makeModels(\"sqlite\")), orElse: () => Effect.die(...) })`, mirroring CoreMigrations' `orElse`. Pass `models.X` to `SqlModel.makeRepository` and the `SqlSchema` Result schemas. Expose `models` on each repository shape (or a small `SqlModels` Context.Service) so callers that construct variant inputs use the right class.",
+          "Update the 12 `SqlModels.<Model>.insert|update.makeEffect` call sites in `packages/core/src/{Users,Accounts,Sessions}.ts` to take the model from the repository/service instead of the static import.",
+          "Request schemas that encode DateTime parameters (`SessionCursorRequest`, touch/tombstone/reauthenticate/upsertLive/tryConsume/claim/AuditLog) should use the same per-dialect field, so pg binds a `Date` (timestamptz) rather than relying on text-parameter inference. b8d6177's real-pg run showed string binds for `updatedAt` do work, so treat this as consistency, not correctness, and let the pg test outcome decide.",
+          "Export the field table as `Models.dialectFields(dialect)` so plugin record stores with the same defect class can reuse it: admin ImpersonationRecords, jwt RevocationStore/SigningKeyRecords, organization *Records, passkey PasskeyCredentials/ChallengeStore, migrate-better-auth LegacySessionBridgeLive. File that plugin sweep as a cross-slice follow-up.",
+          "Update the `Models.ts` header comment: one declaration per field, except the per-dialect wire codec of the boolean/DateTime columns.",
+          "Add a local `pnpm run test:pg` script (docker `postgres:16` plus `AWTHAQ_POSTGRES_URL`) and document it. `.github/workflows/check.yml` configures a Postgres service, but this repo has no git remote (AGENTS.md), so that suite has never actually run."
+        ],
+        "files": [
+          "packages/sql/src/Models.ts",
+          "packages/sql/src/Repositories.ts",
+          "packages/core/src/Users.ts",
+          "packages/core/src/Accounts.ts",
+          "packages/core/src/Sessions.ts",
+          "packages/sql/test/Models.test.ts (new)",
+          "packages/sql/test/Repositories.postgres.test.ts",
+          "package.json (test:pg script)"
+        ],
+        "tests": [
+          "New failing unit test first, runnable without Postgres, in packages/sql/test/Models.test.ts: \"makeModels('pg').User decodes a driver-shaped row { emailVerified: true, createdAt: Date, updatedAt: Date }\" and \"makeModels('sqlite').User decodes { emailVerified: 1, createdAt: ISO string }\". Also assert both json variants encode identically.",
+          "Existing packages/sql/test/Repositories.postgres.test.ts \"migrates and round-trips a User through the real repository\" and \"Users.verifyEmail sets emailVerified/updatedAt via the quoted columns\" fail today (per TS-002's resolution note) and must go green under `pnpm run test:pg`.",
+          "The whole SQLite suite (packages/sql, core, organization, passkey, jwt, admin) stays green."
+        ],
+        "acceptance": [
+          "A real Postgres 16 run of Repositories.postgres.test.ts passes every case.",
+          "`BooleanFromBit` appears in Models.ts only in the sqlite branch of the field table.",
+          "No `as`/`as const` assertions were introduced, and no return-type annotations on new Effect/Layer consts.",
+          "`pnpm check` is green."
+        ],
+        "spec_refs": [
+          "BEH-EA-033",
+          "BEH-EA-034",
+          "ADR-EA-004"
+        ],
+        "effort": "L"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SMS-007",
+      "level": "low",
+      "category": "docs",
+      "package": "sql",
+      "title": "Spec's model-level Redacted typing for provider tokens is not what shipped",
+      "issue_file": ".issues/low/SMS-007-secrets-management-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "spec/behaviors/05-persistence-stratum.md",
+          "line": 45,
+          "snippet": "class Account extends Model.Class<Account>(\"Account\")({\n  id: Model.UuidV7Insert,\n  passwordHash: Model.Sensitive(Schema.String),\n  accessToken: Model.Sensitive(Schema.Redacted(Schema.String))\n}) {}",
+          "note": "The spec illustration still shows Redacted."
+        },
+        {
+          "path": "packages/sql/src/Models.ts",
+          "line": 103,
+          "snippet": "  accessToken: Model.Sensitive(Schema.NullOr(Schema.String)),\n  refreshToken: Model.Sensitive(Schema.NullOr(Schema.String)),",
+          "note": "Shipped: plain strings. Models.ts:77-86 explains why (a Redacted encoded form is not a bindable SQL parameter)."
+        },
+        {
+          "path": "spec/glossary.md",
+          "line": 63,
+          "snippet": "Effect's wrapper type for a value that must never reach a log line, a span, or a published event in cleartext — passwords, session secrets, and verification tokens are carried as `Redacted` throughout.",
+          "note": "The glossary overclaims for the repository stratum."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-encrypted-token-read-path",
+      "fix": {
+        "summary": "Amend the spec to match the real, deliberate boundary. Do not retype the repository: a `Schema.Redacted` encoded form cannot be bound as a SQL parameter (Models.ts:77-86), and core already re-wraps tokens as `Redacted` at the domain boundary (`ProviderTokenSet.accessToken: Redacted.Redacted<string>`, core Accounts.ts:85-87).",
+        "steps": [
+          "BEH-EA-034 illustration: change to `accessToken: Model.Sensitive(Schema.NullOr(Schema.String))`. Add one paragraph: rows hold plaintext in memory, the disk holds AES-GCM ciphertext with row+column AAD, `Redacted` exists at the Encryption seam and from core's domain records upward, and JSON exclusion is guaranteed by `Model.Sensitive`.",
+          "Glossary `Redacted`: qualify \"throughout\" to \"throughout every domain-service and HTTP boundary; repository rows below core hold the plain value only transiently.\"",
+          "Run `pnpm run spec:verify:strict`."
+        ],
+        "files": [
+          "spec/behaviors/05-persistence-stratum.md",
+          "spec/glossary.md"
+        ],
+        "tests": [
+          "No code test. `pnpm run spec:verify:strict` passes."
+        ],
+        "acceptance": [
+          "BEH-EA-034 text matches Models.ts."
+        ],
+        "spec_refs": [
+          "BEH-EA-034"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SMS-002",
+      "level": "high",
+      "category": "correctness",
+      "package": "sql",
+      "title": "Key rotation is a data-losing dead end: single-key env provider plus Effect.orDie on decrypt",
+      "issue_file": ".issues/high/SMS-002-secrets-management-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 223,
+          "snippet": "      value === null\n        ? Effect.succeed(null)\n        : encryption\n            .decrypt(value, tokenAad(providerId, userId, field))\n            .pipe(Effect.map(Redacted.value), Effect.orDie);",
+          "note": "Still `Effect.orDie` at HEAD (the line moved from :199 to :227)."
+        },
+        {
+          "path": "packages/ports/src/KeyProvider.ts",
+          "line": 96,
+          "snippet": "    const material: KeyMaterial = { kid, key: Redacted.make(decoded.success) };\n    const getKey: KeyProviderShape[\"getKey\"] = (requestedKid) =>\n      requestedKid === kid\n        ? Effect.succeed(material)\n        : Effect.fail(new UnknownKeyId({ kid: requestedKid }));",
+          "note": "Still single-key. Multi-key is KRS-002 (ticket 22), which is unimplemented: `grep AWTHAQ_ENCRYPTION_KEYS packages` finds nothing."
+        },
+        {
+          "path": "packages/oauth/src/OAuth.ts",
+          "line": 659,
+          "snippet": "            DecryptionFailed: () => new OAuthApi.OAuthCallbackFailed(),\n            UnknownKeyId: () => new OAuthApi.OAuthCallbackFailed(),",
+          "note": "The typed-mapping precedent the SQL path lacks."
+        },
+        {
+          "path": "packages/core/src/Accounts.ts",
+          "line": 645,
+          "snippet": "    const updateProviderTokens: AccountsShape[\"updateProviderTokens\"] = Effect.fnUntraced(\n      function* (id, tokens) {\n        const performUpdate = Effect.gen(function* () {\n          const existing = yield* repo.findById(id).pipe(",
+          "note": "New since the audit (BE-002): even *overwriting* an undecryptable token first decrypts it, so a rotation-affected row can never self-heal."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "ESR-004",
+        "KRS-003",
+        "TS-005-tim-smart"
+      ],
+      "workstream": "sql-encrypted-token-read-path",
+      "fix": {
+        "summary": "Replace `Effect.orDie` on decrypt with a typed, per-row failure policy. Point token reads surface a typed error; identity/list reads degrade the unreadable column to null and log. Token-only writes stop decrypting the old value. Add lazy re-encryption once KRS-002's multi-key provider and `staleKid` result land (ticket 22).",
+        "steps": [
+          "Prerequisite (ports slice, KRS-002/ticket 22): `KeyProvider.layerEnv` reads the `AWTHAQ_ENCRYPTION_KEYS` keyset plus the current `AWTHAQ_ENCRYPTION_KEY_ID`, and `EncryptionShape.decrypt` returns `{ plaintext, staleKid: Option<string> }`.",
+          "In Repositories.ts, add an `AccountTokenUndecryptable` tagged error (`accountId`, `field: \"accessToken\" | \"refreshToken\"`, `reason: \"DecryptionFailed\" | \"UnknownKeyId\"`), using the same tagged-error style as the rest of the package, and add it to `AccountsRepositoryShape.findById`'s error channel.",
+          "Rewrite `decryptToken` to `Effect.catchTags({ DecryptionFailed, UnknownKeyId })` into that error, with no `orDie`. Give `decryptRow` a policy argument. `\"strict\"` (findById) propagates the typed error. `\"degrade\"` (findByProviderSubject, listByUser, and the insert/update echo) maps an undecryptable column to `null` and emits `Effect.logWarning` annotated with accountId/field/kid, never ciphertext. OAuth sign-in and unlink's last-account check (core Accounts.ts:556) then keep working for a row with a bad token.",
+          "Add targeted repository writes that never read token plaintext. `updateProviderTokens(id, aad, tokenColumns)` runs `UPDATE accounts SET \"accessToken\", \"refreshToken\", \"accessTokenExpiresAt\", \"refreshTokenExpiresAt\", scope, \"tokenType\", \"updatedAt\" ... WHERE id RETURNING *`. `updatePasswordHash(id, hash)` runs `UPDATE accounts SET \"passwordHash\", \"updatedAt\" ... RETURNING *`. Switch core Accounts.ts `updateProviderTokens` (645-667) and `updateCredentialHash` (600-625) to them, so neither pass-through-decrypts the other columns and a stale row heals on the next OAuth sign-in. This mirrors the `Sessions.reauthenticate` targeted-UPDATE precedent.",
+          "Lazy re-encrypt, after KRS-002: when decrypt reports `staleKid: Some`, re-encrypt under `currentKey` and CAS-write the column (`UPDATE accounts SET \"accessToken\" = ${fresh} WHERE id = ${id} AND \"accessToken\" = ${old}`). A single statement needs no transaction, so this respects BEH-EA-035. Gate it on an `AccountsRepositoryConfig` Context.Reference with `reencryptOnRead` defaulting to true.",
+          "In core Accounts.ts, map `AccountTokenUndecryptable` in `findProviderTokens` (631-641) to a new typed `ProviderTokensUnreadable` on `AccountsShape.findProviderTokens`, so @awthaq/oauth's scoped refresh port (BE-002) can treat it as \"re-consent required\" instead of dying.",
+          "Register ADR `spec/decisions/017-encryption-at-rest-key-rotation.md` (plus spec/decisions/index.yaml), as ticket 22 requires."
+        ],
+        "files": [
+          "packages/sql/src/Repositories.ts",
+          "packages/core/src/Accounts.ts",
+          "packages/oauth/src/OAuth.ts (refresh-port consumer)",
+          "packages/ports/src/KeyProvider.ts + Encryption.ts (via KRS-002)",
+          "spec/decisions/017-encryption-at-rest-key-rotation.md",
+          "spec/decisions/index.yaml",
+          "packages/sql/test/Repositories.test.ts",
+          "packages/core/test/Accounts.test.ts"
+        ],
+        "tests": [
+          "First failing test, packages/sql/test/Repositories.test.ts: \"a tampered accessToken ciphertext fails findById with AccountTokenUndecryptable, not a defect\". Tamper via a raw `UPDATE accounts SET \"accessToken\" = ...`.",
+          "\"listByUser returns every row when one row's token is undecryptable, nulling only that column\"",
+          "\"findByProviderSubject still resolves the identity row when its token ciphertext is unreadable\"",
+          "\"updateProviderTokens overwrites an undecryptable token without reading it\"",
+          "After KRS-002: \"a row written under a retired kid still decrypts while that kid stays in the keyset\" and \"findById rewrites a stale-kid ciphertext under the current key\"",
+          "packages/core/test/Accounts.test.ts: \"findProviderTokens fails ProviderTokensUnreadable for an undecryptable row\""
+        ],
+        "acceptance": [
+          "No decrypt-path `orDie` remains in packages/sql/src/Repositories.ts.",
+          "A key rotation that retains the old kid leaves every account readable, and rows migrate to the current kid on read.",
+          "One bad row never kills listByUser or OAuth sign-in."
+        ],
+        "spec_refs": [
+          "BEH-EA-034",
+          "BEH-EA-043",
+          "ADR (new): encryption-at-rest key rotation"
+        ],
+        "effort": "L"
+      },
+      "depends_on": [
+        "KRS-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ESR-004",
+      "level": "medium",
+      "category": "api",
+      "package": "sql",
+      "title": "Decrypt failures are collapsed to fiber defects, so one unreadable row poisons whole result-set operations",
+      "issue_file": ".issues/medium/ESR-004-effect-sql-repository-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 225,
+          "snippet": "        : encryption\n            .decrypt(value, tokenAad(providerId, userId, field))\n            .pipe(Effect.map(Redacted.value), Effect.orDie);",
+          "note": "Same `Effect.orDie` at Repositories.ts:227. The list-path skip-and-log policy it asks for is folded into SMS-002's `degrade` policy."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "SMS-002-secrets-management-specialist",
+      "duplicates": [],
+      "workstream": "sql-encrypted-token-read-path",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "KRS-003",
+      "level": "medium",
+      "category": "correctness",
+      "package": "sql",
+      "title": "Reads of old-key ciphertext rows die as defects instead of a typed error",
+      "issue_file": ".issues/medium/KRS-003-key-rotation-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 225,
+          "snippet": "        : encryption\n            .decrypt(value, tokenAad(providerId, userId, field))\n            .pipe(Effect.map(Redacted.value), Effect.orDie);",
+          "note": "Same `Effect.orDie`. Its lazy re-encrypt-on-read ask is SMS-002's step 5 (after KRS-002)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "SMS-002-secrets-management-specialist",
+      "duplicates": [],
+      "workstream": "sql-encrypted-token-read-path",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "TS-005",
+      "level": "low",
+      "category": "correctness",
+      "package": "sql",
+      "title": "Account token decryption failures are collapsed with Effect.orDie instead of the port's typed error channel",
+      "issue_file": ".issues/low/TS-005-tim-smart.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 225,
+          "snippet": "        : encryption\n            .decrypt(value, tokenAad(providerId, userId, field))\n            .pipe(Effect.map(Redacted.value), Effect.orDie);",
+          "note": "Same `Effect.orDie`. The typed `TokenUndecryptable` it asks for is SMS-002's `AccountTokenUndecryptable`."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "SMS-002-secrets-management-specialist",
+      "duplicates": [],
+      "workstream": "sql-encrypted-token-read-path",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "PPS-008",
+      "level": "low",
+      "category": "performance",
+      "package": "sql",
+      "title": "SELECT * on every hand-written lookup pulls full wide rows including ciphertext and audit columns",
+      "issue_file": ".issues/low/PPS-008-postgres-performance-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "WONTFIX-CANDIDATE",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 296,
+          "snippet": "    const listByUser = SqlSchema.findAll({\n      Request: UserId,\n      Result: Account,\n      execute: (userId) => sql`SELECT * FROM accounts WHERE \"userId\" = ${userId}`,\n    });",
+          "note": "True, but not worth actioning. Every `Result` is a full `Model.Class` select variant that requires all columns, so projecting would mean parallel partial schemas per query (doubling drift surface). The rows are narrow (≤17 scalar columns, no blobs), callers consume most columns (decryptRow needs both token columns), and the hot session verify path is SqlModel's own findById."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-repository-hygiene",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "wontfix"
+    },
+    {
+      "id": "ESR-010",
+      "level": "low",
+      "category": "api",
+      "package": "sql",
+      "title": "listByUser limit is unvalidated before being bound into LIMIT",
+      "issue_file": ".issues/low/ESR-010-effect-sql-repository-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 328,
+          "snippet": "const SessionCursorRequest = Schema.Struct({\n  userId: UserId,\n  cursorCreatedAt: Schema.NullOr(Schema.DateTimeUtcFromString),\n  cursorId: Schema.NullOr(Schema.String),\n  limit: Schema.Int,\n});",
+          "note": ""
+        },
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 450,
+          "snippet": "          limit: limit ?? DEFAULT_PAGE_SIZE,",
+          "note": "Only `undefined` is defaulted. 0, negative and huge limits pass through."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "session-list-liveness-and-pagination",
+      "fix": {
+        "summary": "Bound the page size by construction: clamp in `listByUser` and enforce the bound in the request schema.",
+        "steps": [
+          "Add `export const MAX_PAGE_SIZE = 200` in Repositories.ts (matching core's LIST_PAGE_SIZE, which should then import it).",
+          "In `listByUser`, compute `effectiveLimit = Math.min(Math.max(limit ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE)` once and use it for both the query and the `nextCursor` check (today :450 and :453 compute it twice).",
+          "Set `SessionCursorRequest.limit` to `Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 1, maximum: MAX_PAGE_SIZE })))` as defense in depth. After clamping it never fails."
+        ],
+        "files": [
+          "packages/sql/src/Repositories.ts",
+          "packages/core/src/Sessions.ts",
+          "packages/sql/test/Repositories.test.ts"
+        ],
+        "tests": [
+          "First failing tests: \"listByUser clamps limit 0 to 1 and still returns a nextCursor when more rows exist\"; \"listByUser with a negative limit does not raise a SqlError\"; \"listByUser caps limit at MAX_PAGE_SIZE\"."
+        ],
+        "acceptance": [
+          "No caller-supplied limit can yield a SqlError or an unbounded page."
+        ],
+        "spec_refs": [
+          "BEH-EA-036"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SMS-002",
+      "level": "medium",
+      "category": "correctness",
+      "package": "sql",
+      "title": "Session list returns expired sessions and nothing ever reaps dead rows",
+      "issue_file": ".issues/medium/SMS-002-session-management-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 435,
+          "snippet": "            ? sql`SELECT * FROM sessions WHERE \"userId\" = ${request.userId}\n                  AND \"supersededAt\" IS NULL\n                  ORDER BY \"createdAt\" ASC, id ASC LIMIT ${request.limit}`",
+          "note": "RRS-003 added a tombstone filter, but there is still no expiry predicate."
+        },
+        {
+          "path": "packages/core/src/Sessions.ts",
+          "line": 572,
+          "snippet": "            Array.from(HashMap.values(s))\n              .filter((row) => row.userId === userId && Option.isNone(row.supersededAt))",
+          "note": "The memory list filters no expiry either."
+        },
+        {
+          "path": "spec/behaviors/07-sessions.md",
+          "line": 98,
+          "snippet": "REQUIREMENT: `Sessions` MUST expose a list of a user's own live sessions",
+          "note": "The spec says *live*. `grep -ri 'purge|retention|sweep' packages/*/src` finds no session reaper; Retention (ticket 30/CSG-003) is unimplemented."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "session-list-liveness-and-pagination",
+      "fix": {
+        "summary": "Filter expired rows out of the device list in both layers. Delegate physical deletion to ticket 30's `Retention.sweep` (CSG-003, cross-slice) rather than inventing a second reaper.",
+        "steps": [
+          "Give `SessionsRepositoryShape.listByUser` a required `now: DateTime.Utc` (caller clock, so TestClock controls it, like `tryConsume`/`claim`). Add `AND \"absoluteExpiresAt\" > ${now} AND \"idleExpiresAt\" > ${now}` to both branches of the page query, and add `now` to `SessionCursorRequest`.",
+          "core Sessions.ts: `layerSql.list` passes `yield* DateTime.now`. `layerMemory.list` applies the same two comparisons.",
+          "Reaper: none here. CSG-003's `Retention.sweep` provides `SessionsRepository.deleteExpiredBefore(cutoff)` and the opt-in `Retention.layerScheduled`. Link this issue from CSG-003."
+        ],
+        "files": [
+          "packages/sql/src/Repositories.ts",
+          "packages/core/src/Sessions.ts",
+          "packages/sql/test/Repositories.test.ts",
+          "packages/core/test/Sessions.test.ts",
+          "features/features/02-domain/07-sessions.feature"
+        ],
+        "tests": [
+          "First failing test, packages/core/test/Sessions.test.ts (both layers): \"an idle-expired session no longer appears in list\" (TestClock.adjust past idle) and \"an absolute-expired session no longer appears in list\".",
+          "Add a BDD scenario under the BEH-EA-054 Rule in features/features/02-domain/07-sessions.feature: \"expired sessions are not listed as devices\"."
+        ],
+        "acceptance": [
+          "The device list shows only sessions that `verify` would accept (modulo the secret).",
+          "Physical cleanup is tracked under CSG-003."
+        ],
+        "spec_refs": [
+          "BEH-EA-054",
+          "BEH-EA-051"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "CSG-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "TIR-003",
+      "level": "medium",
+      "category": "correctness",
+      "package": "sql",
+      "title": "verifyLive consults page 1 of a paginated list - valid sessions beyond 200 rows false-negative",
+      "issue_file": ".issues/medium/TIR-003-token-introspection-revocation-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/jwt/src/Jwt.ts",
+          "line": 446,
+          "snippet": "            return yield* sessions.isLive(Users.UserId(sub), Sessions.SessionId(sid));",
+          "note": "FIXED part: verifyLive/introspectLive now use a keyed `Sessions.isLive` (commit 6629fd2, TIR-002/FAMS-009/MAPS-006)."
+        },
+        {
+          "path": "packages/core/src/Sessions.ts",
+          "line": 872,
+          "snippet": "    const list: SessionsShape[\"list\"] = (userId, current) =>\n      repo.listByUser(userId, undefined, LIST_PAGE_SIZE).pipe(",
+          "note": "STILL TRUE: `list` returns only page 1 (the 200 oldest rows, LIST_PAGE_SIZE at :642)."
+        },
+        {
+          "path": "packages/server/src/Session.ts",
+          "line": 64,
+          "snippet": "        const items = yield* sessions.list(userId, sessionId);\n        const item = items.find((row) => row.current);\n        if (item === undefined) {\n          return yield* Effect.die(new Error(\"awthaq: current session missing from its own list\"));",
+          "note": "The finding's secondary claim still holds: GET /session dies for a user whose current session is beyond row 200. The same point-lookup-through-list pattern appears at server Session.ts:102 (revoke ownership check), passkey Passkey.ts:574 (requireFreshSession) and qadi Resolvers.ts:147 (reauth obligation)."
+        }
+      ],
+      "fixed_by_commit": "6629fd2",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "session-list-liveness-and-pagination",
+      "fix": {
+        "summary": "Add a keyed ownership lookup and route every point query through it. Make `list` exhaustive instead of silently truncating at 200.",
+        "steps": [
+          "Add `readonly findOwned: (userId: UserId, id: SessionId) => Effect.Effect<Option.Option<SessionListItem>>` to `SessionsShape` in core Sessions.ts. Memory layer: `HashMap.get` plus the userId/tombstone/expiry checks `isLive` already does. SQL layer: `repo.findById` plus the same checks. Implement `isLive` as `findOwned(...).pipe(Effect.map(Option.isSome))` to share the logic.",
+          "Switch the four point-lookup call sites to `findOwned`: server Session.ts `current` (:64-69) and `revoke` (:102-104), passkey Passkey.ts `requireFreshSession` (:574-575), and qadi Resolvers.ts reauth handler (:147-148).",
+          "Make `Sessions.layerSql.list` exhaustive: loop `repo.listByUser` with `nextCursor` until `None`. Once SMS-002(session) adds the expiry predicate, this is bounded by the live-session count. The loop keeps BEH-EA-054's plain-list contract."
+        ],
+        "files": [
+          "packages/core/src/Sessions.ts",
+          "packages/server/src/Session.ts",
+          "packages/passkey/src/Passkey.ts",
+          "packages/qadi/src/Resolvers.ts",
+          "packages/core/test/Sessions.test.ts",
+          "packages/server/test (session handler tests)"
+        ],
+        "tests": [
+          "First failing test, packages/core/test/Sessions.test.ts (layerSql over SQLite): \"findOwned resolves the newest session of a user with 201 live sessions\" and \"list returns all 201 live sessions\".",
+          "Server: \"GET /session succeeds for a user with >200 sessions\" (fails today with the 'current session missing' defect).",
+          "Passkey/qadi: \"reauth freshness check finds the current session beyond row 200\"."
+        ],
+        "acceptance": [
+          "No production code calls `sessions.list(...)` just to find one id (grep).",
+          "`list` never truncates silently."
+        ],
+        "spec_refs": [
+          "BEH-EA-054",
+          "ADR-EA-014"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SSMS-008",
+      "level": "low",
+      "category": "performance",
+      "package": "sql",
+      "title": "Session pagination lacks a composite index for its filter-plus-order shape",
+      "issue_file": ".issues/low/SSMS-008-sql-schema-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 233,
+          "snippet": "      pg: () => sql`CREATE INDEX sessions_user_id ON sessions(\"userId\")`,",
+          "note": "Identical recommendation to PPS-002 (a sessions(\"userId\", \"createdAt\", id) composite)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "PPS-002",
+      "duplicates": [],
+      "workstream": "session-list-liveness-and-pagination",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "SEA-005",
+      "level": "low",
+      "category": "correctness",
+      "package": "sql",
+      "title": "TEXT timestamp ordering correctness rests on an implicit fixed-width ISO encoding invariant",
+      "issue_file": ".issues/low/SEA-005-sqlite-embedded-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 440,
+          "snippet": "                  AND (\"createdAt\" > ${request.cursorCreatedAt}\n                       OR (\"createdAt\" = ${request.cursorCreatedAt} AND id > ${request.cursorId}))",
+          "note": "On SQLite, TEXT comparison is correct only for fixed-width ISO-8601 Z strings, and nothing asserts that invariant. TS-001's factory keeps SQLite on string encoding, so the invariant persists."
+        },
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 526,
+          "snippet": "        sql`UPDATE sessions SET \"reusedAt\" = ${Schema.encodeSync(Schema.DateTimeUtcFromString)(reusedAt)} WHERE \"id\" = ${id}`.pipe(",
+          "note": "Hand-encoded call sites, like this one and verifyEmail's `encodedNow` at :94, are exactly where a divergent format could slip in."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-contract-test-coverage",
+      "fix": {
+        "summary": "Pin the encoding invariant with contract tests. STRICT tables are rejected: they enforce only the TEXT type, not the format, and need table rebuilds.",
+        "steps": [
+          "Add a test helper that reads raw timestamp columns (`SELECT \"createdAt\", \"expiresAt\", \"reusedAt\" ...`) after exercising every write path (insert, touch, tombstone, markReused, reauthenticate, upsertLive, tryConsume, claim, AuditLog.insert, verifyEmail). Assert each against `/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/`.",
+          "Add an ordering test: insert sessions at timestamps spanning a second boundary and a .999→.000 rollover, and assert that listByUser order equals epoch order.",
+          "Route hand-encoded sites through one shared `encodeUtc` helper, or through TS-001's dialect field, so there is a single encoder."
+        ],
+        "files": [
+          "packages/sql/test/Repositories.test.ts",
+          "packages/sql/src/Repositories.ts"
+        ],
+        "tests": [
+          "\"every persisted SQLite timestamp is fixed-width ISO-8601 UTC with milliseconds\"; \"keyset order equals epoch order across second and millisecond rollovers\"."
+        ],
+        "acceptance": [
+          "Any encoding drift fails the suite loudly."
+        ],
+        "spec_refs": [
+          "BEH-EA-036"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "PPS-006",
+      "level": "low",
+      "category": "performance",
+      "package": "sql",
+      "title": "No prepared-statement reuse: every hot statement is an unnamed template executed fresh",
+      "issue_file": ".issues/low/PPS-006-postgres-performance-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "INVALID",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "node_modules/.pnpm/@effect+sql-pg@4.0.0-rc.116_effect@4.0.0-rc.116/node_modules/@effect/sql-pg/src/PgClient.ts",
+          "line": 139,
+          "snippet": "   * Caches prepared statements by name. Enabled by default. Disable it for\n   * poolers that cannot preserve named statements between queries.\n   */\n  readonly prepare?: boolean | undefined\n  /** How many statements a connection keeps prepared. Defaults to `100`. */\n  readonly preparedStatementCacheSize?: number | undefined",
+          "note": "The pinned @effect/sql-pg rc.116 auto-prepares and caches every statement by name by default (`run(query, params, prepare = true)`, :281). The tagged templates compile to stable SQL text, so hot statements are already reused. No `.prepare(` call is needed."
+        },
+        {
+          "path": "packages/sql/node_modules/@effect/sql-sqlite-node/src/SqliteClient.ts",
+          "line": 99,
+          "snippet": "  readonly prepareCacheSize?: number | undefined",
+          "note": "The SQLite driver also caches prepared statements (a Cache at :160)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-docs-operations",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "wontfix"
+    },
+    {
+      "id": "RRC-001",
+      "level": "high",
+      "category": "architecture",
+      "package": "sql",
+      "title": "No replica-routing hooks, staleness classification, or read-your-writes guardrail exists anywhere in the persistence layer",
+      "issue_file": ".issues/high/RRC-001-read-replica-consistency-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 5,
+          "snippet": "// Each repository is a `Context.Service` built with `SqlModel.makeRepository`\n// over the ambient `SqlClient` (BEH-EA-035) — none opens its own\n// transaction; the calling domain service (in `@awthaq/core`'s",
+          "note": "`grep -rn ReadRouting packages` finds nothing, so ticket 28 is unimplemented."
+        },
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 418,
+          "snippet": "      const sql = yield* SqlClient.SqlClient;\n      const repo = yield* SqlModel.makeRepository(Session, {",
+          "note": "Implementation note: the client is captured once at layer construction. A call-time `provideService(SqlClient, replica)` would therefore NOT reroute the query; ReadRouting must resolve both clients at construction."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "read-replica-routing",
+      "fix": {
+        "summary": "Implement ticket 28's decision: an opt-in, default-off `ReadRouting` module (a `ReplicaSqlClient` Context.Reference plus a fiber-scoped `CurrentCausalToken`), and a per-method staleness classification in which only display/history listings are replica-eligible.",
+        "steps": [
+          "Add `packages/sql/src/ReadRouting.ts`. It defines `ReplicaSqlClient: Context.Reference<Option.Option<SqlClient.SqlClient>>` (default `Option.none()`, meaning use the primary); `ReadRouting.replica(layer)`; `CausalToken = Schema.String.pipe(Schema.brand(\"CausalToken\"))`; `CurrentCausalToken: Context.Reference<Option.Option<CausalToken>>`; `captureToken(effect)`, which after a successful commit on pg reads `pg_current_wal_insert_lsn()` and sets the token via `Effect.provideService` for the rest of the fiber; and `forRead(primary, replica)(query)`, which with a token checks `pg_last_wal_replay_lsn() >= token` on the replica and otherwise falls back to the primary.",
+          "Correct ticket 28's method list against HEAD. `SessionsRepository.findByTokenHash` does not exist. PRIMARY-pinned: every write; Users.findById/findByEmail; Accounts.findById/findByProviderSubject/listByUser (unlink's last-account check depends on it); Sessions.findById/touch/tombstone/markReused/reauthenticate; Verification.*; VerificationReservations.claim. REPLICA-eligible: `SessionsRepository.listByUser` (device list only, once TIR-003 moves the point lookups to keyed `findOwned`), `AuditLogRepository.list`, and organization listing reads (cross-slice).",
+          "In each affected repository `Layer.effect`, resolve `primary = yield* SqlClient.SqlClient` and `replica = yield* ReplicaSqlClient` at construction. Build the replica-eligible SqlSchema queries against `Option.getOrElse(replica, () => primary)` wrapped in `forRead`.",
+          "Document the single-primary read-your-writes assumption in the Repositories.ts header and in a BEH-EA-035 addendum. Codify RRC-007's 'carry results via RETURNING, never re-read' rule there too.",
+          "Add ADR `spec/decisions/0NN-read-replica-routing.md` recording ticket 28's points 1-4, including the deferred cross-request causal-token header."
+        ],
+        "files": [
+          "packages/sql/src/ReadRouting.ts (new)",
+          "packages/sql/src/Repositories.ts",
+          "packages/sql/src/index.ts",
+          "spec/behaviors/05-persistence-stratum.md",
+          "spec/decisions/0NN-read-replica-routing.md"
+        ],
+        "tests": [
+          "First failing test, packages/sql/test/ReadRouting.test.ts: \"with no replica provided, every repository reads the primary\" (a counting SqlClient wrapper). Then \"with a replica provided, Sessions.listByUser reads the replica while Sessions.findById reads the primary\", and \"a CurrentCausalToken ahead of the replica's replay LSN forces a primary read\" (pg; stub the LSN query via a fake client on SQLite).",
+          "See RRC-008 for the lag-injection suite."
+        ],
+        "acceptance": [
+          "The default behavior is byte-identical.",
+          "No session/verification/credential read can reach a replica.",
+          "The ADR is recorded."
+        ],
+        "spec_refs": [
+          "BEH-EA-035",
+          "ADR-EA-014",
+          "ADR (new): read-replica routing"
+        ],
+        "effort": "XL"
+      },
+      "depends_on": [
+        "TIR-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "PPS-003",
+      "level": "medium",
+      "category": "performance",
+      "package": "sql",
+      "title": "findByIdentifier cannot use the partial unique index and verification_tokens history grows unboundedly",
+      "issue_file": ".issues/medium/PPS-003-postgres-performance-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 640,
+          "snippet": "    const findByIdentifier = SqlSchema.findOneOption({\n      Request: Schema.String,\n      Result: VerificationToken,\n      execute: (identifier) =>\n        sql`SELECT * FROM verification_tokens WHERE identifier = ${identifier} ORDER BY \"createdAt\" DESC LIMIT 1`,\n    });",
+          "note": ""
+        },
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 173,
+          "snippet": "        CREATE UNIQUE INDEX verification_tokens_live_identifier\n        ON verification_tokens(identifier) WHERE \"consumedAt\" IS NULL`,",
+          "note": "The only identifier index is partial. Migration 16 added `verification_tokens_user_id`, which does not help. Latent: `grep -rn findByIdentifier packages/*/src` shows no production caller outside the repository itself, only the two sql test suites."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "SSMS-003",
+        "ESR-005"
+      ],
+      "workstream": "verification-store-hygiene",
+      "fix": {
+        "summary": "Scope `findByIdentifier` to the live row so the existing partial unique index serves it with at most one row and no sort. History growth is handled by CSG-003's retention sweep (ticket 30), not a new index.",
+        "steps": [
+          "Change the query to `SELECT * FROM verification_tokens WHERE identifier = ${identifier} AND \"consumedAt\" IS NULL` and drop the ORDER BY/LIMIT: the partial unique index guarantees at most one row. Update the shape doc to say \"the current live token for identifier, if any\".",
+          "The alternative (a new non-partial `(identifier, \"createdAt\")` index) is rejected. There is no caller for the \"latest including consumed\" semantics (ADR-EA-016's `upsertLive`/`tryConsume` replaced it), and it would add a write-amplifying index to every token issue.",
+          "Update the two tests that call it (Repositories.test.ts:498 and Repositories.postgres.test.ts:233) to the live-row semantics.",
+          "Unbounded history: covered by CSG-003's `VerificationRepository.deleteExpiredBefore(cutoff)` / `Retention.sweep`. Link this issue from CSG-003."
+        ],
+        "files": [
+          "packages/sql/src/Repositories.ts",
+          "packages/sql/test/Repositories.test.ts",
+          "packages/sql/test/Repositories.postgres.test.ts"
+        ],
+        "tests": [
+          "First failing test: \"findByIdentifier returns None once the identifier's only token is consumed\" (today it returns the consumed row).",
+          "\"findByIdentifier's query plan uses verification_tokens_live_identifier\" (SQLite EXPLAIN QUERY PLAN)."
+        ],
+        "acceptance": [
+          "The findByIdentifier plan uses the partial unique index on both dialects.",
+          "No unbounded scan is reachable from the public shape."
+        ],
+        "spec_refs": [
+          "BEH-EA-057",
+          "ADR-EA-016"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SSMS-003",
+      "level": "medium",
+      "category": "performance",
+      "package": "sql",
+      "title": "verification findByIdentifier cannot use any index and scans an unbounded history table",
+      "issue_file": ".issues/medium/SSMS-003-sql-schema-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 644,
+          "snippet": "        sql`SELECT * FROM verification_tokens WHERE identifier = ${identifier} ORDER BY \"createdAt\" DESC LIMIT 1`,",
+          "note": "Same query and root cause as PPS-003. The \"hot auth path\" framing is overstated: there is no production caller at HEAD."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "PPS-003",
+      "duplicates": [],
+      "workstream": "verification-store-hygiene",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ESR-005",
+      "level": "low",
+      "category": "performance",
+      "package": "sql",
+      "title": "findByIdentifier cannot use the identifier index for consumed history and sorts unindexed",
+      "issue_file": ".issues/low/ESR-005-effect-sql-repository-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 644,
+          "snippet": "        sql`SELECT * FROM verification_tokens WHERE identifier = ${identifier} ORDER BY \"createdAt\" DESC LIMIT 1`,",
+          "note": "Same query as PPS-003. Its second option (scope to consumedAt IS NULL) is the plan PPS-003 adopts."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "PPS-003",
+      "duplicates": [],
+      "workstream": "verification-store-hygiene",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "RRC-007",
+      "level": "info",
+      "category": "architecture",
+      "package": "sql",
+      "title": "Verification write path is replica-friendly by construction: single-statement issue/consume with RETURNING carrying all needed state",
+      "issue_file": ".issues/info/RRC-007-read-replica-consistency-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "WONTFIX-CANDIDATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 684,
+          "snippet": "      execute: (request) => sql`\n        UPDATE verification_tokens\n        SET \"consumedAt\" = ${request.now}\n        WHERE identifier = ${request.identifier}\n          AND \"valueHash\" = ${request.valueHash}\n          AND \"expiresAt\" > ${request.now}\n          AND \"consumedAt\" IS NULL\n        RETURNING *",
+          "note": "A positive observation that still holds. Nothing to fix; codifying the pattern is folded into RRC-001's BEH-EA-035 addendum."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "read-replica-routing",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "wontfix"
+    },
+    {
+      "id": "BCR-002",
+      "level": "high",
+      "category": "architecture",
+      "package": "sql",
+      "title": "No bulk-invalidate, list, or count primitives anywhere in the Verification stack",
+      "issue_file": ".issues/high/BCR-002-backup-codes-recovery-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "PARTIAL",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 698,
+          "snippet": "      findById: repo.findById,\n      delete: repo.delete,\n      findByIdentifier,\n      upsertLive,\n      tryConsume,\n      deleteAllByUser,",
+          "note": "True at HEAD: no prefix-invalidate or count primitive. `deleteAllByUser` came with BCR-003 (704cdd4)."
+        },
+        {
+          "path": ".scratch/resolve-ready-for-human-findings/issues/05-mfa-two-factor-subsystem.md",
+          "line": 38,
+          "snippet": "   - **Recovery codes**: table `two_factor_recovery_code` (`id`, `userId`, `codeHash`, `usedAt` nullable) — hashed via the existing `PasswordHasher` port (same primitive, no new dependency), 10 codes minted at `confirm` time, each single-use",
+          "note": "The later MFA decision (ticket 05) puts recovery codes in their own plugin table, not verification_tokens. The premise that Verification must carry backup codes no longer holds; the need moves to that table's repository."
+        },
+        {
+          "path": "packages/two-factor/src/index.ts",
+          "line": 3,
+          "snippet": "// TOTP-based two-factor authentication with a divert hook and hashed recovery codes.",
+          "note": "The two-factor plugin is still a placeholder."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "two-factor-recovery-codes",
+      "fix": {
+        "summary": "Don't add prefix/count primitives to VerificationRepository. Implement bulk-replace and count on the `two_factor_recovery_code` repository when the two-factor plugin is built (ticket 05). Verification history purging comes from CSG-003's `deleteExpiredBefore`.",
+        "steps": [
+          "In the two-factor plugin build (ticket 05 cluster: AOMS-003/THS-001/ARF-005/BAM-007), give `RecoveryCodesRepository` the operations `replaceAll(userId, codeHashes)` (one `DELETE FROM two_factor_recovery_code WHERE \"userId\" = ...` then a batch INSERT; the caller wraps both in `SqlTransaction.withTransaction`, per BEH-EA-035/058), `countUnused(userId)` (`SELECT count(*) ... WHERE \"usedAt\" IS NULL`), and `consume(userId, codeHash, now)` as a single CAS UPDATE.",
+          "Plugin service: `TwoFactor.regenerateRecoveryCodes` must call `replaceAll` inside one transaction, never delete-then-insert across two transactions. `TwoFactor.recoveryCodeStatus` returns `{ remaining }` for low-remaining warnings.",
+          "Register the table in the plugin's own `migrations` and its `ErasureRegistry` contribution (ticket 30/DRS-002 pattern).",
+          "Comment on BCR-002 that the Verification-stack premise is superseded by ticket 05, then close it with the two-factor build."
+        ],
+        "files": [
+          "packages/two-factor/src/* (new)",
+          "packages/two-factor/test/* (new)"
+        ],
+        "tests": [
+          "packages/two-factor/test/RecoveryCodes.test.ts: \"regenerating recovery codes invalidates every old code atomically\" (assert no old code consumes afterwards, and a failure mid-insert leaves the old set intact), and \"countUnused decrements on each successful consume\"."
+        ],
+        "acceptance": [
+          "Regeneration is one transaction.",
+          "A remaining-count is available to clients.",
+          "No new Verification primitives are added."
+        ],
+        "spec_refs": [
+          "BEH-EA-058"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "AOMS-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SAM-006",
+      "level": "medium",
+      "category": "security",
+      "package": "sql",
+      "title": "SQL stratum has no authorization hook: dropping RLS removes the database-level backstop",
+      "issue_file": ".issues/medium/SAM-006-supabase-auth-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 76,
+          "snippet": "export const UsersRepositoryLive: Layer.Layer<UsersRepository, never, SqlClient.SqlClient> =",
+          "note": "True at HEAD: there is no row-scoping, and `grep -rn 'ROW LEVEL' packages spec` finds nothing."
+        },
+        {
+          "path": ".scratch/resolve-ready-for-human-findings/issues/18-multi-tenant-composition-oauth-connections.md",
+          "line": 97,
+          "snippet": "- **Structural isolation, not just convention** — directly answering",
+          "note": "The structural DB backstop (Postgres RLS on core tables) is already decided under DRS-001, so that half is covered. The Supabase cutover-protocol documentation is not."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "tenancy-residency",
+      "fix": {
+        "summary": "The RLS backstop ships with DRS-001's opt-in RLS migrations. What remains here is documentation of the Supabase hybrid window and the recommended least-privilege database role.",
+        "steps": [
+          "Write a 'Migrating from Supabase: RLS and qadi' section (packages/sql/README.md or docs/migrations/supabase.md). Keep the existing Supabase RLS active through the qadi rollout, driving both from one policy catalog. Exit criteria are qadi call-site coverage of every data path plus audit-log review. Then disable app-table RLS, and optionally keep awthaq's own DRS-001 RLS on the auth tables.",
+          "Recommend that the app connect as a non-owner role with only the DML grants it needs, and that migrations run as the owner role. RLS is then enforced even without FORCE, and ad-hoc scripts using the app role are scoped.",
+          "Add a note in ADR-EA-009 (authorization delegated to qadi) that DB-level isolation is opt-in defense in depth, not the primary control."
+        ],
+        "files": [
+          "packages/sql/README.md or docs/migrations/supabase.md",
+          "spec/decisions/009-authorization-delegated-to-qadi.md"
+        ],
+        "tests": [
+          "No code test (docs). DRS-001's RLS tests cover the mechanism."
+        ],
+        "acceptance": [
+          "The cutover protocol and role recommendation are documented and linked from the README."
+        ],
+        "spec_refs": [
+          "ADR-EA-009"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "DRS-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ERAS-006",
+      "level": "info",
+      "category": "architecture",
+      "package": "sql",
+      "title": "SQL repositories are structurally driver-neutral, but no edge-viable SqlClient story exists or is documented",
+      "issue_file": ".issues/info/ERAS-006-edge-runtime-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/package.json",
+          "line": 31,
+          "snippet": "  \"devDependencies\": {\n    \"@effect/platform-node\": \"catalog:\",\n    \"@effect/sql-pg\": \"catalog:\",\n    \"@effect/sql-sqlite-node\": \"catalog:\",",
+          "note": "The boundary is drawn correctly, since the drivers are devDependencies. Nothing documents it, though."
+        },
+        {
+          "path": "../effect/packages/sql/libsql/src/LibsqlClient.ts",
+          "line": 189,
+          "snippet": "    const compiler = Statement.makeCompilerSqlite(options.transformQueryNames)",
+          "note": "Effect v4 ships sqlite-dialect edge drivers (sql-libsql, sql-d1 at D1Client.ts:202, sql-sqlite-do) and a WASM pg (sql-pglite, dialect 'pg'). CoreMigrations' sqlite branch therefore already covers them in principle, but this is untested and undocumented."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "NAM-011"
+      ],
+      "workstream": "sql-docs-operations",
+      "fix": {
+        "summary": "Document the edge/origin split and the driver matrix, and prove one HTTP-capable sqlite-dialect driver against the contract suite so the documentation isn't aspirational.",
+        "steps": [
+          "README 'Runtimes & drivers' section. Edge (Workers/Vercel Edge) handles stateless verification (JWT via @awthaq/jwt) and presence checks. Origin (Node) handles SqlClient-backed sessions/users/credentials/migrations, unless an HTTP driver is used. The matrix: @effect/sql-pg and sql-sqlite-node (Node); sql-libsql (Turso, HTTP) and sql-d1 (Cloudflare) with the sqlite dialect; sql-pglite (WASM). MySQL is not supported (CoreMigrations `orElse` dies).",
+          "Add a dev-only contract run of packages/sql/test's shared cases against `@effect/sql-libsql` with a local file/in-memory URL, as a new devDependency. This proves that the sqlite-dialect migrations and repositories work over a non-node:sqlite driver. Check specifically whether `sql.withTransaction` (used by Migrator.ts:308) works on libsql, and document D1's lack of interactive transactions as a known limitation if the contract run can't cover D1.",
+          "Add an ADR or overview note on the edge/origin boundary (ERAS-006's ask)."
+        ],
+        "files": [
+          "packages/sql/README.md",
+          "packages/sql/package.json (devDependency @effect/sql-libsql)",
+          "packages/sql/test/Repositories.libsql.test.ts (new)",
+          "spec/overview.md"
+        ],
+        "tests": [
+          "packages/sql/test/Repositories.libsql.test.ts: \"coreMigrations and the repository contract pass on @effect/sql-libsql\"."
+        ],
+        "acceptance": [
+          "A documented, tested edge-capable persistence path exists, or a documented limitation."
+        ],
+        "spec_refs": [
+          "ADR-EA-004",
+          "ADR-EA-014"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "EOTS-008",
+      "level": "medium",
+      "category": "performance",
+      "package": "sql",
+      "title": "Hand-written SQL queries bypass the spanPrefix spans that repository CRUD gets",
+      "issue_file": ".issues/medium/EOTS-008-effect-observability-tracing-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "node_modules/.pnpm/effect@4.0.0-rc.116/node_modules/effect/src/unstable/sql/Statement.ts",
+          "line": 1305,
+          "snippet": "    return Effect.useSpan(\n      \"sql.execute\",\n      { kind: \"client\" },",
+          "note": "OVERSTATED: every statement, hand-written ones included, already gets a `sql.execute` client span carrying `db.query.text` (Statement.ts:1333-1334). The claim that they \"produce no span at all\" is false."
+        },
+        {
+          "path": "node_modules/.pnpm/effect@4.0.0-rc.116/node_modules/effect/src/unstable/sql/SqlModel.ts",
+          "line": 112,
+          "snippet": "        Effect.withSpan(`${options.spanPrefix}.insert`, {}, { captureStackTrace: false })",
+          "note": "TRUE part: only makeRepository methods get named domain spans (Users.insert, ...)."
+        },
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 87,
+          "snippet": "      const findByEmail = SqlSchema.findOneOption({\n        Request: Schema.String,\n        Result: User,\n        execute: (email) => sql`SELECT * FROM users WHERE lower(email) = lower(${email})`,\n      });",
+          "note": "`grep -c withSpan packages/sql/src/Repositories.ts` returns 0."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-repository-hygiene",
+      "fix": {
+        "summary": "Give every hand-written repository method a named span, matching SqlModel's `<spanPrefix>.<method>` convention, so a flame graph shows `Users.findByEmail > sql.execute` rather than an anonymous `sql.execute`.",
+        "steps": [
+          "Add a tiny helper in Repositories.ts: `const traced = (name: string, attributes?: Record<string, unknown>) => Effect.withSpan(name, { attributes }, { captureStackTrace: false })`.",
+          "Wrap these methods. Users: findByEmail, verifyEmail. Accounts: findByProviderSubject (attribute providerId only), listByUser, deleteAllByUser, and the insert/update/findById encryption wrappers. Sessions: listByUser, touch, deleteAllForUserExcept, deleteAllByUser, tombstone, markReused, revokeFamily, reauthenticate. VerificationTokens: findByIdentifier, upsertLive, tryConsume, deleteAllByUser. VerificationReservations: claim. AuditLog: insert, list.",
+          "Never attach email, identifier, secretHash, valueHash, tokens or payload as span attributes (BEH-EA-199; ticket 27's redaction interceptor will assert it). ids (userId/sessionId/accountId) are acceptable, matching SqlModel's `findById` `{ attributes: { id } }`.",
+          "Coordinate naming with ticket 27's business-logic spans (`awthaq.session.verify` wraps `Sessions.findById`/`touch`)."
+        ],
+        "files": [
+          "packages/sql/src/Repositories.ts",
+          "packages/sql/test/Repositories.test.ts"
+        ],
+        "tests": [
+          "First failing test, packages/sql/test/Repositories.test.ts: \"hand-written repository methods emit named spans\". Install an in-memory Tracer that collects span names, call findByEmail/touch/tryConsume, and assert that `Users.findByEmail`, `Sessions.touch` and `VerificationTokens.tryConsume` exist, each parenting a `sql.execute` span.",
+          "\"no span attribute carries the email or a hash\"."
+        ],
+        "acceptance": [
+          "Every public repository method has a named span.",
+          "No PII or secret appears in span attributes."
+        ],
+        "spec_refs": [
+          "BEH-EA-035",
+          "BEH-EA-199"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "DRS-005",
+      "level": "medium",
+      "category": "performance",
+      "package": "sql",
+      "title": "Login-path lookups are global-semantics queries (lower(email), (providerId, subject, issuer)) that scatter under any sharding",
+      "issue_file": ".issues/medium/DRS-005-data-residency-sharding-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 90,
+          "snippet": "        execute: (email) => sql`SELECT * FROM users WHERE lower(email) = lower(${email})`,",
+          "note": ""
+        },
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 293,
+          "snippet": "        sql`SELECT * FROM accounts WHERE \"providerId\" = ${request.providerId} AND subject = ${request.subject} AND issuer = ${request.issuer}`,",
+          "note": "The login lookups carry no tenant predicate, and both unique indexes (CoreMigrations.ts:93, :215) are global. Ticket 18 adds a tenant column but is silent on identity uniqueness scope."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "tenancy-residency",
+      "fix": {
+        "summary": "After the uniqueness-scope decision: document the users and accounts tables as the global identity directory, and let tenant-scoped routing apply only to sessions/verification/audit (recommended option A). Under option B, prefix the unique indexes with the tenant column instead.",
+        "steps": [
+          "(A) Document in the DRS-001 ADR that users/accounts are the global identity directory: email and (providerId, subject, issuer) are unique across tenants. This is consistent with ticket 18's tenant = Organization row and the membership model, under which one user belongs to many orgs. Sign-in lookups are directory reads. Under sharding, the directory stays unsharded (or replicated read-only), and the tenant-stamped sessions/verification/audit tables are what partition.",
+          "(A) Add `(\"tenantId\", \"userId\")` composite indexes on sessions/verification_tokens in DRS-001's migration so tenant-routed reads prune.",
+          "(B, only if chosen) Replace users_email_unique with `UNIQUE (COALESCE(\"tenantId\", ''), lower(email))` and accounts' unique with a tenant-prefixed one. findByEmail/findByProviderSubject add `\"tenantId\" IS NOT DISTINCT FROM ${TenantContext}`."
+        ],
+        "files": [
+          "spec/decisions/0NN-tenancy-column-and-rls.md",
+          "packages/sql/src/CoreMigrations.ts"
+        ],
+        "tests": [
+          "(A) No behavior test. Use an EXPLAIN assertion that the tenant-scoped session list uses the (tenantId, userId) index.",
+          "(B) \"the same email can register in two tenants; sign-in resolves per TenantContext\"."
+        ],
+        "acceptance": [
+          "The identity uniqueness scope is written down in an ADR, and the login path's shard behavior is explicit."
+        ],
+        "spec_refs": [
+          "BEH-EA-041",
+          "BEH-EA-043",
+          "ADR (new): tenancy column & RLS"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "DRS-001"
+      ],
+      "needs_decision": true,
+      "decision_options": [
+        "A — Global identity directory: email and (providerId, subject, issuer) stay globally unique. Users/accounts are the unsharded directory tier, and tenant partitioning applies to sessions/verification/audit only.",
+        "B — Tenant-scoped identity: unique indexes are prefixed with COALESCE(tenantId, ''), so the same email is a different user per tenant. Login lookups require TenantContext.",
+        "C — Both, selectable per deployment via alternative migration sets."
+      ],
+      "recommendation": "A. Ticket 18 fixed tenant = Organization row, and the organization plugin's membership model already lets one global user belong to many orgs. Tenant-scoped identity (B) would contradict that by forcing duplicate user rows per org, and C doubles the migration surface for a scenario with no customer yet. Revisit B as an opt-in only when a residency customer needs per-tenant identity isolation.",
+      "recommended_status": "ready-for-human"
+    },
+    {
+      "id": "ESR-003",
+      "level": "medium",
+      "category": "correctness",
+      "package": "sql",
+      "title": "Email case-folding relies on lower() whose semantics diverge between SQLite and Postgres and from the app-level normalization",
+      "issue_file": ".issues/medium/ESR-003-effect-sql-repository-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 90,
+          "snippet": "        execute: (email) => sql`SELECT * FROM users WHERE lower(email) = lower(${email})`,",
+          "note": ""
+        },
+        {
+          "path": "packages/core/src/Users.ts",
+          "line": 317,
+          "snippet": "    const findByEmail: UsersShape[\"findByEmail\"] = (email) =>\n      repo.findByEmail(email).pipe(Effect.map(Option.map(toUserRecord)), Effect.orDie);",
+          "note": "layerSql passes the raw email (Password.ts:801/892/929 and Passkey.ts:724 pass user input). Writes JS-lowercase (Users.ts:286), and layerMemory looks up `email.toLowerCase()` (Users.ts:141), so on SQLite a non-ASCII mixed-case sign-in misses."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-repository-hygiene",
+      "fix": {
+        "summary": "Make JS `toLowerCase()` the only fold. Normalize the bound parameter in the repository and keep `lower(email)` on the column side so the existing `users_email_unique` expression index still serves the lookup. Stored values are already JS-lowercased, so column-side `lower()` is a no-op for them on every dialect.",
+        "steps": [
+          "Repositories.ts `findByEmail`: `execute: (email) => sql`SELECT * FROM users WHERE lower(email) = ${email.toLowerCase()}``.",
+          "core Users.ts layerSql `findByEmail`: pass `email.toLowerCase()` as well, for symmetry with layerMemory and so the domain service owns normalization.",
+          "No migration: the index stays `lower(email)`.",
+          "BEH-EA-041 text: state that normalization is JS `String.prototype.toLowerCase()` at the domain boundary and the database index never sees a non-normalized value."
+        ],
+        "files": [
+          "packages/sql/src/Repositories.ts",
+          "packages/core/src/Users.ts",
+          "packages/sql/test/Repositories.test.ts",
+          "packages/core/test/Users.test.ts",
+          "spec/behaviors/06-domain-users-accounts.md"
+        ],
+        "tests": [
+          "First failing test, packages/core/test/Users.test.ts (layerSql over SQLite): \"findByEmail('MÜLLER@EXAMPLE.COM') finds a user created as 'Müller@example.com'\". It fails today because SQLite's lower() folds ASCII only.",
+          "The existing \"BEH-EA-041: findByEmail matches case-insensitively\" stays green."
+        ],
+        "acceptance": [
+          "Lookups behave identically on SQLite, Postgres and memory for non-ASCII emails."
+        ],
+        "spec_refs": [
+          "BEH-EA-041"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ESR-007",
+      "level": "low",
+      "category": "correctness",
+      "package": "sql",
+      "title": "verifyEmail hardcodes the bit literal 1 instead of the model's BooleanFromBit encoding",
+      "issue_file": ".issues/low/ESR-007-effect-sql-repository-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 103,
+          "snippet": "        yield* sql.onDialectOrElse({\n          pg: () =>\n            sql`UPDATE users SET \"emailVerified\" = TRUE, \"updatedAt\" = ${encodedNow} WHERE id = ${id}`,\n          sqlite: () =>\n            sql`UPDATE users SET \"emailVerified\" = 1, \"updatedAt\" = ${encodedNow} WHERE id = ${id}`,",
+          "note": "b8d6177 (TS-002) replaced the unconditional literal with a dialect branch. The audit's premise that Postgres accepts `= 1` was wrong: TS-002 reproduced error 42804. Binding a BooleanFromBit value, as recommended, would also fail on pg (TS-001). PPS-007's plan binds through TS-001's dialect field, which removes the remaining second convention."
+        }
+      ],
+      "fixed_by_commit": "b8d6177",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-dialect-neutral-models",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "PPS-007",
+      "level": "low",
+      "category": "performance",
+      "package": "sql",
+      "title": "verifyEmail pays an extra round trip: UPDATE followed by a separate findById instead of RETURNING",
+      "issue_file": ".issues/low/PPS-007-postgres-performance-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 103,
+          "snippet": "        yield* sql.onDialectOrElse({\n          pg: () =>\n            sql`UPDATE users SET \"emailVerified\" = TRUE, \"updatedAt\" = ${encodedNow} WHERE id = ${id}`,\n          sqlite: () =>\n            sql`UPDATE users SET \"emailVerified\" = 1, \"updatedAt\" = ${encodedNow} WHERE id = ${id}`,\n          orElse: () => Effect.die(new Error(\"awthaq: unsupported SQL dialect for verifyEmail\")),\n        });\n        return yield* repo.findById(id);",
+          "note": "TS-002 (b8d6177) changed the literal but kept the UPDATE-then-findById double round trip."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-dialect-neutral-models",
+      "fix": {
+        "summary": "Collapse verifyEmail into one `UPDATE ... RETURNING *` decoded through the dialect model. Bind the boolean through the model's own encoding so the per-dialect literal branch disappears.",
+        "steps": [
+          "In `UsersRepositoryLive`, replace the `onDialectOrElse` block and `repo.findById` with a `SqlSchema.findOne({ Request: Schema.Struct({ id: UserId, updatedAt: <dialect DateTime field> }), Result: models.User, execute: (r) => sql`UPDATE users SET \"emailVerified\" = ${verifiedTrue}, \"updatedAt\" = ${r.updatedAt} WHERE id = ${r.id} RETURNING *` })`. `verifiedTrue` is `true` encoded through the dialect boolean field from TS-001's table: pg binds `true`, sqlite binds `1`.",
+          "Zero rows back fails with `Cause.NoSuchElementError`, keeping the shape's existing error channel."
+        ],
+        "files": [
+          "packages/sql/src/Repositories.ts",
+          "packages/sql/test/Repositories.test.ts",
+          "packages/sql/test/Repositories.postgres.test.ts"
+        ],
+        "tests": [
+          "packages/sql/test/Repositories.test.ts: \"verifyEmail on an unknown id fails NoSuchElementError\" and \"verifyEmail returns the updated row from the same statement\" (use a statement-counting SqlClient wrapper, or a span count once EOTS-008 lands).",
+          "The existing pg case \"Users.verifyEmail sets emailVerified/updatedAt via the quoted columns\" stays green."
+        ],
+        "acceptance": [
+          "verifyEmail issues exactly one statement.",
+          "The `onDialectOrElse` literal branch is removed from verifyEmail."
+        ],
+        "spec_refs": [
+          "BEH-EA-042"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "TS-001-tim-smart"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SSMS-007",
+      "level": "low",
+      "category": "correctness",
+      "package": "sql",
+      "title": "Boolean write path uses literal 1 and leans on driver reconciliation for Postgres",
+      "issue_file": ".issues/low/SSMS-007-sql-schema-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 105,
+          "snippet": "            sql`UPDATE users SET \"emailVerified\" = TRUE, \"updatedAt\" = ${encodedNow} WHERE id = ${id}`,",
+          "note": "The pg branch now writes TRUE, which was this finding's own first recommended option (commit b8d6177, TS-002). Its secondary 'pg read decode leans on the driver' point is TS-001."
+        }
+      ],
+      "fixed_by_commit": "b8d6177",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-dialect-neutral-models",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "SSMS-005",
+      "level": "medium",
+      "category": "dx",
+      "package": "sql",
+      "title": "No shipped wiring ever runs coreMigrations",
+      "issue_file": ".issues/medium/SSMS-005-sql-schema-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/src/index.ts",
+          "line": 10,
+          "snippet": "// Planned next: migration records/linker input (BEH-EA-037/038).",
+          "note": "True at HEAD. `grep -rn coreMigrations packages/*/src` finds only its definition, and packages/cli/src/index.ts is an empty placeholder. Ticket 07 (BE-003, cross-slice) already decided that `migration apply` concatenates `CoreMigrations.coreMigrations` ahead of `Auth.make(...).migrations`."
+        },
+        {
+          "path": "packages/core/src/Migrations.ts",
+          "line": 55,
+          "snippet": "  Migrator.make({})({\n    loader: Effect.succeed(\n      migrations.map((m, i): Migrator.ResolvedMigration => [i + 1, m.name, Effect.succeed(m.up)]),\n    ),\n  });",
+          "note": "IMPORTANT for BE-003's implementer: plugin migrations are numbered from 1 and use the same default tracking table (`effect_sql_migrations`, Migrator.ts:111) as coreMigrations' ids 1-17. Migrator skips any id ≤ the latest applied (Migrator.ts:251), so running both separately would silently skip plugin migrations 1-17. Array-index ids also shift when a plugin is added mid-order. The combined runner must use one concatenated, stable id space or separate tracking tables per owner."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "BE-003",
+      "duplicates": [],
+      "workstream": "migration-wiring",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ESR-009",
+      "level": "low",
+      "category": "testing",
+      "package": "sql",
+      "title": "Postgres contract suite omits the touch CAS and encryption round-trip behaviors",
+      "issue_file": ".issues/low/ESR-009-effect-sql-repository-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/test/Repositories.postgres.test.ts",
+          "line": 169,
+          "snippet": "  it.effect(\n    \"Sessions.listByUser/deleteAllForUserExcept/deleteAllByUser all resolve the quoted userId/createdAt columns\",",
+          "note": "The pg suite has 8 cases. `grep -n touch` in the file finds nothing, and Encryption is wired only as a layer dependency (lines 30-48), never round-trip asserted."
+        },
+        {
+          "path": "packages/sql/test/Repositories.test.ts",
+          "line": 427,
+          "snippet": "    \"upstream-hardening ticket 01: touch's compare-and-swap lets only the first of two racing callers rotate\",",
+          "note": "SQLite-only coverage of the touch CAS. The encryption round trip is at line 125, also SQLite-only."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-dialect-neutral-models",
+      "fix": {
+        "summary": "Mirror the security-relevant SQLite cases into the Postgres suite once TS-001 makes pg row decode possible.",
+        "steps": [
+          "Add these pg cases to packages/sql/test/Repositories.postgres.test.ts: the touch CAS race (copy the Repositories.test.ts:427 body); tombstone/markReused/revokeFamily/reauthenticate RETURNING decode; the AccountsRepository encrypted round trip, asserting the raw `SELECT \"accessToken\" FROM accounts` is not the plaintext (copy :125); and AuditLogRepository insert/list with an occurredAfter/occurredBefore range.",
+          "Better still, extract shared case bodies into a `contractCases(SqlLive)` helper used by both suites, so future cases land on both dialects automatically. This also serves SEA-004's file-backed pass."
+        ],
+        "files": [
+          "packages/sql/test/Repositories.postgres.test.ts",
+          "packages/sql/test/Repositories.test.ts",
+          "packages/sql/test/contract.ts (new, optional)"
+        ],
+        "tests": [
+          "Postgres: \"touch's compare-and-swap lets only the first of two racing callers rotate\"",
+          "Postgres: \"accessToken/refreshToken round-trip encrypted; raw column bytes are not the plaintext\"",
+          "Postgres: \"tombstone/markReused/reauthenticate decode their RETURNING rows\"",
+          "Postgres: \"AuditLog.list filters by occurredAt range\""
+        ],
+        "acceptance": [
+          "`pnpm run test:pg` runs the new cases green.",
+          "The SQLite and pg suites share their case bodies."
+        ],
+        "spec_refs": [
+          "BEH-EA-035",
+          "BEH-EA-052"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "TS-001-tim-smart"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "PPS-004",
+      "level": "medium",
+      "category": "dx",
+      "package": "sql",
+      "title": "Zero connection-pool configuration for the shared PgClient anywhere in the repo",
+      "issue_file": ".issues/medium/PPS-004-postgres-performance-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/test/Repositories.postgres.test.ts",
+          "line": 52,
+          "snippet": "  const SqlLive = PgClient.layer({ url: Redacted.make(postgresUrl ?? \"\") });",
+          "note": ""
+        },
+        {
+          "path": "spec/overview.md",
+          "line": 132,
+          "snippet": "    Layer.provideMerge(PgClient.layerConfig({ url: Config.Redacted(\"DATABASE_URL\") })))),",
+          "note": "This is the only wiring example, with no pool settings."
+        },
+        {
+          "path": "node_modules/.pnpm/@effect+sql-pg@4.0.0-rc.116_effect@4.0.0-rc.116/node_modules/@effect/sql-pg/src/PgClient.ts",
+          "line": 139,
+          "snippet": "   * Caches prepared statements by name. Enabled by default. Disable it for\n   * poolers that cannot preserve named statements between queries.\n   */\n  readonly prepare?: boolean | undefined",
+          "note": "The pinned client exposes maxConnections/minConnections/idleTimeout/connectionTTL (:156-160) and `prepare`, which must be false under pgbouncer transaction pooling. None of it is documented for awthaq deployers."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-docs-operations",
+      "fix": {
+        "summary": "Ship a documented, ops-ready PgClient recipe and update the spec example. Distinguishable pool-exhaustion errors are an upstream @effect/sql-pg concern and are out of scope.",
+        "steps": [
+          "README 'Postgres client configuration': `PgClient.layerConfig({ url, maxConnections, minConnections, idleTimeout, connectionTTL, prepare })`. Size maxConnections as (server max_connections − headroom) / app instances. Under pgbouncer transaction mode, set `prepare: false` and do not rely on session state; DRS-001's `set_config(..., true)` is transaction-local and safe. Set `statement_timeout` at the role level (`ALTER ROLE <app> SET statement_timeout = '5s'`), since that works regardless of pooler.",
+          "Update spec/overview.md:132 to show maxConnections/idleTimeout in the example.",
+          "Optionally export a convenience config-driven layer from @awthaq/sql. Recommended only if the docs alone prove insufficient; don't build it speculatively."
+        ],
+        "files": [
+          "packages/sql/README.md",
+          "spec/overview.md"
+        ],
+        "tests": [
+          "`pnpm run spec:verify:strict` passes."
+        ],
+        "acceptance": [
+          "Deployers have explicit pool/timeout/pgbouncer guidance."
+        ],
+        "spec_refs": [],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SEA-004",
+      "level": "low",
+      "category": "testing",
+      "package": "sql",
+      "title": "All SQLite tests run :memory:, so the WAL configuration production gets is never exercised",
+      "issue_file": ".issues/low/SEA-004-sqlite-embedded-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/test/Repositories.test.ts",
+          "line": 27,
+          "snippet": "const SqlLive = SqliteClient.layer({ filename: \":memory:\" });",
+          "note": ""
+        },
+        {
+          "path": "packages/sql/node_modules/@effect/sql-sqlite-node/src/SqliteClient.ts",
+          "line": 150,
+          "snippet": "      if (options.disableWAL !== true) {\n        db.exec(\"PRAGMA journal_mode = WAL\")",
+          "note": "WAL is a no-op on :memory:, so production's journal mode is never exercised."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "sql-contract-test-coverage",
+      "fix": {
+        "summary": "Run the SQLite contract cases against a temp-file database as well, and add a two-connection contention test for the CAS primitives.",
+        "steps": [
+          "Using ESR-009's extracted `contractCases(SqlLive)` helper, add a second SQLite describe block. It uses `SqliteClient.layer({ filename: <tmpdir>/awthaq-<uuid>.db })` (WAL active), a scoped temp dir via `@effect/platform-node` FileSystem, and deletes the file at scope close.",
+          "Contention tests: two independent SqliteClient layers on the same file, both running coreMigrations once. Race `SessionsRepository.touch` with the same expectedSecretHash (exactly one `Some`) and `VerificationReservationsRepository.claim` (exactly one `true`). Configure a busy timeout if the driver exposes it, and assert no `SQLITE_BUSY` leaks as a defect."
+        ],
+        "files": [
+          "packages/sql/test/Repositories.test.ts",
+          "packages/sql/test/Repositories.file.test.ts (new)"
+        ],
+        "tests": [
+          "\"file-backed WAL database: journal_mode is wal\" (`PRAGMA journal_mode`); \"two connections racing touch: exactly one rotates\"; \"two connections racing claim: exactly one wins\"."
+        ],
+        "acceptance": [
+          "The CAS/claim atomicity is proven across connections on a WAL file."
+        ],
+        "spec_refs": [
+          "BEH-EA-052",
+          "BEH-EA-063"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "ESR-009"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "RRC-008",
+      "level": "low",
+      "category": "testing",
+      "package": "sql",
+      "title": "No staleness or lag-injection coverage: SQL contract suites run single-client semantics only",
+      "issue_file": ".issues/low/RRC-008-read-replica-consistency-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/sql/test/Repositories.test.ts",
+          "line": 27,
+          "snippet": "const SqlLive = SqliteClient.layer({ filename: \":memory:\" });",
+          "note": "There is a single client per suite (pg likewise at Repositories.postgres.test.ts:52), and no lag/staleness wrapper exists in packages/test."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "read-replica-routing",
+      "fix": {
+        "summary": "Land a lag-injecting replica test double together with ReadRouting, and cover the four causal handoffs.",
+        "steps": [
+          "In @awthaq/test, add `LaggingReplica.layer(primaryLayer, { lag })`. It is a SqlClient that answers reads from a snapshot taken `lag` writes ago (e.g. a second SQLite file copied at a checkpoint), provided as `ReplicaSqlClient`.",
+          "Contract tests under a lagging replica: issue→verify, rotation→next verify, revoke→verify (each must read the primary and succeed or fail correctly), and membership write→qadi read (organization slice). Also add the device-list case: a revoked session disappears once `CurrentCausalToken` is set by the revoke."
+        ],
+        "files": [
+          "packages/test/src/LaggingReplica.ts (new)",
+          "packages/sql/test/ReadRouting.test.ts",
+          "packages/core/test/Sessions.test.ts"
+        ],
+        "tests": [
+          "\"verify after revoke fails even when a lagging replica still has the row\"; \"rotated secret verifies on the very next request under replica lag\"; \"device list reflects a just-revoked session within the same fiber\"."
+        ],
+        "acceptance": [
+          "Every ADR-EA-014 'authoritative next read' path is proven under injected lag."
+        ],
+        "spec_refs": [
+          "ADR-EA-014",
+          "BEH-EA-054"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "RRC-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    }
+  ],
+  "workstreams": [
+    {
+      "slug": "sql-dialect-neutral-models",
+      "title": "Dialect-neutral SQL models (make Postgres reads work)",
+      "ids": [
+        "TS-001-tim-smart",
+        "PPS-007",
+        "ESR-009",
+        "ESR-007",
+        "SSMS-007"
+      ],
+      "rationale": "Every Postgres SELECT through the core models fails decode today (BooleanFromBit / string-DateTime vs the pg driver's boolean/Date), so no pg-backed deployment works. The verifyEmail rewrite and pg contract-suite additions can only be verified once pg decode works. ESR-007/SSMS-007 were fixed by b8d6177 and close here.",
+      "order_hint": 1,
+      "effort": "L",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "sql-encrypted-token-read-path",
+      "title": "Typed, rotation-safe encrypted token reads",
+      "ids": [
+        "SMS-002-secrets-management-specialist",
+        "ESR-004",
+        "KRS-003",
+        "TS-005-tim-smart",
+        "SMS-007-secrets-management-specialist"
+      ],
+      "rationale": "Four findings describe the same `Effect.orDie` at Repositories.ts:227. The fix pairs with KRS-002's multi-key KeyProvider (ticket 22). SMS-007 is the spec wording about the same seam.",
+      "order_hint": 2,
+      "effort": "L",
+      "depends_on_workstreams": [
+        "encryption-key-rotation (ports slice, KRS-002)"
+      ]
+    },
+    {
+      "slug": "session-list-liveness-and-pagination",
+      "title": "Session device list: live-only, exhaustive, index-aligned, bounded",
+      "ids": [
+        "TIR-003",
+        "SMS-002-session-management-specialist",
+        "PPS-002",
+        "SEA-006",
+        "SSMS-008",
+        "ESR-010"
+      ],
+      "rationale": "All six touch the same `SessionsRepository.listByUser` query and its consumers: point lookups routed through a truncated page, expired rows listed, a missing composite index, and an unbounded limit.",
+      "order_hint": 3,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "retention (CSG-003, cross-slice; reaper only)"
+      ]
+    },
+    {
+      "slug": "verification-store-hygiene",
+      "title": "Verification store: live-row lookup and payload parity",
+      "ids": [
+        "PPS-003",
+        "SSMS-003",
+        "ESR-005",
+        "ESS-010-effect-schema-specialist"
+      ],
+      "rationale": "These are small, independent correctness and performance fixes in the verification repository and service. History growth is delegated to CSG-003's retention sweep.",
+      "order_hint": 4,
+      "effort": "S",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "sql-repository-hygiene",
+      "title": "Repository hygiene: email fold, brand unification, named spans",
+      "ids": [
+        "ESR-003",
+        "MA-008",
+        "ESS-011-effect-schema-specialist",
+        "EOTS-008",
+        "PPS-008"
+      ],
+      "rationale": "These are independent small fixes to Repositories.ts/Models.ts that don't depend on the model factory. PPS-008 is closed wontfix.",
+      "order_hint": 5,
+      "effort": "S",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "user-identity-lifecycle",
+      "title": "User identity union and suspension state",
+      "ids": [
+        "SAM-003",
+        "SCP-001"
+      ],
+      "rationale": "Both come from ticket 09 and change the same User model, migration file and sign-in gate. Ticket 19 (BAM-005) adds an overlapping `banned` gate on the same record, so co-design one gate and one migration.",
+      "order_hint": 6,
+      "effort": "XL",
+      "depends_on_workstreams": [
+        "sql-dialect-neutral-models",
+        "admin banned gate (BAM-005, admin slice; co-design)"
+      ]
+    },
+    {
+      "slug": "tenancy-residency",
+      "title": "Tenant attribution column, RLS backstop, residency docs",
+      "ids": [
+        "DRS-001",
+        "SSMS-009",
+        "CSG-009",
+        "SAM-006",
+        "DRS-005"
+      ],
+      "rationale": "Ticket 18 decided the tenant column plus RLS. CSG-009 and SAM-006 are the documentation halves, and DRS-005 needs the identity-uniqueness scope decided on top of it.",
+      "order_hint": 7,
+      "effort": "XL",
+      "depends_on_workstreams": [
+        "organization TenantResolver/middleware (organization slice)"
+      ]
+    },
+    {
+      "slug": "read-replica-routing",
+      "title": "Opt-in read-replica routing with causal tokens",
+      "ids": [
+        "RRC-001",
+        "RRC-008",
+        "RRC-007"
+      ],
+      "rationale": "Ticket 28's decision plus its test harness. It depends on TIR-003 moving the security-relevant point lookups off the replica-eligible device list. RRC-007 is closed as a positive observation codified in the ADR.",
+      "order_hint": 8,
+      "effort": "XL",
+      "depends_on_workstreams": [
+        "session-list-liveness-and-pagination"
+      ]
+    },
+    {
+      "slug": "retention-sweeps",
+      "title": "Retention for audit data (extends CSG-003's Retention)",
+      "ids": [
+        "ALF-010"
+      ],
+      "rationale": "Ticket 30's Retention service covers sessions and verification history. Audit-log and impersonation retention extend the same config service. SMS-002(session)'s reaper and PPS-003's history growth also land through CSG-003.",
+      "order_hint": 9,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "retention (CSG-003, cross-slice)"
+      ]
+    },
+    {
+      "slug": "two-factor-recovery-codes",
+      "title": "Recovery-code set primitives (in the two-factor plugin build)",
+      "ids": [
+        "BCR-002",
+        "BCR-009"
+      ],
+      "rationale": "Ticket 05 moved recovery codes into their own `two_factor_recovery_code` table, so the bulk-invalidate and count needs belong there, not in Verification. BCR-009's TTL problem disappears with that design.",
+      "order_hint": 10,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "two-factor plugin build (ticket 05: AOMS-003/THS-001/ARF-005)"
+      ]
+    },
+    {
+      "slug": "sql-docs-operations",
+      "title": "Persistence-stratum README and operations docs",
+      "ids": [
+        "ESR-008",
+        "ERAS-006",
+        "NAM-011",
+        "PPS-009",
+        "PPS-004",
+        "SSMS-006",
+        "NAM-007",
+        "CSG-006",
+        "PPS-006"
+      ],
+      "rationale": "These findings are documentation gaps about the same package, so the rewritten packages/sql/README.md is their single home. The libsql contract run (ERAS-006), the IF NOT EXISTS convention test (SSMS-006) and optional PII encryption (CSG-006, pending a decision) are the only code. PPS-006 is closed as invalid (the driver auto-prepares).",
+      "order_hint": 11,
+      "effort": "M",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "sql-contract-test-coverage",
+      "title": "SQLite contract coverage: file-backed WAL and timestamp invariants",
+      "ids": [
+        "SEA-004",
+        "SEA-005"
+      ],
+      "rationale": "Both are SQLite-specific test gaps in packages/sql/test and reuse ESR-009's extracted contract cases.",
+      "order_hint": 12,
+      "effort": "S",
+      "depends_on_workstreams": [
+        "sql-dialect-neutral-models (ESR-009's shared contract cases)"
+      ]
+    },
+    {
+      "slug": "migration-wiring",
+      "title": "Composed migration runner (tracked under BE-003, cli slice)",
+      "ids": [
+        "SSMS-005"
+      ],
+      "rationale": "This is a duplicate of cross-slice BE-003 (ticket 07). It is kept as a named workstream only to carry the tracking-table id-collision warning to BE-003's implementer.",
+      "order_hint": 13,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "cli migration tooling (BE-003, cli slice)"
+      ]
+    }
+  ]
+}

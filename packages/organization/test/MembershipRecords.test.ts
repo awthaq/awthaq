@@ -6,7 +6,6 @@
 // `packages/jwt/test/RevocationStore.test.ts` establishes.
 import { Migrations, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -15,10 +14,11 @@ import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const MemoryLayer = MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("organization_MembershipRecords");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
   Layer.provide(SqlLive),
@@ -39,6 +39,43 @@ const suite = (
   layer: Layer.Layer<MembershipRecords.MembershipRecords, unknown, never>,
 ): void => {
   describe(name, () => {
+    // MTI-003: one membership per (userId, organizationId), enforced by the
+    // records layer (memory) / a UNIQUE index (sql) rather than by callers.
+    it.effect(
+      "create for an existing (userId, organizationId) fails MembershipRecordAlreadyExists and leaves the original role untouched",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* MembershipRecords.MembershipRecords;
+          yield* records.create({ userId: userA, organizationId: orgId, role: ["owner"] });
+          const failure = yield* records
+            .create({ userId: userA, organizationId: orgId, role: ["member"] })
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "MembershipRecordAlreadyExists");
+          const found = yield* records.findByUserAndOrg(userA, orgId);
+          assert.isTrue(Option.isSome(found));
+          if (Option.isSome(found)) assert.deepStrictEqual(found.value.role, ["owner"]);
+          assert.strictEqual(yield* records.countByOrganization(orgId), 1);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    // MTI-005: counts are COUNT(*) queries; countOwners must see a role array
+    // that merely *contains* owner, and ignore ones that don't.
+    it.effect("countOwners counts only memberships whose role array contains owner", () =>
+      Effect.gen(function* () {
+        const records = yield* MembershipRecords.MembershipRecords;
+        yield* records.create({ userId: userA, organizationId: orgId, role: ["admin", "owner"] });
+        yield* records.create({ userId: userB, organizationId: orgId, role: ["admin"] });
+        yield* records.create({
+          userId: Users.UserId("user-c"),
+          organizationId: orgId,
+          role: ["owner-ish", "coowner"],
+        });
+        yield* records.create({ userId: userA, organizationId: "org-2", role: ["owner"] });
+        assert.strictEqual(yield* records.countOwners(orgId), 1);
+        assert.strictEqual(yield* records.countByOrganization(orgId), 3);
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("create then findByUserAndOrg round-trips role", () =>
       Effect.gen(function* () {
         const records = yield* MembershipRecords.MembershipRecords;

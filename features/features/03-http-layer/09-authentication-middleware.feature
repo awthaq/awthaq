@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @http-layer @authentication-middleware
-@skip @unwired
 Feature: Authentication Middleware
 
   # BEH-EA-065 — spec/behaviors/09-authentication-middleware.md; see also
@@ -135,9 +134,9 @@ Feature: Authentication Middleware
 
     @REQ-EA-199
     Scenario: A machine-to-machine group under ApiKeyAuthentication resolves a ServicePrincipal
-      Given a group "machine" carrying "ApiKeyAuthentication"
+      Given a group "machine" carrying "MachineAuthentication"
       When a request presents a valid "x-api-key" header to the "machine" group
-      Then the request resolves to a "ServicePrincipal"
+      Then the request resolves to an "ApiKeyPrincipal" carrying the key's scopes
 
     @REQ-EA-200
     Scenario: An application group under Authentication resolves the ordinary Principal union
@@ -147,7 +146,7 @@ Feature: Authentication Middleware
 
     @REQ-EA-201
     Scenario: Two groups with different authentication middleware compose independently in one contract
-      Given a composed contract containing group "machine" under "ApiKeyAuthentication" and group "app" under "Authentication"
+      Given a composed contract containing group "machine" under "MachineAuthentication" and group "app" under "Authentication"
       When each group's requests are authenticated
       Then "machine"'s scheme selection has no effect on how "app"'s requests are authenticated, and vice versa
 

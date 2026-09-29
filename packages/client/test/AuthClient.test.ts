@@ -1,15 +1,22 @@
 // spec/behaviors/22-client-effect.md, BEH-EA-169, BEH-EA-174, BEH-EA-176.
 //
-// `CsrfClientLive` (BEH-EA-170) has no dedicated behavioral test here — see
-// `AuthClient.ts`'s own header comment: no plugin group in this repository
-// declares `.middleware(Api.CsrfProtection)` yet, so there is no real,
-// generated client to exercise it against. `readCookie`'s own logic (what
-// `CsrfClientLive` actually reads) is tested directly below instead.
-import { SessionContract } from "@awthaq/api";
+// `CsrfClientLive` (BEH-EA-170) and its cold-start bootstrap (CDS-007) are
+// tested in `Csrf.test.ts`; `readCookie`'s own logic (what `CsrfClientLive`
+// actually reads) is tested directly below.
+import * as DateTime from "effect/DateTime";
+import { Api, SessionContract } from "@awthaq/api";
 import { afterEach, assert, describe, it } from "@effect/vitest";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 import * as AuthClient from "../src/AuthClient.ts";
 
@@ -51,9 +58,9 @@ describe("readCookie (BEH-EA-170)", () => {
 const session = (id: string): AuthClient.Session =>
   new SessionContract.SessionDto({
     id,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    lastActiveAt: "2026-01-01T00:00:00.000Z",
-    expiresAt: "2026-02-01T00:00:00.000Z",
+    createdAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+    lastActiveAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+    expiresAt: DateTime.makeUnsafe("2026-02-01T00:00:00.000Z"),
     userAgent: null,
     current: true,
   });
@@ -136,4 +143,205 @@ describe("toPromiseFacade (BEH-EA-176)", () => {
       (error) => assert.instanceOf(error, BoomFailure),
     );
   });
+});
+
+class OtherFailure extends Data.TaggedError("OtherFailure")<{ readonly code: number }> {}
+
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type Expect<T extends true> = T;
+
+describe("toPromiseFacade result mode (EHA-005)", () => {
+  const fakeClient = {
+    password: {
+      signIn: (input: { readonly email: string }) =>
+        input.email === "boom@example.com"
+          ? Effect.fail(new BoomFailure({ reason: "wrong password" }))
+          : input.email === "other@example.com"
+            ? Effect.fail(new OtherFailure({ code: 7 }))
+            : Effect.succeed({ userId: input.email }),
+    },
+    version: "1.0.0",
+  };
+
+  it("resolves a Success carrying the value", async () => {
+    const facade = AuthClient.toPromiseFacade(fakeClient, { mode: "result" });
+    const result = await facade.password.signIn({ email: "a@example.com" });
+    assert.isTrue(Result.isSuccess(result));
+    assert.deepStrictEqual(Result.isSuccess(result) ? result.success : undefined, {
+      userId: "a@example.com",
+    });
+    assert.strictEqual(facade.version, "1.0.0");
+  });
+
+  it("resolves a Failure carrying the typed contract error instead of rejecting", async () => {
+    const facade = AuthClient.toPromiseFacade(fakeClient, { mode: "result" });
+    const result = await facade.password.signIn({ email: "boom@example.com" });
+    assert.isTrue(Result.isFailure(result));
+    if (Result.isFailure(result)) {
+      // Exhaustive over the error union: adding a variant breaks this switch at compile time.
+      switch (result.failure._tag) {
+        case "BoomFailure":
+          assert.strictEqual(result.failure.reason, "wrong password");
+          break;
+        case "OtherFailure":
+          assert.fail("unexpected variant");
+      }
+    }
+  });
+
+  it("the failure type is exactly the endpoint's error union", () => {
+    const facade = AuthClient.toPromiseFacade(fakeClient, { mode: "result" });
+    type Resolved = Awaited<ReturnType<typeof facade.password.signIn>>;
+    type Failure = Resolved extends Result.Result<infer _A, infer E> ? E : never;
+    const check: Expect<Equal<Failure, BoomFailure | OtherFailure>> = true;
+    assert.isTrue(check);
+  });
+
+  it("the default mode still rejects (BEH-EA-176 unchanged)", async () => {
+    const facade = AuthClient.toPromiseFacade(fakeClient);
+    await facade.password.signIn({ email: "other@example.com" }).then(
+      () => assert.fail("expected the promise to reject"),
+      (error) => assert.instanceOf(error, OtherFailure),
+    );
+  });
+});
+
+// MNA-005/PIL-005: a bearer client survives unlimited server-side rotations
+// with no code of its own beyond wiring the shipped transform.
+describe("bearerTransformClient (MNA-005)", () => {
+  const BearerApi = HttpApi.make("bearer").add(
+    HttpApiGroup.make("g").add(HttpApiEndpoint.get("ping", "/ping", { success: Schema.String })),
+  );
+
+  // A fake transport: records the Authorization header it was sent and
+  // answers with the queued response headers.
+  const fakeTransport = (
+    seen: Array<string | undefined>,
+    responseHeaders: ReadonlyArray<Record<string, string>>,
+  ) => {
+    let call = 0;
+    return HttpClient.make((request) => {
+      seen.push(request.headers["authorization"]);
+      const headers = { "content-type": "application/json", ...responseHeaders[call++] };
+      return Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          new Response(JSON.stringify("pong"), { status: 200, headers }),
+        ),
+      );
+    });
+  };
+
+  const run = (
+    store: AuthClient.BearerTokenStoreShape,
+    transport: HttpClient.HttpClient,
+    calls: number,
+  ) =>
+    Effect.gen(function* () {
+      const client = yield* AuthClient.make(BearerApi, {
+        baseUrl: "http://localhost",
+        transformClient: AuthClient.bearerTransformClient(store),
+      });
+      for (let i = 0; i < calls; i++) yield* client.g.ping();
+    }).pipe(Effect.provideService(HttpClient.HttpClient, transport));
+
+  it.effect("persists set-auth-token from a response and sends it on the next request", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      yield* store.set(Redacted.make("token-0"));
+      const seen: Array<string | undefined> = [];
+      yield* run(
+        store,
+        fakeTransport(seen, [
+          { [Api.ROTATED_TOKEN_HEADER]: "token-1" },
+          { [Api.ROTATED_TOKEN_HEADER]: "token-2" },
+          {},
+        ]),
+        3,
+      );
+      assert.deepStrictEqual(seen, ["Bearer token-0", "Bearer token-1", "Bearer token-2"]);
+      assert.strictEqual(Option.getOrThrow(yield* store.get).pipe(Redacted.value), "token-2");
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  it.effect("a response without the header leaves the stored token unchanged", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      yield* store.set(Redacted.make("token-0"));
+      const seen: Array<string | undefined> = [];
+      yield* run(store, fakeTransport(seen, [{}, {}]), 2);
+      assert.deepStrictEqual(seen, ["Bearer token-0", "Bearer token-0"]);
+      assert.strictEqual(Option.getOrThrow(yield* store.get).pipe(Redacted.value), "token-0");
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  it.effect("sends no Authorization header while the store is empty", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      const seen: Array<string | undefined> = [];
+      yield* run(store, fakeTransport(seen, [{ [Api.ROTATED_TOKEN_HEADER]: "fresh" }, {}]), 2);
+      assert.deepStrictEqual(seen, [undefined, "Bearer fresh"]);
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  // MNA-006 (ticket 17): the request header that opts the server into body token delivery.
+  it.effect(
+    "every request carries X-Awthaq-Token-Delivery: bearer, with or without a stored token",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* AuthClient.BearerTokenStore;
+        const deliveries: Array<string | undefined> = [];
+        const transport = HttpClient.make((request) => {
+          deliveries.push(request.headers[Api.TOKEN_DELIVERY_HEADER]);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify("pong"), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            ),
+          );
+        });
+        yield* run(store, transport, 1);
+        yield* store.set(Redacted.make("token-0"));
+        yield* run(store, transport, 1);
+        assert.deepStrictEqual(deliveries, ["bearer", "bearer"]);
+      }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  it.effect("captureSessionToken stores the body token so the next request is authenticated", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      const seen: Array<string | undefined> = [];
+      const signedIn = yield* AuthClient.captureSessionToken(
+        Effect.succeed({ id: "s1", token: "from-body" }),
+      );
+      // The response is handed back unchanged, token included.
+      assert.deepStrictEqual(signedIn, { id: "s1", token: "from-body" });
+      assert.strictEqual(Option.getOrThrow(yield* store.get).pipe(Redacted.value), "from-body");
+      yield* run(store, fakeTransport(seen, [{}]), 1);
+      assert.deepStrictEqual(seen, ["Bearer from-body"]);
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  it.effect("captureSessionToken stores nothing when the response carries no token", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      yield* store.set(Redacted.make("kept"));
+      yield* AuthClient.captureSessionToken(Effect.succeed({ id: "s1" }));
+      yield* AuthClient.captureSessionToken(Effect.succeed({ id: "s2", token: "" }));
+      assert.strictEqual(Option.getOrThrow(yield* store.get).pipe(Redacted.value), "kept");
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
+
+  it.effect("captureSessionToken leaves a failed sign-in alone", () =>
+    Effect.gen(function* () {
+      const store = yield* AuthClient.BearerTokenStore;
+      const failure = yield* Effect.flip(AuthClient.captureSessionToken(Effect.fail("nope")));
+      assert.strictEqual(failure, "nope");
+      assert.isTrue(Option.isNone(yield* store.get));
+    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
+  );
 });

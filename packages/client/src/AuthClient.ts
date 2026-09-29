@@ -14,32 +14,35 @@
 // implemented in this module, but is no longer blocked.** An earlier
 // revision of this comment said the only published `AtomHttpApi` was
 // `@effect-atom/atom`, pinned to `effect: ^3.22.1` and therefore unusable
-// against this project's `effect@4.0.0-rc.115` — that reasoning no longer
+// against this project's catalog-pinned `effect` — that reasoning no longer
 // holds: `effect` itself now ships `AtomHttpApi`/`Atom`/`AtomRegistry`
-// natively at `effect/unstable/reactivity` (confirmed present in this
-// repo's own installed `effect` dependency, no external package needed).
-// `@awthaq/react`'s own reactive bindings (M5, not yet built) are the
-// right place to build the actual `AtomHttpApiClient` service over this
-// package's `Api` contract — this module stays the plain, non-reactive
-// `HttpApiClient` binding either way (BEH-EA-169 offers both forms; this
-// file is only the first of them).
+// natively at `effect/unstable/reactivity` (no external package needed).
+// `@awthaq/react`'s `ReactClient.makeReactClient` builds the actual
+// `AtomHttpApiClient` service over an application's composed api — this
+// module stays the plain, non-reactive `HttpApiClient` binding either way
+// (BEH-EA-169 offers both forms; this file is only the first of them).
 //
-// **BEH-EA-171's `{ csrf: false }` contract variant has nothing to build
-// against yet.** No plugin's `HttpApiGroup` in this repository currently
-// declares `.middleware(Api.CsrfProtection)` at all — `Password`/`OAuth`/the
-// core `session` group all use `Authentication`/`OptionalAuthentication`
-// only — so there is no real, CSRF-carrying contract for a `{ csrf: false }`
-// variant to strip `CsrfProtection` middleware *from* today. A bearer-mode
-// client is, for now, simply `make(api, { baseUrl, transformClient })` with
-// no `CsrfClientLive` provided, which already type-checks and behaves
-// correctly against every contract this repository currently composes.
+// **BEH-EA-171's `{ csrf: false }` contract variant is still unbuilt** —
+// `Auth.make` has no composition-level CSRF opt-out yet (decision ticket 24),
+// so a bearer-mode client is, for now, `make(api, { baseUrl, transformClient })`
+// against a contract without the `CsrfProtection` middleware, or one that
+// supplies its own `csrfClientLayer`/transport. Every mutating production
+// group *does* declare `CsrfProtection` (CSRF is on by default), so a
+// cookie-mode client needs `CsrfClientLive` below, and a cookie-less native client
+// `CsrfClientNative` (the server skips the double-submit for a request with no
+// `Cookie` header, BEH-EA-077, so its first sign-in needs no warm-up).
 import { Api, SessionContract } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import type * as Result from "effect/Result";
 import * as Context from "effect/Context";
+import * as Redacted from "effect/Redacted";
+import * as Headers from "effect/unstable/http/Headers";
+import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import type { HttpApi, HttpApiEndpoint } from "effect/unstable/httpapi";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
@@ -83,22 +86,193 @@ export const readCookie = (name: string): string | undefined => {
   return match === undefined ? undefined : decodeURIComponent(match.slice(prefix.length));
 };
 
+export interface CsrfClientOptions {
+  /**
+   * How the CSRF cookie is read (default: `document.cookie` via `readCookie`).
+   * A server-side caller — a Next.js server action dispatching in-process —
+   * passes a reader over its own request's `Cookie` header instead.
+   */
+  readonly readCookie?: ((name: string) => string | undefined) | undefined;
+  /**
+   * Retry a `CsrfRejected` response exactly once when a fresh CSRF cookie has
+   * appeared since the request was sent (default `true`) — see `csrfClientLayer`.
+   */
+  readonly bootstrapRetry?: boolean | undefined;
+}
+
+/** CDS-007: is this response the contract's own `CsrfRejected` (403 + its `_tag`)? Reading the body is safe — `HttpClientResponse` caches it for the decode that follows. */
+const isCsrfRejected = (response: HttpClientResponse.HttpClientResponse) =>
+  response.status === 403
+    ? response.json.pipe(
+        Effect.map(
+          (body) =>
+            typeof body === "object" &&
+            body !== null &&
+            Reflect.get(body, "_tag") === "CsrfRejected",
+        ),
+        Effect.orElseSucceed(() => false),
+      )
+    : Effect.succeed(false);
+
 /**
  * BEH-EA-170: a cookie-mode client program does not type-check without
  * providing this — `Api.CsrfProtection` declares `requiredForClient: true`,
  * so `HttpApiMiddleware.ForClient<Api.CsrfProtection>` is a real requirement
  * `HttpApiClient.make` leaves in the built client's own `R` until something
  * satisfies it.
+ *
+ * CDS-007 — self-bootstrapping. The server mints `__Host-csrf` from a
+ * pre-response handler on *any* response through a CSRF-guarded group
+ * (including `GET /session`, and including the 403 that rejects a request for
+ * lacking it), so a cold browser's first unsafe call carries no cookie and is
+ * rejected — once. The layer therefore (1) omits the header when no cookie is
+ * readable rather than sending an empty one, and (2) on a `CsrfRejected`
+ * response, when a cookie the rejected request did not carry is now readable
+ * (the browser stored the 403's `Set-Cookie`), re-issues the request once with
+ * it. A second rejection, or a rejection with the same cookie as was sent (a
+ * genuinely bad token), surfaces to the caller untouched. Safe to repeat: the
+ * guard rejects before any handler work runs.
  */
-export const CsrfClientLive: Layer.Layer<HttpApiMiddleware.ForClient<Api.CsrfProtection>> =
-  HttpApiMiddleware.layerClient(Api.CsrfProtection, ({ next, request }) =>
-    next(
-      HttpClientRequest.setHeader(
-        request,
-        Api.CSRF_HEADER_NAME,
-        readCookie(Api.CSRF_COOKIE_NAME) ?? "",
+export const csrfClientLayer = (options?: CsrfClientOptions) => {
+  const read = options?.readCookie ?? readCookie;
+  const retry = options?.bootstrapRetry ?? true;
+  // An empty cookie value is as unusable as an absent one.
+  const readToken = () => {
+    const token = read(Api.CSRF_COOKIE_NAME);
+    return token === "" ? undefined : token;
+  };
+  const withToken = (request: HttpClientRequest.HttpClientRequest, token: string | undefined) =>
+    token === undefined
+      ? request
+      : HttpClientRequest.setHeader(request, Api.CSRF_HEADER_NAME, token);
+  return HttpApiMiddleware.layerClient(Api.CsrfProtection, ({ next, request }) => {
+    const sent = readToken();
+    const first = next(withToken(request, sent));
+    if (!retry) return first;
+    return first.pipe(
+      Effect.flatMap((response) =>
+        isCsrfRejected(response).pipe(
+          Effect.flatMap((rejected) => {
+            if (!rejected) return Effect.succeed(response);
+            const fresh = readToken();
+            return fresh === undefined || fresh === sent
+              ? Effect.succeed(response)
+              : next(withToken(request, fresh));
+          }),
+        ),
       ),
-    ),
+    );
+  });
+};
+
+export const CsrfClientLive: Layer.Layer<HttpApiMiddleware.ForClient<Api.CsrfProtection>> =
+  csrfClientLayer();
+
+/**
+ * Native first sign-in (BEH-EA-077, cookie-less exemption): the client half for a program that
+ * has no cookie jar (a native app, a CLI, a server-to-server caller), so it never reads or echoes
+ * a `__Host-csrf` cookie and never retries a `CsrfRejected`. It still discharges
+ * `ForClient<CsrfProtection>` (the middleware is type-required), but the server no longer asks a
+ * request that carries no `Cookie` header at all for the double-submit pair, so the very first
+ * sign-in or sign-up needs no warm-up round trip. Pair it with `bearerTransformClient`.
+ */
+export const CsrfClientNative = csrfClientLayer({
+  readCookie: () => undefined,
+  bootstrapRetry: false,
+});
+
+// ---------------------------------------------------------------------------
+// MNA-005/PIL-005: the bearer-client contract
+// ---------------------------------------------------------------------------
+
+export interface BearerTokenStoreShape {
+  readonly get: Effect.Effect<Option.Option<Redacted.Redacted<string>>>;
+  readonly set: (token: Redacted.Redacted<string>) => Effect.Effect<void>;
+  readonly clear: Effect.Effect<void>;
+}
+
+/**
+ * MNA-005: where a bearer (native/CLI/server-to-server) client keeps its
+ * session token. `BearerTokenStoreMemory` is process-local; durable storage
+ * (Keychain/Keystore, an encrypted file) is the application's responsibility —
+ * implement this service over it. The token is a long-lived secret: never log
+ * it, and preserve the `set-auth-token` response header through any proxy.
+ */
+export class BearerTokenStore extends Context.Service<BearerTokenStore, BearerTokenStoreShape>()(
+  "awthaq/client/BearerTokenStore",
+) {}
+
+export const BearerTokenStoreMemory = Layer.effect(
+  BearerTokenStore,
+  Effect.gen(function* () {
+    const state = yield* Ref.make(Option.none<Redacted.Redacted<string>>());
+    return {
+      get: Ref.get(state),
+      set: (token) => Ref.set(state, Option.some(token)),
+      clear: Ref.set(state, Option.none()),
+    };
+  }),
+);
+
+/**
+ * MNA-005/MNA-006: `make(api, { baseUrl, transformClient: bearerTransformClient(store) })`
+ * — attaches `Authorization: Bearer <token>` from the store on every request
+ * and captures a rotated token (`Api.ROTATED_TOKEN_HEADER`, the server's
+ * throttled-touch rotation, BEH-EA-052 — the replaced secret survives only
+ * `SessionConfig.rotationGrace`, so a missed capture logs the client out once that passes) from every response, whatever its status. A
+ * response without the header leaves the stored token unchanged. Contract for
+ * callers: an idle-expired or revoked token surfaces as the typed
+ * `Unauthenticated`; re-authenticate and `set` a fresh token.
+ *
+ * MNA-006 (ticket 17): every request also carries
+ * `X-Awthaq-Token-Delivery: bearer`, which is what makes a session-minting
+ * response (password sign-in, passkey verify, the OAuth exchange) return its
+ * token in the body instead of a cookie this client has no jar for. Pair the
+ * sign-in call with `captureSessionToken` to put that token in the store.
+ */
+export const bearerTransformClient =
+  (store: BearerTokenStoreShape) =>
+  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+    client.pipe(
+      HttpClient.mapRequestEffect((request) =>
+        store.get.pipe(
+          Effect.map((stored) => {
+            const optedIn = HttpClientRequest.setHeader(
+              request,
+              Api.TOKEN_DELIVERY_HEADER,
+              "bearer",
+            );
+            return Option.match(stored, {
+              onNone: () => optedIn,
+              onSome: (token) => HttpClientRequest.bearerToken(optedIn, Redacted.value(token)),
+            });
+          }),
+        ),
+      ),
+      HttpClient.tap((response) => {
+        const rotated = Headers.get(response.headers, Api.ROTATED_TOKEN_HEADER);
+        return Option.isSome(rotated) && rotated.value.length > 0
+          ? store.set(Redacted.make(rotated.value))
+          : Effect.void;
+      }),
+    );
+
+/**
+ * MNA-006: runs a session-minting call (password sign-in/up, passkey verify, the
+ * OAuth `POST /oauth/token` exchange) made through a `bearerTransformClient` and
+ * stores the `token` its response body carries in the ambient `BearerTokenStore`,
+ * so the next request is authenticated. The response is returned unchanged
+ * (including its `token`); a response without one (a cookie-mode server, or a
+ * concealed sign-up) stores nothing.
+ */
+export const captureSessionToken = <A extends object, E, R>(signIn: Effect.Effect<A, E, R>) =>
+  signIn.pipe(
+    Effect.tap((session) => {
+      const token: unknown = Reflect.get(session, "token");
+      return typeof token === "string" && token !== ""
+        ? Effect.flatMap(BearerTokenStore, (store) => store.set(Redacted.make(token)))
+        : Effect.void;
+    }),
   );
 
 // ---------------------------------------------------------------------------
@@ -192,6 +366,18 @@ export type PromiseFacade<A> = A extends AnyClientMethod
     : A;
 
 /**
+ * EHA-005: like {@link PromiseFacade}, but every method resolves a
+ * `Result<A, E>` — `E` the method's own error union — instead of rejecting.
+ */
+export type ResultFacade<A> = A extends AnyClientMethod
+  ? (
+      ...args: Parameters<A>
+    ) => Promise<Result.Result<Effect.Success<ReturnType<A>>, Effect.Error<ReturnType<A>>>>
+  : A extends Readonly<Record<string, unknown>>
+    ? { readonly [K in keyof A]: ResultFacade<A[K]> }
+    : A;
+
+/**
  * BEH-EA-176: wraps an already-built client (every method's own `R` already
  * discharged to `never` — the ordinary shape once `baseUrl`/`HttpClient`/any
  * required client middleware have been provided) so a non-Effect caller gets
@@ -208,14 +394,37 @@ export type PromiseFacade<A> = A extends AnyClientMethod
  * itself against — the same overload-vs-implementation split
  * `@awthaq/core`'s `Auth.make` already uses for the identical reason
  * (that module's own doc comment explains it in more depth).
+ *
+ * EHA-005 — two modes, the same generated methods either way:
+ *
+ * - default: a Promise per call that **rejects** with the endpoint's tagged
+ *   contract error (`switch (error._tag)` in a `catch`, cf. `ErrorCodes<Api>`),
+ *   but whose *type* says nothing about it — a rejection is untyped in
+ *   TypeScript;
+ * - `{ mode: "result" }` ({@link ResultFacade}): a Promise that always
+ *   **resolves** to a `Result<A, E>`, `E` being the endpoint's contract error
+ *   union, so a non-Effect caller narrows `result.failure._tag` with
+ *   exhaustiveness checking.
+ *
+ * In both modes a defect (a network or decoding failure the contract does not
+ * declare) still rejects.
  */
 export function toPromiseFacade<A extends Readonly<Record<string, unknown>>>(
   client: A,
 ): PromiseFacade<A>;
-export function toPromiseFacade(client: Readonly<Record<string, unknown>>): unknown {
+export function toPromiseFacade<A extends Readonly<Record<string, unknown>>>(
+  client: A,
+  options: { readonly mode: "result" },
+): ResultFacade<A>;
+export function toPromiseFacade(
+  client: Readonly<Record<string, unknown>>,
+  options?: { readonly mode?: "promise" | "result" },
+): unknown {
+  const run = (effect: Effect.Effect<unknown, unknown, never>) =>
+    Effect.runPromise(options?.mode === "result" ? Effect.result(effect) : effect);
   const wrap = (value: unknown): unknown => {
     if (typeof value === "function") {
-      return (...args: ReadonlyArray<unknown>) => Effect.runPromise(value(...args));
+      return (...args: ReadonlyArray<unknown>) => run(value(...args));
     }
     if (value !== null && typeof value === "object") {
       return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, wrap(nested)]));

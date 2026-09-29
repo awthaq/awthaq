@@ -2,7 +2,7 @@
   "name": "@awthaq/react",
   "version": "0.1.0",
   "private": true,
-  "description": "React provider glue over @awthaq/client, including QadiProvider integration.",
+  "description": "React bindings: reactive AtomHttpApi clients over the awthaq contract (CSRF via @awthaq/client) and Providers with QadiProvider integration.",
   "license": "MIT",
   "files": [
     "lib",
@@ -26,13 +26,14 @@
   },
   "dependencies": {
     "@awthaq/api": "workspace:*",
-    "@effect/atom-react": "catalog:",
-    "@qadi/core": "^0.7.0",
-    "@qadi/react": "^0.7.0",
+    "@awthaq/client": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect/atom-react": "catalog:",
     "@effect/vitest": "catalog:",
+    "@qadi/core": "^0.8.0",
+    "@qadi/react": "^0.8.0",
     "@testing-library/react": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
@@ -43,6 +44,9 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
+    "@effect/atom-react": "catalog:",
+    "@qadi/core": "^0.8.0",
+    "@qadi/react": "^0.8.0",
     "react": ">=19.3.0"
   },
   "engines": {

@@ -15,7 +15,7 @@
 // `Authentication`'s own `resolvePrincipal` (the identical hash-comparison
 // and absolute/idle-expiry logic over `Sessions`, per BEH-EA-153's own text).
 import { Api } from "@awthaq/api";
-import { Sessions } from "@awthaq/core";
+import { SessionCookie, Sessions } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -23,7 +23,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Headers from "effect/unstable/http/Headers";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import { SubjectExtractor } from "@qadi/http";
+import { SubjectExtractionFailed, SubjectExtractor } from "@qadi/http";
 import { SubjectResolver } from "./SubjectResolver.ts";
 
 const BEARER_PREFIX = "bearer ";
@@ -31,23 +31,32 @@ const BEARER_PREFIX = "bearer ";
 /**
  * BEH-EA-065/072's own declaration order, replicated here since Path B runs
  * before any `HttpApiSecurity` scheme decodes anything: the session cookie
- * is tried first, the `Authorization` bearer header second. Matched
- * case-insensitively and trimmed, the same robustness `@qadi/http`'s own
- * `subjectExtractorBearer` documents for exactly this scheme.
+ * is tried first, the `x-api-key` header second (OCM-002), the `Authorization`
+ * bearer header last. Matched case-insensitively and trimmed, the same
+ * robustness `@qadi/http`'s own `subjectExtractorBearer` documents for exactly
+ * this scheme.
  */
 const extractCredential = (
   request: HttpServerRequest.HttpServerRequest,
-): Redacted.Redacted<string> => {
-  const cookie = request.cookies[Sessions.SESSION_COOKIE_NAME];
+  cookieName: string,
+): {
+  readonly scheme: "cookie" | "bearer" | "apiKey";
+  readonly credential: Redacted.Redacted<string>;
+} => {
+  const cookie = request.cookies[cookieName];
   if (cookie !== undefined && cookie.length > 0) {
-    return Redacted.make(cookie);
+    return { scheme: "cookie", credential: Redacted.make(cookie) };
+  }
+  const apiKey = Headers.get(request.headers, Api.API_KEY_HEADER_NAME);
+  if (Option.isSome(apiKey) && apiKey.value.trim().length > 0) {
+    return { scheme: "apiKey", credential: Redacted.make(apiKey.value.trim()) };
   }
   const header = Headers.get(request.headers, "authorization");
   if (Option.isSome(header) && header.value.toLowerCase().startsWith(BEARER_PREFIX)) {
     const token = header.value.slice(BEARER_PREFIX.length).trim();
-    if (token.length > 0) return Redacted.make(token);
+    if (token.length > 0) return { scheme: "bearer", credential: Redacted.make(token) };
   }
-  return Redacted.make("");
+  return { scheme: "bearer", credential: Redacted.make("") };
 };
 
 /**
@@ -56,12 +65,10 @@ const extractCredential = (
  * mapped to it, the same uniform treatment `OptionalAuthenticationLive`'s
  * bearer handler relies on. NHS-002: `resolvePrincipal`'s own
  * `resolveSession` no longer collapses a genuinely broken store into
- * `Unauthenticated` — a lookup `PlatformError` is `Effect.orDie`d into a
- * defect there, so it propagates through here uncaught rather than being
- * silently reported as an anonymous caller, giving this extractor the
- * store-is-unreachable distinction `@qadi/http`'s own
- * `SubjectExtractionFailed` is reserved for, without this module needing to
- * construct that error itself.
+ * `Unauthenticated`. MA-004: that outage is the typed `StoreUnavailable`,
+ * which this extractor reports as `@qadi/http`'s `SubjectExtractionFailed` —
+ * the store-is-unreachable signal that error is reserved for — never as an
+ * anonymous caller and never as a defect.
  */
 export const SubjectExtractorLive: Layer.Layer<
   SubjectExtractor,
@@ -76,11 +83,45 @@ export const SubjectExtractorLive: Layer.Layer<
     return {
       extract: (request) =>
         Effect.gen(function* () {
-          const credential = extractCredential(request);
+          // IC-007: the configured session-cookie name (default `__Host-session`).
+          const cfg = yield* SessionCookie.SessionCookieConfig;
+          const cookieName = SessionCookie.cookieName(cfg);
+          // APS-006: `Authentication` prefers a live impersonation cookie over
+          // the caller's own session, so authorization must evaluate the same
+          // identity the request is being served as — not the admin behind it.
+          const impersonation = request.cookies[SessionCookie.cookieName(cfg, "impersonation")];
+          if (impersonation !== undefined && impersonation.length > 0) {
+            const impersonated = yield* Authentication.resolvePrincipal(
+              sessions,
+              principalResolver,
+              Redacted.make(impersonation),
+              "impersonation",
+            ).pipe(
+              Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+              Effect.map(Option.some),
+              // Only a missing/expired session falls through to the ordinary cookie; a store
+              // outage must not be read as "not an impersonation" (MA-004).
+              Effect.catchTag("Unauthenticated", () => Effect.succeedNone),
+            );
+            // Only a session carrying `actingAs` counts from that cookie (mirrors
+            // `Authentication`'s `impersonation` scheme); anything else falls through.
+            if (
+              Option.isSome(impersonated) &&
+              impersonated.value._tag === "User" &&
+              impersonated.value.actingAs !== undefined
+            ) {
+              return yield* subjectResolver.resolve(impersonated.value);
+            }
+          }
+          const { scheme, credential } = extractCredential(request, cookieName);
+          // PIL-005: `scheme` tells a rotating `verify` how to deliver the
+          // new secret — `resolveSession` registers that delivery on the
+          // request itself, so a Path-B-only route still rotates cleanly.
           const principal = yield* Authentication.resolvePrincipal(
             sessions,
             principalResolver,
             credential,
+            scheme,
           ).pipe(
             // Ticket 03: `resolvePrincipal` reads the ambient
             // `HttpServerRequest` to key its per-request verify memoization
@@ -92,7 +133,15 @@ export const SubjectExtractorLive: Layer.Layer<
             Effect.catchTag("Unauthenticated", () => Effect.succeed(Api.anonymousPrincipal)),
           );
           return yield* subjectResolver.resolve(principal);
-        }),
+        }).pipe(
+          Effect.catchTag("StoreUnavailable", (error) =>
+            Effect.fail(
+              new SubjectExtractionFailed({
+                reason: `awthaq: session store unavailable (${error.operation})`,
+              }),
+            ),
+          ),
+        ),
     };
   }),
 );

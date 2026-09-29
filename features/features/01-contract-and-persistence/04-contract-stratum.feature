@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @foundations @contract
-@skip @unwired
 Feature: The Contract Stratum
 
   # BEH-EA-025 — spec/behaviors/04-contract-stratum.md; see also ADR-EA-003
@@ -42,12 +41,16 @@ Feature: The Contract Stratum
   @BEH-EA-026
   Rule: SessionView and SubjectDto are the wire shapes of "who is signed in and what they may do"
 
+    # PV-250: delivered as two wire shapes the client composes (packages/api/src/Subject.ts header):
+    # the server cannot assemble one struct, because qadi's subject resolver sits a stratum above it.
     @REQ-EA-062
-    Scenario: SessionView bundles principal, user, session, and subject in one struct
-      Given a signed-in user "alice" with a valid session
-      When a SessionView is produced for "alice"
-      Then the SessionView carries "principal", "user", "session", and "subject" as one struct
+    Scenario: Who is signed in and what they may do are two wire shapes the client composes
+      Given the session contract and the subject contract
+      When their wire shapes are inspected
+      Then the session shape carries "id", "createdAt", "expiresAt" and "current"
+      And the subject shape carries "id", "roles", "permissions" and "attributes"
 
+    # The mapper is module-private to @awthaq/qadi, so it is observed through the served GET /subject over TestAuth.layer (TestingHarnessWorld.subjectApp).
     @REQ-EA-063
     Scenario: SubjectDto flattens qadi's AuthSubject into wire-safe arrays
       Given qadi's AuthSubject for a signed-in user "alice" carries roles and permissions
@@ -56,10 +59,10 @@ Feature: The Contract Stratum
       And the SubjectDto carries an "attributes" record alongside them
 
     @REQ-EA-064
-    Scenario: Sign-in, sign-up, and GET /auth/session return the same SessionView shape
-      Given a signed-in user "alice"
-      When "alice" signs in, and separately when a new user signs up, and separately when "alice" requests GET /auth/session
-      Then all three responses are shaped as the same SessionView struct
+    Scenario: Sign-in, sign-up, and GET /session answer the same SessionDto shape
+      Given a new user who signs up and then signs in
+      When the user requests the current session
+      Then the sign-up, sign-in and current-session responses all decode as the same SessionDto
 
   # BEH-EA-027 — spec/behaviors/04-contract-stratum.md
   @BEH-EA-027
@@ -156,9 +159,9 @@ Feature: The Contract Stratum
   # INV-EA-011.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (generated-client type-checking), not a runtime step. These
-  # scenarios record the intended developer-facing outcome; the eventual
-  # verification artifact is a type-level test (definitions-of-done.md
-  # gate 5).
+  # scenarios record the intended developer-facing outcome; the compiler-
+  # checked half is proven in features/step-definitions/ContractTypeGates.ts
+  # (compiled by the typecheck gate), the runtime half by the steps.
   @BEH-EA-030 @compile-time
   Rule: CsrfProtection declares requiredForClient: true, gating client generation at the type level
 
@@ -179,7 +182,7 @@ Feature: The Contract Stratum
 
   # BEH-EA-031 — spec/behaviors/04-contract-stratum.md
   @BEH-EA-031
-  Rule: Core owns a session group at the API root, with current, list, signOut, revoke, and revokeOthers
+  Rule: Core owns a session group at the API root, with current, list, signOut, revoke, revokeOthers, and revokeAll
 
     @REQ-EA-078
     Scenario: The core session group mounts at the root of the composed HttpApi
@@ -189,7 +192,7 @@ Feature: The Contract Stratum
       And it is not nested under any plugin's namespace prefix
 
     @REQ-EA-079
-    Scenario Outline: The session group exposes its five endpoints
+    Scenario Outline: The session group exposes its six endpoints
       Given the composed HttpApi's "session" group
       When the group's endpoints are inspected
       Then it exposes "<endpoint>" at "<method> <path>"
@@ -201,6 +204,7 @@ Feature: The Contract Stratum
         | signOut       | POST   | /auth/session/sign-out      |
         | revoke        | POST   | /auth/session/revoke        |
         | revokeOthers  | POST   | /auth/session/revoke-others |
+        | revokeAll     | POST   | /auth/session/revoke-all    |
 
     @REQ-EA-080
     Scenario: The session group's endpoints are reachable with no plugin installed
@@ -215,28 +219,37 @@ Feature: The Contract Stratum
   # contracts merged outside Auth.make, it is a composition-time evaluation
   # of HttpApi.addHttpApi, not a request-time HTTP response either way.
   # These scenarios record the intended developer-facing outcome; the
-  # eventual verification artifact is a type-level test plus a composition
-  # unit test (definitions-of-done.md gate 5).
+  # compiler-checked half is proven in features/step-definitions/
+  # PluginTypeGates.ts, the runtime half (GroupIdConflict) by the steps.
   @BEH-EA-032 @compile-time
   Rule: Auth.api merges contracts and refuses a duplicate group id
 
     @REQ-EA-081
     Scenario: Two plugins contributing the same group id fail composition through Auth.make
-      Given a plugin tuple containing "password" and a third-party "acmeLegacyLogin", both contributing an HttpApiGroup id "password"
+      Given a plugin tuple containing "login" and a third-party "login.legacy", both contributing an HttpApiGroup id "login.legacy"
       When "Auth.make" composes the tuple
       Then composition is rejected
-      And the rejection names both "password" and "acmeLegacyLogin" as the contributing plugins, by version
+      And the rejection names both "login" and "login.legacy" as the contributing plugins
 
+    # PV-251: Effect's own HttpApi.addHttpApi replaces a same-id group silently (last wins), so awthaq's
+    # refusal is Auth.make's; a host that has a group of its own hands it to Auth.make as `extraGroups`.
     @REQ-EA-082
-    Scenario: Merging raw contracts outside Auth.make rejects a duplicate group id at the point they are merged
-      Given two raw HttpApiGroup contracts, both declaring the group id "password", composed outside Auth.make via HttpApi.addHttpApi
-      When the contracts are merged
-      Then the merge is rejected as "E_GROUP_CONFLICT"
-      And neither group silently replaces the other
+    Scenario: A group a host adds through Auth.make's extraGroups is refused when its id is already composed
+      Given a host group with the id "session" passed as an extra group to Auth.make
+      When "Auth.make" composes the tuple
+      Then composition is rejected
+      And the rejection names "core" and "host" as the owners of the "session" group
 
     @REQ-EA-083
     Scenario: A duplicate group id is never resolved by array order
-      Given a plugin tuple containing two plugins that both contribute the group id "password"
+      Given a plugin tuple containing "login" and "login.legacy" that both contribute the group id "login.legacy"
       When "Auth.make" composes the tuple regardless of which plugin appears later in the array
       Then composition is rejected
       And the outcome does not depend on which plugin was added to the array last
+
+    @REQ-EA-681
+    Scenario: The composed api is the one served document, carrying core's session and account groups
+      Given a plugin tuple containing "password"
+      When "Auth.make" composes the tuple
+      Then the composed api's groups are "session", "account" and "password"
+      And a plugin contributing a group id "session" is rejected as "E_GROUP_CONFLICT" naming "core"

@@ -36,11 +36,16 @@
 // any one of them.
 import { Organization as OrganizationService } from "./Organization.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
+import * as OrganizationRecords from "./OrganizationRecords.ts";
+import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
 import { Users } from "@awthaq/core";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Record from "effect/Record";
+import * as Schema from "effect/Schema";
 import {
   AttributeResolver,
   AttributeResolveError,
@@ -56,61 +61,218 @@ const userIdFromSubject = (subjectId: string): Users.UserId | undefined =>
     : undefined;
 
 /**
- * BEH-EA-162 (`"member"`), plus this plugin's own richer relations built on
- * the same mechanism: `"admin"`/`"owner"` (the subject holds that role in
- * the organization named by `resourceId`) and `"team-member"` (the subject
- * belongs to the team named by `resourceId`). `resourceId` names the
- * organization/team directly — see this module's own header comment for
- * why the richer "arbitrary application resource → organization" walk
- * `spec/models/14-organization.md`'s own worked example shows (via a
- * `Projects.use(...)` call this plugin cannot make) is out of scope: it
- * requires application-specific domain knowledge only the application
- * itself has.
+ * RZS-001 (wayfinder ticket 13): the port an application provides so
+ * `"member"` can be asked of a resource that is not itself an organization
+ * ("member of this *project*", `hasRelationship("member", { depth: 2 })`).
+ * This plugin cannot know that an arbitrary resource id is a project or a task
+ * — only the application does — so it asks: `organizationOf` answers the
+ * resource's *direct* owning organization (the application resolves any longer
+ * chain itself). `Option.none()` means "no organization could be resolved".
+ * Per ADR-EA-010 the plugin requires the port and the application provides it;
+ * `layerNone` is the visible, deliberate "no walking configured" choice.
+ */
+export interface ResourceOrganizationLookupShape {
+  readonly organizationOf: (resourceId: string) => Effect.Effect<Option.Option<string>, unknown>;
+}
+
+export class ResourceOrganizationLookup extends Context.Service<
+  ResourceOrganizationLookup,
+  ResourceOrganizationLookupShape
+>()("awthaq/organization/ResourceOrganizationLookup") {
+  /** For applications with no non-organization resources to walk from: every walk is unresolved, i.e. a `RelationshipResolveError`, never a silent deny. */
+  static readonly layerNone = Layer.succeed(
+    ResourceOrganizationLookup,
+    ResourceOrganizationLookup.of({ organizationOf: () => Effect.succeed(Option.none()) }),
+  );
+}
+
+/**
+ * RZS-006: the relation grammar `relationships` understands, in one place so
+ * application policies reference it instead of string literals.
+ *
+ * - `member` — the subject holds a membership in the organization (`resourceId`,
+ *   or, at `depth >= 1`, the organization `ResourceOrganizationLookup` resolves
+ *   it to).
+ * - `has-role:<name>` — the membership holds that role, whatever kind it is
+ *   (built-in, `OrganizationConfig.permissionStatements`, or a dynamic role);
+ *   `admin`/`owner` are aliases of `has-role:admin`/`has-role:owner`. (Not
+ *   `role:<name>`: `role` is itself a built-in statement resource —
+ *   `role:create`, `role:delete` — so that spelling would collide with the
+ *   `<resource>:<action>` form below.)
+ * - `<resource>:<action>` (e.g. `member:update`) — the membership's *effective*
+ *   statements include it: the very `effectivePermissionsOf` result
+ *   `requirePermission` gates the plugin's own endpoints with, so a qadi policy
+ *   and the plugin's own gating can never disagree.
+ * - `team-member` — the subject is on the team `resourceId` names.
+ * - `team-role:<name>` — the subject holds that team role on the team `resourceId`
+ *   names *or any of its ancestors* (OHS-004: team authority flows down the subtree,
+ *   exactly as the plugin's own gating applies it).
+ *
+ * Anything else is `"Unknown"` — qadi's documented answer for a relation the
+ * resolver has no answer for — and so is an organization-scoped relation whose
+ * `resourceId` names no organization (or a team relation naming no team): a
+ * malformed question is distinguishable from a genuine negative in traces.
+ */
+export const relations = {
+  member: "member",
+  admin: "admin",
+  owner: "owner",
+  teamMember: "team-member",
+  teamRole: <const Name extends string>(name: Name): `team-role:${Name}` => `team-role:${name}`,
+  role: <const Name extends string>(name: Name): `has-role:${Name}` => `has-role:${name}`,
+  permission: <const Resource extends string, const Action extends string>(
+    resource: Resource,
+    action: Action,
+  ): `${Resource}:${Action}` => `${resource}:${action}`,
+};
+
+type ParsedRelation =
+  | { readonly _tag: "member" }
+  | { readonly _tag: "team" }
+  | { readonly _tag: "team-role"; readonly name: string }
+  | { readonly _tag: "role"; readonly name: string }
+  | { readonly _tag: "permission"; readonly resource: string; readonly action: string };
+
+const parseRelation = (relation: string): ParsedRelation | undefined => {
+  switch (relation) {
+    case "member":
+      return { _tag: "member" };
+    case "team-member":
+      return { _tag: "team" };
+    case "admin":
+    case "owner":
+      return { _tag: "role", name: relation };
+  }
+  const colon = relation.indexOf(":");
+  if (colon <= 0 || colon === relation.length - 1) return undefined;
+  const head = relation.slice(0, colon);
+  const tail = relation.slice(colon + 1);
+  if (head === "team-role") return { _tag: "team-role", name: tail };
+  return head === "has-role"
+    ? { _tag: "role", name: tail }
+    : { _tag: "permission", resource: head, action: tail };
+};
+
+/**
+ * BEH-EA-162 (`"member"`, plus `depth >= 1` through `ResourceOrganizationLookup`)
+ * and this plugin's richer relations — see `relations` for the grammar.
+ * Every organization-scoped relation is answered from the membership row
+ * (`member`, `has-role:*`: one indexed lookup, RZS-004) or, for `<resource>:<action>`,
+ * from the same effective statements the plugin's own gating computes
+ * (RZS-006). No cross-request cache lives here — the per-request
+ * `DecisionCache` (ticket 12) is the sanctioned memo.
+ *
+ * Only `member` walks at `depth >= 1` (ticket 13's scope); the other relations
+ * always treat `resourceId` as the organization (or team) itself.
  */
 export const relationships = Layer.effect(
   RelationshipResolver,
   Effect.gen(function* () {
     const organization = yield* OrganizationService;
+    const members = yield* MembershipRecords.MembershipRecords;
+    const orgs = yield* OrganizationRecords.OrganizationRecords;
     const teams = yield* TeamRecords.TeamRecords;
-
-    const roleRelation = (organizationId: string, userId: Users.UserId, role: string) =>
-      organization
-        .attributesFor(organizationId, userId)
-        .pipe(
-          Effect.map((attrs) =>
-            Option.isSome(attrs) && attrs.value.role.includes(role)
-              ? ("Related" as const)
-              : ("Unrelated" as const),
-          ),
-        );
+    const lookup = yield* ResourceOrganizationLookup;
 
     return {
       name: "awthaq/OrganizationQadi.relationships",
-      check: ({ subjectId, relation, resourceId }) =>
+      check: ({ subjectId, relation, resourceId, depth }) =>
         Effect.gen(function* () {
+          const parsed = parseRelation(relation);
+          if (parsed === undefined) return "Unknown" as const;
           const userId = userIdFromSubject(subjectId);
           if (userId === undefined) return "Unrelated" as const;
 
-          switch (relation) {
-            case "member":
-              return yield* organization
-                .attributesFor(resourceId, userId)
-                .pipe(
-                  Effect.map((attrs) =>
-                    Option.isSome(attrs) ? ("Related" as const) : ("Unrelated" as const),
-                  ),
-                );
-            case "admin":
-              return yield* roleRelation(resourceId, userId, "admin");
-            case "owner":
-              return yield* roleRelation(resourceId, userId, "owner");
-            case "team-member": {
-              const membership = yield* teams.findTeamMembership(resourceId, userId);
-              return Option.isSome(membership) ? ("Related" as const) : ("Unrelated" as const);
-            }
-            default:
+          // EP-003 (ADR-EA-018): a suspended organization confers nothing —
+          // membership answers must not open a door the plugin's own gating shut.
+          const isSuspended = (organizationId: string) =>
+            orgs
+              .findById(organizationId)
+              .pipe(
+                Effect.map(
+                  (found) => Option.isSome(found) && Option.isSome(found.value.suspendedAt),
+                ),
+              );
+
+          if (parsed._tag === "team") {
+            const team = yield* teams.findTeamByIdAnyOrg(resourceId);
+            if (Option.isSome(team) && (yield* isSuspended(team.value.organizationId))) {
               return "Unrelated" as const;
+            }
+            const membership = yield* teams.findTeamMembership(resourceId, userId);
+            if (Option.isSome(membership)) return "Related" as const;
+            return Option.isSome(team) ? ("Unrelated" as const) : ("Unknown" as const);
           }
+
+          if (parsed._tag === "team-role") {
+            const team = yield* teams.findTeamByIdAnyOrg(resourceId);
+            if (Option.isNone(team)) return "Unknown" as const;
+            if (yield* isSuspended(team.value.organizationId)) return "Unrelated" as const;
+            const ancestors = yield* teams.getAncestors(team.value.organizationId, resourceId);
+            for (const id of [resourceId, ...ancestors.map((row) => row.id)]) {
+              const held = yield* teams.findTeamMembership(id, userId);
+              if (Option.isSome(held) && held.value.role.includes(parsed.name)) {
+                return "Related" as const;
+              }
+            }
+            return "Unrelated" as const;
+          }
+
+          // ticket 13: `member` at depth >= 1 asks the application which
+          // organization owns the resource; an unresolved walk fails closed.
+          const organizationId =
+            parsed._tag === "member" && depth !== undefined && depth >= 1
+              ? yield* lookup.organizationOf(resourceId).pipe(
+                  Effect.mapError(
+                    (cause) => new RelationshipResolveError({ relation, resourceId, cause }),
+                  ),
+                  Effect.flatMap(
+                    Option.match({
+                      onNone: () =>
+                        Effect.fail(
+                          new RelationshipResolveError({
+                            relation,
+                            resourceId,
+                            cause: `no organization could be resolved for resource "${resourceId}"`,
+                          }),
+                        ),
+                      onSome: Effect.succeed,
+                    }),
+                  ),
+                )
+              : resourceId;
+
+          if (yield* isSuspended(organizationId)) return "Unrelated" as const;
+
+          // A subject that is simply not in an organization is a genuine
+          // negative; an id naming no organization at all is malformed.
+          const notRelated = () =>
+            orgs
+              .findById(organizationId)
+              .pipe(
+                Effect.map((found) =>
+                  Option.isSome(found) ? ("Unrelated" as const) : ("Unknown" as const),
+                ),
+              );
+
+          if (parsed._tag === "permission") {
+            const attrs = yield* organization.attributesFor(organizationId, userId);
+            if (Option.isNone(attrs)) return yield* notRelated();
+            return PermissionEngine.hasPermission(
+              attrs.value.permissions,
+              parsed.resource,
+              parsed.action,
+            )
+              ? ("Related" as const)
+              : ("Unrelated" as const);
+          }
+
+          const membership = yield* members.findByUserAndOrg(userId, organizationId);
+          if (Option.isNone(membership)) return yield* notRelated();
+          if (parsed._tag === "member") return "Related" as const;
+          return membership.value.role.includes(parsed.name)
+            ? ("Related" as const)
+            : ("Unrelated" as const);
         }).pipe(
           Effect.catchDefect((cause) =>
             Effect.fail(new RelationshipResolveError({ relation, resourceId, cause })),
@@ -134,7 +296,18 @@ export const relationships = Layer.effect(
  * alongside the `Layer` itself — mirrors `@awthaq/qadi`'s own
  * `Resolvers.UserAttributeNames`, for the identical reason.
  */
-export const OrganizationAttributeNames = ["organizationCount", "ownedOrganizationCount"] as const;
+export const OrganizationAttributeSchemas = {
+  organizationCount: Schema.Number,
+  ownedOrganizationCount: Schema.Number,
+};
+
+/** AAPS-003: valid `attributes` names, derived from `OrganizationAttributeSchemas`. */
+export type OrganizationAttributeName = keyof typeof OrganizationAttributeSchemas;
+
+export const OrganizationAttributeNames = Record.keys(OrganizationAttributeSchemas);
+
+/** AAPS-003: a policy author's typed attribute name — a typo is a compile error, not a silent "no value". */
+export const orgAttr = <const N extends OrganizationAttributeName>(name: N): N => name;
 
 export const attributes = Layer.effect(
   AttributeResolver,

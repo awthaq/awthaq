@@ -4,7 +4,8 @@
 // `Passkey.test.ts`, for the same reason
 // `packages/password/test/PasswordHooksSignUp.test.ts`'s own header
 // comment gives.
-import { AuditLog, Hooks, AuthEvents, Accounts, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Hooks, AuthEvents, Accounts, RateLimits, Sessions, Users } from "@awthaq/core";
+import { ClientAddress, RateLimiter } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -15,6 +16,7 @@ import * as Redacted from "effect/Redacted";
 import * as ChallengeStore from "../src/ChallengeStore.ts";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
+import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
 import {
   ORIGIN,
   RP_ID,
@@ -26,7 +28,8 @@ import {
 const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
+  Layer.provideMerge(RateLimits.layer),
+  Layer.provideMerge(RateLimiter.layerPermissive),
   // BEH-EA-093: unconditionally diverts — enough to prove the wiring is
   // real; the mechanism itself is proven generically elsewhere (see this
   // file's own header comment).
@@ -37,6 +40,8 @@ const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Session
       ),
     ),
   ),
+  // The tap requires its point, so `HooksLive` feeds both (ELC-001).
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -47,7 +52,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
     Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("passkey-hooks-test-csrf-secret"),
+      secret: Redacted.make("passkey-hooks-test-csrf-secret-padded-to-thirty-two-bytes"),
       allowedOrigins: [] as ReadonlyArray<string>,
     }),
   ),
@@ -58,6 +63,8 @@ const PortsLive = Layer.mergeAll(
   mockWebAuthn(),
   ChallengeStore.layerMemory,
   PasskeyCredentials.layerMemory,
+  PasskeyUserHandles.layerMemory,
+  ClientAddress.layerDirect,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const TestLayer = Passkey.Passkey.layer.pipe(
@@ -77,7 +84,10 @@ describe("Passkey authenticateVerify hook (BEH-EA-093)", () => {
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
 
-        const user = yield* users.create({ email: "bo@example.com", name: "Bo" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "bo@example.com" },
+          name: "Bo",
+        });
         const registerSession = yield* sessions.issue({ userId: user.id });
         const registerOptions = yield* passkey.registerOptions(user.id, registerSession.session.id);
         yield* passkey.registerVerify(user.id, registerSession.session.id, {
@@ -96,7 +106,7 @@ describe("Passkey authenticateVerify hook (BEH-EA-093)", () => {
           },
         });
 
-        const { ceremonyId, options } = yield* passkey.authenticateOptions(undefined);
+        const { ceremonyId, options } = yield* passkey.authenticateOptions({});
         const clientDataJSON = buildClientDataJSON({
           type: "webauthn.get",
           challenge: extractChallenge(options),

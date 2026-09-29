@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @http-layer @http-error-mapping
-@skip @unwired
 Feature: HTTP Serving and Error Mapping
 
   # BEH-EA-081 — spec/behaviors/11-http-error-mapping.md; see also
@@ -36,10 +35,18 @@ Feature: HTTP Serving and Error Mapping
       Then it already satisfies the service "HttpApiBuilder.layer(auth.api)" requires for the "password" group
       And no additional adaptation of "Password"'s handler Layer is needed
 
+    # Composition is static here: `Auth.make` over the three plugin classes, no layer built (TwoFactor and OAuth need their own stores and providers).
     @REQ-EA-226
     Scenario: This holds regardless of which other plugins are installed alongside it
       Given a plugin "Password" whose handlers were authored before any other plugin was chosen
       When "Password" is composed alongside newly-added plugins "TwoFactor" and "OAuth"
+      Then the merged "AuthApi" still declares the "password" group under the service key "Password"'s own handler Layer provides
+      And the newly-added plugins' groups sit beside it without displacing it
+
+    @REQ-EA-690
+    Scenario: A plugin's group service is unchanged when another plugin is composed alongside it
+      Given a plugin "Password" whose handlers were authored before any other plugin was chosen
+      When "Password" is composed alongside a newly-added plugin "Invite"
       Then "Password"'s handler Layer continues to satisfy its own group's requirement unchanged
 
   # BEH-EA-083 — spec/behaviors/11-http-error-mapping.md
@@ -161,6 +168,8 @@ Feature: HTTP Serving and Error Mapping
         | Unauthenticated    | 401 Unauthorized |
         | InvalidCredentials | 401 Unauthorized |
         | CsrfRejected       | 403 Forbidden    |
+        # MA-004/ADR-EA-028: an unavailable backing store is a typed, retryable outage, not a 401 or a 500.
+        | StoreUnavailable   | 503 Service Unavailable |
 
     @REQ-EA-241
     Scenario: No separate, out-of-band status-mapping table is maintained anywhere in the HTTP stratum

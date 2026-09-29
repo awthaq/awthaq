@@ -4,15 +4,15 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-20 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-015, clarified that `SubjectExtractor` reuses `Authentication`'s session-verification logic rather than reimplementing it, and added the INV-EA-013 callout to BEH-EA-156 (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-015, clarified that `SubjectExtractor` reuses `Authentication`'s session-verification logic rather than reimplementing it, and added the INV-EA-013 callout to BEH-EA-156 (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
+> Implemented in `@awthaq/qadi` (`SubjectExtractor.ts`; tests `packages/qadi/test/SubjectExtractor.test.ts`); the `RequirePermission` refusal itself is `@qadi/http`'s; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
 
 ## BEH-EA-153: `SubjectExtractor` runs session resolution on the raw request
 
@@ -33,9 +33,13 @@ REQUIREMENT: `SubjectExtractor` MUST perform awthaq's own session
              contract middleware executes.
 ```
 
+Path B decision-cache scope follows [BEH-EA-145](19-qadi-bridge-path-a.md#beh-ea-145-authorizedsubject-bridges-currentprincipal-to-currentsubject): `SubjectExtractor` only returns a subject and cannot wrap qadi's later `guard` evaluation, so per-request scope comes from declaring `RequestDecisionCache` as the group's outermost middleware (after `RequirePermission`), not from the extractor.
+
 Path B's `RequirePermission` is qadi's middleware, not awthaq's, so it cannot depend on `CurrentPrincipal` the way `AuthorizedSubject` does in Path A — `SubjectExtractor` is the adapter that lets qadi read a subject straight from the request. `usage-qadi.md` §1 wires it exactly this way: `RequirePermissionLive.pipe(Layer.provide(SubjectExtractorLive))`, a self-contained bridge qadi's middleware can be given without awthaq's contract middleware needing to run first.
 
 `SubjectExtractor` performing session resolution "directly against the raw HTTP request, independent of `Authentication`'s middleware pipeline" describes *where in the request lifecycle* it runs, not a second implementation of session verification: it MUST reuse the identical hash-comparison and absolute/idle-expiry logic `Authentication`'s own middleware uses over `Sessions` — the same path [BEH-EA-066](09-authentication-middleware.md#beh-ea-066-the-bearer-handler-is-tried-after-the-cookie-handler-fails-over-the-same-session-resolution-logic) already requires the bearer handler to share with the cookie handler, and the same constant-time-compare/expiry mechanics [BEH-EA-050](07-sessions.md#beh-ea-050-only-sha-256secret-is-persisted-the-plaintext-secret-is-never-stored), [BEH-EA-051](07-sessions.md#beh-ea-051-a-session-carries-independent-absolute-and-idle-expiries-idle-refresh-never-extends-the-absolute-deadline), and [BEH-EA-056](07-sessions.md#beh-ea-056-session-secret-verification-is-a-constant-time-comparison-over-a-fixed-length-hash) specify. A `SubjectExtractor` implementation that hand-wrote its own hash comparison or its own expiry check — even one that produced the same answer in the common case — would be exactly the hand-written duplication of contract logic [BEH-EA-169](22-client-effect.md#beh-ea-169-the-client-derives-from-the-merged-contract) forbids: two independent places a session-validity bug could be fixed in only one, leaving awthaq with two sources of truth for what "a valid session" means depending on which of Path A or Path B a given request happened to go through.
+
+Sharing the resolution includes sharing its side effect: when the shared `verify` rotates the session secret (throttled touch, [BEH-EA-052](07-sessions.md#beh-ea-052-idle-window-refresh-is-throttled-to-at-most-one-write-per-touchevery)), the delivery of the new secret is registered on the request itself, so a route served by Path B alone (no `Authentication` middleware) delivers it on its response exactly as a Path A route does (PIL-005).
 
 _Previous: [BEH-EA-152](19-qadi-bridge-path-a.md#beh-ea-152-bare-httprouter-routes-use-addguardedroute) | Next: [BEH-EA-154](20-qadi-bridge-path-b.md#beh-ea-154-requirepermission-reads-the-requiredpermission-annotation)_
 
@@ -97,19 +101,23 @@ _Previous: [BEH-EA-155](20-qadi-bridge-path-b.md#beh-ea-155-publicendpoint-is-th
 ## BEH-EA-157: Status mapping is qadi's, not awthaq's
 
 ```text
-AccessDenied, UndischargedObligation → 403
-resolver outage → 502
-wiring mistake (missing annotation) → 500
+AccessDenied → 403 (qadi's public denial view, never the trace)
+UndischargedObligation → 403 (tag only)
+resolver outage → 502 (tag plus at most one identifying attribute, never the cause)
+wiring mistake (missing annotation) → 500 (empty body)
 ```
 
 ```text
 REQUIREMENT: `RequirePermission` MUST map `AccessDenied` and
              `UndischargedObligation` to 403, a resolver outage to 502, and a
              missing annotation to 500; awthaq MUST NOT reinterpret or
-             override this mapping in its own bridge code.
+             override this mapping in its own bridge code. The 403 and 500
+             bodies MUST be empty; a resolver-outage 502 body MUST carry no
+             cause and no internal message, at most the error's tag and one
+             identifying attribute (PV-230).
 ```
 
-`usage-qadi.md` §4 states this mapping directly, and it is qadi's own status taxonomy, not something awthaq layers on top: 403 is a decision, 502 is qadi's evaluation infrastructure being unreachable (still "failure is not denial," expressed here as a gateway error rather than a handler defect since Path B has no handler code to `Effect.die` from), and 500 is the operator's own contract mistake. Bodies are empty on all three; the trace lives in the span, not in a response an attacker could read.
+`usage-qadi.md` §4 states this mapping directly, and it is qadi's own status taxonomy, not something awthaq layers on top: 403 is a decision, 502 is qadi's evaluation infrastructure being unreachable (still "failure is not denial," expressed here as a gateway error rather than a handler defect since Path B has no handler code to `Effect.die` from), and 500 is the operator's own contract mistake. The bodies are qadi's own typed views (`@qadi/http` 0.8.0), kept typed so a generated `HttpApiClient` can decode each refusal instead of receiving an empty body it would decode to `undefined`: `AccessDenied` answers `AccessDeniedPublic` (`subjectId`, `policyTag`, the root node's `reason`; the evaluation `trace` is never sent), `UndischargedObligation` answers its tag only, and a resolver outage answers the tag plus at most one identifying field (`attribute`, `relation`/`resourceId`, `event`, `name`, `subjectId`/`resourceId`) and never the `cause`, so the failing dependency's own message cannot reach a caller. Only the wiring-mistake 500 stays an empty body. The cause and the trace live in the span, not in a response an attacker could read.
 
 _Previous: [BEH-EA-156](20-qadi-bridge-path-b.md#beh-ea-156-absence-of-either-annotation-is-refusal-not-an-open-door) | Next: [BEH-EA-158](20-qadi-bridge-path-b.md#beh-ea-158-the-permission-registry-route)_
 

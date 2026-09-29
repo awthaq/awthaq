@@ -6,6 +6,7 @@
 // via `Layer.Success<typeof Layer.effect(someReference, ...)>` resolving to
 // `never` in this effect version, not the reference's own identity.
 import { assert, describe, it } from "@effect/vitest";
+import { expectTypeOf } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { AuthPlugin } from "../src/index.ts";
@@ -37,23 +38,33 @@ describe("Slots.define (BEH-EA-017/021)", () => {
     }),
   );
 
-  it.effect(
-    "a plugin overriding the slot replaces the default, with no Slots.layer required",
-    () => {
-      const roles = fakePlugin("roles");
-      return Effect.gen(function* () {
-        const resolved = yield* Resolver;
-        assert.strictEqual(resolved.resolve(), "with-roles");
-      }).pipe(
-        Effect.provide(
-          Slots.override(roles, Resolver, Effect.succeed({ resolve: () => "with-roles" })),
+  it.effect("a plugin overriding the slot replaces the default", () => {
+    const roles = fakePlugin("roles");
+    return Effect.gen(function* () {
+      const resolved = yield* Resolver;
+      assert.strictEqual(resolved.resolve(), "with-roles");
+    }).pipe(
+      // MA-005: `override` requires the registry (`Auth.make` provides one per composition).
+      Effect.provide(
+        Slots.override(roles, Resolver, Effect.succeed({ resolve: () => "with-roles" })).pipe(
+          Layer.provide(Slots.layer),
         ),
-      );
-    },
-  );
+      ),
+    );
+  });
+
+  it("MA-005: override without a registry is a type error", () => {
+    const layer = Slots.override(
+      fakePlugin("roles"),
+      Resolver,
+      Effect.succeed({ resolve: () => "x" }),
+    );
+    // The registry is part of the layer's requirements, so it cannot be built unchecked.
+    expectTypeOf<Layer.Services<typeof layer>>().toEqualTypeOf<Slots.SlotsRegistry>();
+  });
 });
 
-describe("Slots.SlotsRegistry (BEH-EA-012, opt-in)", () => {
+describe("Slots.SlotsRegistry (BEH-EA-012)", () => {
   it.effect(
     "two plugins overriding the same slot is a SlotConflict once Slots.layer is provided",
     () => {

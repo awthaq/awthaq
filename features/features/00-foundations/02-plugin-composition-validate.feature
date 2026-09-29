@@ -1,18 +1,18 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @foundations @plugin-composition
-@skip @unwired
 Feature: Plugin Composition and Validate<P>
 
   # BEH-EA-009 — spec/behaviors/02-plugin-composition-validate.md; see also
   # ADR-EA-002, ADR-EA-008.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-009 @compile-time
   Rule: Auth.make computes three outputs from one plugin tuple
 
@@ -33,8 +33,9 @@ Feature: Plugin Composition and Validate<P>
   # INV-EA-003.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-010 @compile-time
   Rule: Validate<P>'s DuplicateId check refuses two plugins sharing an id
 
@@ -56,8 +57,9 @@ Feature: Plugin Composition and Validate<P>
   # INV-EA-001.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-011 @compile-time
   Rule: Validate<P>'s MissingDep check names an absent dependency by plugin id
 
@@ -81,12 +83,20 @@ Feature: Plugin Composition and Validate<P>
       Then the rejection is a literal string naming both "Password" and "TwoFactor"
       And the rejection is not merely an opaque unsatisfied service requirement
 
+    @REQ-EA-682
+    Scenario: A dependent listed before its dependency fails composition at compile time
+      Given a plugin tuple listing "TwoFactor" before its declared dependency "Password"
+      When "Auth.make" composes the tuple
+      Then composition is rejected
+      And the rejection names "Password" as a plugin that must be listed before "TwoFactor"
+
   # BEH-EA-012 — spec/behaviors/02-plugin-composition-validate.md; see also
   # INV-EA-004.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-012 @compile-time
   Rule: Validate<P>'s SlotConflict check refuses two plugins overriding one exclusive slot
 
@@ -103,11 +113,18 @@ Feature: Plugin Composition and Validate<P>
       When "Auth.make" composes the tuple
       Then composition succeeds
 
+    @REQ-EA-683
+    Scenario: The slot-conflict check runs without the application providing a slots registry
+      Given a plugin tuple containing "Roles" and "Organization", both overriding the "SubjectResolver" slot
+      When the composed layer is built without any explicit "Slots.layer"
+      Then the build fails with a "SlotConflict" naming both owners
+
   # BEH-EA-013 — spec/behaviors/02-plugin-composition-validate.md
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-013 @compile-time
   Rule: api and layer diverging from one another is unrepresentable, not merely untested
 
@@ -127,8 +144,9 @@ Feature: Plugin Composition and Validate<P>
   # INV-EA-002.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-014 @compile-time
   Rule: Layer.launch refuses to compile while any port remains unprovided
 
@@ -156,8 +174,9 @@ Feature: Plugin Composition and Validate<P>
   # BEH-EA-015 — spec/behaviors/02-plugin-composition-validate.md
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-015 @compile-time
   Rule: A plugin definition itself, not Auth.make, is where a namespace violation is caught
 

@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @domain @verification-tokens
-@skip @unwired
 Feature: Verification Tokens
 
   # BEH-EA-057 — spec/behaviors/08-verification-tokens.md
@@ -93,6 +92,15 @@ Feature: Verification Tokens
       When it is consumed for the first time
       Then no "auth.token.replay" event is published
 
+    # PV-220: the replayed consume fails inside the endpoint's SqlTransaction, so the row is
+    # recorded after that transaction has rolled back, not inline within it.
+    @REQ-EA-688
+    Scenario: A replay through a transactional endpoint leaves a durable audit row
+      Given a VerificationToken that has already been consumed
+      When the same token is presented for consumption again
+      Then the request fails with "410 TokenConsumed"
+      And the durable audit table holds an "auth.token.replay" row for that token
+
   # BEH-EA-060 — spec/behaviors/08-verification-tokens.md
   @BEH-EA-060
   Rule: A verification token is hashed at rest
@@ -152,7 +160,7 @@ Feature: Verification Tokens
     Scenario: The token row is gone afterward regardless of which caller won
       Given a live VerificationToken identifier
       When 5 callers race to consume that same token identifier concurrently
-      Then the VerificationToken row no longer exists once the race resolves, regardless of which caller won
+      Then no live VerificationToken row for it remains once the race resolves, regardless of which caller won
 
     @REQ-EA-179
     Scenario: A caller that ignores the consume result is responsible for any resulting double-application

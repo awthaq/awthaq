@@ -27,7 +27,9 @@ export class PasskeyNoPlatformAuthenticator extends Data.TaggedError(
 )<{}> {}
 
 /** This authenticator already holds a credential for this account (`ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED`, or a raw `InvalidStateError`). */
-export class PasskeyAlreadyRegistered extends Data.TaggedError("PasskeyAlreadyRegistered")<{}> {}
+export class PasskeyAlreadyRegistered extends Data.TaggedError(
+  "PasskeyClient/AlreadyRegistered",
+)<{}> {}
 
 /** No `PublicKeyCredential` global at all — this browser/runtime cannot do WebAuthn. Checked before ever attempting a ceremony (`browserSupportsWebAuthn()`), not something the library itself throws for `startRegistration`/`startAuthentication` as a classified `WebAuthnError`. */
 export class PasskeyNotSupported extends Data.TaggedError("PasskeyNotSupported")<{}> {}

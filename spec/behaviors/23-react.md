@@ -4,24 +4,23 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-23 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): BEH-EA-177's example replaced with `Providers`' real props (`initialSession`, `initialSubject`, `decisions`, `atoms`) and the two-atom design noted; banner given implementation pointers; requirement texts unchanged (RSC-008, CCR-EA-006) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
+> Implemented in `@awthaq/react` (`AuthClientAtom.ts`, `Subject.ts`, `Providers.tsx`; tests `packages/react/test`) — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md) §5. BEH-EA-177, 178 and 179 are the package's own; BEH-EA-180 through 184 are `@qadi/react` re-exports. Its BDD scenarios are `@skip @unwired`.
 
 ## BEH-EA-177: `RegistryProvider` seeds the session atom for SSR
 
 ```ts
-export const Providers = ({ initialSession, decisions, children }: ProvidersProps) => (
-  <RegistryProvider initialValues={[[sessionAtom, AsyncResult.success(initialSession)]]}>
-    <Authz decisions={decisions}>{children}</Authz>
-  </RegistryProvider>
-)
+// app/layout.tsx (a Server Component) passes the server's session and subject as plain props
+<Providers initialSession={session} initialSubject={subject} decisions={decisions} atoms={qadiAtoms}>
+  {children}
+</Providers>
 ```
 
 ```text
@@ -30,6 +29,8 @@ REQUIREMENT: `RegistryProvider` MUST be seeded with the server-resolved
              render MUST NOT show a loading state for a session the server
              already knew.
 ```
+
+**Implementation (RSC-005, EAR-001).** The shipped `Providers` is a `"use client"` component that seeds `sessionAtom` from `initialSession` and, separately, `subjectDtoAtom` from `initialSubject` (BEH-EA-179's second atom); both may be the class instance or its encoded plain object, which is what a Server Component can pass across the boundary, and a malformed seed seeds nothing and is reported through `onError`. It runs exactly one atom registry (`QadiProvider`'s). Decision hydration (`decisions`, BEH-EA-192) is a further prop, not a wrapper component.
 
 `usage-qadi.md` §12.1 and `usage-examples-v4.md` §12.2 both wire the identical seeding pattern. Without it, every page load would show a momentary "checking session" flash before the first client-side fetch resolves — seeding the atom directly with `AsyncResult.success(initialSession)` means the session the server rendered with is the session the client starts with, no round-trip required.
 
@@ -60,13 +61,17 @@ const toSubject = (v: SessionView | undefined) =>
 ```
 
 ```text
-REQUIREMENT: The React provider tree MUST derive qadi's `subject` prop from
-             `sessionAtom`'s current value, not from a second, independently
-             fetched source; when the session becomes `undefined` (sign-out),
-             `subject` MUST become `undefined` in the same render.
+REQUIREMENT: The React provider tree MUST derive qadi's `subject` prop
+             from `sessionAtom`: it is `undefined` unless the session is a
+             settled, real one, and it follows the session (sign-out makes
+             `subject` `undefined` in the same render). Its roles and
+             permissions come from the subject endpoint (`GET /subject`),
+             because a session carries none.
 ```
 
 `usage-qadi.md` §12.1 states the consequence directly: "Sign-out sets `subject` to `undefined` and every gate closes at once." Deriving `subject` from the one session atom, rather than from a parallel fetch, is what makes that guarantee hold — there is no window where the session has cleared but a stale subject still grants access in a `Can` gate somewhere on the page.
+
+**Implementation (EAR-001/EAR-002).** `SessionView` does not carry a `subject` field (BEH-EA-026's single combined struct is not built; the subject is its own `SubjectApi` endpoint — `@awthaq/api`'s `SubjectContract`). The requirement is met by making `sessionAtom` the *gate* over that endpoint's data: `AuthClientAtom.subjectAtom` is `undefined` unless `sessionAtom` is a settled, real (`Success`, non-`null`) session **and** `subjectDtoAtom` is a settled `Success` (not `waiting`). Both queries carry `reactivityKeys: ["session"]`, so a session-changing mutation refetches both in one registry tick and the gate stays closed until both settle; sign-out (`success(null)`) closes it in the same registry batch. An anonymous visitor's `/subject` answer (an anonymous `SubjectDto`) is never handed to qadi. `Providers` runs exactly one registry (`QadiProvider`'s) and forwards `subjectAtom` into `atoms.subject` from a registry subscription, not a React effect.
 
 _Previous: [BEH-EA-178](23-react.md#beh-ea-178-mutations-invalidate-the-session-reactivity-key) | Next: [BEH-EA-180](23-react.md#beh-ea-180-a-stale-decision-is-not-a-decision)_
 

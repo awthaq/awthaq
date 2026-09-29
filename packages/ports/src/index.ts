@@ -1,6 +1,6 @@
 // @awthaq/ports — Ports stratum (2)
 //
-// PasswordHasher, Mailer, WebAuthn — each with layer, layerNoop, layerMemory variants. A plugin depends on a port, never a concrete implementation (capability over implementation).
+// PasswordHasher, Mailer, SmsSender, WebAuthn — each with layer, layerNoop, layerMemory variants. A plugin depends on a port, never a concrete implementation (capability over implementation).
 //
 // `PasswordHasher` and `Mailer` are implemented below; see each module's own
 // header comment for its grounding (no BEH-EA range is allocated for the
@@ -25,11 +25,22 @@
 // See spec/overview.md for the full package map.
 
 export * as ClientAddress from "./ClientAddress.ts";
+export * as Defects from "./Defects.ts";
 export * as Encryption from "./Encryption.ts";
+export * as Hmac from "./Hmac.ts";
+export * as HostResolver from "./HostResolver.ts";
 export * as KeyProvider from "./KeyProvider.ts";
 export * as LegacySessionBridge from "./LegacySessionBridge.ts";
 export * as Mailer from "./Mailer.ts";
+export * as OutboundUrl from "./OutboundUrl.ts";
+export * as PinnedHttp from "./PinnedHttp.ts";
 export * as PasswordHasher from "./PasswordHasher.ts";
+export * as PasswordHasherWorkerPool from "./PasswordHasherWorkerPool.ts";
 export * as RateLimiter from "./RateLimiter.ts";
+export * as RefreshingCache from "./RefreshingCache.ts";
+export * as SmsSender from "./SmsSender.ts";
 export * as SqlTransaction from "./SqlTransaction.ts";
+export * as Tenant from "./Tenant.ts";
 export * as WebAuthn from "./WebAuthn.ts";
+export * as WebCrypto from "./WebCrypto.ts";
+export * as XmlSignature from "./XmlSignature.ts";

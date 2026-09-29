@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-10 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Scheduled, SP-only, with the `SamlApi` contract, the `SamlSigner` port and the ordered validation chain designed (AOMS-009, SFS-003, SFS-007; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.2 (2026-09-29): implemented as `@awthaq/saml`; the port is `XmlSignature` (generic XML-DSig, `@awthaq/ports`), verified by a Node adapter over `xml-crypto` (SFS-003) |
 ---
 
 ## What it is
@@ -21,10 +21,10 @@ Enterprise buyers whose identity teams standardize on SAML rather than OIDC — 
 ## Status
 | Property | Value |
 |---|---|
-| Status | Planned-Phase3 |
+| Status | Implemented (SP only) — `@awthaq/saml` ([ADR-EA-023](../decisions/023-enterprise-federation-packages.md), [BEH-EA-238 through 245](../behaviors/29-saml-sp.md)) |
 | Priority | P3 |
 | Enabler(s) | E2 — External provider/port abstraction, E5 — Identity-provider-as-server |
-| Breaking? | Additive in the relying-party direction (consuming SAML assertions extends E2 the same way OAuth does), but SAML also touches E5 if awthaq is ever asked to act as a SAML identity provider rather than only a service provider — that direction is a materially larger, separable subsystem and is not assumed by anything Planned-MVP or Planned-Phase2 depends on. |
+| Breaking? | Additive in the relying-party direction (consuming SAML assertions extends E2 the same way OAuth does). Acting as a SAML *identity provider* (E5) is a materially larger, separable subsystem and is explicitly out of scope: `@awthaq/saml` is a service provider only. |
 
 ## How it would be expressed
 ```ts
@@ -40,7 +40,7 @@ export class Saml extends AuthPlugin.Service<Saml, {
   static readonly layer = AuthPlugin.layer(Saml, {
     dependsOn: [Sessions, Users],
     make: Effect.gen(function*() {
-      const signer = yield* SamlSigner        // port: XML signature verification/signing, not yet designed
+      const signer = yield* XmlSignature      // port in @awthaq/ports: fused parse + verify (see "The `XmlSignature` port")
       /* validate the IdP-signed assertion, map NameID/attributes to a principal */
       return Saml.of({ metadata, acsCallback })
     }),
@@ -52,10 +52,52 @@ export class Saml extends AuthPlugin.Service<Saml, {
 ## Worked example
 No worked example drafted yet. Neither `archive/design/usage-examples-v4.md` nor `archive/design/usage-qadi.md` carries a SAML section as of this revision.
 
+## The contract (`SamlApi`)
+Two endpoints under the `saml` group ([BEH-EA-4](../behaviors/01-plugin-contract.md)):
+
+- `GET /auth/saml/metadata?connection=<id>` — the SP metadata XML for one connection (entity id, the ACS URL, `WantAssertionsSigned="true"`, the SP's own signing certificate when AuthnRequests are signed).
+- `POST /auth/saml/acs` — the Assertion Consumer Service: `SAMLResponse` (and `RelayState`) as a form post. Success mints a session exactly like every other sign-in path (`Users.assertCanSignIn` first, [BEH-EA-46](../behaviors/06-domain-users-accounts.md)); every validation failure is one uniform `SamlAssertionRejected` (no oracle on *which* check failed).
+
+SP-initiated login starts from the `Sso` dispatcher ([ADR-EA-023](../decisions/023-enterprise-federation-packages.md) Decision 4) or `Saml.authnRequest(connectionId)`, which reserves the request id (see below) and returns the redirect.
+
+`saml_connection` (owned by this plugin, an organization's own IdP, exactly the shape `organization_oauth_connection` has for OIDC): `id`, `organizationId`, `name`, `idpEntityId`, `ssoUrl`, `idpCertificates` (the trust set, JSON: PEM + `notBefore`/`notAfter` per certificate, so a rotation overlaps), `emailDomains` (routed like the OIDC connection's), `trustsEmail`, `authnRequestsSigned`, `sloUrl`/`sloBinding` (the IdP's logout endpoint), `metadataUrl`, `roleMapping` (rules, ceiling, defaults), `createdAt`/`updatedAt`. Alongside it: `saml_sp_key` (the SP's own signing keys per connection: certificate plus the private key SEALED with `Encryption`) and `saml_session` (the NameID/SessionIndex of each session a connection's sign-in created, for Single Logout). Provider ids are `saml:<organizationId>:<connectionId>`; accounts link on `(providerId, NameID)`.
+
+## The `XmlSignature` port
+A port in `@awthaq/ports` ([ADR-EA-010](../decisions/010-plugins-require-ports-never-provide.md)), required by the plugin and provided by the application. It is generic XML-DSig, not SAML: the SAML-specific reading of an assertion is the plugin's, done over what the port returns. The production adapter is `XmlSignatureNode` in `@awthaq/saml`, over `xml-crypto` (evaluated before adoption — never home-grown crypto; see ADR-EA-023 Decision 3).
+
+```ts
+interface TrustSet {
+  readonly certificates: ReadonlyArray<{
+    readonly fingerprint: string            // SHA-256 of the DER certificate, hex
+    readonly pem: string
+    readonly notBefore: DateTime.Utc        // trusted from here (inclusive) ...
+    readonly notAfter: DateTime.Utc         // ... until here (exclusive): a rotation overlaps two entries
+  }>
+}
+interface VerifyPolicy {
+  readonly signedElements: ReadonlyArray<ElementName>   // what a verified signature may cover: Assertion, Response
+  readonly exactlyOne?: ReadonlyArray<ElementName>      // must occur exactly once in the whole document: Assertion
+  readonly forbidden?: ReadonlyArray<ElementName>       // refuses the document: EncryptedAssertion
+  readonly maxBytes?: number                            // default 256 KiB, before any parse
+  readonly now?: DateTime.Utc
+}
+interface VerifiedXml {                      // ONLY the signed element
+  readonly signedXml: string                 // canonical (exclusive C14N, no comments) bytes the digest covers
+  readonly signedElement: ElementName
+  readonly signedId: string
+  readonly signatureAlgorithm: string
+  readonly digestAlgorithm: string
+  readonly certificateFingerprint: string
+}
+interface XmlSignatureShape {
+  /** Parse and verify as one step: no unverified DOM escapes; DTD, entities, comments and PIs refused inside. */
+  readonly verify: (input: { xml: string; trust: TrustSet; policy: VerifyPolicy }) => Effect<VerifiedXml, XmlSignatureError>
+}
+```
+
+`XmlSignatureError` carries a `reason` (`tooLarge`, `doctype`, `comment`, `cardinality`, `duplicateId`, `signatureNotEnveloped`, `unsupportedAlgorithm`, `unsupportedTransform`, `untrustedKey`, `noTrustedCertificate`, `invalidSignature`, ...) for the log and the audit event — never for the wire — and a constant `detail` that never echoes input.
+
+The contract is what makes signature wrapping (XSW) unrepresentable: `verify` returns the bytes of *the element the verified signature covers*, never "an Assertion somewhere in the document"; exclusive C14N is internal; an algorithm outside the allow-list (RSA-SHA256/512 and SHA-256/512 digests; no SHA-1, no HMAC, no inclusive or with-comments canonicalization, no XSLT/XPath transform) is refused; the signer is pinned by fingerprint (a certificate the document names is never a key source); and a certificate outside its window is not trusted, so an IdP rotating its signing key can publish both certificates for the overlap. The plugin then parses `signedXml` again through the same hardened reader and judges issuer, audience, recipient, destination, bearer confirmation, `InResponseTo` and the time window (`SamlAssertion.validateAssertion`).
+
 ## What is missing
-No design beyond this row exists yet — there is no `SamlApi` contract, no XML-signing port, no metadata format decision, and no answer to whether awthaq ever plans to act as a SAML identity provider (E5) as opposed to only a service provider consuming external assertions. See `research/03-auth-landscape.md` for landscape context on where SAML sits in the competitive field (the WorkOS/Keycloak/Casdoor evidence cited above); that file documents demand and positioning, not an awthaq-specific protocol design.
-
-## Verification
-None yet — no test exists.
-
-_Related: [00 — Adoption Matrix](00-adoption-matrix.md)_
+The behavior each step of the validation chain owes — size cap, structural parse, assertion cardinality, signature over the processed element, issuer, audience/recipient/destination, time window, single-consume request id, account link — is implemented and fixed in [`../behaviors/29-saml-sp.md`](../behaviors/29-saml-sp.md) (BEH-EA-238 through 245). The rest of the original "Not built" list is built too: signed AuthnRequests and the SP signing key at rest (BEH-EA-314), Single Logout in both directions (315), organization role mapping under a `canGrant` ceiling (316), the `Sso` dispatcher ([MOD-EA-09](09-sso.md), 317) and the administrator's HTTP CRUD with IdP metadata import from XML or a URL (318). Two items stay refused, as recorded decisions: IdP-initiated (unsolicited) login and encrypted assertions ([ADR-EA-036](../decisions/036-saml-refusals-are-decisions.md)). Home-realm discovery is `SamlConnectionStore.discover`, which `Sso` calls next to the OIDC connections' own. See `research/03-auth-landscape.md` for the demand evidence.

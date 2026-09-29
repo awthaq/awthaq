@@ -1,9 +1,13 @@
 {
   "name": "@awthaq/ports",
   "version": "0.1.0",
-  "private": true,
   "description": "PasswordHasher, Mailer, WebAuthn — each with layer, layerNoop, layerMemory variants. A plugin depends on a port, never a concrete implementation (capability over implementation).",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awthaq/awthaq.git",
+    "directory": "packages/ports"
+  },
   "files": [
     "lib",
     "src",

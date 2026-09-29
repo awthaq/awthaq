@@ -6,9 +6,20 @@
 // `HttpRouter`, requests built from actual `Request` objects (BEH-EA-085's
 // "any host that hands the application a `Request`" path), and `httpApiStatus`
 // annotations landing on the real response status (BEH-EA-088).
-import { Api, AuthCore } from "@awthaq/api";
-import { Accounts, AuditLog, Hooks, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import { AccountContract, Api, AuthCore, SessionContract } from "@awthaq/api";
+import {
+  Accounts,
+  AuditLog,
+  DataExport,
+  Erasure,
+  Hooks,
+  AuthEvents,
+  Sessions,
+  UserFields,
+  Users,
+  Verification,
+} from "@awthaq/core";
+import { SqlTransaction, RateLimiter } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { createHmac, randomBytes } from "node:crypto";
@@ -18,8 +29,15 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Path from "effect/Path";
+import * as Cause from "effect/Cause";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
+import * as Cookies from "effect/unstable/http/Cookies";
 import * as Etag from "effect/unstable/http/Etag";
+import * as Headers from "effect/unstable/http/Headers";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -28,6 +46,8 @@ import * as Account from "../src/Account.ts";
 import * as Authentication from "../src/Authentication.ts";
 import * as AuthHttp from "../src/AuthHttp.ts";
 import * as Csrf from "../src/Csrf.ts";
+import { currentUser } from "../src/internal/CurrentUser.ts";
+import { HandlerInvariantViolation } from "../src/internal/Defects.ts";
 import * as Session from "../src/Session.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
@@ -54,9 +74,10 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 );
 
 const CSRF_TEST_COOKIE_VALUE: string = (() => {
-  const token = randomBytes(32).toString("hex");
-  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(token).digest("hex");
-  return `${token}.${signature}`;
+  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The router runs under `it.effect`'s TestClock, which starts at 0.
+  const signed = `0.${randomBytes(32).toString("hex")}`;
+  const signature = createHmac("sha256", CSRF_TEST_SECRET).update(signed).digest("hex");
+  return `${signed}.${signature}`;
 })();
 
 const withCsrfCookie = (cookie?: string): string =>
@@ -70,31 +91,65 @@ const csrfHeaders = (cookie?: string): Record<string, string> => ({
   "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
 });
 
-const AppLayer = Layer.mergeAll(
-  AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
-    Layer.provide(Session.SessionHandlers),
-    Layer.provide(Account.AccountHandlers),
+const makeAppLayer = (
+  sessionsLayer: typeof Sessions.layerMemory,
+  limiterLayer: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
+) =>
+  Layer.mergeAll(
+    AuthHttp.routes(AuthCore.AuthCoreApi, { openapiPath: "/openapi.json" }).pipe(
+      Layer.provide(Session.SessionHandlers),
+      Layer.provide(Account.AccountHandlers),
+    ),
+    AuthHttp.docs(AuthCore.AuthCoreApi),
+  ).pipe(
+    Layer.provideMerge(Authentication.AuthenticationLive),
+    Layer.provide(Authentication.PrincipalResolverLive),
+    Layer.provide(CsrfProtectionLive),
+    // CSG-001: `Account.deleteUser` runs core's `AccountErasure` and `Account.exportData` its `AccountExport` (CSG-005).
+    Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
+    // CSG-005: the export endpoint rate-limits per account.
+    Layer.provide(limiterLayer),
+    // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
+    // `SqlTransaction` — a no-op wrapper for this in-memory composition.
+    Layer.provide(SqlTransaction.layerNoop),
+    Layer.provideMerge(sessionsLayer),
+    Layer.provideMerge(Users.layerMemory),
+    Layer.provideMerge(Accounts.layerMemory),
+    Layer.provideMerge(Verification.layerMemory),
+    // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(Hooks.HooksLive),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(TestServices),
+    Layer.provideMerge(HttpRouter.layer),
+  );
+
+const AppLayer = makeAppLayer(Sessions.layerMemory);
+
+// SAM-004: the same app over a composition that declares two `billing` fields, one of them server-only.
+const FieldsAppLayer = makeAppLayer(Sessions.layerMemory).pipe(
+  Layer.provideMerge(
+    UserFields.layer({
+      billing_plan: UserFields.serverOnly(Schema.Literals(["free", "pro"])),
+      billing_nickname: UserFields.field(Schema.String),
+      billing_seats: UserFields.field(Schema.Number),
+    }),
   ),
-  AuthHttp.docs(AuthCore.AuthCoreApi),
-).pipe(
-  Layer.provideMerge(Authentication.AuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provide(CsrfProtectionLive),
-  // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
-  // `SqlTransaction` — a no-op wrapper for this in-memory composition.
-  Layer.provide(SqlTransaction.layerNoop),
-  Layer.provideMerge(Sessions.layerMemory),
-  Layer.provideMerge(Users.layerMemory),
-  Layer.provideMerge(Accounts.layerMemory),
-  Layer.provideMerge(Verification.layerMemory),
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provide(NodeCrypto.layer),
-  Layer.provideMerge(TestServices),
-  Layer.provideMerge(HttpRouter.layer),
 );
+
+// TIR-003/ESS-005/GC-005: a `Sessions` whose `list` never contains the
+// caller's own session — what the SQL layer's 200-row page cap used to do to
+// a user with many historical sessions. Point queries must not depend on it.
+const ListlessSessions: typeof Sessions.layerMemory = Layer.effect(
+  Sessions.Sessions,
+  Effect.gen(function* () {
+    const real = yield* Sessions.Sessions;
+    return { ...real, list: () => Effect.succeed([]) };
+  }),
+).pipe(Layer.provide(Sessions.layerMemory));
+
+const ListlessAppLayer = makeAppLayer(ListlessSessions);
 
 const userId = Users.UserId("44444444-4444-4444-4444-444444444444");
 const otherUserId = Users.UserId("55555555-5555-5555-5555-555555555555");
@@ -132,13 +187,17 @@ describe("AuthHttp + Session (real HTTP)", () => {
 
         const current = yield* send("/session", { token: a.token });
         assert.strictEqual(current.status, 200);
-        const currentBody = (yield* jsonBody(current)) as { id: string; current: boolean };
+        const currentBody = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* jsonBody(current),
+        );
         assert.strictEqual(currentBody.id, a.session.id);
         assert.isTrue(currentBody.current);
 
         const list = yield* send("/session/list", { token: a.token });
         assert.strictEqual(list.status, 200);
-        const listBody = (yield* jsonBody(list)) as ReadonlyArray<unknown>;
+        const listBody = Schema.decodeUnknownSync(Schema.Array(SessionContract.SessionDto))(
+          yield* jsonBody(list),
+        );
         assert.strictEqual(listBody.length, 2);
 
         const signedOut = yield* send("/session/sign-out", { method: "POST", token: a.token });
@@ -179,11 +238,15 @@ describe("AuthHttp + Session (real HTTP)", () => {
 
           const revokeForeign = yield* revoke(foreign.session.id, mine.token);
           assert.strictEqual(revokeForeign.status, 404);
-          const foreignBody = (yield* jsonBody(revokeForeign)) as { _tag: string };
+          const foreignBody = Schema.decodeUnknownSync(SessionContract.SessionNotFound)(
+            yield* jsonBody(revokeForeign),
+          );
 
           const revokeUnknown = yield* revoke("00000000-0000-0000-0000-000000000000", mine.token);
           assert.strictEqual(revokeUnknown.status, 404);
-          const unknownBody = (yield* jsonBody(revokeUnknown)) as { _tag: string };
+          const unknownBody = Schema.decodeUnknownSync(SessionContract.SessionNotFound)(
+            yield* jsonBody(revokeUnknown),
+          );
 
           assert.strictEqual(foreignBody._tag, unknownBody._tag);
 
@@ -292,6 +355,399 @@ describe("AuthHttp + Session (real HTTP)", () => {
   );
 });
 
+// CSS-002: pre-response handlers only run under `HttpEffect.toHandled`, so
+// these tests drive the router the way a real server does and read the
+// cookies of the response actually written.
+const sendHandled = (
+  path: string,
+  options: {
+    readonly method: string;
+    readonly token: Redacted.Redacted<string>;
+    readonly body?: unknown;
+  },
+) =>
+  Effect.gen(function* () {
+    const router = yield* HttpRouter.HttpRouter;
+    let written: HttpServerResponse.HttpServerResponse | undefined;
+    yield* HttpEffect.toHandled(router.asHttpEffect(), (_request, response) =>
+      Effect.sync(() => {
+        written = response;
+      }),
+    ).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(
+          new Request(`http://localhost${path}`, {
+            method: options.method,
+            headers: {
+              ...cookieHeader(options.token),
+              ...(options.body === undefined ? {} : { "content-type": "application/json" }),
+            },
+            ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+          }),
+        ),
+      ),
+    );
+    if (written === undefined) return yield* Effect.die("no response was written");
+    return written;
+  });
+
+const assertSessionCookieExpired = (response: HttpServerResponse.HttpServerResponse) => {
+  const cookie = Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME);
+  assert.isTrue(Option.isSome(cookie), "the session cookie must be expired on this response");
+  if (Option.isNone(cookie)) return;
+  assert.strictEqual(cookie.value.value, "");
+  assert.strictEqual(cookie.value.options?.maxAge, 0);
+  assert.strictEqual(cookie.value.options?.path, "/");
+  assert.isTrue(cookie.value.options?.secure);
+  assert.isTrue(cookie.value.options?.httpOnly);
+  assert.strictEqual(cookie.value.options?.sameSite, "strict");
+};
+
+describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)", () => {
+  it.effect("POST /session/sign-out expires __Host-session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/sign-out", { method: "POST", token });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  // TIR-008: sign-out and account deletion are audited, not silent.
+  it.effect("POST /session/sign-out records a signOut auth.session.revoked in AuditLog", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const audit = yield* AuditLog.AuditLog;
+        const { token, session } = yield* sessions.issue({ userId });
+        yield* sendHandled("/session/sign-out", { method: "POST", token });
+        const rows = yield* audit.list({ eventTag: "auth.session.revoked" });
+        assert.strictEqual(rows.length, 1);
+        const payload = Schema.decodeUnknownSync(
+          Schema.Struct({ reason: Schema.String, sessionId: Schema.String, scope: Schema.String }),
+        )(rows[0]?.payload);
+        assert.strictEqual(payload.reason, "signOut");
+        assert.strictEqual(payload.sessionId, session.id);
+        assert.strictEqual(payload.scope, "one");
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("POST /session/revoke-all expires __Host-session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/revoke-all", { method: "POST", token });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("POST /session/revoke with the caller's own id expires the cookie", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token, session } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/revoke", {
+          method: "POST",
+          token,
+          body: { id: session.id },
+        });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("revoking a different session does NOT expire the caller's cookie", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const current = yield* sessions.issue({ userId });
+        const other = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session/revoke", {
+          method: "POST",
+          token: current.token,
+          body: { id: other.session.id },
+        });
+        assert.strictEqual(response.status, 204);
+        assert.isTrue(Option.isNone(Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME)));
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("DELETE /user expires __Host-session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "delete-me@example.com" },
+          name: "Del",
+        });
+        const { token } = yield* sessions.issue({ userId: user.id });
+        const response = yield* sendHandled("/user", { method: "DELETE", token });
+        assert.strictEqual(response.status, 204);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+});
+
+// CSG-005: GDPR Art. 15/20 self-service export.
+describe("GET /user/export (CSG-005)", () => {
+  it.effect(
+    "returns the caller's user, accounts (no secrets), sessions and activity as an attachment, and audits it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const accounts = yield* Accounts.Accounts;
+          const sessions = yield* Sessions.Sessions;
+          const audit = yield* AuditLog.AuditLog;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "export-me@example.com" },
+            name: "Exp",
+          });
+          const other = yield* users.create({
+            identity: { _tag: "Email", email: "not-me@example.com" },
+            name: "Other",
+          });
+          yield* accounts.link({ userId: user.id, providerId: "google", subject: "sub-exp" });
+          yield* accounts.link({ userId: other.id, providerId: "google", subject: "sub-other" });
+          const { token } = yield* sessions.issue({ userId: user.id });
+
+          const response = yield* sendHandled("/user/export", { method: "GET", token });
+
+          assert.strictEqual(response.status, 200);
+          assert.strictEqual(
+            response.headers["content-disposition"],
+            'attachment; filename="account-export.json"',
+          );
+          assert.strictEqual(response.headers["cache-control"], "no-store");
+          const body = Schema.decodeUnknownSync(AccountContract.AccountExportDto)(
+            yield* jsonBody(response),
+          );
+          assert.strictEqual(body.user.id, user.id);
+          assert.deepStrictEqual(body.user.identity, {
+            _tag: "Email",
+            email: "export-me@example.com",
+            emailVerified: false,
+          });
+          assert.deepStrictEqual(
+            body.accounts.map((account) => account.subject),
+            ["sub-exp"],
+          );
+          assert.strictEqual(body.sessions.length, 1);
+          assert.isTrue(body.activity.some((row) => row.event === "auth.session.issued"));
+          assert.deepStrictEqual(body.sections, {});
+          // never another person's data, never a secret
+          const text = JSON.stringify(body);
+          assert.notInclude(text, "not-me@example.com");
+          assert.notInclude(text, "secretHash");
+          assert.notInclude(text, Redacted.value(token));
+
+          const exported = yield* audit.list({ eventTag: "auth.user.dataExported" });
+          assert.strictEqual(exported.length, 1);
+          assert.deepStrictEqual(exported[0]?.payload, {
+            _tag: "auth.user.dataExported",
+            userId: user.id,
+            requestedBy: "self",
+          });
+        }),
+      ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("answers 401 without a valid session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const response = yield* sendHandled("/user/export", {
+          method: "GET",
+          token: Redacted.make("unknown.session"),
+        });
+        assert.strictEqual(response.status, 401);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("is rate limited per account: the sixth export in an hour answers 429", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "hammer@example.com" },
+          name: "H",
+        });
+        const { token } = yield* sessions.issue({ userId: user.id });
+        for (let i = 0; i < 5; i += 1) {
+          const ok = yield* sendHandled("/user/export", { method: "GET", token });
+          assert.strictEqual(ok.status, 200);
+        }
+        const limited = yield* sendHandled("/user/export", { method: "GET", token });
+        assert.strictEqual(limited.status, 429);
+      }),
+    ).pipe(Effect.provide(makeAppLayer(Sessions.layerMemory, RateLimiter.layerMemory))),
+  );
+});
+
+// EHA-009: the session was revoked between the middleware's verify and the
+// handler's keyed read — a typed 401 with an expired cookie, not a 500.
+const VanishingSessions: typeof Sessions.layerMemory = Layer.effect(
+  Sessions.Sessions,
+  Effect.gen(function* () {
+    const real = yield* Sessions.Sessions;
+    return { ...real, findOwned: () => Effect.succeed(Option.none()) };
+  }),
+).pipe(Layer.provide(Sessions.layerMemory));
+
+describe("AuthHttp + Session: a concurrently revoked current session (EHA-009)", () => {
+  it.effect("GET /session answers 401 Unauthenticated and expires the cookie", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* sendHandled("/session", { method: "GET", token });
+        assert.strictEqual(response.status, 401);
+        assertSessionCookieExpired(response);
+      }),
+    ).pipe(Effect.provide(makeAppLayer(VanishingSessions))),
+  );
+});
+
+describe("server handler invariants (GC-003/GC-008)", () => {
+  it.effect(
+    "a non-User principal reaching a required-auth group dies with HandlerInvariantViolation",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* currentUser.pipe(
+          Effect.provideService(
+            Api.CurrentPrincipal,
+            new Api.ApiKeyPrincipal({
+              ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }),
+              scopes: [],
+            }),
+          ),
+          Effect.exit,
+        );
+        assert.isTrue(Exit.isFailure(exit));
+        if (!Exit.isFailure(exit)) return;
+        assert.isTrue(Cause.hasDies(exit.cause));
+        const defect = Cause.squash(exit.cause);
+        assert.instanceOf(defect, HandlerInvariantViolation);
+        if (defect instanceof HandlerInvariantViolation) {
+          assert.strictEqual(defect.invariant, "NonUserPrincipal");
+        }
+      }),
+  );
+});
+
+describe("AuthHttp + Session: point queries never go through list (TIR-003/GC-005)", () => {
+  it.effect("GET /session answers 200 even when the caller's session is absent from list", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const { token, session } = yield* sessions.issue({ userId });
+        const response = yield* router
+          .asHttpEffect()
+          .pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              HttpServerRequest.fromWeb(
+                new Request("http://localhost/session", { headers: cookieHeader(token) }),
+              ),
+            ),
+          );
+        assert.strictEqual(response.status, 200);
+        const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* jsonBody(response),
+        );
+        assert.strictEqual(body.id, session.id);
+        assert.isTrue(body.current);
+      }),
+    ).pipe(Effect.provide(ListlessAppLayer)),
+  );
+
+  it.effect("POST /session/revoke revokes an owned session even when list omits it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const current = yield* sessions.issue({ userId });
+        const other = yield* sessions.issue({ userId });
+        const response = yield* router.asHttpEffect().pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/session/revoke", {
+                method: "POST",
+                headers: { ...cookieHeader(current.token), "content-type": "application/json" },
+                body: JSON.stringify({ id: other.session.id }),
+              }),
+            ),
+          ),
+        );
+        assert.strictEqual(response.status, 204);
+        const failure = yield* sessions.verify(other.token).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+      }),
+    ).pipe(Effect.provide(ListlessAppLayer)),
+  );
+});
+
+describe("AuthHttp + Session: bearer clients (MNA-008, decision 24 §2)", () => {
+  it.effect("POST /session/sign-out with only a bearer token (no CSRF pair) answers 204", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* router.asHttpEffect().pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/session/sign-out", {
+                method: "POST",
+                headers: { authorization: `Bearer ${Redacted.value(token)}` },
+              }),
+            ),
+          ),
+        );
+        assert.strictEqual(response.status, 204);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect("a cookie-authenticated POST without the CSRF pair is still rejected 403", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const router = yield* HttpRouter.HttpRouter;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* router.asHttpEffect().pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/session/sign-out", {
+                method: "POST",
+                headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+              }),
+            ),
+          ),
+        );
+        assert.strictEqual(response.status, 403);
+      }),
+    ).pipe(Effect.provide(AppLayer)),
+  );
+});
+
 describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
   it.effect("PATCH /user updates the caller's own name; requires authentication", () =>
     Effect.scoped(
@@ -299,7 +755,10 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
         const router = yield* HttpRouter.HttpRouter;
-        const user = yield* users.create({ email: "ada@example.com", name: "Ada" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "ada@example.com" },
+          name: "Ada",
+        });
         const issued = yield* sessions.issue({ userId: user.id });
 
         const patch = (token?: Redacted.Redacted<string>) =>
@@ -324,13 +783,195 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
 
         const response = yield* patch(issued.token);
         assert.strictEqual(response.status, 200);
-        const body = (yield* jsonBody(response)) as { name: string };
+        const body = Schema.decodeUnknownSync(AccountContract.AccountDto)(
+          yield* jsonBody(response),
+        );
         assert.strictEqual(body.name, "Ada Lovelace");
 
         const stored = yield* users.findById(user.id);
         assert.strictEqual(stored.name, "Ada Lovelace");
       }),
     ).pipe(Effect.provide(AppLayer)),
+  );
+
+  it.effect(
+    "BAM-009/FAMS-002: PATCH /user sets the avatar (http(s) only) and the DTO carries the identity union",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const sessions = yield* Sessions.Sessions;
+          const router = yield* HttpRouter.HttpRouter;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "img@example.com" },
+            name: "Img",
+          });
+          const issued = yield* sessions.issue({ userId: user.id });
+
+          const patch = (body: unknown) =>
+            router.asHttpEffect().pipe(
+              Effect.provideService(
+                HttpServerRequest.HttpServerRequest,
+                HttpServerRequest.fromWeb(
+                  new Request("http://localhost/user", {
+                    method: "PATCH",
+                    headers: { ...cookieHeader(issued.token), "content-type": "application/json" },
+                    body: JSON.stringify(body),
+                  }),
+                ),
+              ),
+            );
+
+          const ok = yield* patch({ name: "Img", image: "https://cdn.example.com/me.png" });
+          assert.strictEqual(ok.status, 200);
+          const body = Schema.decodeUnknownSync(AccountContract.AccountDto)(yield* jsonBody(ok));
+          assert.deepStrictEqual(body.identity, {
+            _tag: "Email",
+            email: "img@example.com",
+            emailVerified: false,
+          });
+          assert.strictEqual(body.image, "https://cdn.example.com/me.png");
+
+          // A `javascript:` URL is a payload error, never stored.
+          // (This raw router has no `HttpApiSchemaError` -> 400 mapping; the point is the
+          // payload never reaches `Users.updateProfile`.)
+          const rejected = yield* patch({ name: "Img", image: "javascript:alert(1)" }).pipe(
+            Effect.exit,
+          );
+          assert.strictEqual(rejected._tag, "Failure");
+          assert.deepStrictEqual(
+            (yield* users.findById(user.id)).image,
+            Option.some("https://cdn.example.com/me.png"),
+          );
+
+          // Omitted leaves it; null clears it.
+          assert.strictEqual((yield* patch({ name: "Img 2" })).status, 200);
+          assert.isTrue(Option.isSome((yield* users.findById(user.id)).image));
+          assert.strictEqual((yield* patch({ name: "Img 2", image: null })).status, 200);
+          assert.isTrue(Option.isNone((yield* users.findById(user.id)).image));
+        }),
+      ).pipe(Effect.provide(AppLayer)),
+  );
+
+  // SAM-004/BEH-EA-048: plugin-declared fields ride the profile payload; the registry decides who may write what.
+  it.effect(
+    "SAM-004: PATCH /user writes client-writable declared fields, refuses server-only and undeclared ones, and the DTO carries them",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const sessions = yield* Sessions.Sessions;
+          const router = yield* HttpRouter.HttpRouter;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "fields@example.com" },
+            name: "Fields",
+          });
+          yield* users.setFields(user.id, { billing_plan: "pro" });
+          const issued = yield* sessions.issue({ userId: user.id });
+
+          const patch = (body: unknown) =>
+            router.asHttpEffect().pipe(
+              Effect.provideService(
+                HttpServerRequest.HttpServerRequest,
+                HttpServerRequest.fromWeb(
+                  new Request("http://localhost/user", {
+                    method: "PATCH",
+                    headers: { ...cookieHeader(issued.token), "content-type": "application/json" },
+                    body: JSON.stringify(body),
+                  }),
+                ),
+              ),
+            );
+
+          const ok = yield* patch({
+            name: "Fields",
+            fields: { billing_nickname: "Countess", billing_seats: 3 },
+          });
+          assert.strictEqual(ok.status, 200);
+          // The server-only value the user cannot write is readable, alongside what they just wrote.
+          assert.deepStrictEqual(
+            Schema.decodeUnknownSync(AccountContract.AccountDto)(yield* jsonBody(ok)).fields,
+            {
+              billing_plan: "pro",
+              billing_nickname: "Countess",
+              billing_seats: 3,
+            },
+          );
+
+          // A server-only field is 403 and, as a whole-patch refusal, leaves the client-writable one unchanged.
+          const forbidden = yield* patch({
+            name: "Renamed",
+            fields: { billing_nickname: "Changed", billing_plan: "free" },
+          });
+          assert.strictEqual(forbidden.status, 403);
+          const undeclared = yield* patch({ name: "Fields", fields: { billing_ghost: "x" } });
+          assert.strictEqual(undeclared.status, 422);
+          const invalid = yield* patch({ name: "Fields", fields: { billing_seats: "many" } });
+          assert.strictEqual(invalid.status, 422);
+          const stored = yield* users.getFields(user.id);
+          assert.deepStrictEqual(stored, {
+            billing_plan: "pro",
+            billing_nickname: "Countess",
+            billing_seats: 3,
+          });
+          assert.strictEqual((yield* users.findById(user.id)).name, "Fields");
+
+          // Omitting `fields` leaves them; null clears one; the DTO still carries the rest.
+          const cleared = yield* patch({ name: "Fields", fields: { billing_nickname: null } });
+          assert.deepStrictEqual(
+            Schema.decodeUnknownSync(AccountContract.AccountDto)(yield* jsonBody(cleared)).fields,
+            {
+              billing_plan: "pro",
+              billing_seats: 3,
+            },
+          );
+          const untouched = yield* patch({ name: "Fields" });
+          assert.deepStrictEqual(
+            Schema.decodeUnknownSync(AccountContract.AccountDto)(yield* jsonBody(untouched)).fields,
+            {
+              billing_plan: "pro",
+              billing_seats: 3,
+            },
+          );
+        }),
+      ).pipe(Effect.provide(FieldsAppLayer)),
+  );
+
+  it.effect(
+    "SAM-004: a composition that declares no field answers `fields: {}` and refuses any",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const sessions = yield* Sessions.Sessions;
+          const router = yield* HttpRouter.HttpRouter;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "nofields@example.com" },
+            name: "None",
+          });
+          const issued = yield* sessions.issue({ userId: user.id });
+          const patch = (body: unknown) =>
+            router.asHttpEffect().pipe(
+              Effect.provideService(
+                HttpServerRequest.HttpServerRequest,
+                HttpServerRequest.fromWeb(
+                  new Request("http://localhost/user", {
+                    method: "PATCH",
+                    headers: { ...cookieHeader(issued.token), "content-type": "application/json" },
+                    body: JSON.stringify(body),
+                  }),
+                ),
+              ),
+            );
+          const plain = yield* patch({ name: "None" });
+          assert.deepStrictEqual(
+            Schema.decodeUnknownSync(AccountContract.AccountDto)(yield* jsonBody(plain)).fields,
+            {},
+          );
+          const refused = yield* patch({ name: "None", fields: { billing_plan: "pro" } });
+          assert.strictEqual(refused.status, 422);
+        }),
+      ).pipe(Effect.provide(AppLayer)),
   );
 
   it.effect(
@@ -343,7 +984,10 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
           const sessions = yield* Sessions.Sessions;
           const verification = yield* Verification.Verification;
           const router = yield* HttpRouter.HttpRouter;
-          const user = yield* users.create({ email: "bo@example.com", name: "Bo" });
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "bo@example.com" },
+            name: "Bo",
+          });
           yield* accounts.link({
             userId: user.id,
             providerId: "password",
@@ -374,6 +1018,28 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
           const response = yield* del;
           assert.strictEqual(response.status, 204);
 
+          // SCP-006: exactly one `auth.user.deleted`, after the commit, with no email.
+          const audit = yield* AuditLog.AuditLog;
+          const deleted = yield* audit.list({ eventTag: "auth.user.deleted" });
+          assert.strictEqual(deleted.length, 1);
+          assert.deepStrictEqual(deleted[0]?.payload, {
+            _tag: "auth.user.deleted",
+            userId: user.id,
+            deletedBy: "self",
+          });
+
+          // CSG-001/ESA-005: every other audit row that named the user (the session issued
+          // above) was pseudonymized in the same transaction — only the erasure receipt
+          // above still carries the id.
+          const stillNaming = yield* audit.list({ actorUserId: user.id });
+          assert.deepStrictEqual(
+            stillNaming.map((row) => row.payload._tag),
+            ["auth.user.deleted"],
+          );
+          const issuedRows = yield* audit.list({ eventTag: "auth.session.issued" });
+          assert.strictEqual(issuedRows.length, 1);
+          assert.isFalse(JSON.stringify(issuedRows).includes(user.id));
+
           const stillHasUser = yield* Effect.exit(users.findById(user.id));
           assert.isTrue(stillHasUser._tag === "Failure");
 
@@ -386,7 +1052,7 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
           const verifyOutcome = yield* verification
             .consume(verifyIdentifier, verifyValue)
             .pipe(Effect.flip);
-          assert.strictEqual(verifyOutcome._tag, "TokenConsumed");
+          assert.strictEqual(verifyOutcome._tag, "Verification/TokenConsumed");
 
           const sessionCheck = yield* router
             .asHttpEffect()
@@ -423,7 +1089,9 @@ describe("AuthHttp (BEH-EA-085's toWebHandler serving path)", () => {
         handler(new Request("http://localhost/openapi.json")),
       );
       assert.strictEqual(openapi.status, 200);
-      const spec = (yield* Effect.promise(() => openapi.json())) as { paths?: unknown };
+      const spec = Schema.decodeUnknownSync(Schema.Struct({ paths: Schema.Unknown }))(
+        yield* Effect.promise(() => openapi.json()),
+      );
       assert.isDefined(spec.paths);
 
       const docs = yield* Effect.promise(() => handler(new Request("http://localhost/docs")));
@@ -452,6 +1120,38 @@ describe("AuthHttp (BEH-EA-087's ManagedRuntime escape hatch)", () => {
       );
       assert.strictEqual(session.userId, userId);
       yield* Effect.promise(() => runtime.dispose());
+    }),
+  );
+});
+
+describe("AuthHttp.layerRedactedHeaders (MAPS-008)", () => {
+  it.effect("redacts the rotated-token header and x-jwt-token alongside Effect's defaults", () =>
+    Effect.gen(function* () {
+      const names = yield* Headers.CurrentRedactedNames;
+      const redacted = Headers.redact(
+        Headers.fromInput({
+          [Api.ROTATED_TOKEN_HEADER]: "rotated-secret",
+          "x-jwt-token": "jwt-secret",
+          authorization: "Bearer secret",
+          "x-request-id": "not-secret",
+        }),
+        names,
+      );
+      assert.isTrue(Redacted.isRedacted(redacted[Api.ROTATED_TOKEN_HEADER]));
+      assert.isTrue(Redacted.isRedacted(redacted["x-jwt-token"]));
+      assert.isTrue(Redacted.isRedacted(redacted["authorization"]));
+      assert.strictEqual(redacted["x-request-id"], "not-secret");
+    }).pipe(Effect.provide(AuthHttp.layerRedactedHeaders)),
+  );
+
+  it.effect("without the layer the rotated token would be logged verbatim", () =>
+    Effect.gen(function* () {
+      const names = yield* Headers.CurrentRedactedNames;
+      const redacted = Headers.redact(
+        Headers.fromInput({ [Api.ROTATED_TOKEN_HEADER]: "rotated-secret" }),
+        names,
+      );
+      assert.strictEqual(redacted[Api.ROTATED_TOKEN_HEADER], "rotated-secret");
     }),
   );
 });

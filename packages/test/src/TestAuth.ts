@@ -20,17 +20,19 @@
 //   installed `@qadi/testing`/`@qadi/core`; the real equivalent is
 //   `@qadi/core`'s own `makeSubject`/`fromRoles`, and `@qadi/testing`'s
 //   `Fixtures.ts` ready-made subjects — a test imports those directly.
-// - BEH-EA-200 (hook veto/observe isolation) is now directly testable via
-//   `@awthaq/core`'s `HookPoint.ts` (see `packages/core/test/HookPoint.test.ts`
-//   for veto-abort/observe-isolation/divert coverage) — but no hook point is
-//   wired into a real signUp/signIn flow yet (`HookPoint.ts`'s own header
-//   comment), so `TestAuth.layer` itself still has nothing plugin-facing to
-//   assemble for this one.
+// - BEH-EA-200 (hook veto/observe isolation): `runPluginContractTests`' opt-in `hooks`
+//   option (PV-260) exercises each tap the plugin *declares* (`AuthPlugin.layer`'s
+//   `taps`, whose handlers `plugin.taps` exposes) against a stub input on a fresh point
+//   of the tap's own kind. Taps an application adds itself are not declared on a plugin;
+//   a test taps a point by passing the tap in `TestAuth.layer`'s second parameter — it
+//   requires its point, which `MemoryPorts` provides (every point's own layer,
+//   `Hooks.HooksLive`, rides there). The mechanism itself is covered by
+//   `packages/core/test/HookPoint.test.ts`.
 // - BEH-EA-199's "no `Redacted` value reaches a span or event" check is
-//   already, honestly, documented by that behavior file itself as "not
-//   mechanically verifiable today" (no tracer/logger interceptor exists) —
-//   `runPluginContractTests` below implements only its other half
-//   (contract-hash stability).
+//   mechanical (EOTS-002): `RedactionGuard` installs a recording tracer and
+//   logger (and an `AuthEvents` inspector) into `TestAuth.layer`, and
+//   `runPluginContractTests`' opt-in `redaction` option drives a plugin's flows
+//   against it with canary secrets.
 //
 // **`TestAuth.signInAs` targets `HttpRouter.toWebHandler`'s raw
 // `(Request) => Promise<Response>` shape, not `HttpApiTest.groups`'s
@@ -63,19 +65,36 @@ import {
   AuditLog,
   AuthEvents,
   AuthPlugin,
+  DataExport,
+  Erasure,
+  HookPoint,
   Hooks,
+  Migrations,
   RateLimits,
   Sessions,
+  Slots,
   Users,
+  Verification,
 } from "@awthaq/core";
-import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { AuthHttp } from "@awthaq/server";
+import { CoreMigrations } from "@awthaq/sql";
+import * as RedactionGuard from "./RedactionGuard.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
+import * as Cause from "effect/Cause";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
+import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 /**
  * BEH-EA-193: memory repositories, `Mailer.layerMemory`, and
@@ -91,32 +110,78 @@ import * as HttpServer from "effect/unstable/http/HttpServer";
  * same way, and a second, separately-named layer here would be a
  * distinction with no practical difference for callers of this module.
  */
-const MemoryPorts = Layer.mergeAll(
+/**
+ * ETVS-004: a real argon2id hasher at the smallest legal cost, so a sign-up/sign-in suite
+ * does not pay production KDF time per hash (the algorithm, salt, PHC format and rehash
+ * path are the real ones; only m/t are lowered). A ConfigError here is a defect in this
+ * fixed table, not a runtime condition.
+ */
+const TestHasher = PasswordHasher.layerArgon2id.pipe(
+  Layer.provide(
+    ConfigProvider.layer(
+      ConfigProvider.fromEnv({
+        env: { AUTH_ARGON2_MEMORY_KIB: "1024", AUTH_ARGON2_ITERATIONS: "1" },
+      }),
+    ),
+  ),
+  Layer.orDie,
+);
+
+const MemoryStores = Layer.mergeAll(
   Users.layerMemory,
   Accounts.layerMemory,
   Sessions.layerMemory,
+  // ETVS-004/MW-002: what every password-style composition needs beyond the core stores
+  // (also `AuthHttp.coreHandlers`' always-served `account` group).
+  Verification.layerMemory,
+  TestHasher,
   Mailer.layerMemory,
   RateLimiter.layerPermissive,
   RateLimits.layer,
+  // MA-005: `Auth.make` provides its own `SlotsRegistry`; this one is for a plugin layer a
+  // test composes standalone (outside `Auth.make`), whose `Slots.override` requires one.
+  Slots.layer,
   SqlTransaction.layerNoop,
   // AGA-001/NHS-003: `ClientAddress.layerDirect` — the raw-`remoteAddress`
   // passthrough every zero-config app (and every composition here) gets
   // by default; `layerTrustedProxy` is an opt-in an application makes for
   // itself when it actually sits behind a gateway/load balancer.
   ClientAddress.layerDirect,
-).pipe(
-  Layer.provideMerge(NodeCrypto.layer),
-  // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(AuthEvents.layer),
-  // BEH-EA-100: `AuthEvents.layer` now needs `AuditLog` too — see its own
-  // header comment.
-  Layer.provideMerge(AuditLog.layerMemory),
-  // AOMS-006/BCR-004/CSG-002/THS-002 (wayfinder ticket 03): every hook
-  // point's own default (no-tap) layer — `Users.layerMemory` and every
-  // plugin's own `make` now consult one directly. See `Hooks.HooksLive`'s
-  // own doc comment.
-  Layer.provideMerge(Hooks.HooksLive),
 );
+
+/**
+ * CSG-001: the `AccountErasure` service the account handler calls, built over these same
+ * stores and over the erasure registry `Hooks.HooksLive` provides (the one every plugin's
+ * erasure contribution registers into), so a plugin installed in a `TestAuth` composition is
+ * erased like any other.
+ */
+/**
+ * ELC-004: what every memory layer (`Users`/`Accounts`/`Sessions`/`Verification`, each plugin's
+ * record stores) needs beneath it, as one layer: the platform `Crypto` (ids and secrets),
+ * `AuthEvents` over an in-memory `AuditLog`, and every hook point's default (no-tap) layer.
+ * `layerMemory.pipe(Layer.provideMerge(TestAuth.memoryFoundation))` replaces the four
+ * `Layer.provideMerge(NodeCrypto.layer | AuthEvents.layer | AuditLog.layerMemory |
+ * Hooks.HooksLive)` lines each suite used to repeat. The services stay in the output, so a test
+ * can `yield*` the very instances the stores were built over. Raw layers stay available for a
+ * suite that injects its own `Crypto` or hook taps.
+ */
+export const memoryFoundation = AuthEvents.layer.pipe(
+  // BEH-EA-100: `AuthEvents.layer` needs `AuditLog` — see its own header comment.
+  Layer.provideMerge(AuditLog.layerMemory),
+  // AOMS-006/BCR-004/CSG-002/THS-002 (wayfinder ticket 03): every hook point's own default
+  // (no-tap) layer — `Users.layerMemory` and every plugin's own `make` consult one directly. See
+  // `Hooks.HooksLive`'s own doc comment.
+  Layer.provideMerge(Hooks.HooksLive),
+  Layer.provideMerge(NodeCrypto.layer),
+);
+
+const MemoryPorts = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
+  Layer.provideMerge(MemoryStores),
+  // RRS-003: `Sessions.layerMemory` also needs `AuthEvents`.
+  Layer.provideMerge(memoryFoundation),
+);
+
+const GuardLive = RedactionGuard.layerEvents.pipe(Layer.provideMerge(RedactionGuard.layer));
 
 /**
  * BEH-EA-193: `TestAuth.layer(Auth.make(plugins))` — the whole pipeline over
@@ -137,8 +202,13 @@ const MemoryPorts = Layer.mergeAll(
  * the caller gets `Validate<P>`'s real compile-time checking exactly where
  * they'd get it if they called `Auth.make` for production use anyway.
  *
- * **`middleware` is a real, necessary second parameter, not an
- * afterthought.** The first version of this function had none, and folded
+ * **`services` is a real, necessary second parameter, not an
+ * afterthought** (ETVS-004: it was named `middleware` until it was clear it carries
+ * every support layer a plugin needs, not only `HttpApi` middleware — `Authentication`,
+ * `CsrfProtection`, a plugin's own record stores, an `HttpClient`). Do **not** provide a
+ * second copy of a service the bundled memory ports already supply (`Verification`,
+ * `PasswordHasher`, `Users`, ...): the plugin would use yours and a test's own
+ * `yield*` the bundle's, two instances of one store.** The first version of this function had none, and folded
  * `Layer.provideMerge(MemoryPorts)` immediately after `Layer.provide(built.layer)`.
  * That silently made any plugin using `Api.Authentication` (or any other
  * middleware whose *implementation* needs a service `MemoryPorts` itself
@@ -153,12 +223,12 @@ const MemoryPorts = Layer.mergeAll(
  * stale) surfaces a real `Missing 'Authentication'`/`Missing 'Sessions'`
  * error instead of the confusing `unknown` `HttpRouter.toWebHandler`'s own
  * far more permissive constraint let through. The fix is structural, not a
- * type annotation: `middleware` is folded in via `Layer.provide` *before*
+ * type annotation: `services` is folded in via `Layer.provide` *before*
  * `MemoryPorts` is `provideMerge`d — the identical position `CoreLive`
  * occupies in every wire-level `AuthHttp.test.ts` already in this
  * repository — so a middleware implementation's own requirement on a
  * memory-backed port is satisfied the same way theirs already is. Pass
- * `Layer.empty` when no middleware needs providing.
+ * `Layer.empty` when nothing needs providing.
  *
  * Declared as an overload for the same reason `Auth.make` itself is:
  * checked against an abstract `P` (inside this function's own body, `P` is
@@ -171,28 +241,67 @@ const MemoryPorts = Layer.mergeAll(
  * `never` is what a contravariant slot accepts from any concrete success
  * type, the same reasoning `Auth.ts`'s own comments give for that field).
  */
-export function layer<P extends ReadonlyArray<AuthPlugin.Any>, MR, ME, MRIn>(
-  built: Auth.Built<P>,
-  middleware: Layer.Layer<MR, ME, MRIn>,
+export function layer<
+  P extends ReadonlyArray<AuthPlugin.Any>,
+  Extra extends HttpApiGroup.Constraint,
+  MR,
+  ME,
+  MRIn,
+>(
+  built: Auth.Built<P, Extra>,
+  services: Layer.Layer<MR, ME, MRIn>,
+  options?: LayerOptions,
 ): Layer.Layer<
   | Layer.Success<typeof MemoryPorts>
+  | Layer.Success<typeof GuardLive>
+  | Layer.Success<Auth.Built<P>["layer"]>
   | Layer.Success<typeof HttpServer.layerServices>
   | Layer.Success<typeof HttpRouter.layer>
   | MR,
   ME,
-  Exclude<Layer.Services<Auth.Built<P>["layer"]> | MRIn, Layer.Success<typeof MemoryPorts> | MR>
+  Exclude<
+    | Layer.Services<Auth.Built<P, Extra>["layer"]>
+    | Layer.Services<typeof AuthHttp.coreHandlers>
+    | MRIn,
+    Layer.Success<typeof MemoryPorts> | MR
+  >
 >;
 export function layer(
-  built: Auth.Built<ReadonlyArray<AuthPlugin.Any>>,
-  middleware: Layer.Layer<unknown, unknown, unknown>,
+  built: Auth.Built<ReadonlyArray<AuthPlugin.Any>, HttpApiGroup.Constraint>,
+  services: Layer.Layer<unknown, unknown, unknown>,
+  options?: LayerOptions,
 ): Layer.Layer<never, unknown, unknown> {
-  return AuthHttp.routes(built.api, {}).pipe(
-    Layer.provide(built.layer),
-    Layer.provide(middleware),
+  // MW-002: `built.api` always carries core's session/account groups, so their
+  // handlers are part of every test pipeline (the same layer `AuthHttp.coreHandlers` gives a host).
+  // The plugins' own services stay in the output (`provideMerge`), so a test can
+  // `yield* Password.Password` from the same composition it serves over HTTP.
+  // BEH-EA-084: the docs page (when asked for) is mounted on the same router, over the same api.
+  const docs =
+    options?.docsPath === undefined
+      ? Layer.empty
+      : AuthHttp.docs(built.api, { path: options.docsPath });
+  return Layer.merge(AuthHttp.routes(built.api, { openapiPath: options?.openapiPath }), docs).pipe(
+    Layer.provide(AuthHttp.coreHandlers),
+    Layer.provideMerge(built.layer),
+    Layer.provide(services),
+    // EOTS-002: the recording tracer/logger (and the `AuthEvents` inspector) are part
+    // of every `TestAuth` composition; they only record, `assertNoLeaks` is what fails.
+    Layer.provideMerge(GuardLive),
     Layer.provideMerge(MemoryPorts),
     Layer.provideMerge(HttpServer.layerServices),
     Layer.provideMerge(HttpRouter.layer),
+    // SAM-004: the composition's declared user fields, last so `Users` and the account handler both see it.
+    Layer.provideMerge(built.userFieldsLayer),
   );
+}
+
+/**
+ * P20a (BEH-EA-084): serve the generated OpenAPI document at `openapiPath` and the Scalar docs
+ * page at `docsPath`, next to the routes they describe — off by default, like `AuthHttp.routes`.
+ */
+export interface LayerOptions {
+  readonly openapiPath?: `/${string}` | undefined;
+  readonly docsPath?: `/${string}` | undefined;
 }
 
 export interface SignedInSession {
@@ -218,7 +327,7 @@ export const signInAs = (input: {
     const users = yield* Users.Users;
     const sessions = yield* Sessions.Sessions;
     const user = yield* users
-      .create({ email: input.email, name: input.name ?? input.email })
+      .create({ identity: { _tag: "Email", email: input.email }, name: input.name ?? input.email })
       .pipe(Effect.orDie);
     if (input.onSignedUp !== undefined) {
       yield* input.onSignedUp(user.id);
@@ -235,20 +344,178 @@ export const signInAs = (input: {
 // BEH-EA-198/199 (second half): runPluginContractTests
 // ---------------------------------------------------------------------------
 
-export interface ContractTestOptions<O> {
+export interface ContractTestOptions<O, R = never> {
   readonly options: ReadonlyArray<O>;
   /** Other plugins to compose alongside the plugin under test — its own declared `dependsOn`, at minimum. */
   readonly host?: ReadonlyArray<AuthPlugin.Any>;
+  /**
+   * EOTS-002/BEH-EA-199: opt in to the mechanical redaction check. `app` is the
+   * composition to drive (normally `TestAuth.layer(Auth.make([...]), services)`, which
+   * installs the `RedactionGuard`), `exercise` runs the plugin's flows against it — call
+   * `guard.watch("password", canary)` first for every secret it will feed in. The check
+   * fails if any `Redacted` value or watched canary reaches a span, a log line or a
+   * published event (a leak names the channel and the canary's label, never the secret).
+   * Without it the check is not registered: the harness cannot build a plugin whose
+   * layer needs services it was not given.
+   */
+  readonly redaction?: {
+    readonly app: Layer.Layer<RedactionGuard.RedactionGuard | R, unknown>;
+    readonly exercise: (
+      guard: RedactionGuard.RedactionGuardShape,
+    ) => Effect.Effect<void, unknown, R | RedactionGuard.RedactionGuard>;
+  };
+  /**
+   * PV-260/BEH-EA-200: opt in to the hook-kind checks. Every tap the plugin declares is always
+   * checked to register its own handler at its own point (a plugin-owned entry in that point's
+   * resolved chain, at the declared order); for each tap whose point appears here the plugin's
+   * *actual handler* is run against the stub `input` — an observe tap must not try to abort (it
+   * must not fail with `HookAbort`) and its failure must not reach the operation it observes, a
+   * veto tap may only succeed or abort with `HookAbort`, a divert tap must not fail. `point` is
+   * the hook point class (`Hooks.AfterSignUp`), `input` a value of its input schema (a stub that
+   * does not match makes the check fail, naming the point). A `hooks` entry for a point the
+   * plugin does not tap fails too, so a typo cannot silently skip a check.
+   */
+  readonly hooks?: ReadonlyArray<{
+    readonly point: { readonly id: string };
+    readonly input: unknown;
+  }>;
 }
 
-/** `describe`/`it`/`assert` — kept as an injected shape rather than importing `@effect/vitest` directly, so this harness has no hard dependency on which test runner a third-party plugin author uses. */
+/** `describe`/`it`/`assert` — kept as an injected shape rather than importing `@effect/vitest` directly, so this harness has no hard dependency on which test runner a third-party plugin author uses. `it`'s body may be async (the migration and redaction checks run real effects). */
 export interface TestFramework {
   readonly describe: (name: string, body: () => void) => void;
-  readonly it: (name: string, body: () => void) => void;
+  readonly it: (name: string, body: () => void | Promise<void>) => void;
   readonly fail: (message: string) => never;
 }
 
+/**
+ * SSMS-004: one fresh in-memory SQLite database, core migrations first, then `migrations`
+ * on the plugin ledger — applied a second time to prove the migrator skips what it has
+ * already applied — resolving to the resulting schema (every table/index and its SQL, minus
+ * the two ledgers) so two independent applications can be compared.
+ */
+const applyMigrations = (migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["migrations"]) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const readSchema = sql<{
+      readonly type: string;
+      readonly name: string;
+      readonly tbl_name: string;
+      readonly sql: string;
+    }>`
+      SELECT type, name, tbl_name, sql FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%' AND name NOT IN ('effect_sql_migrations', ${Migrations.pluginMigrationsTable})
+      ORDER BY name`;
+    yield* Migrator.make({})({
+      loader: CoreMigrations.coreMigrations,
+      table: "effect_sql_migrations",
+    });
+    // PV-252/INV-EA-016: what core alone created, before any plugin migration runs.
+    const coreSchema = yield* readSchema;
+    yield* Migrations.run(migrations);
+    const reapplied = yield* Migrations.run(migrations);
+    const schema = yield* readSchema;
+    return { schema, coreSchema, reapplied: reapplied.length };
+  }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" })), Effect.scoped);
+
+/**
+ * PV-252/INV-EA-016: what the plugins' migrations did to the schema core created. A core table
+ * (or index) whose SQL changed was altered; anything new must hang off a table named under one
+ * of the composition's plugin ids, so an index on a core table, or a table outside every plugin's
+ * prefix, is refused too.
+ */
+const ownershipViolations = (
+  coreSchema: ReadonlyArray<{
+    readonly type: string;
+    readonly name: string;
+    readonly tbl_name: string;
+    readonly sql: string;
+  }>,
+  schema: ReadonlyArray<{
+    readonly type: string;
+    readonly name: string;
+    readonly tbl_name: string;
+    readonly sql: string;
+  }>,
+  pluginIds: ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+  const core = new Map(coreSchema.map((row) => [`${row.type}:${row.name}`, row]));
+  const violations: Array<string> = [];
+  for (const [key, before] of core) {
+    const after = schema.find((row) => `${row.type}:${row.name}` === key);
+    if (after === undefined) violations.push(`core ${before.type} "${before.name}" was dropped`);
+    else if (after.sql !== before.sql) {
+      violations.push(`core ${before.type} "${before.name}" was altered`);
+    }
+  }
+  for (const row of schema) {
+    if (core.has(`${row.type}:${row.name}`)) continue;
+    if (!pluginIds.some((id) => TABLE_PREFIX_PATTERN(id).test(row.tbl_name))) {
+      violations.push(
+        `${row.type} "${row.name}" is on "${row.tbl_name}", which is outside every plugin's own table prefix`,
+      );
+    }
+  }
+  return violations;
+};
+
 const TABLE_PREFIX_PATTERN = (id: string): RegExp => new RegExp(`^${id}_`);
+
+/**
+ * PV-260: what running a declared tap on a fresh point of its own kind shows — the point's
+ * resolved chain (does the plugin's entry sit in it), and, given a stub, how `run` ended for it
+ * (a point's own failure semantics: observe swallows a failing tap, veto surfaces `HookAbort`).
+ */
+const runOnScratchPoint = (
+  owner: AuthPlugin.Any,
+  tap: AuthPlugin.DeclaredTap,
+  stub: { readonly input: unknown } | undefined,
+) => {
+  const prefix = "awthaq/hook/";
+  const id = tap.point.startsWith(prefix) ? tap.point.slice(prefix.length) : tap.point;
+  const installed = tap.install(owner);
+  switch (tap.kind) {
+    case "veto": {
+      const point = HookPoint.veto<unknown>()(id, Schema.Unknown);
+      return Effect.gen(function* () {
+        const shape = yield* point;
+        return {
+          resolved: yield* shape.resolved,
+          run: stub === undefined ? undefined : yield* Effect.exit(shape.run(stub.input)),
+        };
+      }).pipe(Effect.provide(Layer.provideMerge(installed, point.layer)));
+    }
+    case "observe": {
+      const point = HookPoint.observe<unknown>()(id, Schema.Unknown);
+      return Effect.gen(function* () {
+        const shape = yield* point;
+        return {
+          resolved: yield* shape.resolved,
+          run: stub === undefined ? undefined : yield* Effect.exit(shape.run(stub.input)),
+        };
+      }).pipe(Effect.provide(Layer.provideMerge(installed, point.layer)));
+    }
+    case "divert": {
+      const point = HookPoint.divert<unknown>()(id, Schema.Unknown, Schema.Unknown);
+      return Effect.gen(function* () {
+        const shape = yield* point;
+        return {
+          resolved: yield* shape.resolved,
+          run: stub === undefined ? undefined : yield* Effect.exit(shape.run(stub.input)),
+        };
+      }).pipe(Effect.provide(Layer.provideMerge(installed, point.layer)));
+    }
+  }
+};
+
+/** The `HookAbort` a failed `Exit` carries, if its failure is one (a defect or another error is not an abort). */
+const abortOf = (exit: Exit.Exit<unknown, unknown>): HookPoint.HookAbort | undefined => {
+  if (Exit.isSuccess(exit)) return undefined;
+  const failure = Cause.findErrorOption(exit.cause);
+  return failure._tag === "Some" && failure.value instanceof HookPoint.HookAbort
+    ? failure.value
+    : undefined;
+};
 
 /**
  * BEH-EA-198/199: the mechanically-verifiable subset of the plugin contract
@@ -259,10 +526,10 @@ const TABLE_PREFIX_PATTERN = (id: string): RegExp => new RegExp(`^${id}_`);
  * factory with no dependency on `@awthaq/*`'s own test files — only on
  * this package and their own `AuthPlugin.Any`-shaped plugin classes.
  */
-export const runPluginContractTests = <O>(
+export const runPluginContractTests = <O, R = never>(
   framework: TestFramework,
   makePlugin: (options: O) => AuthPlugin.Any,
-  config: ContractTestOptions<O>,
+  config: ContractTestOptions<O, R>,
 ): void => {
   const host = config.host ?? [];
   const hostIds = new Set(host.map((plugin) => plugin.id));
@@ -299,23 +566,220 @@ export const runPluginContractTests = <O>(
         }
       });
 
+      framework.it(`${label}: migration declarations are deterministic across builds`, () => {
+        const [first, ...rest] = [...host, plugin];
+        if (first === undefined) {
+          framework.fail("runPluginContractTests: host plus plugin under test was empty");
+          return;
+        }
+        // Only what a build declares (names and their order) — the `up` effects are not
+        // comparable as data; the check below applies them.
+        const names = (built: ReturnType<typeof Auth.make>) =>
+          JSON.stringify(built.migrations.map((migration) => migration.name));
+        if (names(Auth.make([first, ...rest])) !== names(Auth.make([first, ...rest]))) {
+          framework.fail(
+            `plugin "${plugin.id}"'s migration declarations are not deterministic across two identical builds`,
+          );
+        }
+      });
+
+      // SSMS-004/REQ-EA-563: an actual double application, not a JSON comparison.
+      framework.it(`${label}: migrations apply identically on two fresh databases`, async () => {
+        const [first, ...rest] = [...host, plugin];
+        if (first === undefined) {
+          framework.fail("runPluginContractTests: host plus plugin under test was empty");
+          return;
+        }
+        const outcome = await Effect.runPromise(
+          Effect.exit(
+            Effect.all([
+              applyMigrations(Auth.make([first, ...rest]).migrations),
+              applyMigrations(Auth.make([first, ...rest]).migrations),
+            ]),
+          ),
+        );
+        if (Exit.isFailure(outcome)) {
+          framework.fail(
+            `plugin "${plugin.id}"'s migrations failed to apply: ${Cause.pretty(outcome.cause)}`,
+          );
+          return;
+        }
+        const [a, b] = outcome.value;
+        if (JSON.stringify(a.schema) !== JSON.stringify(b.schema)) {
+          framework.fail(
+            `plugin "${plugin.id}"'s migrations produced different schemas on two fresh databases — an \`up\` is not deterministic`,
+          );
+        }
+        if (a.reapplied !== 0) {
+          framework.fail(
+            `plugin "${plugin.id}"'s migrations were applied again on an already-migrated database (${a.reapplied} re-run)`,
+          );
+        }
+      });
+
+      // PV-252/INV-EA-016: a plugin migration may create its own tables and nothing else. A shared
+      // (core-owned) table is extended only through a declared extension point, never by an ALTER.
       framework.it(
-        `${label}: composes with its host plugins, and migrations apply deterministically`,
-        () => {
+        `${label}: migrations leave every core-owned table untouched (INV-EA-016)`,
+        async () => {
           const [first, ...rest] = [...host, plugin];
           if (first === undefined) {
             framework.fail("runPluginContractTests: host plus plugin under test was empty");
             return;
           }
-          const builtA = Auth.make([first, ...rest]);
-          const builtB = Auth.make([first, ...rest]);
-          if (JSON.stringify(builtA.migrations) !== JSON.stringify(builtB.migrations)) {
+          const outcome = await Effect.runPromise(
+            Effect.exit(applyMigrations(Auth.make([first, ...rest]).migrations)),
+          );
+          if (Exit.isFailure(outcome)) {
             framework.fail(
-              `plugin "${plugin.id}"'s migrations are not deterministic across two identical builds`,
+              `plugin "${plugin.id}"'s migrations failed to apply: ${Cause.pretty(outcome.cause)}`,
+            );
+            return;
+          }
+          const violations = ownershipViolations(
+            outcome.value.coreSchema,
+            outcome.value.schema,
+            [...host, plugin].map((installed) => installed.id),
+          );
+          if (violations.length > 0) {
+            framework.fail(
+              `plugin "${plugin.id}"'s migrations break INV-EA-016 (shared tables are core's): ${violations.join("; ")}`,
             );
           }
         },
       );
+
+      // PV-260/BEH-EA-200: the plugin's declared taps, checked as the plugin's own handlers.
+      const stubs = config.hooks ?? [];
+      for (const stub of stubs) {
+        const point = `awthaq/hook/${stub.point.id}`;
+        framework.it(
+          `${label}: the hooks stub for "${stub.point.id}" names a tap this plugin declares`,
+          () => {
+            if (!plugin.taps?.some((tap) => tap.point === point)) {
+              framework.fail(
+                `plugin "${plugin.id}" declares no tap on hook point "${stub.point.id}", but a hooks stub was supplied for it`,
+              );
+            }
+          },
+        );
+      }
+      for (const tap of plugin.taps ?? []) {
+        const stub = stubs.find((candidate) => `awthaq/hook/${candidate.point.id}` === tap.point);
+        framework.it(
+          `${label}: the tap on "${tap.point}" registers this plugin's handler at that point`,
+          async () => {
+            const outcome = await Effect.runPromise(
+              Effect.exit(runOnScratchPoint(plugin, tap, undefined).pipe(Effect.scoped)),
+            );
+            if (Exit.isFailure(outcome)) {
+              framework.fail(
+                `the tap on "${tap.point}" could not be installed: ${Cause.pretty(outcome.cause)}`,
+              );
+              return;
+            }
+            if (
+              !outcome.value.resolved.some(
+                (entry) => entry.owner === plugin.id && entry.order === tap.order,
+              )
+            ) {
+              framework.fail(
+                `plugin "${plugin.id}"'s tap (order ${tap.order}) is not in "${tap.point}"'s resolved chain`,
+              );
+            }
+          },
+        );
+        if (stub === undefined) continue;
+        framework.it(
+          `${label}: the ${tap.kind} tap on "${tap.point}" obeys its point's kind (BEH-EA-200)`,
+          async () => {
+            // What the handler does on its own, before any point's semantics apply.
+            const direct = await Effect.runPromise(Effect.exit(tap.exercise(stub.input)));
+            if (Exit.isFailure(direct)) {
+              framework.fail(
+                `the hooks stub for "${tap.point}" does not match the point's input: ${Cause.pretty(direct.cause)}`,
+              );
+              return;
+            }
+            const ended = direct.value;
+            const abort = abortOf(ended);
+            if (tap.kind === "observe" && abort !== undefined) {
+              framework.fail(
+                `plugin "${plugin.id}"'s tap on the observe point "${tap.point}" tried to abort the operation it observes (HookAbort "${abort.code}") — only a veto point's tap may abort`,
+              );
+            }
+            if (tap.kind === "divert" && Exit.isFailure(ended)) {
+              framework.fail(
+                `plugin "${plugin.id}"'s tap on the divert point "${tap.point}" failed instead of returning Option.none()/Option.some(...): ${Cause.pretty(ended.cause)}`,
+              );
+            }
+            if (tap.kind === "veto" && Exit.isFailure(ended) && abort === undefined) {
+              framework.fail(
+                `plugin "${plugin.id}"'s tap on the veto point "${tap.point}" failed with something other than HookAbort: ${Cause.pretty(ended.cause)}`,
+              );
+            }
+            // Then through a point of the same kind: the operation must come out as the kind promises.
+            const viaPoint = await Effect.runPromise(
+              Effect.exit(runOnScratchPoint(plugin, tap, stub).pipe(Effect.scoped)),
+            );
+            if (Exit.isFailure(viaPoint)) {
+              framework.fail(
+                `the tap on "${tap.point}" could not be run: ${Cause.pretty(viaPoint.cause)}`,
+              );
+              return;
+            }
+            const run = viaPoint.value.run;
+            if (run === undefined) return;
+            if (tap.kind === "observe" && Exit.isFailure(run)) {
+              framework.fail(
+                `a failure in plugin "${plugin.id}"'s observer on "${tap.point}" reached the operation it observes: ${Cause.pretty(run.cause)}`,
+              );
+            }
+            if (tap.kind === "veto" && Exit.isFailure(run) && abortOf(run) === undefined) {
+              framework.fail(
+                `plugin "${plugin.id}"'s veto tap on "${tap.point}" ended the operation with something other than HookAbort: ${Cause.pretty(run.cause)}`,
+              );
+            }
+            if (tap.kind === "divert" && Exit.isFailure(run)) {
+              framework.fail(
+                `plugin "${plugin.id}"'s divert tap on "${tap.point}" ended the operation abnormally: ${Cause.pretty(run.cause)}`,
+              );
+            }
+          },
+        );
+      }
+
+      const redaction = config.redaction;
+      if (redaction !== undefined) {
+        // EOTS-002/BEH-EA-199: the mechanical half — nothing secret reaches a span, log or event.
+        framework.it(
+          `${label}: no Redacted value or watched secret reaches a span, log line or event`,
+          async () => {
+            const outcome = await Effect.runPromise(
+              Effect.exit(
+                Effect.scoped(
+                  Effect.gen(function* () {
+                    const context = yield* Layer.build(redaction.app);
+                    const guard = Context.get(context, RedactionGuard.RedactionGuard);
+                    yield* redaction.exercise(guard).pipe(Effect.provide(context));
+                    // Let subscriber fibers drain what the flows just published.
+                    yield* Effect.sleep("10 millis");
+                    yield* guard.assertNoLeaks;
+                  }),
+                ),
+              ),
+            );
+            if (Exit.isFailure(outcome)) {
+              const failure = Cause.squash(outcome.cause);
+              framework.fail(
+                failure instanceof RedactionGuard.RedactionLeak
+                  ? failure.message
+                  : `the redaction check could not run: ${Cause.pretty(outcome.cause)}`,
+              );
+            }
+          },
+        );
+      }
 
       framework.it(`${label}: this option value does not change the plugin's own contract`, () => {
         if (previousContract !== undefined && previousContract !== plugin.contract) {

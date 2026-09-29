@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @http-layer @csrf
-@skip @unwired
 Feature: CSRF Protection
 
   # BEH-EA-073 — spec/behaviors/10-csrf.md
@@ -87,9 +86,10 @@ Feature: CSRF Protection
 
   # BEH-EA-076 — spec/behaviors/10-csrf.md; see also INV-EA-011.
   # Compile-time contract: the enforcing mechanism is the TypeScript
-  # compiler, not a runtime step. These scenarios record the intended
-  # developer-facing outcome; the eventual verification artifact is a
-  # type-level test (definitions-of-done.md gate 5).
+  # compiler, not a runtime step. The type-level assertions live in
+  # features/step-definitions/CsrfClientTypes.ts and are checked by `tsc`
+  # (the `typecheck` gate); the Then steps here read them, and REQ-EA-214
+  # also drives a real call through the client the type describes.
   @BEH-EA-076 @compile-time
   Rule: `requiredForClient: true` is enforced at the type level, not merely documented
 
@@ -112,7 +112,7 @@ Feature: CSRF Protection
 
     @REQ-EA-216
     Scenario Outline: CSRF checks apply only to unsafe methods
-      Given a request using the "<method>" method with no CSRF header, no double-submit cookie, and no Sec-Fetch-Site header
+      Given a request using the "<method>" method carrying a stale session cookie, with no CSRF header, no double-submit cookie, and no Sec-Fetch-Site header
       When "CsrfProtection" evaluates the request
       Then the request is "<outcome>"
 
@@ -124,6 +124,22 @@ Feature: CSRF Protection
         | PUT    | rejected                 |
         | PATCH  | rejected                 |
         | DELETE | rejected                 |
+
+    # Native first sign-in: no `Cookie` header means no ambient credential, so no double-submit pair is
+    # demanded; the stricter site checks still run (spec/behaviors/10-csrf.md, "Cookie-less exemption").
+    @REQ-EA-1187
+    Scenario Outline: An unsafe request with no Cookie header skips the double-submit pair but not the site checks
+      Given an unsafe "POST" request with no "Cookie" header and no CSRF pair, carrying "<signal>"
+      When "CsrfProtection" evaluates the request
+      Then the request is "<outcome>"
+
+      Examples:
+        | signal                                                  | outcome                  |
+        | no site signal at all (a native client)                  | not subject to rejection |
+        | Sec-Fetch-Site: same-origin                              | not subject to rejection |
+        | Sec-Fetch-Site: cross-site                               | rejected                 |
+        | an Origin outside the allowed origins                    | rejected                 |
+        | Sec-Fetch-Site: same-site and no allowed Origin          | rejected                 |
 
   # BEH-EA-078 — spec/behaviors/10-csrf.md
   @BEH-EA-078
@@ -152,18 +168,17 @@ Feature: CSRF Protection
   @BEH-EA-079
   Rule: A client may opt out of CSRF by choosing a bearer-only contract variant
 
-    @REQ-EA-219
-    Scenario: Requests against the csrf:false contract succeed on unsafe methods with no CSRF header at all
-      Given a native client built against "Auth.api(..., { csrf: false })"
-      When the client sends an unsafe "POST" request with no CSRF header and no double-submit cookie
-      Then the request succeeds without any CSRF check being applied
+    # Retired (PV-262, decision 24 / MNA-008): the { csrf: false } contract variant is not built, and its
+    # scenarios (REQ-EA-219/220) were removed; the shipped exemption is the Authorization-header rule below.
 
-    @REQ-EA-220
-    Scenario: The csrf:false contract's groups carry no CsrfProtection middleware at all
-      Given a contract produced by "Auth.api(..., { csrf: false })"
-      When the contract's groups are inspected
-      Then none of them declare the "CsrfProtection" middleware
-      And this is a structural absence from the contract, not a runtime flag that skips an otherwise-declared check
+    # MNA-008/decision 24 §2: what shipped for native clients — a request carrying an
+    # Authorization header is exempt from CSRF minting and enforcement alike.
+    @REQ-EA-689
+    Scenario: An unsafe request carrying an Authorization header needs no CSRF pair
+      Given a native client with a bearer token and no cookie jar
+      When it sends an unsafe "POST" request carrying an "Authorization" header and no CSRF header or double-submit cookie
+      Then the request passes without any CSRF check being applied to it, and no "__Host-csrf" cookie is minted for it
+      And an unsafe "POST" request with an empty "Authorization" header, a session cookie and no CSRF pair is still rejected
 
   # BEH-EA-080 — spec/behaviors/10-csrf.md
   @BEH-EA-080

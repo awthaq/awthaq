@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @client-integration @react
-@skip @unwired
 Feature: React Bindings
 
   # BEH-EA-177 — spec/behaviors/23-react.md
@@ -27,7 +26,7 @@ Feature: React Bindings
     @REQ-EA-503
     Scenario: A server render with no session seeds a resolved absence, not a loading state
       Given the server resolved no session for the current request
-      When "RegistryProvider" is seeded with "AsyncResult.success(undefined)" as the session atom's initial value
+      When "RegistryProvider" is seeded with "AsyncResult.success(null)" as the session atom's initial value
       Then the first client render reflects a resolved signed-out state, not a pending session lookup
 
   # BEH-EA-178 — spec/behaviors/23-react.md
@@ -45,7 +44,21 @@ Feature: React Bindings
         | mutation          |
         | sign-in           |
         | sign-out          |
-        | role assignment   |
+
+    # @skip: plugin-owned mutations (role assignment, accepting an invite) need an organization/roles
+    # composition and their own makeReactClient atoms, and no such atoms ship in @awthaq/react; the
+    # mechanism is the same reactivityKeys wiring REQ-EA-504's wired rows prove.
+    @skip
+    @REQ-EA-698
+    Scenario Outline: A plugin mutation that changes the current session tags reactivityKeys with session
+      Given a signed-in user "alice"
+      When "<mutation>" is performed
+      Then the mutation runs with "reactivityKeys: [\"session\"]"
+      And "sessionAtom" refetches automatically, without application code calling a manual refetch
+
+      Examples:
+        | mutation            |
+        | role assignment     |
         | accepting an invite |
 
     @REQ-EA-505
@@ -58,12 +71,13 @@ Feature: React Bindings
   @BEH-EA-179
   Rule: QadiProvider is fed by the session's subject field
 
+    # PV-263: `subjectAtom` is gated on `sessionAtom` (undefined unless the session is a settled, real one),
+    # while its roles and permissions come from the subject endpoint (EAR-002, AuthClientAtom.ts).
     @REQ-EA-506
-    Scenario: subject is derived from sessionAtom's current value, not a second fetch
-      Given "sessionAtom" currently holds a session for "alice" with roles and permissions
-      When the provider tree computes qadi's "subject" prop via "toSubject(sessionAtom's value)"
-      Then "subject" reflects "alice"'s roles and permissions from "sessionAtom"
-      And no second, independently fetched source is queried to produce "subject"
+    Scenario: subject is gated on sessionAtom and takes its roles and permissions from the subject endpoint
+      Given a signed-in user "alice" whose session has settled
+      When qadi's "subject" is computed from "subjectAtom"
+      Then "subject" is defined only because "sessionAtom" holds a real session, with its data from the subject endpoint
 
     @REQ-EA-507
     Scenario: Sign-out clears subject to undefined in the same render as the session update
@@ -71,6 +85,7 @@ Feature: React Bindings
       When "alice" signs out and "sessionAtom" becomes "undefined"
       Then "subject" becomes "undefined" in that same render
 
+    # Driven without a DOM (QadiClientHarness.ts): the real @qadi/react atoms in a real registry, and the real Can/useProjected rendered with react-dom/server.
     @REQ-EA-508
     Scenario: Every mounted gate closes at once when subject becomes undefined
       Given several "Can" gates mounted for "alice", each currently rendering an allowed action
@@ -143,6 +158,9 @@ Feature: React Bindings
       Then that field is absent from the returned data itself
       And it is never present in rendered component props merely hidden by conditional JSX
 
+    # @skip: application-authoring guidance about component source (read the projected view, not the
+    # full resource): no library behavior to observe
+    @skip
     @REQ-EA-516
     Scenario: A component does not read the full resource object and conditionally hide fields in JSX
       Given a component rendering fields conditioned on "canReadProject"
@@ -161,6 +179,10 @@ Feature: React Bindings
       Then it renders "Wrong email or password."
       And the branch was selected by checking "result.cause._tag === \"InvalidCredentials\""
 
+    # @skip: application-authoring guidance about form code: a copy edit cannot change a branch that
+    # is selected by _tag (REQ-EA-517 shows the failure carries the typed _tag); no library behavior
+    # to observe
+    @skip
     @REQ-EA-518
     Scenario: A copy edit to the error's message text does not change which branch renders
       Given the same failure with "cause._tag" of "InvalidCredentials", but with its associated message text changed by a copy edit or localization pass
@@ -168,6 +190,9 @@ Feature: React Bindings
       Then the same "InvalidCredentials" branch renders as before
       And the branch choice is unaffected by the message text change
 
+    # @skip: application-authoring guidance about form source (do not match on message strings): no
+    # library behavior to observe
+    @skip
     @REQ-EA-519
     Scenario: The form does not pattern-match on the error message string to decide what to render
       Given a mutation failure with a typed "_tag"
@@ -179,6 +204,12 @@ Feature: React Bindings
   @BEH-EA-184
   Rule: One evaluation path across server, client, and tests
 
+    # @skip: one scenario over five surfaces owned by two runtimes. Server side, RequirePermission/guard/
+    # enforce are wired in 19-qadi-bridge-path-a.feature and 20-qadi-bridge-path-b.feature; client side, Can
+    # is shown to consult the evaluator (an evaluation id no shortcut could mint) by REQ-EA-521 below. What no
+    # test asserts is one policy going through all five and agreeing, which would need a browser and a server
+    # sharing one DecisionSink: not something the BDD harness composes today.
+    @skip
     @REQ-EA-520
     Scenario: Every gate and helper resolves the same policy through the same qadi evaluator
       Given qadi's evaluator would return an Allow decision for policy "canDeleteProject" against subject "alice"

@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-05 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Reworded the banner: the plugin is unbuilt, not the whole project (DTWS-001, CCR-EA-006) |
 ---
 
 ## What it is
@@ -19,7 +19,7 @@ clickable link: the caller submits an email address, receives a code, and
 types it back into the application to complete sign-in. It is the same
 email-possession proof as Magic Link, delivered as a code a user can type on a
 second device rather than a link they must click on the device that received
-it. Nothing described here exists yet — awthaq is pre-implementation.
+it. Nothing described here is implemented yet: there is no `EmailOtp` package.
 
 ## Who asks for it
 
@@ -36,7 +36,7 @@ share infrastructure with Magic Link rather than be designed independently.
 
 | Property | Value |
 |---|---|
-| Status | Planned-Phase2 |
+| Status | Shipped (`EmailOtp` in `@awthaq/magic-link`, email only; normative behaviors in [behaviors/33-email-otp.md](../behaviors/33-email-otp.md); SMS deferred per [ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)) |
 | Priority | P2 |
 | Enabler(s) | E1 — Verification-token infrastructure |
 | Breaking? | Purely additive — it would reuse the same shared verification-token table as Magic Link and Password reset/verify; no existing MVP plugin needs to change. |

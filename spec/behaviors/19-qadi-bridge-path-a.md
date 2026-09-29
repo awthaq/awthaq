@@ -4,15 +4,15 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-19 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-015 (qadi bridge path selection) (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-015 (qadi bridge path selection) (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
+> Implemented in `@awthaq/qadi` (`AuthorizedSubject.ts`; tests `packages/qadi/test/AuthorizedSubject.test.ts`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
 
 ## BEH-EA-145: `AuthorizedSubject` bridges `CurrentPrincipal` to `CurrentSubject`
 
@@ -33,6 +33,17 @@ REQUIREMENT: The `AuthorizedSubject` middleware MUST require `CurrentPrincipal`
              calling `SubjectResolver`; an endpoint group using it MUST list
              `Authentication` before it in the middleware chain.
 ```
+
+```text
+REQUIREMENT: When the bridge's decision cache is enabled, it MUST be scoped to
+             one request (`RequestDecisionCache`, declared last on the group so
+             it wraps `AuthorizedSubject`), unless the application-scoped
+             `DecisionCache` is paired with `DecisionCacheInvalidationLive`.
+             A membership or role revoked in a store the evaluation consults
+             MUST be denied on the very next request under either wiring.
+```
+
+`DecisionCache`'s key is the whole subject plus policy/resource/action, so a revocation in a store the evaluation reads (the organization membership behind `OrganizationQadi.relationships`) is invisible to it; per-request scope is safe by construction and needs no invalidation. Wayfinder ticket 12 (PCS-001/PCS-002).
 
 `usage-qadi.md` §3 states this plainly: "`AuthorizedSubject` puts qadi's `CurrentSubject` in the environment of every endpoint in the group." This is the entire Path A bridge — one middleware, placed after `Authentication` so a `Principal` already exists to resolve, that hands every handler in the group qadi's evaluation context without the handler doing any resolution itself.
 

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-001 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
-> | Status | Accepted — design; implementation deferred |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
 
 ---
 
@@ -37,5 +37,3 @@ This decision is the foundation the other eleven ADRs in this set build on: ADR-
 **Negative**: Contribution metadata that is not encoded in the Layer's type (human-readable plugin names for error messages, documentation strings, CLI-facing manifests) has to be attached separately, as static properties on the plugin's `Context.Service` class (ADR-EA-008), rather than falling out of a single declarative record the way it would in the rejected alternative.
 
 **Trade-off accepted**: The project gives up a single point where *all* plugin metadata (static and runtime) lives in one interpretable value, in exchange for correctness and composition guarantees the type checker enforces automatically. Anything the CLI needs to introspect (ADR-EA-002's `manifest`) must be derived from the Layer's type-level channels and a small amount of accompanying static data, rather than read off one uniform record.
-
-Not yet implemented — see spec/roadmap.md for milestone.

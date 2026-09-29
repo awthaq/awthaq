@@ -1,13 +1,13 @@
 // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 14
 // (AAPS-002).
-import { AuditLog, Hooks, AuthEvents, Users } from "@awthaq/core";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { AttributeResolver, makeSubjectId } from "@qadi/core";
 import * as AttributeResolvers from "../src/AttributeResolvers.ts";
 import * as Resolvers from "../src/Resolvers.ts";
+import { TestAuth } from "@awthaq/test";
 
 const fakeResolver = (
   name: string,
@@ -18,12 +18,7 @@ const fakeResolver = (
     resolve: (_subjectId, attribute) => Effect.succeed(table[attribute]),
   });
 
-const CoreLive = Users.layerMemory.pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+const CoreLive = Users.layerMemory.pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 describe("attributeResolverRegistry (AAPS-002)", () => {
   it.effect("dispatches each attribute to exactly the contribution that declared it", () =>
@@ -78,7 +73,10 @@ describe("attributeResolverRegistry (AAPS-002)", () => {
     () =>
       Effect.gen(function* () {
         const users = yield* Users.Users;
-        const user = yield* users.create({ email: "both@example.com", name: "Both" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "both@example.com" },
+          name: "Both",
+        });
         const subjectId = makeSubjectId(`user:${user.id}`);
 
         const resolver = yield* AttributeResolver;

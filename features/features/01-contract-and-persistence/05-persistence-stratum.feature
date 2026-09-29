@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @foundations @persistence
-@skip @unwired
 Feature: The Persistence Stratum
 
   # BEH-EA-033 — spec/behaviors/05-persistence-stratum.md; see also ADR-EA-004
@@ -54,7 +53,7 @@ Feature: The Persistence Stratum
 
     @REQ-EA-089
     Scenario: A Redacted Model.Sensitive field never reaches logs, spans, or events
-      Given an "Account" entity whose "accessToken" field is declared Model.Sensitive(Schema.Redacted(Schema.String))
+      Given an "Account" entity whose "accessToken" field is declared Model.Sensitive
       When the entity passes through logging, tracing spans, and emitted events
       Then no Redacted value for "accessToken" reaches any log, span, or event
 
@@ -74,6 +73,7 @@ Feature: The Persistence Stratum
       When the method executes
       Then it does not call SqlClient.withTransaction itself
 
+    # Observed through Password.confirmReset over a real SQLite transaction with a fault injected between the two writes (PasswordWorld, TIR-005).
     @REQ-EA-092
     Scenario: A domain service composing two repository calls holds the transaction boundary
       Given "Password.confirmReset" consuming a verification token and rotating a session in one operation
@@ -179,10 +179,12 @@ Feature: The Persistence Stratum
 
     @REQ-EA-105
     Scenario: A plugin's migration creates or alters only tables under its own prefix
-      Given a plugin "password" whose migrations create the table "password_account"
-      When the plugin's migrations run
-      Then the plugin creates or alters only tables named "password_<table>"
+      Given the shipped plugins that declare migrations
+      When core's migrations and then each plugin's migrations run
+      Then every table a plugin created is named "<plugin>_<table>" under its own id
+      And the tables core created are unchanged
 
+    # PV-252: enforced by `TestAuth.runPluginContractTests` (a plugin runs it against its own migrations).
     @REQ-EA-106
     Scenario: A plugin's migration that directly alters a core-owned shared table is rejected
       Given a plugin migration that attempts to ALTER TABLE "users" directly
@@ -190,16 +192,18 @@ Feature: The Persistence Stratum
       Then the migration is rejected
       And the shared table "users" is not altered
 
+    # Rewritten to the shipped extension point (PV-252, SAM-004): a plugin-declared user field, whose column the linker adds.
     @REQ-EA-107
     Scenario: A plugin extends a shared table only through a declared extension point
-      Given a plugin that needs to attach derived data to a signed-in user's session
-      When the plugin contributes that data through a declared extension point, such as a hook point or the SessionClaims registry
-      Then the shared table's own schema is not modified by the plugin's migration
-      And the extension is visible only through the declared extension point
+      Given a plugin that needs to attach a derived value to the shared "users" table
+      When the plugin contributes that value through the declared extension point "AuthPlugin.userFields"
+      Then the plugin's own migrations do not modify the shared "users" table
+      And the extension is visible only through the declared extension point: the column the linker generated, and the composition's typed user fields
 
     @REQ-EA-108
-    Scenario: A shared-table extension is limited to a primitive, nullable or defaulted scalar
+    Scenario: A shared-table extension is limited to a primitive, nullable scalar
       Given a declared extension point for the shared "users" table
       When a plugin contributes an extension through that point
-      Then the extension is a primitive, nullable or defaulted scalar value
+      Then the extension is a primitive, nullable scalar column: text, real or boolean
+      And a declaration that is not one scalar is refused when the plugin is defined
       And it is never an unmediated ALTER TABLE from the plugin's migration code

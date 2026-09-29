@@ -23,25 +23,54 @@
 // instead — see that call site, and `Slots.ts`'s own header comment, for
 // how.
 //
-// **BEH-EA-140/141 (ApiKey/Service principal scopes → permissions) are also
-// not implemented, for a different reason**: `@awthaq/api`'s
-// `ApiKeyPrincipal`/`ServicePrincipal` (`Api.ts`) carry only a `ref`, no
-// `scopes` field — there is no `@awthaq/api-key` plugin yet (M7,
-// unbuilt) or any other mechanism that would populate one. Inventing a
-// `scopes` field on these Principal schemas now, with no code path that ever
-// sets it, would be exactly the kind of speculative infrastructure this
-// project avoids building ahead of a real caller (`WebAuthn`'s own port
-// interface is deferred for the identical reason — see `@awthaq/ports`).
-// The default resolver below still maps both principal kinds to a real,
-// well-formed `AuthSubject` — `id` only, per BEH-EA-137's own "identity-only"
-// default — so a policy checking a permission against either simply denies,
-// which is the correct fail-closed behavior in the absence of a scope
-// source, not a broken one.
+// **BEH-EA-140/141 (ApiKey/Service principal scopes -> permissions), OCM-002/MAPS-003.**
+// `@awthaq/api-key` populates `scopes` on `ApiKeyPrincipal`/`ServicePrincipal`, and this
+// default resolver maps them 1:1 onto `AuthSubject.permissions` (id `apikey:<keyId>` /
+// `service:<clientId>`). Only scope strings shaped like a qadi permission key
+// (`resource:action`) become permissions; any other scope string names no permission and
+// is ignored, so a policy checking one simply denies (fail-closed). This is the one place
+// the mapping lives, deliberately not a `SubjectResolver` override: `Roles` and
+// `Organization` already contest the exclusive slot (ADR-EA-012) and both delegate every
+// non-`User` principal here, so an API key never needs a third contender.
 import { Api } from "@awthaq/api";
-import { Slots } from "@awthaq/core";
+import { Assurance, Sessions, Slots } from "@awthaq/core";
 import * as Effect from "effect/Effect";
-import type { AuthSubject } from "@qadi/core";
+import type { AuthSubject, PermissionKey } from "@qadi/core";
 import { anonymous, makeSubject, withAttributes } from "@qadi/core";
+
+/** A scope is a qadi permission when it is `resource:action` with both halves non-empty (`:` may appear in the action, e.g. `scim:users:write`). */
+const isPermissionKey = (scope: string): scope is PermissionKey => {
+  const colon = scope.indexOf(":");
+  return colon > 0 && colon < scope.length - 1;
+};
+
+/**
+ * AAPS-006/SOS-005/HSK-005 (BEH-EA-258): the attributes every `User` subject carries, from the
+ * resolved principal — `actingAs` (BEH-EA-142) when impersonating, plus how the session was
+ * authenticated: `amr` (RFC 8176 method references, `[]` when the issuing path recorded none —
+ * the floor, never a guess), `authenticatedAt` (epoch seconds, absent when unknown), `aal` (the
+ * derived NIST assurance level, `Assurance.assuranceLevel`) and `restrictedFactor` (an SMS factor
+ * was used). A policy states `hasAttribute("aal", oneOf("aal2", "aal3"))` or
+ * `amr contains "hwk"` rather than re-deriving them at each check. Exported so an overriding
+ * resolver (`@awthaq/roles`) builds its subject with the identical attributes.
+ */
+export const principalAttributes = (
+  principal: Api.UserPrincipal,
+): Readonly<Record<string, unknown>> => {
+  const amr = (principal.amr ?? []).filter(Sessions.isAuthMethod);
+  const derived = Assurance.assurance(amr);
+  return {
+    ...(principal.actingAs === undefined
+      ? {}
+      : { actingAs: { type: principal.actingAs.type, id: principal.actingAs.id } }),
+    amr,
+    ...(principal.authenticatedAt === undefined
+      ? {}
+      : { authenticatedAt: principal.authenticatedAt }),
+    aal: derived.level,
+    restrictedFactor: derived.restricted,
+  };
+};
 
 export interface SubjectResolverShape {
   /** BEH-EA-145: what `AuthorizedSubject`/`SubjectExtractorLive` both call. */
@@ -63,18 +92,21 @@ export const resolveIdentityOnly = (principal: Api.Principal): AuthSubject => {
   switch (principal._tag) {
     case "Anonymous":
       return anonymous;
-    case "User": {
-      const subject = makeSubject({ id: `user:${principal.ref.id}` });
-      return principal.actingAs === undefined
-        ? subject
-        : withAttributes(subject, {
-            actingAs: { type: principal.actingAs.type, id: principal.actingAs.id },
-          });
-    }
+    case "User":
+      return withAttributes(
+        makeSubject({ id: `user:${principal.ref.id}` }),
+        principalAttributes(principal),
+      );
     case "ApiKey":
-      return makeSubject({ id: `apikey:${principal.ref.id}` });
+      return makeSubject({
+        id: `apikey:${principal.ref.id}`,
+        permissions: principal.scopes.filter(isPermissionKey),
+      });
     case "Service":
-      return makeSubject({ id: `service:${principal.ref.id}` });
+      return makeSubject({
+        id: `service:${principal.ref.id}`,
+        permissions: principal.scopes.filter(isPermissionKey),
+      });
   }
 };
 

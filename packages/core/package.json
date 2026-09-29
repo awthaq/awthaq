@@ -25,6 +25,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@awthaq/api": "workspace:*",
     "@awthaq/ports": "workspace:*",
     "@awthaq/sql": "workspace:*",
     "effect": "catalog:"

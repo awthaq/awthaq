@@ -13,6 +13,7 @@ import {
   AuditLog,
   Hooks,
   AuthEvents,
+  MailDispatch,
   RateLimits,
   Sessions,
   Users,
@@ -23,6 +24,7 @@ import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } fr
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -31,11 +33,13 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as Password from "../src/Password.ts";
+import { tokenOf } from "./harness.ts";
 
 const sha1Hex = (plain: string): string =>
   createHash("sha1").update(plain).digest("hex").toUpperCase();
@@ -51,7 +55,7 @@ const httpClientReturning = (body: (url: string) => string): Layer.Layer<HttpCli
   );
 
 /** BEH-EA-119: nothing in the corpus ever matches — the default, "not breached" transport. */
-const NoBreachHttpClient = httpClientReturning(() => "");
+const NoBreachHttpClient = httpClientReturning(() => `${"F".repeat(35)}:1`);
 
 const UnavailableHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   HttpClient.HttpClient,
@@ -161,7 +165,24 @@ const TestLayerHangingMailer = Password.Password.layer.pipe(
   Layer.provide(NoBreachHttpClient),
   Layer.provide(SqlTransaction.layerNoop),
   Layer.provide(ClientAddress.layerDirect),
+  // ERS-002: scope close waits `drainTimeout` for in-flight mail; this
+  // mailer never finishes and `TestClock` never advances, so don't wait.
+  Layer.provideMerge(MailDispatch.config({ drainTimeout: Duration.zero })),
 );
+
+/**
+ * PHS-005: a real argon2id hasher at explicitly chosen cost parameters (env-style keys), for
+ * planting hashes "stored under other parameters". `Layer.fresh` matters: the composition under
+ * test already built `layerArgon2id` on the shared memo map, so without it this would resolve to
+ * that same default-cost instance and silently ignore `env`. A ConfigError here is a defect in
+ * the fixed table.
+ */
+const hasherAt = (env: Record<string, string>) =>
+  Layer.fresh(PasswordHasher.layerArgon2id).pipe(
+    Layer.provide(NodeCrypto.layer),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+    Layer.orDie,
+  );
 
 const email = "ada@example.com";
 const strongPassword = Redacted.make("correct horse battery staple");
@@ -186,14 +207,19 @@ const letForkedFibersRun = Effect.gen(function* () {
 const signUpAndVerify = (
   password: Password.PasswordShape,
   mailer: Mailer.MailerShape,
-  input: { readonly email: string; readonly password: Redacted.Redacted<string> },
+  input: {
+    readonly email: string;
+    readonly password: Redacted.Redacted<string>;
+    readonly ip?: string;
+    readonly userAgent?: string;
+  },
 ) =>
   Effect.gen(function* () {
     const issued = yield* password.signUp(input);
     yield* letForkedFibersRun;
     const sent = yield* mailer.sent;
     const verifyMail = sent.findLast((mail) => mail.template === "verify-email");
-    const token = Redacted.make(String(verifyMail?.data?.["token"]));
+    const token = Redacted.make(tokenOf(verifyMail));
     yield* password.verifyEmail({ token });
     return issued;
   });
@@ -280,6 +306,152 @@ describe("Password", () => {
       }).pipe(Effect.provide(TestLayer)),
   );
 
+  // BEH-EA-115/REQ-EA-312 (a compile-time property, so the BDD scenario is @skip'd in favour of
+  // this): `Password.layer` bundles no hasher, so a composition that provides none is incomplete
+  // — the requirement is still on the layer's type, and this line stops compiling if it is not.
+  it("BEH-EA-115: Password.layer requires a PasswordHasher, it never supplies its own", () => {
+    type Needs = Layer.Services<typeof Password.Password.layer>;
+    const requiresHasher: PasswordHasher.PasswordHasher extends Needs ? true : false = true;
+    assert.isTrue(requiresHasher);
+  });
+
+  // PHS-005: the positive half of BEH-EA-116 — the negative case above only proves a current
+  // hash is left alone; these prove an outdated one really is upgraded (and a stronger one is not
+  // downgraded, PHS-002). The "previous configuration" is a second hasher at other cost
+  // parameters whose output is planted as the account's stored credential, so the composition's
+  // own (default-cost) hasher is what `signIn` then compares against.
+  it.effect(
+    "BEH-EA-116: signIn against a hash stored under outdated parameters rehashes to current parameters",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const accounts = yield* Accounts.Accounts;
+        const mailer = yield* Mailer.Mailer;
+        const current = yield* PasswordHasher.PasswordHasher;
+        const { session } = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
+        const account = Option.getOrThrow(
+          yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, session.userId),
+        );
+
+        const outdated = yield* Effect.gen(function* () {
+          const previous = yield* PasswordHasher.PasswordHasher;
+          return yield* previous.hash(strongPassword);
+        }).pipe(
+          Effect.provide(hasherAt({ AUTH_ARGON2_MEMORY_KIB: "1024", AUTH_ARGON2_ITERATIONS: "1" })),
+        );
+        assert.isTrue(current.needsRehash(outdated), "the planted hash must be below the floor");
+        yield* accounts.updateCredentialHash(account.id, Redacted.make(outdated));
+
+        yield* password.signIn({ email, password: strongPassword });
+
+        const stored = Redacted.value(
+          Option.getOrThrow(yield* accounts.findCredentialHash(account.id)),
+        );
+        assert.notStrictEqual(stored, outdated, "the outdated hash must have been replaced");
+        assert.match(stored, /^\$argon2id\$v=19\$m=19456,t=2,p=1\$/);
+        assert.isFalse(current.needsRehash(stored));
+        assert.isTrue(yield* current.verify(strongPassword, stored));
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "BEH-EA-116/PHS-002: signIn against a hash stronger than the current parameters does not rehash it",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const accounts = yield* Accounts.Accounts;
+        const mailer = yield* Mailer.Mailer;
+        const current = yield* PasswordHasher.PasswordHasher;
+        const { session } = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
+        const account = Option.getOrThrow(
+          yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, session.userId),
+        );
+
+        const stronger = yield* Effect.gen(function* () {
+          const previous = yield* PasswordHasher.PasswordHasher;
+          return yield* previous.hash(strongPassword);
+        }).pipe(Effect.provide(hasherAt({ AUTH_ARGON2_ITERATIONS: "3" })));
+        assert.isFalse(current.needsRehash(stronger), "a stronger hash is above the floor");
+        yield* accounts.updateCredentialHash(account.id, Redacted.make(stronger));
+
+        yield* password.signIn({ email, password: strongPassword });
+
+        const stored = Redacted.value(
+          Option.getOrThrow(yield* accounts.findCredentialHash(account.id)),
+        );
+        assert.strictEqual(stored, stronger, "signIn must never downgrade a stronger stored hash");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // THS-003: how the session was authenticated.
+  it.effect("THS-003: signUp, signIn and changePassword sessions carry amr [pwd]", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const mailer = yield* Mailer.Mailer;
+      const signedUp = yield* signUpAndVerify(password, mailer, {
+        email,
+        password: strongPassword,
+      });
+      assert.deepStrictEqual(signedUp.session.amr, ["pwd"]);
+      const signedIn = yield* password.signIn({ email, password: strongPassword });
+      assert.deepStrictEqual(signedIn.session.amr, ["pwd"]);
+      const changed = yield* password.changePassword({
+        userId: signedUp.session.userId,
+        currentSessionId: signedIn.session.id,
+        currentPassword: strongPassword,
+        newPassword: Redacted.make("another strong passphrase"),
+      });
+      assert.deepStrictEqual(changed.session.amr, ["pwd"]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // CSD-003: request context recorded on every session-minting path.
+  it.effect(
+    "CSD-003: signUp, signIn and changePassword record ip and userAgent on the session",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const sessions = yield* Sessions.Sessions;
+        const context = { ip: "203.0.113.7", userAgent: "Agent/1.0" };
+
+        const signedUp = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+          ...context,
+        });
+        assert.deepStrictEqual(signedUp.session.ipAddress, Option.some(context.ip));
+        assert.deepStrictEqual(signedUp.session.userAgent, Option.some(context.userAgent));
+
+        const signedIn = yield* password.signIn({
+          email,
+          password: strongPassword,
+          ip: "198.51.100.9",
+          userAgent: "Agent/2.0",
+        });
+        const verified = yield* sessions.verify(signedIn.token);
+        assert.deepStrictEqual(verified.session.ipAddress, Option.some("198.51.100.9"));
+        assert.deepStrictEqual(verified.session.userAgent, Option.some("Agent/2.0"));
+
+        const changed = yield* password.changePassword({
+          userId: signedUp.session.userId,
+          currentSessionId: signedIn.session.id,
+          currentPassword: strongPassword,
+          newPassword: Redacted.make("a different strong passphrase"),
+          ip: "192.0.2.1",
+          userAgent: "Agent/3.0",
+        });
+        assert.deepStrictEqual(changed.session.ipAddress, Option.some("192.0.2.1"));
+        assert.deepStrictEqual(changed.session.userAgent, Option.some("Agent/3.0"));
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect(
     "BEH-EA-114: signIn fails uniformly with InvalidCredentials for an unknown email, a wrong password, and a passwordless account",
     () =>
@@ -299,7 +471,10 @@ describe("Password", () => {
           .pipe(Effect.flip);
         assert.strictEqual(wrongPassword._tag, "InvalidCredentials");
 
-        const oauthOnly = yield* users.create({ email: "oauth@example.com", name: "Oauth" });
+        const oauthOnly = yield* users.create({
+          identity: { _tag: "Email", email: "oauth@example.com" },
+          name: "Oauth",
+        });
         yield* accounts.link({
           userId: oauthOnly.id,
           providerId: "github",
@@ -323,6 +498,53 @@ describe("Password", () => {
           .signIn({ email, password: strongPassword })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "EmailNotVerified");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "SCP-001: a suspended user's correct-password signIn is refused with UserSuspended and issues no session; reactivating restores it",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const mailer = yield* Mailer.Mailer;
+        const events = yield* AuthEvents.AuthEvents;
+        yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        const user = Option.getOrThrow(yield* users.findByEmail(email));
+        const before = (yield* sessions.list(user.id)).length;
+
+        yield* users.setStatus(user.id, "suspended", { reason: "fraud" });
+        const collected = yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((event) => event._tag === "auth.user.signInFailed"),
+            Stream.take(2),
+            Stream.runCollect,
+          ),
+        );
+        yield* Effect.yieldNow;
+
+        const refused = yield* password
+          .signIn({ email, password: strongPassword })
+          .pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "UserSuspended");
+        assert.strictEqual((yield* sessions.list(user.id)).length, before);
+
+        // The gate sits after the credential proof: a wrong password on the same
+        // suspended account still reads as InvalidCredentials (no suspension oracle).
+        const wrong = yield* password
+          .signIn({ email, password: Redacted.make("totally wrong password") })
+          .pipe(Effect.flip);
+        assert.strictEqual(wrong._tag, "InvalidCredentials");
+
+        const reasons = Array.from(yield* Fiber.join(collected)).map((event) =>
+          event._tag === "auth.user.signInFailed" ? event.reason : "?",
+        );
+        assert.deepStrictEqual(reasons, ["suspended", "invalidCredentials"]);
+
+        yield* users.setStatus(user.id, "active");
+        const restored = yield* password.signIn({ email, password: strongPassword });
+        assert.strictEqual(restored.session.userId, user.id);
       }).pipe(Effect.provide(TestLayer)),
   );
 
@@ -407,6 +629,125 @@ describe("Password", () => {
   );
 
   it.effect(
+    "EOTS-001: every operation is an awthaq.password.<operation> span (plugin, strategy, user.id on success) and no attribute holds the email or password",
+    () => {
+      const spans: Array<Tracer.Span> = [];
+      const base = Tracer.Tracer.defaultValue();
+      const TracerLive = Layer.succeed(
+        Tracer.Tracer,
+        Tracer.make({
+          span: (options) => {
+            const span = base.span(options);
+            spans.push(span);
+            return span;
+          },
+        }),
+      );
+      return Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const issued = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
+        yield* password.signIn({ email, password: strongPassword });
+        yield* password
+          .signIn({ email, password: Redacted.make("totally wrong password") })
+          .pipe(Effect.flip);
+
+        const named = (name: string) => spans.filter((span) => span.name === name);
+        assert.isAbove(named("awthaq.password.signUp").length, 0);
+        assert.isAbove(named("awthaq.password.verifyEmail").length, 0);
+        // Two sign-ins, and each does one real hash check under its own span.
+        assert.strictEqual(named("awthaq.password.signIn").length, 2);
+        assert.strictEqual(named("awthaq.password.verify").length, 2);
+        const [successful] = named("awthaq.password.signIn");
+        assert.strictEqual(successful?.attributes.get("awthaq.plugin"), "password");
+        assert.strictEqual(successful?.attributes.get("auth.strategy"), "password");
+        assert.strictEqual(successful?.attributes.get("user.id"), issued.session.userId);
+        // The failed attempt never learns the user id.
+        assert.isFalse(named("awthaq.password.signIn")[1]?.attributes.has("user.id") ?? true);
+
+        const values = spans.flatMap((span) =>
+          [...span.attributes.values()].map((value) => String(value)),
+        );
+        assert.isFalse(values.some((value) => value.includes(email)));
+        assert.isFalse(values.some((value) => value.includes("correct horse battery staple")));
+        assert.isFalse(values.some((value) => value.includes("totally wrong password")));
+      }).pipe(Effect.provide(TestLayer.pipe(Layer.provideMerge(TracerLive))));
+    },
+  );
+
+  it.effect(
+    "CSD-004: the failure event carries the source ip and a keyed identifierDigest — stable per identifier (existing account or not), distinct across identifiers, never the identifier itself",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* password.signUp({ email, password: strongPassword });
+        const wrong = Redacted.make("totally wrong password");
+        const attempt = (who: string) =>
+          password.signIn({ email: who, password: wrong, ip: "203.0.113.7" }).pipe(Effect.flip);
+        yield* attempt(email); // an existing account
+        yield* attempt(email.toUpperCase()); // the same identifier, differently cased
+        yield* attempt("nobody@example.com"); // no such account
+        yield* attempt("nobody@example.com");
+
+        const rows = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
+        const failures = rows.flatMap((row) =>
+          row.payload._tag === "auth.user.signInFailed" ? [row.payload] : [],
+        );
+        assert.strictEqual(failures.length, 4);
+        for (const failure of failures) {
+          assert.strictEqual(failure.clientIp, "203.0.113.7");
+          assert.isString(failure.identifierDigest);
+          assert.notProperty(failure, "userId");
+          assert.notProperty(failure, "email");
+        }
+        const digests = new Set(failures.map((failure) => failure.identifierDigest));
+        // {email, EMAIL} share one digest (normalized), {nobody} is another: two distinct values.
+        assert.strictEqual(digests.size, 2);
+        assert.isFalse(JSON.stringify(failures).includes("nobody"));
+        assert.isFalse(JSON.stringify(failures).includes(email));
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "ARF-006: requestReset publishes auth.password.resetRequested for a real account only; verifyEmail publishes auth.user.emailVerified",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        const mailer = yield* Mailer.Mailer;
+        const auditLog = yield* AuditLog.AuditLog;
+        const issued = yield* signUpAndVerify(password, mailer, {
+          email,
+          password: strongPassword,
+        });
+
+        const verified = yield* auditLog.list({ eventTag: "auth.user.emailVerified" });
+        assert.strictEqual(verified.length, 1);
+        assert.strictEqual(verified[0]?.actorUserId._tag, "Some");
+
+        yield* password.requestReset({ email: "nobody@example.com" });
+        yield* letForkedFibersRun;
+        assert.strictEqual(
+          (yield* auditLog.list({ eventTag: "auth.password.resetRequested" })).length,
+          0,
+        );
+
+        yield* password.requestReset({ email });
+        yield* letForkedFibersRun;
+        const requested = yield* auditLog.list({ eventTag: "auth.password.resetRequested" });
+        assert.strictEqual(requested.length, 1);
+        const [row] = requested;
+        assert.strictEqual(
+          row?.payload._tag === "auth.password.resetRequested" ? row.payload.userId : "",
+          issued.session.userId,
+        );
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
     "ALF-004: signUp and signIn each publish auth.session.issued for the session they mint",
     () =>
       Effect.gen(function* () {
@@ -485,7 +826,7 @@ describe("Password", () => {
         // still-live token signUp minted — the most recently mailed token
         // is the only one still valid, not the first.
         const verifyMail = afterKnown.findLast((mail) => mail.template === "verify-email");
-        yield* password.verifyEmail({ token: Redacted.make(String(verifyMail?.data?.["token"])) });
+        yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
         yield* password.resendVerification({ email });
         yield* letForkedFibersRun;
         const afterVerified = yield* mailer.sent;
@@ -557,21 +898,21 @@ describe("Password", () => {
         // verified account — consume signUp's own dispatched mail first.
         yield* letForkedFibersRun;
         const verifyMail = (yield* mailer.sent).find((mail) => mail.template === "verify-email");
-        yield* password.verifyEmail({ token: Redacted.make(String(verifyMail?.data?.["token"])) });
+        yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
 
         yield* password.requestReset({ email });
         yield* letForkedFibersRun;
         const sent = yield* mailer.sent;
         const resetMail = sent.find((m) => m.template === "reset-password");
         assert.isDefined(resetMail);
-        const mailedToken = Redacted.make(String(resetMail?.data?.["token"]));
+        const mailedToken = Redacted.make(tokenOf(resetMail));
 
         const newPassword = Redacted.make("a brand new strong password");
         yield* password.confirmReset({ token: mailedToken, password: newPassword });
 
         // BEH-EA-117: every *other* session is gone...
         const secondStillValid = yield* sessions.verify(second.token).pipe(Effect.flip);
-        assert.strictEqual(secondStillValid._tag, "SessionNotFound");
+        assert.strictEqual(secondStillValid._tag, "Sessions/NotFound");
 
         // ...and the new password actually works.
         const signedIn = yield* password.signIn({ email, password: newPassword });
@@ -598,7 +939,7 @@ describe("Password", () => {
         yield* password.requestReset({ email });
         yield* letForkedFibersRun;
         const resetMail = (yield* mailer.sent).findLast((m) => m.template === "reset-password");
-        const mailedToken = Redacted.make(String(resetMail?.data?.["token"]));
+        const mailedToken = Redacted.make(tokenOf(resetMail));
 
         const captured = yield* Effect.forkChild(
           events.stream.pipe(
@@ -643,7 +984,7 @@ describe("Password", () => {
         yield* letForkedFibersRun;
         const sent = yield* mailer.sent;
         const resetMail = sent.find((m) => m.template === "reset-password");
-        const mailedToken = Redacted.make(String(resetMail?.data?.["token"]));
+        const mailedToken = Redacted.make(tokenOf(resetMail));
 
         yield* password.confirmReset({
           token: mailedToken,
@@ -865,7 +1206,7 @@ describe("Password", () => {
         });
 
         const hijackedStillValid = yield* sessions.verify(hijacked.token).pipe(Effect.flip);
-        assert.strictEqual(hijackedStillValid._tag, "SessionNotFound");
+        assert.strictEqual(hijackedStillValid._tag, "Sessions/NotFound");
 
         const rotatedIsValid = yield* sessions.verify(rotated.token);
         assert.strictEqual(rotatedIsValid.session.id, rotated.session.id);
@@ -1017,6 +1358,14 @@ describe("Password", () => {
           .signIn({ email, password: Redacted.make("wrong password") })
           .pipe(Effect.flip);
         assert.strictEqual(throttled._tag, "RateLimited");
+
+        // EOTS-007: the breach is observable, and the audit payload carries
+        // the rule that fired but never the email the bucket was keyed on.
+        const auditLog = yield* AuditLog.AuditLog;
+        const breaches = yield* auditLog.list({ eventTag: "auth.rateLimit.exceeded" });
+        assert.strictEqual(breaches.length, 1);
+        assert.isFalse(JSON.stringify(breaches[0]?.payload).includes(email));
+        assert.strictEqual(JSON.stringify(breaches[0]?.payload).includes('"rule":"signIn"'), true);
       }).pipe(
         // A real, enforcing limiter for this one test — every other test
         // in this file uses `RateLimiter.layerPermissive` via `TestLayer`'s
@@ -1163,7 +1512,7 @@ describe("Password", () => {
 
       const sent = yield* mailer.sent;
       const verifyMail = sent.findLast((mail) => mail.template === "verify-email");
-      const realToken = String(verifyMail?.data?.["token"]);
+      const realToken = tokenOf(verifyMail);
       const separator = realToken.lastIndexOf(".");
       const identifier = realToken.slice(0, separator);
 
@@ -1233,7 +1582,7 @@ describe("Password", () => {
           const mail = sent.find(
             (m) => m.template === "verify-email" && m.to === `verify-spray-${i}@example.com`,
           );
-          const realToken = String(mail?.data?.["token"]);
+          const realToken = tokenOf(mail);
           identifiers.push(realToken.slice(0, realToken.lastIndexOf(".")));
         }
 
@@ -1335,5 +1684,62 @@ describe("Password", () => {
           ),
         ),
       ),
+  );
+});
+
+describe("Password signIn timing floor (TSS-006)", () => {
+  // A hasher that verifies instantly, standing in for a legacy hash cheaper than the
+  // configured cost: without a floor, its sign-in returns sooner than an argon2 one.
+  const InstantHasher = Layer.succeed(
+    PasswordHasher.PasswordHasher,
+    PasswordHasher.PasswordHasher.of({
+      hash: () => Effect.succeed(PasswordHasher.PhcHash("instant-hash")),
+      verify: () => Effect.succeed(false),
+      needsRehash: () => false,
+    }),
+  );
+
+  const layerWith = (timingFloor: Partial<Password.PasswordConfigShape>) =>
+    Password.Password.layer.pipe(
+      Layer.provideMerge(AuthenticationLive),
+      Layer.provide(CsrfProtectionLive),
+      Layer.provideMerge(CoreLive),
+      Layer.provideMerge(
+        Layer.mergeAll(InstantHasher, Mailer.layerMemory, RateLimiter.layerPermissive).pipe(
+          Layer.provideMerge(NodeCrypto.layer),
+        ),
+      ),
+      Layer.provideMerge(RateLimits.layer),
+      Layer.provide(NoBreachHttpClient),
+      Layer.provide(SqlTransaction.layerNoop),
+      Layer.provide(ClientAddress.layerDirect),
+      Layer.provide(Password.config(timingFloor)),
+    );
+
+  it.effect("a sign-in completes no sooner than the floor, even when verify is instant", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const fiber = yield* Effect.forkChild(
+        password
+          .signIn({ email: "nobody@example.com", password: strongPassword })
+          .pipe(Effect.flip),
+        { startImmediately: true },
+      );
+      yield* TestClock.adjust(Duration.millis(60));
+      assert.isUndefined(fiber.pollUnsafe());
+      yield* TestClock.adjust(Duration.millis(60));
+      const failure = yield* Fiber.join(fiber);
+      assert.strictEqual(failure._tag, "InvalidCredentials");
+    }).pipe(Effect.provide(layerWith({ signInTimingFloor: Duration.millis(100) }))),
+  );
+
+  it.effect("signInTimingFloor: off restores the unpadded behaviour", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const failure = yield* password
+        .signIn({ email: "nobody@example.com", password: strongPassword })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "InvalidCredentials");
+    }).pipe(Effect.provide(layerWith({ signInTimingFloor: "off" }))),
   );
 });

@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @cross-cutting @rate-limiting
-@skip @unwired
 Feature: Rate Limiting
 
   # BEH-EA-105 — spec/behaviors/14-rate-limiting.md; see also ADR-EA-010.
@@ -62,7 +61,7 @@ Feature: Rate Limiting
 
     @REQ-EA-285
     Scenario: An application may configure RateLimiter to fail closed instead of the fail-open default
-      Given an application that provides a "RateLimiter" Layer configured with "onUnavailable: \"reject\""
+      Given an application that provides a "RateLimiter" Layer configured with "onStoreUnavailable: \"reject\""
       And its backing store is unreachable
       When "consume" is called
       Then "consume" fails with "RateLimited" or a distinct outage error
@@ -87,6 +86,12 @@ Feature: Rate Limiting
       Then the failure is not a generic or untyped error
       And a client can render a "try again in n seconds" message from "retryAfterMillis" alone, without parsing any message string
 
+    @REQ-EA-691
+    Scenario: An HTTP client receives a 429 RateLimited body carrying retryAfterMillis
+      Given the password plugin's sign-in rule enforced by a real limiter over the memory store
+      When "alice" attempts to sign in with a wrong password more often than the rule allows
+      Then the refused request is a 429 whose body is a RateLimited value carrying retryAfterMillis
+
   # BEH-EA-107 — spec/behaviors/14-rate-limiting.md
   @BEH-EA-107
   Rule: A plugin may only rate-limit its own endpoints
@@ -108,6 +113,7 @@ Feature: Rate Limiting
   @BEH-EA-108
   Rule: Key strategies
 
+    # PV-240: `RateLimits.bucketKey` resolves the strategy against the request (CurrentPrincipal, ClientAddress).
     @REQ-EA-290
     Scenario Outline: A rate-limit rule keys its bucket using a built-in strategy
       Given a rule with key strategy "<strategy>"
@@ -126,6 +132,7 @@ Feature: Rate Limiting
       When "consume" derives a bucket key for a sign-in request
       Then the bucket key is the deterministic value that function computes for that request
 
+    # Compile-time: proven by the `// type-gate:` block in step-definitions/CompileTimeGates.ts.
     @REQ-EA-292
     Scenario: A rule must not key on a caller-controlled arbitrary value without the plugin author opting in explicitly
       Given a plugin author declaring a rule using only the built-in "principal" or "ip" strategies
@@ -172,7 +179,7 @@ Feature: Rate Limiting
     Scenario: An official plugin ships a default rate-limit rule for a brute-force-prone endpoint
       Given the official "two-factor" plugin's "verify" endpoint
       When "two-factor" is installed with no application-authored rate-limit configuration
-      Then "/two-factor/verify" is rate limited to 3 attempts per 10 seconds by a rule the plugin itself ships
+      Then "/two-factor/verify" is rate limited by rules the plugin itself ships: 30 attempts per 15 minutes per source address, and a per-user failure budget
 
     @REQ-EA-298
     Scenario: An application does not have to add rate limiting itself to get a sane default on brute-force-prone endpoints
@@ -188,7 +195,7 @@ Feature: Rate Limiting
     @REQ-EA-299
     Scenario: Rate-limit rules are listed in dependency order, then declared order, then rule id
       Given rate-limit rules contributed by plugins with a dependency relationship, some declaring an explicit "order", and rule ids as the final tiebreaker
-      When "awthaq plugin list --graph" lists the rate-limit rules
+      When the rate-limit registry is read for its resolved rule list
       Then the listing is ordered by plugin dependency order first, then by declared "order", then by rule id
 
     @REQ-EA-300

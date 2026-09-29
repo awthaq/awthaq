@@ -11,11 +11,17 @@ number (identifiers are permanent — see spec/process/requirement-id-scheme.md
 one already in use. Run this again after adding new scenarios to the suite;
 it will not renumber or duplicate existing ids.
 
-Usage: python3 features/scripts/allocate-req-ea.py
+Usage: python3 features/scripts/allocate-req-ea.py [--check]
 (run from the awthaq repo root, or anywhere — paths below are resolved
 relative to this script's own location)
+
+--check writes nothing: it exits non-zero when a scenario still lacks a
+@REQ-EA tag or features/traceability.md differs from what this script would
+generate. spec/scripts/verify-traceability.sh runs it, so `pnpm check` fails
+when a .feature file changes without the regenerated manifest (BDD-003).
 """
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,6 +56,16 @@ ORDER = [
     "08-tooling/25-testing-harness.feature",
     "08-tooling/26-cli.feature",
     "09-admin-and-impersonation/27-admin-impersonation.feature",
+    "05-authentication-methods/28-device-authorization.feature",
+    "10-organization/35-organization.feature",
+    "11-jwt/36-jwt.feature",
+    "12-multi-tenancy/28-tenancy.feature",
+    "13-enterprise-federation/29-saml-sp.feature",
+    "13-enterprise-federation/30-scim.feature",
+    "14-mfa-passwordless/31-two-factor.feature",
+    "14-mfa-passwordless/32-magic-link.feature",
+    "14-mfa-passwordless/33-email-otp.feature",
+    "15-webhooks/34-webhooks.feature",
 ]
 
 # Explicit feature-file -> source-behavior-md map (most basenames match
@@ -82,11 +98,27 @@ SOURCE_MD = {
     "25-testing-harness.feature": "25-testing-harness.md",
     "26-cli.feature": "26-cli.md",
     "27-admin-impersonation.feature": "27-admin-impersonation.md",
+    "35-organization.feature": "35-organization.md",
+    "36-jwt.feature": "36-jwt.md",
+    "28-tenancy.feature": "28-tenancy.md",
+    "29-saml-sp.feature": "29-saml-sp.md",
+    "30-scim.feature": "30-scim.md",
+    "31-two-factor.feature": "31-two-factor.md",
+    "32-magic-link.feature": "32-magic-link.md",
+    "33-email-otp.feature": "33-email-otp.md",
+    "34-webhooks.feature": "34-webhooks.md",
+    "28-device-authorization.feature": "37-device-authorization.md",
 }
 
+# DAG-007: a feature for a plugin that has no BEH-EA range yet traces to its model
+# (spec/models/) through `@MOD-EA-NNN` Rule tags instead of `@BEH-EA-NNN`. None does today
+# (device authorization gained BEH-EA-299 to 317 with its plugin); the hook stays for the next one.
+SOURCE_MODEL: dict[str, str] = {}
+
 RULE_RE = re.compile(r'^\s*Rule:')
-BEH_TAG_RE = re.compile(r'@BEH-EA-(\d{3})')
-REQ_TAG_RE = re.compile(r'@REQ-EA-(\d{3})')
+BEH_TAG_RE = re.compile(r'@(?:BEH|MOD)-EA-(\d{3})')
+RULE_KIND_RE = re.compile(r'@(BEH|MOD)-EA-\d{3}')
+REQ_TAG_RE = re.compile(r'@REQ-EA-(\d{3,})')
 SCEN_RE = re.compile(r'^(\s*)(Scenario( Outline)?):\s*(.*)$')
 HEADING_RE = re.compile(r'^##\s+(BEH-EA-\d{3}:.*)$')
 
@@ -153,15 +185,30 @@ def check_no_duplicate_req_ids(manifest):
     owner_by_req_id = {}
     for req_id, _beh_id, rel, _title in manifest:
         owner = owner_by_req_id.get(req_id)
-        if owner is not None and owner != rel:
+        if owner is not None:
+            # AH-010: a duplicate inside one file is as ambiguous as one across two.
+            where = f"twice in {rel}" if owner == rel else f"in both {owner} and {rel}"
             raise SystemExit(
-                f"allocate-req-ea.py: {req_id} is tagged in both {owner} and {rel} — "
+                f"allocate-req-ea.py: {req_id} is tagged {where} — "
                 "duplicate REQ-EA id, refusing to write an ambiguous manifest."
             )
         owner_by_req_id[req_id] = rel
 
 
-def main():
+# The manifest's Document Control block is emitted from these constants so a
+# regeneration never resets it (BDD-003). Bump them when the manifest's own
+# format changes, not when scenarios are added: the row count is generated.
+MANIFEST_REVISION = "1.1"
+MANIFEST_DATE = "2026-09-29"
+MANIFEST_HISTORY = (
+    "1.0 (2026-09-12): Initial release, generated from `features/features/**/*.feature` (CCR-EA-003) "
+    "<br> 1.1 (2026-09-29): Header is emitted by the generator so regeneration keeps it; "
+    "`27-admin-impersonation.feature` (REQ-EA-603..627) and every later feature file are allocated "
+    "(BDD-003, CCR-EA-006)"
+)
+
+
+def main(check=False):
     check_order_matches_disk()
     anchor_index = build_anchor_index()
 
@@ -177,18 +224,21 @@ def main():
     counter = max_existing
 
     manifest = []  # (req_id, beh_id, file, scenario_title)
+    untagged = []  # scenarios --check found without a @REQ-EA tag
 
     for rel in ORDER:
         path = FEATURES / rel
         lines = path.read_text(encoding="utf-8").splitlines()
         out = []
         current_beh = None
+        current_kind = "BEH"
         for line in lines:
             if RULE_RE.match(line):
                 for prev in reversed(out):
                     m = BEH_TAG_RE.search(prev)
                     if m:
                         current_beh = m.group(1)
+                        current_kind = RULE_KIND_RE.search(prev).group(1)
                         break
             m = SCEN_RE.match(line)
             if m:
@@ -200,19 +250,24 @@ def main():
                     if rm:
                         existing_req = rm.group(1)
                 if existing_req is None:
+                    untagged.append(f"{rel}: {title.strip()}")
                     counter += 1
                     req_id_num = counter
                     out.append(f"{indent}@REQ-EA-{req_id_num:03d}")
                 else:
                     req_id_num = int(existing_req)
-                manifest.append((f"REQ-EA-{req_id_num:03d}", f"BEH-EA-{current_beh}", rel, title.strip()))
+                manifest.append(
+                    (f"REQ-EA-{req_id_num:03d}", f"{current_kind}-EA-{current_beh}", rel, title.strip())
+                )
             out.append(line)
-        path.write_text("\n".join(out) + "\n", encoding="utf-8")
+        if not check:
+            path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
     check_no_duplicate_req_ids(manifest)
     manifest.sort(key=lambda row: int(row[0].split("-")[-1]))
-    print(f"{counter} REQ-EA id(s) now allocated across {len(ORDER)} files "
-          f"({counter - max_existing} newly assigned this run).")
+    if not check:
+        print(f"{counter} REQ-EA id(s) now allocated across {len(ORDER)} files "
+              f"({counter - max_existing} newly assigned this run).")
 
     manifest_path = ROOT / "features" / "traceability.md"
     out_lines = []
@@ -222,13 +277,12 @@ def main():
         "> | Property | Value |\n"
         "> |---|---|\n"
         "> | Document ID | EFAUTH-FEAT-RTM |\n"
-        "> | Revision | 1.0 |\n"
-        "> | Effective Date | 2026-09-12 |\n"
+        f"> | Revision | {MANIFEST_REVISION} |\n"
+        f"> | Effective Date | {MANIFEST_DATE} |\n"
         "> | Status | Effective |\n"
         "> | Author | awthaq Engineering |\n"
         "> | Classification | Verification Record |\n"
-        "> | Change History | 1.0 (2026-09-12): Initial release, generated from "
-        "`features/features/**/*.feature` (CCR-EA-003) |\n"
+        f"> | Change History | {MANIFEST_HISTORY} |\n"
     )
     out_lines.append("---\n")
     out_lines.append(
@@ -236,22 +290,42 @@ def main():
         f"`.feature` file, and its scenario title. Generated mechanically by "
         f"`features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file "
         f"order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` "
-        f"§6 for the file-level summary this rolls up to. {counter} `REQ-EA-NNN` ids allocated across "
-        f"{len(ORDER)} `.feature` files.\n"
+        f"§6 for the file-level summary this rolls up to. {len(manifest)} `REQ-EA-NNN` ids allocated across "
+        f"{len(ORDER)} `.feature` files (highest issued: REQ-EA-{counter:03d}; the ids of a scenario that "
+        f"was removed are retired, never reused).\n"
     )
     out_lines.append("| REQ-EA | BEH-EA | Feature file | Scenario |")
     out_lines.append("|---|---|---|---|")
     for req_id, beh_id, rel, title in manifest:
         title_escaped = title.replace("|", "\\|")
         feature_basename = rel.split("/")[-1]
-        source_md = SOURCE_MD[feature_basename]
-        anchor = anchor_index.get(source_md, {}).get(beh_id, "")
-        beh_link = f"../spec/behaviors/{source_md}#{anchor}" if anchor else f"../spec/behaviors/{source_md}"
+        if beh_id.startswith("MOD-"):
+            beh_link = f"../spec/models/{SOURCE_MODEL[feature_basename]}"
+        else:
+            source_md = SOURCE_MD[feature_basename]
+            anchor = anchor_index.get(source_md, {}).get(beh_id, "")
+            beh_link = f"../spec/behaviors/{source_md}#{anchor}" if anchor else f"../spec/behaviors/{source_md}"
         out_lines.append(f"| {req_id} | [{beh_id}]({beh_link}) | [{rel}](features/{rel}) | {title_escaped} |")
 
-    manifest_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+    generated = "\n".join(out_lines) + "\n"
+    if check:
+        if untagged:
+            raise SystemExit(
+                f"allocate-req-ea.py --check: {len(untagged)} scenario(s) have no @REQ-EA tag "
+                f"(first: {untagged[0]}) — run python3 features/scripts/allocate-req-ea.py"
+            )
+        current = manifest_path.read_text(encoding="utf-8") if manifest_path.exists() else ""
+        if current != generated:
+            raise SystemExit(
+                "allocate-req-ea.py --check: features/traceability.md is stale against the .feature files — "
+                "run python3 features/scripts/allocate-req-ea.py and commit the result"
+            )
+        print(f"{len(manifest)} scenario row(s), manifest current")
+        return
+
+    manifest_path.write_text(generated, encoding="utf-8")
     print(f"Wrote manifest: {manifest_path} ({len(manifest)} rows)")
 
 
 if __name__ == "__main__":
-    main()
+    main(check="--check" in sys.argv[1:])

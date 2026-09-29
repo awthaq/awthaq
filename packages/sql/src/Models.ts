@@ -5,18 +5,25 @@
 // `User`/`Account`/`Session`/`VerificationToken` as `Model.Class` entities —
 // one field declaration each is the source of truth, from which the
 // database (`select`/`insert`/`update`) and JSON (`json`/`jsonCreate`/
-// `jsonUpdate`) variants are all derived. This package sits below
-// `@awthaq/core` (spec/overview.md's stratum ordering), so these ids
-// are declared as ordinary branded schemas here, not imported from core's
-// own `UserId`/`SessionId`/`AccountId`/`VerificationTokenId` — the two are
-// structurally compatible (a `Brand<Keys>`'s uniqueness comes from the
-// literal string key, not a runtime symbol), and it is core's eventual
-// SQL-backed `Layer` that bridges between the two, the same way it already
-// bridges from an in-memory `Ref` today.
+// `jsonUpdate`) variants are all derived. The one exception is the
+// per-dialect wire codec of the boolean/DateTime columns (TS-001,
+// wayfinder ticket 29): `node:sqlite` binds and returns booleans as `0 | 1`
+// and timestamps as ISO strings, while `@effect/sql-pg`'s binary protocol
+// returns a JS `boolean`/`Date`, so `makeModels(dialect)` selects the
+// database-variant codec of just those columns. Every JSON variant is
+// byte-identical across dialects; nothing above the repository boundary can
+// observe which dialect built a model.
+//
+// This package sits below `@awthaq/core` (spec/overview.md's stratum
+// ordering) and owns the id brands (MA-008): core re-exports these types and
+// keeps only a nominal constructor over each, so a key rename on either side
+// breaks the bridge at compile time.
 
+import { Defects } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Model from "effect/unstable/schema/Model";
+import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
 export const UserId = Schema.String.pipe(Schema.brand("UserId"));
 export type UserId = typeof UserId.Type;
@@ -31,15 +38,87 @@ export const VerificationTokenId = Schema.String.pipe(Schema.brand("Verification
 export type VerificationTokenId = typeof VerificationTokenId.Type;
 
 /**
- * BEH-EA-041/042: `email` is compared case-insensitively unique by the
- * calling domain service (which lower-cases before every read and write);
- * `emailVerified` is excluded from the generic `update`/`jsonUpdate`
- * variants so a repository's ordinary `update` call cannot flip it —
- * only a dedicated operation (BEH-EA-042) may.
+ * SOS-008/FAMS-002: the stored shape of `users.phone` — E.164 (`+` and 2-15
+ * digits, no leading zero after the `+`). Declared here for the same reason
+ * `UserId` is: the model's `phone` column and core's `Phone` identity share one
+ * brand, and `@awthaq/core`'s `Phone.ts` owns the normalizer that mints it.
  */
-export class User extends Model.Class<User>("User")({
-  id: Model.UuidV7Insert(UserId),
-  email: Schema.String,
+export const E164 = Schema.String.pipe(
+  Schema.check(Schema.isPattern(/^\+[1-9]\d{1,14}$/)),
+  Schema.brand("E164"),
+);
+export type E164 = typeof E164.Type;
+
+/** The SQL dialects this stratum implements (mysql is a named target, not yet wired — see `CoreMigrations.ts`). */
+export type Dialect = "pg" | "sqlite";
+
+// ---- per-dialect wire codecs (TS-001) --------------------------------------
+
+// Built as plain functions over the dialect's DateTime codec (one call per
+// dialect), so no assertion is needed to unify the two codec types. `json*`
+// variants are always the ISO-string codec.
+const dateTimeFields = <C extends Schema.Top>(codec: C) => ({
+  /** Every variant, e.g. `VerificationReservation.expiresAt`. */
+  dateTime: Model.Field({
+    select: codec,
+    insert: codec,
+    update: codec,
+    json: Schema.DateTimeUtcFromString,
+    jsonCreate: Schema.DateTimeUtcFromString,
+    jsonUpdate: Schema.DateTimeUtcFromString,
+  }),
+  /** Fixed at insert: no `update`/`jsonUpdate` variant. */
+  dateTimeImmutable: Model.Field({
+    select: codec,
+    insert: codec,
+    json: Schema.DateTimeUtcFromString,
+    jsonCreate: Schema.DateTimeUtcFromString,
+  }),
+});
+
+const nullableDateTimeFields = <C extends Schema.Top>(codec: C) => {
+  const nullable = Schema.NullOr(codec);
+  const json = Schema.NullOr(Schema.DateTimeUtcFromString);
+  const jsonNullable = json.pipe(Schema.withConstructorDefault(Effect.succeed(null)));
+  return {
+    /** `NULL` until set; every variant. */
+    nullableDateTime: Model.Field({
+      select: nullable,
+      insert: nullable,
+      update: nullable,
+      json,
+      jsonCreate: json,
+      jsonUpdate: json,
+    }),
+    /**
+     * SCP-001: `NULL` unless set at insert or by a dedicated targeted write —
+     * no `update`/`jsonUpdate` variant, so the generic `update` can never
+     * clobber it (`users.suspendedUntil`).
+     */
+    nullableDateTimeInsertOnly: Model.Field({
+      select: nullable,
+      insert: nullable.pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+      json: jsonNullable,
+      jsonCreate: jsonNullable,
+    }),
+    /**
+     * As `nullableDateTime`, with a `null` constructor default in every
+     * variant — exactly what the single plain schema this replaces gave the
+     * pre-TS-001 model (including `update`, which the repository's own
+     * writers never rely on: they always pass the whole group).
+     */
+    nullableDateTimeDefaultNull: Model.Field({
+      select: nullable,
+      insert: nullable.pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+      update: nullable.pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+      json: jsonNullable,
+      jsonCreate: jsonNullable,
+      jsonUpdate: jsonNullable,
+    }),
+  };
+};
+
+const sqliteFields = {
   // `node:sqlite` (and SQLite generally) has no boolean bind type, so this
   // needs `Schema.BooleanFromBit`'s `0 | 1` database encoding — the same
   // shape `Model.BooleanSqlite` provides, built by hand here because it
@@ -50,6 +129,125 @@ export class User extends Model.Class<User>("User")({
     json: Schema.Boolean,
     jsonCreate: Schema.Boolean,
   }),
+  // FAMS-002: `phoneVerified` mirrors `emailVerified` exactly (BEH-EA-042).
+  phoneVerified: Model.Field({
+    select: Schema.BooleanFromBit,
+    insert: Schema.BooleanFromBit.pipe(Schema.withConstructorDefault(Effect.succeed(false))),
+    json: Schema.Boolean,
+    jsonCreate: Schema.Boolean,
+  }),
+  dateTimeInsert: Model.DateTimeInsert,
+  dateTimeUpdate: Model.DateTimeUpdate,
+  ...dateTimeFields(Schema.DateTimeUtcFromString),
+  ...nullableDateTimeFields(Schema.DateTimeUtcFromString),
+  wireDateTime: Schema.DateTimeUtcFromString,
+  wireNullableDateTime: Schema.NullOr(Schema.DateTimeUtcFromString),
+  wireBoolean: Schema.BooleanFromBit,
+};
+
+const pgFields = {
+  // `@effect/sql-pg` decodes OID 16 (bool) to a JS boolean and binds one
+  // as-is; `BooleanFromBit` would reject every row.
+  emailVerified: Model.Field({
+    select: Schema.Boolean,
+    insert: Schema.Boolean.pipe(Schema.withConstructorDefault(Effect.succeed(false))),
+    json: Schema.Boolean,
+    jsonCreate: Schema.Boolean,
+  }),
+  phoneVerified: Model.Field({
+    select: Schema.Boolean,
+    insert: Schema.Boolean.pipe(Schema.withConstructorDefault(Effect.succeed(false))),
+    json: Schema.Boolean,
+    jsonCreate: Schema.Boolean,
+  }),
+  dateTimeInsert: Model.DateTimeInsertFromDate,
+  dateTimeUpdate: Model.DateTimeUpdateFromDate,
+  ...dateTimeFields(Schema.DateTimeUtcFromDate),
+  ...nullableDateTimeFields(Schema.DateTimeUtcFromDate),
+  wireDateTime: Schema.DateTimeUtcFromDate,
+  wireNullableDateTime: Schema.NullOr(Schema.DateTimeUtcFromDate),
+  wireBoolean: Schema.Boolean,
+};
+
+/**
+ * The per-dialect wire codecs, for record stores that declare their own
+ * `SqlSchema` request/result structs rather than a `Model.Class`
+ * (admin/jwt/organization/passkey/migrate-better-auth): `dateTime` is
+ * `DateTimeUtcFromString` on SQLite and `DateTimeUtcFromDate` on Postgres,
+ * `boolean` is `BooleanFromBit` / `Boolean`.
+ */
+export const dialectFields = (dialect: Dialect) =>
+  dialect === "pg"
+    ? {
+        dateTime: pgFields.wireDateTime,
+        nullableDateTime: pgFields.wireNullableDateTime,
+        boolean: pgFields.wireBoolean,
+      }
+    : {
+        dateTime: sqliteFields.wireDateTime,
+        nullableDateTime: sqliteFields.wireNullableDateTime,
+        boolean: sqliteFields.wireBoolean,
+      };
+
+export type DialectWire = ReturnType<typeof dialectFields>;
+
+/**
+ * Reads the ambient client's own dialect once, at layer construction.
+ * `orElse` dies rather than guessing, mirroring `CoreMigrations.ts`.
+ */
+export const resolveDialect = (sql: SqlClient.SqlClient): Effect.Effect<Dialect> =>
+  sql.onDialectOrElse({
+    pg: () => Effect.succeed<Dialect>("pg"),
+    sqlite: () => Effect.succeed<Dialect>("sqlite"),
+    orElse: () => Defects.unsupportedDialect("models"),
+  });
+
+// ---- dialect-independent field declarations ---------------------------------
+//
+// `Model.Class` validates each field's variants at the declaration site, so
+// the classes cannot be generic over the per-dialect fields; instead the
+// dialect-independent fields of each entity are declared exactly once here and
+// spread into the two per-dialect class declarations below, which add only the
+// handful of boolean/DateTime columns whose wire codec differs.
+
+/**
+ * BEH-EA-041/042: `email` is compared case-insensitively unique by the
+ * calling domain service (which lower-cases before every read and write);
+ * `emailVerified` is excluded from the generic `update`/`jsonUpdate`
+ * variants so a repository's ordinary `update` call cannot flip it —
+ * only a dedicated operation (BEH-EA-042) may.
+ *
+ * FAMS-002/SAM-003 (wayfinder ticket 09): the domain layer's `UserIdentity`
+ * union (Email | Phone | Anonymous) is stored flattened, so `users_email_unique`
+ * and `users_phone_unique` stay real database constraints. Both columns are
+ * nullable with a `null` constructor default (an Anonymous row sets neither),
+ * and — like `emailVerified` — excluded from `update`/`jsonUpdate`: an identity
+ * only changes through the repository's dedicated `promoteIdentity`/
+ * `changeEmail`/`verify*` writes. SCP-001: `status` (and its reason/expiry) is
+ * likewise write-gated to `setStatus`; no generic update field can touch it.
+ */
+const insertOnly = <S extends Schema.Top>(schema: S) =>
+  schema.pipe(Model.FieldExcept(["update", "jsonUpdate"]));
+
+/**
+ * DRS-001/EP-001 (ADR-EA-018): the opaque tenant attribution column. Database
+ * variants only — no JSON variant, so a client-supplied body can never name its
+ * own tenant — and no `update`: a row is stamped once, at insert, from the
+ * ambient `TenantContext` (`Repositories.ts` reads it; `NULL` when unset). The
+ * constructor default keeps every existing insert call site compiling.
+ */
+const tenantIdField = Model.Field({
+  select: Schema.NullOr(Schema.String),
+  insert: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+});
+
+const userFields = {
+  id: Model.UuidV7Insert(UserId),
+  tenantId: tenantIdField,
+  email: insertOnly(
+    Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  ),
+  phone: insertOnly(Schema.NullOr(E164).pipe(Schema.withConstructorDefault(Effect.succeed(null)))),
   name: Schema.String,
   // AOMS-002 (.issues/high): free-form per-user metadata this service
   // stores opaquely and never parses — the same
@@ -58,11 +256,22 @@ export class User extends Model.Class<User>("User")({
   // constructor default (unlike `Account`'s always-explicit
   // `passwordHash`/`accessToken`/`refreshToken`) so every pre-existing
   // `User.insert` call site that predates this field keeps compiling
-  // unchanged, matching `emailVerified`'s own default just above.
+  // unchanged, matching `emailVerified`'s own default.
   metadata: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
-  createdAt: Model.DateTimeInsert,
-  updatedAt: Model.DateTimeUpdate,
-}) {}
+  // BAM-009/NAM-009: an avatar URL. Client-writable like `name`, so it keeps
+  // its `update` variant; `NULL` means none.
+  image: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  // SCP-001/BAM-005: ban and SCIM `active:false` are one state. The reason is
+  // an operator note, never sent over the wire to the suspended user.
+  status: insertOnly(
+    Schema.Literals(["active", "suspended"]).pipe(
+      Schema.withConstructorDefault(Effect.succeed("active")),
+    ),
+  ),
+  statusReason: insertOnly(
+    Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  ),
+};
 
 /**
  * BEH-EA-043/044/125: `(providerId, subject, issuer)` identifies at most one
@@ -85,8 +294,9 @@ export class User extends Model.Class<User>("User")({
  * already draw between their own stored plain strings and the `Redacted`
  * values they hand back to a caller.
  */
-export class Account extends Model.Class<Account>("Account")({
+const accountFields = {
   id: Model.UuidV7Insert(AccountId),
+  tenantId: tenantIdField,
   userId: UserId.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   providerId: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   subject: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
@@ -102,6 +312,14 @@ export class Account extends Model.Class<Account>("Account")({
   passwordHash: Model.Sensitive(Schema.NullOr(Schema.String)),
   accessToken: Model.Sensitive(Schema.NullOr(Schema.String)),
   refreshToken: Model.Sensitive(Schema.NullOr(Schema.String)),
+  // BAM-008: the provider's OIDC `id_token`, a bearer-grade credential like
+  // the two above — sensitive, encrypted at rest. Constructor-defaulted to
+  // `null` so a pre-existing insert/update call site keeps compiling; every
+  // writer that rewrites a row from its old values (`updateCredentialHash`)
+  // must pass it through explicitly, or the default would null it.
+  idToken: Model.Sensitive(
+    Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  ),
   // BE-002 (.issues/high): token *metadata*, not secrets themselves — no
   // `Model.Sensitive` (matching how `providerId`/`subject`/`issuer` already
   // sit unencrypted alongside `accessToken`/`refreshToken` on this same
@@ -110,18 +328,11 @@ export class Account extends Model.Class<Account>("Account")({
   // OAuth token persistence keeps compiling unchanged; the real writers
   // (`@awthaq/core`'s `Accounts.ts` `link`/`updateProviderTokens`) always
   // pass every field of this group explicitly, never relying on the
-  // default themselves.
-  accessTokenExpiresAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
-    Schema.withConstructorDefault(Effect.succeed(null)),
-  ),
-  refreshTokenExpiresAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
-    Schema.withConstructorDefault(Effect.succeed(null)),
-  ),
+  // default themselves. (`accessTokenExpiresAt`/`refreshTokenExpiresAt` are
+  // per-dialect DateTime columns, added by each class.)
   scope: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
   tokenType: Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
-  createdAt: Model.DateTimeInsert,
-  updatedAt: Model.DateTimeUpdate,
-}) {}
+};
 
 /**
  * BEH-EA-049/050: only `SHA-256(secret)` is ever persisted — `secretHash`
@@ -131,27 +342,23 @@ export class Account extends Model.Class<Account>("Account")({
  * `secretHash` are the columns the idle-refresh touch (BEH-EA-052,
  * upstream-hardening ticket 01's rotation) may write.
  */
-export class Session extends Model.Class<Session>("Session")({
+const sessionFields = {
   id: Model.UuidV7Insert(SessionId),
+  tenantId: tenantIdField,
   userId: UserId.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   // Ticket 01: rotation overwrites this on the same throttled touch write
   // that already refreshes `lastActiveAt`/`idleExpiresAt`, so — unlike
   // every other insert-only field on this table — it needs an `update`
   // variant. `Model.Sensitive` still omits it from every JSON variant.
   secretHash: Model.Sensitive(Schema.String),
+  // RRS-005: the hash the last rotation replaced, accepted alongside `secretHash` until
+  // `previousSecretExpiresAt` (a per-dialect DateTime column added by each class). Written only by the
+  // touch's own targeted UPDATE; constructor-defaulted to `null` so a fresh insert never names it.
+  previousSecretHash: Model.Sensitive(
+    Schema.NullOr(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  ),
   ipAddress: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   userAgent: Schema.NullOr(Schema.String).pipe(Model.FieldExcept(["update", "jsonUpdate"])),
-  absoluteExpiresAt: Schema.DateTimeUtcFromString.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
-  idleExpiresAt: Model.DateTimeUpdate,
-  createdAt: Model.DateTimeInsert,
-  // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
-  // (AAPS-001/BPAS-001): "when this session last proved a credential" —
-  // defaulted to now at insert (identical to `createdAt` at issue time),
-  // and the one column `Sessions.reauthenticate` writes; needs the same
-  // `update` variant `secretHash`/`lastActiveAt`/`idleExpiresAt` already
-  // have, for the identical reason.
-  authenticatedAt: Model.DateTimeUpdate,
-  lastActiveAt: Model.DateTimeUpdate,
   // BEH-EA-209: the caller's own identity, immutable once issued — no
   // `update`/`jsonUpdate` variant, the same insert-only shape `secretHash`/
   // `absoluteExpiresAt` already have. Two plain nullable columns rather than
@@ -170,11 +377,18 @@ export class Session extends Model.Class<Session>("Session")({
   familyId: SessionId.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   /** Set at most once, when this row is superseded by a rotation — never on insert. */
   supersededBy: Schema.NullOr(SessionId),
-  /** Set at most once, alongside `supersededBy`. */
-  supersededAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-  /** Set at most once — the first (and only ever recorded) time a tombstoned row is presented again. */
-  reusedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-}) {}
+  /**
+   * THS-003/APS-007: RFC 8176 `amr` — which authentication methods proved
+   * this session, as a JSON array of strings (dialect-neutral text; core
+   * decodes and validates it). Written at insert; `Sessions.reauthenticate`
+   * unions new methods in through its own targeted `UPDATE`, so — like
+   * `actingAs` — it has no generic `update` variant.
+   */
+  amr: Schema.String.pipe(
+    Schema.withConstructorDefault(Effect.succeed("[]")),
+    Model.FieldExcept(["update", "jsonUpdate"]),
+  ),
+};
 
 /**
  * BEH-EA-057: `identifier` encodes the token's one purpose (e.g.
@@ -198,16 +412,14 @@ export class Session extends Model.Class<Session>("Session")({
  * missing payload is stored as the encoded literal `null`, decoded back to
  * `undefined` by the caller (`Verification.layerSql`'s own `toTokenView`),
  * matching `layerMemory`'s omitted-payload case (`undefined` in, `undefined`
- * out). This only covers "no payload was passed" — an *explicit*
- * `payload: null` is indistinguishable from omission once round-tripped
- * through this column (both decode back to `undefined`), whereas
- * `layerMemory` stores and returns whatever was passed verbatim, `null`
- * included. No current caller ever passes an explicit `null` (only a real
- * object or nothing at all), so this asymmetry is latent, not reachable
- * today — flagged here rather than silently relied upon.
+ * out). An *explicit* `payload: null` is indistinguishable from omission once
+ * round-tripped through this column, so `Verification.layerMemory` normalizes
+ * it to `undefined` at `issue` too (ESS-010): both layers return the same
+ * `payload` for omitted, `null` and object.
  */
-export class VerificationToken extends Model.Class<VerificationToken>("VerificationToken")({
+const verificationTokenFields = {
   id: Model.UuidV7Insert(VerificationTokenId),
+  tenantId: tenantIdField,
   identifier: Schema.String.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
   /**
    * BCR-003 (.issues/high): nullable — not every token names a real user at
@@ -222,31 +434,203 @@ export class VerificationToken extends Model.Class<VerificationToken>("Verificat
     Model.FieldExcept(["update", "jsonUpdate"]),
   ),
   valueHash: Model.Field({ select: Schema.String, insert: Schema.String }),
-  expiresAt: Schema.DateTimeUtcFromString.pipe(Model.FieldExcept(["update", "jsonUpdate"])),
-  consumedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-  createdAt: Model.DateTimeInsert,
+  /**
+   * SOS-004: the per-token attempt budget (`NULL` = none, the default 256-bit token) and
+   * how many wrong presentations have been spent. Select/insert only: they change through
+   * `VerificationRepository.recordFailedAttempt`'s one atomic statement, never a generic update.
+   */
+  maxAttempts: Model.Field({
+    select: Schema.NullOr(Schema.Number),
+    insert: Schema.NullOr(Schema.Number).pipe(Schema.withConstructorDefault(Effect.succeed(null))),
+  }),
+  attempts: Model.Field({
+    select: Schema.Number,
+    insert: Schema.Number.pipe(Schema.withConstructorDefault(Effect.succeed(0))),
+  }),
   payload: Model.Field({
     select: Schema.fromJsonString(Schema.Unknown),
     insert: Schema.fromJsonString(Schema.Unknown).pipe(
       Schema.withConstructorDefault(Effect.succeed(null)),
     ),
   }),
+};
+
+/** One `auth_audit_log` row as the database returns it (`occurredAt` per-dialect, payload opaque JSON text). */
+const auditLogRow = <C extends Schema.Top>(occurredAt: C) =>
+  Schema.Struct({
+    id: Schema.String,
+    eventTag: Schema.String,
+    actorUserId: Schema.NullOr(Schema.String),
+    occurredAt,
+    correlationId: Schema.NullOr(Schema.String),
+    tenantId: Schema.NullOr(Schema.String),
+    payload: Schema.fromJsonString(Schema.Unknown),
+  });
+
+// ---- per-dialect model sets -------------------------------------------------
+
+// `VerificationReservation` (below, per dialect):
+// BEH-EA-063/`spec/decisions/016-verification-sql-claiming.md` (ADR-EA-016):
+// `VerificationReservation` is a wholly separate concept from a
+// `VerificationToken` — "first caller to claim this identifier while
+// unexpired wins," never a token a caller presents back. `identifier` is its
+// own primary key (a plain, non-partial `UNIQUE`/`PRIMARY KEY` column): at
+// most one live reservation per identifier, ever. Claiming is one atomic
+// conditional upsert (`Repositories.ts`'s
+// `VerificationReservationsRepository.claim`), not a generic
+// `insert`/`update` pair — the model exists only to give that upsert's
+// `RETURNING` row a schema to decode against.
+// PV-380: the classes are declared at module scope (not inside a factory) so the emitted
+// declarations name them (`typeof PgUser`) instead of inlining each anonymous class's whole
+// constructor type, whose `extend` signature leaked unresolved names (`Extended_1`, `S`,
+// `Self`) into `lib/Models.d.ts` for a consumer with `skipLibCheck: false`. `package:smoke`
+// type-checks every emitted `.d.ts` that way.
+class PgUser extends Model.Class<PgUser>("User")({
+  ...userFields,
+  emailVerified: pgFields.emailVerified,
+  phoneVerified: pgFields.phoneVerified,
+  suspendedUntil: pgFields.nullableDateTimeInsertOnly,
+  createdAt: pgFields.dateTimeInsert,
+  updatedAt: pgFields.dateTimeUpdate,
 }) {}
 
-/**
- * BEH-EA-063/`spec/decisions/016-verification-sql-claiming.md` (ADR-EA-016):
- * a wholly separate concept from a `VerificationToken` — "first caller to
- * claim this identifier while unexpired wins," never a token a caller
- * presents back. `identifier` is this table's own primary key (a plain,
- * non-partial `UNIQUE`/`PRIMARY KEY` column): at most one live reservation
- * per identifier, ever. Claiming is one atomic conditional upsert
- * (`Repositories.ts`'s `VerificationReservationsRepository.claim`), not a
- * generic `insert`/`update` pair — this model exists only to give that
- * upsert's `RETURNING` row a schema to decode against.
- */
-export class VerificationReservation extends Model.Class<VerificationReservation>(
+class PgAccount extends Model.Class<PgAccount>("Account")({
+  ...accountFields,
+  accessTokenExpiresAt: pgFields.nullableDateTimeDefaultNull,
+  refreshTokenExpiresAt: pgFields.nullableDateTimeDefaultNull,
+  createdAt: pgFields.dateTimeInsert,
+  updatedAt: pgFields.dateTimeUpdate,
+}) {}
+
+class PgSession extends Model.Class<PgSession>("Session")({
+  ...sessionFields,
+  absoluteExpiresAt: pgFields.dateTimeImmutable,
+  idleExpiresAt: pgFields.dateTimeUpdate,
+  createdAt: pgFields.dateTimeInsert,
+  // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
+  // (AAPS-001/BPAS-001): "when this session last proved a credential" —
+  // defaulted to now at insert (identical to `createdAt` at issue time),
+  // and the one column `Sessions.reauthenticate` writes; needs the same
+  // `update` variant `secretHash`/`lastActiveAt`/`idleExpiresAt` already
+  // have, for the identical reason.
+  authenticatedAt: pgFields.dateTimeUpdate,
+  lastActiveAt: pgFields.dateTimeUpdate,
+  /** Set at most once, alongside `supersededBy`. */
+  supersededAt: pgFields.nullableDateTime,
+  /** Set at most once — the first (and only ever recorded) time a tombstoned row is presented again. */
+  reusedAt: pgFields.nullableDateTime,
+  previousSecretExpiresAt: pgFields.nullableDateTimeDefaultNull,
+}) {}
+
+class PgVerificationToken extends Model.Class<PgVerificationToken>("VerificationToken")({
+  ...verificationTokenFields,
+  expiresAt: pgFields.dateTimeImmutable,
+  consumedAt: pgFields.nullableDateTime,
+  createdAt: pgFields.dateTimeInsert,
+}) {}
+
+class PgVerificationReservation extends Model.Class<PgVerificationReservation>(
   "VerificationReservation",
 )({
   identifier: Schema.String,
-  expiresAt: Schema.DateTimeUtcFromString,
+  tenantId: tenantIdField,
+  expiresAt: pgFields.dateTime,
 }) {}
+
+const pgModels = {
+  User: PgUser,
+  Account: PgAccount,
+  Session: PgSession,
+  VerificationToken: PgVerificationToken,
+  VerificationReservation: PgVerificationReservation,
+  AuditLogRow: auditLogRow(pgFields.wireDateTime),
+  wire: dialectFields("pg"),
+};
+
+class SqliteUser extends Model.Class<SqliteUser>("User")({
+  ...userFields,
+  emailVerified: sqliteFields.emailVerified,
+  phoneVerified: sqliteFields.phoneVerified,
+  suspendedUntil: sqliteFields.nullableDateTimeInsertOnly,
+  createdAt: sqliteFields.dateTimeInsert,
+  updatedAt: sqliteFields.dateTimeUpdate,
+}) {}
+
+class SqliteAccount extends Model.Class<SqliteAccount>("Account")({
+  ...accountFields,
+  accessTokenExpiresAt: sqliteFields.nullableDateTimeDefaultNull,
+  refreshTokenExpiresAt: sqliteFields.nullableDateTimeDefaultNull,
+  createdAt: sqliteFields.dateTimeInsert,
+  updatedAt: sqliteFields.dateTimeUpdate,
+}) {}
+
+class SqliteSession extends Model.Class<SqliteSession>("Session")({
+  ...sessionFields,
+  absoluteExpiresAt: sqliteFields.dateTimeImmutable,
+  idleExpiresAt: sqliteFields.dateTimeUpdate,
+  createdAt: sqliteFields.dateTimeInsert,
+  authenticatedAt: sqliteFields.dateTimeUpdate,
+  lastActiveAt: sqliteFields.dateTimeUpdate,
+  supersededAt: sqliteFields.nullableDateTime,
+  reusedAt: sqliteFields.nullableDateTime,
+  previousSecretExpiresAt: sqliteFields.nullableDateTimeDefaultNull,
+}) {}
+
+class SqliteVerificationToken extends Model.Class<SqliteVerificationToken>("VerificationToken")({
+  ...verificationTokenFields,
+  expiresAt: sqliteFields.dateTimeImmutable,
+  consumedAt: sqliteFields.nullableDateTime,
+  createdAt: sqliteFields.dateTimeInsert,
+}) {}
+
+class SqliteVerificationReservation extends Model.Class<SqliteVerificationReservation>(
+  "VerificationReservation",
+)({
+  identifier: Schema.String,
+  tenantId: tenantIdField,
+  expiresAt: sqliteFields.dateTime,
+}) {}
+
+const sqliteModels = {
+  User: SqliteUser,
+  Account: SqliteAccount,
+  Session: SqliteSession,
+  VerificationToken: SqliteVerificationToken,
+  VerificationReservation: SqliteVerificationReservation,
+  AuditLogRow: auditLogRow(sqliteFields.wireDateTime),
+  wire: dialectFields("sqlite"),
+};
+
+/**
+ * TS-001: the four `Model.Class` entities (plus the reservation and audit-log
+ * row schemas) with the database variants' boolean/DateTime codecs selected
+ * for `dialect`. `Repositories.ts` resolves the dialect once per layer from
+ * the ambient `SqlClient` (`resolveDialect`); the pg client's own codecs are
+ * never overridden globally, because the ambient client is shared with the
+ * host application's tables.
+ */
+export type SqlModels = typeof pgModels | typeof sqliteModels;
+
+// DRS-001: annotated because adding the tenant column to six entities pushed the
+// inferred union past the compiler's declaration-serialization limit (TS7056).
+export const makeModels = (dialect: Dialect): SqlModels =>
+  dialect === "pg" ? pgModels : sqliteModels;
+
+// The decoded `Type` side is identical across dialects (only `Encoded`
+// differs), so these dialect-independent aliases are what callers name.
+export type User = InstanceType<SqlModels["User"]>;
+export type Account = InstanceType<SqlModels["Account"]>;
+export type Session = InstanceType<SqlModels["Session"]>;
+export type VerificationToken = InstanceType<SqlModels["VerificationToken"]>;
+export type VerificationReservation = InstanceType<SqlModels["VerificationReservation"]>;
+
+// Constructor-level input shapes (`insert`/`update` variants' decoded `Type`
+// side), likewise identical across dialects.
+export type UserInsert = SqlModels["User"]["insert"]["Type"];
+export type UserUpdate = SqlModels["User"]["update"]["Type"];
+export type AccountInsert = SqlModels["Account"]["insert"]["Type"];
+export type AccountUpdate = SqlModels["Account"]["update"]["Type"];
+export type SessionInsert = SqlModels["Session"]["insert"]["Type"];
+export type SessionUpdate = SqlModels["Session"]["update"]["Type"];
+export type VerificationTokenInsert = SqlModels["VerificationToken"]["insert"]["Type"];
+export type VerificationTokenUpdate = SqlModels["VerificationToken"]["update"]["Type"];

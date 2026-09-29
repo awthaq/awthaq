@@ -3,8 +3,8 @@
 // codes, a real session cookie — mirroring `@awthaq/admin`'s own
 // `AuthHttp.test.ts`.
 import { Api } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
+import { Sessions, Users } from "@awthaq/core";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -14,19 +14,16 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import { TestAuth } from "@awthaq/test";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
-import * as InvitationRecords from "../src/InvitationRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationApi from "../src/OrganizationApi.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationRecords from "../src/OrganizationRecords.ts";
-import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
-import * as TeamRecords from "../src/TeamRecords.ts";
+import * as OrganizationMemory from "../src/OrganizationMemory.ts";
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -34,10 +31,7 @@ const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.lay
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
@@ -65,9 +59,10 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 );
 
 const CSRF_TOKEN: string = (() => {
-  const token = randomBytes(32).toString("hex");
-  const signature = createHmac("sha256", CSRF_SECRET).update(token).digest("hex");
-  return `${token}.${signature}`;
+  // CDS-006: `<iat>.<random>.<hmac(iat.random)>`. The handler under test runs on the real clock here (a web handler).
+  const signed = `${Math.floor(Date.now() / 1000)}.${randomBytes(32).toString("hex")}`;
+  const signature = createHmac("sha256", CSRF_SECRET).update(signed).digest("hex");
+  return `${signed}.${signature}`;
 })();
 
 /** Appends the double-submit CSRF cookie to an existing `cookie` header value, if any. */
@@ -86,14 +81,10 @@ const buildAppLayer = (configOverrides: Partial<Organization.OrganizationConfigS
     AuthHttp.docs(OrganizationApi.OrganizationApi),
   ).pipe(
     Layer.provide(CsrfProtectionLive),
+    Layer.provideMerge(OrganizationMemory.layer),
     Layer.provideMerge(CoreLive),
-    Layer.provideMerge(OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(ActiveContextRecords.layerMemory),
-    Layer.provideMerge(InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(Mailer.layerMemory),
+    Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
@@ -122,7 +113,21 @@ const buildHandler = (configOverrides: Partial<Organization.OrganizationConfigSh
       ),
     );
 
-  return { handler, issueSessionCookieHeader };
+  /** Runs `effect` against the same running records the handler uses (e.g. to seed a member the HTTP surface gives no direct route for). */
+  const withServices = <A, E>(
+    effect: Effect.Effect<A, E, MembershipRecords.MembershipRecords>,
+  ): Promise<A> =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const context = yield* Layer.buildWithMemoMap(AppLayer, memoMap, scope);
+          return yield* effect.pipe(Effect.provide(context));
+        }),
+      ),
+    );
+
+  return { handler, issueSessionCookieHeader, withServices };
 };
 
 const UNSAFE_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -161,7 +166,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
         request(handler, "POST", "/organization", { name: "Acme", slug: "acme" }, { cookie }),
       );
       assert.strictEqual(created.status, 200);
-      const record = (yield* Effect.promise(() => created.json())) as { id: string; slug: string };
+      const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(
+        yield* Effect.promise(() => created.json()),
+      );
       assert.strictEqual(record.slug, "acme");
 
       const fetched = yield* Effect.promise(() =>
@@ -173,7 +180,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
         request(handler, "PATCH", `/organization/${record.id}`, { name: "Acme Inc" }, { cookie }),
       );
       assert.strictEqual(updated.status, 200);
-      const updatedBody = (yield* Effect.promise(() => updated.json())) as { name: string };
+      const updatedBody = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(
+        yield* Effect.promise(() => updated.json()),
+      );
       assert.strictEqual(updatedBody.name, "Acme Inc");
 
       const deleted = yield* Effect.promise(() =>
@@ -202,7 +211,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
     assert.strictEqual(collision.status, 409);
   });
 
-  it("update answers 403 for a non-member without permission", async () => {
+  // MTI-009 (BEH-EA-147): a non-member's denial is a 404, never a 403 — it must
+  // not reveal that the organization exists.
+  it("update answers 404 for a non-member", async () => {
     const { handler, issueSessionCookieHeader } = buildHandler();
     const ownerCookie = await issueSessionCookieHeader("owner-1");
     const outsiderCookie = await issueSessionCookieHeader("outsider-1");
@@ -213,7 +224,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie: ownerCookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const denied = await request(
       handler,
@@ -222,7 +233,161 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "x" },
       { cookie: outsiderCookie },
     );
+    assert.strictEqual(denied.status, 404);
+  });
+
+  // MTI-009: every /organization/:organizationId/* endpoint answers a
+  // non-member byte-identically for an existing and a non-existent id.
+  it("a non-member gets the same 404 for an existing organization as for a random id", async () => {
+    const { handler, issueSessionCookieHeader } = buildHandler({
+      teams: {
+        enabled: true,
+        maximumTeams: Number.POSITIVE_INFINITY,
+        maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+        allowRemovingAllTeams: false,
+      },
+    });
+    const ownerCookie = await issueSessionCookieHeader("owner-1");
+    const outsiderCookie = await issueSessionCookieHeader("outsider-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme" },
+      { cookie: ownerCookie },
+    );
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
+
+    const probes: ReadonlyArray<{ method: string; path: (id: string) => string; body?: unknown }> =
+      [
+        { method: "GET", path: (id) => `/organization/${id}` },
+        { method: "GET", path: (id) => `/organization/${id}/full` },
+        { method: "GET", path: (id) => `/organization/${id}/members` },
+        { method: "PATCH", path: (id) => `/organization/${id}`, body: { name: "x" } },
+        { method: "DELETE", path: (id) => `/organization/${id}` },
+        { method: "DELETE", path: (id) => `/organization/${id}/members/owner-1` },
+        { method: "GET", path: (id) => `/organization/${id}/invitations` },
+        {
+          method: "POST",
+          path: (id) => `/organization/${id}/invitations`,
+          body: { email: "x@example.com", role: ["member"] },
+        },
+        { method: "GET", path: (id) => `/organization/${id}/teams` },
+        // PV-300: `leave` and the caller-scoped team reads used to answer a different 404 body
+        // (or 200 []) for an existing organization than for an unknown id.
+        { method: "POST", path: (id) => `/organization/${id}/leave` },
+        { method: "GET", path: (id) => `/organization/${id}/teams/mine` },
+        { method: "GET", path: (id) => `/organization/${id}/teams/some-team/members` },
+      ];
+    for (const probe of probes) {
+      const existing = await request(handler, probe.method, probe.path(record.id), probe.body, {
+        cookie: outsiderCookie,
+      });
+      const missing = await request(handler, probe.method, probe.path("no-such-org"), probe.body, {
+        cookie: outsiderCookie,
+      });
+      assert.strictEqual(existing.status, 404, `${probe.method} ${probe.path(record.id)}`);
+      assert.strictEqual(missing.status, 404);
+      assert.strictEqual(await existing.text(), await missing.text());
+    }
+  });
+
+  // PV-300: with teams disabled (the default) the feature gate used to run before the membership
+  // gate, so an outsider got 403 TeamsDisabled for an existing organization and 404 for an unknown one.
+  it("a non-member gets the same 404 from team endpoints whether or not teams are enabled", async () => {
+    const { handler, issueSessionCookieHeader } = buildHandler();
+    const ownerCookie = await issueSessionCookieHeader("owner-1");
+    const outsiderCookie = await issueSessionCookieHeader("outsider-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme" },
+      { cookie: ownerCookie },
+    );
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
+    const probes: ReadonlyArray<{ method: string; path: (id: string) => string; body?: unknown }> =
+      [
+        { method: "GET", path: (id) => `/organization/${id}/teams` },
+        { method: "GET", path: (id) => `/organization/${id}/teams/mine` },
+        { method: "POST", path: (id) => `/organization/${id}/teams`, body: { name: "x" } },
+      ];
+    for (const probe of probes) {
+      const existing = await request(handler, probe.method, probe.path(record.id), probe.body, {
+        cookie: outsiderCookie,
+      });
+      const missing = await request(handler, probe.method, probe.path("no-such-org"), probe.body, {
+        cookie: outsiderCookie,
+      });
+      assert.strictEqual(existing.status, 404, `${probe.method} ${probe.path(record.id)}`);
+      assert.strictEqual(await existing.text(), await missing.text());
+    }
+  });
+
+  it("a member without the statement still gets 403, not 404", async () => {
+    const { handler, issueSessionCookieHeader, withServices } = buildHandler();
+    const ownerCookie = await issueSessionCookieHeader("owner-1");
+    const memberCookie = await issueSessionCookieHeader("member-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme" },
+      { cookie: ownerCookie },
+    );
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
+    await withServices(
+      MembershipRecords.MembershipRecords.use((members) =>
+        members.create({
+          organizationId: record.id,
+          userId: Users.UserId("member-1"),
+          role: ["member"],
+        }),
+      ),
+    );
+
+    // Removing another (plain) member needs member:delete, which a member lacks.
+    await withServices(
+      MembershipRecords.MembershipRecords.use((members) =>
+        members.create({
+          organizationId: record.id,
+          userId: Users.UserId("member-2"),
+          role: ["member"],
+        }),
+      ),
+    );
+    const denied = await request(
+      handler,
+      "DELETE",
+      `/organization/${record.id}/members/member-2`,
+      undefined,
+      { cookie: memberCookie },
+    );
     assert.strictEqual(denied.status, 403);
+  });
+
+  // MTI-008: organization metadata is member-only.
+  it("GET /organization/:id answers a non-member 404 and a member the DTO", async () => {
+    const { handler, issueSessionCookieHeader } = buildHandler();
+    const ownerCookie = await issueSessionCookieHeader("owner-1");
+    const outsiderCookie = await issueSessionCookieHeader("outsider-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme", metadata: '{"secret":true}' },
+      { cookie: ownerCookie },
+    );
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
+
+    const outsider = await handler(
+      new Request(`${ORIGIN}/organization/${record.id}`, { headers: { cookie: outsiderCookie } }),
+    );
+    assert.strictEqual(outsider.status, 404);
+    const member = await handler(
+      new Request(`${ORIGIN}/organization/${record.id}`, { headers: { cookie: ownerCookie } }),
+    );
+    assert.strictEqual(member.status, 200);
   });
 
   it("removeMember answers 409 (OwnerInvariantViolation) for the last owner", async () => {
@@ -235,7 +400,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const removed = await request(
       handler,
@@ -257,13 +422,15 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const members = await handler(
       new Request(`${ORIGIN}/organization/${record.id}/members`, { headers: { cookie } }),
     );
     assert.strictEqual(members.status, 200);
-    const rows = (await members.json()) as ReadonlyArray<unknown>;
+    const rows = Schema.decodeUnknownSync(Schema.Array(OrganizationApi.MembershipDto))(
+      await members.json(),
+    );
     assert.strictEqual(rows.length, 1);
   });
 
@@ -277,7 +444,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const set = await request(
       handler,
@@ -292,7 +459,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       new Request(`${ORIGIN}/organization/active`, { headers: { cookie } }),
     );
     assert.strictEqual(active.status, 200);
-    const activeBody = (await active.json()) as { activeOrganizationId: string | null };
+    const activeBody = Schema.decodeUnknownSync(OrganizationApi.ActiveContextDto)(
+      await active.json(),
+    );
     assert.strictEqual(activeBody.activeOrganizationId, record.id);
 
     const activeMember = await handler(
@@ -315,7 +484,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const inviteRes = await request(
       handler,
@@ -325,13 +494,20 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { cookie },
     );
     assert.strictEqual(inviteRes.status, 200);
-    const invitation = (await inviteRes.json()) as { id: string };
+    const invitationJson: unknown = await inviteRes.json();
+    // MTI-010: neither the emailed token nor its hash ever appears on the wire (checked on the raw body,
+    // since decoding through the contract would strip an unknown field).
+    assert.notProperty(invitationJson, "tokenHash");
+    assert.notProperty(invitationJson, "token");
+    const invitation = Schema.decodeUnknownSync(OrganizationApi.InvitationDto)(invitationJson);
 
     const listRes = await handler(
       new Request(`${ORIGIN}/organization/${record.id}/invitations`, { headers: { cookie } }),
     );
     assert.strictEqual(listRes.status, 200);
-    const invitations = (await listRes.json()) as ReadonlyArray<unknown>;
+    const invitations = Schema.decodeUnknownSync(Schema.Array(OrganizationApi.InvitationDto))(
+      await listRes.json(),
+    );
     assert.strictEqual(invitations.length, 1);
 
     const cancelRes = await request(
@@ -359,7 +535,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const createRes = await request(
       handler,
@@ -369,13 +545,15 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { cookie },
     );
     assert.strictEqual(createRes.status, 200);
-    const role = (await createRes.json()) as { id: string };
+    const role = Schema.decodeUnknownSync(OrganizationApi.OrgRoleDto)(await createRes.json());
 
     const listRes = await handler(
       new Request(`${ORIGIN}/organization/${record.id}/roles`, { headers: { cookie } }),
     );
     assert.strictEqual(listRes.status, 200);
-    const roles = (await listRes.json()) as ReadonlyArray<unknown>;
+    const roles = Schema.decodeUnknownSync(Schema.Array(OrganizationApi.OrgRoleDto))(
+      await listRes.json(),
+    );
     assert.strictEqual(roles.length, 1);
 
     const deleteRes = await request(
@@ -405,7 +583,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { name: "Acme", slug: "acme" },
       { cookie },
     );
-    const record = (await created.json()) as { id: string };
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
 
     const teamRes = await request(
       handler,
@@ -415,7 +593,7 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { cookie },
     );
     assert.strictEqual(teamRes.status, 200);
-    const team = (await teamRes.json()) as { id: string };
+    const team = Schema.decodeUnknownSync(OrganizationApi.TeamDto)(await teamRes.json());
 
     const addRes = await request(
       handler,
@@ -432,7 +610,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       }),
     );
     assert.strictEqual(membersRes.status, 200);
-    const members = (await membersRes.json()) as ReadonlyArray<unknown>;
+    const members = Schema.decodeUnknownSync(Schema.Array(OrganizationApi.TeamMembershipDto))(
+      await membersRes.json(),
+    );
     assert.strictEqual(members.length, 1);
 
     const setActiveTeamRes = await request(
@@ -443,7 +623,9 @@ describe("AuthHttp + Organization (real HTTP)", () => {
       { cookie },
     );
     assert.strictEqual(setActiveTeamRes.status, 200);
-    const activeBody = (await setActiveTeamRes.json()) as { activeTeamId: string | null };
+    const activeBody = Schema.decodeUnknownSync(OrganizationApi.ActiveContextDto)(
+      await setActiveTeamRes.json(),
+    );
     assert.strictEqual(activeBody.activeTeamId, team.id);
 
     const removeRes = await request(
@@ -456,14 +638,196 @@ describe("AuthHttp + Organization (real HTTP)", () => {
     assert.strictEqual(removeRes.status, 204);
   });
 
+  it("team roles (OHS-004): a lead manages their team over HTTP; role changes are canGrant-guarded", async () => {
+    const { handler, issueSessionCookieHeader, withServices } = buildHandler({
+      teams: {
+        enabled: true,
+        maximumTeams: Number.POSITIVE_INFINITY,
+        maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+        allowRemovingAllTeams: true,
+      },
+    });
+    const ownerCookie = await issueSessionCookieHeader("owner-1");
+    const leadCookie = await issueSessionCookieHeader("lead-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme" },
+      { cookie: ownerCookie },
+    );
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
+    for (const id of ["lead-1", "worker-1"]) {
+      await withServices(
+        MembershipRecords.MembershipRecords.use((members) =>
+          members.create({
+            organizationId: record.id,
+            userId: Users.UserId(id),
+            role: ["member"],
+          }),
+        ),
+      );
+    }
+    const base = `/organization/${record.id}/teams`;
+    const eng = Schema.decodeUnknownSync(OrganizationApi.TeamDto)(
+      await (await request(handler, "POST", base, { name: "Eng" }, { cookie: ownerCookie })).json(),
+    );
+    const sales = Schema.decodeUnknownSync(OrganizationApi.TeamDto)(
+      await (
+        await request(handler, "POST", base, { name: "Sales" }, { cookie: ownerCookie })
+      ).json(),
+    );
+
+    const promoted = await request(
+      handler,
+      "POST",
+      `${base}/${eng.id}/members`,
+      { userId: "lead-1", role: ["lead"] },
+      { cookie: ownerCookie },
+    );
+    assert.strictEqual(promoted.status, 200);
+    assert.deepStrictEqual(
+      Schema.decodeUnknownSync(OrganizationApi.TeamMembershipDto)(await promoted.json()).role,
+      ["lead"],
+    );
+
+    // The lead staffs their own team ...
+    const added = await request(
+      handler,
+      "POST",
+      `${base}/${eng.id}/members`,
+      { userId: "worker-1" },
+      { cookie: leadCookie },
+    );
+    assert.strictEqual(added.status, 200);
+    // ... but not another one.
+    const other = await request(
+      handler,
+      "POST",
+      `${base}/${sales.id}/members`,
+      { userId: "worker-1" },
+      { cookie: leadCookie },
+    );
+    assert.strictEqual(other.status, 403);
+
+    const rerole = await request(
+      handler,
+      "PATCH",
+      `${base}/${eng.id}/members/worker-1`,
+      { role: ["lead"] },
+      { cookie: leadCookie },
+    );
+    assert.strictEqual(rerole.status, 200);
+    const unknown = await request(
+      handler,
+      "PATCH",
+      `${base}/${eng.id}/members/worker-1`,
+      { role: ["nope"] },
+      { cookie: leadCookie },
+    );
+    assert.strictEqual(unknown.status, 422);
+    // The default lead holds only team:update, so deleting its team is still refused.
+    const escalate = await request(handler, "DELETE", `${base}/${eng.id}`, undefined, {
+      cookie: leadCookie,
+    });
+    assert.strictEqual(escalate.status, 403);
+  });
+
+  it("teams hierarchy (OHS-001): nested create, ancestors/descendants, move, cycle and has-children conflicts", async () => {
+    const { handler, issueSessionCookieHeader } = buildHandler({
+      teams: {
+        enabled: true,
+        maximumTeams: Number.POSITIVE_INFINITY,
+        maximumMembersPerTeam: Number.POSITIVE_INFINITY,
+        allowRemovingAllTeams: true,
+      },
+    });
+    const cookie = await issueSessionCookieHeader("owner-1");
+    const created = await request(
+      handler,
+      "POST",
+      "/organization",
+      { name: "Acme", slug: "acme" },
+      { cookie },
+    );
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
+    const base = `/organization/${record.id}/teams`;
+    const makeTeam = async (name: string, parentId?: string) => {
+      const res = await request(
+        handler,
+        "POST",
+        base,
+        parentId === undefined ? { name } : { name, parentId },
+        { cookie },
+      );
+      assert.strictEqual(res.status, 200);
+      return Schema.decodeUnknownSync(OrganizationApi.TeamDto)(await res.json());
+    };
+    const get = async (path: string, headers: Record<string, string>) =>
+      handler(new Request(`${ORIGIN}${path}`, { headers }));
+
+    const eng = await makeTeam("Engineering");
+    const platform = await makeTeam("Platform", eng.id);
+    assert.strictEqual(platform.parentId, eng.id);
+
+    const ancestors = await get(`${base}/${platform.id}/ancestors`, { cookie });
+    assert.strictEqual(ancestors.status, 200);
+    assert.strictEqual(
+      Schema.decodeUnknownSync(Schema.Array(OrganizationApi.TeamDto))(await ancestors.json())
+        .length,
+      1,
+    );
+    const descendants = await get(`${base}/${eng.id}/descendants`, { cookie });
+    assert.strictEqual(descendants.status, 200);
+    assert.strictEqual(
+      Schema.decodeUnknownSync(Schema.Array(OrganizationApi.TeamDto))(await descendants.json())
+        .length,
+      1,
+    );
+
+    // Under its own descendant: 409.
+    const cycle = await request(
+      handler,
+      "PATCH",
+      `${base}/${eng.id}/parent`,
+      { parentId: platform.id },
+      { cookie },
+    );
+    assert.strictEqual(cycle.status, 409);
+
+    // A parent with children cannot be deleted: 409.
+    const blocked = await request(handler, "DELETE", `${base}/${eng.id}`, undefined, { cookie });
+    assert.strictEqual(blocked.status, 409);
+
+    const toRoot = await request(
+      handler,
+      "PATCH",
+      `${base}/${platform.id}/parent`,
+      { parentId: null },
+      { cookie },
+    );
+    assert.strictEqual(toRoot.status, 200);
+    assert.strictEqual(
+      Schema.decodeUnknownSync(OrganizationApi.TeamDto)(await toRoot.json()).parentId,
+      null,
+    );
+    const removed = await request(handler, "DELETE", `${base}/${eng.id}`, undefined, { cookie });
+    assert.strictEqual(removed.status, 204);
+
+    // A non-member cannot read the hierarchy.
+    const outsider = await issueSessionCookieHeader("outsider-1");
+    const hidden = await get(`${base}/${platform.id}/ancestors`, { cookie: outsider });
+    assert.strictEqual(hidden.status, 404);
+  });
+
   it.effect("serves generated OpenAPI JSON including the organization group", () =>
     Effect.gen(function* () {
       const { handler } = buildHandler();
       const openapi = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/openapi.json`)));
       assert.strictEqual(openapi.status, 200);
-      const spec = (yield* Effect.promise(() => openapi.json())) as {
-        paths: Record<string, unknown>;
-      };
+      const spec = Schema.decodeUnknownSync(
+        Schema.Struct({ paths: Schema.Record(Schema.String, Schema.Unknown) }),
+      )(yield* Effect.promise(() => openapi.json()));
       assert.isTrue("/organization" in spec.paths);
       const docs = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/docs`)));
       assert.strictEqual(docs.status, 200);

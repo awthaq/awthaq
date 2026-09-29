@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @authorization-bridge @qadi-bridge-path-a
-@skip @unwired
 Feature: Qadi Bridge — Path A (Decide in Handler)
 
   # BEH-EA-145 — spec/behaviors/19-qadi-bridge-path-a.md; see also
@@ -19,6 +18,7 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
       Then "AuthorizedSubject" reads "CurrentPrincipal" already provided by "Authentication"
       And "AuthorizedSubject" provides qadi's "CurrentSubject" to every handler in the group via "SubjectResolver"
 
+    # Compile-time: proven by the `// type-gate:` blocks in step-definitions/CompileTimeGates.ts.
     @REQ-EA-406
     Scenario: A group declaring AuthorizedSubject without Authentication preceding it fails composition, not at first request
       Given an endpoint group that declares ".middleware(AuthorizedSubject)" without ".middleware(Authentication)" preceding it in the chain
@@ -38,11 +38,12 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
   @BEH-EA-146
   Rule: One call per need, not one call for everything
 
+    # Run rather than read: each row executes the named qadi call over a real subject and asserts the shape of what it returns, so the guidance table cannot name a call that no longer fits its need.
     @REQ-EA-408
     Scenario Outline: A handler selects the qadi call whose shape matches its need
       Given a handler with the need "<need>"
       When the handler is implemented
-      Then it uses "<call>"
+      Then it uses "<call>", whose result has the shape that need calls for
 
       Examples:
         | need                                           | call                                                     |
@@ -54,6 +55,10 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
         | authorize a collection item by item             | filter(policy, items) / filterStream                      |
         | downstream code needs proof                     | guard(permission, policy)(resource, (witness, r) => …)    |
 
+    # @skip: anti-pattern statement about how a handler is written (do not hand-roll trimming next
+    #   to check); the observable half, that enforceProjected alone trims to the granted fields, is
+    #   REQ-EA-416.
+    @skip
     @REQ-EA-409
     Scenario: A handler must not layer check plus hand-written field-trimming where enforceProjected already does both
       Given a handler that needs to gate an effect and trim its result to the fields a policy decision granted
@@ -131,6 +136,10 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
       When the caller requests "project-42" through a handler using "enforceProjected"
       Then the returned value is trimmed to exactly the fields the decision granted
 
+    # @skip: anti-pattern statement about handler source (no hand-written redaction on an
+    #   enforceProjected path); nothing observable at runtime beyond REQ-EA-416's exact-fields
+    #   assertion.
+    @skip
     @REQ-EA-417
     Scenario: A handler using enforceProjected must not additionally hand-write field redaction on the same path
       Given a handler using "enforceProjected" to read "project-42"
@@ -164,6 +173,9 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
       Then each item is decided individually against the policy as it streams
       And denied items are dropped from the stream before it reaches the caller
 
+    # @skip: anti-pattern statement about handler source; the observable half, that denied items
+    #   never cross the wire, is asserted by REQ-EA-419 and REQ-EA-420.
+    @skip
     @REQ-EA-421
     Scenario: A handler must not return the full loaded collection and rely on the client to hide denied items
       Given a handler returning a list of resources
@@ -182,6 +194,7 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
       Then the downstream removal function receives an unforgeable witness proving the permission was granted for that resource
       And the removal cannot be invoked without that witness having been produced by "guard"
 
+    # Compile-time: the witness is a branded value only guard mints, so a boolean does not type-check where it is required (CompileTimeGates.ts).
     @REQ-EA-423
     Scenario: A handler must not thread a boolean in place of the witness
       Given a handler needing downstream proof that "project.delete" was granted for "project-42"
@@ -189,6 +202,9 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
       Then it does not thread a boolean flag as a substitute for the witness
       And the downstream removal function's signature requires the actual witness value, not a boolean
 
+    # @skip: anti-pattern statement about handler source (no second check after guard); REQ-EA-422
+    #   asserts one guarded evaluation yields the sole proof the removal receives.
+    @skip
     @REQ-EA-424
     Scenario: A handler must not re-derive the same conclusion by calling check a second time
       Given a handler that already obtained a witness via "guard" for "project-42"
@@ -207,6 +223,10 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
       Then the route requires "SubjectExtractor" to supply the subject
       And a successful decision mints the same kind of witness "guard" produces for handlers inside "HttpApi"
 
+    # @skip: anti-pattern statement about route source (do not hand-check CurrentPrincipal on a
+    #   bare route); the observable half, that addGuardedRoute reaches the evaluator through
+    #   SubjectExtractor, is REQ-EA-425 and REQ-EA-427.
+    @skip
     @REQ-EA-426
     Scenario: A bare HttpRouter route must not hand-check CurrentPrincipal and skip qadi's evaluator
       Given a bare "HttpRouter" route outside "HttpApi" that needs authorization

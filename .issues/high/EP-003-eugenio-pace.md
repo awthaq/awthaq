@@ -1,0 +1,60 @@
+---
+ID: "EP-003"
+Title: "Admin surface is impersonation-only; no user lifecycle or tenant administration"
+Level: high
+Category: "api"
+Status: resolved
+Package: "admin"
+Source: "packages/admin/src/AdminApi.ts:82"
+Auditor: "eugenio-pace"
+Auditor-Type: "real"
+Audit-Date: 2026-09-19
+---
+# EP-003 — Admin surface is impersonation-only; no user lifecycle or tenant administration
+
+`HIGH` · `api` · `admin` · reported by **Co-founder/former CEO of Auth0** (`eugenio-pace`)
+
+Status: **resolved**
+
+## Summary
+
+The whole admin package is four endpoints — impersonate, stopImpersonating, forceStop, list (AdminApi.ts:82-113) — all impersonation. There is no user list/search, no block/disable, no delete, no admin-forced session revocation, no tenant settings. An IAM suite's minimum admin API (support workflows beyond impersonation: suspend an abusive account, enumerate a user's sessions, purge PII on request) is absent, and the fail-closed `canImpersonate` default (Admin.ts:47) means even impersonation is inert until the host writes the gate.
+
+## Evidence
+
+Source: `packages/admin/src/AdminApi.ts:82`
+
+```
+export const AdminGroup = HttpApiGroup.make("admin")
+  .add(
+    HttpApiEndpoint.post("impersonate", "/admin/impersonate/:userId", {
+```
+
+## Recommended fix
+
+Grow @awthaq/admin behind the same gate pattern: user search/list, block/unblock with typed errors, admin-initiated session revocation, and a redaction-respecting delete. Each is small against the existing Users/Sessions services; the impersonation gate (deny-by-default predicate) is the right template.
+
+## Context
+
+- Auditor verdict on this domain: **needs-work** (score 48/100), domain: multi-tenant SaaS readiness
+- Full dossier: [`eugenio-pace`](../../.reports/eugenio-pace/index.html) · Board: [`dashboard`](../../.reports/index.html)
+- Auditor read 27 files in this domain; this finding's source was read directly during the audit.
+
+## Related findings (same source file)
+
+- [`AR-003` — Admin API shares the public surface — no separate tier, scheme, or network boundary](medium/AR-003-aeneas-rekkas.md) `_(aeneas-rekkas, medium)_`
+- [`APS-009` — Admin path parameters are raw unvalidated strings; impersonate accepts nonexistent target users](low/APS-009-auth-pentest-specialist.md) `_(auth-pentest-specialist, low)_`
+
+## Comments
+
+_Triage notes and discussion append here._
+
+**Validation (2026-09-19):** CONFIRMED — evidence quote matches `packages/admin/src/AdminApi.ts:82-84` exactly; `AdminGroup` (lines 82-111) has exactly the four cited endpoints, all impersonation, and `Admin.ts:47` (`canImpersonate: () => Effect.succeed(false)`) confirms the fail-closed default. Deciding and building a user-lifecycle/tenant-admin surface (search, block, forced revocation, redaction-respecting delete) is a product-scope decision, not a mechanical patch. Status → ready-for-human.
+
+**Decision (2026-09-19):** Resolved via [Admin API surface expansion beyond impersonation](../../.scratch/resolve-ready-for-human-findings/issues/19-admin-api-surface-expansion.md) — Resolved via the same admin-surface growth described in the ticket, plus a superadmin-only tenant-admin slice (`listOrganizations`/`suspendOrganization`) built on Ticket 18's organization-as-tenant model, gated behind a new optional `Admin.layerWithTenants` variant. Status → ready-for-agent.
+
+**Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `admin-surface-expansion`. Evidence at HEAD ec065a7: `packages/admin/src/AdminApi.ts:82`. Fix: Implement ticket 19 §3: an optional superadmin tenant-administration sub-surface on top of BAM-005's user/session admin. (effort L). Full dossier: `.plan/slices/10-passkey-admin.md`.
+
+**Plan note (2026-09-29):** Left open by P05, blocked. EP-003 depends on BAM-005 (only its first slice landed: canManageUsers + user/session endpoints; the canAdministerTenants predicate was intentionally not added yet, it has no consumer) and DRS-001 (ticket 18 TenantContext / tenant column - not in the repo). Its core is also outside packages/admin: an organization `suspended`/`suspendedAt` migration and enforcement wherever membership gates access (packages/organization - P04/P18 territory) plus an `OrganizationSuspended` error, then the admin side (AdminTenantsGroup listOrganizations/getOrganization/suspendOrganization/unsuspendOrganization behind canAdministerTenants, Admin.layerWithTenants with dependsOn [Organization], auth.admin.organizationSuspended/Unsuspended events). The admin-tier machinery it needs is in place: a group id with an `admin` segment (e.g. `admin.tenants`) is automatically admin-tier and sits behind Api.AdminAuthentication (AR-003), and the target-aware gate pattern is established (IDS-001/BAM-005). Suggested order: organization suspension (P04/P18) -> then this admin sub-surface.
+
+**Resolved (2026-09-29):** Tenant-administration sub-surface landed (ADR-EA-018, BEH-EA-237). Organization: organization_org."suspendedAt" (plugin migration), OrganizationRecords.setSuspended/listPage, requireOrganization refuses a suspended organization with OrganizationNotFound (MTI-009 posture, so no endpoint error contract changes), setActive/getActiveMember refuse it, qadi relationships (member, has-role, resource:action, team-member, team-role) answer Unrelated through it, member list still returns it flagged suspended. Admin: new opt-in plugin AdminTenants (id admin.tenants, dependsOn [Organization], group admin.tenants which is admin-tier by construction and behind Api.AdminAuthentication + CSRF): GET /admin/organizations (keyset), GET /admin/organizations/:id, POST .../suspend {reason?} (idempotent), POST .../unsuspend, all behind AdminConfig.canAdministerTenants (fail-closed; gate before existence; denials audited as auth.admin.actionDenied), events auth.admin.organizationSuspended/organizationUnsuspended (AuthEvents + AuditLog actor mapping). Deviation from the dossier: a separate plugin AdminTenants instead of Admin.layerWithTenants, because Auth.make composes plugin classes and the tuple type must carry the Organization dependency (RolesAdmin beside Roles is the same shape); Admin itself stays organization-free and @awthaq/admin gains a dependency on @awthaq/organization. Tests: AdminTenants (denied by default and audited, no id oracle, keyset list, suspend/unsuspend round trip with the member refused then restored, events), composition (Auth.make([Organization, Admin, AdminTenants]) orders and tiers correctly), Organization suspension and qadi suspension suites, OrganizationRecords suspension/listPage (memory, SQL, Postgres).

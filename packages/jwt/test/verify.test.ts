@@ -6,10 +6,12 @@
 // JWKS document for `verify.ts` to be handed as plain data/HTTP
 // responses — mirroring `packages/oauth/test/OAuth.test.ts`'s own fake-
 // `HttpClient` pattern for exercising fetch-based code without a network.
+import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
@@ -49,6 +51,7 @@ const buildJwtLayer = () =>
   Jwt.Jwt.layer.pipe(
     Layer.provideMerge(KeyRing.KeyRing.layer),
     Layer.provideMerge(SigningKeyRecords.layerMemory),
+    Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(AuthenticationLive),
     Layer.provideMerge(Sessions.layerMemory),
     // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
@@ -84,7 +87,8 @@ describe("lite verifier (@awthaq/jwt/verify)", () => {
         jwksUrl: JWKS_URL,
         issuer: ISSUER,
         audience: ISSUER,
-        algorithm: "EdDSA",
+        algorithms: ["EdDSA"],
+        expectedTyp: "JWT",
       }).pipe(Effect.provide(fakeJwksHttpClient(served)));
 
       const claims = yield* verifier.verify(token);
@@ -105,7 +109,8 @@ describe("lite verifier (@awthaq/jwt/verify)", () => {
         jwksUrl: JWKS_URL,
         issuer: ISSUER,
         audience: ISSUER,
-        algorithm: "EdDSA",
+        algorithms: ["EdDSA"],
+        expectedTyp: "JWT",
       }).pipe(Effect.provide(fakeJwksHttpClient(served)));
 
       const result = yield* verifier.verify(tampered).pipe(Effect.flip);
@@ -124,7 +129,8 @@ describe("lite verifier (@awthaq/jwt/verify)", () => {
         jwksUrl: JWKS_URL,
         issuer: "https://someone-else.test",
         audience: "https://someone-else.test",
-        algorithm: "EdDSA",
+        algorithms: ["EdDSA"],
+        expectedTyp: "JWT",
       }).pipe(Effect.provide(fakeJwksHttpClient(served)));
 
       const result = yield* verifier.verify(token).pipe(Effect.flip);
@@ -144,7 +150,8 @@ describe("lite verifier (@awthaq/jwt/verify)", () => {
         jwksUrl: JWKS_URL,
         issuer: ISSUER,
         audience: ISSUER,
-        algorithm: "EdDSA",
+        algorithms: ["EdDSA"],
+        expectedTyp: "JWT",
       }).pipe(Effect.provide(fakeJwksHttpClient(served)));
 
       const result = yield* verifier.verify(token).pipe(Effect.flip);
@@ -159,7 +166,8 @@ describe("lite verifier (@awthaq/jwt/verify)", () => {
         jwksUrl: JWKS_URL,
         issuer: ISSUER,
         audience: ISSUER,
-        algorithm: "EdDSA",
+        algorithms: ["EdDSA"],
+        expectedTyp: "JWT",
       }).pipe(Effect.provide(fakeJwksHttpClient(served)));
 
       const result = yield* verifier.verify("not-a-jwt").pipe(Effect.flip);
@@ -173,7 +181,7 @@ describe("lite verifier (@awthaq/jwt/verify)", () => {
       const tokenBeforeRotation = yield* jwt.signJWT({ sub: "user-1" });
       const jwksBeforeRotation = yield* jwt.jwks;
 
-      yield* KeyRing.rotateNow;
+      yield* KeyRing.rotateNow();
       const tokenAfterRotation = yield* jwt.signJWT({ sub: "user-2" });
       const jwksAfterRotation = yield* jwt.jwks;
 
@@ -186,7 +194,8 @@ describe("lite verifier (@awthaq/jwt/verify)", () => {
         jwksUrl: JWKS_URL,
         issuer: ISSUER,
         audience: ISSUER,
-        algorithm: "EdDSA",
+        algorithms: ["EdDSA"],
+        expectedTyp: "JWT",
       }).pipe(Effect.provide(fakeJwksHttpClient(served)));
 
       const firstClaims = yield* verifier.verify(tokenBeforeRotation);
@@ -197,6 +206,31 @@ describe("lite verifier (@awthaq/jwt/verify)", () => {
 
       const secondClaims = yield* verifier.verify(tokenAfterRotation);
       assert.strictEqual(secondClaims["sub"], "user-2");
+    }).pipe(Effect.provide(buildJwtLayer())),
+  );
+
+  // ECF-001: the JWKS fetch (request plus body decode) has a deadline, so a hung issuer fails the
+  // verification instead of pinning the caller's fiber.
+  it.effect("a JWKS endpoint that never answers fails within fetchTimeout", () =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+      const token = yield* jwt.signJWT({ sub: "user-1" });
+      const hung = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make(() => Effect.never),
+      );
+      const verifier = yield* Verify.makeVerifier({
+        jwksUrl: JWKS_URL,
+        issuer: ISSUER,
+        audience: ISSUER,
+        algorithms: ["EdDSA"],
+        expectedTyp: "JWT",
+        fetchTimeout: Duration.seconds(2),
+      }).pipe(Effect.provide(hung));
+      const fiber = yield* Effect.forkChild(verifier.verify(token).pipe(Effect.flip));
+      yield* TestClock.adjust(Duration.seconds(3));
+      const failure = yield* Fiber.join(fiber);
+      assert.strictEqual(failure.reason, "jwks fetch failed");
     }).pipe(Effect.provide(buildJwtLayer())),
   );
 });

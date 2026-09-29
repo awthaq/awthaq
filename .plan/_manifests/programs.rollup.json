@@ -1,0 +1,312 @@
+[
+ {
+  "key": "P01",
+  "phase": 1,
+  "title": "Session integrity & cookie/CSRF correctness",
+  "file": "programs/P01-session-integrity-cookie-csrf-correctness.md",
+  "open": 44,
+  "closed": 26,
+  "est_hours": 125,
+  "levels": {
+   "low": 21,
+   "medium": 22,
+   "info": 1
+  },
+  "decisions": 3
+ },
+ {
+  "key": "P02",
+  "phase": 1,
+  "title": "OAuth / OIDC flow hardening",
+  "file": "programs/P02-oauth-oidc-flow-hardening.md",
+  "open": 35,
+  "closed": 36,
+  "est_hours": 64,
+  "levels": {
+   "high": 3,
+   "medium": 21,
+   "low": 10,
+   "info": 1
+  },
+  "decisions": 4
+ },
+ {
+  "key": "P03",
+  "phase": 1,
+  "title": "JWT, signing keys & key rotation",
+  "file": "programs/P03-jwt-signing-keys-key-rotation.md",
+  "open": 23,
+  "closed": 13,
+  "est_hours": 92,
+  "levels": {
+   "high": 4,
+   "low": 7,
+   "info": 1,
+   "medium": 11
+  },
+  "decisions": 2
+ },
+ {
+  "key": "P04",
+  "phase": 1,
+  "title": "Authorization: organizations, roles, qadi",
+  "file": "programs/P04-authorization-organizations-roles-qadi.md",
+  "open": 54,
+  "closed": 17,
+  "est_hours": 198,
+  "levels": {
+   "high": 8,
+   "medium": 32,
+   "info": 3,
+   "low": 11
+  },
+  "decisions": 4
+ },
+ {
+  "key": "P05",
+  "phase": 1,
+  "title": "Admin & impersonation",
+  "file": "programs/P05-admin-impersonation.md",
+  "open": 12,
+  "closed": 7,
+  "est_hours": 91,
+  "levels": {
+   "high": 3,
+   "medium": 7,
+   "low": 1,
+   "info": 1
+  },
+  "decisions": 3
+ },
+ {
+  "key": "P06",
+  "phase": 1,
+  "title": "Rate limiting & abuse resistance",
+  "file": "programs/P06-rate-limiting-abuse-resistance.md",
+  "open": 10,
+  "closed": 3,
+  "est_hours": 39,
+  "levels": {
+   "high": 1,
+   "medium": 7,
+   "low": 2
+  },
+  "decisions": 0
+ },
+ {
+  "key": "P07",
+  "phase": 2,
+  "title": "Password, hashing, mail & verification tokens",
+  "file": "programs/P07-password-hashing-mail-verification-tokens.md",
+  "open": 37,
+  "closed": 25,
+  "est_hours": 86,
+  "levels": {
+   "high": 4,
+   "medium": 20,
+   "low": 12,
+   "info": 1
+  },
+  "decisions": 3
+ },
+ {
+  "key": "P08",
+  "phase": 2,
+  "title": "Passkeys / WebAuthn",
+  "file": "programs/P08-passkeys-webauthn.md",
+  "open": 25,
+  "closed": 17,
+  "est_hours": 58,
+  "levels": {
+   "medium": 16,
+   "low": 8,
+   "info": 1
+  },
+  "decisions": 2
+ },
+ {
+  "key": "P09",
+  "phase": 2,
+  "title": "Persistence: SQL dialects, repositories, replicas",
+  "file": "programs/P09-persistence-sql-dialects-repositories-replicas.md",
+  "open": 19,
+  "closed": 12,
+  "est_hours": 79,
+  "levels": {
+   "high": 2,
+   "low": 8,
+   "medium": 7,
+   "info": 2
+  },
+  "decisions": 1
+ },
+ {
+  "key": "P10",
+  "phase": 2,
+  "title": "Events, hooks & observability",
+  "file": "programs/P10-events-hooks-observability.md",
+  "open": 33,
+  "closed": 11,
+  "est_hours": 133,
+  "levels": {
+   "medium": 19,
+   "high": 6,
+   "low": 8
+  },
+  "decisions": 1
+ },
+ {
+  "key": "P11",
+  "phase": 2,
+  "title": "Compliance: erasure, export, retention, redaction",
+  "file": "programs/P11-compliance-erasure-export-retention-redaction.md",
+  "open": 7,
+  "closed": 11,
+  "est_hours": 57,
+  "levels": {
+   "high": 2,
+   "medium": 4,
+   "low": 1
+  },
+  "decisions": 3
+ },
+ {
+  "key": "P12",
+  "phase": 2,
+  "title": "Composition, API surface & error taxonomy",
+  "file": "programs/P12-composition-api-surface-error-taxonomy.md",
+  "open": 16,
+  "closed": 10,
+  "est_hours": 73,
+  "levels": {
+   "high": 1,
+   "medium": 10,
+   "low": 5
+  },
+  "decisions": 1
+ },
+ {
+  "key": "P13",
+  "phase": 2,
+  "title": "Frontend: Next.js, React, client",
+  "file": "programs/P13-frontend-next-js-react-client.md",
+  "open": 29,
+  "closed": 20,
+  "est_hours": 78,
+  "levels": {
+   "medium": 10,
+   "low": 13,
+   "high": 5,
+   "info": 1
+  },
+  "decisions": 1
+ },
+ {
+  "key": "P14",
+  "phase": 3,
+  "title": "Identity model & user lifecycle",
+  "file": "programs/P14-identity-model-user-lifecycle.md",
+  "open": 10,
+  "closed": 4,
+  "est_hours": 134,
+  "levels": {
+   "medium": 5,
+   "high": 3,
+   "low": 2
+  },
+  "decisions": 1
+ },
+ {
+  "key": "P15",
+  "phase": 3,
+  "title": "MFA, passwordless & authentication assurance",
+  "file": "programs/P15-mfa-passwordless-authentication-assurance.md",
+  "open": 19,
+  "closed": 13,
+  "est_hours": 131,
+  "levels": {
+   "high": 6,
+   "medium": 10,
+   "low": 3
+  },
+  "decisions": 1
+ },
+ {
+  "key": "P16",
+  "phase": 3,
+  "title": "Native, bearer & machine identity",
+  "file": "programs/P16-native-bearer-machine-identity.md",
+  "open": 16,
+  "closed": 12,
+  "est_hours": 120,
+  "levels": {
+   "high": 8,
+   "medium": 7,
+   "info": 1
+  },
+  "decisions": 2
+ },
+ {
+  "key": "P17",
+  "phase": 3,
+  "title": "CLI tooling",
+  "file": "programs/P17-cli-tooling.md",
+  "open": 16,
+  "closed": 9,
+  "est_hours": 115,
+  "levels": {
+   "medium": 9,
+   "high": 6,
+   "low": 1
+  },
+  "decisions": 0
+ },
+ {
+  "key": "P18",
+  "phase": 4,
+  "title": "Multi-tenancy, residency & enterprise federation",
+  "file": "programs/P18-multi-tenancy-residency-enterprise-federation.md",
+  "open": 16,
+  "closed": 6,
+  "est_hours": 194,
+  "levels": {
+   "high": 5,
+   "info": 3,
+   "medium": 7,
+   "low": 1
+  },
+  "decisions": 4
+ },
+ {
+  "key": "P19",
+  "phase": 0,
+  "title": "Spec & documentation truthfulness",
+  "file": "programs/P19-spec-documentation-truthfulness.md",
+  "open": 27,
+  "closed": 5,
+  "est_hours": 42,
+  "levels": {
+   "high": 1,
+   "info": 4,
+   "low": 15,
+   "medium": 7
+  },
+  "decisions": 0
+ },
+ {
+  "key": "P20",
+  "phase": 0,
+  "title": "Test suite, tooling & CI",
+  "file": "programs/P20-test-suite-tooling-ci.md",
+  "open": 49,
+  "closed": 16,
+  "est_hours": 152,
+  "levels": {
+   "medium": 24,
+   "low": 22,
+   "info": 2,
+   "high": 1
+  },
+  "decisions": 3
+ }
+]

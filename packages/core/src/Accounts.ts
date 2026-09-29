@@ -7,6 +7,7 @@
 // same deferral `Migrations.ts` documents for the persistence stratum
 // generally.
 
+import { PasswordHasher } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -17,14 +18,16 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as PlatformError from "effect/PlatformError";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
+import * as Tenant from "./Tenant.ts";
 import { UserId } from "./Users.ts";
 
-export type AccountId = string & Brand.Brand<"AccountId">;
+// MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
+export type AccountId = SqlModels.AccountId;
 export const AccountId = Brand.nominal<AccountId>();
 
 /** BEH-EA-044: `providerId = "password"` is the reserved password-credential provider. */
@@ -72,6 +75,37 @@ export class LastAccountRefusal extends Data.TaggedError("LastAccountRefusal")<{
 }> {}
 
 /**
+ * PV-221/BEH-EA-045: whether a User may be left with zero Accounts. `false` (the default) refuses
+ * unlinking the last one (`LastAccountRefusal`); a deployment that deliberately wants a User to
+ * outlive its last credential (an account kept for its data, re-entered through recovery or an
+ * admin) opts in with `Accounts.config({ allowZeroAccounts: true })`. Like every core config it
+ * can also be applied to one call (`Effect.provideService`) or one tenant (`Tenant.configApplied`).
+ */
+export interface AccountsPolicyShape {
+  readonly allowZeroAccounts: boolean;
+}
+
+export const AccountsPolicy = Context.Reference<AccountsPolicyShape>("awthaq/core/AccountsPolicy", {
+  defaultValue: () => ({ allowZeroAccounts: false }),
+});
+
+export const config = (partial: Partial<AccountsPolicyShape>) =>
+  Layer.succeed(AccountsPolicy, { allowZeroAccounts: false, ...partial });
+
+/**
+ * SMS-002: the stored provider tokens for an account cannot be decrypted —
+ * their key was retired from the keyset or the ciphertext is corrupt. Not a
+ * defect: the caller (e.g. `@awthaq/oauth`'s token access) should treat the
+ * account as needing re-consent, and the next successful OAuth sign-in
+ * overwrites the unreadable value.
+ */
+export class ProviderTokensUnreadable extends Data.TaggedError("ProviderTokensUnreadable")<{
+  readonly id: AccountId;
+  readonly field: "accessToken" | "refreshToken" | "idToken";
+  readonly reason: "DecryptionFailed" | "UnknownKeyId";
+}> {}
+
+/**
  * BE-002 (.issues/high): a federated provider's exchanged token pair, kept
  * out of `AccountRecord` for the same reason `credentialHash` is — an
  * ordinary "list my linked accounts" read must never carry a live
@@ -85,6 +119,14 @@ export class LastAccountRefusal extends Data.TaggedError("LastAccountRefusal")<{
 export interface ProviderTokenSet {
   readonly accessToken: Redacted.Redacted<string>;
   readonly refreshToken: Option.Option<Redacted.Redacted<string>>;
+  /**
+   * BAM-008: the OIDC `id_token` the provider returned, kept (encrypted at
+   * rest like the other two tokens) so a better-auth account import has a
+   * destination for it and a future RP-initiated logout can send it as
+   * `id_token_hint`. `None` for a plain OAuth2 provider, or when a refresh
+   * response carried none and none was stored.
+   */
+  readonly idToken: Option.Option<Redacted.Redacted<string>>;
   readonly accessTokenExpiresAt: Option.Option<DateTime.Utc>;
   readonly refreshTokenExpiresAt: Option.Option<DateTime.Utc>;
   readonly scope: Option.Option<string>;
@@ -113,15 +155,17 @@ export interface AccountsShape {
     readonly subject: string;
     /** BEH-EA-125: omitted for a non-federated provider (`password`); see `AccountRecord.issuer`. */
     readonly issuer?: string;
-    readonly credentialHash?: Redacted.Redacted<string>;
+    readonly credentialHash?: Redacted.Redacted<PasswordHasher.PhcHash>;
     readonly tokens?: ProviderTokenSet;
-  }) => Effect.Effect<AccountRecord, AccountAlreadyLinked | PlatformError.PlatformError>;
+  }) => Effect.Effect<AccountRecord, AccountAlreadyLinked | StoreUnavailable>;
   readonly findByProviderSubject: (
     providerId: string,
     subject: string,
     issuer?: string,
-  ) => Effect.Effect<Option.Option<AccountRecord>>;
-  readonly listByUser: (userId: UserId) => Effect.Effect<ReadonlyArray<AccountRecord>>;
+  ) => Effect.Effect<Option.Option<AccountRecord>, StoreUnavailable>;
+  readonly listByUser: (
+    userId: UserId,
+  ) => Effect.Effect<ReadonlyArray<AccountRecord>, StoreUnavailable>;
   /**
    * BE-002: `OAuthTokenAccess.withAccessToken` (`@awthaq/oauth`) is the
    * first caller that needs an account's own `providerId` given only an
@@ -130,16 +174,21 @@ export interface AccountsShape {
    * lookup direction (`findByProviderSubject` needs the provider/subject
    * to find the id, not the other way around).
    */
-  readonly findById: (id: AccountId) => Effect.Effect<AccountRecord, AccountNotFound>;
+  readonly findById: (
+    id: AccountId,
+  ) => Effect.Effect<AccountRecord, AccountNotFound | StoreUnavailable>;
   /** BEH-EA-044: reads back a credential hash `link` stored, if any. */
   readonly findCredentialHash: (
     id: AccountId,
-  ) => Effect.Effect<Option.Option<Redacted.Redacted<string>>, AccountNotFound>;
+  ) => Effect.Effect<
+    Option.Option<Redacted.Redacted<PasswordHasher.PhcHash>>,
+    AccountNotFound | StoreUnavailable
+  >;
   /** BEH-EA-116: rehash-on-login writes a fresh hash for the same row. */
   readonly updateCredentialHash: (
     id: AccountId,
-    hash: Redacted.Redacted<string>,
-  ) => Effect.Effect<void, AccountNotFound>;
+    hash: Redacted.Redacted<PasswordHasher.PhcHash>,
+  ) => Effect.Effect<void, AccountNotFound | StoreUnavailable>;
   /**
    * BE-002: reads back the token set `link`'s own `tokens` stored, if any
    * — `None` for a `password` account, a provider `@awthaq/oauth` never
@@ -147,7 +196,10 @@ export interface AccountsShape {
    */
   readonly findProviderTokens: (
     id: AccountId,
-  ) => Effect.Effect<Option.Option<ProviderTokenSet>, AccountNotFound>;
+  ) => Effect.Effect<
+    Option.Option<ProviderTokenSet>,
+    AccountNotFound | ProviderTokensUnreadable | StoreUnavailable
+  >;
   /**
    * BE-002: every successful OAuth sign-in against an already-linked
    * account writes a fresh token set here — the re-authentication branch
@@ -158,9 +210,11 @@ export interface AccountsShape {
   readonly updateProviderTokens: (
     id: AccountId,
     tokens: ProviderTokenSet,
-  ) => Effect.Effect<void, AccountNotFound>;
+  ) => Effect.Effect<void, AccountNotFound | StoreUnavailable>;
   /** BEH-EA-045: refused when `id` is the user's only remaining Account. */
-  readonly unlink: (id: AccountId) => Effect.Effect<void, AccountNotFound | LastAccountRefusal>;
+  readonly unlink: (
+    id: AccountId,
+  ) => Effect.Effect<void, AccountNotFound | LastAccountRefusal | StoreUnavailable>;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 09/10: whole-user
    * deletion's own cascade — deliberately bypasses `unlink`'s last-account
@@ -168,7 +222,7 @@ export interface AccountsShape {
    * *otherwise-still-existing* account, not to block deleting the account
    * entirely along with the user it belongs to.
    */
-  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void>;
+  readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, StoreUnavailable>;
 }
 
 export class Accounts extends Context.Service<Accounts, AccountsShape>()("awthaq/core/Accounts") {}
@@ -177,7 +231,7 @@ interface State {
   readonly byId: HashMap.HashMap<AccountId, AccountRecord>;
   readonly byProviderSubject: HashMap.HashMap<string, AccountId>;
   /** Kept out of `AccountRecord` itself — see `AccountsShape.link`'s own comment. */
-  readonly credentialHashes: HashMap.HashMap<AccountId, Redacted.Redacted<string>>;
+  readonly credentialHashes: HashMap.HashMap<AccountId, Redacted.Redacted<PasswordHasher.PhcHash>>;
   /** BE-002: same reasoning as `credentialHashes`, for a federated provider's token pair. */
   readonly providerTokens: HashMap.HashMap<AccountId, ProviderTokenSet>;
 }
@@ -197,59 +251,71 @@ const emptyState: State = {
   providerTokens: HashMap.empty(),
 };
 
+/**
+ * TRBS-005: single-process, test-grade storage. State is one per-process
+ * `Ref`: it is not shared across instances (a revocation on one instance does
+ * not propagate to another), it is lost on restart, and it grows without bound
+ * until a retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV
+ * layer, ADR-EA-014) for any multi-instance deployment. `AuthEvents`' in-process
+ * `PubSub` has the same process boundary.
+ */
 export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.effect(
   Accounts,
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
     const crypto = yield* Crypto.Crypto;
+    const policyNow = Tenant.configInForce(AccountsPolicy, yield* AccountsPolicy);
 
-    const link: AccountsShape["link"] = Effect.fnUntraced(function* (input) {
-      const key = providerSubjectKey(input.providerId, input.subject, input.issuer);
-      const id = AccountId(yield* crypto.randomUUIDv7);
-      const now = yield* DateTime.now;
-      const record: AccountRecord = {
-        id,
-        userId: input.userId,
-        providerId: input.providerId,
-        subject: input.subject,
-        issuer: input.issuer === undefined ? Option.none() : Option.some(input.issuer),
-        createdAt: now,
-        updatedAt: now,
-      };
-      const outcome = yield* Ref.modify(
-        state,
-        (s): readonly [Result.Result<AccountRecord, AccountAlreadyLinked>, State] => {
-          if (HashMap.has(s.byProviderSubject, key)) {
+    const link: AccountsShape["link"] = Effect.fnUntraced(
+      function* (input) {
+        const key = providerSubjectKey(input.providerId, input.subject, input.issuer);
+        const id = AccountId(yield* crypto.randomUUIDv7);
+        const now = yield* DateTime.now;
+        const record: AccountRecord = {
+          id,
+          userId: input.userId,
+          providerId: input.providerId,
+          subject: input.subject,
+          issuer: input.issuer === undefined ? Option.none() : Option.some(input.issuer),
+          createdAt: now,
+          updatedAt: now,
+        };
+        const outcome = yield* Ref.modify(
+          state,
+          (s): readonly [Result.Result<AccountRecord, AccountAlreadyLinked>, State] => {
+            if (HashMap.has(s.byProviderSubject, key)) {
+              return [
+                Result.fail(
+                  new AccountAlreadyLinked({
+                    message: "awthaq: account already linked",
+                    providerId: input.providerId,
+                    subject: input.subject,
+                  }),
+                ),
+                s,
+              ] as const;
+            }
             return [
-              Result.fail(
-                new AccountAlreadyLinked({
-                  message: `awthaq: account already linked: ${key}`,
-                  providerId: input.providerId,
-                  subject: input.subject,
-                }),
-              ),
-              s,
+              Result.succeed(record),
+              {
+                byId: HashMap.set(s.byId, id, record),
+                byProviderSubject: HashMap.set(s.byProviderSubject, key, id),
+                credentialHashes:
+                  input.credentialHash === undefined
+                    ? s.credentialHashes
+                    : HashMap.set(s.credentialHashes, id, input.credentialHash),
+                providerTokens:
+                  input.tokens === undefined
+                    ? s.providerTokens
+                    : HashMap.set(s.providerTokens, id, input.tokens),
+              },
             ] as const;
-          }
-          return [
-            Result.succeed(record),
-            {
-              byId: HashMap.set(s.byId, id, record),
-              byProviderSubject: HashMap.set(s.byProviderSubject, key, id),
-              credentialHashes:
-                input.credentialHash === undefined
-                  ? s.credentialHashes
-                  : HashMap.set(s.credentialHashes, id, input.credentialHash),
-              providerTokens:
-                input.tokens === undefined
-                  ? s.providerTokens
-                  : HashMap.set(s.providerTokens, id, input.tokens),
-            },
-          ] as const;
-        },
-      );
-      return yield* Effect.fromResult(outcome);
-    });
+          },
+        );
+        return yield* Effect.fromResult(outcome);
+      },
+      Effect.catchTag("PlatformError", storeUnavailable("Accounts.link")),
+    );
 
     const findByProviderSubject: AccountsShape["findByProviderSubject"] = (
       providerId,
@@ -274,47 +340,49 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
       );
 
     const unlink: AccountsShape["unlink"] = (id) =>
-      Ref.modify(
-        state,
-        (s): readonly [Result.Result<void, AccountNotFound | LastAccountRefusal>, State] => {
-          const existing = HashMap.get(s.byId, id);
-          if (Option.isNone(existing)) {
+      Effect.flatMap(policyNow, (policy) =>
+        Ref.modify(
+          state,
+          (s): readonly [Result.Result<void, AccountNotFound | LastAccountRefusal>, State] => {
+            const existing = HashMap.get(s.byId, id);
+            if (Option.isNone(existing)) {
+              return [
+                Result.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
+                s,
+              ] as const;
+            }
+            const siblingCount = Array.from(HashMap.values(s.byId)).filter(
+              (row) => row.userId === existing.value.userId,
+            ).length;
+            if (siblingCount <= 1 && !policy.allowZeroAccounts) {
+              return [
+                Result.fail(
+                  new LastAccountRefusal({
+                    message: "awthaq: refusing to unlink the last account",
+                    userId: existing.value.userId,
+                  }),
+                ),
+                s,
+              ] as const;
+            }
+            const key = providerSubjectKey(
+              existing.value.providerId,
+              existing.value.subject,
+              Option.getOrUndefined(existing.value.issuer),
+            );
+            const ok: Result.Result<void, AccountNotFound | LastAccountRefusal> =
+              Result.succeed(undefined);
             return [
-              Result.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
-              s,
+              ok,
+              {
+                byId: HashMap.remove(s.byId, id),
+                byProviderSubject: HashMap.remove(s.byProviderSubject, key),
+                credentialHashes: HashMap.remove(s.credentialHashes, id),
+                providerTokens: HashMap.remove(s.providerTokens, id),
+              },
             ] as const;
-          }
-          const siblingCount = Array.from(HashMap.values(s.byId)).filter(
-            (row) => row.userId === existing.value.userId,
-          ).length;
-          if (siblingCount <= 1) {
-            return [
-              Result.fail(
-                new LastAccountRefusal({
-                  message: `awthaq: refusing to unlink the last account for user ${existing.value.userId}`,
-                  userId: existing.value.userId,
-                }),
-              ),
-              s,
-            ] as const;
-          }
-          const key = providerSubjectKey(
-            existing.value.providerId,
-            existing.value.subject,
-            Option.getOrUndefined(existing.value.issuer),
-          );
-          const ok: Result.Result<void, AccountNotFound | LastAccountRefusal> =
-            Result.succeed(undefined);
-          return [
-            ok,
-            {
-              byId: HashMap.remove(s.byId, id),
-              byProviderSubject: HashMap.remove(s.byProviderSubject, key),
-              credentialHashes: HashMap.remove(s.credentialHashes, id),
-              providerTokens: HashMap.remove(s.providerTokens, id),
-            },
-          ] as const;
-        },
+          },
+        ),
       ).pipe(Effect.flatMap(Effect.fromResult));
 
     const findById: AccountsShape["findById"] = (id) =>
@@ -323,7 +391,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
           HashMap.get(s.byId, id).pipe(
             Option.match({
               onNone: () =>
-                Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+                Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
               onSome: Effect.succeed,
             }),
           ),
@@ -335,7 +403,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
         Effect.flatMap((s) =>
           HashMap.has(s.byId, id)
             ? Effect.succeed(HashMap.get(s.credentialHashes, id))
-            : Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            : Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
         ),
       );
 
@@ -343,7 +411,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
       Ref.modify(state, (s): readonly [Result.Result<void, AccountNotFound>, State] => {
         if (!HashMap.has(s.byId, id)) {
           return [
-            Result.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Result.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
             s,
           ] as const;
         }
@@ -358,7 +426,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
         Effect.flatMap((s) =>
           HashMap.has(s.byId, id)
             ? Effect.succeed(HashMap.get(s.providerTokens, id))
-            : Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            : Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
         ),
       );
 
@@ -366,7 +434,7 @@ export const layerMemory: Layer.Layer<Accounts, never, Crypto.Crypto> = Layer.ef
       Ref.modify(state, (s): readonly [Result.Result<void, AccountNotFound>, State] => {
         if (!HashMap.has(s.byId, id)) {
           return [
-            Result.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Result.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
             s,
           ] as const;
         }
@@ -432,6 +500,7 @@ const tokenSetToRow = (
 ): {
   readonly accessToken: string | null;
   readonly refreshToken: string | null;
+  readonly idToken: string | null;
   readonly accessTokenExpiresAt: DateTime.Utc | null;
   readonly refreshTokenExpiresAt: DateTime.Utc | null;
   readonly scope: string | null;
@@ -441,6 +510,7 @@ const tokenSetToRow = (
     ? {
         accessToken: null,
         refreshToken: null,
+        idToken: null,
         accessTokenExpiresAt: null,
         refreshTokenExpiresAt: null,
         scope: null,
@@ -449,6 +519,7 @@ const tokenSetToRow = (
     : {
         accessToken: Redacted.value(tokens.accessToken),
         refreshToken: Option.getOrNull(Option.map(tokens.refreshToken, Redacted.value)),
+        idToken: Option.getOrNull(Option.map(tokens.idToken, Redacted.value)),
         accessTokenExpiresAt: Option.getOrNull(tokens.accessTokenExpiresAt),
         refreshTokenExpiresAt: Option.getOrNull(tokens.refreshTokenExpiresAt),
         scope: Option.getOrNull(tokens.scope),
@@ -461,6 +532,7 @@ const rowToProviderTokenSet = (row: SqlModels.Account): Option.Option<ProviderTo
     Option.map((accessToken): ProviderTokenSet => ({
       accessToken: Redacted.make(accessToken),
       refreshToken: Option.fromNullOr(row.refreshToken).pipe(Option.map(Redacted.make)),
+      idToken: Option.fromNullOr(row.idToken).pipe(Option.map(Redacted.make)),
       accessTokenExpiresAt: Option.fromNullOr(row.accessTokenExpiresAt),
       refreshTokenExpiresAt: Option.fromNullOr(row.refreshTokenExpiresAt),
       scope: Option.fromNullOr(row.scope),
@@ -488,9 +560,10 @@ export const layerSql: Layer.Layer<
   Effect.gen(function* () {
     const repo = yield* SqlRepositories.AccountsRepository;
     const sql = yield* SqlClient.SqlClient;
+    const policyNow = Tenant.configInForce(AccountsPolicy, yield* AccountsPolicy);
 
     const link: AccountsShape["link"] = Effect.fnUntraced(function* (input) {
-      const insert = yield* SqlModels.Account.insert
+      const insert = yield* repo.models.Account.insert
         .makeEffect({
           userId: input.userId,
           providerId: input.providerId,
@@ -503,16 +576,17 @@ export const layerSql: Layer.Layer<
         .pipe(Effect.orDie);
       const row = yield* repo.insert(insert).pipe(
         Effect.catchTag("SqlError", (error) =>
-          error.reason._tag === "UniqueViolation"
-            ? Effect.fail(
-                new AccountAlreadyLinked({
-                  message: `awthaq: account already linked: ${input.providerId}:${input.subject}`,
+          Effect.fail(
+            error.reason._tag === "UniqueViolation"
+              ? new AccountAlreadyLinked({
+                  message: "awthaq: account already linked",
                   providerId: input.providerId,
                   subject: input.subject,
-                }),
-              )
-            : Effect.die(error),
+                })
+              : error,
+          ),
         ),
+        Effect.catchTag("SqlError", storeUnavailable("Accounts.link")),
         Effect.catchTag("SchemaError", Effect.die),
       );
       return toAccountRecord(row);
@@ -525,21 +599,24 @@ export const layerSql: Layer.Layer<
     ) =>
       repo
         .findByProviderSubject(providerId, subject, issuer ?? "")
-        .pipe(Effect.map(Option.map(toAccountRecord)), Effect.orDie);
+        .pipe(
+          Effect.map(Option.map(toAccountRecord)),
+          orStoreUnavailable("Accounts.findByProviderSubject"),
+        );
 
     const listByUser: AccountsShape["listByUser"] = (userId) =>
       repo.listByUser(userId).pipe(
         Effect.map((rows) => rows.map(toAccountRecord)),
-        Effect.orDie,
+        orStoreUnavailable("Accounts.listByUser"),
       );
 
     const findById: AccountsShape["findById"] = (id) =>
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Accounts.findById"),
         }),
         Effect.map(toAccountRecord),
       );
@@ -548,125 +625,94 @@ export const layerSql: Layer.Layer<
       const account = yield* repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Accounts.unlink"),
         }),
       );
-      const siblings = yield* repo.listByUser(account.userId).pipe(Effect.orDie);
-      if (siblings.length <= 1) {
+      const siblings = yield* repo
+        .listByUser(account.userId)
+        .pipe(orStoreUnavailable("Accounts.unlink"));
+      const policy = yield* policyNow;
+      if (siblings.length <= 1 && !policy.allowZeroAccounts) {
         return yield* Effect.fail(
           new LastAccountRefusal({
-            message: `awthaq: refusing to unlink the last account for user ${account.userId}`,
+            message: "awthaq: refusing to unlink the last account",
             userId: UserId(account.userId),
           }),
         );
       }
-      yield* repo.delete(id).pipe(Effect.orDie);
+      yield* repo.delete(id).pipe(orStoreUnavailable("Accounts.unlink"));
     });
 
     const unlink: AccountsShape["unlink"] = (id) =>
-      sql.withTransaction(performUnlink(id)).pipe(Effect.catchTag("SqlError", Effect.die));
+      sql
+        .withTransaction(performUnlink(id))
+        .pipe(Effect.catchTag("SqlError", storeUnavailable("Accounts.unlink")));
 
     const deleteAllByUser: AccountsShape["deleteAllByUser"] = (userId) =>
-      repo.deleteAllByUser(userId).pipe(Effect.orDie);
+      repo.deleteAllByUser(userId).pipe(orStoreUnavailable("Accounts.deleteAllByUser"));
 
     const findCredentialHash: AccountsShape["findCredentialHash"] = (id) =>
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Accounts.findCredentialHash"),
         }),
-        Effect.map((row) => Option.fromNullOr(row.passwordHash).pipe(Option.map(Redacted.make))),
+        // TTE-005: the trust boundary — a stored column is a `PhcHash` by
+        // construction, since only `Accounts.link`/`updateCredentialHash` write it.
+        Effect.map((row) =>
+          Option.fromNullOr(row.passwordHash).pipe(
+            Option.map((stored) => Redacted.make(PasswordHasher.PhcHash(stored))),
+          ),
+        ),
       );
 
-    // `passwordHash`/`accessToken`/`refreshToken`/the four BE-002 token-
-    // metadata columns are all included together in the generic `update`
-    // (only the non-sensitive identity fields are `FieldExcept`-excluded)
-    // — so writing a fresh `passwordHash` still has to read the row first
-    // and pass the rest straight through, the same pattern
-    // `Users.layerSql.updateProfile` uses for `email`.
-    //
-    // PPS-001: wrapped in `sql.withTransaction`, mirroring `unlink`'s own
-    // precedent above — unwrapped, a concurrent `unlink`/account-deletion
-    // racing between this read and its write could see the final `UPDATE`
-    // silently apply to nothing (or the read itself die on a row that
-    // vanished mid-flight). `existing.providerId`/`existing.userId` (this
-    // read's own, decrypted result) are passed straight through as `repo
-    // .update`'s AAD, so `AccountsRepositoryLive.update` no longer needs
-    // its own second, redundant `findById` just to recover them.
-    const updateCredentialHash: AccountsShape["updateCredentialHash"] = Effect.fnUntraced(
-      function* (id, hash) {
-        const performUpdate = Effect.gen(function* () {
-          const existing = yield* repo.findById(id).pipe(
-            Effect.catchTags({
-              NoSuchElementError: () =>
-                Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
-              SchemaError: Effect.die,
-              SqlError: Effect.die,
-            }),
-          );
-          const update = yield* SqlModels.Account.update
-            .makeEffect({
-              id,
-              passwordHash: Redacted.value(hash),
-              accessToken: existing.accessToken,
-              refreshToken: existing.refreshToken,
-              accessTokenExpiresAt: existing.accessTokenExpiresAt,
-              refreshTokenExpiresAt: existing.refreshTokenExpiresAt,
-              scope: existing.scope,
-              tokenType: existing.tokenType,
-            })
-            .pipe(Effect.orDie);
-          yield* repo
-            .update(update, { providerId: existing.providerId, userId: existing.userId })
-            .pipe(Effect.orDie);
-        });
-        yield* sql.withTransaction(performUpdate).pipe(Effect.catchTag("SqlError", Effect.die));
-      },
-    );
-
-    const findProviderTokens: AccountsShape["findProviderTokens"] = (id) =>
-      repo.findById(id).pipe(
+    // SMS-002: a targeted `UPDATE ... SET "passwordHash"` — it neither reads
+    // nor rewrites the token columns, so an undecryptable token can never make
+    // a password change fail (or be silently wiped by a pass-through write).
+    const updateCredentialHash: AccountsShape["updateCredentialHash"] = (id, hash) =>
+      repo.updatePasswordHash(id, Redacted.value(hash)).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
-            Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
           SchemaError: Effect.die,
-          SqlError: Effect.die,
+          SqlError: storeUnavailable("Accounts.updateCredentialHash"),
+        }),
+        Effect.asVoid,
+      );
+
+    const findProviderTokens: AccountsShape["findProviderTokens"] = (id) =>
+      repo.findTokensById(id).pipe(
+        Effect.catchTags({
+          NoSuchElementError: () =>
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
+          AccountTokenUndecryptable: (error) =>
+            Effect.fail(
+              new ProviderTokensUnreadable({ id, field: error.field, reason: error.reason }),
+            ),
+          SchemaError: Effect.die,
+          SqlError: storeUnavailable("Accounts.findProviderTokens"),
         }),
         Effect.map(rowToProviderTokenSet),
       );
 
-    // Mirrors `updateCredentialHash` exactly, in reverse: reads the row
-    // first so `passwordHash` (also update-eligible, also not this write's
-    // concern) survives unchanged.
-    const updateProviderTokens: AccountsShape["updateProviderTokens"] = Effect.fnUntraced(
-      function* (id, tokens) {
-        const performUpdate = Effect.gen(function* () {
-          const existing = yield* repo.findById(id).pipe(
-            Effect.catchTags({
-              NoSuchElementError: () =>
-                Effect.fail(new AccountNotFound({ message: `awthaq: no such account: ${id}`, id })),
-              SchemaError: Effect.die,
-              SqlError: Effect.die,
-            }),
-          );
-          const update = yield* SqlModels.Account.update
-            .makeEffect({
-              id,
-              passwordHash: existing.passwordHash,
-              ...tokenSetToRow(tokens),
-            })
-            .pipe(Effect.orDie);
-          yield* repo
-            .update(update, { providerId: existing.providerId, userId: existing.userId })
-            .pipe(Effect.orDie);
-        });
-        yield* sql.withTransaction(performUpdate).pipe(Effect.catchTag("SqlError", Effect.die));
-      },
-    );
+    // SMS-002/RRS-006: a targeted write of the whole token group. It needs the
+    // row's `providerId`/`userId` only as encryption AAD, read through
+    // `findAad` (no decrypt, no lazy re-encrypt), never the old token values.
+    const updateProviderTokens: AccountsShape["updateProviderTokens"] = (id, tokens) =>
+      repo.findAad(id).pipe(
+        Effect.flatMap((aad) => repo.updateProviderTokens(id, aad, tokenSetToRow(tokens))),
+        Effect.catchTags({
+          NoSuchElementError: () =>
+            Effect.fail(new AccountNotFound({ message: "awthaq: no such account", id })),
+          SchemaError: Effect.die,
+          SqlError: storeUnavailable("Accounts.updateProviderTokens"),
+        }),
+        Effect.asVoid,
+      );
 
     return {
       link,

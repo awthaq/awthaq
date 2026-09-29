@@ -9,16 +9,29 @@
 // signature checking all stay inside the wrapped library; this module
 // never reimplements any of it (BEH-EA-129's own REQUIREMENT block).
 //
-// Deliberately permissive on user-presence/user-verification: both
-// `verify*` methods always call the underlying library with
-// `requireUserPresence: false, requireUserVerification: false` and hand
-// back the real `userVerified` flag observed on a structurally-valid,
+// Deliberately permissive on user-verification, and explicit about
+// user-presence: both `verify*` methods always call the underlying library
+// with `requireUserVerification: false` and hand back the real
+// `userVerified`/`userPresent` flags observed on a structurally-valid,
 // cryptographically-verified response. Enforcing *policy* about whether UV
 // was required for a given ceremony (an ordinary registration vs.
 // `@awthaq/passkey`'s Conditional Create, whose whole point is
 // accepting UP=0/UV=0) is the plugin's job, not this port's — this port
 // only ever proves "this response is a real, unforged answer to this exact
 // challenge," never "...and the caller's policy about it is satisfied."
+// UP is the one flag the caller must choose per registration call
+// (`VerifyRegistrationInput.requireUserPresence`, CB-002): a required field,
+// so no call site can inherit a silently permissive default. Authentication
+// always enforces UP — the wrapped library does so whenever
+// `advancedFIDOConfig` is absent, which this port never passes.
+//
+// The signature counter is likewise the plugin's policy, not the library's
+// (CB-004): `verifyAuthentication` hands the library a stored counter of 0,
+// which disables its hard throw on every non-zero regression, and reports the
+// assertion's own `newCounter` so the plugin can flag or reject a suspected
+// clone (`PasskeyConfig.counterAnomalyPolicy`) instead of the ceremony
+// collapsing into an opaque `PasskeyVerificationFailed` before that policy
+// ever runs.
 //
 // `PasskeyVerificationFailed` is this port's one failure mode (BEH-EA-129's
 // own type signature): a tampered/forged response, a wrong challenge, or a
@@ -44,6 +57,7 @@
 
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import {
@@ -52,7 +66,11 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from "@simplewebauthn/server";
-import { isoBase64URL } from "@simplewebauthn/server/helpers";
+import {
+  decodeAttestationObject,
+  isoBase64URL,
+  parseAuthenticatorData,
+} from "@simplewebauthn/server/helpers";
 import type {
   AuthenticationResponseJSON,
   PublicKeyCredentialCreationOptionsJSON,
@@ -66,12 +84,27 @@ const toMutable = (value: string | ReadonlyArray<string>): string | Array<string
   typeof value === "string" ? value : [...value];
 
 /** BEH-EA-136: this port's one failure mode — see this module's own header comment. */
-export class PasskeyVerificationFailed extends Data.TaggedError("PasskeyVerificationFailed")<{
+export class PasskeyVerificationFailed extends Data.TaggedError("WebAuthn/VerificationFailed")<{
   readonly message: string;
 }> {}
 
-/** BEH-EA-135: `"none"` is the default; `"direct"`/`"enterprise"` are explicit opt-in. */
-export type AttestationConveyance = "none" | "direct" | "enterprise";
+/**
+ * BEH-EA-135: `"none"` is the default; `"indirect"` (HSK-006, the WebAuthn L3
+ * enum's remaining member), `"direct"` and `"enterprise"` are explicit opt-in.
+ * Conveyance is only a *request* — it verifies nothing by itself (HSK-002):
+ * see `VerifiedRegistration.attestationFormat`/`attestationType` and
+ * `@awthaq/passkey`'s `attestationPolicy`.
+ */
+export type AttestationConveyance = "none" | "indirect" | "direct" | "enterprise";
+
+/** TC-003/WebAuthn L3 `PublicKeyCredentialHint`: a UI hint about which kind of authenticator to prompt for. */
+export type CeremonyHint = "security-key" | "client-device" | "hybrid";
+
+/** TC-003: the client-extension inputs this port knows to request; anything else the wrapped library types is passed through untouched. */
+export interface CeremonyExtensions {
+  /** Ask the browser to report whether the credential is discoverable (`clientExtensionResults.credProps.rk`). */
+  readonly credProps?: boolean;
+}
 
 export interface AuthenticatorSelection {
   readonly residentKey?: "discouraged" | "preferred" | "required";
@@ -97,6 +130,10 @@ export interface RegistrationOptionsInput {
   readonly excludeCredentials?: ReadonlyArray<CredentialDescriptor>;
   readonly attestation?: AttestationConveyance;
   readonly authenticatorSelection?: AuthenticatorSelection;
+  /** TC-003: how long the *browser* lets the ceremony run — always set it explicitly, or the wrapped library's own 60 s default silently applies. */
+  readonly timeout?: Duration.Duration;
+  readonly hints?: ReadonlyArray<CeremonyHint>;
+  readonly extensions?: CeremonyExtensions;
 }
 
 export interface VerifyRegistrationInput {
@@ -104,7 +141,24 @@ export interface VerifyRegistrationInput {
   readonly expectedChallenge: string;
   readonly expectedOrigin: string | ReadonlyArray<string>;
   readonly expectedRpId: string | ReadonlyArray<string>;
+  /**
+   * CB-002: whether the authenticator's UP flag MUST be set. Required — each
+   * call site chooses (an ordinary registration: `true`; Conditional Create,
+   * which Chrome performs without a user gesture: `false`).
+   */
+  readonly requireUserPresence: boolean;
 }
+
+/**
+ * HSK-002: what kind of attestation statement backed a registration. `"none"`
+ * carries no statement; `"self"` is a `packed` statement signed by the
+ * credential's own key (proves nothing about the authenticator model);
+ * `"certificate"` carries an attestation certificate chain (`x5c`, `apple`,
+ * `tpm`, `fido-u2f`, ...). This port surfaces the class; whether a chain
+ * *chains to a trusted root* is the wrapped library's `SettingsService` root
+ * store, not something this port decides.
+ */
+export type AttestationType = "none" | "self" | "certificate";
 
 export interface VerifiedRegistration {
   readonly credentialId: string;
@@ -116,6 +170,11 @@ export interface VerifiedRegistration {
   readonly credentialBackedUp: boolean;
   /** The real UV flag from a verified response — the plugin, not this port, decides whether this ceremony required it to be `true`. */
   readonly userVerified: boolean;
+  /** CB-002: the real UP flag. `requireUserPresence: true` already made `false` unreachable; a Conditional Create registration may report `false`. */
+  readonly userPresent: boolean;
+  /** HSK-002: the attestation statement format (`none`, `packed`, `tpm`, `fido-u2f`, ...) the authenticator answered with. */
+  readonly attestationFormat: string;
+  readonly attestationType: AttestationType;
 }
 
 export interface AuthenticationOptionsInput {
@@ -125,13 +184,20 @@ export interface AuthenticationOptionsInput {
   readonly userVerification?: "discouraged" | "preferred" | "required";
   /** Base64url-encoded raw challenge bytes — see this module's own header comment. */
   readonly challenge: string;
+  /** TC-003: see `RegistrationOptionsInput.timeout`. */
+  readonly timeout?: Duration.Duration;
+  readonly hints?: ReadonlyArray<CeremonyHint>;
+  readonly extensions?: CeremonyExtensions;
 }
 
-/** What the plugin's own store hands back in for the credential an assertion claims to be signed by. */
+/**
+ * What the plugin's own store hands back in for the credential an assertion
+ * claims to be signed by. Deliberately carries no signature counter: counter
+ * regression is the caller's policy (CB-004), see this module's own header.
+ */
 export interface StoredCredential {
   readonly id: string;
   readonly publicKey: Uint8Array_;
-  readonly counter: number;
   readonly transports?: ReadonlyArray<string>;
 }
 
@@ -140,6 +206,8 @@ export interface VerifyAuthenticationInput {
   readonly expectedChallenge: string;
   readonly expectedOrigin: string | ReadonlyArray<string>;
   readonly expectedRpId: string | ReadonlyArray<string>;
+  /** CB-003: top-level origins an embedded (cross-origin iframe) assertion may come from. Absent ⇒ every cross-origin assertion that reports a `topOrigin` is rejected. */
+  readonly expectedTopOrigin?: string | ReadonlyArray<string>;
   readonly credential: StoredCredential;
 }
 
@@ -149,6 +217,8 @@ export interface VerifiedAuthentication {
   readonly credentialDeviceType: "singleDevice" | "multiDevice";
   readonly credentialBackedUp: boolean;
   readonly userVerified: boolean;
+  /** CB-002: the real UP flag — always `true` here, since the wrapped library refuses an assertion without it. */
+  readonly userPresent: boolean;
 }
 
 export interface WebAuthnShape {
@@ -179,27 +249,68 @@ const toCredentialDescriptor = (
     ? { id: descriptor.id }
     : { id: descriptor.id, transports: [...descriptor.transports] };
 
+/**
+ * HSK-002: classifies an attestation statement from the (already
+ * library-verified) attestation object. `packed` without a certificate chain
+ * is self-attestation (the library supports no ECDAA); every other format that
+ * is not `none` carries a certificate chain.
+ */
+const classifyAttestation = (fmt: string, attestationObject: Uint8Array_): AttestationType => {
+  if (fmt === "none") return "none";
+  if (fmt !== "packed") return "certificate";
+  const attStmt = decodeAttestationObject(attestationObject).get("attStmt");
+  return attStmt.get("x5c") === undefined ? "self" : "certificate";
+};
+
+/** CB-002: the UP flag of a registration's `authData`, read from the library-verified attestation object. */
+const attestationUserPresent = (attestationObject: Uint8Array_): boolean =>
+  parseAuthenticatorData(decodeAttestationObject(attestationObject).get("authData")).flags.up;
+
+/** CB-002: the UP flag of an assertion's `authenticatorData` (base64url), read after the library verified it. */
+const assertionUserPresent = (authenticatorData: string): boolean =>
+  parseAuthenticatorData(isoBase64URL.toBuffer(authenticatorData)).flags.up;
+
 export const layerSimpleWebAuthn: Layer.Layer<WebAuthn> = Layer.succeed(
   WebAuthn,
   WebAuthn.of({
     registrationOptions: (input) =>
-      Effect.promise(() =>
-        generateRegistrationOptions({
+      Effect.promise(async () => {
+        const options = await generateRegistrationOptions({
           rpID: input.rpId,
           rpName: input.rpName,
           challenge: isoBase64URL.toBuffer(input.challenge),
           userID: isoBase64URL.toBuffer(input.userId),
           userName: input.userName,
           userDisplayName: input.userDisplayName,
-          attestationType: input.attestation ?? "none",
+          // HSK-006: the library's own enum lacks `"indirect"`; it is set on
+          // the returned options below instead.
+          attestationType:
+            input.attestation === undefined || input.attestation === "indirect"
+              ? "none"
+              : input.attestation,
           ...(input.excludeCredentials === undefined
             ? {}
             : { excludeCredentials: input.excludeCredentials.map(toCredentialDescriptor) }),
           ...(input.authenticatorSelection === undefined
             ? {}
             : { authenticatorSelection: input.authenticatorSelection }),
-        }),
-      ),
+          ...(input.timeout === undefined ? {} : { timeout: Duration.toMillis(input.timeout) }),
+          ...(input.extensions === undefined ? {} : { extensions: input.extensions }),
+        });
+        // The library returns `extensions: undefined` when none apply; an
+        // absent member and an `undefined` one are different things to a
+        // strict contract schema (AVS-003), so it is left out instead.
+        const { extensions, ...rest } = options;
+        return {
+          ...rest,
+          ...(extensions === undefined ? {} : { extensions }),
+          ...(input.attestation === "indirect" ? { attestation: "indirect" as const } : {}),
+          // `hints` is set here rather than through the library's
+          // `preferredAuthenticatorType`, which would also rewrite
+          // `authenticatorAttachment` behind the caller's back.
+          ...(input.hints === undefined ? {} : { hints: [...input.hints] }),
+        };
+      }),
 
     verifyRegistration: (input) =>
       Effect.tryPromise({
@@ -209,7 +320,7 @@ export const layerSimpleWebAuthn: Layer.Layer<WebAuthn> = Layer.succeed(
             expectedChallenge: input.expectedChallenge,
             expectedOrigin: toMutable(input.expectedOrigin),
             expectedRPID: toMutable(input.expectedRpId),
-            requireUserPresence: false,
+            requireUserPresence: input.requireUserPresence,
             requireUserVerification: false,
           }),
         catch: (cause) =>
@@ -228,6 +339,12 @@ export const layerSimpleWebAuthn: Layer.Layer<WebAuthn> = Layer.succeed(
                 credentialDeviceType: result.registrationInfo.credentialDeviceType,
                 credentialBackedUp: result.registrationInfo.credentialBackedUp,
                 userVerified: result.registrationInfo.userVerified,
+                userPresent: attestationUserPresent(result.registrationInfo.attestationObject),
+                attestationFormat: result.registrationInfo.fmt,
+                attestationType: classifyAttestation(
+                  result.registrationInfo.fmt,
+                  result.registrationInfo.attestationObject,
+                ),
               })
             : Effect.fail(
                 new PasskeyVerificationFailed({
@@ -238,8 +355,8 @@ export const layerSimpleWebAuthn: Layer.Layer<WebAuthn> = Layer.succeed(
       ),
 
     authenticationOptions: (input) =>
-      Effect.promise(() =>
-        generateAuthenticationOptions({
+      Effect.promise(async () => {
+        const options = await generateAuthenticationOptions({
           rpID: input.rpId,
           challenge: isoBase64URL.toBuffer(input.challenge),
           ...(input.allowCredentials === undefined
@@ -248,8 +365,16 @@ export const layerSimpleWebAuthn: Layer.Layer<WebAuthn> = Layer.succeed(
           ...(input.userVerification === undefined
             ? {}
             : { userVerification: input.userVerification }),
-        }),
-      ),
+          ...(input.timeout === undefined ? {} : { timeout: Duration.toMillis(input.timeout) }),
+          ...(input.extensions === undefined ? {} : { extensions: input.extensions }),
+        });
+        const { extensions, ...rest } = options;
+        return {
+          ...rest,
+          ...(extensions === undefined ? {} : { extensions }),
+          ...(input.hints === undefined ? {} : { hints: [...input.hints] }),
+        };
+      }),
 
     verifyAuthentication: (input) =>
       Effect.tryPromise({
@@ -259,10 +384,16 @@ export const layerSimpleWebAuthn: Layer.Layer<WebAuthn> = Layer.succeed(
             expectedChallenge: input.expectedChallenge,
             expectedOrigin: toMutable(input.expectedOrigin),
             expectedRPID: toMutable(input.expectedRpId),
+            ...(input.expectedTopOrigin === undefined
+              ? {}
+              : { expectedTopOrigin: toMutable(input.expectedTopOrigin) }),
             credential: {
               id: input.credential.id,
               publicKey: input.credential.publicKey,
-              counter: input.credential.counter,
+              // CB-004: 0 disables the library's hard throw on a counter
+              // regression (`(counter > 0 || stored > 0) && counter <= stored`);
+              // the plugin applies its own `counterAnomalyPolicy` to `newCounter`.
+              counter: 0,
               ...(input.credential.transports === undefined
                 ? {}
                 : { transports: [...input.credential.transports] }),
@@ -282,6 +413,7 @@ export const layerSimpleWebAuthn: Layer.Layer<WebAuthn> = Layer.succeed(
                 credentialDeviceType: result.authenticationInfo.credentialDeviceType,
                 credentialBackedUp: result.authenticationInfo.credentialBackedUp,
                 userVerified: result.authenticationInfo.userVerified,
+                userPresent: assertionUserPresent(input.response.response.authenticatorData),
               })
             : Effect.fail(
                 new PasskeyVerificationFailed({

@@ -7,39 +7,27 @@
 // (see `Organization.ts`'s own header comment — this is the first real
 // plugin consumer of `HookPoint`, mirrored identically everywhere).
 //
-// Every hook point class is a shared, module-level singleton whose
-// registry freezes at its own first `run()` (BEH-EA-024) — including an
-// implicit run with zero taps, which is exactly what an earlier, untapped
-// `create`/`createTeam` call in this same file would do to a later test
-// wanting to tap that same point. Each `it.effect` case below is therefore
-// the *only* place in this file that ever calls the operation whose hooks
-// it taps, and taps every point that operation touches (both its `before`
-// and `after`) up front, in the same `Effect.provide`, so nothing runs
-// untapped before the tap is installed.
+// Each hook point's registry is per composition (ELC-001): every case
+// builds its own layer, so a tap installed in one never leaks into, or
+// freezes, another. A tap's `Layer` requires its point, which
+// `OrganizationHooksLive` provides last in `buildLayer`'s pipe.
 import { Api } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, HookPoint, Sessions, Users } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
+import { HookPoint, Sessions, Users } from "@awthaq/core";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as ActiveContextRecords from "../src/ActiveContextRecords.ts";
-import * as InvitationRecords from "../src/InvitationRecords.ts";
-import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
-import * as OrganizationRecords from "../src/OrganizationRecords.ts";
-import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
-import * as TeamRecords from "../src/TeamRecords.ts";
+import * as OrganizationMemory from "../src/OrganizationMemory.ts";
+import { TestAuth } from "@awthaq/test";
 
 const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
@@ -49,14 +37,20 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
     Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("organization-test-csrf-secret"),
+      secret: Redacted.make("organization-test-csrf-secret-padded-to-thirty-two-bytes"),
       allowedOrigins: [] as ReadonlyArray<string>,
     }),
   ),
   Layer.provide(NodeCrypto.layer),
 );
 
-const buildLayer = (extraHooks: Layer.Layer<never>) =>
+const buildLayer = (
+  extraHooks: Layer.Layer<
+    never,
+    never,
+    Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
+  >,
+) =>
   Organization.Organization.layer.pipe(
     Layer.provide(
       Organization.config({
@@ -70,14 +64,10 @@ const buildLayer = (extraHooks: Layer.Layer<never>) =>
     ),
     Layer.provide(AuthenticationLive),
     Layer.provide(CsrfProtectionLive),
+    Layer.provideMerge(OrganizationMemory.layer),
     Layer.provideMerge(CoreLive),
-    Layer.provideMerge(OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(MembershipRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(ActiveContextRecords.layerMemory),
-    Layer.provideMerge(InvitationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
-    Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(Mailer.layerMemory),
+    Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(extraHooks),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
   );

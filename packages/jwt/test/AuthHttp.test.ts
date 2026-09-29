@@ -6,13 +6,25 @@
 // mirroring `packages/organization/test/AuthHttp.test.ts`'s own
 // `issueSessionCookieHeader` pattern for setting one up.
 import { AuthCore } from "@awthaq/api";
-import { Accounts, AuditLog, Hooks, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  DataExport,
+  Erasure,
+  Hooks,
+  AuthEvents,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
-import { SqlTransaction } from "@awthaq/ports";
+import { SqlTransaction, RateLimiter } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -38,17 +50,17 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 );
 
 /**
- * `Jwt`'s own `jwt`/`jwt.token` groups are GET-only and were deliberately
- * NOT given `Api.CsrfProtection` (CSRF only ever rejects unsafe methods,
- * BEH-EA-077), so the plain `AppLayer` below (JwtApi alone) never needs
- * this. `CrossPluginAppLayer` further down composes `AuthCore.AuthCoreApi`
- * (`SessionGroup`/`AccountGroup`, both now CSRF-protected) alongside it, so
- * only that layer needs it.
+ * `Jwt`'s own `jwt`/`jwt.token` groups are deliberately NOT given
+ * `Api.CsrfProtection`: minting and introspection sign or read a token and change no
+ * server state, and the response is unreadable cross-origin (no CORS by default), so
+ * the plain `AppLayer` below (JwtApi alone) never needs this. `CrossPluginAppLayer`
+ * further down composes `AuthCore.AuthCoreApi` (`SessionGroup`/`AccountGroup`, both
+ * CSRF-protected) alongside it, so only that layer needs it.
  */
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
     Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("jwt-authhttp-test-csrf-secret"),
+      secret: Redacted.make("jwt-authhttp-test-csrf-secret-padded-to-thirty-two-bytes"),
       allowedOrigins: [] as ReadonlyArray<string>,
     }),
   ),
@@ -71,6 +83,7 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(AuthenticationLive),
   Layer.provideMerge(KeyRing.KeyRing.layer),
   Layer.provideMerge(SigningKeyRecords.layerMemory),
+  Layer.provideMerge(SqlTransaction.layerNoop),
   Layer.provideMerge(Sessions.layerMemory),
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
@@ -121,6 +134,27 @@ const buildHandler = () => {
       }),
     );
 
+  /** TIR-007: a second, separate session for the same user, plus a way to revoke one by its id. */
+  const issueSession = (userId: string) =>
+    withAppContext(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
+        return {
+          cookie: `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`,
+          sessionId: issued.session.id,
+        };
+      }),
+    );
+
+  const revokeSession = (sessionId: Sessions.SessionId): Promise<void> =>
+    withAppContext(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        yield* sessions.revoke(sessionId, "admin");
+      }),
+    );
+
   /** TIR-001: denylists `jti` directly against the same `RevocationStore` instance `/jwt/introspect`'s handler reads. */
   const revokeJti = (jti: string, expiresAt: DateTime.Utc): Promise<void> =>
     withAppContext(
@@ -150,14 +184,15 @@ const buildHandler = () => {
         return yield* JwtCodec.verify({
           token,
           keys: jwks.keys.map((key) => ({ kid: key.kid, alg: key.alg, publicKeyJwk: key })),
-          algorithm: "EdDSA",
+          algorithms: ["EdDSA"],
+          expectedTyp: "at+jwt",
           issuer: "https://issuer.test",
           audience: "https://issuer.test",
         });
       }),
     );
 
-  return { handler, issueSessionCookieHeader, revokeJti, verifyToken };
+  return { handler, issueSessionCookieHeader, issueSession, revokeSession, revokeJti, verifyToken };
 };
 
 describe("AuthHttp + Jwt (real HTTP)", () => {
@@ -179,21 +214,42 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
     }),
   );
 
-  it("GET /jwt/token requires authentication", async () => {
+  // ECF-002/KRS-010: the served JWKS tells verifiers how long they may cache it.
+  it.effect(
+    "GET /jwt/jwks carries Cache-Control max-age (JwtConfig.jwksMaxAge, default 10 minutes)",
+    () =>
+      Effect.gen(function* () {
+        const { handler } = buildHandler();
+        const response = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/jwt/jwks`)));
+        assert.strictEqual(response.headers.get("cache-control"), "public, max-age=600");
+      }),
+  );
+
+  it("POST /jwt/token requires authentication", async () => {
     const { handler } = buildHandler();
-    const response = await handler(new Request(`${ORIGIN}/jwt/token`));
+    const response = await handler(new Request(`${ORIGIN}/jwt/token`, { method: "POST" }));
     assert.strictEqual(response.status, 401);
   });
 
-  it("GET /jwt/token mints a token verifiable against /jwt/jwks", async () => {
+  // AVS-007: minting a credential is an action, so it is POST-only — a GET must not reach it.
+  it("GET /jwt/token is not served (minting is POST-only)", async () => {
+    const { handler, issueSessionCookieHeader } = buildHandler();
+    const cookie = await issueSessionCookieHeader("user-1");
+    const response = await handler(new Request(`${ORIGIN}/jwt/token`, { headers: { cookie } }));
+    assert.strictEqual(response.status, 404);
+  });
+
+  it("POST /jwt/token mints a token verifiable against /jwt/jwks", async () => {
     const { handler, issueSessionCookieHeader, verifyToken } = buildHandler();
     const cookie = await issueSessionCookieHeader("user-1");
 
-    const minted = await handler(new Request(`${ORIGIN}/jwt/token`, { headers: { cookie } }));
+    const minted = await handler(
+      new Request(`${ORIGIN}/jwt/token`, { method: "POST", headers: { cookie } }),
+    );
     assert.strictEqual(minted.status, 200);
-    // The response-mirroring hook (ticket 16) fires on this endpoint too —
-    // it's an ordinary `Authentication`-gated endpoint like any other.
-    assert.isString(minted.headers.get("x-jwt-token"));
+    // PDR-003: response mirroring is opt-in now (`mirrorResponses`, default
+    // "off"), so this endpoint's token arrives in the body only.
+    assert.isNull(minted.headers.get("x-jwt-token"));
     const body = (await minted.json()) as { token: string };
     assert.isString(body.token);
 
@@ -218,7 +274,7 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
     const cookie = await issueSessionCookieHeader("user-1");
 
     const mintedResponse = await handler(
-      new Request(`${ORIGIN}/jwt/token`, { headers: { cookie } }),
+      new Request(`${ORIGIN}/jwt/token`, { method: "POST", headers: { cookie } }),
     );
     const { token } = (await mintedResponse.json()) as { token: string };
 
@@ -249,6 +305,34 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
   });
 });
 
+// TIR-007: the HTTP introspection endpoint applies session liveness whenever
+// `Sessions` is composed (it always is here — `Authentication` needs it).
+describe("POST /jwt/introspect session liveness (TIR-007)", () => {
+  it("reports active:false once the minting session is revoked", async () => {
+    const { handler, issueSession, revokeSession } = buildHandler();
+    const minting = await issueSession("user-1");
+    const caller = await issueSession("user-1");
+    const mintedResponse = await handler(
+      new Request(`${ORIGIN}/jwt/token`, { method: "POST", headers: { cookie: minting.cookie } }),
+    );
+    const { token } = (await mintedResponse.json()) as { token: string };
+    const introspect = async (): Promise<boolean> => {
+      const response = await handler(
+        new Request(`${ORIGIN}/jwt/introspect`, {
+          method: "POST",
+          headers: { cookie: caller.cookie, "content-type": "application/json" },
+          body: JSON.stringify({ token }),
+        }),
+      );
+      return ((await response.json()) as { active: boolean }).active;
+    };
+
+    assert.isTrue(await introspect());
+    await revokeSession(minting.sessionId);
+    assert.isFalse(await introspect());
+  });
+});
+
 // .scratch/jwt/issues/16-automatic-response-mirroring.md — the one test
 // proving the mechanism is genuinely generic: `Jwt` installed alongside
 // the core `session` group (a group `Jwt` owns nothing about — the same
@@ -265,84 +349,229 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
   // per request, inside `Authentication.ts`'s own `handle` closures — see
   // that file's comment) sees `Jwt`'s override regardless of which
   // branch's endpoint is actually being called.
-  const CrossPluginAppLayer = Layer.mergeAll(
-    AuthHttp.routes(AuthCore.AuthCoreApi, {}).pipe(
-      Layer.provide(Session.SessionHandlers),
-      Layer.provide(Account.AccountHandlers),
-    ),
-    AuthHttp.routes(JwtApi.JwtApi, {}),
-  ).pipe(
-    Layer.provide(CsrfProtectionLive),
-    // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
-    // `SqlTransaction` — a no-op wrapper for this in-memory composition.
-    Layer.provide(SqlTransaction.layerNoop),
-    Layer.provideMerge(Jwt.Jwt.layer),
-    Layer.provideMerge(AuthenticationLive),
-    Layer.provideMerge(KeyRing.KeyRing.layer),
-    Layer.provideMerge(SigningKeyRecords.layerMemory),
-    Layer.provideMerge(Sessions.layerMemory),
-    Layer.provideMerge(Verification.layerMemory),
-    // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(RevocationStore.layerMemory),
-    Layer.provideMerge(Users.layerMemory),
-    Layer.provideMerge(Accounts.layerMemory),
-    Layer.provideMerge(Hooks.HooksLive),
-    Layer.provideMerge(NodeCrypto.layer),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-    Layer.provideMerge(JwtConfig.config({ issuer: "https://issuer.test" })),
-  );
+  const crossPluginAppLayer = (
+    mirrorResponses?: JwtConfig.JwtConfigShape["mirrorResponses"],
+    sessionCookie?: Parameters<typeof JwtConfig.config>[0]["sessionCookie"],
+  ) =>
+    Layer.mergeAll(
+      AuthHttp.routes(AuthCore.AuthCoreApi, {}).pipe(
+        Layer.provide(Session.SessionHandlers),
+        Layer.provide(Account.AccountHandlers),
+      ),
+      AuthHttp.routes(JwtApi.JwtApi, {}),
+    ).pipe(
+      Layer.provide(CsrfProtectionLive),
+      // CSG-001: `Account.deleteUser` runs core's `AccountErasure` and `Account.exportData` its `AccountExport` (CSG-005).
+      // CSG-005: the export endpoint rate-limits per account.
+      Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer, RateLimiter.layerPermissive)),
+      // CSG-001/DRS-002: `Account.deleteUser` now runs inside a
+      // `SqlTransaction` — a no-op wrapper for this in-memory composition.
+      Layer.provide(SqlTransaction.layerNoop),
+      Layer.provideMerge(Jwt.Jwt.layer),
+      Layer.provideMerge(AuthenticationLive),
+      Layer.provideMerge(KeyRing.KeyRing.layer),
+      Layer.provideMerge(SigningKeyRecords.layerMemory),
+      Layer.provideMerge(SqlTransaction.layerNoop),
+      Layer.provideMerge(Sessions.layerMemory),
+      Layer.provideMerge(Verification.layerMemory),
+      // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
+      Layer.provideMerge(AuthEvents.layer),
+      Layer.provideMerge(AuditLog.layerMemory),
+      Layer.provideMerge(RevocationStore.layerMemory),
+      Layer.provideMerge(Users.layerMemory),
+      Layer.provideMerge(Accounts.layerMemory),
+      Layer.provideMerge(Hooks.HooksLive),
+      Layer.provideMerge(NodeCrypto.layer),
+      Layer.provideMerge(TestServices),
+      Layer.provideMerge(HttpRouter.layer),
+      Layer.provideMerge(
+        JwtConfig.config({
+          issuer: "https://issuer.test",
+          ...(mirrorResponses === undefined ? {} : { mirrorResponses }),
+          ...(sessionCookie === undefined ? {} : { sessionCookie }),
+        }),
+      ),
+    );
 
-  it("GET /session (not a Jwt endpoint) carries a mirrored, verifiable x-jwt-token header", async () => {
+  // A live app for one `mirrorResponses` setting, plus a way to run effects
+  // against its context (to issue a real session).
+  const buildApp = (
+    mirrorResponses?: JwtConfig.JwtConfigShape["mirrorResponses"],
+    sessionCookie?: Parameters<typeof JwtConfig.config>[0]["sessionCookie"],
+  ) => {
+    const layer = crossPluginAppLayer(mirrorResponses, sessionCookie);
     const memoMap = Layer.makeMemoMapUnsafe();
-    const { handler } = HttpRouter.toWebHandler(CrossPluginAppLayer, { memoMap });
-
+    const { handler } = HttpRouter.toWebHandler(layer, { memoMap });
     const withAppContext = <A, E>(
-      effect: Effect.Effect<A, E, Layer.Success<typeof CrossPluginAppLayer>>,
+      effect: Effect.Effect<A, E, Layer.Success<typeof layer>>,
     ): Promise<A> =>
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
             const scope = yield* Effect.scope;
-            const context = yield* Layer.buildWithMemoMap(CrossPluginAppLayer, memoMap, scope);
+            const context = yield* Layer.buildWithMemoMap(layer, memoMap, scope);
             return yield* effect.pipe(Effect.provide(context));
           }),
         ),
       );
+    const issueSessionToken = () =>
+      withAppContext(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const issued = yield* sessions.issue({ userId: Users.UserId("user-1") });
+          return Redacted.value(issued.token);
+        }),
+      );
+    return { handler, issueSessionToken };
+  };
 
-    const cookie = await withAppContext(
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const issued = yield* sessions.issue({ userId: Users.UserId("user-1") });
-        return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
+  const verifyMirrored = async (
+    handler: (request: Request) => Promise<Response>,
+    mirrored: string,
+  ) => {
+    const jwksResponse = await handler(new Request(`${ORIGIN}/jwt/jwks`));
+    const jwks = (await jwksResponse.json()) as {
+      keys: ReadonlyArray<{ readonly kid: string; readonly alg: JwtCodec.Algorithm }>;
+    };
+    return Effect.runPromise(
+      JwtCodec.verify({
+        token: mirrored,
+        keys: jwks.keys.map((key) => ({ kid: key.kid, alg: key.alg, publicKeyJwk: key })),
+        algorithms: ["EdDSA"],
+        expectedTyp: "at+jwt",
+        issuer: "https://issuer.test",
+        audience: "https://issuer.test",
       }),
     );
+  };
 
-    const response = await handler(new Request(`${ORIGIN}/session`, { headers: { cookie } }));
+  // PDR-003 (decision: adopted recommended option B, default off): a response
+  // header is a log/proxy/APM capture surface, so nothing is mirrored unless
+  // the deployment opts in.
+  it("default config: GET /session carries no x-jwt-token header", async () => {
+    const { handler, issueSessionToken } = buildApp();
+    const token = await issueSessionToken();
+    const response = await handler(
+      new Request(`${ORIGIN}/session`, {
+        headers: { cookie: `__Host-session=${encodeURIComponent(token)}` },
+      }),
+    );
     assert.strictEqual(response.status, 200);
+    assert.isNull(response.headers.get("x-jwt-token"));
+  });
 
+  it('mirrorResponses: "always": GET /session (not a Jwt endpoint) carries a mirrored, verifiable x-jwt-token header', async () => {
+    const { handler, issueSessionToken } = buildApp("always");
+    const token = await issueSessionToken();
+    const response = await handler(
+      new Request(`${ORIGIN}/session`, {
+        headers: { cookie: `__Host-session=${encodeURIComponent(token)}` },
+      }),
+    );
+    assert.strictEqual(response.status, 200);
     const mirrored = response.headers.get("x-jwt-token");
     assert.isString(mirrored);
     if (mirrored === null) {
       throw new Error("expected x-jwt-token header");
     }
+    const claims = await verifyMirrored(handler, mirrored);
+    assert.strictEqual(claims["sub"], "user-1");
+  });
 
-    const jwksResponse = await handler(new Request(`${ORIGIN}/jwt/jwks`));
-    const jwks = (await jwksResponse.json()) as {
-      keys: ReadonlyArray<{ readonly kid: string; readonly alg: JwtCodec.Algorithm }>;
-    };
-    const claims = await Effect.runPromise(
-      JwtCodec.verify({
-        token: mirrored,
-        keys: jwks.keys.map((key) => ({ kid: key.kid, alg: key.alg, publicKeyJwk: key })),
-        algorithm: "EdDSA",
-        issuer: "https://issuer.test",
-        audience: "https://issuer.test",
+  it('mirrorResponses: "bearer": a cookie-authenticated request gets no header, a bearer-authenticated one does', async () => {
+    const { handler, issueSessionToken } = buildApp("bearer");
+    const token = await issueSessionToken();
+    const viaCookie = await handler(
+      new Request(`${ORIGIN}/session`, {
+        headers: { cookie: `__Host-session=${encodeURIComponent(token)}` },
       }),
     );
-    assert.strictEqual(claims["sub"], "user-1");
+    assert.strictEqual(viaCookie.status, 200);
+    assert.isNull(viaCookie.headers.get("x-jwt-token"));
+
+    const viaBearer = await handler(
+      new Request(`${ORIGIN}/session`, { headers: { authorization: `Bearer ${token}` } }),
+    );
+    assert.strictEqual(viaBearer.status, 200);
+    const mirrored = viaBearer.headers.get("x-jwt-token");
+    assert.isString(mirrored);
+    if (mirrored === null) {
+      throw new Error("expected x-jwt-token header");
+    }
+    assert.strictEqual((await verifyMirrored(handler, mirrored))["sub"], "user-1");
+  });
+
+  // BO-006 (ADR D1 option C): the opt-in, short-lived JWT session-mirror
+  // cookie an edge proxy can verify statelessly (`@awthaq/next/edge`).
+  describe("session-mirror cookie (BO-006)", () => {
+    const MIRROR = "__Host-session-jwt";
+
+    const sessionRequest = (token: string) =>
+      new Request(`${ORIGIN}/session`, {
+        headers: { cookie: `__Host-session=${encodeURIComponent(token)}` },
+      });
+
+    it("default config mints no mirror cookie", async () => {
+      const { handler, issueSessionToken } = buildApp();
+      const response = await handler(sessionRequest(await issueSessionToken()));
+      assert.strictEqual(response.status, 200);
+      assert.notInclude(response.headers.getSetCookie().join("\n"), MIRROR);
+    });
+
+    it("sessionCookie: true sets an HttpOnly/Secure/SameSite=Strict __Host- cookie holding a verifiable JWT that expires with the cookie", async () => {
+      const { handler, issueSessionToken } = buildApp(undefined, true);
+      const response = await handler(sessionRequest(await issueSessionToken()));
+      assert.strictEqual(response.status, 200);
+      const cookie = response.headers
+        .getSetCookie()
+        .find((header) => header.startsWith(`${MIRROR}=`));
+      assert.isDefined(cookie);
+      if (cookie === undefined) return;
+      assert.include(cookie, "HttpOnly");
+      assert.include(cookie, "Secure");
+      assert.include(cookie, "SameSite=Strict");
+      assert.include(cookie, "Path=/");
+      assert.include(cookie, "Max-Age=300");
+      const token = decodeURIComponent(cookie.slice(MIRROR.length + 1).split(";")[0] ?? "");
+      const claims = await verifyMirrored(handler, token);
+      assert.strictEqual(claims["sub"], "user-1");
+      assert.strictEqual(Number(claims["exp"]) - Number(claims["iat"]), 300);
+    });
+
+    it("honours a custom name and ttl", async () => {
+      const { handler, issueSessionToken } = buildApp(undefined, {
+        name: "__Host-edge",
+        ttl: Duration.minutes(1),
+      });
+      const response = await handler(sessionRequest(await issueSessionToken()));
+      const cookie = response.headers
+        .getSetCookie()
+        .find((header) => header.startsWith("__Host-edge="));
+      assert.isDefined(cookie);
+      assert.include(cookie ?? "", "Max-Age=60");
+    });
+
+    it("a bearer-authenticated request gets no mirror cookie", async () => {
+      const { handler, issueSessionToken } = buildApp(undefined, true);
+      const token = await issueSessionToken();
+      const response = await handler(
+        new Request(`${ORIGIN}/session`, { headers: { authorization: `Bearer ${token}` } }),
+      );
+      assert.strictEqual(response.status, 200);
+      assert.notInclude(response.headers.getSetCookie().join("\n"), MIRROR);
+    });
+
+    it("a name without the __Host- prefix fails the layer build", async () => {
+      const exit = await Effect.runPromiseExit(
+        Layer.build(
+          JwtConfig.config({
+            issuer: "https://issuer.test",
+            sessionCookie: { name: "session-jwt" },
+          }),
+        ).pipe(Effect.scoped),
+      );
+      assert.isTrue(Exit.isFailure(exit));
+    });
   });
 });
 

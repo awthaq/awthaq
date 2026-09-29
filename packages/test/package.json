@@ -25,14 +25,16 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
     "@awthaq/ports": "workspace:*",
     "@awthaq/server": "workspace:*",
+    "@awthaq/sql": "workspace:*",
     "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@awthaq/api": "workspace:*",
     "@awthaq/password": "workspace:*",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",

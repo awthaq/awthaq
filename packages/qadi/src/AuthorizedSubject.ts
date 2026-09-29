@@ -33,6 +33,8 @@
 import { Api } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
+import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import { CurrentSubject } from "@qadi/core";
 import { SubjectResolver } from "./SubjectResolver.ts";
@@ -77,3 +79,29 @@ export const AuthorizedSubjectLive: Layer.Layer<AuthorizedSubject> = Layer.effec
     return middleware;
   }),
 );
+
+/**
+ * YL-008: applies the pair in the one order that works — `AuthorizedSubject`
+ * declared first, `Api.Authentication` last so it is outermost and runs first
+ * (see this module's header). Use it instead of hand-ordering the two
+ * `.middleware(...)` calls; a misordered pair still fails to compile, as an
+ * unsatisfied `CurrentPrincipal` requirement (`AuthorizedSubject.test.ts` pins
+ * both directions at the type level). The group's own type parameters are
+ * threaded through, so nothing about the group is widened.
+ */
+export const withAuthorizedSubject = <
+  Id extends string,
+  Endpoints extends HttpApiEndpoint.Constraint,
+  TopLevel extends boolean,
+>(
+  group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>,
+) => group.middleware(AuthorizedSubject).middleware(Api.Authentication);
+
+/** YL-008: as `withAuthorizedSubject`, for a group readable by anonymous callers (`Api.OptionalAuthentication`). */
+export const withOptionalAuthorizedSubject = <
+  Id extends string,
+  Endpoints extends HttpApiEndpoint.Constraint,
+  TopLevel extends boolean,
+>(
+  group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>,
+) => group.middleware(AuthorizedSubject).middleware(Api.OptionalAuthentication);

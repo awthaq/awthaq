@@ -17,6 +17,12 @@
       "bun": "./src/index.ts",
       "import": "./lib/index.js",
       "default": "./lib/index.js"
+    },
+    "./verify": {
+      "types": "./lib/verify.d.ts",
+      "bun": "./src/verify.ts",
+      "import": "./lib/verify.js",
+      "default": "./lib/verify.js"
     }
   },
   "scripts": {
@@ -27,14 +33,14 @@
   "dependencies": {
     "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
+    "@awthaq/ports": "workspace:*",
     "@awthaq/server": "workspace:*",
+    "@awthaq/sql": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@awthaq/ports": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@effect/platform-node": "catalog:",
-    "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

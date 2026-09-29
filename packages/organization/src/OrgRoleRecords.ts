@@ -9,6 +9,7 @@
 // permission directly into `PermissionEngine.statementsByRoleFrom`'s
 // `dynamicStatements` argument with no reshaping.
 
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -48,10 +49,12 @@ export interface OrgRoleRecordsShape {
     readonly role: string;
     readonly permission: PermissionEngine.Statements;
   }) => Effect.Effect<OrgRoleRecord, OrgRoleRecordNameTaken>;
+  /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findById: (
     organizationId: string,
     id: string,
   ) => Effect.Effect<Option.Option<OrgRoleRecord>>;
+  /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly listByOrganization: (
     organizationId: string,
   ) => Effect.Effect<ReadonlyArray<OrgRoleRecord>>;
@@ -181,18 +184,21 @@ export const layerMemory = Layer.effect(
 
 // ---- layerSql -----------------------------------------------------------------
 
-const OrgRoleRow = Schema.Struct({
-  id: Schema.String,
-  organizationId: Schema.String,
-  role: Schema.String,
-  permission: Schema.String,
-  createdAt: Schema.DateTimeUtcFromString,
-  updatedAt: Schema.DateTimeUtcFromString,
-});
+const makeOrgRoleRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    organizationId: Schema.String,
+    role: Schema.String,
+    permission: Schema.String,
+    createdAt: wire.dateTime,
+    updatedAt: wire.dateTime,
+  });
+
+type OrgRoleRow = ReturnType<typeof makeOrgRoleRow>["Type"];
 
 const parsePermission = (json: string): PermissionEngine.Statements => JSON.parse(json);
 
-const toRecord = (row: typeof OrgRoleRow.Type): OrgRoleRecord => ({
+const toRecord = (row: OrgRoleRow): OrgRoleRecord => ({
   id: row.id,
   organizationId: row.organizationId,
   role: row.role,
@@ -205,6 +211,9 @@ export const layerSql = Layer.effect(
   OrgRoleRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const OrgRoleRow = makeOrgRoleRow(wire);
     const crypto = yield* Crypto.Crypto;
 
     const insert = SqlSchema.findOne({
@@ -213,12 +222,12 @@ export const layerSql = Layer.effect(
         organizationId: Schema.String,
         role: Schema.String,
         permission: Schema.String,
-        createdAt: Schema.DateTimeUtcFromString,
-        updatedAt: Schema.DateTimeUtcFromString,
+        createdAt: wire.dateTime,
+        updatedAt: wire.dateTime,
       }),
       Result: OrgRoleRow,
       execute: (r) => sql`
-          INSERT INTO organization_role (id, organizationId, role, permission, createdAt, updatedAt)
+          INSERT INTO organization_role (id, "organizationId", role, permission, "createdAt", "updatedAt")
           VALUES (${r.id}, ${r.organizationId}, ${r.role}, ${r.permission}, ${r.createdAt}, ${r.updatedAt})
           RETURNING *
         `,
@@ -228,14 +237,22 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ organizationId: Schema.String, id: Schema.String }),
       Result: OrgRoleRow,
       execute: (r) =>
-        sql`SELECT * FROM organization_role WHERE id = ${r.id} AND organizationId = ${r.organizationId}`,
+        sql`SELECT * FROM organization_role WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}`,
     });
 
     const listByOrganizationQuery = SqlSchema.findAll({
       Request: Schema.String,
       Result: OrgRoleRow,
       execute: (organizationId) =>
-        sql`SELECT * FROM organization_role WHERE organizationId = ${organizationId}`,
+        sql`SELECT * FROM organization_role WHERE "organizationId" = ${organizationId}`,
+    });
+
+    // MTI-005: a COUNT(*), never a full-row materialization.
+    const countByOrganizationQuery = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: Schema.Struct({ count: Schema.Number }),
+      execute: (organizationId) =>
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_role WHERE "organizationId" = ${organizationId}`,
     });
 
     const updateQuery = SqlSchema.findOneOption({
@@ -243,12 +260,12 @@ export const layerSql = Layer.effect(
         organizationId: Schema.String,
         id: Schema.String,
         permission: Schema.String,
-        updatedAt: Schema.DateTimeUtcFromString,
+        updatedAt: wire.dateTime,
       }),
       Result: OrgRoleRow,
       execute: (r) => sql`
-          UPDATE organization_role SET permission = ${r.permission}, updatedAt = ${r.updatedAt}
-          WHERE id = ${r.id} AND organizationId = ${r.organizationId}
+          UPDATE organization_role SET permission = ${r.permission}, "updatedAt" = ${r.updatedAt}
+          WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}
           RETURNING *
         `,
     });
@@ -257,7 +274,7 @@ export const layerSql = Layer.effect(
       Request: Schema.Struct({ organizationId: Schema.String, id: Schema.String }),
       Result: OrgRoleRow,
       execute: (r) =>
-        sql`DELETE FROM organization_role WHERE id = ${r.id} AND organizationId = ${r.organizationId} RETURNING *`,
+        sql`DELETE FROM organization_role WHERE id = ${r.id} AND "organizationId" = ${r.organizationId} RETURNING *`,
     });
 
     const create: OrgRoleRecordsShape["create"] = Effect.fnUntraced(function* (input) {
@@ -292,8 +309,8 @@ export const layerSql = Layer.effect(
       );
 
     const countByOrganization: OrgRoleRecordsShape["countByOrganization"] = (organizationId) =>
-      listByOrganizationQuery(organizationId).pipe(
-        Effect.map((rows) => rows.length),
+      countByOrganizationQuery(organizationId).pipe(
+        Effect.map((row) => row.count),
         Effect.orDie,
       );
 
@@ -319,7 +336,7 @@ export const layerSql = Layer.effect(
     const removeAllForOrganization: OrgRoleRecordsShape["removeAllForOrganization"] = (
       organizationId,
     ) =>
-      sql`DELETE FROM organization_role WHERE organizationId = ${organizationId}`.pipe(
+      sql`DELETE FROM organization_role WHERE "organizationId" = ${organizationId}`.pipe(
         Effect.orDie,
         Effect.asVoid,
       );

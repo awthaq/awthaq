@@ -28,11 +28,13 @@
     "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
     "@awthaq/qadi": "workspace:*",
-    "@qadi/core": "^0.7.0",
+    "@qadi/core": "^0.8.0",
+    "@qadi/http": "^0.8.0",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect/sql-sqlite-node": "catalog:",
+    "@awthaq/server": "workspace:*",
+    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

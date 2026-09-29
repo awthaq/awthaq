@@ -1,0 +1,385 @@
+{
+ "_doc": "Workstream slug -> program. Programs are the unit of execution in .plan/README.md. Order = execution phase order. Edit here, then re-run aggregate.py. `first` pins workstream order inside a program (overrides severity ranking where new findings/deps matter).",
+ "programs": [
+  {
+   "key": "P01",
+   "phase": 1,
+   "title": "Session integrity & cookie/CSRF correctness",
+   "slugs": [
+    "session-verify-hardening",
+    "session-supersede-atomicity",
+    "session-list-correctness",
+    "session-list-liveness-and-pagination",
+    "session-rotation-delivery",
+    "session-handler-hardening",
+    "per-request-session-cache",
+    "session-cookie-expiry",
+    "session-cookie-policy",
+    "session-policy",
+    "session-issuance-context",
+    "session-lifecycle-events",
+    "session-revocation-events",
+    "session-docs-accuracy",
+    "csrf-hardening",
+    "hmac-secret-hygiene",
+    "optional-auth-contract",
+    "wire-constant-single-source"
+   ],
+   "first": [
+    "session-verify-hardening",
+    "session-rotation-delivery",
+    "csrf-hardening",
+    "session-supersede-atomicity",
+    "session-list-correctness",
+    "session-list-liveness-and-pagination"
+   ]
+  },
+  {
+   "key": "P02",
+   "phase": 1,
+   "title": "OAuth / OIDC flow hardening",
+   "slugs": [
+    "oauth-oidc-claims-integrity",
+    "oauth-provider-boot-validation",
+    "oauth-provider-response-decoding",
+    "oauth-outbound-resilience",
+    "oauth-callback-http-hardening",
+    "oauth-account-linking-policy",
+    "oauth-callback-error-contract",
+    "oauth-config-safety",
+    "oauth-token-endpoint-client-auth",
+    "provider-token-storage",
+    "oauth-provider-presets",
+    "oauth-callback-url-policy",
+    "persistence-colocation-invariant",
+    "api-path-param-conventions",
+    "shared-constant-time-compare"
+   ]
+  },
+  {
+   "key": "P03",
+   "phase": 1,
+   "title": "JWT, signing keys & key rotation",
+   "slugs": [
+    "jwt-signing-key-at-rest-encryption",
+    "keyprovider-rotation",
+    "jwt-lite-verifier-jwks-cache",
+    "jwt-claims-codec-hardening",
+    "jwt-key-rotation-integrity",
+    "jose-algorithm-coverage",
+    "jwt-response-mirroring-opt-in",
+    "jwt-revocation-propagation",
+    "jwt-key-rotation-runbook",
+    "jwt-act-claim",
+    "sql-encrypted-token-read-path"
+   ]
+  },
+  {
+   "key": "P04",
+   "phase": 1,
+   "title": "Authorization: organizations, roles, qadi",
+   "slugs": [
+    "qadi-decision-cache-invalidation",
+    "org-role-escalation-guards",
+    "org-qadi-relationships",
+    "org-write-atomicity-and-uniqueness",
+    "org-tenant-read-isolation",
+    "org-active-context-lifecycle",
+    "org-sql-count-queries",
+    "qadi-bridge-hardening",
+    "roles-catalog-validation",
+    "roles-audit-and-admin",
+    "authz-model-boundaries",
+    "qadi-upstream",
+    "qadi-attribute-typing",
+    "user-claims-store",
+    "roles-permission-modeling",
+    "org-team-hierarchy",
+    "authz-docs-truthfulness"
+   ],
+   "first": [
+    "org-role-escalation-guards",
+    "qadi-decision-cache-invalidation",
+    "org-write-atomicity-and-uniqueness",
+    "org-qadi-relationships",
+    "org-active-context-lifecycle"
+   ]
+  },
+  {
+   "key": "P05",
+   "phase": 1,
+   "title": "Admin & impersonation",
+   "slugs": [
+    "admin-impersonation-gate-target",
+    "admin-impersonation-cookie-contract",
+    "admin-impersonation-lifecycle",
+    "admin-audit-integrity",
+    "admin-surface-expansion",
+    "admin-api-tier"
+   ]
+  },
+  {
+   "key": "P06",
+   "phase": 1,
+   "title": "Rate limiting & abuse resistance",
+   "slugs": [
+    "ratelimit-memory-eviction",
+    "ratelimit-distributed-store",
+    "ratelimit-signal-and-escalation",
+    "server-request-limits",
+    "cors-posture"
+   ]
+  },
+  {
+   "key": "P07",
+   "phase": 2,
+   "title": "Password, hashing, mail & verification tokens",
+   "slugs": [
+    "password-hasher-verify-hardening",
+    "password-hasher-offload",
+    "legacy-password-migration",
+    "password-hasher-legacy-recipes",
+    "password-policy-posture",
+    "password-rate-limit-hardening",
+    "password-recovery-correctness",
+    "password-api-contract-hygiene",
+    "phc-hash-branding",
+    "mail-delivery-reliability",
+    "mailer-typed-delivery-errors",
+    "verification-token-delivery",
+    "verification-hardening",
+    "verification-store-hygiene",
+    "verification-timing-uniformity"
+   ]
+  },
+  {
+   "key": "P08",
+   "phase": 2,
+   "title": "Passkeys / WebAuthn",
+   "slugs": [
+    "passkey-challenge-store-hardening",
+    "passkey-ceremony-policy",
+    "passkey-user-handle",
+    "passkey-enumeration-safety",
+    "passkey-counter-anomaly-policy",
+    "passkey-wire-contract",
+    "passkey-docs",
+    "passkey-browser-signals",
+    "webauthn-user-presence",
+    "webauthn-attestation-policy"
+   ]
+  },
+  {
+   "key": "P09",
+   "phase": 2,
+   "title": "Persistence: SQL dialects, repositories, replicas",
+   "slugs": [
+    "sql-dialect-neutral-models",
+    "sql-repository-hygiene",
+    "sql-contract-test-coverage",
+    "sql-docs-operations",
+    "sqlite-ops-docs",
+    "migration-wiring",
+    "accounts-targeted-writes",
+    "read-replica-routing"
+   ],
+   "first": [
+    "sql-dialect-neutral-models"
+   ]
+  },
+  {
+   "key": "P10",
+   "phase": 2,
+   "title": "Events, hooks & observability",
+   "slugs": [
+    "hook-registry-per-composition",
+    "hook-run-semantics",
+    "core-hook-point-coverage",
+    "auth-events-subscription",
+    "auth-event-schema",
+    "auth-event-envelope",
+    "auth-event-taxonomy",
+    "security-signal-pipeline",
+    "auth-event-external-delivery",
+    "events-delivery-durability",
+    "observability-substrate",
+    "auth-operation-tracing",
+    "authn-failure-observability"
+   ],
+   "first": [
+    "hook-registry-per-composition",
+    "authn-failure-observability"
+   ]
+  },
+  {
+   "key": "P11",
+   "phase": 2,
+   "title": "Compliance: erasure, export, retention, redaction",
+   "slugs": [
+    "gdpr-erasure-export",
+    "data-retention-sweep",
+    "retention-sweeps",
+    "auth-event-pii-posture",
+    "redaction-guarantee-check"
+   ]
+  },
+  {
+   "key": "P12",
+   "phase": 2,
+   "title": "Composition, API surface & error taxonomy",
+   "slugs": [
+    "httpapi-surface-consolidation",
+    "plugin-composition-soundness",
+    "core-error-taxonomy",
+    "plugin-api-surface-conventions",
+    "plugin-port-boundary-enforcement",
+    "plugin-contract-docs",
+    "canonical-starter-defaults",
+    "api-contract-tests"
+   ]
+  },
+  {
+   "key": "P13",
+   "phase": 2,
+   "title": "Frontend: Next.js, React, client",
+   "slugs": [
+    "react-provider-subject-pipeline",
+    "next-getsession-hardening",
+    "next-server-action-facade",
+    "next-edge-stateless-tier",
+    "next-package-manifest-hygiene",
+    "next-react-ssr-bridge",
+    "react-client-atoms-factory",
+    "react-package-deps",
+    "client-promise-facade-errors",
+    "csrf-client-bootstrap",
+    "frontend-docs-truthfulness"
+   ],
+   "first": [
+    "react-client-atoms-factory",
+    "next-getsession-hardening",
+    "react-provider-subject-pipeline"
+   ]
+  },
+  {
+   "key": "P14",
+   "phase": 3,
+   "title": "Identity model & user lifecycle",
+   "slugs": [
+    "users-identity-model",
+    "user-identity-lifecycle",
+    "user-import-idempotency",
+    "users-profile-surface",
+    "user-profile-image"
+   ]
+  },
+  {
+   "key": "P15",
+   "phase": 3,
+   "title": "MFA, passwordless & authentication assurance",
+   "slugs": [
+    "mfa-two-factor",
+    "mfa-two-factor-hardening",
+    "two-factor-recovery-codes",
+    "passwordless-magic-link-email-otp",
+    "verification-otp-substrate",
+    "session-assurance-channel",
+    "session-assurance",
+    "session-authentication-methods"
+   ]
+  },
+  {
+   "key": "P16",
+   "phase": 3,
+   "title": "Native, bearer & machine identity",
+   "slugs": [
+    "native-session-bootstrap",
+    "native-token-delivery",
+    "client-native-bearer-mode",
+    "native-bearer-bootstrap",
+    "session-delivery",
+    "bearer-credential-extensibility",
+    "jwt-stateless-bearer-reentry",
+    "apikey-machine-identity",
+    "m2m-client-credentials",
+    "m2m-client-secret-lifecycle",
+    "m2m-machine-credentials",
+    "device-authorization-design",
+    "device-authorization-grant"
+   ]
+  },
+  {
+   "key": "P17",
+   "phase": 3,
+   "title": "CLI tooling",
+   "slugs": [
+    "cli-contract",
+    "cli-session-login-carveout",
+    "cli-manifest-tooling",
+    "cli-exit-code-and-arg-contract",
+    "cli-import-tooling",
+    "cli-session-commands",
+    "cli-doctor-hardening",
+    "cli-migration-guardrails",
+    "cli-seed-admin-audit"
+   ]
+  },
+  {
+   "key": "P18",
+   "phase": 4,
+   "title": "Multi-tenancy, residency & enterprise federation",
+   "slugs": [
+    "tenancy-residency",
+    "multi-tenant-composition",
+    "multi-tenant-oauth-connections",
+    "org-config-and-tenancy",
+    "enterprise-federation-saml-scim"
+   ]
+  },
+  {
+   "key": "P19",
+   "phase": 0,
+   "title": "Spec & documentation truthfulness",
+   "slugs": [
+    "spec-status-banner-sweep",
+    "spec-bdd-traceability-refresh",
+    "spec-behavior-code-reconcile",
+    "spec-roadmap-status-reconcile",
+    "spec-surface-inventory-reconcile",
+    "spec-model-drift",
+    "readme-docs-accuracy",
+    "design-docs-archive"
+   ]
+  },
+  {
+   "key": "P20",
+   "phase": 0,
+   "title": "Test suite, tooling & CI",
+   "slugs": [
+    "bdd-feature-wiring",
+    "bdd-step-definition-quality",
+    "bdd-skip-debt",
+    "bdd-suite-docs",
+    "bdd-organization-feature",
+    "bdd-plugin-coverage",
+    "test-harness-completeness",
+    "property-based-testing",
+    "coverage-enforcement",
+    "ci-release-hardening",
+    "workspace-roster-sync",
+    "dev-scripts-tooling",
+    "tooling-typecheck-lint",
+    "quality-metrics-regeneration",
+    "build-tooling-hygiene",
+    "examples-memory-server",
+    "package-and-test-hygiene",
+    "tsconfig-paths-drift"
+   ],
+   "first": [
+    "tooling-typecheck-lint",
+    "workspace-roster-sync",
+    "bdd-feature-wiring"
+   ]
+  }
+ ]
+}

@@ -16,41 +16,78 @@
 // or a resolved `UserPrincipal`'s `actingAs` — so this World also exposes
 // direct domain-level access to `Sessions`/`Authentication.resolvePrincipal`
 // over the same shared `MemoMap` the HTTP handler itself resolves against.
-import { AuditLog, AuthEvents, Hooks, Sessions, Users } from "@awthaq/core";
+import { AuditChain, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Admin, AdminApi, ImpersonationRecords } from "@awthaq/admin";
 import type { Api } from "@awthaq/api";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
-import type { AuthSubject } from "@qadi/core";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
+import { TestServices } from "./shared/Harness.ts";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import { TestAuth } from "@awthaq/test";
 
 const ORIGIN = "http://localhost:3000";
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
+/**
+ * IDS-003: `Admin.impersonate` refuses a nonexistent target. The scenarios name
+ * their targets by literal ids ("target-1", "admin-1"), so this World treats
+ * every id as an existing account except those prefixed `unknown-`, which the
+ * unknown-target scenario uses.
+ */
+const UsersLive = Layer.effect(
+  Users.Users,
+  Effect.gen(function* () {
+    const real = yield* Users.Users;
+    return Users.Users.of({
+      ...real,
+      findById: (id) =>
+        real.findById(id).pipe(
+          Effect.catchTag("UserNotFound", (notFound) =>
+            id.startsWith("unknown-")
+              ? Effect.fail(notFound)
+              : Effect.succeed({
+                  id,
+                  identity: {
+                    _tag: "Email" as const,
+                    email: `${id}@example.com`,
+                    emailVerified: false,
+                  },
+                  name: id,
+                  metadata: Option.none(),
+                  image: Option.none(),
+                  tenantId: Option.none(),
+                  status: "active" as const,
+                  statusReason: Option.none(),
+                  suspendedUntil: Option.none(),
+                  createdAt: DateTime.makeUnsafe(0),
+                  updatedAt: DateTime.makeUnsafe(0),
+                }),
+          ),
+        ),
+    });
+  }),
+).pipe(Layer.provide(Users.layerMemory));
 
-const CoreLive = Layer.mergeAll(Sessions.layerMemory, Users.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+const CoreLive = Layer.mergeAll(Sessions.layerMemory, UsersLive).pipe(
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
+);
+
+// AR-003: the admin group sits behind `Api.AdminAuthentication`; the default just delegates.
+const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
+  Layer.provide(AuthenticationLive),
 );
 
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
@@ -60,7 +97,9 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 
 export interface AppOptions {
   /** Omitted entirely means `AdminConfig`'s own fail-closed default (`() => false`) applies — REQ-EA-382/400's own point. */
-  readonly canImpersonate?: (subject: AuthSubject) => Effect.Effect<boolean>;
+  readonly canImpersonate?: Admin.AdminConfigShape["canImpersonate"];
+  /** BAM-005: omitted means the fail-closed default, exactly like `canImpersonate`. */
+  readonly canManageUsers?: Admin.AdminConfigShape["canManageUsers"];
 }
 
 const buildAppLayer = (
@@ -95,15 +134,27 @@ const buildAppLayer = (
   return Layer.mergeAll(
     AuthHttp.routes(AdminApi.AdminApi, { openapiPath: "/openapi.json" }).pipe(
       Layer.provide(Admin.Admin.layer),
-      Layer.provide(Admin.config({ canImpersonate })),
-      Layer.provide(AuthenticationLive),
+      Layer.provide(
+        Admin.config({
+          canImpersonate,
+          ...(options.canManageUsers === undefined
+            ? {}
+            : { canManageUsers: options.canManageUsers }),
+        }),
+      ),
+      Layer.provide(AdminAuthenticationLive),
     ),
     AuthHttp.docs(AdminApi.AdminApi),
   ).pipe(
     Layer.provideMerge(eventsLayer),
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(CoreLive),
-    Layer.provideMerge(ImpersonationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
+    Layer.provideMerge(
+      ImpersonationRecords.layerMemory.pipe(
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer))),
+      ),
+    ),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),
   );
@@ -179,14 +230,8 @@ export const request = Effect.fn("features.admin.request")(function* (
   return response;
 });
 
-export const cookieFrom = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw.split(";")[0] ?? raw;
-};
-
 export const tokenFromCookie = (cookie: string): string =>
-  decodeURIComponent(cookie.replace("__Host-session=", ""));
+  decodeURIComponent(cookie.replace(/^__Host-(session|impersonation)=/, ""));
 
 /**
  * Issues a real session directly against `Sessions`, reaching into the
@@ -205,8 +250,8 @@ export const signIn = Effect.fn("features.admin.signIn")(function* (userId: stri
           return yield* Effect.gen(function* () {
             const users = yield* Users.Users;
             yield* users
-              .create({ email: `${userId}@example.com`, name: userId })
-              .pipe(Effect.catchTag("EmailAlreadyExists", () => Effect.void));
+              .create({ identity: { _tag: "Email", email: `${userId}@example.com` }, name: userId })
+              .pipe(Effect.catchTag("Users/EmailAlreadyExists", () => Effect.void));
             const sessions = yield* Sessions.Sessions;
             const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
             return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
@@ -262,6 +307,7 @@ export const resolvePrincipal: (token: string) => Effect.Effect<Api.Principal, n
                 sessions,
                 resolver,
                 Redacted.make(token),
+                "cookie",
               ).pipe(
                 // Ticket 03: `resolvePrincipal` keys its per-request verify
                 // memoization off the ambient `HttpServerRequest` — this

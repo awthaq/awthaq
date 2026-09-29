@@ -1,9 +1,181 @@
 # @awthaq/client
 
-> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.
+Effect `HttpApiClient` bindings for the awthaq contract: the generated client,
+the CSRF client middleware (self-bootstrapping), error-code derivation, a
+session store, an opt-in Promise facade and the passkey ceremony helper. It is
+isomorphic — browser, Node and edge runtimes — and adds no transport of its own:
+every method is the one `HttpApiClient` generated from your api.
 
-Client. AtomHttpApi client and session atom — the isomorphic Effect client derived from the merged contract.
+Spec: [`spec/behaviors/22-client-effect.md`](../../spec/behaviors/22-client-effect.md)
+(BEH-EA-169–176). The reactive (`AtomHttpApi`) layer lives in
+[`@awthaq/react`](../react/README.md), built on this package.
 
-**Planned first module:** AuthClient.ts (spec/behaviors/22-client-effect.md, BEH-EA-169–176)
+## The client
 
-See [`spec/overview.md`](../../spec/overview.md) for the full package map this fits into.
+`make` (and `makeWith`, `group`, `endpoint`, `urlBuilder`) are `HttpApiClient`'s
+own functions, re-exported — never re-declared wrappers — so the literal group and
+endpoint names of *your* composed `auth.api` survive:
+
+```ts
+import { AuthClient } from "@awthaq/client";
+import * as Effect from "effect/Effect";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import { auth } from "./auth.ts"; // your Auth.make(...) result
+
+const program = Effect.gen(function* () {
+  const client = yield* AuthClient.make(auth.api, { baseUrl: "/api/auth" });
+  return yield* client.password.signIn({ payload: { email, password } });
+}).pipe(Effect.provide(AuthClient.CsrfClientLive), Effect.provide(FetchHttpClient.layer));
+```
+
+## Cookie mode and CSRF
+
+Every mutating production group declares the `CsrfProtection` middleware, and it is
+`requiredForClient`, so a cookie-mode client **does not type-check** until you
+provide its client half. `CsrfClientLive` is that half: it echoes the
+`__Host-csrf` cookie as `x-csrf-token` (double-submit).
+
+It is self-bootstrapping. The server mints the cookie on *any* response through
+a guarded group — including the 403 that rejects a request for lacking it — so a
+cold browser's first mutation carries no cookie. `CsrfClientLive` then sends no
+header (never an empty one) and, on a `CsrfRejected` whose response left a fresh
+cookie behind, retries the request **once** with it. A second rejection, or one
+with the same cookie as was sent, reaches your code untouched.
+
+`csrfClientLayer({ readCookie, bootstrapRetry })` builds the same layer with a
+custom cookie reader (a server-side caller reads its request's `Cookie` header —
+`@awthaq/next`'s server-action client does) or the retry switched off.
+`AuthClient.readCookie` is the browser reader.
+
+Bearer-authenticated requests are exempt from CSRF on the server (there is no
+ambient browser credential to forge), and so is any unsafe request that carries no
+`Cookie` header at all (BEH-EA-077), which is what a native or CLI client's **first**
+sign-in or sign-up is: it has no cookie jar and no token yet, and it no longer needs
+a warm-up round trip. Such a client provides `AuthClient.CsrfClientNative` (it never
+reads or echoes a cookie and never retries a `CsrfRejected`) alongside the bearer
+transform below. A browser that holds any cookie is still asked for the pair, and the
+server still refuses a cross-site or foreign-`Origin` request. The `{ csrf: false }`
+contract variant is still unbuilt (`Auth.make` has no composition-level CSRF opt-out).
+
+## Bearer (native, CLI, server-to-server) clients
+
+The session token rotates on the server's throttled touch (the replaced secret
+survives only `SessionConfig.rotationGrace`, 30 seconds by default), so a bearer client must capture the rotated token from every response:
+
+```ts
+import { AuthClient } from "@awthaq/client";
+import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
+import { auth } from "./auth.ts";
+
+declare const tokenFromSignIn: string;
+
+const program = Effect.gen(function* () {
+  const store = yield* AuthClient.BearerTokenStore; // BearerTokenStoreMemory, or your own (Keychain/Keystore)
+  yield* store.set(Redacted.make(tokenFromSignIn));
+  return yield* AuthClient.make(auth.api, {
+    baseUrl: "https://auth.example.com",
+    transformClient: AuthClient.bearerTransformClient(store),
+  });
+});
+```
+
+`bearerTransformClient` attaches `Authorization: Bearer <token>` and stores the
+`set-auth-token` header (`Api.ROTATED_TOKEN_HEADER`) whenever a response carries
+it. On the typed `Unauthenticated` error, re-authenticate and `store.set` a fresh
+token. Keep `set-auth-token` intact through proxies, expose it via CORS if
+cross-origin, and never log it.
+
+### Getting the first token
+
+The transform also sends `X-Awthaq-Token-Delivery: bearer` on every request. That
+header is what makes a session-minting response (password sign-up/sign-in/change-password,
+passkey authenticate, `POST /oauth/token`) return the session token in its body's `token`
+field instead of setting a cookie your app has no jar for. `captureSessionToken` puts it
+in the store:
+
+```ts
+import { AuthClient } from "@awthaq/client";
+import * as Effect from "effect/Effect";
+import { auth } from "./auth.ts";
+
+const signIn = (email: string, password: string) =>
+  Effect.gen(function* () {
+    const store = yield* AuthClient.BearerTokenStore;
+    const client = yield* AuthClient.make(auth.api, {
+      baseUrl: "https://auth.example.com",
+      transformClient: AuthClient.bearerTransformClient(store),
+    });
+    // The response carries `token`; captureSessionToken stores it, the next call is authenticated.
+    return yield* AuthClient.captureSessionToken(
+      client.password.signIn({ payload: { email, password } }),
+    );
+  });
+```
+
+### React Native / Expo recipe
+
+1. Implement `BearerTokenStore` over the Keychain/Keystore (`expo-secure-store`, `react-native-keychain`): `get`, `set` and `clear` read and write one secret string. Where the token lives on the device is your app's responsibility; the library ships only the wire contract, and plain app storage is not an acceptable place for a session token.
+2. Build the client with `make(api, { baseUrl, transformClient: bearerTransformClient(store) })` and provide your store `Layer`.
+3. Sign in with `captureSessionToken(...)`. For OAuth, open `https://auth.example.com/oauth/<provider>/authorize?mode=native&callbackURL=myapp://oauth/callback&code_challenge=<S256>` in `ASWebAuthenticationSession`/Custom Tabs, take `code` from the returned deep link, and redeem it with `POST /oauth/token` (`{ code, codeVerifier }`) through `captureSessionToken`; see `@awthaq/oauth`'s README.
+4. CSRF: a bearer client has no `__Host-csrf` cookie to echo before it holds a token, so its *first* mutating call (sign-in) is still checked (the `{ csrf: false }` contract variant is unbuilt). Requests that carry `Authorization` are exempt. If your runtime cannot read `Set-Cookie`, sign in from a browser-capable step (a web view) or through the OAuth native flow, whose `POST /oauth/token` is outside CSRF protection by design.
+
+## Errors as data: `ErrorCodes`
+
+`AuthClient.ErrorCodes<typeof auth.api>` is the set of `_tag` literals your i18n
+catalog must cover, derived mechanically from the contract — endpoint errors plus
+their middleware's (`Unauthenticated`, `CsrfRejected`, ...) — so it cannot drift
+from what a call can actually fail with.
+
+## Promise facade
+
+`toPromiseFacade(client)` wraps an already-built client so non-Effect code gets
+Promises from the *same* generated methods (BEH-EA-176). Two modes:
+
+```ts
+import { AuthClient } from "@awthaq/client";
+
+declare const client: Parameters<typeof AuthClient.toPromiseFacade>[0];
+
+// default: rejects with the endpoint's tagged contract error
+const rejecting = AuthClient.toPromiseFacade(client);
+
+// { mode: "result" }: always resolves a Result<A, E>, E being the endpoint's error union
+const facade = AuthClient.toPromiseFacade(client, { mode: "result" });
+```
+
+In `result` mode a non-Effect caller narrows `result.failure._tag` with
+exhaustiveness checking. Defects (transport, decoding) reject in both modes.
+
+## Session store
+
+`SessionStore` / `SessionStoreLive` hold the current `SessionDto` for Effect
+programs. `hydrate(initial)` is SSR seeding: the first non-null value wins, so a
+slow client refetch can never clobber what the server rendered; `set` always
+overwrites (a real sign-in, sign-out or refresh).
+
+## Session model
+
+The session is an opaque server-side session behind an `HttpOnly` cookie — there
+is no token on the client to store, decode or refresh. Server-side rotation
+replaces refresh loops (`SessionConfig.touchEvery`); reading the session is a
+`GET /session`, not an SDK call (`useAtomValue(sessionAtom)` in
+[`@awthaq/react`](../react/README.md) is the `onAuthStateChanged` analogue, and it
+revalidates on window focus). An idle tab therefore learns about expiry or
+revocation the next time it is focused or acts.
+
+## Passkeys
+
+`PasskeyClient.passkeyClient(client)` drives the browser WebAuthn ceremonies
+(`registerPasskey`, `authenticate`, conditional UI, list/rename/delete) over a
+`PasskeyApi` client slice; ceremony failures are typed
+(`PasskeyClientError.PasskeyUserCancelled`, ...).
+
+```ts
+import { PasskeyClient } from "@awthaq/client";
+
+declare const passkeyApi: Parameters<typeof PasskeyClient.passkeyClient>[0];
+
+const passkeys = PasskeyClient.passkeyClient(passkeyApi);
+const authenticate = () => passkeys.authenticate({ autoFill: true });
+```

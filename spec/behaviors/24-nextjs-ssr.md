@@ -4,20 +4,20 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-24 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Examples updated to the shipped signatures (`getSession(headers, runtime)`, `withNextCookies(response, jar)`) and the banner given implementation pointers; requirement texts unchanged (NAM-010, BO-008, IC-006, CCR-EA-006) |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet; awthaq is pre-implementation.
+> Implemented in `@awthaq/web` — the framework-neutral core (`Session.ts`, `HasSessionCookie.ts`, `CookieJar.ts`, `InProcessClient.ts`; tests `packages/web/test`; BO-004) — and `@awthaq/next`, the Next adapter over it (`GetSession.ts`'s `React.cache` dedup, `WithNextCookies.ts`/`ServerActionClient.ts` name aliases, `edge.ts`, `Seed.ts`; tests `packages/next/test`) — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md) §5. The examples below use the shipped signatures: `getSession(headers, runtime)` and `withNextCookies(response, jar)`. Its BDD scenarios are `@skip @unwired`.
 
 ## BEH-EA-185: `getSession` verifies the cookie against the database
 
 ```ts
-const session = await getSession({ headers: await headers() })   // SessionView | undefined, database-verified
+const session = await getSession(await headers(), runtime)   // Session | undefined, database-verified
 if (!session) redirect("/sign-in")
 ```
 
@@ -81,13 +81,17 @@ export function proxy(request: NextRequest) {
 ```
 
 ```text
-REQUIREMENT: `proxy.ts` MUST perform only a cookie-presence check for
-             redirect purposes; a page or server action reached past `proxy.ts`
-             MUST independently verify the session and MUST NOT treat having
-             passed `proxy.ts` as proof of authentication or authorization.
+REQUIREMENT: `proxy.ts` MUST perform only a database-free check for redirect
+             purposes — cookie presence, or (opt-in, BO-006) the signature and
+             expiry check of a short-lived JWT session-mirror cookie; a page or
+             server action reached past `proxy.ts` MUST independently verify
+             the session against the database and MUST NOT treat having passed
+             `proxy.ts` as proof of authentication or authorization.
 ```
 
 `usage-examples-v4.md` §13 labels this explicitly: "optimistic redirect only, never the boundary." research/11-client-frontend.md's Q84 gives the platform reason this is not merely a stylistic choice: Next.js's own guidance says Proxy "runs on every route... only read the session from the cookie... and avoid database checks," so a database-backed verification cannot live there without a real performance cost on every request — the real check belongs in the page's data-access layer, where `getSession` (BEH-EA-185) runs it once per request that actually needs it.
+
+**Stateless edge tier (BO-006, decision D1 option C).** Presence alone lets a forged or long-expired opaque cookie through the edge. `@awthaq/jwt`'s `JwtConfig.sessionCookie` (default off) makes every cookie-authenticated response also carry a `__Host-`-prefixed, `HttpOnly`, `Secure`, `SameSite=Strict` cookie holding a JWT of the same principal that expires with the cookie (default 5 minutes); `@awthaq/next/edge`'s `verifySessionJwt` verifies it against the JWKS through the lite verifier (`@awthaq/jwt/verify`, free of `@awthaq/core`/`@awthaq/server` — pinned by an import-graph test) and yields the claims or `undefined`. It is still a redirect signal: the mirror is a copy, a revoked session's mirror keeps verifying for at most its `ttl` (sign-out does not clear it), and the boundary stays `getSession`. Edge deployments: `hasSessionCookie` and `@awthaq/next/edge` are the edge-safe entries; `getSession`/`serverActionClient` need the origin (Sessions/Users/SQL).
 
 _Previous: [BEH-EA-187](24-nextjs-ssr.md#beh-ea-187-decide-against-attributes-project-content-separately) | Next: [BEH-EA-189](24-nextjs-ssr.md#beh-ea-189-withnextcookies-bridges-set-cookie-from-server-actions)_
 
@@ -96,7 +100,10 @@ _Previous: [BEH-EA-187](24-nextjs-ssr.md#beh-ea-187-decide-against-attributes-pr
 ```ts
 "use server"
 export async function changeName(form: FormData) {
-  return runtime.runPromise(withNextCookies(Users.use((u) => u.rename(String(form.get("name"))))))
+  // `handler` is the application's composed web handler (`HttpRouter.toWebHandler`)
+  const response = await handler(new Request(url, { method: "PATCH", headers: await forwardedHeaders(), body: form }))
+  withNextCookies(response, await cookies())   // copies every Set-Cookie header into Next's cookie jar
+  return response.json()
 }
 ```
 
@@ -108,7 +115,11 @@ REQUIREMENT: A server action that triggers a `Set-Cookie` (a new session
              which a server action never sees.
 ```
 
-`usage-examples-v4.md` §13 shows exactly this shape. React Server Components and the framework layer around server actions don't expose a raw HTTP response for an ordinary Effect program to write `Set-Cookie` onto directly — `withNextCookies` exists specifically to carry that header across the boundary into `next/headers`' cookie API, which is the only thing on the Next.js side actually allowed to write cookies from within a server action.
+The archive cookbook (`usage-examples-v4.md` §13) sketched this as `withNextCookies(Users.use(...))`, wrapping a domain Effect; that shape cannot work, because only `HttpApiBuilder.securitySetCookie` produces a `Set-Cookie` header and a domain call has no response to read one from, so `withNextCookies` takes the *response* of an HTTP dispatch and the jar. React Server Components and the framework layer around server actions don't expose a raw HTTP response for an ordinary Effect program to write `Set-Cookie` onto directly — `withNextCookies` exists specifically to carry that header across the boundary into `next/headers`' cookie API, which is the only thing on the Next.js side actually allowed to write cookies from within a server action.
+
+**Implementation (BO-002).** The shipped surface is `serverActionClient`/`makeServerActionClient` (`@awthaq/next`): an `HttpApiClient` over the application's own composed `api` whose in-process transport dispatches to the application's web handler, forwards the action's `Cookie`/`User-Agent`/`X-Forwarded-For`, echoes the CSRF cookie as `x-csrf-token` (with the bootstrap retry of BEH-EA-170 for a cold action), and passes every response through `withNextCookies` into the action's jar. `withNextCookies` itself stays exported for callers who dispatch on their own.
+
+**Framework-neutral core (BO-004/BO-010).** The bridge, the client and `getSession` are framework-neutral and live in `@awthaq/web` (`applyResponseCookies`, `inProcessClient`/`makeInProcessClient`, `getSession`/`makeGetSession`); `@awthaq/next`'s names are aliases over them, so an Astro or SvelteKit adapter reuses the core unchanged. `CookieJarLike.set` always receives an explicit `path` (defaulted to `/` when the `Set-Cookie` omits it), which is what lets SvelteKit's `Cookies.set` (path required), Astro's `AstroCookies.set` and Next's `cookies()` all satisfy it structurally.
 
 _Previous: [BEH-EA-188](24-nextjs-ssr.md#beh-ea-188-proxyts-is-an-optimistic-redirect-never-the-boundary) | Next: [BEH-EA-190](24-nextjs-ssr.md#beh-ea-190-server-actions-re-resolve-the-subject-per-invocation)_
 
@@ -117,7 +128,7 @@ _Previous: [BEH-EA-188](24-nextjs-ssr.md#beh-ea-188-proxyts-is-an-optimistic-red
 ```ts
 "use server"
 export async function deleteProject(id: ProjectId) {
-  const session = await getSession({ headers: await headers() })
+  const session = await getSession(await headers(), runtime)
   return runtime.runPromise(Effect.gen(function*() {
     const subject = yield* SubjectResolver.use((s) => s.resolve(session!.principal))
     /* … */

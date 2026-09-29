@@ -1,27 +1,28 @@
 // @awthaq/core — Auth
 //
 // spec/behaviors/02-plugin-composition-validate.md, BEH-EA-009 through
-// BEH-EA-016. awthaq is pre-implementation (spec/README.md); this module
-// composes real `AuthPlugin` values, it does not merely type them.
-//
-// Scoped deliberately smaller than the full design in
-// archive/design/plugins-as-layers.md §4: `AuthCore` (the fixed
-// Users/Accounts/Sessions/Verification/Authentication/Csrf/SessionView tuple,
-// §6) does not exist until M1 Core lands, so `Auth.make` does not yet prepend
-// it; `AuthPlugin.Variant` (BEH-EA-019, spec/behaviors/03-ports-slots-hooks-registries.md)
-// and the `SlotConflict<P>` check it would need do not exist until Slots
-// (BEH-EA-017+) land either. What is implemented here — `Validate<P>`'s
-// `DuplicateId` and `MissingDep` checks (BEH-EA-010, BEH-EA-011), computing
-// `api` and `layer` from the same tuple (BEH-EA-009, BEH-EA-013), and the
-// runtime cycle detection and migration ordering (BEH-EA-016) — is real and
-// exercised by `test/Auth.test.ts`.
+// BEH-EA-016. `Auth.make` composes real `AuthPlugin` values: `Validate<P>`'s
+// `DuplicateId`, `MissingDep` and `OutOfOrderDep` checks (BEH-EA-010,
+// BEH-EA-011, JH-006), `api` and `layer` computed from the same tuple
+// (BEH-EA-009, BEH-EA-013), core's own `session`/`account` groups seeded into
+// `api` (MW-002), one `SlotsRegistry` per composition so `SlotConflict` is
+// always checked (BEH-EA-012, MA-005), and the runtime cycle detection and
+// migration ordering (BEH-EA-016) — all exercised by `test/AuthPlugin.test.ts`.
 
+import { AuthCore } from "@awthaq/api";
+import type * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as Layer from "effect/Layer";
+import type * as Types from "effect/Types";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import type * as AuthPlugin from "./AuthPlugin.ts";
+import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as AuthPlugin from "./AuthPlugin.ts";
+import * as HookPoint from "./HookPoint.ts";
+import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
+import * as Slots from "./Slots.ts";
+import * as UserFields from "./UserFields.ts";
 
 // ---------------------------------------------------------------------------
 // Errors — catchable by class instead of by string-matching a plain `Error`
@@ -62,6 +63,36 @@ export class GroupIdConflict extends Data.TaggedError("GroupIdConflict")<{
   readonly groupId: string;
   readonly firstPluginId: string;
   readonly secondPluginId: string;
+  readonly message: string;
+}> {}
+
+/**
+ * AVS-004: two contributed endpoints, in the same or different groups, claim
+ * the same method and path. The router would silently serve whichever
+ * registered first, shadowing the other plugin's endpoint, so composition
+ * refuses it instead of relying on a hand-kept list of reserved paths — which
+ * also covers a plugin's deliberate root-level routes (`@awthaq/password`
+ * owns `/verify-email`, `/resend-verification`, `/change-password`) the same
+ * way it covers namespaced ones.
+ */
+export class RouteConflict extends Data.TaggedError("RouteConflict")<{
+  readonly method: string;
+  readonly path: string;
+  readonly firstPluginId: string;
+  readonly secondPluginId: string;
+  readonly message: string;
+}> {}
+
+/**
+ * JH-007: a plugin declared (`readsTables`) that it reads a table another installed
+ * plugin owns, without listing that plugin in `dependsOn`. `dependsOn` is the sole
+ * source of migration order, so without it the reader's migrations could run before
+ * the table exists; composition refuses it instead of relying on a convention.
+ */
+export class UndeclaredTableDependency extends Data.TaggedError("UndeclaredTableDependency")<{
+  readonly pluginId: string;
+  readonly ownerId: string;
+  readonly table: string;
   readonly message: string;
 }> {}
 
@@ -150,21 +181,88 @@ type MissingDep<
   : never;
 
 /**
- * BEH-EA-009/010/011: a plugin tuple is accepted as-is only once it has no
- * duplicate id and no dependency missing from the same tuple; otherwise the
- * argument type narrows to a literal object naming the problem, so passing
- * the tuple to `Auth.make` fails to type-check with a readable message
- * (`archive/design/plugins-as-layers.md` §4.3) instead of an opaque mismatch.
+ * JH-006: the first `[dependencyId, dependentId]` pair where a plugin is listed
+ * before a plugin its `layer` requires, or `never`. `FoldLayer<P>` folds the tuple
+ * left to right while `composeLayer` folds the topologically sorted order, so the
+ * two are the same layer only when the tuple already lists dependencies first —
+ * refusing anything else makes that agreement a checked invariant, not a convention.
  */
-export type Validate<P extends ReadonlyArray<AuthPlugin.Any>> = [DuplicateId<P>] extends [never]
+type OutOfOrderDep<
+  P extends ReadonlyArray<AuthPlugin.Any>,
+  Seen extends string = never,
+> = P extends readonly [infer Head, ...infer Rest]
+  ? Head extends AuthPlugin.Any
+    ? [IdOf<PluginDeps<Head>>] extends [Seen]
+      ? Rest extends ReadonlyArray<AuthPlugin.Any>
+        ? OutOfOrderDep<Rest, Seen | Head["id"]>
+        : never
+      : readonly [Exclude<IdOf<PluginDeps<Head>>, Seen>, Head["id"]]
+    : never
+  : never;
+
+/**
+ * JH-008 / BEH-EA-020: the ports a plugin's layer must only ever *require*. Every
+ * awthaq port's service key is `awthaq/ports/<Name>` (`PasswordHasher`, `Mailer`,
+ * `RateLimiter`, `WebAuthn`, `KeyProvider`, `Encryption`, `SqlTransaction`,
+ * `ClientAddress`, ...), so the key prefix names them all without a hand-kept
+ * list that a new port could be missing from; `SqlClient` and `Crypto` are
+ * Effect's own, listed by type.
+ */
+type ReservedPort =
+  | { readonly key: `awthaq/ports/${string}` }
+  | Crypto.Crypto
+  | SqlClient.SqlClient;
+
+type PortName<Port> = Port extends { readonly key: infer Key extends string }
+  ? Key
+  : "Crypto or SqlClient";
+
+/** JH-008: the first `[portName, pluginId]` where a plugin's layer provides a port in its `ROut`, or `never`. */
+type PortProvidedByPlugin<P extends ReadonlyArray<AuthPlugin.Any>> = P[number] extends infer Plugin
+  ? Plugin extends AuthPlugin.Any
+    ? [Extract<Layer.Success<Plugin["layer"]>, ReservedPort>] extends [never]
+      ? never
+      : readonly [PortName<Extract<Layer.Success<Plugin["layer"]>, ReservedPort>>, Plugin["id"]]
+    : never
+  : never;
+
+/** The one problem `Validate<P>` reports for `P`, in a fixed order (duplicate id, missing dependency, order, port), or `never`. */
+type FirstProblem<P extends ReadonlyArray<AuthPlugin.Any>> = [DuplicateId<P>] extends [never]
   ? [MissingDep<P>] extends [never]
-    ? P
+    ? [OutOfOrderDep<P>] extends [never]
+      ? [PortProvidedByPlugin<P>] extends [never]
+        ? never
+        : PortProvidedByPlugin<P> extends readonly [
+              infer Port extends string,
+              infer By extends string,
+            ]
+          ? {
+              readonly awthaq: `plugin "${By}" provides port "${Port}" — a plugin may only require ports, never provide them`;
+            }
+          : never
+      : OutOfOrderDep<P> extends readonly [infer Dep extends string, infer By extends string]
+        ? {
+            readonly awthaq: `plugin "${By}" depends on plugin "${Dep}", which must be listed before it`;
+          }
+        : never
     : MissingDep<P> extends readonly [infer Dep extends string, infer By extends string]
       ? {
           readonly awthaq: `plugin "${By}" depends on plugin "${Dep}", which is not in the list`;
         }
       : never
   : { readonly awthaq: `plugin id "${DuplicateId<P>}" appears more than once` };
+
+/**
+ * BEH-EA-009/010/011/020: a plugin tuple is accepted as-is only once it has no
+ * duplicate id, no dependency missing from the same tuple, every dependency
+ * listed before its dependent (JH-006), and no plugin providing a port (JH-008);
+ * otherwise the argument type narrows to a literal object naming the problem, so
+ * passing the tuple to `Auth.make` fails to type-check with a readable message
+ * (`archive/design/plugins-as-layers.md` §4.3) instead of an opaque mismatch.
+ */
+export type Validate<P extends ReadonlyArray<AuthPlugin.Any>> = [FirstProblem<P>] extends [never]
+  ? P
+  : FirstProblem<P>;
 
 // ---------------------------------------------------------------------------
 // Built<P> — BEH-EA-009, BEH-EA-013
@@ -175,11 +273,64 @@ export interface ManifestPlugin {
   readonly apiVersion: 1;
   readonly tables: ReadonlyArray<string>;
   readonly dependsOn: ReadonlyArray<string>;
+  /** BEH-EA-203: the contract groups this plugin owns, so `routes` can name the owning plugin of an endpoint. */
+  readonly groups: ReadonlyArray<string>;
+}
+
+/** PV-241/BEH-EA-202: one port a plugin's layer requires (`AuthPlugin.layer`'s `ports`), by service key, declared statically. */
+export interface ManifestPort {
+  readonly plugin: string;
+  readonly key: string;
+}
+
+/** PV-241/BEH-EA-111: one statically declared rate-limit rule, tagged with the plugin that declared it. */
+export interface ManifestRateLimit extends AuthPlugin.RateLimitDeclaration {
+  readonly plugin: string;
+}
+
+/** ECS-008/BEH-EA-229: one configuration descriptor, tagged with the plugin that declared it. */
+export interface ManifestConfig {
+  readonly pluginId: string;
+  readonly descriptor: ConfigDescriptor;
+}
+
+/** PERS-003: one statically declared tap in a point's resolved chain. */
+export interface ManifestTap {
+  readonly plugin: string;
+  readonly order: number;
 }
 
 /** BEH-EA-016: read off the composed classes, never authored (`archive/design/plugins-as-layers.md` §7). */
 export interface Manifest {
   readonly plugins: ReadonlyArray<ManifestPlugin>;
+  /**
+   * PERS-003/BEH-EA-096: every plugin-declared tap (`AuthPlugin.layer`'s `taps`
+   * option), per hook point key, in the order the runtime chain runs them —
+   * derived with `HookPoint.compareTaps`, the same comparator the runtime uses,
+   * without building any layer. Application taps (`Point.tap` in the host) are
+   * not declared statically and run after every entry listed here.
+   */
+  readonly hooks: Readonly<Record<string, ReadonlyArray<ManifestTap>>>;
+  /**
+   * PV-241/BEH-EA-111: every rate-limit rule a plugin declares (`AuthPlugin.Service`'s `rateLimits`),
+   * in link order and each plugin's own declaration order — static, no Layer evaluated. The numbers
+   * are the declared defaults; a configurable plugin may register tuned ones at build.
+   */
+  readonly rateLimits: ReadonlyArray<ManifestRateLimit>;
+  /** PV-241/BEH-EA-202: every plugin's declared required ports, in link order and each plugin's own declaration order — static, no Layer evaluated. */
+  readonly ports: ReadonlyArray<ManifestPort>;
+  /** ECS-008: every installed plugin's configuration descriptors, in link order — static, no Layer evaluated. */
+  readonly config: ReadonlyArray<ManifestConfig>;
+  /** SAM-004: every plugin-declared user field the linker adds a column for, in link order. */
+  readonly userFields: ReadonlyArray<ManifestUserField>;
+}
+
+/** SAM-004: one declared user field as the manifest reports it (the schema itself lives in `Built.userFields`). */
+export interface ManifestUserField {
+  readonly key: string;
+  readonly column: string;
+  readonly kind: UserFields.ColumnKind;
+  readonly clientWritable: boolean;
 }
 
 /**
@@ -194,6 +345,41 @@ export interface Manifest {
 type GroupsOf<Plugin> = Plugin extends { readonly contract: HttpApi.HttpApi<string, infer Groups> }
   ? Groups
   : never;
+
+/**
+ * SAM-004: one plugin's declared user fields, keyed `<plugin id>_<field>`. Read off the type-only
+ * `"~userFields"` member (see `AuthPlugin.Class`), so at a concrete call site it is the per-key type the
+ * plugin declared, not the widened `Declarations`; a plugin declaring none contributes `{}`.
+ */
+type UserFieldsOfPlugin<Plugin> = Plugin extends {
+  readonly id: infer Id extends string;
+  readonly "~userFields"?: infer Fields;
+}
+  ? {
+      readonly [K in keyof NonNullable<Fields> & string as `${Id}_${K}`]: NonNullable<Fields>[K];
+    }
+  : {};
+
+/**
+ * SAM-004: the composed user fields of a plugin tuple, as `{ "<plugin id>_<field>": Schema }`. This is
+ * the type of `Built.userFields` and what a typed accessor (`Users.typedFields(auth.userFields)`) and the
+ * client's profile `fields` are typed by.
+ */
+export type UserFieldsOf<P extends ReadonlyArray<AuthPlugin.Any>> = Types.UnionToIntersection<
+  UserFieldsOfPlugin<P[number]>
+>;
+
+/**
+ * MW-002 (wayfinder ticket 26): core's own `session`/`account` groups, read off
+ * `AuthCore.AuthCoreApi` the way `GroupsOf` reads a plugin's.
+ */
+type CoreGroups = GroupsOf<{ readonly contract: typeof AuthCore.AuthCoreApi }>;
+
+/** MW-002: every group of the one served `api`: core's, the host's `extraGroups`, then each plugin's. */
+type AllGroups<P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpApiGroup.Constraint> =
+  | CoreGroups
+  | Extra
+  | GroupsOf<P[number]>;
 
 /**
  * `Layer.provideMerge(self, that)`'s own type, restated so `FoldLayer` can
@@ -221,11 +407,10 @@ type ProvideMerged<
  * walks `P` left to right with an accumulator, each next plugin's `layer`
  * provided everything folded in so far, so a later plugin's requirement on
  * an earlier one nets out of the result instead of staying in `RIn` next to
- * what already provides it. This only matches `composeLayer`'s *runtime*
- * fold — which runs on `linkPlugins`' topologically sorted order, so it is
- * correct regardless of the order plugins were passed in — when `P` itself
- * already lists dependencies before dependents; `Auth.make`'s own examples,
- * and `test/AuthPlugin.test.ts`, do exactly that.
+ * what already provides it. `composeLayer`'s *runtime* fold runs on
+ * `linkPlugins`' topologically sorted order; `Validate<P>`'s `OutOfOrderDep`
+ * (JH-006) refuses any tuple whose own order differs from it, so for every
+ * accepted `P` the two folds are the same.
  */
 type FoldLayer<P extends ReadonlyArray<AuthPlugin.Any>> = P extends readonly [
   infer Head,
@@ -256,11 +441,49 @@ type FoldLayerFrom<
  * required at each plugin's own definition site, BEH-EA-013), and handlers
  * cannot exist for a group no plugin's `contract` declares.
  */
-export interface Built<P extends ReadonlyArray<AuthPlugin.Any>> {
-  readonly api: HttpApi.HttpApi<"auth", GroupsOf<P[number]>>;
-  readonly layer: FoldLayer<P>;
+export interface Built<
+  P extends ReadonlyArray<AuthPlugin.Any>,
+  Extra extends HttpApiGroup.Constraint = never,
+> {
+  readonly api: HttpApi.HttpApi<"auth", AllGroups<P, Extra>>;
+  /**
+   * AR-003: `api` minus the admin-tier groups (`AuthPlugin.isAdminTier`) — what a host
+   * serves on its public listener when it firewalls the admin surface separately.
+   * Handlers still come from the one composed `layer`; serving fewer groups needs no more.
+   */
+  readonly publicApi: HttpApi.HttpApi<
+    "auth",
+    Exclude<AllGroups<P, Extra>, AuthPlugin.AdminTierGroup>
+  >;
+  /** AR-003: only the admin-tier groups, for a separate listener/port (empty when no plugin has one). */
+  readonly adminApi: HttpApi.HttpApi<
+    "auth",
+    Extract<AllGroups<P, Extra>, AuthPlugin.AdminTierGroup>
+  >;
+  /**
+   * MA-005: the folded plugin layers with the composition's one `SlotsRegistry`
+   * provided (and exposed in `ROut`, for introspection) — `Slots.override` requires it.
+   */
+  readonly layer: ProvideMerged<FoldLayer<P>, typeof Slots.layer>;
+  /**
+   * SAM-004: the migrations the linker generates for `userFields` are part of these, after every
+   * plugin's own (see `renumberMigrations`). Run core's migrations first, then these.
+   */
   readonly migrations: Migrations;
   readonly manifest: Manifest;
+  /**
+   * SAM-004 (BEH-EA-040/048): every plugin-declared user field of this composition, keyed `<plugin id>_<field>`
+   * with the field's own schema. Pass it to `UserFields.layer` (so `Users` validates and gates writes) and to
+   * `Users.typedFields` (typed reads and writes); `TestAuth.layer` provides the registry for you.
+   */
+  readonly userFields: UserFieldsOf<P>;
+  /**
+   * SAM-004: provides the `UserFields.UserFieldRegistry` for `userFields` — provide it to `Users` (and to
+   * whatever serves the HTTP profile endpoint) so declared fields are validated, gated and readable:
+   * `Users.layerSql.pipe(Layer.provide(auth.userFieldsLayer))`. Empty, and harmless, when no plugin
+   * declares a field.
+   */
+  readonly userFieldsLayer: Layer.Layer<never>;
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +542,27 @@ const linkPlugins = (plugins: ReadonlyArray<AuthPlugin.Any>): ReadonlyArray<Auth
   );
 };
 
+/** JH-007: every `readsTables` entry owned by an installed plugin needs that plugin in the reader's `dependsOn`. */
+const checkTableDependencies = (plugins: ReadonlyArray<AuthPlugin.Any>): void => {
+  const ownerOf = new Map<string, AuthPlugin.Any>();
+  for (const plugin of plugins) {
+    for (const table of plugin.tables) ownerOf.set(table, plugin);
+  }
+  for (const plugin of plugins) {
+    for (const table of plugin.readsTables ?? []) {
+      const owner = ownerOf.get(table);
+      if (owner === undefined || owner.id === plugin.id) continue;
+      if (plugin.dependsOn.some((dep) => dep.id === owner.id)) continue;
+      throw new UndeclaredTableDependency({
+        pluginId: plugin.id,
+        ownerId: owner.id,
+        table,
+        message: `awthaq: plugin "${plugin.id}" reads table "${table}" owned by plugin "${owner.id}" but does not list it in dependsOn`,
+      });
+    }
+  }
+};
+
 const findCycle = (
   remaining: Set<string>,
   byId: Map<string, AuthPlugin.Any>,
@@ -351,20 +595,73 @@ const findCycle = (
   ];
 };
 
-/** BEH-EA-016: core first (none yet, see the module header), then plugins in dependency order, keys re-written `NNNN_<plugin>_<name>`. */
+/**
+ * BEH-EA-016: core first (none yet, see the module header), then plugins in dependency order, keys re-written
+ * `NNNN_<plugin>_<name>`. SAM-004/BEH-EA-040: then the columns of every plugin's declared `userFields`, one
+ * generated `ALTER TABLE users ADD COLUMN` each (`UserFields.migrationFor`), in link order — the only way a
+ * plugin changes a shared table. They come after every plugin's own migrations so that adding a field never
+ * renumbers a hand-written one; as with adding a plugin, add a field on a database that has already been
+ * migrated by appending (the last plugin's, or a new field of the last one), because a migration whose id
+ * sorts before an applied one is refused by `awthaq migration status` (ECS-009), not applied late.
+ */
 const renumberMigrations = (order: ReadonlyArray<AuthPlugin.Any>): Migrations => {
   const out: Array<Migrations[number]> = [];
   let index = 0;
+  const next = (pluginId: string, migration: Migrations[number]) => {
+    index += 1;
+    out.push({
+      ...migration,
+      name: `${String(index).padStart(4, "0")}_${pluginId}_${migration.name}`,
+    });
+  };
   for (const plugin of order) {
-    for (const migration of plugin.migrations) {
-      index += 1;
-      out.push({
-        ...migration,
-        name: `${String(index).padStart(4, "0")}_${plugin.id}_${migration.name}`,
-      });
+    for (const migration of plugin.migrations) next(plugin.id, migration);
+  }
+  for (const plugin of order) {
+    for (const descriptor of UserFields.describePlugin(plugin.id, plugin.userFields ?? {})) {
+      next(plugin.id, UserFields.migrationFor(descriptor));
     }
   }
   return out;
+};
+
+/** SAM-004: every plugin's declared user fields in one record keyed `<plugin id>_<field>`; refuses two that share a column. */
+const composeUserFields = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+): Readonly<Record<string, UserFields.Declaration>> => {
+  const composed = Object.fromEntries(
+    order.flatMap((plugin) =>
+      Object.entries(plugin.userFields ?? {}).map(
+        ([name, schema]): [string, UserFields.Declaration] => [`${plugin.id}_${name}`, schema],
+      ),
+    ),
+  );
+  UserFields.describeAll(composed);
+  return composed;
+};
+
+const buildHooks = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+): Readonly<Record<string, ReadonlyArray<ManifestTap>>> => {
+  const byPoint = new Map<
+    string,
+    Array<{ readonly owner: AuthPlugin.Any; readonly order: number }>
+  >();
+  for (const plugin of order) {
+    for (const tap of plugin.taps ?? []) {
+      const entries = byPoint.get(tap.point) ?? [];
+      entries.push({ owner: plugin, order: tap.order });
+      byPoint.set(tap.point, entries);
+    }
+  }
+  return Object.fromEntries(
+    [...byPoint].map(([point, entries]) => [
+      point,
+      entries
+        .toSorted(HookPoint.compareTaps)
+        .map((entry) => ({ plugin: entry.owner.id, order: entry.order })),
+    ]),
+  );
 };
 
 const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
@@ -373,11 +670,60 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
     apiVersion: plugin.apiVersion,
     tables: plugin.tables,
     dependsOn: plugin.dependsOn.map((dep) => dep.id),
+    groups: Object.values(plugin.contract.groups).map((group) => group.identifier),
   })),
+  hooks: buildHooks(order),
+  ports: order.flatMap((plugin) => (plugin.ports ?? []).map((key) => ({ plugin: plugin.id, key }))),
+  rateLimits: order.flatMap((plugin) =>
+    (plugin.rateLimits ?? []).map((rule) => ({ plugin: plugin.id, ...rule })),
+  ),
+  config: order.flatMap((plugin) =>
+    (plugin.config ?? []).map((descriptor) => ({ pluginId: plugin.id, descriptor })),
+  ),
+  userFields: UserFields.describeAll(composeUserFields(order)).map(
+    ({ key, column, kind, clientWritable }) => ({ key, column, kind, clientWritable }),
+  ),
 });
 
+const hasRoute = (
+  endpoint: object,
+): endpoint is { readonly method: string; readonly path: string } =>
+  "method" in endpoint &&
+  typeof endpoint.method === "string" &&
+  "path" in endpoint &&
+  typeof endpoint.path === "string";
+
+/** MW-002: the pseudo-owner id core's own groups are attributed to in a conflict message. */
+const CORE_OWNER = "core";
+
+/** MW-002: the host's own non-plugin groups (qadi's subject group), attributed to this id. */
+const HOST_OWNER = "host";
+
+interface Contribution {
+  readonly ownerId: string;
+  readonly group: HttpApiGroup.Constraint;
+}
+
 /**
- * Every group of every plugin's own `contract`, added in one call —
+ * MW-002 (wayfinder ticket 26): every group `Auth.make` serves, in one list —
+ * core's own `session`/`account` groups first, then the host's `extraGroups`,
+ * then each plugin's from its own `contract`. One served document, so a plugin
+ * cannot shadow a core route: the duplicate-id and duplicate-route refusals
+ * below cover core exactly as they cover any two plugins.
+ */
+const contributionsOf = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+  extraGroups: ReadonlyArray<HttpApiGroup.Constraint>,
+): ReadonlyArray<Contribution> => [
+  ...Object.values(AuthCore.AuthCoreApi.groups).map((group) => ({ ownerId: CORE_OWNER, group })),
+  ...extraGroups.map((group) => ({ ownerId: HOST_OWNER, group })),
+  ...order.flatMap((plugin) =>
+    Object.values(plugin.contract.groups).map((group) => ({ ownerId: plugin.id, group })),
+  ),
+];
+
+/**
+ * Every contributed group, added in one call —
  * `HttpApiGroup.Constraint` values, read straight off each `HttpApi`, prove
  * `.add`'s non-empty-tuple parameter through the `firstGroup === undefined`
  * check below rather than an assertion. `HttpApi`'s `Groups` parameter is
@@ -389,32 +735,76 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
  */
 const composeApi = (
   order: ReadonlyArray<AuthPlugin.Any>,
+  extraGroups: ReadonlyArray<HttpApiGroup.Constraint>,
 ): HttpApi.HttpApi<"auth", HttpApiGroup.Constraint> => {
-  const contributions = order.flatMap((plugin) =>
-    Object.values(plugin.contract.groups).map((group) => ({ plugin, group })),
-  );
+  // Core's groups are always present now, so the empty-tuple refusal is explicit.
+  if (order.length === 0) {
+    throw new EmptyPluginTuple({ message: "awthaq: Auth.make requires at least one plugin" });
+  }
+  const contributions = contributionsOf(order, extraGroups);
   // BEH-EA-032: refuse a duplicate group id ourselves — `HttpApi.add`'s own
   // last-wins semantics would otherwise silently drop the first
   // contributor's endpoints.
-  const ownerOf = new Map<string, AuthPlugin.Any>();
-  for (const { plugin, group } of contributions) {
+  const ownerOf = new Map<string, string>();
+  for (const { ownerId, group } of contributions) {
     const owner = ownerOf.get(group.identifier);
     if (owner !== undefined) {
       throw new GroupIdConflict({
         groupId: group.identifier,
-        firstPluginId: owner.id,
-        secondPluginId: plugin.id,
-        message: `awthaq: E_GROUP_CONFLICT: group "${group.identifier}" contributed by plugin "${owner.id}" and plugin "${plugin.id}"`,
+        firstPluginId: owner,
+        secondPluginId: ownerId,
+        message: `awthaq: E_GROUP_CONFLICT: group "${group.identifier}" contributed by plugin "${owner}" and plugin "${ownerId}"`,
       });
     }
-    ownerOf.set(group.identifier, plugin);
+    ownerOf.set(group.identifier, ownerId);
   }
-  const groups = contributions.map((contribution) => contribution.group);
-  const [firstGroup, ...restGroups] = groups;
+  // AVS-004: a group id is not the only thing two plugins can collide on —
+  // refuse a duplicate (method, path) across every contributed endpoint.
+  const routeOwner = new Map<string, string>();
+  for (const { ownerId, group } of contributions) {
+    for (const endpoint of Object.values(group.endpoints)) {
+      // `HttpApiGroup.Constraint` widens each endpoint past its method/path.
+      if (!hasRoute(endpoint)) continue;
+      const route = `${endpoint.method} ${endpoint.path}`;
+      const owner = routeOwner.get(route);
+      if (owner !== undefined) {
+        throw new RouteConflict({
+          method: endpoint.method,
+          path: endpoint.path,
+          firstPluginId: owner,
+          secondPluginId: ownerId,
+          message: `awthaq: E_ROUTE_CONFLICT: ${route} contributed by plugin "${owner}" and plugin "${ownerId}"`,
+        });
+      }
+      routeOwner.set(route, ownerId);
+    }
+  }
+  const [firstGroup, ...restGroups] = contributions.map((contribution) => contribution.group);
   if (firstGroup === undefined) {
     throw new EmptyPluginTuple({ message: "awthaq: Auth.make requires at least one plugin" });
   }
   return HttpApi.make("auth").add(firstGroup, ...restGroups);
+};
+
+/**
+ * AR-003: the groups of the composed api on one side of the admin tier, as its
+ * own `HttpApi`. Unlike `composeApi`, an empty side is legitimate (a composition
+ * with no admin group has nothing to firewall), hence the union with the
+ * no-groups `HttpApi`; the precise per-tier type is `Built<P>`'s, as for `api`.
+ * Core's and the host's own groups are public-tier (their ids carry no `admin`).
+ */
+const composeTier = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+  extraGroups: ReadonlyArray<HttpApiGroup.Constraint>,
+  admin: boolean,
+): HttpApi.HttpApi<"auth", never> | HttpApi.HttpApi<"auth", HttpApiGroup.Constraint> => {
+  const groups = contributionsOf(order, extraGroups)
+    .map((contribution) => contribution.group)
+    .filter((group) => AuthPlugin.isAdminTier(group.identifier) === admin);
+  const [firstGroup, ...restGroups] = groups;
+  return firstGroup === undefined
+    ? HttpApi.make("auth")
+    : HttpApi.make("auth").add(firstGroup, ...restGroups);
 };
 
 /**
@@ -442,7 +832,11 @@ const composeLayer = (
   if (first === undefined) {
     throw new EmptyPluginTuple({ message: "awthaq: Auth.make requires at least one plugin" });
   }
-  return rest.reduce((acc, plugin) => Layer.provideMerge(plugin.layer, acc), first.layer);
+  const folded = rest.reduce((acc, plugin) => Layer.provideMerge(plugin.layer, acc), first.layer);
+  // MA-005: one registry per composition, shared by every plugin's `Slots.override`,
+  // so a second claim on a slot is always a `SlotConflict` — not only when a host
+  // remembered to provide `Slots.layer` itself.
+  return Layer.provideMerge(folded, Slots.layer);
 };
 
 /**
@@ -465,6 +859,16 @@ const composeLayer = (
 export type NonEmptyPlugins = readonly [AuthPlugin.Any, ...ReadonlyArray<AuthPlugin.Any>];
 
 /**
+ * MW-002: groups the host serves in the same document that no plugin owns —
+ * `@awthaq/qadi`'s `SubjectApi.SubjectGroup` is the shipped case. Typed, so
+ * `Built<P, Extra>["api"]` names them (a client built over `api` sees them).
+ * Their handlers are the host's to provide, like a plugin's are its own.
+ */
+export interface MakeOptions<Extra extends HttpApiGroup.Constraint> {
+  readonly extraGroups?: ReadonlyArray<Extra>;
+}
+
+/**
  * BEH-EA-009: computes `api`, `layer`, `migrations`, and `manifest` from one
  * plugin tuple. `plugins` must already satisfy `Validate<P>` — a tuple with a
  * duplicate id, a missing dependency, or no plugins at all fails to
@@ -477,13 +881,25 @@ export type NonEmptyPlugins = readonly [AuthPlugin.Any, ...ReadonlyArray<AuthPlu
  * function body (P is abstract at that point), and bridging that gap with a
  * cast is exactly what this module does not do.
  */
-export function make<const P extends NonEmptyPlugins>(plugins: Validate<P>): Built<P>;
-export function make(plugins: ReadonlyArray<AuthPlugin.Any>) {
+export function make<
+  const P extends NonEmptyPlugins,
+  const Extra extends HttpApiGroup.Constraint = never,
+>(plugins: Validate<P>, options?: MakeOptions<Extra>): Built<P, Extra>;
+export function make(
+  plugins: ReadonlyArray<AuthPlugin.Any>,
+  options?: MakeOptions<HttpApiGroup.Constraint>,
+) {
   const order = linkPlugins(plugins);
+  checkTableDependencies(order);
+  const extraGroups = options?.extraGroups ?? [];
   return {
-    api: composeApi(order),
+    api: composeApi(order, extraGroups),
+    publicApi: composeTier(order, extraGroups, false),
+    adminApi: composeTier(order, extraGroups, true),
     layer: composeLayer(order),
     migrations: renumberMigrations(order),
     manifest: buildManifest(order),
+    userFields: composeUserFields(order),
+    userFieldsLayer: UserFields.layer(composeUserFields(order)),
   };
 }

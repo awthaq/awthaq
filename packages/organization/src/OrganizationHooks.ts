@@ -4,7 +4,8 @@
 // (after) `HookPoint` per mutating operation this plugin exposes —
 // `Organization` is the first real plugin consumer of the core
 // `HookPoint` mechanism (`packages/core/src/HookPoint.ts`,
-// `BEH-EA-089`–`096`); there is no prior plugin example to mirror.
+// `BEH-EA-089`–`096`). For a minimal example of the same pattern, see
+// `examples/plugin-template/` and `docs/plugin-authoring.md`.
 //
 // Each `Input` is a plain `Schema.Struct` carrying that operation's own
 // payload/context (a type carrier only — `HookPoint.ts`'s own header
@@ -201,7 +202,12 @@ export class AfterDeleteRole extends HookPoint.observe<AfterDeleteRole>()(
 
 // ---- teams --------------------------------------------------------------------
 
-const CreateTeamInput = Schema.Struct({ organizationId: Schema.String, name: Schema.String });
+const CreateTeamInput = Schema.Struct({
+  organizationId: Schema.String,
+  name: Schema.String,
+  /** OHS-001: the parent team, when created nested. */
+  parentId: Schema.optional(Schema.String),
+});
 const CreateTeamResult = Schema.Struct({ ...CreateTeamInput.fields, teamId: Schema.String });
 export class BeforeCreateTeam extends HookPoint.veto<BeforeCreateTeam>()(
   "organization.team.create.before",
@@ -226,6 +232,21 @@ export class AfterUpdateTeam extends HookPoint.observe<AfterUpdateTeam>()(
   UpdateTeamInput,
 ) {}
 
+/** OHS-001: `parentId` is `null` when the team is moved to the root. */
+const MoveTeamInput = Schema.Struct({
+  organizationId: Schema.String,
+  teamId: Schema.String,
+  parentId: Schema.NullOr(Schema.String),
+});
+export class BeforeMoveTeam extends HookPoint.veto<BeforeMoveTeam>()(
+  "organization.team.move.before",
+  MoveTeamInput,
+) {}
+export class AfterMoveTeam extends HookPoint.observe<AfterMoveTeam>()(
+  "organization.team.move.after",
+  MoveTeamInput,
+) {}
+
 const DeleteTeamInput = Schema.Struct({ organizationId: Schema.String, teamId: Schema.String });
 export class BeforeDeleteTeam extends HookPoint.veto<BeforeDeleteTeam>()(
   "organization.team.delete.before",
@@ -241,13 +262,26 @@ const TeamMemberInput = Schema.Struct({
   teamId: Schema.String,
   userId: Schema.String,
 });
+/** OHS-004: adding and re-roling carry the team role names being conferred. */
+const TeamMemberRoleInput = Schema.Struct({
+  ...TeamMemberInput.fields,
+  role: Schema.Array(Schema.String),
+});
 export class BeforeAddTeamMember extends HookPoint.veto<BeforeAddTeamMember>()(
   "organization.team.member.add.before",
-  TeamMemberInput,
+  TeamMemberRoleInput,
 ) {}
 export class AfterAddTeamMember extends HookPoint.observe<AfterAddTeamMember>()(
   "organization.team.member.add.after",
-  TeamMemberInput,
+  TeamMemberRoleInput,
+) {}
+export class BeforeUpdateTeamMemberRole extends HookPoint.veto<BeforeUpdateTeamMemberRole>()(
+  "organization.team.member.updateRole.before",
+  TeamMemberRoleInput,
+) {}
+export class AfterUpdateTeamMemberRole extends HookPoint.observe<AfterUpdateTeamMemberRole>()(
+  "organization.team.member.updateRole.after",
+  TeamMemberRoleInput,
 ) {}
 
 export class BeforeRemoveTeamMember extends HookPoint.veto<BeforeRemoveTeamMember>()(
@@ -298,10 +332,14 @@ export const OrganizationHooksLive = Layer.mergeAll(
   AfterCreateTeam.layer,
   BeforeUpdateTeam.layer,
   AfterUpdateTeam.layer,
+  BeforeMoveTeam.layer,
+  AfterMoveTeam.layer,
   BeforeDeleteTeam.layer,
   AfterDeleteTeam.layer,
   BeforeAddTeamMember.layer,
   AfterAddTeamMember.layer,
+  BeforeUpdateTeamMemberRole.layer,
+  AfterUpdateTeamMemberRole.layer,
   BeforeRemoveTeamMember.layer,
   AfterRemoveTeamMember.layer,
 );

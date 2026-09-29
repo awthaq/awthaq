@@ -1,7 +1,7 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @authentication-methods @password
 Feature: Password Authentication
@@ -16,6 +16,15 @@ Feature: Password Authentication
       When "alice@example.com" signs up with a password
       Then the User row and the initial session are both created under one transaction
 
+    # TIR-005: the atomicity half of the claim above, observable only over a real transaction (SQLite).
+    @REQ-EA-692
+    Scenario: A failure while issuing the initial session leaves no User row behind
+      Given no user exists with email "alice@example.com"
+      And the initial session cannot be issued
+      When "alice@example.com" signs up with a password
+      Then the sign-up fails with a server error
+      And no User row exists for "alice@example.com"
+
     @REQ-EA-305
     Scenario: Sign-up dispatches the verification mail without waiting for delivery
       Given a sign-up request for "alice@example.com"
@@ -23,14 +32,11 @@ Feature: Password Authentication
       Then the caller receives a "SessionView" without the response waiting on the verification mail's delivery
       And the mail is dispatched as a detached, fire-and-forget effect
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — a timing-side-channel assertion; not deterministically
-    # assertable in CI, and this suite has no latency-measurement
-    # harness to make it one.
-    @skip
+    # Deterministic stand-in for "timing": the mail provider never answers, yet both sign-ups answer at once. With signUpEnumeration "conceal" (ADR-EA-018) the two answers are also identical; under the default "reveal" the existing address is told 409 by design.
     @REQ-EA-306
     Scenario: Sign-up response time does not reveal whether the email address already had an account
       Given a slow-responding mail provider
+      And the application conceals account existence on sign-up
       And two sign-up requests, one for an email with no existing account and one for an email that already has one
       When both requests are handled
       Then neither response's timing varies with the mail provider's latency
@@ -59,9 +65,7 @@ Feature: Password Authentication
       Then all three responses have the identical status and the identical body
       And none of them reveals which of the three reasons applied
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — the same timing-side-channel non-determinism as REQ-EA-306.
-    @skip
+    # Asserted as the floor, which is what equalises the reasons: with signInTimingFloor set, no failure (however cheap its path) returns sooner than the floor, so the cheap reasons are padded up to the expensive one. The upper bound depends on the machine and is not asserted; the floor mechanism itself is packages/password/test/Password.test.ts (TSS-006, under TestClock).
     @REQ-EA-309
     Scenario: Response latency does not vary across the three failure reasons
       Given the same three sign-in attempts, differing only in which of the three reasons applies
@@ -85,13 +89,7 @@ Feature: Password Authentication
       Then "Password" hashes and verifies passwords using "PasswordHasher.layerScrypt"
       And no change is made to "Password"'s own code to accept the substitution
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — "the composition remains incomplete" is a TypeScript
-    # compile-time property (an unsatisfied Layer requirement is a type
-    # error where it's composed, not a runtime outcome) — there is no
-    # request this suite's runtime step-definitions could make that
-    # would even compile without the missing PasswordHasher provided.
-    @skip
+    # Compile-time: proven by the `// type-gate:` blocks in step-definitions/CompileTimeGates.ts.
     @REQ-EA-312
     Scenario: Password bundles no hashing implementation of its own
       Given an application composing "Password" with no "PasswordHasher" Layer provided
@@ -102,34 +100,23 @@ Feature: Password Authentication
   @BEH-EA-116
   Rule: Rehash on login
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — "the stored hash is replaced" is not observable through this
-    # plugin's real HTTP surface (no endpoint returns a stored hash) —
-    # already covered at the domain level by
-    # packages/password/test/Password.test.ts's own rehash-on-login tests.
-    @skip
+    # PHS-005: observed through PasswordWorld's credential-hash read handle (no endpoint returns
+    # a stored hash); the domain-level twin is packages/password/test/Password.test.ts
+    # "BEH-EA-116: signIn against a hash stored under outdated parameters rehashes ...".
     @REQ-EA-313
     Scenario: A sign-in against a hash stored under outdated parameters triggers a rehash with current parameters
       Given a user "alice" whose stored password hash was computed under previously configured "PasswordHasher" parameters
-      And "PasswordHasher"'s currently configured parameters differ from those under which the hash was stored
+      And "PasswordHasher"'s currently configured parameters are stronger than those under which the hash was stored
       When "alice" signs in successfully with her password
       Then the password is rehashed with the current parameters within the same request
       And the stored hash is replaced with the new one
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — the same not-wire-observable reason as REQ-EA-313.
-    @skip
     @REQ-EA-314
     Scenario: A sign-in against a hash already matching current parameters does not trigger a rehash
       Given a user "bob" whose stored password hash already matches "PasswordHasher"'s currently configured parameters
       When "bob" signs in successfully with his password
       Then the stored hash is not replaced
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — an internal-architecture claim ("no separate background job"),
-    # not something a caller's own HTTP response can distinguish from
-    # a synchronous rehash — same category as REQ-EA-313/314.
-    @skip
     @REQ-EA-315
     Scenario: The rehash occurs synchronously within the sign-in request, not as a deferred job
       Given a user "alice" whose stored hash's parameters differ from the currently configured parameters
@@ -155,6 +142,18 @@ Feature: Password Authentication
       And the new password is set
       And session "s1" is revoked
       And all three effects commit under one transaction
+
+    # TIR-005: the atomicity half of REQ-EA-317, over a real SQLite transaction with a fault injected
+    # after the credential hash update.
+    @REQ-EA-693
+    Scenario: A failure after the credential hash update rolls back the token, the new password and the session revocation together
+      Given a live password-reset token for "alice" and an existing session "s1" for "alice"
+      And the reset fails after the credential hash update
+      When "alice" confirms the reset with that token and a new password
+      Then the request fails with a server error
+      And the old password still signs in
+      And session "s1" is still valid
+      And the reset token is still redeemable
 
     @REQ-EA-318
     Scenario: A session obtained before the reset does not survive it
@@ -210,6 +209,21 @@ Feature: Password Authentication
       When a user signs up with a password in each case
       Then sign-up proceeds in all three cases, each treated as "unavailable" rather than handled inconsistently by cause
 
+    # CSD-009: under the default posture "unavailable" and "not breached" both let sign-up through,
+    # so REQ-EA-324 cannot tell them apart; fail-closed can.
+    @REQ-EA-694
+    Scenario Outline: Every failure mode of the breach-check provider is rejected under the fail-closed configuration
+      Given "password({ breachCheck: { onUnavailable: \"reject\" } })"
+      And the breach-database provider fails by <failure>
+      When a user signs up with a password
+      Then sign-up is rejected
+
+      Examples:
+        | failure   |
+        | timeout   |
+        | 5xx       |
+        | malformed |
+
   # BEH-EA-120 — spec/behaviors/15-password.md
   @BEH-EA-120
   Rule: Password policy is configuration, not a plugin variant
@@ -220,12 +234,6 @@ Feature: Password Authentication
       When it provides "Password.config({ minLength: 16 })"
       Then the tightened policy takes effect without installing any different plugin class
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 20: pruned, not
-    # force-implemented — a structural/type-level claim about object identity
-    # (the same plugin class, contract, and migrations are reused) —
-    # not a runtime HTTP outcome; provable by inspection of the source,
-    # not by a request/response pair.
-    @skip
     @REQ-EA-326
     Scenario: Overriding minLength does not change Password's contract, table set, or migrations
       Given "Password.config({ minLength: 16 })" is provided in place of the default "minLength: 8"
@@ -240,3 +248,58 @@ Feature: Password Authentication
       When a user signs up with a password that appears in a known breach
       Then sign-up fails with "422 WeakPassword"
       And the failure carries hints including "appears in known breaches"
+
+  # BEH-EA-259 — spec/behaviors/15-password.md; see also BEH-EA-093, BEH-EA-261
+  # Wired over the two-factor composition (TwoFactorWorld): `credentialResetGate` is the tap.
+  @BEH-EA-259
+  Rule: A credential reset consults BeforeCredentialReset before anything is rewritten
+
+    @REQ-EA-1001
+    Scenario: Mailbox possession alone cannot reset an account with a confirmed second factor
+      Given a reset-flow user "alice" with a confirmed second factor
+      And "alice" holds a live password-reset token
+      When the reset of "alice" is confirmed with a new password and no second-factor code
+      Then the reset fails with "SecondFactorRequired"
+      And the old password of "alice" still signs in as far as the second-factor divert
+
+    @REQ-EA-1002
+    Scenario: A wrong second-factor code aborts the reset with the typed HookAborted
+      Given a reset-flow user "alice" with a confirmed second factor
+      And "alice" holds a live password-reset token
+      When the reset of "alice" is confirmed with a new password and the second-factor code "000000"
+      Then the reset fails with "HookAborted" carrying the code "SECOND_FACTOR_INVALID"
+
+    @REQ-EA-1003
+    Scenario: A valid TOTP carries the reset
+      Given a reset-flow user "alice" with a confirmed second factor
+      And "alice" holds a live password-reset token
+      And a new time step begins
+      When the reset of "alice" is confirmed with a new password and her current authenticator code
+      Then the reset succeeds
+      And the new password of "alice" signs in as far as the second-factor divert
+
+    @REQ-EA-1004
+    Scenario: A recovery code carries a reset exactly once
+      Given a reset-flow user "alice" with a confirmed second factor
+      And "alice" holds a live password-reset token
+      When the reset of "alice" is confirmed with a new password and her first recovery code
+      Then the reset succeeds
+      When "alice" holds a live password-reset token
+      And the reset of "alice" is confirmed with a new password and her first recovery code
+      Then the reset fails with "HookAborted" carrying the code "SECOND_FACTOR_INVALID"
+
+    @REQ-EA-1005
+    Scenario: A refused reset revokes no session and rewrites no credential
+      Given a reset-flow user "alice" with a confirmed second factor
+      And "alice" holds a live password-reset token
+      When the reset of "alice" is confirmed with a new password and no second-factor code
+      Then the reset fails with "SecondFactorRequired"
+      And the session "alice" signed up with is still live
+
+    @REQ-EA-1006
+    Scenario: An account without a second factor resets exactly as before
+      Given a reset-flow user "bob" without a second factor
+      And "bob" holds a live password-reset token
+      When the reset of "bob" is confirmed with a new password and no second-factor code
+      Then the reset succeeds
+      And the new password of "bob" signs in with a session

@@ -1,16 +1,16 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @cross-cutting @hooks
-@skip @unwired
 Feature: Hooks
 
   # BEH-EA-089 — spec/behaviors/12-hooks.md; see also ADR-EA-001.
   @BEH-EA-089
   Rule: A hook point is declared as a service carrying its own kind
 
+    # Compile-time: proven by the `// type-gate:` blocks in step-definitions/CompileTimeGates.ts.
     @REQ-EA-242
     Scenario: Defining a hook point requires declaring a kind of "veto", "observe", or "divert"
       Given a "HookPoint.Service" definition that omits a "kind"
@@ -115,6 +115,7 @@ Feature: Hooks
   @BEH-EA-094 @compile-time
   Rule: Tapping a hook point nobody defines is a type error, not a silent no-op
 
+    # Compile-time: proven by the `// type-gate:` blocks in step-definitions/CompileTimeGates.ts.
     @REQ-EA-253
     Scenario: A tap on a hook point no installed plugin defines keeps that point's service in the composed Layer's RIn
       Given a plugin tuple where no installed plugin's Layer provides "SomeHookPoint" in its "ROut"
@@ -155,13 +156,13 @@ Feature: Hooks
     @REQ-EA-257
     Scenario: The resolved tap order for every hook point is printable by the CLI without executing any tap
       Given an application composed from a plugin tuple with taps registered on multiple hook points
-      When "awthaq plugin list --hooks" is run
-      Then it prints the fully resolved tap order for each hook point
-      And no tap is executed to produce that output
+      When the composed application's manifest is read for its resolved hook order
+      Then it reports the fully resolved tap order for each hook point
+      And no tap is executed to produce that report
 
     @REQ-EA-258
     Scenario: The resolved order is derived only from static facts already known off the plugin tuple
       Given the same composed application
-      When the CLI computes the resolved tap order
+      When the resolved tap order is computed
       Then it uses only each plugin's declared "dependsOn", each tap's declared "order", and each plugin's "id"
       And no running application is needed to observe it

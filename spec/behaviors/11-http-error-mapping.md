@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-11 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-013 (error taxonomy and HTTP status mapping) (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-013 (error taxonomy and HTTP status mapping) (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 
 ---
 
-> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/PRD.md` §14 and `archive/design/usage-examples-v4.md` §3 — not code that has shipped.
+> Implemented in `@awthaq/server` (`AuthHttp.ts`) and the error classes in `@awthaq/api`; tests `packages/server/test/AuthHttp.test.ts`, `packages/api/test/Contracts.test.ts`; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/PRD.md` §14 and `archive/design/usage-examples-v4.md` §3.
 
 ## BEH-EA-081: A plugin's handlers are built with `HttpApiBuilder.group` against its own contract
 
@@ -107,6 +107,8 @@ REQUIREMENT: The same composed `Routes` Layer MUST be servable through
 
 `archive/design/usage-examples-v4.md` §3.1–§3.3 demonstrate both paths against the identical `Routes` value: a standalone Node server via `HttpRouter.serve`, and a Next.js route handler or Hono catch-all route via `HttpRouter.toWebHandler` — the plugin composition, the contract, and the handlers are unaffected by which of the two a deployment chooses.
 
+Both serving paths are **bounded by default** (NHS-004). Effect's server reads request bodies with no cap unless `HttpIncomingMessage.MaxBodySize` is set, so an unauthenticated caller could otherwise make the process buffer an arbitrarily large body before any handler, CSRF check or rate limit ran. `@awthaq/server`'s `BodyLimit.layer` is a global `HttpRouter` middleware, merged into the same layer list as `AuthHttp.routes(...)`, that provides `MaxBodySize` (default 256 KiB; `BodyLimit.config({ maxBytes })` overrides it per deployment) and answers `413` `PayloadTooLarge` (`{ "_tag": "PayloadTooLarge", "message": ... }`) to any request whose declared `content-length` exceeds the cap, before the handler runs. On a Node server the body reader also cuts off a chunked body with no `content-length` at the cap, by dropping the connection (no 413 can be written to a destroyed socket). On `HttpRouter.toWebHandler` the runtime does not consult `MaxBodySize`, so the `content-length` check is the bound there; a chunked body without `content-length` is left to the host's own limits.
+
 ## BEH-EA-086: Error responses are enumeration-safe uniformly across the HTTP surface
 
 ```text
@@ -118,6 +120,8 @@ REQUIREMENT: Every endpoint whose failure could disclose whether a
 ```
 
 This is BEH-EA-027 and BEH-EA-064 restated as a property of the HTTP surface taken as a whole, per `archive/PRD.md` §18's "uniform enumeration-safe errors": the requirement applies not only to sign-in (`InvalidCredentials`) and password reset (`requestReset` always `202`), but to every endpoint the composed `auth.api` exposes, including ones contributed by third-party plugins — a plugin author is expected to apply the same discipline to their own account- or token-existence-sensitive endpoints.
+
+TMS-005: `password.signUp` is the one recorded exception. By default (`signUpEnumeration: "reveal"`) it answers `409 EmailAlreadyExists` for a registered address, with the `signUp`/`signUpByIp` rate limits as compensating controls; `"conceal"` closes it (`202`, no session, mail to the address's owner). See [ADR-EA-026](../decisions/026-signup-enumeration-posture.md).
 
 ## BEH-EA-087: `ManagedRuntime` serves imperative, non-Effect-native code paths against the same Layer
 

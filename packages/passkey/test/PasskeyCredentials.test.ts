@@ -7,17 +7,17 @@
 // hand-rolled inline `CREATE TABLE` — BAM-002 (.issues/high) verification,
 // the same `packages/jwt/test/RevocationStore.test.ts` establishes.
 import { Migrations, Users } from "@awthaq/core";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyCredentials from "../src/PasskeyCredentials.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
 const MemoryLayer = PasskeyCredentials.layerMemory;
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("passkey_PasskeyCredentials");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Passkey.Passkey.migrations)).pipe(
   Layer.provide(SqlLive),
@@ -138,7 +138,7 @@ const suite = (
         const wrongOwner = yield* credentials
           .rename("cred-rename", userB, "Stolen")
           .pipe(Effect.flip);
-        assert.strictEqual(wrongOwner._tag, "PasskeyCredentialNotFound");
+        assert.strictEqual(wrongOwner._tag, "PasskeyCredentials/NotFound");
         const renamed = yield* credentials.rename("cred-rename", userA, "Renamed");
         assert.strictEqual(renamed.name, "Renamed");
       }).pipe(Effect.provide(layer)),
@@ -163,11 +163,88 @@ const suite = (
           });
           const unknown = yield* credentials.delete("does-not-exist", userA).pipe(Effect.flip);
           const wrongOwner = yield* credentials.delete("cred-delete", userB).pipe(Effect.flip);
-          assert.strictEqual(unknown._tag, "PasskeyCredentialNotFound");
-          assert.strictEqual(wrongOwner._tag, "PasskeyCredentialNotFound");
+          assert.strictEqual(unknown._tag, "PasskeyCredentials/NotFound");
+          assert.strictEqual(wrongOwner._tag, "PasskeyCredentials/NotFound");
           yield* credentials.delete("cred-delete", userA);
           const found = yield* credentials.findById("cred-delete");
           assert.isTrue(Option.isNone(found));
+        }).pipe(Effect.provide(layer)),
+    );
+
+    const seed = (id: string, userId: Users.UserId) => ({
+      id,
+      userId,
+      webauthnUserId: `wau-${id}`,
+      publicKey: new Uint8Array([9, 9]),
+      counter: 0,
+      deviceType: "singleDevice" as const,
+      backedUp: false,
+      transports: [],
+      aaguid: "00000000-0000-0000-0000-000000000000",
+      name: id,
+    });
+
+    // WPS-010: both layers refuse a duplicate credential id identically — the
+    // memory layer used to silently re-own it, the SQL layer died on the PK.
+    it.effect(
+      "WPS-010: creating an existing credential id fails PasskeyCredentialAlreadyExists and leaves the original owner intact",
+      () =>
+        Effect.gen(function* () {
+          const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+          yield* credentials.create(seed("cred-dup", userA));
+          const failure = yield* credentials.create(seed("cred-dup", userB)).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "PasskeyCredentialAlreadyExists");
+          const found = yield* credentials.findById("cred-dup");
+          assert.isTrue(Option.isSome(found));
+          if (Option.isSome(found)) assert.strictEqual(found.value.userId, userA);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    // CB-004: the stored counter only moves forward, so a clone replaying an
+    // old value keeps tripping the regression check.
+    it.effect("CB-004: recordUsage never lowers the stored counter", () =>
+      Effect.gen(function* () {
+        const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+        yield* credentials.create(seed("cred-counter", userA));
+        yield* credentials.recordUsage("cred-counter", 5, false);
+        yield* credentials.recordUsage("cred-counter", 3, false);
+        const found = yield* credentials.findById("cred-counter");
+        assert.isTrue(Option.isSome(found));
+        if (Option.isSome(found)) assert.strictEqual(found.value.counter, 5);
+        yield* credentials.recordUsage("cred-counter", 9, false);
+        const advanced = yield* credentials.findById("cred-counter");
+        if (Option.isSome(advanced)) assert.strictEqual(advanced.value.counter, 9);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("WPS-006: flagCounterAnomaly stamps the credential and counts each anomaly", () =>
+      Effect.gen(function* () {
+        const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+        yield* credentials.create(seed("cred-flag", userA));
+        const before = yield* credentials.findById("cred-flag");
+        assert.isTrue(Option.isSome(before));
+        if (Option.isSome(before)) {
+          assert.isTrue(Option.isNone(before.value.counterAnomalyAt));
+          assert.strictEqual(before.value.counterAnomalyCount, 0);
+        }
+        yield* credentials.flagCounterAnomaly("cred-flag");
+        yield* credentials.flagCounterAnomaly("cred-flag");
+        const after = yield* credentials.findById("cred-flag");
+        assert.isTrue(Option.isSome(after));
+        if (Option.isSome(after)) {
+          assert.isTrue(Option.isSome(after.value.counterAnomalyAt));
+          assert.strictEqual(after.value.counterAnomalyCount, 2);
+        }
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "WPS-006: flagCounterAnomaly on an unknown credential is PasskeyCredentialNotFound",
+      () =>
+        Effect.gen(function* () {
+          const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+          const failure = yield* credentials.flagCounterAnomaly("nope").pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "PasskeyCredentials/NotFound");
         }).pipe(Effect.provide(layer)),
     );
   });

@@ -12,24 +12,28 @@
 // directly against `Sessions` through the same shared `MemoMap` the app's
 // own handler resolves against — the identical technique
 // `AuthHttp.test.ts`'s own `issueSessionCookieHeader` uses.
-import { AuditLog, AuthEvents, Accounts, Hooks, Sessions, Users } from "@awthaq/core";
-import { WebAuthn } from "@awthaq/ports";
+import { AuditLog, AuthEvents, Accounts, Hooks, RateLimits, Sessions, Users } from "@awthaq/core";
+import { ClientAddress, RateLimiter, WebAuthn } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import { Passkey, PasskeyApi, ChallengeStore, PasskeyCredentials } from "@awthaq/passkey";
+import {
+  Passkey,
+  PasskeyApi,
+  ChallengeStore,
+  PasskeyCredentials,
+  PasskeyUserHandles,
+} from "@awthaq/passkey";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Etag from "effect/unstable/http/Etag";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
+import { TestServices } from "./shared/Harness.ts";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 
 export const RP_ID = "example.com";
@@ -69,7 +73,15 @@ export interface MockWebAuthnOverrides {
  * two — rebuilding the whole app to change this would discard the session
  * and challenge the shared Given already issued.
  */
-const mockWebAuthn = (behavior: Ref.Ref<MockWebAuthnOverrides>): Layer.Layer<WebAuthn.WebAuthn> =>
+/** BEH-EA-256: what `verifyRegistration` was asked, so a scenario can prove the plugin — not the mock — decided whether user presence was required. */
+export interface VerifyRegistrationCall {
+  readonly requireUserPresence: boolean | undefined;
+}
+
+const mockWebAuthn = (
+  behavior: Ref.Ref<MockWebAuthnOverrides>,
+  calls: Ref.Ref<ReadonlyArray<VerifyRegistrationCall>>,
+): Layer.Layer<WebAuthn.WebAuthn> =>
   Layer.mock(WebAuthn.WebAuthn, {
     registrationOptions: (input) =>
       Effect.succeed({
@@ -81,6 +93,10 @@ const mockWebAuthn = (behavior: Ref.Ref<MockWebAuthnOverrides>): Layer.Layer<Web
       }),
     verifyRegistration: (input) =>
       Effect.gen(function* () {
+        yield* Ref.update(calls, (seen) => [
+          ...seen,
+          { requireUserPresence: input.requireUserPresence },
+        ]);
         const overrides = yield* Ref.get(behavior);
         if (overrides.failVerifyRegistration === true) {
           return yield* Effect.fail(
@@ -100,11 +116,14 @@ const mockWebAuthn = (behavior: Ref.Ref<MockWebAuthnOverrides>): Layer.Layer<Web
           credentialDeviceType: "singleDevice" as const,
           credentialBackedUp: false,
           userVerified: true,
+          userPresent: true,
+          attestationFormat: "none",
+          attestationType: "none" as const,
           ...overrides.registrationVerified,
         };
       }),
     authenticationOptions: (input) => Effect.succeed({ challenge: input.challenge }),
-    verifyAuthentication: () =>
+    verifyAuthentication: (input) =>
       Effect.gen(function* () {
         const overrides = yield* Ref.get(behavior);
         if (overrides.failVerifyAuthentication === true) {
@@ -113,24 +132,24 @@ const mockWebAuthn = (behavior: Ref.Ref<MockWebAuthnOverrides>): Layer.Layer<Web
           );
         }
         return {
-          credentialId: "cred-mock-1",
+          // The credential id the client presented, like a real authenticator's.
+          credentialId: input.response.id,
           newCounter: 1,
           credentialDeviceType: "singleDevice" as const,
           credentialBackedUp: false,
           userVerified: true,
+          userPresent: true,
           ...overrides.authenticationVerified,
         };
       }),
   });
 
-const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-  Layer.provideMerge(FileSystem.layerNoop({})),
-);
-
 const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Hooks.HooksLive),
+  Layer.provideMerge(RateLimits.layer),
+  Layer.provideMerge(RateLimiter.layerPermissive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -149,10 +168,19 @@ export interface AppOptions {
   readonly attestation?: WebAuthn.AttestationConveyance;
   readonly conditionalCreate?: boolean;
   readonly authenticatorSelection?: WebAuthn.AuthenticatorSelection;
+  readonly counterAnomalyPolicy?: "flag" | "reject";
+  /** BEH-EA-255: the freshness window enrolment requires of the calling session (`PasskeyConfig.reauthMaxAgeSeconds`; the default is five minutes). */
+  readonly reauthMaxAgeMillis?: number;
   readonly webAuthn?: MockWebAuthnOverrides;
+  /** REQ-EA-355/356/357: which `WebAuthn` port implementation the app is composed against — the mock (default) or the real `WebAuthn.layerSimpleWebAuthn`. Nothing else in the composition changes. */
+  readonly webAuthnPort?: "mock" | "simplewebauthn";
 }
 
-const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAuthnOverrides>) =>
+const buildAppLayer = (
+  options: AppOptions,
+  webAuthnBehavior: Ref.Ref<MockWebAuthnOverrides>,
+  verifyCalls: Ref.Ref<ReadonlyArray<VerifyRegistrationCall>>,
+) =>
   Layer.mergeAll(
     AuthHttp.routes(PasskeyApi.PasskeyApi, { openapiPath: "/openapi.json" }).pipe(
       Layer.provide(Passkey.Passkey.layer),
@@ -167,6 +195,12 @@ const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAut
           ...(options.authenticatorSelection === undefined
             ? {}
             : { authenticatorSelection: options.authenticatorSelection }),
+          ...(options.counterAnomalyPolicy === undefined
+            ? {}
+            : { counterAnomalyPolicy: options.counterAnomalyPolicy }),
+          ...(options.reauthMaxAgeMillis === undefined
+            ? {}
+            : { reauthMaxAgeSeconds: Duration.millis(options.reauthMaxAgeMillis) }),
         }),
       ),
       Layer.provide(AuthenticationLive),
@@ -177,9 +211,13 @@ const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAut
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(
       Layer.mergeAll(
-        mockWebAuthn(webAuthnBehavior),
+        options.webAuthnPort === "simplewebauthn"
+          ? WebAuthn.layerSimpleWebAuthn
+          : mockWebAuthn(webAuthnBehavior, verifyCalls),
         ChallengeStore.layerMemory,
         PasskeyCredentials.layerMemory,
+        PasskeyUserHandles.layerMemory,
+        ClientAddress.layerDirect,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
     ),
     Layer.provideMerge(TestServices),
@@ -191,6 +229,7 @@ export interface AppHandle {
   readonly memoMap: Layer.MemoMap;
   readonly appLayer: ReturnType<typeof buildAppLayer>;
   readonly webAuthnBehavior: Ref.Ref<MockWebAuthnOverrides>;
+  readonly verifyCalls: Ref.Ref<ReadonlyArray<VerifyRegistrationCall>>;
 }
 
 export interface WorldShape {
@@ -217,15 +256,18 @@ export const WorldLive = Layer.effect(
 /** Merges (not replaces) — the same `PasswordWorld.configureApp` pattern, so two Given steps compose. */
 export const configureApp = Effect.fn("features.passkey.configureApp")(function* (
   options: AppOptions,
+  mode: "merge" | "replace" = "merge",
 ) {
   const world = yield* World;
-  const merged = { ...(yield* Ref.get(world.appOptions)), ...options };
+  // `replace` starts from a clean composition — for a step that builds several independent apps in one Scenario.
+  const merged = { ...(mode === "merge" ? yield* Ref.get(world.appOptions) : {}), ...options };
   yield* Ref.set(world.appOptions, merged);
   const webAuthnBehavior = Ref.makeUnsafe<MockWebAuthnOverrides>(merged.webAuthn ?? {});
-  const appLayer = buildAppLayer(merged, webAuthnBehavior);
+  const verifyCalls = Ref.makeUnsafe<ReadonlyArray<VerifyRegistrationCall>>([]);
+  const appLayer = buildAppLayer(merged, webAuthnBehavior, verifyCalls);
   const memoMap = Layer.makeMemoMapUnsafe();
   const { handler } = HttpRouter.toWebHandler(appLayer, { memoMap });
-  yield* Ref.set(world.app, { handler, memoMap, appLayer, webAuthnBehavior });
+  yield* Ref.set(world.app, { handler, memoMap, appLayer, webAuthnBehavior, verifyCalls });
 });
 
 /**
@@ -274,12 +316,6 @@ export const request = Effect.fn("features.passkey.request")(function* (
   return response;
 });
 
-export const cookieFrom = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw.split(";")[0] ?? raw;
-};
-
 /**
  * Issues a real session directly against `Sessions`, reaching into the
  * same running services `handler` uses via the shared `MemoMap` — the
@@ -316,9 +352,63 @@ export const signIn = Effect.fn("features.passkey.signIn")(function* (email: str
           return yield* Effect.gen(function* () {
             const users = yield* Users.Users;
             const sessions = yield* Sessions.Sessions;
-            const user = yield* users.create({ email, name: email });
+            const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
             const issued = yield* sessions.issue({ userId: user.id });
             return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
+          }).pipe(Effect.provide(context));
+        }),
+      ),
+    ),
+  );
+});
+
+/**
+ * REQ-EA-358: what `registerVerify` actually persisted for `email`'s user — read from the same
+ * running `PasskeyCredentials` store the handler wrote to (same `MemoMap`, same real-clock
+ * boundary as `signIn`), so a Then can compare every stored field, not just the wire response.
+ */
+export const storedCredentials = Effect.fn("features.passkey.storedCredentials")(function* (
+  email: string,
+) {
+  const { appLayer, memoMap } = yield* appHandle();
+  return yield* Effect.promise(() =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
+          return yield* Effect.gen(function* () {
+            const users = yield* Users.Users;
+            const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+            const user = yield* users.findByEmail(email);
+            if (Option.isNone(user)) throw new Error(`no user found for ${email}`);
+            return yield* credentials.listByUser(user.value.id);
+          }).pipe(Effect.provide(context));
+        }),
+      ),
+    ),
+  );
+});
+
+/**
+ * REQ-EA-363: reads a session back by its cookie — expiry windows the wire never exposes.
+ * Same real-clock `runPromise` boundary as `signIn` (see its comment).
+ */
+export const inspectSession = Effect.fn("features.passkey.inspectSession")(function* (
+  cookie: string,
+) {
+  const { appLayer, memoMap } = yield* appHandle();
+  const token = decodeURIComponent(cookie.replace(/^__Host-session=/, ""));
+  return yield* Effect.promise(() =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
+          return yield* Effect.gen(function* () {
+            const sessions = yield* Sessions.Sessions;
+            const { session } = yield* sessions.verify(Redacted.make(token));
+            return session;
           }).pipe(Effect.provide(context));
         }),
       ),
@@ -359,6 +449,38 @@ export const linkOtherAccount = Effect.fn("features.passkey.linkOtherAccount")(f
     ),
   );
 });
+
+/** What the running app's services can be asked for by a step that needs the rows, not the wire. */
+export type AppServices = Layer.Success<ReturnType<typeof buildAppLayer>>;
+
+/**
+ * Runs `effect` against the running app's own services (same `MemoMap`, real-clock `runPromise`
+ * boundary as `signIn` — see its comment) — for a claim about what is stored or erased, which the
+ * wire never shows.
+ */
+export const inApp = <A, E>(effect: Effect.Effect<A, E, AppServices>) =>
+  Effect.gen(function* () {
+    const { appLayer, memoMap } = yield* appHandle();
+    return yield* Effect.promise(() =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const scope = yield* Effect.scope;
+            const context = yield* Layer.buildWithMemoMap(appLayer, memoMap, scope);
+            return yield* Effect.provide(effect, context);
+          }),
+        ),
+      ),
+    );
+  });
+
+/** The `verifyRegistration` calls the plugin has made to the (mocked) `WebAuthn` port so far. */
+export const verifyRegistrationCalls = Effect.fn("features.passkey.verifyRegistrationCalls")(
+  function* () {
+    const { verifyCalls } = yield* appHandle();
+    return yield* Ref.get(verifyCalls);
+  },
+);
 
 export const setOutcome = Effect.fn("features.passkey.setOutcome")(function* (
   key: string,

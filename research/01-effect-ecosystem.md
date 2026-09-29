@@ -280,7 +280,7 @@ Harness spec detail: scenarios = `GET /me` without credentials (401 path), `GET 
 | `@effect/sql` 0.52.1 + dialects (pg 0.53, mysql2 0.53, sqlite-node/bun 0.53, libsql, d1, mssql, clickhouse, pglite, kysely, drizzle) | SQL toolkit: `Migrator`, `Model`, `SqlResolver`, `SqlPersistedQueue` | MIT | 0.x, actively released (2026-07-30) | Repositories, migrations, session storage |
 | `@effect/vitest` 0.30.0 | Vitest integration (`it.effect`, test runtime) | MIT | 0.x, vitest ^3.2 | Test harness for `@awthaq/test` |
 | `@effect/opentelemetry` 0.64.1 | OTel bridge (traces/metrics/logs, SDK 2.x) | MIT | 0.x | Optional `AuthObservability.layer` |
-| `@effect/cli` 0.77.1 | Declarative CLI framework | MIT | 0.x | `@awthaq/cli` (`auth doctor`, migrations) |
+| `@effect/cli` 0.77.1 | Declarative CLI framework | MIT | 0.x | `@awthaq/cli` (`auth doctor`, migrations) — **superseded (ADR-EA-027): the CLI is built on `effect/unstable/cli`, which ships in `effect` itself** |
 | `@effect/rpc` 0.76.2 / `@effect/cluster` 0.60.2 / `@effect/workflow` 0.19.1 | RPC, entity clustering, durable workflows | MIT | 0.x/experimental | Future distributed-session/audit patterns |
 | `@effect/ai` 0.37.0 | AI provider SDK on Schema | MIT | 0.x | Adjacent ecosystem signal |
 | `@effect/language-service` 0.87.2 / `@effect/tsgo` 0.45.0 | LSP plugin / native TS port | MIT | Active | Dev experience for heavy type graphs (Q8) |

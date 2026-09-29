@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @cross-cutting @events
-@skip @unwired
 Feature: Events
 
   # BEH-EA-097 — spec/behaviors/13-events.md; see also ADR-EA-001.
@@ -33,8 +32,8 @@ Feature: Events
     Scenario: Publishing an event returns without waiting for any subscriber to finish handling it
       Given a subscriber to "AuthEvents" that takes a long time to handle each event
       When an event is published while that subscriber is still processing a previous event
-      Then "publish" returns as soon as the event is enqueued
-      And the publishing fiber is not suspended waiting on the subscriber
+      Then "publish" returns as soon as the event is recorded and offered to the bounded bus, whether or not the bus accepted it
+      And the publishing fiber is not suspended waiting on the subscriber or on the bus's capacity
 
     @REQ-EA-262
     Scenario: A sign-in is not slowed down by a slow subscriber observing it

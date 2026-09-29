@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-015 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
-> | Status | Accepted — design; implementation deferred |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
 
 ---
 
@@ -41,5 +41,3 @@ Both bridges remain available in the same application simultaneously, wired from
 **Negative**: The three factors do not always agree, and this ADR does not fully resolve every case where they conflict — a resource-independent endpoint that an operator wants in the permission registry (favoring Path B) but that a team has already built extensive Path-A tooling around (custom `enforceProjected` wrappers, shared `hideDenied`/`outagesAreDefects` catches per BEH-EA-147/148) is left to a judgment call this ADR does not fully adjudicate; an application with both bridges wired therefore still requires editorial discipline (a code-review convention, or a lint rule not yet specified anywhere in this specification) to keep endpoints from drifting toward whichever bridge a given author reached for out of habit rather than the criteria stated here.
 
 **Trade-off accepted**: The project accepts that path selection remains partly a matter of engineering judgment rather than something `Auth.make`'s type checker can enforce — unlike the compile-time guarantees ADR-EA-002 and ADR-EA-012 provide for plugin composition, nothing prevents an author from wiring a resource-dependent decision through Path B's annotation style in a way that silently cannot express what it needs (Path B has no resource to hand the policy, so the failure mode here is that the endpoint simply cannot be built that way, not that it compiles into a security hole) — the cost accepted is authoring friction and a rebuilt decision rather than a type error, in exchange for not constraining the two bridges' designs to make path selection itself type-checkable, which neither `behaviors/19-qadi-bridge-path-a.md` nor `behaviors/20-qadi-bridge-path-b.md` was designed to support.
-
-Not yet implemented — see spec/roadmap.md for milestone.

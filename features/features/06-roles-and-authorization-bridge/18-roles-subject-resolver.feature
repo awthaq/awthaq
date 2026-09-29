@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @authorization-bridge @roles-subject-resolver
-@skip @unwired
 Feature: Roles and the Subject Resolver
 
   # BEH-EA-137 — spec/behaviors/18-roles-subject-resolver.md. The fail-closed
@@ -55,15 +54,15 @@ Feature: Roles and the Subject Resolver
     @REQ-EA-386
     Scenario: Two plugins overriding SubjectResolver fail composition, naming both and the slot
       Given a plugin tuple containing "Roles" and "Organization", both overriding the "SubjectResolver" slot
-      When "Auth.make" composes the tuple
+      When the composition's layers are built with the slots registry provided
       Then composition is rejected
       And the rejection names "Roles", "Organization", and "SubjectResolver"
 
     @REQ-EA-387
-    Scenario: The slot conflict is caught at Auth.make and never deferred to the first request
+    Scenario: The slot conflict is caught when the layers are built and never deferred to the first request
       Given a plugin tuple containing "Roles" and "Organization", both overriding the "SubjectResolver" slot
       When an application attempts to build and run a server from that tuple
-      Then no server ever starts, because composition already failed at "Auth.make"
+      Then no server ever starts, because composition already failed while the layers were being built
       And the conflict is never surfaced as a first-request runtime error
 
   # BEH-EA-139 — spec/behaviors/18-roles-subject-resolver.md
@@ -189,22 +188,22 @@ Feature: Roles and the Subject Resolver
   Rule: The session view exposes the resolved subject
 
     @REQ-EA-402
-    Scenario: GET /auth/session includes the resolved subject as SubjectDto with plain arrays
+    Scenario: GET /subject returns the resolved subject as SubjectDto with plain arrays
       Given a signed-in user "alice"
-      When "alice" requests "GET /auth/session"
-      Then the response body includes a "subject" field
-      And "subject" is encoded as "SubjectDto" with "roles" and "permissions" as plain arrays
+      When "alice" requests "GET /subject"
+      Then the response body is the resolved subject
+      And the body is encoded as "SubjectDto" with "roles" and "permissions" as plain arrays
 
     @REQ-EA-403
-    Scenario: The subject field is never omitted merely because no roles plugin is installed
+    Scenario: The subject is never omitted merely because no roles plugin is installed
       Given a signed-in user "alice" and no roles plugin installed
-      When "alice" requests "GET /auth/session"
-      Then the response still includes a "subject" field
-      And "subject.roles" and "subject.permissions" are present as empty arrays, not omitted
+      When "alice" requests "GET /subject"
+      Then the response still includes the resolved subject
+      And "roles" and "permissions" are present as empty arrays, not omitted
 
     @REQ-EA-404
-    Scenario: The subject field has the same shape whether or not a roles plugin is installed
+    Scenario: The subject has the same shape whether or not a roles plugin is installed
       Given two applications, one with a roles plugin installed and one without
-      When each requests "GET /auth/session" for a signed-in user
-      Then both responses include a "subject" field with the same shape
+      When each requests "GET /subject" for a signed-in user
+      Then both responses include a resolved subject with the same shape
       And the client's subject derivation can rely on that field being present regardless of which plugins are installed

@@ -4,11 +4,19 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Reused by release.yml so a release can never run after a red Check (MM-006).
+  workflow_call:
 
+# One run per PR ref is enough (a newer push supersedes an older one). Pushes and
+# reusable-workflow calls get a per-run group: `github.workflow` inside a called
+# workflow is the *caller's* name, so a shared group would deadlock against the
+# caller's own concurrency group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'pull_request' && format('check-{0}', github.ref) || format('check-{0}-{1}', github.ref, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# No secret is available to, or needed by, any job here: this workflow also runs for
+# pull requests, so it must stay credential-free (only the read-only default token).
 permissions:
   contents: read
 
@@ -18,7 +26,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       matrix:
-        node-version: ["22.12.0"]
+        node-version: ["22.22.0"]
     # Shipping-gap map (.scratch/shipping-gaps), ticket 15: a real Postgres
     # service so packages/sql's Repositories.postgres.test.ts (skipped
     # locally without AWTHAQ_POSTGRES_URL) actually runs here, not
@@ -42,6 +50,8 @@ jobs:
       AWTHAQ_POSTGRES_URL: postgres://awthaq:awthaq@localhost:5432/awthaq_test
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -49,3 +59,28 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+
+  # AVS-009: a pull request that changes a package must carry a changeset (for a
+  # breaking change, one whose body has a `Migration:` section: see CONTRIBUTING.md).
+  # `pnpm changeset --empty` is the explicit "no release impact" answer. Runs only
+  # for pull requests, and needs the base branch history, hence the full fetch.
+  changeset:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22.22.0"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec changeset status --since="origin/$BASE_REF"
+        env:
+          # Routed through env, never interpolated into the script: the branch name
+          # is not ours to trust (zizmor: template-injection).
+          BASE_REF: ${{ github.base_ref }}

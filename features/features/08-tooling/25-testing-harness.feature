@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @tooling @testing-harness
-@skip @unwired
 Feature: Testing Harness
 
   # BEH-EA-193 — spec/behaviors/25-testing-harness.md
@@ -50,8 +49,14 @@ Feature: Testing Harness
         | invariant                  |
         | session idle expiry        |
         | verification token TTL     |
-        | passkey challenge expiry   |
         | a rate-limit window        |
+
+    # The passkey plugin's own ChallengeStore, elapsed under TestClock like the other invariants (17-passkey.feature REQ-EA-367 drives the same store).
+    @REQ-EA-699
+    Scenario: A passkey challenge's expiry is asserted by advancing TestClock
+      Given a whole-pipeline HTTP test asserting passkey challenge expiry
+      When the test needs to elapse time to observe the boundary
+      Then it advances "TestClock" rather than waiting in real time
 
     @REQ-EA-549
     Scenario: A time-dependent HTTP test never uses a real sleep to elapse time
@@ -59,10 +64,13 @@ Feature: Testing Harness
       When the test elapses that time
       Then it does not call a real "sleep" or otherwise wait for wall-clock time to pass
 
+    # HttpApiTest.groups builds its own internal HttpClient with no seam for a cookie header, so a
+    # session minted by TestAuth.signInAs cannot ride it (TestAuth.ts header); the same in-memory
+    # pipeline is dispatched through TestAuth.layer's router instead.
     @REQ-EA-550
     Scenario: An eight-day expiry is asserted without the test taking eight days
-      Given a client built with "HttpApiTest.groups(AuthApi, [\"password\", \"session\"])" for a session configured to expire after 8 days
-      When the test adjusts "TestClock" by "8 days" and then calls "client.session.current()"
+      Given a test dispatching through "TestAuth.layer"'s router for a session configured to expire after 8 days
+      When the test adjusts "TestClock" by "8 days" and then requests "GET /session"
       Then the call fails with "Unauthenticated"
       And the test completes without any real elapsed wait
 
@@ -87,23 +95,24 @@ Feature: Testing Harness
   @BEH-EA-196
   Rule: qadiTestLayer and subjectWith for authorization unit tests
 
+    # PV-261: the guidance names the real helpers (makeSubject/fromRoles, currentSubjectLayer, EvaluationServicesNone), not the illustrative subjectWith/qadiTestLayer; the scenarios run exactly that recipe.
     @REQ-EA-553
-    Scenario: A policy-level unit test constructs its subject with subjectWith
+    Scenario: A policy-level unit test constructs its subject with qadi's own constructors
       Given a test asserting a single policy's behavior in isolation
       When the test constructs the calling subject
-      Then it builds that subject with "subjectWith"
+      Then it builds that subject with "makeSubject" and the policy answers for it as the subject's permissions dictate
 
     @REQ-EA-554
-    Scenario: A policy-level unit test provides qadi's services via qadiTestLayer
+    Scenario: A policy-level unit test provides qadi's services via currentSubjectLayer and EvaluationServicesNone
       Given a test asserting a single policy's behavior in isolation
       When qadi's services are provided to the test
-      Then they are provided via "qadiTestLayer" from "@qadi/testing"
+      Then they are provided via "currentSubjectLayer" with "EvaluationServicesNone" and nothing else
 
     @REQ-EA-555
     Scenario: A policy-level unit test does not stand up the full HTTP pipeline
       Given a test whose only concern is a single policy's behavior
       When the test is composed
-      Then it does not compose "TestAuth.layer", an HTTP client, or any server layer merely to exercise that policy
+      Then it does not compose "TestAuth.layer", an HTTP client, or any server layer merely to exercise that policy, and still gets a real evaluation
 
   # BEH-EA-197 — spec/behaviors/25-testing-harness.md
   @BEH-EA-197
@@ -115,11 +124,13 @@ Feature: Testing Harness
       When the test establishes its calling identity
       Then it uses "TestAuth.signInAs" rather than calling a handler function directly with a fabricated principal
 
+    # PV-261: the shipped names for the "AuthzLive/QadiLive" pipeline are qadi's RequirePermissionLive over
+    # awthaq's SubjectExtractorLive (+ the Roles resolver and qadi's real evaluator).
     @REQ-EA-557
-    Scenario: An HTTP-level authorization test runs against the whole AuthzLive/QadiLive pipeline
+    Scenario: An HTTP-level authorization test runs against the real RequirePermission pipeline
       Given a test asserting that "RequirePermission" correctly blocks or allows a request
-      When the test is composed
-      Then it merges "AuthzLive" and "QadiLive" alongside "TestAuth.layer" rather than substituting a stub for either
+      When the test is composed with "TestAuth.layer" over the real "RequirePermissionLive" and "SubjectExtractorLive"
+      Then a caller holding the admin role is allowed and a caller without it is blocked, decided by the real evaluator and no stub
 
     @REQ-EA-558
     Scenario: A signed-in caller lacking the required role is blocked by the real RequirePermission middleware
@@ -201,26 +212,29 @@ Feature: Testing Harness
   @BEH-EA-200
   Rule: Veto only in veto points, and observer isolation
 
+    # PV-260: a plugin's declared taps expose their handler (AuthPlugin.taps), so the suite runs the
+    # plugin's own handler against a stub input on a point of the tap's kind (the opt-in `hooks` option).
     @REQ-EA-569
     Scenario: runPluginContractTests asserts an observe-point tap cannot abort the operation it observes
-      Given a "kind: \"observe\"" hook point "AfterSignUp" tapped by "Welcome"
-      When "runPluginContractTests" exercises "Welcome"'s tap attempting to abort the sign-up operation
-      Then it asserts the sign-up operation is not aborted
+      Given a plugin "Welcome" declaring a tap on the observe point "AfterSignUp" that completes normally
+      When "runPluginContractTests" exercises the declared tap with a stub input for its point
+      Then it asserts the sign-up operation is not aborted by the tap
 
     @REQ-EA-570
     Scenario: runPluginContractTests asserts a throwing observer's failure does not propagate to the operation it observes
-      Given the "Welcome" tap on "AfterSignUp" fails because its "Mailer" is unavailable
-      When "runPluginContractTests" runs against that plugin
+      Given a plugin "Welcome" declaring a tap on the observe point "AfterSignUp" that fails because its "Mailer" is unavailable
+      When "runPluginContractTests" exercises the declared tap with a stub input for its point
       Then it asserts the sign-up operation still succeeds despite "Welcome"'s failure
 
     @REQ-EA-571
     Scenario: runPluginContractTests asserts only a veto-point tap may abort or amend an operation
-      Given a "kind: \"veto\"" hook point "BeforeSignUp" tapped by "CompanyEmail"
-      When "runPluginContractTests" exercises "CompanyEmail"'s tap aborting the operation
+      Given a plugin "CompanyEmail" declaring a tap on the veto point "BeforeSignUp" that aborts with code "EMAIL_DOMAIN"
+      When "runPluginContractTests" exercises the declared tap with a stub input for its point
       Then it asserts the abort is accepted, because "BeforeSignUp" is a veto point
 
     @REQ-EA-572
     Scenario: A plugin whose observe-point tap aborts its operation fails the contract test
-      Given a plugin whose "kind: \"observe\"" hook tap attempts to abort the operation it observes
-      When "runPluginContractTests" runs against that plugin
+      Given a plugin "Welcome" declaring a tap on the observe point "AfterSignUp" that attempts to abort with code "NOPE"
+      When "runPluginContractTests" exercises the declared tap with a stub input for its point
       Then the contract test fails
+      And the failure names "AfterSignUp" as an observe point whose tap tried to abort

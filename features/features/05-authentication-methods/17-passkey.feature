@@ -1,7 +1,7 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @authentication-methods @passkey
 Feature: Passkey and WebAuthn
@@ -10,26 +10,12 @@ Feature: Passkey and WebAuthn
   @BEH-EA-129
   Rule: WebAuthn is a port, wrapped, not reimplemented
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 25: pruned, not
-    # force-implemented — a type-level/composition claim (Passkey depends
-    # only on the WebAuthn port's interface, never a concrete
-    # implementation), provable by reading Passkey.ts's own `make` Effect
-    # and its `yield* WebAuthn.WebAuthn`, not by a runtime request this
-    # step framework could make. The real `WebAuthn.layerSimpleWebAuthn`
-    # composition is already exercised for real by
-    # `packages/ports/test/WebAuthn.test.ts`.
-    @skip
     @REQ-EA-355
     Scenario: The application supplies the default SimpleWebAuthn implementation and Passkey composes against it
       Given an application composing "Passkey"
       When the application provides "WebAuthn.layerSimpleWebAuthn"
       Then "Passkey" performs its ceremonies using the provided "WebAuthn" port
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 25: pruned, not
-    # force-implemented — a structural/source-inspection claim ("Passkey's
-    # own code performs none of that parsing"), not a runtime behavior a
-    # wire-level step could observe.
-    @skip
     @REQ-EA-356
     Scenario: The passkey plugin performs no cryptographic verification of its own
       Given a registration or authentication ceremony being verified
@@ -37,15 +23,6 @@ Feature: Passkey and WebAuthn
       Then the CBOR/COSE parsing, attestation verification, and signature checking are all performed by the "WebAuthn" port
       And "Passkey"'s own code performs none of that parsing or verification itself
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 25: pruned, not
-    # force-implemented — same port-composition claim as REQ-EA-355, this
-    # time about swappability; this World already proves the plugin is
-    # driven entirely through the `WebAuthn` port interface (a mock
-    # implementation, not `layerSimpleWebAuthn`), which is the same
-    # structural property this scenario names, but "requires no change to
-    # the Passkey plugin" itself is a claim about the plugin's own source
-    # code, not a wire-observable behavior.
-    @skip
     @REQ-EA-357
     Scenario: Swapping the WebAuthn port implementation requires no change to the Passkey plugin
       Given an application composing "Passkey" against "WebAuthn.layerSimpleWebAuthn"
@@ -85,10 +62,10 @@ Feature: Passkey and WebAuthn
       Then a session is issued through the same core "Sessions" capability every sign-in method uses
 
     @REQ-EA-362
-    Scenario: The passkey plugin does not set the session cookie itself
+    Scenario: The passkey plugin delivers the session only through the shared SessionDelivery helper
       Given a successfully verified authentication assertion
       When "authenticateVerify" returns its "SessionView"
-      Then the session cookie is set by core "Sessions", not by any cookie-setting code in the passkey plugin
+      Then the session is delivered through the shared "SessionDelivery" helper as the "__Host-session" cookie
 
     @REQ-EA-363
     Scenario: A passkey-issued session behaves identically to a password- or OAuth-issued session
@@ -146,6 +123,13 @@ Feature: Passkey and WebAuthn
       When a ceremony's origin host is checked against "rpId"
       Then "rpId" is validated as a registrable-domain suffix of that origin
       And a bare substring or unrelated host match is not accepted in its place
+
+    @REQ-EA-696
+    Scenario: rpId suffix validation applies even to an origin the deployment listed
+      Given "passkey({ rpId: \"example.com\", origins: [\"https://example.com\", \"https://www.example.com\", \"https://evil-example.com\"] })"
+      When ceremonies arrive from "https://www.example.com" and from "https://evil-example.com"
+      Then the ceremony from "https://www.example.com" is accepted
+      And the ceremony from "https://evil-example.com" is rejected as an rpId mismatch
 
     @REQ-EA-371
     Scenario: Multiple explicit deployment origins are each matched individually
@@ -210,11 +194,10 @@ Feature: Passkey and WebAuthn
 
     # Shipping-gap map (.scratch/shipping-gaps), ticket 25: the "counter
     # anomaly" row is split out below into its own, separately-tagged
-    # Scenario Outline rather than kept in this table — a Gherkin `@skip`
-    # tag applies to a whole Scenario Outline, not to one `Examples` row,
-    # and `PasskeyCounterAnomaly` is real but genuinely never thrown by
-    # `authenticateVerify` (see the split-out scenario below for why), so
-    # it can't share this table's 7 rows, which really are all thrown.
+    # Scenario Outline rather than kept in this table — it is only thrown
+    # under `counterAnomalyPolicy: "reject"` (under the default "flag" the
+    # ceremony still succeeds), so it can't share this table's 7 rows, which
+    # are thrown unconditionally.
     @REQ-EA-378
     Scenario Outline: Each distinct ceremony failure surfaces as its own typed Schema.TaggedError
       Given a ceremony that fails for the reason "<failure>"
@@ -244,24 +227,165 @@ Feature: Passkey and WebAuthn
       When "PasskeyCredentialNotFound" is returned
       Then the response does not reveal whether any credential exists for that identifier, distinguishably from a credential that exists but fails verification
 
-    # Shipping-gap map (.scratch/shipping-gaps), ticket 25: pruned, not
-    # force-implemented — this scenario's literal expectation ("reported
-    # as PasskeyCounterAnomaly", "not silently accepted") contradicts the
-    # real, deliberate implementation: `Passkey.ts`'s own `authenticateVerify`
-    # treats a counter regression as "log + step-up, not an instant kill"
-    # (its own comment) — it publishes `auth.passkey.counterAnomaly` on
-    # `AuthEvents` and the ceremony still succeeds. `PasskeyApi.ts`'s own
-    # `PasskeyCounterAnomaly` doc comment confirms this is intentional: the
-    # type is declared for BEH-EA-136's closed list and for a future caller
-    # to `catchTag` against if the policy ever changes, but "deliberately
-    # never appears in any endpoint's error union". Forcing this scenario
-    # green would mean asserting a failure that cannot occur; this is a
-    # genuine spec/implementation divergence, flagged here rather than
-    # hidden, not assumed to be a defect in either direction.
-    @skip
+    # CB-004/WPS-006: a counter regression on an otherwise-verified assertion
+    # (`newCounter <= stored`, and not the normal 0 === 0 of an authenticator
+    # that never reports one) now actually reaches the plugin's policy — the
+    # port no longer lets the library throw first. `counterAnomalyPolicy`
+    # "flag" (the default, wayfinder ticket 08's "log + step-up, not an instant
+    # kill") signs in and flags the credential; "reject" fails the ceremony
+    # with the typed anomaly. Either way the credential is flagged and the
+    # anomaly is audited.
     @REQ-EA-381
-    Scenario: A counter regression on an otherwise-verified assertion is reported as its own typed anomaly, not silently accepted
-      Given a stored credential with a nonzero counter, and an authentication assertion whose returned counter does not exceed it
-      When "authenticateVerify" processes the assertion
-      Then the failure is reported as "PasskeyCounterAnomaly"
-      And it is not silently accepted as an ordinary successful authentication
+    Scenario Outline: A counter regression on a verified assertion follows the configured policy
+      Given a stored credential with a nonzero counter, and an authentication assertion whose returned counter does not exceed it, under the "<policy>" counter-anomaly policy
+      When "authenticateVerify" processes the regressed assertion
+      Then the outcome is "<outcome>"
+      And the credential is flagged for the counter anomaly
+
+      Examples:
+        | policy | outcome               |
+        | reject | PasskeyCounterAnomaly |
+        | flag   | a session is issued   |
+
+  # BEH-EA-255 — spec/behaviors/17-passkey.md; see also BEH-EA-165
+  # Over the wire the authentication middleware refuses a revoked or expired session before any
+  # passkey handler runs, so the plugin's own "not live for its owner" branch (a session belonging to
+  # another user) is not reachable through HTTP; the scenarios below observe what a caller sees.
+  @BEH-EA-255
+  Rule: Passkey registration requires a fresh session
+
+    @REQ-EA-1007
+    Scenario: A session authenticated within the window may start a registration
+      Given a user "fresh@example.com" whose session is inside the passkey reauthentication window
+      When the session requests registration options
+      Then the options are issued
+
+    @REQ-EA-1008
+    Scenario: A stale session is refused registration options, and the refusal names the window
+      Given a deployment with a 600 millisecond passkey reauthentication window
+      And a user "stale-options@example.com" whose session has outlived that window
+      When the session requests registration options
+      Then the request fails with "PasskeyReauthRequired" naming a window of 600 milliseconds
+
+    @REQ-EA-1009
+    Scenario: A stale session is refused Conditional Create options too
+      Given a deployment with a 600 millisecond passkey reauthentication window
+      And a user "stale-conditional@example.com" whose session has outlived that window
+      When the session requests Conditional Create options
+      Then the request fails with "PasskeyReauthRequired" naming a window of 600 milliseconds
+
+    @REQ-EA-1010
+    Scenario: A challenge obtained while fresh cannot be redeemed after the session has gone stale
+      Given a deployment with a 600 millisecond passkey reauthentication window
+      And a user "late@example.com" whose session is inside the passkey reauthentication window
+      And the session obtained registration options while fresh
+      When the session has outlived that window and presents the completed registration
+      Then the request fails with "PasskeyReauthRequired" naming a window of 600 milliseconds
+      And no credential is stored for "late@example.com"
+
+    @REQ-EA-1011
+    Scenario: A session that is no longer live cannot register a passkey
+      Given a user "gone@example.com" whose session is inside the passkey reauthentication window
+      And that session has been revoked
+      When the session requests registration options
+      Then the request is refused as unauthenticated and no options are issued
+
+  # BEH-EA-256 — spec/behaviors/17-passkey.md; see also BEH-EA-130, BEH-EA-132
+  # The WebAuthn port is mocked everywhere except the one scenario that reads the options the real
+  # library builds; user presence is observed as what the plugin asks the port to require.
+  @BEH-EA-256
+  Rule: Conditional Create is a separate, config-gated ceremony with its own challenge scope
+
+    @REQ-EA-1012
+    Scenario: With Conditional Create on, its options force a discoverable credential and discouraged user verification
+      Given a deployment composed against the real "WebAuthn.layerSimpleWebAuthn" port
+      And a user "cc-on@example.com" whose session is inside the passkey reauthentication window
+      When the session requests Conditional Create options
+      Then the options are issued
+      And the options require a resident key and discourage user verification
+
+    @REQ-EA-1013
+    Scenario: With Conditional Create configured off, the endpoint is reported as absent
+      Given a deployment with Conditional Create switched off
+      And a user "cc-off@example.com" whose session is inside the passkey reauthentication window
+      When the session requests Conditional Create options
+      Then the request fails with "PasskeyConditionalCreateDisabled"
+
+    @REQ-EA-1014
+    Scenario: A deployment that requires user verification cannot offer Conditional Create
+      Given a deployment that requires user verification
+      And a user "cc-uv@example.com" whose session is inside the passkey reauthentication window
+      When the session requests Conditional Create options
+      Then the request fails with "PasskeyConditionalCreateDisabled"
+
+    @REQ-EA-1015
+    Scenario: A Conditional Create challenge cannot be redeemed as an ordinary registration
+      Given a user "cc-scope-a@example.com" whose session is inside the passkey reauthentication window
+      And the session obtained Conditional Create options
+      When the session presents that challenge as an ordinary registration
+      Then the request fails with "PasskeyChallengeInvalid"
+
+    @REQ-EA-1016
+    Scenario: An ordinary registration challenge cannot be redeemed as a Conditional Create registration
+      Given a user "cc-scope-b@example.com" whose session is inside the passkey reauthentication window
+      And the session obtained registration options while fresh
+      When the session presents that challenge as a Conditional Create registration
+      Then the request fails with "PasskeyChallengeInvalid"
+
+    @REQ-EA-1017
+    Scenario: Completing one ceremony does not consume the other's challenge
+      Given a user "cc-both@example.com" whose session is inside the passkey reauthentication window
+      And the session obtained registration options while fresh
+      And the session obtained Conditional Create options
+      When the session completes the ordinary registration and then the Conditional Create registration
+      Then both registrations succeed and "cc-both@example.com" holds two credentials
+
+    @REQ-EA-1018
+    Scenario: Only Conditional Create relaxes the user-presence requirement
+      Given a user "cc-up@example.com" whose session is inside the passkey reauthentication window
+      And the session obtained registration options while fresh
+      And the session obtained Conditional Create options
+      When the session completes the ordinary registration and then the Conditional Create registration
+      Then the ordinary registration required user presence and the Conditional Create one did not
+
+  # BEH-EA-257 — spec/behaviors/17-passkey.md; see also BEH-EA-130, BEH-EA-132
+  @BEH-EA-257
+  Rule: A user has one stable, random WebAuthn user handle
+
+    @REQ-EA-1019
+    Scenario: Every registration's creation options carry the same handle for one user
+      Given a user "handle-stable@example.com" whose session is inside the passkey reauthentication window
+      When the session requests registration options twice
+      Then both creation options carry the same "user.id"
+
+    @REQ-EA-1020
+    Scenario: The handle is 32 random bytes and names no one
+      Given a user "handle-a@example.com" whose session is inside the passkey reauthentication window
+      When the session requests registration options
+      Then the "user.id" is 32 random bytes that contain neither the user's id nor the user's address
+      And a second user "handle-b@example.com" is given a different "user.id"
+
+    @REQ-EA-1021
+    Scenario: The handle stored with each credential is the one the options carried
+      Given a user "handle-stored@example.com" whose session is inside the passkey reauthentication window
+      When the session registers two credentials
+      Then both credentials are stored under the "user.id" the options carried
+
+    @REQ-EA-1022
+    Scenario: An assertion carrying a different user handle fails like any other bad assertion
+      Given a user "handle-assert@example.com" who has registered a credential
+      When that credential asserts with a "userHandle" that is not the one stored with it
+      Then the assertion fails with "InvalidCredentials"
+
+    @REQ-EA-1023
+    Scenario: An assertion carrying the stored user handle succeeds
+      Given a user "handle-assert-ok@example.com" who has registered a credential
+      When that credential asserts with the "userHandle" stored with it
+      Then the assertion succeeds
+
+    @REQ-EA-1024
+    Scenario: The handle is erased with the user
+      Given a user "handle-erase@example.com" who has registered a credential
+      When the plugin's erasure contribution runs for that user
+      Then no credential remains for "handle-erase@example.com"
+      And the next "user.id" minted for that user is a different value

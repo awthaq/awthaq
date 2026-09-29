@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @client-integration @nextjs-ssr
-@skip @unwired
 Feature: Next.js Server Rendering
 
   # BEH-EA-185 — spec/behaviors/24-nextjs-ssr.md
@@ -49,6 +48,7 @@ Feature: Next.js Server Rendering
       Then the resulting payload is plain JSON
       And it carries no evaluation trace by default
 
+    # A first paint is a server render: the real QadiProvider + Can rendered with react-dom/server over the hydrateDecisions seed (QadiClientHarness.ts).
     @REQ-EA-527
     Scenario: The client does not re-decide the server's policies from scratch before hydration completes
       Given a page whose gates were already decided server-side and dehydrated

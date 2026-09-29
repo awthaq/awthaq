@@ -21,6 +21,26 @@ export interface Migration {
 export type Migrations = ReadonlyArray<Migration>;
 
 /**
+ * N11 — the migration id space. Effect's `Migrator` records only a numeric id
+ * per migration and skips any id at or below the newest one already recorded
+ * in its tracking table. The core tables (`@awthaq/sql`'s
+ * `CoreMigrations.coreMigrations`, ids 1-17 in `effect_sql_migrations`) and
+ * the plugin list below (array-index ids from 1) are two independent id
+ * spaces, so they must never share a ledger: run together in one table, every
+ * plugin migration numbered <= 17 would be skipped without an error. Each
+ * owner therefore has its own tracking table — core keeps the migrator's
+ * default `effect_sql_migrations`, plugins use this one (a plugin store that
+ * ships its own out-of-band migration, like the SQL rate limiter, picks its
+ * own). A runner applies core first, then `run(auth.migrations)`.
+ *
+ * Within the plugin ledger the ids are positions in `Auth.make`'s
+ * dependency-ordered list, so adding a plugin that sorts *before* one already
+ * applied shifts the later ids; pin the plugin set (or append new plugins
+ * last) on a database that has already been migrated.
+ */
+export const pluginMigrationsTable = "awthaq_plugin_migrations";
+
+/**
  * Shipping-gap map (.scratch/shipping-gaps), ticket 15: wires this
  * scaffold's plugin-declared `Migrations` list (`Auth.make`'s own
  * `built.migrations`, already dependency-ordered and renumbered into
@@ -47,6 +67,7 @@ export type Migrations = ReadonlyArray<Migration>;
  */
 export const run = (
   migrations: Migrations,
+  options?: { readonly table?: string },
 ): Effect.Effect<
   ReadonlyArray<readonly [id: number, name: string]>,
   Migrator.MigrationError | SqlError,
@@ -56,4 +77,5 @@ export const run = (
     loader: Effect.succeed(
       migrations.map((m, i): Migrator.ResolvedMigration => [i + 1, m.name, Effect.succeed(m.up)]),
     ),
+    table: options?.table ?? pluginMigrationsTable,
   });

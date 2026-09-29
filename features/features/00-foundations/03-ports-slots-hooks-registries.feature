@@ -1,18 +1,18 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @foundations @ports-slots-hooks-registries
-@skip @unwired
 Feature: Ports, Slots, Hook Points, and Registries
 
   # BEH-EA-017 — spec/behaviors/03-ports-slots-hooks-registries.md; see also
   # ADR-EA-011, ADR-EA-006.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-017 @compile-time
   Rule: Configuration is a Context.Reference with a default value
 
@@ -39,8 +39,9 @@ Feature: Ports, Slots, Hook Points, and Registries
   # BEH-EA-018 — spec/behaviors/03-ports-slots-hooks-registries.md
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-018 @compile-time
   Rule: An invalid configuration override is a type error against the reference's shape, not a runtime validation failure
 
@@ -66,8 +67,9 @@ Feature: Ports, Slots, Hook Points, and Registries
   # BEH-EA-019 — spec/behaviors/03-ports-slots-hooks-registries.md
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-019 @compile-time
   Rule: Variants are alternative static layers that remove requirements from RIn
 
@@ -87,8 +89,9 @@ Feature: Ports, Slots, Hook Points, and Registries
   # ADR-EA-010.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-020 @compile-time
   Rule: Ports are required in RIn and never provided by a plugin's ROut
 
@@ -115,8 +118,9 @@ Feature: Ports, Slots, Hook Points, and Registries
   # ADR-EA-012.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-021 @compile-time
   Rule: A slot is a Context.Reference with a fail-closed default that at most one plugin may override
 
@@ -133,17 +137,18 @@ Feature: Ports, Slots, Hook Points, and Registries
       Then the default is at least as restrictive as any explicit override
 
     @REQ-EA-049
-    Scenario: Overriding a slot places it in the overriding plugin's Layer ROut, making two overrides pairwise-detectable
+    Scenario: Overriding a slot is recorded against the overriding plugin, making two overrides pairwise-detectable
       Given a plugin "Roles" that overrides the "SubjectResolver" slot
-      When "Roles"'s Layer "ROut" is inspected
-      Then "SubjectResolver" appears in "Roles"'s Layer "ROut"
+      When "Roles"'s Layer is built with its "SlotsRegistry" claim
+      Then "SubjectResolver" resolves to "Roles"'s implementation
       And a second plugin also overriding "SubjectResolver" is thereby detectable pairwise (BEH-EA-012)
 
   # BEH-EA-022 — spec/behaviors/03-ports-slots-hooks-registries.md
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-022 @compile-time
   Rule: A veto hook point may abort or amend, and its taps run in dependency order
 
@@ -170,8 +175,9 @@ Feature: Ports, Slots, Hook Points, and Registries
   # BEH-EA-023 — spec/behaviors/03-ports-slots-hooks-registries.md
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-023 @compile-time
   Rule: An observe hook point is fail-isolated; a divert hook point returns a typed alternative outcome
 
@@ -193,8 +199,9 @@ Feature: Ports, Slots, Hook Points, and Registries
   # INV-EA-005.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-024 @compile-time
   Rule: Tapping a hook point nobody defines is a compile error, and registries aggregate through Layer.effectDiscard, ordered and frozen at first read
 

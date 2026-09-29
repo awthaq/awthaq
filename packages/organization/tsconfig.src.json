@@ -9,17 +9,15 @@
     "tsBuildInfoFile": "./.tsbuildinfo",
     "paths": {
       "@/*": ["./src/*"],
-      "@awthaq/server": ["../server/src/index.ts"],
       "@awthaq/core": ["../core/src/index.ts"],
       "@awthaq/sql": ["../sql/src/index.ts"],
       "@awthaq/ports": ["../ports/src/index.ts"],
-      "@awthaq/api": ["../api/src/index.ts"]
+      "@awthaq/api": ["../api/src/index.ts"],
+      "@awthaq/oauth": ["../oauth/src/index.ts"],
+      "@awthaq/oauth/presets": ["../oauth/src/presets/index.ts"]
     }
   },
   "references": [
-    {
-      "path": "../server/tsconfig.src.json"
-    },
     {
       "path": "../core/tsconfig.src.json"
     },
@@ -31,6 +29,9 @@
     },
     {
       "path": "../api/tsconfig.src.json"
+    },
+    {
+      "path": "../oauth/tsconfig.src.json"
     }
   ]
 }

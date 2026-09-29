@@ -11,15 +11,18 @@
 // group at all). A minimal companion plugin with one real endpoint is
 // composed alongside `Roles` to prove its own manifest entry composes
 // correctly without a real HTTP dependency between the two packages.
-import { Auth, AuthPlugin } from "@awthaq/core";
+import { AuditLog, DataExport, Erasure, Auth, AuthEvents, AuthPlugin, Slots } from "@awthaq/core";
+import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as Roles from "../src/Roles.ts";
+import * as RolesAdmin from "../src/RolesAdmin.ts";
 
 const PingApi = HttpApi.make("auth").add(
   HttpApiGroup.make("ping").add(HttpApiEndpoint.get("get", "/ping", { success: Schema.Void })),
@@ -39,16 +42,70 @@ class Ping extends AuthPlugin.Service<Ping, Record<string, never>>()("ping", {
 }
 
 describe("Auth.make([Roles])", () => {
-  it("a Roles-only tuple fails — it contributes zero HTTP groups", () => {
-    assert.throws(() => Auth.make([Roles.Roles]), /Auth.make requires at least one plugin/);
+  it("a Roles-only tuple composes — it contributes no HTTP group, but core's own are always served (MW-002)", () => {
+    const auth = Auth.make([Roles.Roles]);
+    assert.deepStrictEqual(Object.keys(auth.api.groups).sort(), ["account", "session"]);
+  });
+
+  it("Roles + RolesAdmin compose: the admin plugin depends on Roles and contributes the one group (YL-009)", () => {
+    const auth = Auth.make([Roles.Roles, RolesAdmin.RolesAdmin]);
+    assert.deepStrictEqual(auth.manifest.plugins, [
+      { id: "roles", apiVersion: 1, tables: ["roles_assignments"], dependsOn: [], groups: [] },
+      { id: "rolesAdmin", apiVersion: 1, tables: [], dependsOn: ["roles"], groups: ["rolesAdmin"] },
+    ]);
   });
 
   it("composes alongside another plugin, contributing no groups but a real table", () => {
     const auth = Auth.make([Ping, Roles.Roles]);
     assert.strictEqual(auth.api.identifier, "auth");
     assert.deepStrictEqual(auth.manifest.plugins, [
-      { id: "ping", apiVersion: 1, tables: [], dependsOn: [] },
-      { id: "roles", apiVersion: 1, tables: ["role_assignments"], dependsOn: [] },
+      { id: "ping", apiVersion: 1, tables: [], dependsOn: [], groups: ["ping"] },
+      { id: "roles", apiVersion: 1, tables: ["roles_assignments"], dependsOn: [], groups: [] },
     ]);
   });
+});
+
+// RRM-012: BEH-EA-138's exclusivity is enforced when the layers are *built*
+// (through the `Slots.SlotsRegistry` `Auth.make` provides per composition, MA-005), before any request is served —
+// not by `Auth.make`'s type checker, which cannot observe a `Context.Reference`
+// override (`Slots.ts`'s and `SubjectResolver.ts`'s own header comments give the
+// structural reason).
+describe("SubjectResolver slot exclusivity (BEH-EA-138)", () => {
+  const otherPlugin: AuthPlugin.Any = {
+    id: "organization",
+    apiVersion: 1,
+    contract: { identifier: "auth", groups: {} },
+    tables: [],
+    migrations: [],
+    dependsOn: [],
+    layer: Layer.empty,
+  };
+
+  const CoreLive = AuthEvents.layer.pipe(
+    Layer.provideMerge(AuditLog.layerMemory),
+    // CSG-001: the plugin contributes its erasure to the composition's registry.
+    Layer.provideMerge(Erasure.registryLayer),
+    Layer.provideMerge(DataExport.registryLayer),
+  );
+  const RolesInstalled = Roles.Roles.layer.pipe(
+    Layer.provide(Roles.config([])),
+    Layer.provideMerge(CoreLive),
+  );
+  const OtherOverride = Slots.override(
+    otherPlugin,
+    QadiSubjectResolver.SubjectResolver,
+    Effect.succeed({
+      resolve: (principal) => Effect.succeed(QadiSubjectResolver.resolveIdentityOnly(principal)),
+    }),
+  );
+
+  it.effect("two SubjectResolver overrides with Slots.layer fail with SlotConflict at build", () =>
+    Effect.gen(function* () {
+      yield* Effect.scoped(Layer.build(RolesInstalled));
+      const failure = yield* Effect.scoped(Layer.build(OtherOverride)).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "SlotConflict");
+      assert.strictEqual(failure.firstOwner, "roles");
+      assert.strictEqual(failure.secondOwner, "organization");
+    }).pipe(Effect.provide(Slots.layer)),
+  );
 });

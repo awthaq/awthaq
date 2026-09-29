@@ -10,8 +10,17 @@
 // Keyed by the row's own generated `id`; `sessionId` is the practical lookup
 // key `Admin.ts`'s `stopImpersonating`/`forceStop` use to find the episode
 // to end — a session issued by `impersonate` is 1:1 with its own audit row.
+//
+// ALF-005: tamper-evidence. `admin_impersonation` is a read model the
+// database itself protects (triggers in `Admin.ts`'s migrations reject DELETE
+// and any UPDATE beyond closing an open episode), and every start/end is also
+// appended to `admin_impersonation_chain`, an append-only ledger whose rows are
+// hash-chained by `@awthaq/core`'s `AuditChain`. `verifyChain` re-walks the
+// ledger and cross-checks the read model against it, so a rewrite that bypassed
+// the triggers is reported with the exact first episode/link it touched.
 
-import { Users } from "@awthaq/core";
+import { AuditChain, Tenant, Users } from "@awthaq/core";
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -23,20 +32,17 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 type UserId = Users.UserId;
 
 /**
- * BEH-EA-217: the three ways an impersonation episode ends. `"expired"` is
- * declared for completeness with this closed set — like `@awthaq/passkey`'s
- * own `PasskeyCounterAnomaly` tag, it names a value no code path in this
- * plugin produces yet: nothing here observes a session's hard expiry and
- * calls `endEpisode(id, "expired")` on its behalf, so a naturally-expired
- * episode stays reported as `active` (BEH-EA-219) until a real
- * `stopImpersonating`/`forceStop` call ends it. Any future hard-expiry
- * observer is free to use this exact literal without a schema change.
+ * BEH-EA-217: the three ways an impersonation episode ends. IDS-004:
+ * `"expired"` is produced by `closeExpired` — the session's own hard expiry
+ * (recorded per episode as `expiresAt`) observed by `Admin`'s lazy
+ * reconciliation on every read and by its exported sweep.
  */
 export type EndedBy = "self" | "forcedByAdmin" | "expired";
 
@@ -47,8 +53,15 @@ export interface ImpersonationRecord {
   readonly sessionId: string;
   readonly reason: string;
   readonly startedAt: DateTime.Utc;
+  /** IDS-004: the impersonation session's hard expiry; `None` only for rows written before it was recorded. */
+  readonly expiresAt: Option.Option<DateTime.Utc>;
   readonly endedAt: Option.Option<DateTime.Utc>;
   readonly endedBy: Option.Option<EndedBy>;
+  /**
+   * IDS-002 (ADR-EA-018): the ambient tenant when the episode started — `None`
+   * for a single-tenant deployment. Frozen with the rest of the start facts.
+   */
+  readonly tenantId: Option.Option<string>;
 }
 
 /**
@@ -62,26 +75,98 @@ export class ImpersonationRecordNotFound extends Data.TaggedError("Impersonation
   readonly message: string;
 }> {}
 
+/** IDS-002: `anyTenant` lifts the confinement to the ambient tenant — for the superadmin path and maintenance. */
+export interface TenantScope {
+  readonly anyTenant?: boolean | undefined;
+}
+
+/** ESS-006/BEH-EA-036: keyset position of the history — `(startedAt, id)`, newest-first. */
+export interface ImpersonationCursor {
+  readonly startedAt: DateTime.Utc;
+  readonly id: string;
+}
+
+export interface ImpersonationPage {
+  readonly items: ReadonlyArray<ImpersonationRecord>;
+  /** `None` on the last page — an exactly-full final page does not invent a cursor. */
+  readonly nextCursor: Option.Option<ImpersonationCursor>;
+}
+
+/** ALF-005: the first anomaly `verifyChain` found, in ledger order. */
+export interface ChainBreak {
+  /** The ledger position involved; `None` for a read-model row with no ledger link at all. */
+  readonly seq: Option.Option<number>;
+  readonly episodeId: string;
+  readonly reason:
+    /** a link's hash (or its predecessor link) no longer verifies — the ledger itself was edited */
+    | "chain-broken"
+    /** a ledger link names an episode whose row is gone */
+    | "row-missing"
+    /** the episode row no longer matches what its ledger link recorded */
+    | "row-mismatch"
+    /** a row (or its ended state) exists that the ledger never recorded */
+    | "row-unledgered";
+}
+
+/** ESS-006: applied when a caller names no `limit`, so no read is ever unbounded. */
+export const DEFAULT_PAGE_SIZE = 50;
+
 export interface ImpersonationRecordsShape {
-  /** BEH-EA-215: inserts one durable audit row at the moment `impersonate` issues a session. */
+  /**
+   * BEH-EA-215: inserts one durable audit row at the moment `impersonate` issues a
+   * session, stamped with the ambient `TenantContext` (IDS-002).
+   *
+   * IDS-002: `findBySessionId`, `endEpisode` and `list` see only the *ambient*
+   * tenant's episodes (`None` sees the untenanted ones, i.e. everything in a
+   * single-tenant deployment) unless the caller passes `{ anyTenant: true }`, which
+   * `Admin` does only for a caller that passes `canAdministerTenants` (and for its
+   * own tenant-blind "is this an impersonation session" classification);
+   * `closeExpired` and `verifyChain` are maintenance over every tenant.
+   */
   readonly create: (input: {
     readonly adminUserId: UserId;
     readonly targetUserId: UserId;
     readonly sessionId: string;
     readonly reason: string;
+    /** IDS-004: the issued session's `absoluteExpiresAt`. */
+    readonly expiresAt: DateTime.Utc;
   }) => Effect.Effect<ImpersonationRecord>;
   readonly findBySessionId: (
     sessionId: string,
+    scope?: TenantScope,
   ) => Effect.Effect<Option.Option<ImpersonationRecord>>;
   /** Sets `endedAt`/`endedBy` exactly once — fails `ImpersonationRecordNotFound` for an unknown or already-ended session id. */
   readonly endEpisode: (
     sessionId: string,
     endedBy: EndedBy,
+    scope?: TenantScope,
   ) => Effect.Effect<ImpersonationRecord, ImpersonationRecordNotFound>;
-  /** BEH-EA-219: full history (newest-first) by default; `active: true` narrows to episodes with no `endedAt` yet. */
-  readonly list: (input?: {
-    readonly active?: boolean;
-  }) => Effect.Effect<ReadonlyArray<ImpersonationRecord>>;
+  /**
+   * IDS-004: atomically closes every still-open episode whose `expiresAt` is at
+   * or before `now`, as `endedBy: "expired"` with `endedAt` = its own
+   * `expiresAt`, and returns exactly the rows this call closed — so each
+   * expired episode is closed (and announced) once however many callers race.
+   */
+  readonly closeExpired: (now: DateTime.Utc) => Effect.Effect<ReadonlyArray<ImpersonationRecord>>;
+  /**
+   * BEH-EA-219/ESS-006: history newest-first, keyset-paginated on
+   * `(startedAt, id)`; `active: true` narrows to episodes with no `endedAt`
+   * yet. Never loads more than `limit + 1` rows.
+   */
+  readonly list: (
+    input?: {
+      readonly active?: boolean | undefined;
+      readonly cursor?: ImpersonationCursor | undefined;
+      readonly limit?: number | undefined;
+    },
+    scope?: TenantScope,
+  ) => Effect.Effect<ImpersonationPage>;
+  /**
+   * ALF-005: verifies the whole hash-chained ledger and that every episode row still
+   * matches it. Resolves `None` when intact, else the first anomaly. Reads everything
+   * — an operator/scheduled-job tool, not a request-path call.
+   */
+  readonly verifyChain: Effect.Effect<Option.Option<ChainBreak>>;
 }
 
 export class ImpersonationRecords extends Context.Service<
@@ -94,18 +179,143 @@ const notFound = (sessionId: string): ImpersonationRecordNotFound =>
     message: `awthaq: no active impersonation episode for session: ${sessionId}`,
   });
 
+/** IDS-002: `None` matches `None` (the untenanted episodes), `Some(x)` matches only `Some(x)`. */
+const sameTenant = (episode: Option.Option<string>, ambient: Option.Option<string>): boolean =>
+  Option.isNone(episode) ? Option.isNone(ambient) : Option.getOrNull(ambient) === episode.value;
+
+/** Newest-first with `id` as the tiebreak, the same total order the SQL `ORDER BY startedAt DESC, id DESC` gives. */
 const newestFirst = (
   records: ReadonlyArray<ImpersonationRecord>,
 ): ReadonlyArray<ImpersonationRecord> =>
-  [...records].sort(
-    (a, b) => DateTime.toEpochMillis(b.startedAt) - DateTime.toEpochMillis(a.startedAt),
+  [...records].sort((a, b) => {
+    const byTime = DateTime.toEpochMillis(b.startedAt) - DateTime.toEpochMillis(a.startedAt);
+    return byTime !== 0 ? byTime : a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+  });
+
+const isBeforeCursor = (record: ImpersonationRecord, cursor: ImpersonationCursor): boolean => {
+  const recordMillis = DateTime.toEpochMillis(record.startedAt);
+  const cursorMillis = DateTime.toEpochMillis(cursor.startedAt);
+  return recordMillis < cursorMillis || (recordMillis === cursorMillis && record.id < cursor.id);
+};
+
+/** Turns `limit + 1` fetched rows into a page: the extra row proves there is a next one and is dropped. */
+const toPage = (rows: ReadonlyArray<ImpersonationRecord>, limit: number): ImpersonationPage => {
+  const items = rows.slice(0, limit);
+  const last = items.at(-1);
+  return {
+    items,
+    nextCursor:
+      rows.length > limit && last !== undefined
+        ? Option.some({ startedAt: last.startedAt, id: last.id })
+        : Option.none(),
+  };
+};
+
+// ---- ledger (shared by both layers) -------------------------------------------
+
+/** One `admin_impersonation_chain` row, as persisted. */
+interface LedgerEntry {
+  readonly seq: number;
+  readonly kind: "started" | "ended";
+  readonly episodeId: string;
+  readonly prevHash: string;
+  readonly payload: string;
+  readonly rowHash: string;
+}
+
+const iso = (value: Option.Option<DateTime.Utc>): string | null =>
+  Option.match(value, { onNone: () => null, onSome: DateTime.formatIso });
+
+/** The immutable facts of an episode's start — exactly the columns the triggers freeze. */
+const startedPayload = (record: ImpersonationRecord): string =>
+  AuditChain.canonicalize([
+    "started",
+    record.id,
+    record.adminUserId,
+    record.targetUserId,
+    record.sessionId,
+    record.reason,
+    DateTime.formatIso(record.startedAt),
+    iso(record.expiresAt),
+    // IDS-002: appended only when set, so every link written before the tenant
+    // column existed (and every single-tenant one) still recomputes byte-for-byte.
+    ...Option.match(record.tenantId, { onNone: () => [], onSome: (tenantId) => [tenantId] }),
+  ]);
+
+/** `None` for a row that is not (or no longer) ended — it cannot match any "ended" link. */
+const endedPayload = (record: ImpersonationRecord): Option.Option<string> =>
+  Option.all({ endedAt: record.endedAt, endedBy: record.endedBy }).pipe(
+    Option.map(({ endedAt, endedBy }) =>
+      AuditChain.canonicalize(["ended", record.id, DateTime.formatIso(endedAt), endedBy]),
+    ),
   );
 
-const applyActiveFilter = (
+/** Episodes are closed in a deterministic order so their "ended" links chain reproducibly. */
+const closeOrder = (
   records: ReadonlyArray<ImpersonationRecord>,
-  input?: { readonly active?: boolean },
 ): ReadonlyArray<ImpersonationRecord> =>
-  input?.active === true ? records.filter((row) => Option.isNone(row.endedAt)) : records;
+  [...records].sort((a, b) => {
+    const byTime =
+      Option.match(a.endedAt, { onNone: () => 0, onSome: DateTime.toEpochMillis }) -
+      Option.match(b.endedAt, { onNone: () => 0, onSome: DateTime.toEpochMillis });
+    return byTime !== 0 ? byTime : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+
+/**
+ * ALF-005: the earliest anomaly in ledger order — a read-model discrepancy on a link
+ * strictly before the first broken hash is reported first, so the answer is "the first
+ * tampered thing" whichever side was touched.
+ */
+const verifyLedger = Effect.fnUntraced(function* (
+  chain: AuditChain.AuditChainShape,
+  entries: ReadonlyArray<LedgerEntry>,
+  rows: ReadonlyArray<ImpersonationRecord>,
+) {
+  const byId = new Map(rows.map((row) => [row.id, row] as const));
+  const brokenAt = yield* chain.verify(entries);
+  const checked = Option.getOrElse(brokenAt, () => entries.length);
+  for (const entry of entries.slice(0, checked)) {
+    const row = byId.get(entry.episodeId);
+    if (row === undefined) {
+      return Option.some<ChainBreak>({
+        seq: Option.some(entry.seq),
+        episodeId: entry.episodeId,
+        reason: "row-missing",
+      });
+    }
+    const expected =
+      entry.kind === "started" ? Option.some(startedPayload(row)) : endedPayload(row);
+    if (!Option.isSome(expected) || expected.value !== entry.payload) {
+      return Option.some<ChainBreak>({
+        seq: Option.some(entry.seq),
+        episodeId: entry.episodeId,
+        reason: "row-mismatch",
+      });
+    }
+  }
+  if (Option.isSome(brokenAt)) {
+    const entry = entries[brokenAt.value];
+    if (entry !== undefined) {
+      return Option.some<ChainBreak>({
+        seq: Option.some(entry.seq),
+        episodeId: entry.episodeId,
+        reason: "chain-broken",
+      });
+    }
+  }
+  const startedIds = new Set(entries.filter((e) => e.kind === "started").map((e) => e.episodeId));
+  const endedIds = new Set(entries.filter((e) => e.kind === "ended").map((e) => e.episodeId));
+  for (const row of rows) {
+    if (!startedIds.has(row.id) || (Option.isSome(row.endedAt) && !endedIds.has(row.id))) {
+      return Option.some<ChainBreak>({
+        seq: Option.none(),
+        episodeId: row.id,
+        reason: "row-unledgered",
+      });
+    }
+  }
+  return Option.none<ChainBreak>();
+});
 
 // ---- layerMemory ------------------------------------------------------------
 
@@ -115,11 +325,29 @@ export const layerMemory = Layer.effect(
   ImpersonationRecords,
   Effect.gen(function* () {
     const state = yield* Ref.make<RecordsState>(HashMap.empty());
+    const ledger = yield* Ref.make<ReadonlyArray<LedgerEntry>>([]);
+    const appendLock = yield* Semaphore.make(1);
     const crypto = yield* Crypto.Crypto;
+    const chain = yield* AuditChain.AuditChain;
+
+    /** Reads the tail and appends as one step, so two writers cannot chain off the same predecessor. */
+    const append = (kind: LedgerEntry["kind"], episodeId: string, payload: string) =>
+      appendLock.withPermit(
+        Effect.gen(function* () {
+          const entries = yield* Ref.get(ledger);
+          const prevHash = entries.at(-1)?.rowHash ?? AuditChain.GENESIS_HASH;
+          const rowHash = yield* chain.link(prevHash, payload);
+          yield* Ref.set(ledger, [
+            ...entries,
+            { seq: entries.length + 1, kind, episodeId, prevHash, payload, rowHash },
+          ]);
+        }),
+      );
 
     const create: ImpersonationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
       const now = yield* DateTime.now;
+      const tenantId = yield* Tenant.TenantContext;
       const record: ImpersonationRecord = {
         id,
         adminUserId: input.adminUserId,
@@ -127,22 +355,33 @@ export const layerMemory = Layer.effect(
         sessionId: input.sessionId,
         reason: input.reason,
         startedAt: now,
+        expiresAt: Option.some(input.expiresAt),
         endedAt: Option.none(),
         endedBy: Option.none(),
+        tenantId,
       };
       yield* Ref.update(state, (s) => HashMap.set(s, id, record));
+      yield* append("started", record.id, startedPayload(record));
       return record;
     });
 
-    const findBySessionId: ImpersonationRecordsShape["findBySessionId"] = (sessionId) =>
-      Ref.get(state).pipe(
-        Effect.map((s) => Array.from(HashMap.values(s)).find((row) => row.sessionId === sessionId)),
-        Effect.map(Option.fromNullishOr),
-      );
+    const findBySessionId: ImpersonationRecordsShape["findBySessionId"] = (sessionId, scope) =>
+      Effect.gen(function* () {
+        const tenant = yield* Tenant.TenantContext;
+        const s = yield* Ref.get(state);
+        return Option.fromNullishOr(
+          Array.from(HashMap.values(s)).find(
+            (row) =>
+              row.sessionId === sessionId &&
+              (scope?.anyTenant === true || sameTenant(row.tenantId, tenant)),
+          ),
+        );
+      });
 
-    const endEpisode: ImpersonationRecordsShape["endEpisode"] = (sessionId, endedBy) =>
+    const endEpisode: ImpersonationRecordsShape["endEpisode"] = (sessionId, endedBy, scope) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
+        const tenant = yield* Tenant.TenantContext;
         const outcome = yield* Ref.modify(
           state,
           (
@@ -152,7 +391,9 @@ export const layerMemory = Layer.effect(
             RecordsState,
           ] => {
             const existing = Array.from(HashMap.values(s)).find(
-              (row) => row.sessionId === sessionId,
+              (row) =>
+                row.sessionId === sessionId &&
+                (scope?.anyTenant === true || sameTenant(row.tenantId, tenant)),
             );
             if (existing === undefined || Option.isSome(existing.endedAt)) {
               return [Result.fail(notFound(sessionId)), s] as const;
@@ -165,47 +406,192 @@ export const layerMemory = Layer.effect(
             return [Result.succeed(updated), HashMap.set(s, existing.id, updated)] as const;
           },
         );
-        return yield* Effect.fromResult(outcome);
+        const ended = yield* Effect.fromResult(outcome);
+        yield* Option.match(endedPayload(ended), {
+          onNone: () => Effect.void,
+          onSome: (payload) => append("ended", ended.id, payload),
+        });
+        return ended;
       });
 
-    const list: ImpersonationRecordsShape["list"] = (input) =>
-      Ref.get(state).pipe(
-        Effect.map((s) => applyActiveFilter(newestFirst(Array.from(HashMap.values(s))), input)),
-      );
+    const closeExpired: ImpersonationRecordsShape["closeExpired"] = (now) =>
+      Effect.gen(function* () {
+        const closed = closeOrder(yield* closeExpiredInState(now));
+        for (const episode of closed) {
+          yield* Option.match(endedPayload(episode), {
+            onNone: () => Effect.void,
+            onSome: (payload) => append("ended", episode.id, payload),
+          });
+        }
+        return closed;
+      });
 
-    return { create, findBySessionId, endEpisode, list };
+    const closeExpiredInState = (now: DateTime.Utc) =>
+      Ref.modify(state, (s) => {
+        const closed: Array<ImpersonationRecord> = [];
+        let next = s;
+        for (const row of HashMap.values(s)) {
+          if (
+            Option.isNone(row.endedAt) &&
+            Option.isSome(row.expiresAt) &&
+            DateTime.toEpochMillis(row.expiresAt.value) <= DateTime.toEpochMillis(now)
+          ) {
+            const updated: ImpersonationRecord = {
+              ...row,
+              endedAt: row.expiresAt,
+              endedBy: Option.some("expired"),
+            };
+            closed.push(updated);
+            next = HashMap.set(next, row.id, updated);
+          }
+        }
+        return [closed, next] as const;
+      });
+
+    const list: ImpersonationRecordsShape["list"] = (input, scope) =>
+      Effect.gen(function* () {
+        const tenant = yield* Tenant.TenantContext;
+        const s = yield* Ref.get(state);
+        const limit = input?.limit ?? DEFAULT_PAGE_SIZE;
+        const cursor = input?.cursor;
+        const rows = newestFirst(Array.from(HashMap.values(s))).filter(
+          (row) =>
+            (scope?.anyTenant === true || sameTenant(row.tenantId, tenant)) &&
+            (input?.active !== true || Option.isNone(row.endedAt)) &&
+            (cursor === undefined || isBeforeCursor(row, cursor)),
+        );
+        return toPage(rows.slice(0, limit + 1), limit);
+      });
+
+    const verifyChain: ImpersonationRecordsShape["verifyChain"] = Effect.gen(function* () {
+      const entries = yield* Ref.get(ledger);
+      const rows = Array.from(HashMap.values(yield* Ref.get(state)));
+      return yield* verifyLedger(chain, entries, rows);
+    });
+
+    return { create, findBySessionId, endEpisode, closeExpired, list, verifyChain };
   }),
 );
 
 // ---- layerSql -----------------------------------------------------------------
 
-const ImpersonationRow = Schema.Struct({
-  id: Schema.String,
-  adminUserId: Schema.String,
-  targetUserId: Schema.String,
-  sessionId: Schema.String,
-  reason: Schema.String,
-  startedAt: Schema.DateTimeUtcFromString,
-  endedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-  endedBy: Schema.NullOr(Schema.Literals(["self", "forcedByAdmin", "expired"])),
-});
+const EndedBySchema = Schema.Literals(["self", "forcedByAdmin", "expired"]);
 
-const toRecord = (row: typeof ImpersonationRow.Type): ImpersonationRecord => ({
+const makeImpersonationRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    adminUserId: Schema.String,
+    targetUserId: Schema.String,
+    sessionId: Schema.String,
+    reason: Schema.String,
+    startedAt: wire.dateTime,
+    expiresAt: wire.nullableDateTime,
+    endedAt: wire.nullableDateTime,
+    endedBy: Schema.NullOr(EndedBySchema),
+    tenantId: Schema.NullOr(Schema.String),
+  });
+
+type ImpersonationRow = ReturnType<typeof makeImpersonationRow>["Type"];
+
+const toRecord = (row: ImpersonationRow): ImpersonationRecord => ({
   id: row.id,
   adminUserId: Users.UserId(row.adminUserId),
   targetUserId: Users.UserId(row.targetUserId),
   sessionId: row.sessionId,
   reason: row.reason,
   startedAt: row.startedAt,
+  expiresAt: Option.fromNullishOr(row.expiresAt),
   endedAt: Option.fromNullishOr(row.endedAt),
   endedBy: Option.fromNullishOr(row.endedBy),
+  tenantId: Option.fromNullishOr(row.tenantId),
 });
+
+const LedgerRow = Schema.Struct({
+  seq: Schema.Int,
+  kind: Schema.Literals(["started", "ended"]),
+  episodeId: Schema.String,
+  prevHash: Schema.String,
+  payload: Schema.String,
+  rowHash: Schema.String,
+});
+
+/** ALF-005: a constant key for `pg_advisory_xact_lock`, serialising writers of this one ledger. */
+const CHAIN_LOCK_KEY = 7_313_370_001;
 
 export const layerSql = Layer.effect(
   ImpersonationRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const ImpersonationRow = makeImpersonationRow(wire);
     const crypto = yield* Crypto.Crypto;
+    const chain = yield* AuditChain.AuditChain;
+
+    const ledgerTail = SqlSchema.findOneOption({
+      Request: Schema.Void,
+      Result: Schema.Struct({ rowHash: Schema.String }),
+      execute: () => sql`SELECT "rowHash" FROM admin_impersonation_chain ORDER BY seq DESC LIMIT 1`,
+    });
+
+    const ledgerInsert = SqlSchema.void({
+      Request: Schema.Struct({
+        kind: Schema.String,
+        episodeId: Schema.String,
+        prevHash: Schema.String,
+        payload: Schema.String,
+        rowHash: Schema.String,
+      }),
+      execute: (r) => sql`
+        INSERT INTO admin_impersonation_chain (kind, "episodeId", "prevHash", payload, "rowHash")
+        VALUES (${r.kind}, ${r.episodeId}, ${r.prevHash}, ${r.payload}, ${r.rowHash})
+      `,
+    });
+
+    const ledgerAll = SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: LedgerRow,
+      execute: () =>
+        sql`SELECT seq, kind, "episodeId", "prevHash", payload, "rowHash" FROM admin_impersonation_chain ORDER BY seq ASC`,
+    });
+
+    const rowsAll = SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: ImpersonationRow,
+      execute: () => sql`SELECT * FROM admin_impersonation`,
+    });
+
+    /** Chain writers are serialised (Postgres: a transaction-scoped advisory lock; SQLite is single-writer). */
+    const inTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      sql.withTransaction(
+        Effect.andThen(
+          sql.onDialectOrElse({
+            pg: () => Effect.asVoid(sql`SELECT pg_advisory_xact_lock(${CHAIN_LOCK_KEY})`),
+            orElse: () => Effect.void,
+          }),
+          effect,
+        ),
+      );
+
+    const append = Effect.fnUntraced(function* (
+      kind: LedgerEntry["kind"],
+      episodeId: string,
+      payload: string,
+    ) {
+      const tail = yield* ledgerTail(undefined);
+      const prevHash = Option.match(tail, {
+        onNone: () => AuditChain.GENESIS_HASH,
+        onSome: (last) => last.rowHash,
+      });
+      const rowHash = yield* chain.link(prevHash, payload);
+      yield* ledgerInsert({ kind, episodeId, prevHash, payload, rowHash });
+    });
+
+    const appendEnded = (record: ImpersonationRecord) =>
+      Option.match(endedPayload(record), {
+        onNone: () => Effect.void,
+        onSome: (payload) => append("ended", record.id, payload),
+      });
 
     const insert = SqlSchema.findOne({
       Request: Schema.Struct({
@@ -214,84 +600,181 @@ export const layerSql = Layer.effect(
         targetUserId: Schema.String,
         sessionId: Schema.String,
         reason: Schema.String,
-        startedAt: Schema.DateTimeUtcFromString,
+        startedAt: wire.dateTime,
+        expiresAt: wire.dateTime,
+        tenantId: Schema.NullOr(Schema.String),
       }),
       Result: ImpersonationRow,
       execute: (r) => sql`
           INSERT INTO admin_impersonation
-            (id, adminUserId, targetUserId, sessionId, reason, startedAt, endedAt, endedBy)
+            (id, "adminUserId", "targetUserId", "sessionId", reason, "startedAt", "expiresAt", "endedAt", "endedBy", "tenantId")
           VALUES
-            (${r.id}, ${r.adminUserId}, ${r.targetUserId}, ${r.sessionId}, ${r.reason}, ${r.startedAt}, NULL, NULL)
+            (${r.id}, ${r.adminUserId}, ${r.targetUserId}, ${r.sessionId}, ${r.reason}, ${r.startedAt}, ${r.expiresAt}, NULL, NULL, ${r.tenantId})
           RETURNING *
         `,
     });
 
     const findBySessionIdQuery = SqlSchema.findOneOption({
-      Request: Schema.String,
+      Request: Schema.Struct({
+        sessionId: Schema.String,
+        tenantId: Schema.NullOr(Schema.String),
+        anyTenant: Schema.Boolean,
+      }),
       Result: ImpersonationRow,
-      execute: (sessionId) => sql`SELECT * FROM admin_impersonation WHERE sessionId = ${sessionId}`,
+      execute: (r) =>
+        r.anyTenant
+          ? sql`SELECT * FROM admin_impersonation WHERE "sessionId" = ${r.sessionId}`
+          : sql`SELECT * FROM admin_impersonation WHERE "sessionId" = ${r.sessionId} AND "tenantId" IS NOT DISTINCT FROM ${r.tenantId}`,
     });
 
     const endEpisodeQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         sessionId: Schema.String,
-        endedAt: Schema.DateTimeUtcFromString,
-        endedBy: Schema.Literals(["self", "forcedByAdmin", "expired"]),
+        endedAt: wire.dateTime,
+        endedBy: EndedBySchema,
+        tenantId: Schema.NullOr(Schema.String),
+        anyTenant: Schema.Boolean,
       }),
       Result: ImpersonationRow,
-      execute: (r) => sql`
-          UPDATE admin_impersonation SET endedAt = ${r.endedAt}, endedBy = ${r.endedBy}
-          WHERE sessionId = ${r.sessionId} AND endedAt IS NULL
+      execute: (r) =>
+        r.anyTenant
+          ? sql`
+              UPDATE admin_impersonation SET "endedAt" = ${r.endedAt}, "endedBy" = ${r.endedBy}
+              WHERE "sessionId" = ${r.sessionId} AND "endedAt" IS NULL
+              RETURNING *
+            `
+          : sql`
+              UPDATE admin_impersonation SET "endedAt" = ${r.endedAt}, "endedBy" = ${r.endedBy}
+              WHERE "sessionId" = ${r.sessionId} AND "endedAt" IS NULL
+                AND "tenantId" IS NOT DISTINCT FROM ${r.tenantId}
+              RETURNING *
+            `,
+    });
+
+    // IDS-004: one statement, so a racing reader can never close (and announce) the same row twice.
+    const closeExpiredQuery = SqlSchema.findAll({
+      Request: wire.dateTime,
+      Result: ImpersonationRow,
+      execute: (now) => sql`
+          UPDATE admin_impersonation SET "endedAt" = "expiresAt", "endedBy" = 'expired'
+          WHERE "endedAt" IS NULL AND "expiresAt" IS NOT NULL AND "expiresAt" <= ${now}
           RETURNING *
         `,
     });
 
-    const listAllQuery = SqlSchema.findAll({
-      Request: Schema.Void,
+    // ESS-006: `(startedAt, id) < cursor`, spelled out for both dialects, `limit + 1` rows.
+    const listQuery = SqlSchema.findAll({
+      Request: Schema.Struct({
+        active: Schema.Boolean,
+        cursorStartedAt: wire.nullableDateTime,
+        cursorId: Schema.NullOr(Schema.String),
+        limit: Schema.Int,
+        tenantId: Schema.NullOr(Schema.String),
+        anyTenant: Schema.Boolean,
+      }),
       Result: ImpersonationRow,
-      execute: () => sql`SELECT * FROM admin_impersonation ORDER BY startedAt DESC`,
-    });
-
-    const listActiveQuery = SqlSchema.findAll({
-      Request: Schema.Void,
-      Result: ImpersonationRow,
-      execute: () =>
-        sql`SELECT * FROM admin_impersonation WHERE endedAt IS NULL ORDER BY startedAt DESC`,
+      execute: (r) => {
+        const conditions = [
+          ...(r.anyTenant ? [] : [sql`"tenantId" IS NOT DISTINCT FROM ${r.tenantId}`]),
+          ...(r.active ? [sql`"endedAt" IS NULL`] : []),
+          ...(r.cursorStartedAt === null || r.cursorId === null
+            ? []
+            : [
+                sql`("startedAt" < ${r.cursorStartedAt} OR ("startedAt" = ${r.cursorStartedAt} AND id < ${r.cursorId}))`,
+              ]),
+        ];
+        return sql`SELECT * FROM admin_impersonation WHERE ${sql.and(conditions)} ORDER BY "startedAt" DESC, id DESC LIMIT ${r.limit + 1}`;
+      },
     });
 
     const create: ImpersonationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
       const now = yield* DateTime.now;
-      const row = yield* insert({
-        id,
-        adminUserId: input.adminUserId,
-        targetUserId: input.targetUserId,
-        sessionId: input.sessionId,
-        reason: input.reason,
-        startedAt: now,
-      }).pipe(Effect.orDie);
-      return toRecord(row);
+      const tenantId = Option.getOrNull(yield* Tenant.TenantContext);
+      return yield* inTransaction(
+        Effect.gen(function* () {
+          const row = yield* insert({
+            id,
+            adminUserId: input.adminUserId,
+            targetUserId: input.targetUserId,
+            sessionId: input.sessionId,
+            reason: input.reason,
+            startedAt: now,
+            expiresAt: input.expiresAt,
+            tenantId,
+          });
+          const record = toRecord(row);
+          yield* append("started", record.id, startedPayload(record));
+          return record;
+        }),
+      ).pipe(Effect.orDie);
     });
 
-    const findBySessionId: ImpersonationRecordsShape["findBySessionId"] = (sessionId) =>
-      findBySessionIdQuery(sessionId).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
-
-    const endEpisode: ImpersonationRecordsShape["endEpisode"] = (sessionId, endedBy) =>
-      Effect.gen(function* () {
-        const now = yield* DateTime.now;
-        const updated = yield* endEpisodeQuery({ sessionId, endedAt: now, endedBy }).pipe(
-          Effect.orDie,
-        );
-        if (Option.isNone(updated)) return yield* Effect.fail(notFound(sessionId));
-        return toRecord(updated.value);
-      });
-
-    const list: ImpersonationRecordsShape["list"] = (input) =>
-      (input?.active === true ? listActiveQuery(undefined) : listAllQuery(undefined)).pipe(
-        Effect.map((rows) => rows.map(toRecord)),
+    const findBySessionId: ImpersonationRecordsShape["findBySessionId"] = (sessionId, scope) =>
+      Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
+        Effect.flatMap((tenantId) =>
+          findBySessionIdQuery({ sessionId, tenantId, anyTenant: scope?.anyTenant === true }),
+        ),
+        Effect.map(Option.map(toRecord)),
         Effect.orDie,
       );
 
-    return { create, findBySessionId, endEpisode, list };
+    const endEpisode: ImpersonationRecordsShape["endEpisode"] = (sessionId, endedBy, scope) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const tenantId = Option.getOrNull(yield* Tenant.TenantContext);
+        const anyTenant = scope?.anyTenant === true;
+        const updated = yield* inTransaction(
+          Effect.gen(function* () {
+            const row = yield* endEpisodeQuery({
+              sessionId,
+              endedAt: now,
+              endedBy,
+              tenantId,
+              anyTenant,
+            });
+            const record = Option.map(row, toRecord);
+            if (Option.isSome(record)) yield* appendEnded(record.value);
+            return record;
+          }),
+        ).pipe(Effect.orDie);
+        if (Option.isNone(updated)) return yield* Effect.fail(notFound(sessionId));
+        return updated.value;
+      });
+
+    const closeExpired: ImpersonationRecordsShape["closeExpired"] = (now) =>
+      inTransaction(
+        Effect.gen(function* () {
+          const closed = closeOrder((yield* closeExpiredQuery(now)).map(toRecord));
+          for (const record of closed) yield* appendEnded(record);
+          return closed;
+        }),
+      ).pipe(Effect.orDie);
+
+    const list: ImpersonationRecordsShape["list"] = (input, scope) => {
+      const limit = input?.limit ?? DEFAULT_PAGE_SIZE;
+      return Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
+        Effect.flatMap((tenantId) =>
+          listQuery({
+            active: input?.active === true,
+            cursorStartedAt: input?.cursor?.startedAt ?? null,
+            cursorId: input?.cursor?.id ?? null,
+            limit,
+            tenantId,
+            anyTenant: scope?.anyTenant === true,
+          }),
+        ),
+        Effect.map((rows) => toPage(rows.map(toRecord), limit)),
+        Effect.orDie,
+      );
+    };
+
+    const verifyChain: ImpersonationRecordsShape["verifyChain"] = Effect.gen(function* () {
+      const entries = yield* ledgerAll(undefined);
+      const rows = (yield* rowsAll(undefined)).map(toRecord);
+      return yield* verifyLedger(chain, entries, rows);
+    }).pipe(Effect.orDie);
+
+    return { create, findBySessionId, endEpisode, closeExpired, list, verifyChain };
   }),
 );

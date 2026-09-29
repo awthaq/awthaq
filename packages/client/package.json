@@ -2,7 +2,7 @@
   "name": "@awthaq/client",
   "version": "0.1.0",
   "private": true,
-  "description": "AtomHttpApi client and session atom — the isomorphic Effect client derived from the merged contract.",
+  "description": "Effect HttpApiClient bindings for the awthaq contract: CSRF client middleware, error-code derivation, session store, Promise facade, passkey ceremony helper.",
   "license": "MIT",
   "files": [
     "lib",
@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
     "@awthaq/passkey": "workspace:*",
     "@simplewebauthn/browser": "^14.0.0",
     "effect": "catalog:"

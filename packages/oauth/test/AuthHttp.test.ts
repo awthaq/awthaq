@@ -10,35 +10,27 @@
 // real bug (`Schema.Union` collapsing per-member `httpApiStatus`) that its
 // domain-level tests could not — this file exists for the same reason,
 // against `OAuthApi.ts`'s own array-form `error` declarations.
-import {
-  AuditLog,
-  Hooks,
-  AuthEvents,
-  Accounts,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, RateLimits, SessionCookie, Sessions, Users, Verification } from "@awthaq/core";
 import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp } from "@awthaq/server";
+import { CookieAssertions, TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Etag from "effect/unstable/http/Etag";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as OAuth from "../src/OAuth.ts";
 import * as OAuthApi from "../src/OAuthApi.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
+import { FakeReply, fakeHttpClient, type FakeRoutes } from "./FakeProvider.ts";
 
 // Shipping-gap map (.scratch/shipping-gaps), ticket 19: `OAuth.layer` now
 // requires `Encryption` — a fixed test key, isolated from the real
@@ -58,29 +50,6 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-interface FakeRoutes {
-  readonly [urlFragment: string]: unknown;
-}
-
-const fakeHttpClient = (routes: FakeRoutes): Layer.Layer<HttpClient.HttpClient> =>
-  Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((request) => {
-      const match = Object.entries(routes).find(([fragment]) => request.url.includes(fragment));
-      if (match === undefined) {
-        return Effect.succeed(
-          HttpClientResponse.fromWeb(request, new Response("not found", { status: 404 })),
-        );
-      }
-      return Effect.succeed(
-        HttpClientResponse.fromWeb(
-          request,
-          new Response(JSON.stringify(match[1]), { status: 200 }),
-        ),
-      );
-    }),
-  );
-
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
 );
@@ -90,12 +59,7 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const baseUrl = "https://app.example.com";
 
@@ -115,28 +79,47 @@ const acme = OAuthProvider.oauth2({
   }),
 });
 
-const AppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.json" }).pipe(
-  Layer.provide(OAuth.OAuth.layer),
-  Layer.provide(Authentication.OptionalAuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(RateLimiter.layerPermissive),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(ClientAddress.layerDirect),
-  Layer.provideMerge(EncryptionLive),
-  Layer.provide(
-    fakeHttpClient({
-      "/token": { access_token: "at-1" },
-      "/userinfo": { id: "acme-sub-1", email: "acme-user@example.com" },
-    }),
-  ),
-  Layer.provide(
-    OAuth.config({ providers: [acme], linking: "explicit", trustedOrigins: [], baseUrl }),
-  ),
-  Layer.provideMerge(TestServices),
-  Layer.provideMerge(HttpRouter.layer),
-);
+const defaultRoutes = {
+  "/token": { access_token: "at-1" },
+  "/userinfo": { id: "acme-sub-1", email: "acme-user@example.com" },
+};
+
+const buildAppLayer = (options: {
+  readonly routes?: FakeRoutes;
+  /** A real, enforcing limiter instead of the permissive one every other test uses. */
+  readonly enforcing?: boolean;
+  readonly config?: OAuth.OAuthConfigInput;
+}) =>
+  AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.json" }).pipe(
+    Layer.provide(OAuth.OAuth.layer),
+    Layer.provide(Authentication.OptionalAuthenticationLive),
+    Layer.provide(Authentication.PrincipalResolverLive),
+    Layer.provideMerge(CoreLive),
+    Layer.provideMerge(
+      options.enforcing === true
+        ? RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))
+        : RateLimiter.layerPermissive,
+    ),
+    Layer.provideMerge(RateLimits.layer),
+    Layer.provideMerge(SqlTransaction.layerNoop),
+    Layer.provideMerge(ClientAddress.layerDirect),
+    Layer.provideMerge(EncryptionLive),
+    Layer.provide(fakeHttpClient(options.routes ?? defaultRoutes)),
+    Layer.provide(
+      OAuth.config({
+        providers: [acme],
+        linking: "explicit",
+        trustedOrigins: [],
+        baseUrl,
+        retry: { base: Duration.zero },
+        ...options.config,
+      }),
+    ),
+    Layer.provideMerge(TestServices),
+    Layer.provideMerge(HttpRouter.layer),
+  );
+
+const AppLayer = buildAppLayer({});
 
 /**
  * A real, enforcing limiter — every other test in this file uses
@@ -144,28 +127,38 @@ const AppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.jso
  * the one dedicated layer that opts back into real enforcement, mirroring
  * `@awthaq/password`'s own dedicated throttle test.
  */
-const ThrottledAppLayer = AuthHttp.routes(OAuthApi.OAuthApi, { openapiPath: "/openapi.json" }).pipe(
-  Layer.provide(OAuth.OAuth.layer),
-  Layer.provide(Authentication.OptionalAuthenticationLive),
-  Layer.provide(Authentication.PrincipalResolverLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(ClientAddress.layerDirect),
-  Layer.provideMerge(EncryptionLive),
-  Layer.provide(
-    fakeHttpClient({
-      "/token": { access_token: "at-1" },
-      "/userinfo": { id: "acme-sub-1", email: "acme-user@example.com" },
-    }),
-  ),
-  Layer.provide(
-    OAuth.config({ providers: [acme], linking: "explicit", trustedOrigins: [], baseUrl }),
-  ),
-  Layer.provideMerge(TestServices),
-  Layer.provideMerge(HttpRouter.layer),
-);
+const ThrottledAppLayer = buildAppLayer({ enforcing: true });
+
+/**
+ * Runs authorize then callback against `layer`, returning the callback
+ * response. `query` builds the callback's query string from the flow's
+ * `state` (default: a normal `code` redirect); `handler` lets a test send
+ * several callbacks against the one router.
+ */
+const runCallback = (
+  layer: typeof AppLayer,
+  query: (state: string) => string = (state) => `code=auth-code&state=${state}`,
+) =>
+  Effect.gen(function* () {
+    const { handler } = HttpRouter.toWebHandler(layer);
+    const authorizeResponse = yield* Effect.promise(() =>
+      handler(new Request("http://localhost/oauth/acme/authorize")),
+    );
+    const location = authorizeResponse.headers.get("location");
+    const stateCookie = authorizeResponse.headers.get("set-cookie");
+    if (location === null || stateCookie === null) {
+      throw new Error("expected authorize to redirect with a state cookie");
+    }
+    const state = new URL(location).searchParams.get("state");
+    return yield* Effect.promise(() =>
+      handler(
+        new Request(
+          `http://localhost/oauth/acme/callback?${query(encodeURIComponent(state ?? ""))}`,
+          { headers: { cookie: stateCookie.split(";")[0] ?? "" } },
+        ),
+      ),
+    );
+  });
 
 describe("AuthHttp + OAuth (real HTTP)", () => {
   it.effect(
@@ -193,7 +186,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
   );
 
   it.effect(
-    "BEH-EA-113-adjacent/083: callback answers 302 and sets the session cookie on success",
+    "BEH-EA-113-adjacent/083: callback answers the same-site interstitial (200) and sets the session cookie on success",
     () =>
       Effect.gen(function* () {
         const { handler } = HttpRouter.toWebHandler(AppLayer);
@@ -216,11 +209,91 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
             ),
           ),
         );
-        assert.strictEqual(callbackResponse.status, 302);
+        assert.strictEqual(callbackResponse.status, 200);
         const sessionCookie = callbackResponse.headers.get("set-cookie");
         assert.isString(sessionCookie);
         assert.match(sessionCookie ?? "", /^__Host-session=/);
       }),
+  );
+
+  // MNA-003/MNA-004: the native return leg over the wire — a deep-link redirect
+  // carrying an exchange code, no session cookie, redeemed once at POST /oauth/token.
+  const NativeLayer = buildAppLayer({
+    config: { baseUrl, nativeRedirectURLs: ["myapp://oauth/callback"] },
+  });
+
+  it.effect(
+    "MNA-003: a native flow redirects to the deep link with a code, sets no session cookie, and POST /oauth/token redeems it once",
+    () =>
+      Effect.gen(function* () {
+        const { handler } = HttpRouter.toWebHandler(NativeLayer);
+        const authorize = yield* Effect.promise(() =>
+          handler(
+            new Request(
+              "http://localhost/oauth/acme/authorize?mode=native&callbackURL=" +
+                encodeURIComponent("myapp://oauth/callback"),
+            ),
+          ),
+        );
+        assert.strictEqual(authorize.status, 302);
+        const state = new URL(authorize.headers.get("location") ?? "").searchParams.get("state");
+        const stateCookie = (authorize.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+        const callback = yield* Effect.promise(() =>
+          handler(
+            new Request(
+              `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
+              { headers: { cookie: stateCookie } },
+            ),
+          ),
+        );
+        assert.strictEqual(callback.status, 302);
+        const location = callback.headers.get("location") ?? "";
+        assert.match(location, /^myapp:\/\/oauth\/callback\?code=/);
+        // Only the (expiry of the) state cookie: no session cookie reaches the browser jar.
+        assert.isFalse((callback.headers.get("set-cookie") ?? "").includes("__Host-session"));
+
+        const code = URL.parse(location)?.searchParams.get("code") ?? "";
+        const redeem = () =>
+          handler(
+            new Request("http://localhost/oauth/token", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ code }),
+            }),
+          );
+        const redeemed = yield* Effect.promise(redeem);
+        assert.strictEqual(redeemed.status, 200);
+        assert.match(redeemed.headers.get("cache-control") ?? "", /no-store/);
+        const body = (yield* Effect.promise(() => redeemed.json())) as { token?: string };
+        assert.isString(body.token);
+        const again = yield* Effect.promise(redeem);
+        assert.strictEqual(again.status, 400);
+      }),
+  );
+
+  it.effect("MNA-003: a code_challenge without native mode, or a malformed one, answers 400", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(NativeLayer);
+      const challenge = "A".repeat(43);
+      const browserMode = yield* Effect.promise(() =>
+        handler(new Request(`http://localhost/oauth/acme/authorize?code_challenge=${challenge}`)),
+      );
+      assert.strictEqual(browserMode.status, 400);
+      const malformed = yield* Effect.promise(() =>
+        handler(
+          new Request("http://localhost/oauth/acme/authorize?mode=native&code_challenge=short"),
+        ),
+      );
+      assert.strictEqual(malformed.status, 400);
+      const fine = yield* Effect.promise(() =>
+        handler(
+          new Request(
+            `http://localhost/oauth/acme/authorize?mode=native&code_challenge=${challenge}`,
+          ),
+        ),
+      );
+      assert.strictEqual(fine.status, 302);
+    }),
   );
 
   it.effect("BEH-EA-004: an unknown provider answers 404 ProviderNotFound", () =>
@@ -265,6 +338,336 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
         handler(new Request("http://localhost/oauth/acme/callback?code=cN&state=bogus")),
       );
       assert.strictEqual(throttled.status, 429);
+    }),
+  );
+
+  it.effect("EEM-004: a token endpoint answering 503 yields HTTP 503 ProviderUnavailable", () =>
+    Effect.gen(function* () {
+      const response = yield* runCallback(
+        buildAppLayer({ routes: { ...defaultRoutes, "/token": new FakeReply(503) } }),
+      );
+      assert.strictEqual(response.status, 503);
+      const body = yield* Effect.promise(() => response.json());
+      assert.deepStrictEqual(body, { _tag: "ProviderUnavailable" });
+    }),
+  );
+
+  it.effect("EEM-004: a token endpoint answering 400 invalid_grant still yields HTTP 400", () =>
+    Effect.gen(function* () {
+      const response = yield* runCallback(
+        buildAppLayer({
+          routes: { ...defaultRoutes, "/token": new FakeReply(400, { error: "invalid_grant" }) },
+        }),
+      );
+      assert.strictEqual(response.status, 400);
+      const body = yield* Effect.promise(() => response.json());
+      assert.deepStrictEqual(body, { _tag: "OAuthCallbackFailed" });
+    }),
+  );
+
+  it.effect(
+    "CSS-004: the authorize state cookie is a __Host- cookie, HttpOnly and SameSite=Lax",
+    () =>
+      Effect.gen(function* () {
+        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const response = yield* Effect.promise(() =>
+          handler(new Request("http://localhost/oauth/acme/authorize")),
+        );
+        CookieAssertions.assertHostPrefixedCookie(
+          CookieAssertions.findSetCookie(response, "__Host-oauth-state"),
+          { httpOnly: true, sameSite: "lax" },
+        );
+      }),
+  );
+
+  it.effect(
+    "CSS-004: the callback's session cookie is a __Host- cookie, HttpOnly and SameSite=Strict",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* runCallback(AppLayer);
+        assert.strictEqual(response.status, 200);
+        CookieAssertions.assertHostPrefixedCookie(
+          CookieAssertions.findSetCookie(response, "__Host-session"),
+          { httpOnly: true, sameSite: "strict" },
+        );
+      }),
+  );
+
+  // PV-016: `HostLax` is the other fix for the Strict cookie's withheld first landing request (BEH-EA-055):
+  // a Lax cookie needs no interstitial, so the callback stays a plain 302.
+  it.effect(
+    "PV-016: with SessionCookie.config({ mode: HostLax }) the callback's session cookie is __Host- and SameSite=Lax",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* runCallback(
+          AppLayer.pipe(Layer.provideMerge(SessionCookie.config({ mode: SessionCookie.HostLax }))),
+        );
+        assert.strictEqual(response.status, 302);
+        CookieAssertions.assertHostPrefixedCookie(
+          CookieAssertions.findSetCookie(response, "__Host-session"),
+          { httpOnly: true, sameSite: "lax" },
+        );
+      }),
+  );
+
+  // PV-016: the landing page after sign-in. `GET /oauth/acme/authorize?link=true` is a route that answers
+  // 401 to an anonymous request and 302 to a signed-in one, so its status says whether the session
+  // cookie was on the first landing request.
+  const LANDING = "/oauth/acme/authorize?link=true";
+
+  /**
+   * A browser model for the redirect chain the provider started cross-site. A `SameSite=Strict` cookie
+   * is withheld from every request of that chain (a plain 302 lands inside it), but a request the
+   * document served by this site initiates (a meta refresh) is same-site and carries it.
+   */
+  const browserLanding = (layer: typeof AppLayer) =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(layer);
+      const authorize = yield* Effect.promise(() =>
+        handler(
+          new Request(
+            `http://localhost/oauth/acme/authorize?callbackURL=${encodeURIComponent(LANDING)}`,
+          ),
+        ),
+      );
+      const state = new URL(authorize.headers.get("location") ?? "").searchParams.get("state");
+      const stateCookie = (authorize.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+      const callback = yield* Effect.promise(() =>
+        handler(
+          new Request(
+            `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
+            { headers: { cookie: stateCookie } },
+          ),
+        ),
+      );
+      const session = CookieAssertions.findSetCookie(callback, "__Host-session");
+      const body = yield* Effect.promise(() => callback.clone().text());
+      const refresh = /http-equiv="refresh" content="0;url=([^"]*)"/.exec(body)?.[1];
+      const next = callback.status === 200 ? refresh : (callback.headers.get("location") ?? "");
+      const sameSiteInitiated = callback.status === 200;
+      const landing = yield* Effect.promise(() =>
+        handler(
+          new Request(new URL(next ?? "", "http://localhost"), {
+            headers: sameSiteInitiated ? { cookie: `${session.name}=${session.value}` } : {},
+          }),
+        ),
+      );
+      return { callback, body, landing };
+    });
+
+  it.effect(
+    "PV-016: the default callback answers a same-site interstitial, and the first landing request carries the session",
+    () =>
+      Effect.gen(function* () {
+        const { callback, body, landing } = yield* browserLanding(AppLayer);
+        assert.strictEqual(callback.status, 200);
+        assert.match(callback.headers.get("content-type") ?? "", /^text\/html/);
+        assert.isNull(callback.headers.get("location"));
+        assert.strictEqual(callback.headers.get("cache-control"), "no-store");
+        assert.strictEqual(callback.headers.get("referrer-policy"), "no-referrer");
+        assert.include(body, `content="0;url=${LANDING}"`);
+        CookieAssertions.assertHostPrefixedCookie(
+          CookieAssertions.findSetCookie(callback, "__Host-session"),
+          { httpOnly: true, sameSite: "strict" },
+        );
+        // Signed in on the very first request: the link flow starts (302), not 401 Unauthenticated.
+        assert.strictEqual(landing.status, 302);
+      }),
+  );
+
+  it.effect(
+    "PV-016: with bounce: false the callback is a plain 302 and the Strict cookie is withheld from the landing request",
+    () =>
+      Effect.gen(function* () {
+        const { callback, landing } = yield* browserLanding(
+          buildAppLayer({ config: { baseUrl, bounce: false } }),
+        );
+        assert.strictEqual(callback.status, 302);
+        assert.strictEqual(callback.headers.get("location"), LANDING);
+        assert.strictEqual(landing.status, 401);
+      }),
+  );
+
+  it.effect("PV-016: the landing URL is HTML-escaped into the interstitial", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const authorize = yield* Effect.promise(() =>
+        handler(
+          new Request(
+            `http://localhost/oauth/acme/authorize?callbackURL=${encodeURIComponent("/a?x=1&y=2")}`,
+          ),
+        ),
+      );
+      const state = new URL(authorize.headers.get("location") ?? "").searchParams.get("state");
+      const callback = yield* Effect.promise(() =>
+        handler(
+          new Request(
+            `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
+            {
+              headers: { cookie: (authorize.headers.get("set-cookie") ?? "").split(";")[0] ?? "" },
+            },
+          ),
+        ),
+      );
+      const body = yield* Effect.promise(() => callback.text());
+      assert.include(body, "/a?x=1&amp;y=2");
+      assert.notInclude(body, "x=1&y=2");
+    }),
+  );
+
+  it.effect(
+    "CSS-006: a successful callback expires __Host-oauth-state alongside the session cookie",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* runCallback(AppLayer);
+        assert.strictEqual(response.status, 200);
+        const state = CookieAssertions.findSetCookie(response, "__Host-oauth-state");
+        CookieAssertions.assertExpiredCookie(state);
+        // Cleared with the attributes it was set with, or a browser won't match it.
+        CookieAssertions.assertHostPrefixedCookie(state, { httpOnly: true, sameSite: "lax" });
+        assert.isDefined(
+          CookieAssertions.setCookiesOf(response).find(
+            (cookie) => cookie.name === "__Host-session",
+          ),
+        );
+      }),
+  );
+
+  it.effect("CSS-006: a failed callback (400) also expires __Host-oauth-state", () =>
+    Effect.gen(function* () {
+      const response = yield* runCallback(
+        buildAppLayer({ routes: { ...defaultRoutes, "/token": new FakeReply(400, {}) } }),
+      );
+      assert.strictEqual(response.status, 400);
+      CookieAssertions.assertExpiredCookie(
+        CookieAssertions.findSetCookie(response, "__Host-oauth-state"),
+      );
+    }),
+  );
+
+  it.effect("PDR-004: authorize and callback responses carry Referrer-Policy: no-referrer", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const authorize = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/oauth/acme/authorize")),
+      );
+      assert.strictEqual(authorize.headers.get("referrer-policy"), "no-referrer");
+      const callback = yield* runCallback(AppLayer);
+      assert.strictEqual(callback.status, 200);
+      assert.strictEqual(callback.headers.get("referrer-policy"), "no-referrer");
+      const failed = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/oauth/acme/callback?code=c1&state=bogus.state")),
+      );
+      assert.strictEqual(failed.status, 400);
+      assert.strictEqual(failed.headers.get("referrer-policy"), "no-referrer");
+    }),
+  );
+
+  it.effect("OAP-008: authorize is throttled after its own rule's limit", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(ThrottledAppLayer);
+      for (let i = 0; i < 30; i++) {
+        const response = yield* Effect.promise(() =>
+          handler(new Request("http://localhost/oauth/acme/authorize")),
+        );
+        assert.strictEqual(response.status, 302);
+      }
+      const throttled = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/oauth/acme/authorize")),
+      );
+      assert.strictEqual(throttled.status, 429);
+    }),
+  );
+
+  it.effect(
+    "AP-005: a provider error redirect with a valid state answers the typed denial, not a decode error",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* runCallback(
+          AppLayer,
+          (state) =>
+            `error=access_denied&error_description=${encodeURIComponent("user said no")}&state=${state}`,
+        );
+        assert.strictEqual(response.status, 400);
+        // `error_description` is provider-controlled text and is never echoed.
+        assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
+          _tag: "OAuthAuthorizationDenied",
+          error: "access_denied",
+        });
+      }),
+  );
+
+  it.effect(
+    "AP-005: an error redirect outside the RFC's enumerated set is the uniform OAuthCallbackFailed",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* runCallback(
+          AppLayer,
+          (state) => `error=made_up_code&state=${state}`,
+        );
+        assert.strictEqual(response.status, 400);
+        assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
+          _tag: "OAuthCallbackFailed",
+        });
+      }),
+  );
+
+  it.effect(
+    "AP-005: a callback with neither code nor error is the uniform OAuthCallbackFailed",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* runCallback(AppLayer, (state) => `state=${state}`);
+        assert.strictEqual(response.status, 400);
+        assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
+          _tag: "OAuthCallbackFailed",
+        });
+      }),
+  );
+
+  it.effect(
+    "AP-005: error=access_denied with a mismatched state answers 400 OAuthCallbackFailed",
+    () =>
+      Effect.gen(function* () {
+        const { handler } = HttpRouter.toWebHandler(AppLayer);
+        const response = yield* Effect.promise(() =>
+          handler(
+            new Request(
+              "http://localhost/oauth/acme/callback?error=access_denied&state=bogus.state",
+              {
+                headers: { cookie: "__Host-oauth-state=different-state" },
+              },
+            ),
+          ),
+        );
+        assert.strictEqual(response.status, 400);
+        assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
+          _tag: "OAuthCallbackFailed",
+        });
+      }),
+  );
+
+  it.effect("AP-005: a denial consumes the flow, so a replay carrying a code fails", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const authorizeResponse = yield* Effect.promise(() =>
+        handler(new Request("http://localhost/oauth/acme/authorize")),
+      );
+      const location = authorizeResponse.headers.get("location") ?? "";
+      const cookie = (authorizeResponse.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+      const state = encodeURIComponent(new URL(location).searchParams.get("state") ?? "");
+      const call = (query: string) =>
+        Effect.promise(() =>
+          handler(
+            new Request(`http://localhost/oauth/acme/callback?${query}`, { headers: { cookie } }),
+          ),
+        );
+      const denied = yield* call(`error=access_denied&state=${state}`);
+      assert.strictEqual(denied.status, 400);
+      const replay = yield* call(`code=auth-code&state=${state}`);
+      assert.strictEqual(replay.status, 400);
+      assert.deepStrictEqual(yield* Effect.promise(() => replay.json()), {
+        _tag: "OAuthCallbackFailed",
+      });
     }),
   );
 

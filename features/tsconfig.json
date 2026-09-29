@@ -3,6 +3,8 @@
   "include": ["step-definitions/**/*.ts"],
   "compilerOptions": {
     "composite": true,
+    // The scenarios speak to the app through `fetch`/`Response`; the base config carries no DOM lib (AH-009).
+    "lib": ["ESNext", "DOM"],
     "noEmit": false,
     "emitDeclarationOnly": true,
     "outDir": "./lib",
@@ -19,20 +21,94 @@
       "@awthaq/passkey": ["../packages/passkey/src/index.ts"],
       "@awthaq/organization": ["../packages/organization/src/index.ts"],
       "@awthaq/admin": ["../packages/admin/src/index.ts"],
-      "@awthaq/jwt": ["../packages/jwt/src/index.ts"]
+      "@awthaq/jwt": ["../packages/jwt/src/index.ts"],
+      "@awthaq/api-key": ["../packages/api-key/src/index.ts"],
+      "@awthaq/cli": ["../packages/cli/src/index.ts"],
+      "@awthaq/client": ["../packages/client/src/index.ts"],
+      "@awthaq/next": ["../packages/next/src/index.ts"],
+      "@awthaq/qadi": ["../packages/qadi/src/index.ts"],
+      "@awthaq/react": ["../packages/react/src/index.ts"],
+      "@awthaq/roles": ["../packages/roles/src/index.ts"],
+      "@awthaq/scim": ["../packages/scim/src/index.ts"],
+      "@awthaq/two-factor": ["../packages/two-factor/src/index.ts"],
+      "@awthaq/magic-link": ["../packages/magic-link/src/index.ts"],
+      "@awthaq/webhooks": ["../packages/webhooks/src/index.ts"],
+      "@awthaq/saml": ["../packages/saml/src/index.ts"],
+      "@awthaq/test": ["../packages/test/src/index.ts"]
     }
   },
   "references": [
-    { "path": "../packages/api/tsconfig.src.json" },
-    { "path": "../packages/core/tsconfig.src.json" },
-    { "path": "../packages/ports/tsconfig.src.json" },
-    { "path": "../packages/server/tsconfig.src.json" },
-    { "path": "../packages/sql/tsconfig.src.json" },
-    { "path": "../packages/password/tsconfig.src.json" },
-    { "path": "../packages/oauth/tsconfig.src.json" },
-    { "path": "../packages/passkey/tsconfig.src.json" },
-    { "path": "../packages/organization/tsconfig.src.json" },
-    { "path": "../packages/admin/tsconfig.src.json" },
-    { "path": "../packages/jwt/tsconfig.src.json" }
+    {
+      "path": "../packages/api/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/core/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/ports/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/server/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/sql/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/password/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/oauth/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/passkey/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/organization/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/admin/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/jwt/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/api-key/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/cli/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/client/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/next/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/qadi/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/react/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/roles/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/scim/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/test/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/two-factor/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/magic-link/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/webhooks/tsconfig.src.json"
+    },
+    {
+      "path": "../packages/saml/tsconfig.src.json"
+    }
   ]
 }

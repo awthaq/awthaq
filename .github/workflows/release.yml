@@ -1,12 +1,12 @@
 # Shipping-gap map (.scratch/shipping-gaps), ticket 28: wired per
 # spec/process/definitions-of-done.md's gate 12 (npm trusted publishing via
-# OIDC, no long-lived tokens, Sigstore provenance attached automatically) —
-# not run as part of this ticket. Every `@awthaq/*` package is still
-# `"private": true`, so `changeset publish` has nothing publishable yet;
-# this workflow only becomes live once a package is made public and the
-# npm registry has a trusted publisher configured for this repository and
-# this workflow file (Settings -> Trusted publishers, on npmjs.com), which
-# is manual, out-of-band setup no agent can do from here.
+# OIDC, no long-lived tokens, Sigstore provenance) — not yet exercised. Every
+# `@awthaq/*` package is still `"private": true`, so `changeset publish` has
+# nothing publishable; the workflow becomes live once a package is made public
+# and npm has a trusted publisher configured for this repository and this
+# workflow file (npmjs.com -> package -> Settings -> Trusted publishers), which is
+# manual, out-of-band setup no agent can do. Until then it only opens/updates the
+# "Version Packages" pull request. See canary.yml for the first-publish rehearsal.
 name: Release
 
 on:
@@ -17,37 +17,55 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  pull-requests: write
-  # OIDC trusted publishing — npm exchanges this token for a short-lived
-  # publish credential; no NPM_TOKEN secret is stored anywhere.
-  id-token: write
+# Least privilege: nothing by default; each job asks for exactly what it uses.
+permissions: {}
 
 jobs:
+  # MM-006: a release never runs after a red Check. The same workflow the pull
+  # request ran, called rather than copied.
+  check:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/check.yml
+
   release:
+    needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      # changesets/action pushes the version branch and opens the PR.
+      contents: write
+      pull-requests: write
+      # OIDC trusted publishing: npm exchanges this token for a short-lived
+      # publish credential; no NPM_TOKEN secret is stored anywhere.
+      id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
+          # changesets/action authenticates its own pushes with GITHUB_TOKEN; it
+          # needs the credential left in the checkout.
+          persist-credentials: true # zizmor: ignore[artipacked]
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: "22.12.0"
+          node-version: "22.13.0"
           cache: pnpm
-          # npm 11.5.1+ is required for OIDC trusted publishing.
           registry-url: "https://registry.npmjs.org"
+      # npm >= 11.5.1 is required for OIDC trusted publishing; Node 22.13 bundles 10.x.
+      - run: npm install --global npm@11.5.1
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Version or publish
-        uses: changesets/action@v1
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # Attach a Sigstore provenance statement to every published tarball.
+          NPM_CONFIG_PROVENANCE: "true"
         with:
-          # Runs `pnpm changeset publish` once changesets have been
-          # versioned and merged; otherwise opens/updates a "Version
-          # Packages" pull request. No npm token input — publishing
-          # authenticates via OIDC (`id-token: write` above).
+          # Runs `pnpm changeset publish` once changesets have been versioned and
+          # merged; otherwise opens/updates a "Version Packages" pull request. No
+          # npm token input — publishing authenticates via OIDC (`id-token: write`).
           publish: pnpm changeset-publish
           version: pnpm changeset-version
           commit: "chore: version packages"

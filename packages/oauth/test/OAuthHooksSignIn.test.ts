@@ -1,11 +1,8 @@
 // BCR-004/THS-002 (.issues/high, wayfinder ticket 03): proves
 // `OAuth.callback`'s own sign-in-completing path (silent sign-up)
-// genuinely consults `Hooks.BeforeSessionIssue` — a dedicated file, not
-// folded into `OAuth.test.ts`, for the same reason
-// `packages/password/test/PasswordHooksSignUp.test.ts`'s own header
-// comment gives (a shared, module-level singleton `HookPoint` class that
-// freezes at its own first `run()`, and `OAuth.test.ts`'s own untapped
-// `callback` coverage would otherwise freeze it first).
+// genuinely consults `Hooks.BeforeSessionIssue` — a dedicated file so its
+// unconditionally diverting tap stays out of `OAuth.test.ts`'s own untapped
+// `callback` coverage (a hook registry is per composition, ELC-001).
 import {
   AuditLog,
   Hooks,
@@ -73,7 +70,6 @@ const CoreLive = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
   // BEH-EA-093: unconditionally diverts every sign-in this composition
   // ever issues — enough to prove the wiring is real; the mechanism
   // itself (continue-through, amend, etc.) is proven once, generically,
@@ -86,6 +82,9 @@ const CoreLive = Layer.mergeAll(
       ),
     ),
   ),
+  // The tap requires its point, so the point's layer feeds both this
+  // composition and the tap (ELC-001).
+  Layer.provideMerge(Hooks.HooksLive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 

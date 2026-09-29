@@ -26,18 +26,41 @@
 
 export * as Accounts from "./Accounts.ts";
 export * as Auth from "./Auth.ts";
+export * as AuditChain from "./AuditChain.ts";
+export * as Assurance from "./Assurance.ts";
 export * as AuditLog from "./AuditLog.ts";
 export * as AuthEvents from "./AuthEvents.ts";
 export * as AuthPlugin from "./AuthPlugin.ts";
+export * as AuthRequestContext from "./AuthRequestContext.ts";
+export * as ConfigDescriptor from "./ConfigDescriptor.ts";
+export * as DataExport from "./DataExport.ts";
+// The tagged defect kinds (`Effect.die` with a name), defined in ports so ports and sql can use them too.
+export { Defects } from "@awthaq/ports";
+export * as EffectiveConfig from "./EffectiveConfig.ts";
+export * as EmailChange from "./EmailChange.ts";
+export * as Erasure from "./Erasure.ts";
+export * as Errors from "./Errors.ts";
+export * as EventRelay from "./EventRelay.ts";
 export * as HookPoint from "./HookPoint.ts";
 export * as Hooks from "./Hooks.ts";
 // MA-003: re-exported, not wrapped — see this file's own header comment
 // for why a plugin author should import the httpapi contract classes from
 // here rather than straight from `effect/unstable/httpapi/*`.
 export * from "./HttpApiTypes.ts";
+export * as MailDispatch from "./MailDispatch.ts";
 export * as Migrations from "./Migrations.ts";
+export * as Observability from "./Observability.ts";
+export * as Phone from "./Phone.ts";
 export * as RateLimits from "./RateLimits.ts";
+export * as Retention from "./Retention.ts";
+export * as SecretHash from "./SecretHash.ts";
+export * as SecuritySignals from "./SecuritySignals.ts";
+export * as SessionCookie from "./SessionCookie.ts";
 export * as Sessions from "./Sessions.ts";
 export * as Slots from "./Slots.ts";
+export * as Tenant from "./Tenant.ts";
+export * as UserFields from "./UserFields.ts";
+export * as UserImport from "./UserImport.ts";
 export * as Users from "./Users.ts";
 export * as Verification from "./Verification.ts";
+export * as VerificationLink from "./VerificationLink.ts";

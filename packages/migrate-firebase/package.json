@@ -1,0 +1,42 @@
+{
+  "name": "@awthaq/migrate-firebase",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Verify Firebase Authentication's modified-scrypt password hashes on first sign-in, and map an `auth:export` user onto the domain-service import shape, so exported Firebase users keep their passwords and are rehashed to argon2id.",
+  "license": "MIT",
+  "files": [
+    "lib",
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./lib/index.js",
+      "default": "./lib/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@awthaq/core": "workspace:*",
+    "@awthaq/ports": "workspace:*",
+    "effect": "catalog:",
+    "hash-wasm": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

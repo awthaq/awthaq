@@ -71,10 +71,34 @@
       "path": "packages/migrate-better-auth"
     },
     {
+      "path": "packages/migrate-firebase"
+    },
+    {
+      "path": "packages/scim"
+    },
+    {
+      "path": "packages/webhooks"
+    },
+    {
+      "path": "packages/saml"
+    },
+    {
       "path": "features"
     },
     {
       "path": "examples/memory-server"
+    },
+    {
+      "path": "examples/plugin-template"
+    },
+    {
+      "path": "examples/sql-server"
+    },
+    {
+      "path": "packages/web"
+    },
+    {
+      "path": "packages/device-authorization"
     }
   ]
 }

@@ -1,0 +1,46 @@
+{
+  "name": "@awthaq/webhooks",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Opt-in signed outbound webhooks: Standard-Webhooks-style HMAC signatures, per-endpoint secrets sealed with the Encryption port, at-least-once delivery with retry, backoff and dead-letter over the event relay, SSRF-safe endpoints, and a fail-closed admin API.",
+  "license": "MIT",
+  "files": [
+    "lib",
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./lib/index.js",
+      "default": "./lib/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@awthaq/api": "workspace:*",
+    "@awthaq/core": "workspace:*",
+    "@awthaq/ports": "workspace:*",
+    "@awthaq/sql": "workspace:*",
+    "@qadi/core": "^0.8.0",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@awthaq/server": "workspace:*",
+    "@awthaq/test": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

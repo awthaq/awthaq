@@ -1,0 +1,2765 @@
+{
+  "slice": "11-frontend-next-react-client",
+  "validated_at_sha": "ec065a7",
+  "validated_on": "2026-09-29",
+  "issues": [
+    {
+      "id": "DESS-001",
+      "level": "high",
+      "category": "docs",
+      "package": "client",
+      "title": "Client and React READMEs falsely claim the packages are pre-implementation",
+      "issue_file": ".issues/high/DESS-001-developer-experience-sdk-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/client/README.md",
+          "line": 3,
+          "snippet": "> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.",
+          "note": "Unchanged at HEAD though the package now also ships PasskeyClient (0441226)."
+        },
+        {
+          "path": "packages/react/README.md",
+          "line": 3,
+          "snippet": "> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.",
+          "note": "Identical banner."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "frontend-docs-truthfulness",
+      "fix": {
+        "summary": "Rewrite both READMEs from the shipped modules and add a drift guard.",
+        "steps": [
+          "`packages/client/README.md`: sections — Install; `make`/`group`/`urlBuilder` over the app's `auth.api`; cookie mode with `CsrfClientLive` (and the bootstrap-retry behavior from CDS-007); `ErrorCodes<typeof api>` for i18n; `SessionStore` hydrate semantics; `toPromiseFacade` (both modes, EHA-005); `PasskeyClient` ceremony helper; bearer/native mode (MNA-006); session model (FAMS-008).",
+          "`packages/react/README.md`: Providers (single registry, seeding with `toInitialSession`, `decisions`), `sessionAtom`/`subjectAtom`/`useAuthStatus`, `makeReactClient` (BE-004), which exports are passthrough from `@qadi/react` (DESS-006), and the headless stance (CWM-008).",
+          "Drift guard: extend `scripts/package-smoke.mjs` to fail when a package README contains 'no line of source in this package has shipped yet' while `src/` has > 1 non-index module. NOTE cross-slice: 20 other package READMEs carry the same banner (admin, api, core, jwt, oauth, passkey, password, server, …) — either rewrite them in the same change or make the check an allowlist that shrinks; coordinate with the orchestrator.",
+          "Also refresh the stale 'This file describes planned behavior. No code implementing it exists yet' banners in `spec/behaviors/22-client-effect.md`, `23-react.md`, `24-nextjs-ssr.md` (line 15/14) — code exists for these BEH ids."
+        ],
+        "files": [
+          "packages/client/README.md",
+          "packages/react/README.md",
+          "scripts/package-smoke.mjs",
+          "spec/behaviors/22-client-effect.md",
+          "spec/behaviors/23-react.md",
+          "spec/behaviors/24-nextjs-ssr.md"
+        ],
+        "tests": [
+          "Drift check: run `pnpm package:smoke` — must fail against a README with the banner (verify by temporarily reverting one README locally), pass after rewrite."
+        ],
+        "acceptance": [
+          "No slice README claims pre-implementation.",
+          "Every README code snippet uses only exported symbols.",
+          "`pnpm package:smoke`, `spec:verify:strict` green."
+        ],
+        "spec_refs": [],
+        "effort": "M"
+      },
+      "depends_on": [
+        "RSC-002",
+        "EAR-001",
+        "BE-004",
+        "EHA-005",
+        "CDS-007"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ERAS-003",
+      "level": "low",
+      "category": "docs",
+      "package": "client",
+      "title": "No edge/worker export conditions or edge deployment guidance anywhere",
+      "issue_file": ".issues/low/ERAS-003-edge-runtime-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/client/package.json",
+          "line": 14,
+          "snippet": "  \"exports\": {\n    \".\": {\n      \"types\": \"./lib/index.d.ts\",\n      \"bun\": \"./src/index.ts\",\n      \"import\": \"./lib/index.js\",\n      \"default\": \"./lib/index.js\"",
+          "note": "OVERSTATED: edge bundlers (Vercel Edge/workerd) resolve `import`/`default` to the same WebCrypto-pure `lib/*.js`; `edge-light`/`worker` conditions pointing at the same files (or at `.ts` source, as proposed) add nothing / would break. CONFIRMED: no spec/README documents an edge deployment split (`grep -rni 'edge\\|workers' spec/*.md packages/*/README.md` finds no deployment guidance)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-edge-stateless-tier",
+      "fix": {
+        "summary": "Documentation only: an edge deployment section; no new export conditions.",
+        "steps": [
+          "Add an 'Edge / proxy.ts deployment' section to `packages/next/README.md`: which exports are edge-safe (`hasSessionCookie`; `@awthaq/next/edge` once BO-006 lands), which require origin (`getSession`: Sessions/Users/SQL), and that `@awthaq/api`/`@awthaq/client` are runtime-neutral.",
+          "Optionally an ADR under `spec/decisions/` recording 'no edge-specific export conditions; edge/origin split by entry point' so the question does not recur."
+        ],
+        "files": [
+          "packages/next/README.md",
+          "spec/decisions/ (optional new ADR)"
+        ],
+        "tests": [
+          "Docs-only."
+        ],
+        "acceptance": [
+          "README states the edge/origin split."
+        ],
+        "spec_refs": [
+          "BEH-EA-188"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "BO-006"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "FAMS-008",
+      "level": "low",
+      "category": "dx",
+      "package": "client",
+      "title": "Client SDK session model has no Firebase-style token surface or proactive refresh",
+      "issue_file": ".issues/low/FAMS-008-firebase-auth-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 165,
+          "snippet": "export const SessionStoreLive: Layer.Layer<SessionStore> = Layer.effect(\n  SessionStore,\n  Effect.gen(function* () {\n    const state = yield* Ref.make(Option.none<Session>());",
+          "note": "In-memory, per-tab, no revalidation."
+        },
+        {
+          "path": "packages/react/src/AuthClientAtom.ts",
+          "line": 45,
+          "snippet": "const rawSessionAtom = ReactAuthClient.query(\"session\", \"current\", {\n  reactivityKeys: [\"session\"],\n});",
+          "note": "Only refetches on a tagged mutation — an idle tab never learns about expiry/revocation until it acts."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "react-client-atoms-factory",
+      "fix": {
+        "summary": "Add opt-out window-focus revalidation of the session/subject queries and document the session model for Firebase/token-SDK migrants.",
+        "steps": [
+          "Wrap `rawSessionAtom` and `subjectDtoAtom` with `Atom.refreshOnWindowFocus` (exists in ../effect Atom.ts:2150) — mirrors next-auth's refetchOnWindowFocus default. Expose opt-out via `makeReactClient` options (BE-004) `revalidateOnFocus?: boolean` (default true).",
+          "README (client + react): 'Session model' section — the httpOnly cookie is the persistence (no IndexedDB tokens), server-side rotation replaces client refresh loops (`touchEvery`), `useAtomValue(sessionAtom)` replaces `onAuthStateChanged`, bearer tokens for APIs are the native/bearer mode (MNA-006)."
+        ],
+        "files": [
+          "packages/react/src/AuthClientAtom.ts",
+          "packages/react/README.md",
+          "packages/client/README.md"
+        ],
+        "tests": [
+          "`packages/react/test/Providers.test.tsx` \"focus revalidates the session\": stub fetch (session → then 401), dispatch `window` `focus` (happy-dom), assert session probe flips to `no-session`."
+        ],
+        "acceptance": [
+          "An idle tab re-checks its session on focus.",
+          "Session-model docs exist in both READMEs."
+        ],
+        "spec_refs": [
+          "BEH-EA-178",
+          "BEH-EA-174"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "BE-004",
+        "EAR-004"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "MTS-008",
+      "level": "low",
+      "category": "docs",
+      "package": "client",
+      "title": "Prose comments still cite effect rc.115 after the catalog moved to rc.116",
+      "issue_file": ".issues/low/MTS-008-monorepo-tooling-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 17,
+          "snippet": "// against this project's `effect@4.0.0-rc.115` — that reasoning no longer",
+          "note": ""
+        },
+        {
+          "path": "packages/react/src/AuthClientAtom.ts",
+          "line": 9,
+          "snippet": "// `effect@4.0.0-rc.115` dependency) — no external, v3-pinned",
+          "note": "Catalog is `effect: 4.0.0-rc.116` (pnpm-workspace.yaml:17). These two are the only rc.11x literals under packages/**/*.ts(x)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "frontend-docs-truthfulness",
+      "fix": {
+        "summary": "Remove literal versions from prose and guard against recurrence.",
+        "steps": [
+          "AuthClient.ts:13-25 and AuthClientAtom.ts:7-11: replace `effect@4.0.0-rc.115` with 'the catalog-pinned `effect`' (no literal). While there, update AuthClient.ts:21 '(M5, not yet built)' — @awthaq/react's reactive bindings are built.",
+          "Add to the rc-bump checklist (CONTRIBUTING.md or `.changeset` README): `grep -rnE 'rc\\.[0-9]+' packages --include='*.ts' --include='*.tsx'` must be empty."
+        ],
+        "files": [
+          "packages/client/src/AuthClient.ts",
+          "packages/react/src/AuthClientAtom.ts",
+          "CONTRIBUTING.md"
+        ],
+        "tests": [
+          "Docs-only; the grep is the check."
+        ],
+        "acceptance": [
+          "`grep -rnE 'rc\\.[0-9]+' packages --include='*.ts' --include='*.tsx' | grep -v /lib/` → empty."
+        ],
+        "spec_refs": [],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "EHA-005",
+      "level": "medium",
+      "category": "dx",
+      "package": "client",
+      "title": "toPromiseFacade types away the shared error taxonomy at the Promise boundary",
+      "issue_file": ".issues/medium/EHA-005-effect-http-api-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 188,
+          "snippet": "export type PromiseFacade<A> = A extends AnyClientMethod\n  ? (...args: Parameters<A>) => Promise<Effect.Success<ReturnType<A>>>\n  : A extends Readonly<Record<string, unknown>>\n    ? { readonly [K in keyof A]: PromiseFacade<A[K]> }\n    : A;",
+          "note": "Error type erased."
+        },
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 218,
+          "snippet": "      return (...args: ReadonlyArray<unknown>) => Effect.runPromise(value(...args));",
+          "note": "Rejects with the typed error at runtime (test AuthClient.test.ts:127-138) but the type says nothing."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "DESS-003"
+      ],
+      "workstream": "client-promise-facade-errors",
+      "fix": {
+        "summary": "Keep the rejecting facade (documented) and add an error-honest `mode: \"result\"` variant whose methods resolve `Result<A, E>` with E the endpoint's contract error union.",
+        "steps": [
+          "Add `export type ResultFacade<A>`: same recursion as `PromiseFacade` but methods return `Promise<Result.Result<Effect.Success<ReturnType<A>>, Effect.Error<ReturnType<A>>>>` (`effect/Result`).",
+          "Add overloads: `toPromiseFacade(client)` (unchanged) and `toPromiseFacade(client, { mode: \"result\" }): ResultFacade<A>`; implementation wraps with `Effect.runPromise(Effect.result(value(...args)))` in result mode (Effect.result exists in ../effect Effect.ts:2275). Keep the overload-vs-implementation split already used (no casts).",
+          "Document on `toPromiseFacade`: default mode rejects with the tagged contract error (switch on `error._tag`, cf. `ErrorCodes<Api>`); result mode is the typed alternative. Mention defects (network/decoding) still reject in both modes.",
+          "Export a tiny `isTagged(error, tag)` guard? — not needed; `Result.isFailure` + `_tag` narrowing suffices."
+        ],
+        "files": [
+          "packages/client/src/AuthClient.ts",
+          "packages/client/test/AuthClient.test.ts",
+          "spec/traceability.md"
+        ],
+        "tests": [
+          "TDD: `AuthClient.test.ts` \"result mode resolves Failure with the typed error\" (runtime) plus a type-level assertion in the file's existing idiom (`Csrf.test.ts`/`ErrorCodes.test.ts` style): the failure type of `facade.password.signIn` equals `BoomFailure`.",
+          "\"result mode resolves Success with the value\"."
+        ],
+        "acceptance": [
+          "A non-Effect caller can `switch (result.failure._tag)` with exhaustiveness checking.",
+          "BEH-EA-176 still holds (same generated methods, `Effect.runPromise` shim)."
+        ],
+        "spec_refs": [
+          "BEH-EA-176",
+          "BEH-EA-172"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "DESS-003",
+      "level": "medium",
+      "category": "dx",
+      "package": "client",
+      "title": "toPromiseFacade silently discards the typed error channel",
+      "issue_file": ".issues/medium/DESS-003-developer-experience-sdk-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 218,
+          "snippet": "      return (...args: ReadonlyArray<unknown>) => Effect.runPromise(value(...args));",
+          "note": "Same finding as EHA-005; the recommended runPromiseExit/Result variant is EHA-005's plan."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "EHA-005",
+      "duplicates": [],
+      "workstream": "client-promise-facade-errors",
+      "fix": null,
+      "depends_on": [
+        "EHA-005"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "PDR-002",
+      "level": "high",
+      "category": "security",
+      "package": "client",
+      "title": "CsrfProtection is fully implemented and tested but attached to zero groups — CSRF layer is dormant",
+      "issue_file": ".issues/high/PDR-002-philippe-de-ryck.md",
+      "current_status": "ready-for-agent",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Session.ts",
+          "line": 59,
+          "snippet": "  // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `CsrfProtection`\n  // declared last (outermost, runs first — see `AuthorizedSubject.ts`'s\n  // header on declaration order) so a forged request is rejected before\n  // `Authentication` does any credential work.\n  .middleware(Authentication)\n  .middleware(CsrfProtection);",
+          "note": "409334e 'Wire CsrfProtection onto every mutating production endpoint' attached it to Session, Account, Admin, Organization, Passkey x3 and Password groups."
+        },
+        {
+          "path": "packages/password/src/PasswordApi.ts",
+          "line": 261,
+          "snippet": "  .middleware(Api.CsrfProtection);",
+          "note": "Also AdminApi.ts:116, OrganizationApi.ts:756, PasskeyApi.ts:265/293/319/357, Account.ts:38."
+        },
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 27,
+          "snippet": "// **BEH-EA-171's `{ csrf: false }` contract variant has nothing to build\n// against yet.** No plugin's `HttpApiGroup` in this repository currently\n// declares `.middleware(Api.CsrfProtection)` at all",
+          "note": "The quoted evidence comment survives but is now FALSE — cleanup is folded into CDS-007's plan."
+        }
+      ],
+      "fixed_by_commit": "409334e",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "csrf-client-bootstrap",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "EHA-003",
+      "level": "medium",
+      "category": "security",
+      "package": "client",
+      "title": "CsrfProtection middleware attached to zero served groups: documented CSRF defense is dead code",
+      "issue_file": ".issues/medium/EHA-003-effect-http-api-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Account.ts",
+          "line": 35,
+          "snippet": "  // See Session.ts's identical comment: `CsrfProtection` declared last so\n  // it runs first.\n  .middleware(Authentication)\n  .middleware(CsrfProtection);",
+          "note": "Same root cause as PDR-002/APS-001/CDS-001, fixed by 409334e (no composition-level default/`{csrf:false}` yet — tracked by decision ticket 24, outside this slice). Stale client comment cleanup is in CDS-007."
+        }
+      ],
+      "fixed_by_commit": "409334e",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "csrf-client-bootstrap",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "MNA-006",
+      "level": "medium",
+      "category": "dx",
+      "package": "client",
+      "title": "Client SDK assumes a browser cookie jar; no React Native story",
+      "issue_file": ".issues/medium/MNA-006-mobile-native-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 76,
+          "snippet": "export const readCookie = (name: string): string | undefined => {\n  const doc = Reflect.get(globalThis, \"document\");\n  if (typeof doc !== \"object\" || doc === null) return undefined;",
+          "note": "Cookie-mode only; no token store / bearer seam."
+        },
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 32,
+          "snippet": "// variant to strip `CsrfProtection` middleware *from* today. A bearer-mode\n// client is, for now, simply `make(api, { baseUrl, transformClient })` with\n// no `CsrfClientLive` provided",
+          "note": "Bearer mode is an undocumented one-liner; issuance side (MNA-001, decision ticket 17: opt-in `X-Awthaq-Token-Delivery: bearer`) is not implemented yet — `git log --grep=MNA-001` is empty."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "client-native-bearer-mode",
+      "fix": {
+        "summary": "Ship a client-side bearer mode: a pluggable token-store service, a transformClient that attaches it, and the request header that opts into ticket 17's body token delivery; document the React Native recipe.",
+        "steps": [
+          "`packages/client/src/Bearer.ts` (new): `class TokenStore extends Context.Service<TokenStore, { get: Effect<Option<Redacted<string>>>; set: (t: Redacted<string> | null) => Effect<void> }>()(\"awthaq/client/TokenStore\")`, `TokenStore.layerMemory`, and `bearerTransform` = `HttpClient.mapRequestEffect` adding `Authorization: Bearer` from the store plus `X-Awthaq-Token-Delivery: bearer` (header name per decision ticket 17).",
+          "`bearerSignIn` helper: after a sign-in/passkey-verify response whose DTO carries `token` (added by MNA-001), `TokenStore.set` it.",
+          "Document in `packages/client/README.md`: RN recipe = `make(api, { baseUrl, transformClient: bearerTransform })` + a Keychain/Keystore-backed `TokenStore` layer written by the app (storage choice is the app's, per ticket 17), no `CsrfClientLive`; note BEH-EA-171's `{ csrf: false }` contract variant is still unimplemented (decision ticket 24) so today the bearer client still sees the CSRF requirement type and must satisfy it with a no-op layer — or wait for `Auth.make(plugins, { csrf: false })`.",
+          "Export from `packages/client/src/index.ts`."
+        ],
+        "files": [
+          "packages/client/src/Bearer.ts (new)",
+          "packages/client/src/index.ts",
+          "packages/client/README.md",
+          "packages/client/test/Bearer.test.ts (new)"
+        ],
+        "tests": [
+          "TDD: `Bearer.test.ts` — \"bearerTransform attaches Authorization from TokenStore and the delivery header\"; \"empty store ⇒ no Authorization header\"; \"bearerSignIn persists the body token\" (against a stub HttpClient)."
+        ],
+        "acceptance": [
+          "A non-browser client can sign in and call authenticated endpoints with no cookie jar (once MNA-001 lands).",
+          "RN recipe documented."
+        ],
+        "spec_refs": [
+          "BEH-EA-171",
+          "BEH-EA-175"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "MNA-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "CDS-007",
+      "level": "low",
+      "category": "dx",
+      "package": "client",
+      "title": "CsrfClientLive sends an empty-string header when the cookie is absent, producing opaque first-request 403s",
+      "issue_file": ".issues/low/CDS-007-csrf-defense-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 93,
+          "snippet": "export const CsrfClientLive: Layer.Layer<HttpApiMiddleware.ForClient<Api.CsrfProtection>> =\n  HttpApiMiddleware.layerClient(Api.CsrfProtection, ({ next, request }) =>\n    next(\n      HttpClientRequest.setHeader(\n        request,\n        Api.CSRF_HEADER_NAME,\n        readCookie(Api.CSRF_COOKIE_NAME) ?? \"\",",
+          "note": "Empty-string header when the cookie is absent."
+        },
+        {
+          "path": "packages/server/src/Csrf.ts",
+          "line": 153,
+          "snippet": "        if (!cookieIsValid) {\n          const fresh = yield* mint(crypto, config.secret).pipe(Effect.orDie);\n          yield* HttpApiBuilder.securitySetCookie(Api.CsrfCookie, fresh, {",
+          "note": "Server mints the cookie via a pre-response handler (applies to the 403 too), then rejects at :180 — so a first unsafe request always 403s and a retry would succeed. No longer dormant: 409334e attached CsrfProtection to Session/Account/Admin/Organization/Passkey/Password groups (e.g. packages/password/src/PasswordApi.ts:261)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "DESS-009"
+      ],
+      "workstream": "csrf-client-bootstrap",
+      "fix": {
+        "summary": "Make CsrfClientLive self-bootstrapping: omit the header when no cookie is readable, and on a CsrfRejected response retry exactly once after the 403's Set-Cookie has landed; document the flow.",
+        "steps": [
+          "In `CsrfClientLive` (AuthClient.ts:93-102): read the cookie; if `undefined`, send the request WITHOUT the header (`next(request)`), else set it.",
+          "Wrap `next(...)` so that when the response fails with `Api.CsrfRejected` AND `readCookie(Api.CSRF_COOKIE_NAME)` is now defined (browser stored the pre-response-handler cookie from the 403) AND the header sent was absent or different from the new cookie, re-issue once with the fresh header. Use `Effect.catchTag(\"CsrfRejected\", …)`-style narrowing on the middleware's error (check `HttpApiMiddleware.layerClient`'s `next` error channel in ../effect `effect/unstable/httpapi/HttpApiMiddleware.ts`; if `next` surfaces raw responses instead, branch on status 403 + decoded `_tag`). No type assertions.",
+          "Make the retry opt-out-able via `CsrfClient.layer({ bootstrapRetry?: boolean })` (default true) with `CsrfClientLive = CsrfClient.layer()` kept as the default export (flexibility-over-complexity).",
+          "Rewrite the doc comment above `CsrfClientLive` to document: which responses mint `__Host-csrf` (any response through a CSRF-guarded group, including GET /session), why a cold first unsafe call may 403, and that the retry handles it.",
+          "Also delete the stale header comment at AuthClient.ts:27-35 and client/src/index.ts:10-12 claiming no group declares CsrfProtection (fixed by 409334e); rewrite BEH-EA-171 note to say `{ csrf: false }` is still unimplemented in `Auth.make` (per decision ticket 24)."
+        ],
+        "files": [
+          "packages/client/src/AuthClient.ts",
+          "packages/client/src/index.ts",
+          "packages/client/test/Csrf.test.ts",
+          "spec/traceability.md"
+        ],
+        "tests": [
+          "TDD first: `packages/client/test/Csrf.test.ts` scenario \"no cookie ⇒ no x-csrf-token header is sent\" (stub `document` via `globalThis` with no cookie; capture outgoing request through a test `HttpClient` layer; assert header absent — fails at HEAD, which sends \"\").",
+          "Scenario \"first unsafe call 403s, cookie appears, CsrfClientLive retries once and succeeds\": test HttpClient returns 403 CsrfRejected while setting the fake document.cookie, then 200.",
+          "Scenario \"a second 403 is surfaced, not retried again\"."
+        ],
+        "acceptance": [
+          "A cold browser's first mutation succeeds without application code handling CsrfRejected.",
+          "At most one retry per request.",
+          "Stale 'no group declares CsrfProtection' comments are gone (`grep -rn \"declares \\`.middleware(Api.CsrfProtection)\\` at all\" packages` → empty)."
+        ],
+        "spec_refs": [
+          "BEH-EA-170",
+          "BEH-EA-075",
+          "BEH-EA-078"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "DESS-009",
+      "level": "info",
+      "category": "dx",
+      "package": "client",
+      "title": "CsrfClientLive's empty-string header fallback will produce opaque 403s when activated",
+      "issue_file": ".issues/info/DESS-009-developer-experience-sdk-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 99,
+          "snippet": "        readCookie(Api.CSRF_COOKIE_NAME) ?? \"\",",
+          "note": "Identical defect and recommended fix as CDS-007 (low > info). Its 'dormant' premise is outdated: CSRF was activated by 409334e."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "CDS-007",
+      "duplicates": [],
+      "workstream": "csrf-client-bootstrap",
+      "fix": null,
+      "depends_on": [
+        "CDS-007"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "IC-004",
+      "level": "medium",
+      "category": "dx",
+      "package": "next",
+      "title": "No high-level facade: server actions hand-build synthetic Requests and bridge cookies themselves",
+      "issue_file": ".issues/medium/IC-004-iain-collins.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/README.md",
+          "line": 100,
+          "snippet": "  const request = new Request(\"http://internal/sign-in\", {\n    method: \"POST\",\n    body: JSON.stringify({ email, password }),",
+          "note": "Same missing facade as BO-002. IC-004's additional ask — a globalThis-pinning runtime helper — is explicitly rejected by the existing decision in .scratch/next-package/spec.md:215-229 ('ships no ManagedRuntime.make call, no module-level singleton, and no globalThis-pinning helper'); followed, not re-litigated."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "BO-002",
+      "duplicates": [],
+      "workstream": "next-server-action-facade",
+      "fix": null,
+      "depends_on": [
+        "BO-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "NSA-008",
+      "level": "low",
+      "category": "dx",
+      "package": "next",
+      "title": "Server-action recipe dispatches a synthetic request with no forwarded context (cookies, origin, client metadata)",
+      "issue_file": ".issues/low/NSA-008-nextjs-server-actions-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/README.md",
+          "line": 100,
+          "snippet": "  const request = new Request(\"http://internal/sign-in\", {\n    method: \"POST\",\n    body: JSON.stringify({ email, password }),\n    headers: { \"content-type\": \"application/json\" },\n  });",
+          "note": "CONFIRMED (and now worse than 'latent'): PasswordGroup carries CsrfProtection since 409334e (PasswordApi.ts:261), so this recipe's POST with no csrf cookie/header is rejected 403 today."
+        },
+        {
+          "path": "packages/password/src/Password.ts",
+          "line": 866,
+          "snippet": "        const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);",
+          "note": "OVERSTATED: session ip/userAgent metadata is lost regardless of the recipe — no handler passes `request` metadata to `Sessions.issue` (Sessions.ts:171/373-374 accept it). That is a server-side gap outside this slice."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-server-action-facade",
+      "fix": {
+        "summary": "Forward the action's context in the dispatch path (implemented inside BO-002's in-process client) and fix the README until that lands.",
+        "steps": [
+          "Covered by BO-002 step 1 (cookie, UA, x-forwarded-for forwarding + csrf echo).",
+          "Interim README fix (can land before BO-002): show copying `cookie` from `await headers()` and setting `x-csrf-token` from `(await cookies()).get(\"__Host-csrf\")?.value` on the synthetic Request, with a sentence explaining CSRF-guarded groups need the double-submit echo in-process.",
+          "Cross-slice note (not planned here): handlers should pass `request: { ip, userAgent }` into `Sessions.issue` — raise against the password/passkey/oauth slice."
+        ],
+        "files": [
+          "packages/next/README.md"
+        ],
+        "tests": [
+          "Covered by BO-002's ServerActionClient tests (csrf echo + UA forwarding)."
+        ],
+        "acceptance": [
+          "README recipe succeeds against a CSRF-guarded PasswordGroup."
+        ],
+        "spec_refs": [
+          "BEH-EA-189",
+          "BEH-EA-077"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "BO-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "BO-002",
+      "level": "medium",
+      "category": "dx",
+      "package": "next",
+      "title": "No adapter surface: no route handlers, signIn, or signOut — README's own server-action example contains a placeholder",
+      "issue_file": ".issues/medium/BO-002-balazs-orban.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/README.md",
+          "line": 99,
+          "snippet": "export async function signIn(email: string, password: string) {\n  const request = new Request(\"http://internal/sign-in\", {\n    method: \"POST\",\n    body: JSON.stringify({ email, password }),\n    headers: { \"content-type\": \"application/json\" },\n  });\n  const { handler } = await runtime.runPromise(/* build your web handler from AppApi */);",
+          "note": "Placeholder in the flagship recipe; `packages/next/src/index.ts` exports only getSession/hasSessionCookie/withNextCookies — no dispatch/signIn/signOut surface."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "IC-004"
+      ],
+      "workstream": "next-server-action-facade",
+      "fix": {
+        "summary": "Ship a typed, in-process server-action client: `HttpApiClient` over the app's own composed api whose transport dispatches to the app's web handler, forwards the action request's cookies/CSRF/origin/UA, and harvests Set-Cookie into Next's jar — so `client.password.signIn({...})` works for ANY composed plugin set. Respects the existing next-package decision (no runtime construction owned by the package: the app passes its handler/runtime).",
+        "steps": [
+          "New `packages/next/src/ServerActionClient.ts`: `export const makeServerActionClient = <ApiId extends string, Groups extends HttpApiGroup.Any>(api: HttpApi.HttpApi<ApiId, Groups>, options: { readonly handler: (request: Request) => Promise<Response>; readonly headers: HeadersLike; readonly jar: CookieJarLike; readonly origin?: string })` returning an Effect of `HttpApiClient.Client<Groups, …>` built with `HttpApiClient.make(api, { baseUrl: options.origin ?? \"http://internal\" })` provided with a custom `HttpClient` layer (`HttpClient.make((request) => …)`) that: converts the HttpClientRequest to a web `Request` (`HttpClientRequest` → fetch init), copies the incoming action's `cookie`, `user-agent`, `x-forwarded-for` headers, echoes the `__Host-csrf` cookie value as `x-csrf-token` (satisfies double-submit in-process; `Sec-Fetch-Site`/`Origin` absent ⇒ siteCheck passes, Csrf.ts:117-133), calls `options.handler`, runs `withNextCookies(response, options.jar)`, and returns an `HttpClientResponse.fromWeb(request, response)`.",
+          "Provide the CSRF client middleware inside that layer (reuse `@awthaq/client`'s `AuthClient.CsrfClientLive` semantics but reading the cookie from `options.headers` rather than `document`) so the typed client's `ForClient<CsrfProtection>` requirement is discharged — add `@awthaq/client` as a dependency of `@awthaq/next` or factor a `csrfClientLayer(readCookie)` constructor into `@awthaq/client` (preferred: `AuthClient.csrfClientLayer((name) => string | undefined)`, with `CsrfClientLive = csrfClientLayer(readCookie)`).",
+          "Export a Promise convenience: `serverActionClient(api, options)` = `toPromiseFacade`-wrapped client (depends on EHA-005's typed facade so error tags survive).",
+          "README: replace lines 89-116 with a runnable recipe: build `handler` once next to the pinned runtime (`HttpRouter.toWebHandler` over `AuthHttp.layer`/the app's Layer, per the existing `globalThis` recipe), then `const client = await serverActionClient(AppApi, { handler, headers: await headers(), jar: await cookies() }); const result = await client.password.signIn({ payload: { email, password } });`. Show sign-out too.",
+          "Keep `withNextCookies` exported for callers who dispatch themselves."
+        ],
+        "files": [
+          "packages/next/src/ServerActionClient.ts (new)",
+          "packages/next/src/index.ts",
+          "packages/client/src/AuthClient.ts",
+          "packages/next/package.json",
+          "packages/next/README.md",
+          "packages/next/test/ServerActionClient.test.ts (new)"
+        ],
+        "tests": [
+          "TDD first: `packages/next/test/ServerActionClient.test.ts` — scenario \"signIn through the in-process client writes the session cookie into the jar\": compose the Password plugin + CsrfProtectionLive via the same `HttpRouter.toWebHandler` pattern `WithNextCookies.test.ts`'s integration case uses, seed incoming headers with a valid `__Host-csrf` cookie, call `client.password.signIn`, assert the fake jar received `Api.SessionCookie.key`.",
+          "Scenario \"without a csrf cookie the call fails with CsrfRejected (typed), not a thrown opaque error\".",
+          "Scenario \"user-agent/x-forwarded-for from the action request reach the handler\" (assert via a probe endpoint)."
+        ],
+        "acceptance": [
+          "The README sign-in recipe has no placeholder and is exercised by a test.",
+          "A typed client for the app's composed api works from a server action with cookies bridged automatically.",
+          "No ManagedRuntime is constructed by @awthaq/next."
+        ],
+        "spec_refs": [
+          "BEH-EA-189",
+          "BEH-EA-190"
+        ],
+        "effort": "L"
+      },
+      "depends_on": [
+        "CDS-007",
+        "EHA-005",
+        "BO-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ERS-006",
+      "level": "low",
+      "category": "dx",
+      "package": "next",
+      "title": "Next README dispose recipe drops the dispose promise and never drains in-flight work",
+      "issue_file": ".issues/low/ERS-006-effect-runtime-scheduler-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/README.md",
+          "line": 38,
+          "snippet": "const make = () => {\n  const made = ManagedRuntime.make(AppLayer);\n  const dispose = () => void made.dispose();\n  process.once(\"SIGINT\", dispose);\n  process.once(\"SIGTERM\", dispose);\n  return made;\n};",
+          "note": "Dispose promise dropped; no drain."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-server-action-facade",
+      "fix": {
+        "summary": "Fix the recipe (the decision keeps runtime pinning as README-only, so the fix is documentation).",
+        "steps": [
+          "Rewrite README.md:38-46: `const dispose = async () => { await Promise.race([made.dispose(), new Promise((r) => setTimeout(r, 10_000))]); process.exit(0); };` with `process.once(\"SIGTERM\", () => void dispose())`, and a short paragraph: ManagedRuntime.dispose closes the Layer scope (pools, finalizers) — await it before exit; bound it so a stuck finalizer can't hang shutdown.",
+          "Mention that `runtime.runPromise` fibers are not children of the runtime scope; for draining in-flight actions, wrap them via a small `inflight` counter shown in the recipe (optional block).",
+          "Also guard against double registration under dev HMR: register signal handlers only inside `make()` (already true) — state it."
+        ],
+        "files": [
+          "packages/next/README.md"
+        ],
+        "tests": [
+          "Docs-only; no automated test."
+        ],
+        "acceptance": [
+          "Recipe awaits `dispose()` with a bounded timeout; no `void made.dispose()` remains."
+        ],
+        "spec_refs": [],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "NSA-003",
+      "level": "medium",
+      "category": "security",
+      "package": "next",
+      "title": "README page recipe drops the force-dynamic guard that every spec recipe includes",
+      "issue_file": ".issues/medium/NSA-003-nextjs-server-actions-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/README.md",
+          "line": 79,
+          "snippet": "export default async function Page() {\n  const session = await getSession(await headers(), runtime);\n  if (session === undefined) redirect(\"/sign-in\");",
+          "note": "No `export const dynamic = \"force-dynamic\"`; also `redirect` is used without an import from next/navigation."
+        },
+        {
+          "path": "spec/appendices/03-nextjs-ssr-decision-hydration.md",
+          "line": 49,
+          "snippet": "export const dynamic = \"force-dynamic\"",
+          "note": "The spec's own recipe includes it."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-server-action-facade",
+      "fix": {
+        "summary": "Add the guard and a short caching note to the page recipe.",
+        "steps": [
+          "README.md:73-87: add `export const dynamic = \"force-dynamic\";` and `import { redirect } from \"next/navigation\";`.",
+          "Add 3 sentences: session-derived pages must be dynamic; `headers()` makes a route dynamic implicitly but the explicit export survives refactors/PPR; never cache a shell containing session data."
+        ],
+        "files": [
+          "packages/next/README.md"
+        ],
+        "tests": [
+          "Docs-only."
+        ],
+        "acceptance": [
+          "Page recipe matches spec/appendices/03 (force-dynamic present; imports complete)."
+        ],
+        "spec_refs": [
+          "BEH-EA-185"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "NSA-005",
+      "level": "medium",
+      "category": "api",
+      "package": "next",
+      "title": "No peerDependencies: zero declared compatibility range for next or react",
+      "issue_file": ".issues/medium/NSA-005-nextjs-server-actions-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/package.json",
+          "line": 42,
+          "snippet": "  \"peerDependencies\": {\n    \"react\": \">=19.3.0\"\n  },",
+          "note": "FIXED part: a peerDependencies block now exists (react, added by 6055f62 for React.cache). STILL MISSING: any `next` range, and no README note on proxy.ts vs middleware.ts for < 16.3."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-package-manifest-hygiene",
+      "fix": {
+        "summary": "Declare the Next.js range the recipes assume and document the proxy.ts/middleware.ts split.",
+        "steps": [
+          "`packages/next/package.json`: add `\"next\": \">=15.0.0\"` to `peerDependencies` (async `headers()`/`cookies()` are Next 15+) and `\"peerDependenciesMeta\": { \"next\": { \"optional\": true } }` — the source only uses structural types (HeadersLike/CookieJarLike), so non-Next hosts (tests, other frameworks) must not get a hard peer error.",
+          "`packages/next/README.md` proxy section: one line — \"On Next < 16.3 put this in `middleware.ts` and export it as `middleware`.\"",
+          "Keep `react >=19.3.0` (React.cache use)."
+        ],
+        "files": [
+          "packages/next/package.json",
+          "packages/next/README.md"
+        ],
+        "tests": [
+          "`pnpm package:smoke` (publint) green; no unit test."
+        ],
+        "acceptance": [
+          "`peerDependencies.next` present and optional; README states the < 16.3 variant."
+        ],
+        "spec_refs": [
+          "BEH-EA-188"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "BO-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "BO-003",
+      "level": "medium",
+      "category": "architecture",
+      "package": "next",
+      "title": "@awthaq/next declares an unused @awthaq/react dependency",
+      "issue_file": ".issues/medium/BO-003-balazs-orban.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/package.json",
+          "line": 27,
+          "snippet": "  \"dependencies\": {\n    \"@awthaq/api\": \"workspace:*\",\n    \"@awthaq/core\": \"workspace:*\",\n    \"@awthaq/react\": \"workspace:*\",\n    \"@awthaq/server\": \"workspace:*\",",
+          "note": "`grep -rn \"awthaq/react\" packages/next/src packages/next/test` → no import."
+        },
+        {
+          "path": "packages/next/tsconfig.src.json",
+          "line": 14,
+          "snippet": "      \"@awthaq/react\": [\"../react/src/index.ts\"],",
+          "note": "Plus the project reference at :26 `\"path\": \"../react/tsconfig.src.json\"`."
+        },
+        {
+          "path": "knip.json",
+          "line": 54,
+          "snippet": "    \"packages/next\": {\n      \"ignoreDependencies\": [\"@awthaq/react\"]",
+          "note": "Knip allowlist masking it (MTS-002)."
+        },
+        {
+          "path": "packages/next/package.json",
+          "line": 5,
+          "snippet": "  \"description\": \"Next.js adapter: server/client boundary, cookie forwarding, SSR decision hydration.\",",
+          "note": "NSA-007's description half: no hydration code in the package."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "DESS-004",
+        "MTS-002",
+        "ERAS-005",
+        "NSA-007"
+      ],
+      "workstream": "next-package-manifest-hygiene",
+      "fix": {
+        "summary": "Remove the phantom @awthaq/react edge everywhere and make the description truthful.",
+        "steps": [
+          "`packages/next/package.json`: delete `\"@awthaq/react\": \"workspace:*\"`; reword `description` to \"Next.js adapter: database-verified getSession, optimistic proxy.ts cookie check, Set-Cookie bridging for server actions.\" (if RSC-006/RSC-005 later add a hydration helper to this package, extend the wording then).",
+          "`packages/next/tsconfig.src.json`: delete the `@awthaq/react` path (line 14) and its reference (lines 25-27).",
+          "`knip.json`: delete the `packages/next` `ignoreDependencies` entry (lines 54-56).",
+          "`pnpm install` to refresh the lockfile; add a changeset noting the dependency removal.",
+          "Do not hand-edit `packages/next/CHANGELOG.md` (changesets regenerates it)."
+        ],
+        "files": [
+          "packages/next/package.json",
+          "packages/next/tsconfig.src.json",
+          "knip.json",
+          "pnpm-lock.yaml",
+          ".changeset/*.md (new)"
+        ],
+        "tests": [
+          "No unit test; the gate is `pnpm knip` (must pass WITHOUT the ignore) plus `pnpm run typecheck`."
+        ],
+        "acceptance": [
+          "`grep -rn awthaq/react packages/next` finds only CHANGELOG history.",
+          "`pnpm knip` and `pnpm run typecheck` green with the knip ignore removed."
+        ],
+        "spec_refs": [],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "DESS-004",
+      "level": "medium",
+      "category": "dx",
+      "package": "next",
+      "title": "@awthaq/next declares an unused runtime dependency on @awthaq/react",
+      "issue_file": ".issues/medium/DESS-004-developer-experience-sdk-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/package.json",
+          "line": 30,
+          "snippet": "    \"@awthaq/react\": \"workspace:*\",",
+          "note": "Same unused dependency as BO-003."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "BO-003",
+      "duplicates": [],
+      "workstream": "next-package-manifest-hygiene",
+      "fix": null,
+      "depends_on": [
+        "BO-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "MTS-002",
+      "level": "medium",
+      "category": "dx",
+      "package": "next",
+      "title": "packages/next declares unused @awthaq/react dependency and reference edge, masked by a knip allowlist",
+      "issue_file": ".issues/medium/MTS-002-monorepo-tooling-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/package.json",
+          "line": 30,
+          "snippet": "    \"@awthaq/react\": \"workspace:*\",",
+          "note": "Same unused dependency as BO-003."
+        },
+        {
+          "path": "knip.json",
+          "line": 55,
+          "snippet": "      \"ignoreDependencies\": [\"@awthaq/react\"]",
+          "note": "Knip-ignore removal is included in BO-003's plan."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "BO-003",
+      "duplicates": [],
+      "workstream": "next-package-manifest-hygiene",
+      "fix": null,
+      "depends_on": [
+        "BO-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ERAS-005",
+      "level": "low",
+      "category": "performance",
+      "package": "next",
+      "title": "@awthaq/next declares an unused runtime dependency on @awthaq/react, widening the import closure",
+      "issue_file": ".issues/low/ERAS-005-edge-runtime-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/package.json",
+          "line": 30,
+          "snippet": "    \"@awthaq/react\": \"workspace:*\",",
+          "note": "Same unused dependency as BO-003."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "BO-003",
+      "duplicates": [],
+      "workstream": "next-package-manifest-hygiene",
+      "fix": null,
+      "depends_on": [
+        "BO-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "NSA-007",
+      "level": "low",
+      "category": "dx",
+      "package": "next",
+      "title": "Unused @awthaq/react dependency and a package description promising unshipped decision hydration",
+      "issue_file": ".issues/low/NSA-007-nextjs-server-actions-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/package.json",
+          "line": 5,
+          "snippet": "  \"description\": \"Next.js adapter: server/client boundary, cookie forwarding, SSR decision hydration.\",",
+          "note": "Both halves (unused dep + misleading description) are folded into BO-003's plan."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "BO-003",
+      "duplicates": [],
+      "workstream": "next-package-manifest-hygiene",
+      "fix": null,
+      "depends_on": [
+        "BO-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "EAR-007",
+      "level": "info",
+      "category": "architecture",
+      "package": "next",
+      "title": "No integration joins packages/next's server session to Providers' initialSession prop",
+      "issue_file": ".issues/info/EAR-007-effect-atom-react-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/src/GetSession.ts",
+          "line": 13,
+          "snippet": "// Returns a 3-field struct, not `spec/overview.md`'s aspirational 4-field\n// `SessionView` (which also carries a qadi `subject`) — resolving a subject\n// stays the caller's own job",
+          "note": "Same missing next→Providers seam; examples/ holds only `memory-server` (no Next example). RSC-005's plan includes the mapper + README composition recipe."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "RSC-005",
+      "duplicates": [],
+      "workstream": "next-react-ssr-bridge",
+      "fix": null,
+      "depends_on": [
+        "RSC-005"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "RSC-005",
+      "level": "medium",
+      "category": "api",
+      "package": "next",
+      "title": "getSession's return struct is neither RSC-prop-safe nor Providers-compatible; no adapter bridges the two halves",
+      "issue_file": ".issues/medium/RSC-005-react-server-components-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/src/GetSession.ts",
+          "line": 54,
+          "snippet": "export interface Session {\n  readonly principal: Api.Principal;\n  readonly user: Users.UserRecord;\n  readonly session: Sessions.SessionView;",
+          "note": "SessionView carries DateTime.Utc/Option fields (packages/core/src/Sessions.ts:106-113)."
+        },
+        {
+          "path": "packages/react/src/Providers.tsx",
+          "line": 37,
+          "snippet": "  readonly initialSession?: SessionContract.SessionDto | undefined;",
+          "note": "Providers expects a SessionDto — a Schema.Class INSTANCE (packages/api/src/Session.ts:18), which React cannot pass from a Server Component to a Client Component (class instances are not serializable props). No mapper exists in next/react; three private identical `toSessionDto(SessionView)` copies live in password/admin/passkey (Password.ts:345, Admin.ts:110, Passkey.ts:203)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "EAR-007"
+      ],
+      "workstream": "next-react-ssr-bridge",
+      "fix": {
+        "summary": "Ship the missing server→client seam: a public SessionView→SessionDto mapper, a next-side helper that produces RSC-safe (encoded, plain JSON) seed props, and Providers accepting the encoded shape.",
+        "steps": [
+          "`packages/server/src/Session.ts`: export `toSessionDto(view: Sessions.SessionView, current = true): SessionContract.SessionDto` (same body as Password.ts:345-353). Replace the three private copies in `packages/password/src/Password.ts`, `packages/admin/src/Admin.ts`, `packages/passkey/src/Passkey.ts` with it (cross-slice touch, mechanical).",
+          "`packages/next/src/Seed.ts` (new): `export const toInitialSession = (session: Session | undefined) => session === undefined ? undefined : Schema.encodeSync(SessionContract.SessionDto)(Session.toSessionDto(session.session))` — returns the plain `SessionDto.Encoded` object. Export from `src/index.ts`. (No return-type annotation needed on new consts; let inference.)",
+          "`packages/react/src/Providers.tsx`: widen `initialSession`/`initialSubject` to `typeof SessionContract.SessionDto.Encoded` / `typeof SubjectContract.SubjectDto.Encoded` and decode inside the `useState` initializer via `Schema.decodeUnknownSync(SessionContract.SessionDto)` (accepts both plain objects and instances — no assertions). A decode failure seeds nothing (falls back to the live query) and reports via EAR-006's `onError`.",
+          "Doc: in `GetSession.ts`'s `Session` doc comment state that `Session`/`SessionView`/`UserRecord` are server-only shapes and must go through `toInitialSession` before crossing to client props.",
+          "README (`packages/next/README.md`): add a 'Seeding @awthaq/react's Providers' section: `app/layout.tsx` (Server Component) → `const session = await getSession(await headers(), runtime)` → `<Providers atoms={atoms} initialSession={toInitialSession(session)} initialSubject={…}>`; initialSubject is produced by the app's own qadi `SubjectResolver.resolve(session.principal)` + `Schema.encodeSync(SubjectContract.SubjectDto)` (next stays off @awthaq/qadi per its own design note, GetSession.ts:13-20). Mention the router.refresh()/re-seed caveat: seeds apply only at first mount (RegistryProvider/QadiProvider build their registry once)."
+        ],
+        "files": [
+          "packages/server/src/Session.ts",
+          "packages/password/src/Password.ts",
+          "packages/admin/src/Admin.ts",
+          "packages/passkey/src/Passkey.ts",
+          "packages/next/src/Seed.ts (new)",
+          "packages/next/src/index.ts",
+          "packages/react/src/Providers.tsx",
+          "packages/next/README.md"
+        ],
+        "tests": [
+          "TDD first: `packages/next/test/Seed.test.ts` — \"toInitialSession yields a JSON-round-trippable plain object\": `JSON.parse(JSON.stringify(x))` deep-equals `x`, prototype is `Object.prototype`, and `expiresAt` equals the view's `absoluteExpiresAt` ISO string; \"undefined in, undefined out\".",
+          "`packages/react/test/Providers.test.tsx` — \"initialSession accepts the encoded plain object\" (pass `Schema.encodeSync(SessionDto)(session)`).",
+          "`packages/server/test/Session.test.ts` (or existing) — toSessionDto mapping test; existing password/admin/passkey tests must stay green."
+        ],
+        "acceptance": [
+          "A Server Component can pass `toInitialSession(await getSession(...))` to `<Providers>` without an RSC serialization error.",
+          "Only one SessionView→SessionDto mapper remains in the repo (`grep -rn 'const toSessionDto' packages/*/src` → 0).",
+          "`pnpm check` green."
+        ],
+        "spec_refs": [
+          "BEH-EA-177",
+          "BEH-EA-185"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "EAR-001",
+        "BO-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "RRS-002",
+      "level": "high",
+      "category": "correctness",
+      "package": "next",
+      "title": "Next.js RSC path rotates the session secret then discards the rotated token — undeliverable rotation hard-logs the user out",
+      "issue_file": ".issues/high/RRS-002-refresh-token-rotation-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/src/GetSession.ts",
+          "line": 90,
+          "snippet": "    const { session, rotated } = yield* sessions.verify(Redacted.make(token));\n    const user = yield* users.findById(session.userId);\n    const principal = yield* resolver.resolve(session);\n    return { principal, user, session, rotated: Option.getOrUndefined(rotated) };",
+          "note": "FIXED part (6055f62, BO-001/IC-001/NSA-001/RSC-003 via decision ticket 16): the rotated token is no longer discarded; it rides on `Session.rotated`."
+        },
+        {
+          "path": "packages/next/src/index.ts",
+          "line": 9,
+          "snippet": "export { getSession } from \"./GetSession.ts\";\nexport type { HeadersLike, Session } from \"./GetSession.ts\";\nexport { hasSessionCookie } from \"./HasSessionCookie.ts\";\nexport { withNextCookies } from \"./WithNextCookies.ts\";",
+          "note": "STILL BROKEN: `applyRotatedSession` (GetSession.ts:163) is NOT exported from the package entry, so the delivery channel the fix relies on is unreachable by consumers (README.md:131 imports it from \"@awthaq/next\" — would not compile). Only the test imports it via ../src."
+        },
+        {
+          "path": "packages/next/README.md",
+          "line": 141,
+          "snippet": "A pure Server Component render has no mutable cookie jar at all — Next.js\nRSCs cannot set cookies under any circumstances — so a rotation that happens\nto land during a Server-Component-only render is a genuine platform\nlimitation, not something this package can route around.",
+          "note": "ACCEPTED residual: pure-RSC rotation still happens and is undeliverable; decision ticket 16 explicitly rejected a read-only verify / grace window (core `Sessions.verify` untouched). Not re-litigated."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-getsession-hardening",
+      "fix": {
+        "summary": "Finish the ticket-16 design: export `applyRotatedSession`, fix the README snippet, and test through the public entry.",
+        "steps": [
+          "`packages/next/src/index.ts`: add `export { applyRotatedSession, getSession } from \"./GetSession.ts\";`.",
+          "`packages/next/test/GetSession.test.ts:25`: import `applyRotatedSession`/`getSession` from `../src/index.ts` (public surface), so a future export drop fails the suite.",
+          "`packages/next/README.md:127-138`: add the missing `import { cookies, headers } from \"next/headers\";` (snippet uses `headers()` without importing it).",
+          "Optionally add a knip/package-smoke assertion that every symbol the README imports from `@awthaq/next` exists in `lib/index.d.ts` (cheap doc-drift guard)."
+        ],
+        "files": [
+          "packages/next/src/index.ts",
+          "packages/next/test/GetSession.test.ts",
+          "packages/next/README.md"
+        ],
+        "tests": [
+          "TDD first: change the test import to `../src/index.ts` — typecheck (`pnpm run typecheck`, tsconfig.test.json) fails at HEAD with 'Module has no exported member applyRotatedSession'."
+        ],
+        "acceptance": [
+          "`import { applyRotatedSession } from \"@awthaq/next\"` type-checks.",
+          "README snippets compile when pasted (imports complete).",
+          "Pure-RSC limitation remains documented (unchanged, per ticket 16)."
+        ],
+        "spec_refs": [
+          "BEH-EA-185"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "RSC-007",
+      "level": "low",
+      "category": "performance",
+      "package": "next",
+      "title": "getSession resolves three services strictly sequentially in the RSC hot path",
+      "issue_file": ".issues/low/RSC-007-react-server-components-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/src/GetSession.ts",
+          "line": 90,
+          "snippet": "    const { session, rotated } = yield* sessions.verify(Redacted.make(token));\n    const user = yield* users.findById(session.userId);\n    const principal = yield* resolver.resolve(session);",
+          "note": "findById and resolver.resolve are independent after verify but run sequentially."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-getsession-hardening",
+      "fix": {
+        "summary": "Run the two post-verify lookups concurrently.",
+        "steps": [
+          "Replace lines 91-92 with `const [user, principal] = yield* Effect.all([users.findById(session.userId), resolver.resolve(session)], { concurrency: \"unbounded\" });` — keep the existing `Effect.catchTags` (UserNotFound still collapses to `undefined`).",
+          "Keep the `verifyCached` React.cache wrapper unchanged."
+        ],
+        "files": [
+          "packages/next/src/GetSession.ts",
+          "packages/next/test/GetSession.test.ts"
+        ],
+        "tests": [
+          "TDD: add scenario \"resolves user and principal concurrently\" using a `Users` test layer whose `findById` blocks on a `Deferred` that the `PrincipalResolver` test layer completes — deadlocks (times out) when sequential, passes when concurrent. Existing BEH-EA-185 cases must stay green."
+        ],
+        "acceptance": [
+          "Test above green; `getSession` semantics unchanged for all existing cases."
+        ],
+        "spec_refs": [
+          "BEH-EA-185"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "NAM-012",
+      "level": "low",
+      "category": "security",
+      "package": "next",
+      "title": "Next.js middleware parity is deliberately weaker — hasSessionCookie verifies nothing",
+      "issue_file": ".issues/low/NAM-012-nextauth-authjs-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/src/HasSessionCookie.ts",
+          "line": 17,
+          "snippet": "// renders; the real boundary is `GetSession.ts`'s `getSession`, which every\n// page and server action reached past `proxy.ts` must still call itself.\n// Treating a passing `hasSessionCookie` check as authentication is exactly",
+          "note": "Design is correct (BEH-EA-188); the migration warning lives only in the source header. No docs/ migration guide exists (`ls docs` → agents/, domain.md, issue-tracker.md, triage-labels.md)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "frontend-docs-truthfulness",
+      "fix": {
+        "summary": "Add an Auth.js/next-auth migration note to the next README.",
+        "steps": [
+          "`packages/next/README.md`: 'Migrating from next-auth' section — `export { auth as middleware }` does NOT map to `hasSessionCookie`; map it to proxy.ts presence redirect + `getSession` in every page/action/route handler; table of next-auth → awthaq equivalents (`auth()` → `getSession`, `signIn()` → BO-002's server-action client, `SessionProvider` → `Providers` + `toInitialSession`).",
+          "Optional lint: an oxlint `no-restricted-imports`-style rule is overkill — skip (doc is sufficient)."
+        ],
+        "files": [
+          "packages/next/README.md"
+        ],
+        "tests": [
+          "Docs-only."
+        ],
+        "acceptance": [
+          "Migration section present, explicitly warns presence-only ≠ verification."
+        ],
+        "spec_refs": [
+          "BEH-EA-185",
+          "BEH-EA-188"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "BO-002",
+        "RSC-005"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "BO-006",
+      "level": "medium",
+      "category": "architecture",
+      "package": "next",
+      "title": "No stateless edge/middleware verify: presence check is the only proxy-safe primitive, jwt plugin sits unwired",
+      "issue_file": ".issues/medium/BO-006-balazs-orban.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/src/HasSessionCookie.ts",
+          "line": 32,
+          "snippet": "export const hasSessionCookie = (request: { readonly headers: HeadersLike }): boolean =>\n  hasCookie(request.headers.get(\"cookie\"), Api.SessionCookie.key);",
+          "note": "Only proxy-safe primitive."
+        },
+        {
+          "path": "packages/jwt/src/verify.ts",
+          "line": 76,
+          "snippet": "export const makeVerifier = (options: VerifierOptions) =>\n  Effect.gen(function* () {\n    const httpClient = yield* HttpClient.HttpClient;",
+          "note": "Standalone WebCrypto verifier exists — but is NOT reachable: packages/jwt/src/index.ts does not export verify.ts and 387838f removed the `./*` subpath (cross-slice gap)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "ERAS-001"
+      ],
+      "workstream": "next-edge-stateless-tier",
+      "fix": {
+        "summary": "(Pending decision D1) Add an optional stateless edge tier: an opt-in short-lived JWT session-mirror cookie minted by @awthaq/jwt, and an `@awthaq/next/edge` helper that verifies it with the lite verifier — documented as a better redirect signal, never the authorization boundary (BEH-EA-188 unchanged).",
+        "steps": [
+          "Prereq (jwt slice): restore a public `./verify` subpath export in `packages/jwt/package.json` exporting `src/verify.ts` (keeps the lite verifier free of @awthaq/core/server).",
+          "@awthaq/jwt: `JwtConfig.sessionCookie?: { name: string; ttl: Duration }` (default off) — when on, the existing PostAuthResponseHook also sets a `__Host-`-prefixed, httpOnly, SameSite=Strict JWT cookie with `exp ≤ ttl` alongside the opaque session cookie; cleared on sign-out.",
+          "@awthaq/next: new subpath export `./edge` (`src/edge.ts`, imports only `@awthaq/api` + `@awthaq/jwt/verify` + `CookieHeader.ts`): `verifySessionJwt(request, verifier) => Promise<Claims | undefined>` — never throws, returns undefined on missing/invalid/expired.",
+          "Spec: add a BEH-EA-188 sub-requirement (or new BEH id) stating the edge tier is an optimistic signal with bounded revocation lag, not the boundary; update `spec/behaviors/24-nextjs-ssr.md` and traceability.",
+          "README: proxy.ts recipe variant using `verifySessionJwt`, with the revocation-lag caveat; edge deployment guidance (ERAS-003)."
+        ],
+        "files": [
+          "packages/jwt/package.json",
+          "packages/jwt/src/JwtConfig.ts",
+          "packages/jwt/src/Jwt.ts",
+          "packages/next/src/edge.ts (new)",
+          "packages/next/package.json",
+          "packages/next/README.md",
+          "spec/behaviors/24-nextjs-ssr.md",
+          "spec/traceability.md"
+        ],
+        "tests": [
+          "TDD: `packages/next/test/Edge.test.ts` — \"valid mirror JWT ⇒ claims\", \"forged/expired ⇒ undefined\", \"no cookie ⇒ undefined\" (sign with @awthaq/jwt's KeyRing test keys, JWKS via a stub HttpClient). jwt slice: \"sessionCookie mode sets and clears the mirror cookie\"."
+        ],
+        "acceptance": [
+          "proxy.ts can reject forged/expired cookies without a DB call.",
+          "Edge bundle imports no @awthaq/core/@awthaq/server (verify with a package-smoke import-graph check).",
+          "BEH text updated; `spec:verify:strict` green."
+        ],
+        "spec_refs": [
+          "BEH-EA-188"
+        ],
+        "effort": "L"
+      },
+      "depends_on": [],
+      "needs_decision": true,
+      "decision_options": [
+        "A — Won't fix: keep presence-only proxy.ts + DB-verified getSession (spec-compliant today); document the gap.",
+        "B — Bearer-only edge helper: verify an `Authorization: Bearer <jwt>` header with the lite verifier (useful for API routes, useless for browser page navigations that only carry cookies).",
+        "C — Opt-in JWT session-mirror cookie (jwt plugin) + `@awthaq/next/edge` `verifySessionJwt` helper; bounded revocation lag, never the boundary."
+      ],
+      "recommendation": "C — the richer, configurable option: it is the only one that helps real browser navigations at the edge, reuses the already-built lite verifier and PostAuthResponseHook, stays default-off, and keeps BEH-EA-188's boundary rule. Requires restoring @awthaq/jwt's `./verify` export first.",
+      "recommended_status": "ready-for-human"
+    },
+    {
+      "id": "BO-004",
+      "level": "medium",
+      "category": "architecture",
+      "package": "next",
+      "title": "Framework-neutral adapter code lives in a Next-named package, stranding Astro/SvelteKit reuse",
+      "issue_file": ".issues/medium/BO-004-balazs-orban.md",
+      "current_status": "needs-triage",
+      "verdict": "WONTFIX-CANDIDATE",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/next/src/WithNextCookies.ts",
+          "line": 110,
+          "snippet": "export const withNextCookies = (response: Response, jar: CookieJarLike): void => {",
+          "note": "True that the code is framework-neutral, but spec/roadmap.md M5 lists only 'Next.js adapter' — no SvelteKit/Astro adapter is planned (`grep -rni 'sveltekit\\|astro' spec/` → none). Hoisting into a new package now is speculative infra; the functions are already structural (HeadersLike/CookieJarLike) and can be hoisted when a second adapter is actually scheduled."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-edge-stateless-tier",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "wontfix"
+    },
+    {
+      "id": "BO-010",
+      "level": "info",
+      "category": "api",
+      "package": "next",
+      "title": "CookieJarLike does not structurally satisfy SvelteKit's Cookies.set (path required) — second-adapter fit untested",
+      "issue_file": ".issues/info/BO-010-balazs-orban.md",
+      "current_status": "needs-triage",
+      "verdict": "WONTFIX-CANDIDATE",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/next/src/WithNextCookies.ts",
+          "line": 44,
+          "snippet": "export interface CookieJarLike {\n  readonly set: (name: string, value: string, options?: CookieSetOptions) => unknown;\n}",
+          "note": "SvelteKit-fit concern only matters for a second adapter (see BO-004); every awthaq cookie already sets path=/ (Sessions.ts:157). Revisit together with BO-004."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-edge-stateless-tier",
+      "fix": null,
+      "depends_on": [
+        "BO-004"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "wontfix"
+    },
+    {
+      "id": "NSA-006",
+      "level": "low",
+      "category": "correctness",
+      "package": "next",
+      "title": "parseSetCookie percent-decodes values browsers would store verbatim, and NaN/Invalid Date options can reach the jar",
+      "issue_file": ".issues/low/NSA-006-nextjs-server-actions-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/src/WithNextCookies.ts",
+          "line": 69,
+          "snippet": "  const value = (() => {\n    try {\n      return decodeURIComponent(rawValue);\n    } catch {\n      return rawValue;\n    }\n  })();",
+          "note": "Value is percent-decoded before being written into the jar."
+        },
+        {
+          "path": "packages/next/src/WithNextCookies.ts",
+          "line": 82,
+          "snippet": "    if (key === \"max-age\" && raw !== undefined) {\n      options.maxAge = Number(raw);",
+          "note": "No NaN guard (and :89 `options.expires = new Date(raw);` no Invalid Date guard)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-getsession-hardening",
+      "fix": {
+        "summary": "Pass the Set-Cookie value through verbatim and drop invalid numeric/date attributes.",
+        "steps": [
+          "Before changing the decode, verify how Next's `ResponseCookies.set` serializes (it `encodeURIComponent`s? check `next/dist/compiled/@edge-runtime/cookies` stringifyCookie). If Next re-encodes on write, keep a decode that is the exact inverse; otherwise write `rawValue` verbatim. Document the chosen invariant in the parseSetCookie doc comment: `jar value === what the browser would have stored from the original Set-Cookie`.",
+          "Guard options: `const n = Number(raw); if (Number.isFinite(n)) options.maxAge = n;` and `const d = new Date(raw); if (!Number.isNaN(d.getTime())) options.expires = d;`."
+        ],
+        "files": [
+          "packages/next/src/WithNextCookies.ts",
+          "packages/next/test/WithNextCookies.test.ts"
+        ],
+        "tests": [
+          "TDD: `WithNextCookies.test.ts` scenarios \"Max-Age=abc is dropped, not NaN\", \"Expires=garbage is dropped\", \"a %-containing value round-trips to the same wire bytes\" (assert via a jar fake that re-serializes the way Next's ResponseCookies does)."
+        ],
+        "acceptance": [
+          "No NaN/Invalid Date reaches `jar.set`.",
+          "Round-trip test green."
+        ],
+        "spec_refs": [
+          "BEH-EA-189"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ERAS-001",
+      "level": "medium",
+      "category": "architecture",
+      "package": "next",
+      "title": "No stateless JWT verification tier wired into @awthaq/next despite @awthaq/jwt shipping a purpose-built lite verifier",
+      "issue_file": ".issues/medium/ERAS-001-edge-runtime-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/src/index.ts",
+          "line": 9,
+          "snippet": "export { getSession } from \"./GetSession.ts\";\nexport type { HeadersLike, Session } from \"./GetSession.ts\";\nexport { hasSessionCookie } from \"./HasSessionCookie.ts\";",
+          "note": "Same missing stateless tier as BO-006."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "BO-006",
+      "duplicates": [],
+      "workstream": "next-edge-stateless-tier",
+      "fix": null,
+      "depends_on": [
+        "BO-006"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ETVS-006",
+      "level": "low",
+      "category": "testing",
+      "package": "next",
+      "title": "Next-package tests share one ManagedRuntime and mutate TestClock across test cases",
+      "issue_file": ".issues/low/ETVS-006-effect-testing-vitest-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/next/test/GetSession.test.ts",
+          "line": 40,
+          "snippet": "const runtime = ManagedRuntime.make(TestLayer);",
+          "note": "Module-level runtime shared by 5 cases, never disposed (also `rotationRuntime` at :63, shared by the two rotation cases which each adjust its clock)."
+        },
+        {
+          "path": "packages/next/test/GetSession.test.ts",
+          "line": 130,
+          "snippet": "    await runtime.runPromise(TestClock.adjust(Duration.days(31)));",
+          "note": "Shared TestClock advanced by one case (line drifted from the audit's :102)."
+        },
+        {
+          "path": "packages/next/test/HasSessionCookie.test.ts",
+          "line": 48,
+          "snippet": "    const runtime = ManagedRuntime.make(TestLayer);",
+          "note": "Fresh per test but never disposed."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-getsession-hardening",
+      "fix": {
+        "summary": "Per-case runtimes for clock-mutating cases and deterministic disposal everywhere.",
+        "steps": [
+          "In `GetSession.test.ts`, replace the two module-level runtimes with a `withRuntime(layer, (rt) => …)` helper that builds a ManagedRuntime, runs the body, and `await rt.dispose()` in `finally`; use it in every case (the React.cache wrapper does not memoize outside a render, so per-case runtimes don't change semantics).",
+          "Same helper in `HasSessionCookie.test.ts`.",
+          "Alternatively use `@effect/vitest`'s `layer(...)` per describe for read-only cases; keep clock-advancing cases isolated."
+        ],
+        "files": [
+          "packages/next/test/GetSession.test.ts",
+          "packages/next/test/HasSessionCookie.test.ts"
+        ],
+        "tests": [
+          "Run the file with `--sequence.shuffle` (vitest) several times — must pass every order."
+        ],
+        "acceptance": [
+          "`pnpm vitest run --project next --sequence.shuffle` green repeatedly; no undisposed runtimes."
+        ],
+        "spec_refs": [],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "MM-001",
+      "level": "medium",
+      "category": "dx",
+      "package": "react",
+      "title": "Exports wildcard bun condition cannot resolve .tsx files (react Providers)",
+      "issue_file": ".issues/medium/MM-001-mattia-manzati.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/package.json",
+          "line": 14,
+          "snippet": "  \"exports\": {\n    \".\": {\n      \"types\": \"./lib/index.d.ts\",\n      \"bun\": \"./src/index.ts\",\n      \"import\": \"./lib/index.js\",\n      \"default\": \"./lib/index.js\"\n    }\n  },",
+          "note": "The `./*` wildcard with `bun: ./src/*.ts` was deleted from all packages by 387838f (AVS-001); the root bun entry `./src/index.ts` re-exports `./Providers.tsx`, which Bun resolves."
+        }
+      ],
+      "fixed_by_commit": "387838f",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "react-package-deps",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "DESS-007",
+      "level": "low",
+      "category": "docs",
+      "package": "react",
+      "title": "@awthaq/react's description claims integration with @awthaq/client that does not exist",
+      "issue_file": ".issues/low/DESS-007-developer-experience-sdk-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/package.json",
+          "line": 5,
+          "snippet": "  \"description\": \"React provider glue over @awthaq/client, including QadiProvider integration.\",",
+          "note": "No @awthaq/client in dependencies (lines 27-33); no import."
+        },
+        {
+          "path": "packages/react/src/index.ts",
+          "line": 3,
+          "snippet": "// React provider glue over @awthaq/client, including QadiProvider integration.",
+          "note": "Same claim in the barrel header."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "frontend-docs-truthfulness",
+      "fix": {
+        "summary": "Make the claim true (BE-004 adds @awthaq/client as a real dependency for CsrfClientLive) or reword; fix the client package's own misleading description too.",
+        "steps": [
+          "If BE-004 lands (recommended): keep the wording but make it accurate: \"React bindings: reactive AtomHttpApi clients over the awthaq contract (CSRF via @awthaq/client), Providers with QadiProvider integration.\"",
+          "If BE-004 is deferred: reword to \"React provider glue over the @awthaq/api contracts via effect's AtomHttpApi, including QadiProvider integration.\" in package.json:5 and index.ts:3.",
+          "`packages/client/package.json:5` and `src/index.ts:3` say \"AtomHttpApi client and session atom\" but the package has neither (plain HttpApiClient + SessionStore + PasskeyClient) — reword to \"Effect HttpApiClient bindings for the awthaq contract: CSRF client middleware, error-code derivation, session store, Promise facade, passkey ceremony helper.\""
+        ],
+        "files": [
+          "packages/react/package.json",
+          "packages/react/src/index.ts",
+          "packages/client/package.json",
+          "packages/client/src/index.ts"
+        ],
+        "tests": [
+          "No test; reviewed with DESS-001."
+        ],
+        "acceptance": [
+          "Descriptions match dependencies/exports."
+        ],
+        "spec_refs": [],
+        "effort": "S"
+      },
+      "depends_on": [
+        "BE-004"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "BE-004",
+      "level": "medium",
+      "category": "dx",
+      "package": "react",
+      "title": "Reactive React client covers only the core session; plugin routes need hand-built clients",
+      "issue_file": ".issues/medium/BE-004-bereket-engida.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/src/AuthClientAtom.ts",
+          "line": 37,
+          "snippet": "export class ReactAuthClient extends AtomHttpApi.Service<ReactAuthClient>()(\n  \"awthaq/react/ReactAuthClient\",\n  {\n    api: AuthCore.AuthCoreApi,\n    httpClient: FetchHttpClient.layer,\n  },\n) {}",
+          "note": "Fixed to AuthCoreApi; no baseUrl/transformClient option either (apps mounting auth under /api/auth or another origin cannot configure it)."
+        },
+        {
+          "path": "packages/react/src/AuthClientAtom.ts",
+          "line": 19,
+          "snippet": "// Password's sign-in mutation) builds its own `AtomHttpApi.Service` directly\n// against its own composed `api`",
+          "note": "Documented stance; every plugin needs a hand-built service."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "CWM-005"
+      ],
+      "workstream": "react-client-atoms-factory",
+      "fix": {
+        "summary": "Export a generic reactive-client factory over an app's composed `auth.api`, carrying CSRF + transport options, and rebuild the built-in session/subject atoms on it.",
+        "steps": [
+          "New `packages/react/src/ReactClient.ts`: `export const makeReactClient = <Self>() => <const Id extends string, ApiId extends string, Groups extends HttpApiGroup.Constraint>(id: Id, options: { api: HttpApi.HttpApi<ApiId, Groups>; baseUrl?: string | URL; transformClient?: …; csrf?: boolean })` that calls `AtomHttpApi.Service<Self>()(id, { api, baseUrl, transformClient, httpClient: csrf === false ? FetchHttpClient.layer : Layer.merge(FetchHttpClient.layer, AuthClient.CsrfClientLive) })`. Class-style usage mirrors AtomHttpApi: `class AppClient extends makeReactClient<AppClient>()(\"app/Client\", { api: auth.api }) {}` → `AppClient.query(\"organization\",\"active\", …)` / `AppClient.mutation(\"password\",\"signIn\")` fully typed from the composed api.",
+          "Add `@awthaq/client` as a dependency of `@awthaq/react` (makes the package description true, DESS-007) to reuse `CsrfClientLive`.",
+          "Rebuild `ReactAuthClient`/`ReactSubjectClient` with `makeReactClient` (keeps names/exports; CSRF now provided — closes NF-11-1 for the built-ins).",
+          "Export `sessionReactivityKeys = [\"session\"] as const`? — NO (`as const` is an assertion per the no-assertions rule); export `const SESSION_KEY = \"session\"` and document `reactivityKeys: [SESSION_KEY]` for session-changing mutations (sign-in, sign-out, setActive org, accept invite).",
+          "README (react): an 'Organization switcher' recipe (CWM-005): `AppClient.query(\"organization\",\"active\")` + `AppClient.mutation(\"organization\",\"setActive\")` called with `reactivityKeys: [SESSION_KEY]` + `useInvalidate()` per BEH-EA-181. Confirm endpoint names against `packages/organization/src/OrganizationApi.ts` when writing."
+        ],
+        "files": [
+          "packages/react/src/ReactClient.ts (new)",
+          "packages/react/src/AuthClientAtom.ts",
+          "packages/react/src/index.ts",
+          "packages/react/package.json",
+          "packages/react/tsconfig.src.json",
+          "packages/react/README.md"
+        ],
+        "tests": [
+          "TDD: `packages/react/test/ReactClient.test.ts` — type-level: `makeReactClient` over a synthetic 2-group api exposes `query(\"g1\",\"e\")` with the right success type and rejects an unknown group at compile time (`// @ts-expect-error`); runtime: with fetch stubbed, a mutation on a CsrfProtection group sends `x-csrf-token` from `document.cookie`, and `baseUrl` prefixes the request URL."
+        ],
+        "acceptance": [
+          "One call over `auth.api` yields typed atoms for every installed plugin group.",
+          "Built-in ReactAuthClient mutations send the CSRF header.",
+          "`baseUrl` configurable."
+        ],
+        "spec_refs": [
+          "BEH-EA-169",
+          "BEH-EA-170",
+          "BEH-EA-178"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "CDS-007",
+        "EAR-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "CWM-005",
+      "level": "medium",
+      "category": "dx",
+      "package": "react",
+      "title": "packages/react exposes no organization atoms — an app migrating Clerk's OrganizationSwitcher must hand-build its own reactive layer",
+      "issue_file": ".issues/medium/CWM-005-clerk-workos-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/src/AuthClientAtom.ts",
+          "line": 19,
+          "snippet": "// Password's sign-in mutation) builds its own `AtomHttpApi.Service` directly\n// against its own composed `api`",
+          "note": "Same root cause (reactive layer covers only AuthCoreApi); BE-004's generic factory makes org atoms a one-liner and its plan includes the org-switcher recipe with reactivityKeys wiring."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "BE-004",
+      "duplicates": [],
+      "workstream": "react-client-atoms-factory",
+      "fix": null,
+      "depends_on": [
+        "BE-004"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "RSC-004",
+      "level": "medium",
+      "category": "correctness",
+      "package": "react",
+      "title": "BEH-EA-179's derive-subject-from-sessionAtom and same-render sign-out guarantee is not what shipped",
+      "issue_file": ".issues/medium/RSC-004-react-server-components-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/src/AuthClientAtom.ts",
+          "line": 97,
+          "snippet": "export const subjectDtoAtom = ReactSubjectClient.query(\"subject\", \"current\", {\n  reactivityKeys: [\"session\"],\n});",
+          "note": "Same BEH-EA-179 deviation EAR-002 (high) already covers; RSC-004's option (b) — gate on sessionAtom — is exactly EAR-002's plan."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "EAR-002",
+      "duplicates": [],
+      "workstream": "react-provider-subject-pipeline",
+      "fix": null,
+      "depends_on": [
+        "EAR-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "PCS-007",
+      "level": "info",
+      "category": "dx",
+      "package": "react",
+      "title": "Client-side decision invalidation is a disconnected model: reactivity keys, no server push",
+      "issue_file": ".issues/info/PCS-007-permission-caching-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "WONTFIX-CANDIDATE",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/react/src/AuthClientAtom.ts",
+          "line": 97,
+          "snippet": "export const subjectDtoAtom = ReactSubjectClient.query(\"subject\", \"current\", {\n  reactivityKeys: [\"session\"],\n});",
+          "note": "Accurate description of the documented model (BEH-EA-178/181 put invalidation on the app); the recommended fix presupposes an SSE/WebSocket push channel that does not exist and is not on spec/roadmap.md — speculative infra. FAMS-008's focus revalidation narrows the staleness window meanwhile."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "react-client-atoms-factory",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "wontfix"
+    },
+    {
+      "id": "EAR-003",
+      "level": "medium",
+      "category": "dx",
+      "package": "react",
+      "title": "No 'use client' directive in any packages/react source file",
+      "issue_file": ".issues/medium/EAR-003-effect-atom-react-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/src/Providers.tsx",
+          "line": 1,
+          "snippet": "// @awthaq/react — Providers",
+          "note": "Same root cause as RSC-002 (no \"use client\" anywhere in packages/react/src); RSC-002 is the higher-severity canonical."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "RSC-002",
+      "duplicates": [],
+      "workstream": "react-provider-subject-pipeline",
+      "fix": null,
+      "depends_on": [
+        "RSC-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "EAR-001",
+      "level": "high",
+      "category": "correctness",
+      "package": "react",
+      "title": "QadiProvider's inner registry shadows the outer one, so the subject prop can never update after mount",
+      "issue_file": ".issues/high/EAR-001-effect-atom-react-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/src/Providers.tsx",
+          "line": 103,
+          "snippet": "  return (\n    <RegistryProvider initialValues={initialValues}>\n      <SubjectBridge atoms={atoms} instrument={instrument} initialValues={initialValues}>\n        {children}\n      </SubjectBridge>\n    </RegistryProvider>\n  );",
+          "note": "SubjectBridge (and its useAtomValue(subjectDtoAtom)) resolves against the OUTER registry."
+        },
+        {
+          "path": "node_modules/.pnpm/@qadi+react@0.7.0_react@19.3.0_scheduler@0.27.0/node_modules/@qadi/react/lib/QadiProvider.js",
+          "line": 82,
+          "snippet": "    const registryRef = useRef(undefined);\n    const registry = (registryRef.current ??= AtomRegistry.make({\n        initialValues: [\n            [atoms.subject, subject],\n            ...(initialValues ?? []),\n        ],\n    }));",
+          "note": "QadiProvider builds its own registry and provides it (line 130 `RegistryContext.Provider, { value: registry …`) to children — so every mutation/invalidation run by app code under Providers hits the INNER registry; the outer subjectDtoAtom never refetches."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "react-provider-subject-pipeline",
+      "fix": {
+        "summary": "Collapse to ONE registry: drop the outer RegistryProvider, seed everything through QadiProvider's initialValues, and derive/sync the qadi subject inside QadiProvider's registry from a new derived `subjectAtom` (implemented jointly with EAR-002).",
+        "steps": [
+          "In `packages/react/src/AuthClientAtom.ts` add an exported derived `subjectAtom = Atom.make((get) => …)` returning `AuthSubject | undefined` (semantics defined in EAR-002's plan) — this is the single place the subject is derived.",
+          "Rewrite `packages/react/src/Providers.tsx`: remove `RegistryProvider` and the outer `SubjectBridge` read. Render `<QadiProvider atoms={atoms} subject={seededSubject} initialValues={seeds} instrument={instrument ?? false}><SubjectSync atoms={atoms} />{children}</QadiProvider>`.",
+          "Compute `seeds` (sessionAtom/subjectDtoAtom seed pairs, plus RSC-006's hydrated decisions later) and `seededSubject` ONCE with `useState(() => …)` — NOT per render. Reason: QadiProvider's resync effect (`if (registry.get(atoms.subject) !== subject) registry.set(atoms.subject, subject)`, QadiProvider.js:103-107) would otherwise overwrite the live subject with a freshly-allocated stale seed object on every parent re-render.",
+          "`SubjectSync` (new internal component, same file): `const registry = useContext(RegistryContext)` (from `@effect/atom-react/RegistryContext`, which inside QadiProvider IS the qadi registry) and `useAtomSubscribe(AuthClientAtom.subjectAtom, (s) => registry.set(atoms.subject, s), { immediate: true })` (`@effect/atom-react/Hooks` exports `useAtomSubscribe`). The write happens in the registry subscription, not a React effect, so gates re-decide in the same registry batch as the session change. Renders `null`.",
+          "Update the file header comment (lines 5-17) to describe the single-registry design and why (EAR-001).",
+          "No type assertions: `seed` helper at Providers.tsx:86 already produces typed tuples; keep it."
+        ],
+        "files": [
+          "packages/react/src/Providers.tsx",
+          "packages/react/src/AuthClientAtom.ts",
+          "packages/react/test/Providers.test.tsx"
+        ],
+        "tests": [
+          "TDD first (fails at HEAD): `packages/react/test/Providers.test.tsx` — scenario \"EAR-001: a session-keyed mutation under Providers flips useSubject without remount\": stub `fetch` (vi.stubGlobal) so GET /session and GET /subject return user:1 first, then user:2; render `<Providers atoms initialSession initialSubject>` with a probe calling `useSubject()`, trigger `Reactivity` invalidation of key `session` from a child (e.g. `useAtomSet(ReactAuthClient.mutation(\"session\",\"revokeOthers\"))` called with `reactivityKeys: [\"session\"]`, or `Reactivity.invalidate` run via the inner registry), `await waitFor` probe text `user:2…`.",
+          "Scenario \"re-rendering Providers' parent does not reset the live subject to the seed\": after the flip to user:2, re-render the parent with the same props and assert the probe still reads user:2."
+        ],
+        "acceptance": [
+          "Exactly one AtomRegistry exists under `<Providers>` (no RegistryProvider import remains in Providers.tsx).",
+          "After a `[\"session\"]`-keyed mutation, `useSubject()` under Providers reflects the refetched subject without remount (test above green).",
+          "BEH-EA-178/179 feature text unchanged; traceability row for Providers.test.tsx in `spec/traceability.md` updated to mention the invalidation test; `pnpm run spec:verify:strict` green."
+        ],
+        "spec_refs": [
+          "BEH-EA-177",
+          "BEH-EA-178",
+          "BEH-EA-179"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "RSC-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "EAR-005",
+      "level": "info",
+      "category": "correctness",
+      "package": "react",
+      "title": "Seeded SSR props guarantee a hydration mismatch in the guarded subtree",
+      "issue_file": ".issues/info/EAR-005-effect-atom-react-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "INVALID",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "node_modules/.pnpm/@effect+atom-react@4.0.0-rc.116_effect@4.0.0-rc.116_react@19.3.0_scheduler@0.27.0/node_modules/@effect/atom-react/src/Hooks.ts",
+          "line": 46,
+          "snippet": "    getServerSnapshot() {\n      return Atom.getServerValue(atom, registry)\n    }",
+          "note": ""
+        },
+        {
+          "path": "../effect/packages/effect/src/unstable/reactivity/Atom.ts",
+          "line": 2582,
+          "snippet": "  <A>(self: Atom<A>, registry: Registry.AtomRegistry): A =>\n    ServerValueTypeId in self\n      ? (self as any)[ServerValueTypeId]((atom: Atom<any>) => registry.get(atom))\n      : registry.get(self)",
+          "note": "Neither sessionAtom (Atom.make) nor subjectDtoAtom (AtomHttpApi query) carries a ServerValue override (grep of AtomHttpApi.ts finds none), so the server snapshot is `registry.get(atom)`."
+        },
+        {
+          "path": "node_modules/.pnpm/@effect+atom-react@4.0.0-rc.116_effect@4.0.0-rc.116_react@19.3.0_scheduler@0.27.0/node_modules/@effect/atom-react/src/RegistryContext.ts",
+          "line": 86,
+          "snippet": "  if (ref.current === null) {\n    ref.current = {\n      registry: AtomRegistry.make({\n        scheduleTask: options.scheduleTask ?? scheduleTask,\n        initialValues: options.initialValues,",
+          "note": "RegistryProvider seeds initialValues at construction during the SERVER render too — so server and client both read the seeded value; no mismatch for the seeded flow. RSC-002's planned renderToString+hydrateRoot test pins this."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "react-provider-subject-pipeline",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "wontfix"
+    },
+    {
+      "id": "RSC-002",
+      "level": "high",
+      "category": "dx",
+      "package": "react",
+      "title": "Providers.tsx lacks \"use client\"; canonical RSC usage crashes on first hook call",
+      "issue_file": ".issues/high/RSC-002-react-server-components-auth-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/src/Providers.tsx",
+          "line": 1,
+          "snippet": "// @awthaq/react — Providers\n//\n// spec/behaviors/23-react.md, BEH-EA-177/178/179.",
+          "note": "File opens with a comment, no \"use client\" directive; `grep -rln '\"use client\"' packages/*/src` returns nothing at HEAD."
+        },
+        {
+          "path": "packages/react/src/Providers.tsx",
+          "line": 58,
+          "snippet": "  const subjectResult = useAtomValue(subjectDtoAtom);",
+          "note": "Hook call inside SubjectBridge, a component defined in this directive-less module."
+        },
+        {
+          "path": "node_modules/.pnpm/@qadi+react@0.7.0_react@19.3.0_scheduler@0.27.0/node_modules/@qadi/react/lib/QadiProvider.js",
+          "line": 1,
+          "snippet": "\"use client\";",
+          "note": "Upstream modules carry the directive; awthaq's wrapper does not."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "EAR-003"
+      ],
+      "workstream": "react-provider-subject-pipeline",
+      "fix": {
+        "summary": "Mark every hook-bearing/client-only module of @awthaq/react as a client module and pin SSR behavior with a server-render test.",
+        "steps": [
+          "Add `\"use client\";` as the very first line of `packages/react/src/Providers.tsx` (before the header comment).",
+          "Add `\"use client\";` to `packages/react/src/index.ts` as well: the barrel re-exports `@qadi/react` hooks and `Providers`, so an RSC importing `{ Providers }` from `@awthaq/react` gets a client reference rather than evaluating the module server-side. `AuthClientAtom.ts`/`Subject.ts` are hook-free and may stay directive-free, but the barrel must carry it.",
+          "Confirm `tsc -b` preserves the directive in `packages/react/lib/Providers.js`/`lib/index.js` (TS keeps leading string-literal prologues); if the build ever drops it, add a package-smoke assertion (`scripts/package-smoke.mjs`) that `lib/Providers.js` starts with `\"use client\"`.",
+          "Add an oxlint/grep-based repo check (or a unit test in `packages/react/test/`) that every `packages/react/src/*.tsx` file starts with `\"use client\"` so a new component module cannot regress this."
+        ],
+        "files": [
+          "packages/react/src/Providers.tsx",
+          "packages/react/src/index.ts",
+          "scripts/package-smoke.mjs",
+          "packages/react/test/ClientBoundary.test.ts (new)"
+        ],
+        "tests": [
+          "TDD first: `packages/react/test/ClientBoundary.test.ts` — scenario \"every client module starts with the use client directive\": read `src/Providers.tsx` and `src/index.ts` and assert the first statement is `\"use client\"` (fails at HEAD).",
+          "`packages/react/test/Providers.ssr.test.tsx` (new, `// @vitest-environment node` pragma or a separate vitest project) — scenario \"seeded Providers renders on the server and hydrates without mismatch\": `renderToString(<Providers atoms initialSession initialSubject>…)` then `hydrateRoot` in happy-dom with `onRecoverableError` spy asserting zero recoverable errors. This also pins EAR-005's (invalid) mismatch claim."
+        ],
+        "acceptance": [
+          "`head -1 packages/react/src/Providers.tsx` and `head -1 packages/react/lib/Providers.js` print `\"use client\";`.",
+          "The SSR test renders seeded session/subject text server-side and hydrates with no recoverable error.",
+          "`pnpm run typecheck`, `pnpm run test`, `pnpm package:smoke` green."
+        ],
+        "spec_refs": [
+          "BEH-EA-177"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "EAR-006",
+      "level": "low",
+      "category": "dx",
+      "package": "react",
+      "title": "Fetch failure is reported with a render-phase console.error and is otherwise indistinguishable from loading",
+      "issue_file": ".issues/low/EAR-006-effect-atom-react-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/src/Providers.tsx",
+          "line": 65,
+          "snippet": "  if (AsyncResult.isFailure(subjectResult)) {\n    console.error(\n      \"[@awthaq/react] subjectDtoAtom failed to resolve — QadiProvider will see `subject: undefined` \" +\n        \"(indistinguishable from still-loading) until it succeeds:\",\n      subjectResult.cause,\n    );\n  }",
+          "note": "Render-phase side effect; no retry, no typed status exposed."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "react-provider-subject-pipeline",
+      "fix": {
+        "summary": "Replace the render-phase console.error with an exported auth-status atom/hook plus an optional `onError` prop and a retry handle.",
+        "steps": [
+          "In `AuthClientAtom.ts` export `authStatusAtom = Atom.make((get) => …)` returning a tagged union `{ _tag: \"Pending\" } | { _tag: \"SignedOut\" } | { _tag: \"Ready\", subject } | { _tag: \"Failed\", cause }` derived from sessionAtom + subjectDtoAtom (Failure of either, excluding the Unauthenticated→null translation, ⇒ Failed).",
+          "Export `useAuthStatus()` from a new `packages/react/src/Hooks.ts` (\"use client\"): returns the status plus `retry = useAtomRefresh(subjectDtoAtom)` combined with a refresh of the raw session query.",
+          "Add optional `onError?: (cause: Cause.Cause<unknown>) => void` to `ProvidersProps`; inside `SubjectSync` use `useAtomSubscribe(authStatusAtom, …)` to call it once per transition into Failed (not per render). Default when absent: a single `console.error` from that subscription (dev-visible, not repeated under StrictMode).",
+          "Delete the render-phase block at Providers.tsx:59-71.",
+          "Export the new hook from `src/index.ts`."
+        ],
+        "files": [
+          "packages/react/src/Providers.tsx",
+          "packages/react/src/AuthClientAtom.ts",
+          "packages/react/src/Hooks.ts (new)",
+          "packages/react/src/index.ts"
+        ],
+        "tests": [
+          "TDD first: `Providers.test.tsx` scenario \"a 500 from /subject surfaces as Failed via useAuthStatus and calls onError exactly once\": stub fetch → 500; spy `onError`; render in `<StrictMode>`; assert status probe `Failed`, `onError` called once, `console.error` not called during render.",
+          "Scenario \"retry() refetches and recovers\": second stubbed response 200 → probe becomes `Ready`."
+        ],
+        "acceptance": [
+          "A persistent subject failure is distinguishable from loading through a public hook.",
+          "No console output is produced during render.",
+          "Retry path works without remount."
+        ],
+        "spec_refs": [
+          "BEH-EA-179",
+          "BEH-EA-180"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "EAR-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "CWM-008",
+      "level": "info",
+      "category": "docs",
+      "package": "react",
+      "title": "Deliberate zero-component UI stance is undocumented in the packages themselves — migration scoping relies on reading header comments",
+      "issue_file": ".issues/info/CWM-008-clerk-workos-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/README.md",
+          "line": 5,
+          "snippet": "Client. React provider glue over @awthaq/client, including QadiProvider integration.",
+          "note": "Only README text; no statement of the headless (no drop-in components) stance anywhere in packages/*/README.md or spec/overview.md."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "frontend-docs-truthfulness",
+      "fix": {
+        "summary": "State the headless positioning normatively.",
+        "steps": [
+          "`packages/react/README.md` (in DESS-001's rewrite): a 'What this package does not ship' section — no sign-in/sign-up/user-button/org-switcher components, ever; apps build forms against typed contract errors (BEH-EA-183) and org screens via `makeReactClient` (BE-004).",
+          "`spec/overview.md` client row: one sentence recording the headless stance."
+        ],
+        "files": [
+          "packages/react/README.md",
+          "spec/overview.md"
+        ],
+        "tests": [
+          "Docs-only."
+        ],
+        "acceptance": [
+          "Headless stance stated in README and overview."
+        ],
+        "spec_refs": [
+          "BEH-EA-183"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "DESS-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "RSC-006",
+      "level": "medium",
+      "category": "architecture",
+      "package": "react",
+      "title": "Server-decided gate seeding (BEH-EA-186/192) is unimplemented; first paint shows pending for every auth gate",
+      "issue_file": ".issues/medium/RSC-006-react-server-components-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/src/index.ts",
+          "line": 19,
+          "snippet": "export * from \"@qadi/react\";",
+          "note": "OVERSTATED part: `dehydrateDecisions`/`hydrateDecisions` DO exist and are re-exported through this star (qadi packages/react/src/Hydration.ts:205/346; installed @qadi/react 0.7.0 lib/index.d.ts `export * from \"./Hydration.ts\"`). The `.scratch/next-package/spec.md:236-245` decision says hydration is app-level wiring from those exports."
+        },
+        {
+          "path": "packages/react/src/Providers.tsx",
+          "line": 95,
+          "snippet": "  const initialValues = [\n    ...(initialSession === undefined\n      ? []\n      : [seed(sessionAtom, AsyncResult.success(initialSession))]),\n    ...(initialSubject === undefined\n      ? []\n      : [seed(subjectDtoAtom, AsyncResult.success(initialSubject))]),\n  ];",
+          "note": "CONFIRMED part: Providers has no `decisions`/extra-`initialValues` input and builds QadiProvider's initialValues itself, so an app using `@awthaq/react`'s Providers has NO way to feed hydrateDecisions output into QadiProvider — BEH-EA-192 is unreachable without abandoning Providers. The README worked example the next-package decision promised does not exist."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "next-react-ssr-bridge",
+      "fix": {
+        "summary": "Let Providers accept the server's dehydrated decisions (and arbitrary extra seeds), hydrate them against the seeded subject, and document the server half.",
+        "steps": [
+          "`ProvidersProps`: add `readonly decisions?: DehydratedDecisions` (type from `@qadi/react`) and `readonly initialValues?: InitialValues` (escape hatch, merged last).",
+          "In the `useState` seed initializer (EAR-001): `const hydrated = decisions !== undefined && seededSubject !== undefined ? Array.from(hydrateDecisions(atoms, decisions, seededSubject)) : []` and append to the QadiProvider `initialValues` (BEH-EA-192's exact wiring). `hydrateDecisions` already drops a payload whose subjectId mismatches (qadi Hydration.ts:363-381) — no extra trust logic here.",
+          "`packages/next/README.md`: add the server half (BEH-EA-186/187/191): in the page's data-loading Effect resolve the subject once, `decide` each needed policy against attributes-only resources, `dehydrateDecisions(entries)`, pass `decisions` to Providers — consistent with the existing decision that hydration is app-level (no new next export).",
+          "Keep decisions JSON-serializable across the RSC boundary (they already are plain JSON per BEH-EA-186)."
+        ],
+        "files": [
+          "packages/react/src/Providers.tsx",
+          "packages/react/test/Providers.test.tsx",
+          "packages/next/README.md"
+        ],
+        "tests": [
+          "TDD first: `Providers.test.tsx` scenario \"BEH-EA-192: a server-decided gate renders its verdict on first paint\": build a policy with `@qadi/core`, dehydrate an Allow for subject user:1, render `<Providers atoms initialSession initialSubject decisions={…}><Can policy resource pending='pending'>granted</Can></Providers>` and assert the first render shows `granted` (no `pending`). Plus \"a payload for another subject is dropped (renders pending)\"."
+        ],
+        "acceptance": [
+          "First paint of a server-decided `Can` is its verdict, not pending.",
+          "Mismatched-subject payload is ignored.",
+          "`spec/traceability.md` gains BEH-EA-192 coverage row; `spec:verify:strict` green."
+        ],
+        "spec_refs": [
+          "BEH-EA-186",
+          "BEH-EA-192"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "EAR-001",
+        "EAR-002",
+        "RSC-005"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "EAR-002",
+      "level": "high",
+      "category": "compliance",
+      "package": "react",
+      "title": "Subject is derived from a second independent fetch, and after sign-out it is an anonymous AuthSubject rather than undefined",
+      "issue_file": ".issues/high/EAR-002-effect-atom-react-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/src/Subject.ts",
+          "line": 38,
+          "snippet": "export const toSubject = (dto: SubjectContract.SubjectDto | undefined): AuthSubject | undefined =>\n  dto === undefined\n    ? undefined\n    : makeSubject({",
+          "note": "Subject derives only from the subject DTO; sessionAtom is never consulted."
+        },
+        {
+          "path": "packages/react/src/Providers.tsx",
+          "line": 72,
+          "snippet": "  const dto = AsyncResult.isSuccess(subjectResult) ? subjectResult.value : undefined;",
+          "note": "Fed from subjectDtoAtom (GET /subject), which resolves an anonymous SubjectDto for signed-out callers (spec/traceability.md:189: `id: \"anonymous\"` for no credential) — never undefined after sign-out."
+        },
+        {
+          "path": "spec/behaviors/23-react.md",
+          "line": 63,
+          "snippet": "REQUIREMENT: The React provider tree MUST derive qadi's `subject` prop from\n             `sessionAtom`'s current value, not from a second, independently\n             fetched source; when the session becomes `undefined` (sign-out),\n             `subject` MUST become `undefined` in the same render.",
+          "note": "BEH-EA-179 requirement the code does not meet."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "RSC-004"
+      ],
+      "workstream": "react-provider-subject-pipeline",
+      "fix": {
+        "summary": "Gate the subject on sessionAtom: `subjectAtom` is undefined unless sessionAtom is a settled, non-waiting Success with a real session AND subjectDtoAtom is a settled, non-waiting Success. Keeps the separate /subject endpoint (Subject.ts / qadi SubjectApi.ts rationale) but makes sessionAtom the gate, closing the stale-grant window in the same registry batch.",
+        "steps": [
+          "In `packages/react/src/AuthClientAtom.ts` define `export const subjectAtom = Atom.make((get) => { const s = get(sessionAtom); if (!AsyncResult.isSuccess(s) || s.waiting || s.value === null) return undefined; const d = get(subjectDtoAtom); if (!AsyncResult.isSuccess(d) || d.waiting) return undefined; return Subject.toSubject(d.value); })`. Import `toSubject` from `./Subject.ts` (no cycle: Subject.ts imports only @qadi/core and a type).",
+          "Because both atoms carry `reactivityKeys: [\"session\"]`, an invalidation marks both `waiting` in the same registry tick → subject collapses to `undefined` (gates render `pending`, per BEH-EA-180) until BOTH have settled against the new session. Sign-out → sessionAtom `success(null)` → subject `undefined`, satisfying BEH-EA-179 literally.",
+          "Wire `subjectAtom` into Providers via EAR-001's `SubjectSync`; `seededSubject` = `initialSession !== undefined && initialSubject !== undefined ? toSubject(initialSubject) : undefined` (a seeded subject without a seeded session is not trusted).",
+          "Rewrite the header comments in `Subject.ts` (lines 1-11) and `AuthClientAtom.ts` (lines 24-29, 90-96) to state the gating rule instead of the 'not an independently-chosen source' reframing.",
+          "Note for implementer (not an open decision — BEH-EA-179 is explicit): signed-out visitors get `subject: undefined`, so qadi gates stay `pending` for anonymous users. If anonymous-permitted gates are later wanted, that is a BEH-EA-179 spec amendment, not part of this fix."
+        ],
+        "files": [
+          "packages/react/src/AuthClientAtom.ts",
+          "packages/react/src/Subject.ts",
+          "packages/react/src/Providers.tsx",
+          "packages/react/test/Providers.test.tsx",
+          "packages/react/test/SubjectAtom.test.ts (new)"
+        ],
+        "tests": [
+          "TDD first: `packages/react/test/SubjectAtom.test.ts` — pure registry tests (no React): (1) \"session success(null) ⇒ subjectAtom undefined even when subjectDtoAtom holds a subject\" (seed both via `AtomRegistry.make({ initialValues })`); (2) \"session waiting ⇒ undefined\"; (3) \"both settled ⇒ AuthSubject with dto roles/permissions\".",
+          "`Providers.test.tsx` scenario \"BEH-EA-179: sign-out closes every gate in the same render\": seeded user:1, stub fetch so GET /session then 401s (→ success(null)); invalidate `session`; assert the useSubject probe reads `undefined` at the first render where the session probe reads `no-session` (single `waitFor` checking both texts together).",
+          "BDD: `features/features/07-client-integration/23-react.feature` REQ-EA-506/507 stay @skip @unwired (harness ticket 36); no text change needed since the code now matches them."
+        ],
+        "acceptance": [
+          "For every render where the session probe shows `no-session` or `pending`, the subject probe shows `undefined`.",
+          "No code path returns an anonymous AuthSubject to QadiProvider.",
+          "`pnpm run test` / `typecheck` / `spec:verify:strict` green."
+        ],
+        "spec_refs": [
+          "BEH-EA-179",
+          "BEH-EA-180"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "EAR-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "BO-007",
+      "level": "low",
+      "category": "api",
+      "package": "react",
+      "title": "Wildcard re-export of @qadi/react leaks upstream renames into the public API",
+      "issue_file": ".issues/low/BO-007-balazs-orban.md",
+      "current_status": "needs-triage",
+      "verdict": "WONTFIX-CANDIDATE",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/react/src/index.ts",
+          "line": 10,
+          "snippet": "// BEH-EA-180 through 184 (`Can`/`Cannot`/`useCan`/`useInvalidate`/\n// `useProjected`/`useSubject`/`useDecision`/etc.) are `@qadi/react`'s own\n// exports, re-exported here verbatim — BEH-EA-184 explicitly forbids a\n// second, awthaq-specific evaluation shortcut",
+          "note": "The finding argues purely from upstream-rename/API-stability hazard; the library is pre-release, @qadi/react is the maintainer's own library (../qadi), and the standing preference is not to argue from API stability. The real residual risk (duplicate context instances) is handled by DESS-006's peerDependency plan."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "react-package-deps",
+      "fix": null,
+      "depends_on": [
+        "DESS-006"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "wontfix"
+    },
+    {
+      "id": "DESS-006",
+      "level": "low",
+      "category": "api",
+      "package": "react",
+      "title": "@awthaq/react star-re-exports the entire @qadi/react surface",
+      "issue_file": ".issues/low/DESS-006-developer-experience-sdk-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/react/src/index.ts",
+          "line": 19,
+          "snippet": "export * from \"@qadi/react\";",
+          "note": "Verbatim re-export is mandated by BEH-EA-184's no-wrapper rule (index.ts:10-16) — provenance/discoverability complaint is a documentation matter."
+        },
+        {
+          "path": "packages/react/package.json",
+          "line": 27,
+          "snippet": "  \"dependencies\": {\n    \"@awthaq/api\": \"workspace:*\",\n    \"@effect/atom-react\": \"catalog:\",\n    \"@qadi/core\": \"^0.7.0\",\n    \"@qadi/react\": \"^0.7.0\",",
+          "note": "REAL part: @qadi/react / @effect/atom-react are hard dependencies, so an app that also installs @qadi/react (it must, to call makeQadiAtoms — or it imports it via the star) at a different version gets two QadiContext/RegistryContext instances."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "react-package-deps",
+      "fix": {
+        "summary": "Make the context-owning libraries peers and document provenance.",
+        "steps": [
+          "`packages/react/package.json`: move `@qadi/react`, `@qadi/core`, `@effect/atom-react` to `peerDependencies` (same ranges) and keep them in `devDependencies` for tests; `effect` likewise peer (catalog range).",
+          "README (DESS-001 rewrite): a provenance table — which exports are awthaq-owned (`Providers`, `AuthClientAtom.*`, `Subject.*`, `makeReactClient`, `useAuthStatus`) vs passthrough from `@qadi/react`.",
+          "Note: upstream qadi is at 0.8.0 (../qadi `git log` dd4d247) — bumping is a separate change."
+        ],
+        "files": [
+          "packages/react/package.json",
+          "packages/react/README.md",
+          "pnpm-lock.yaml"
+        ],
+        "tests": [
+          "`pnpm package:smoke` (publint/attw) green; existing react tests green."
+        ],
+        "acceptance": [
+          "Only one copy of @qadi/react/@effect/atom-react can be resolved in a consuming app."
+        ],
+        "spec_refs": [
+          "BEH-EA-184"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "EAR-004",
+      "level": "medium",
+      "category": "testing",
+      "package": "react",
+      "title": "Tests cover only the seeded path; the live fetch, invalidation, and failure paths are untested",
+      "issue_file": ".issues/medium/EAR-004-effect-atom-react-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/react/test/Providers.test.tsx",
+          "line": 7,
+          "snippet": "// second source\" rest on, so these tests only exercise the seeded path\n// (`initialSession`/`initialSubject`), never the live query path (which\n// would need a real HTTP round trip to prove, `@awthaq/qadi`'s own",
+          "note": "Only 3 tests, all seeded."
+        },
+        {
+          "path": "(test run) pnpm vitest run --project react",
+          "line": 0,
+          "snippet": "Error: socket hang up\n  code: 'ECONNRESET'\n Test Files  1 passed (1)\n      Tests  3 passed (3)",
+          "note": "Observed at HEAD: the unseeded test fires REAL fetches (no stub) — the live path is exercised accidentally and its failure is ignored."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "react-provider-subject-pipeline",
+      "fix": {
+        "summary": "Add a fetch-stubbed live-path suite; these tests are the TDD drivers for EAR-001/EAR-002/EAR-006 and the CSRF new finding.",
+        "steps": [
+          "Add `packages/react/test/support/stubFetch.ts`: a tiny router over `vi.stubGlobal(\"fetch\", …)` keyed on method+pathname returning `Response`s (JSON bodies encoded from `SessionContract.SessionDto`/`SubjectContract.SubjectDto` via `Schema.encodeSync`, 401 bodies for Unauthenticated). Restore in `afterEach`.",
+          "Tests: (1) anonymous first load: GET /session → 401 Unauthenticated ⇒ session probe `no-session` (covers `sessionAtom`'s translation at AuthClientAtom.ts:71-80); (2) invalidation flips subject without remount (EAR-001); (3) sign-out window (EAR-002); (4) 500 ⇒ Failure, not success(null); (5) ReactAuthClient mutation sends `x-csrf-token` (new finding NF-11-1).",
+          "Ensure no test leaves an unstubbed fetch (assert the stub saw every request; fail on unknown route) — removes the ECONNRESET noise.",
+          "Update the header comment of Providers.test.tsx and the `spec/traceability.md` row (line ~195) to list the new live-path coverage."
+        ],
+        "files": [
+          "packages/react/test/support/stubFetch.ts (new)",
+          "packages/react/test/Providers.test.tsx",
+          "spec/traceability.md"
+        ],
+        "tests": [
+          "The scenarios listed in steps; each must be seen failing against HEAD (2, 3, 4-as-Failed, 5) before the corresponding fix lands."
+        ],
+        "acceptance": [
+          "`pnpm vitest run --project react` prints no ECONNRESET and covers anonymous, invalidation, sign-out, failure and CSRF-header paths.",
+          "`pnpm run spec:verify:strict` green."
+        ],
+        "spec_refs": [
+          "BEH-EA-177",
+          "BEH-EA-178",
+          "BEH-EA-179"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    }
+  ],
+  "workstreams": [
+    {
+      "slug": "react-provider-subject-pipeline",
+      "title": "React Providers: client boundary, single registry, session-gated subject",
+      "ids": [
+        "RSC-002",
+        "EAR-003",
+        "EAR-001",
+        "EAR-002",
+        "RSC-004",
+        "EAR-006",
+        "EAR-004",
+        "EAR-005"
+      ],
+      "rationale": "All touch Providers.tsx/AuthClientAtom.ts and the same subject-derivation pipeline; EAR-001 (registry shadowing) and EAR-002 (subject not gated on session) must be redesigned together, and EAR-004's live-path tests are the TDD drivers for both.",
+      "order_hint": 1,
+      "effort": "L",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "csrf-client-bootstrap",
+      "title": "CSRF client bootstrap now that CsrfProtection is live",
+      "ids": [
+        "CDS-007",
+        "DESS-009",
+        "PDR-002",
+        "EHA-003"
+      ],
+      "rationale": "409334e activated CsrfProtection on every mutating group; the client half still sends an empty header on a cold start and the client source still claims CSRF is dormant.",
+      "order_hint": 2,
+      "effort": "M",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "next-getsession-hardening",
+      "title": "@awthaq/next getSession/withNextCookies correctness and test hygiene",
+      "ids": [
+        "RRS-002",
+        "RSC-007",
+        "NSA-006",
+        "ETVS-006"
+      ],
+      "rationale": "Small, independent correctness fixes in GetSession.ts/WithNextCookies.ts and their tests; RRS-002's residual is that the ticket-16 delivery helper is not exported.",
+      "order_hint": 2,
+      "effort": "M",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "next-package-manifest-hygiene",
+      "title": "@awthaq/next manifest: drop phantom @awthaq/react, declare next peer",
+      "ids": [
+        "BO-003",
+        "DESS-004",
+        "MTS-002",
+        "ERAS-005",
+        "NSA-007",
+        "NSA-005"
+      ],
+      "rationale": "Five findings on the same unused dependency (+ knip mask + false description) and one on the missing next peer range — one manifest edit.",
+      "order_hint": 1,
+      "effort": "S",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "next-react-ssr-bridge",
+      "title": "Server→client seam: RSC-safe seeds and server-decided gates",
+      "ids": [
+        "RSC-005",
+        "EAR-007",
+        "RSC-006"
+      ],
+      "rationale": "getSession's server shapes cannot reach Providers (wrong shape AND non-serializable class instances), and Providers cannot accept hydrated qadi decisions — the two halves of BEH-EA-177/185/186/192 never meet.",
+      "order_hint": 3,
+      "effort": "L",
+      "depends_on_workstreams": [
+        "react-provider-subject-pipeline",
+        "next-package-manifest-hygiene"
+      ]
+    },
+    {
+      "slug": "next-server-action-facade",
+      "title": "Typed in-process server-action client + runnable Next recipes",
+      "ids": [
+        "BO-002",
+        "IC-004",
+        "NSA-008",
+        "ERS-006",
+        "NSA-003"
+      ],
+      "rationale": "The README's server-action recipe is a placeholder that now 403s under live CSRF; the fix is a typed HttpApiClient transport over the app's own handler (respecting the no-runtime-construction decision) plus README recipe corrections.",
+      "order_hint": 4,
+      "effort": "L",
+      "depends_on_workstreams": [
+        "csrf-client-bootstrap",
+        "client-promise-facade-errors",
+        "next-package-manifest-hygiene"
+      ]
+    },
+    {
+      "slug": "client-promise-facade-errors",
+      "title": "Error-honest Promise facade",
+      "ids": [
+        "EHA-005",
+        "DESS-003"
+      ],
+      "rationale": "Both findings: PromiseFacade erases E.",
+      "order_hint": 2,
+      "effort": "S",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "react-client-atoms-factory",
+      "title": "Generic reactive client over the composed api (CSRF, baseUrl, focus revalidation)",
+      "ids": [
+        "BE-004",
+        "CWM-005",
+        "FAMS-008",
+        "PCS-007"
+      ],
+      "rationale": "The reactive layer only covers AuthCoreApi, hard-codes transport (no baseUrl, no CSRF — NF-11-1), and never revalidates; one factory fixes all three and turns org/plugin atoms into one-liners.",
+      "order_hint": 3,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "csrf-client-bootstrap",
+        "react-provider-subject-pipeline"
+      ]
+    },
+    {
+      "slug": "client-native-bearer-mode",
+      "title": "Client bearer/native mode (token store + delivery header)",
+      "ids": [
+        "MNA-006"
+      ],
+      "rationale": "Client half of decision ticket 17; blocked on server-side MNA-001.",
+      "order_hint": 5,
+      "effort": "M",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "next-edge-stateless-tier",
+      "title": "Edge/proxy.ts stateless verification tier (decision needed)",
+      "ids": [
+        "BO-006",
+        "ERAS-001",
+        "ERAS-003",
+        "BO-004",
+        "BO-010"
+      ],
+      "rationale": "Presence-only proxy check is the sole edge primitive; the lite JWT verifier exists but is unexported and nothing mints an edge-verifiable cookie. Framework-hoisting (BO-004/010) parked until a second adapter is on the roadmap.",
+      "order_hint": 6,
+      "effort": "L",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "frontend-docs-truthfulness",
+      "title": "Truthful READMEs, descriptions, comments and migration notes",
+      "ids": [
+        "DESS-001",
+        "DESS-007",
+        "MTS-008",
+        "CWM-008",
+        "NAM-012"
+      ],
+      "rationale": "Docs claim the packages are unimplemented, mislabel dependencies, cite stale versions, and omit the headless stance / next-auth migration shape. Best written after the API changes above settle.",
+      "order_hint": 7,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "react-provider-subject-pipeline",
+        "react-client-atoms-factory",
+        "next-server-action-facade",
+        "next-react-ssr-bridge"
+      ]
+    },
+    {
+      "slug": "react-package-deps",
+      "title": "@awthaq/react dependency topology",
+      "ids": [
+        "DESS-006",
+        "BO-007",
+        "MM-001"
+      ],
+      "rationale": "Context-owning libs must be peers to avoid duplicate React contexts; wildcard-bun export already gone; star re-export stays (BEH-EA-184).",
+      "order_hint": 2,
+      "effort": "S",
+      "depends_on_workstreams": []
+    }
+  ],
+  "new_findings": [
+    {
+      "id": "NF-11-1",
+      "title": "ReactAuthClient mutations silently omit the CSRF header and 403 against CSRF-guarded groups",
+      "severity": "high",
+      "workstream": "react-client-atoms-factory",
+      "evidence": [
+        {
+          "path": "packages/react/src/AuthClientAtom.ts",
+          "line": 40,
+          "snippet": "    api: AuthCore.AuthCoreApi,\n    httpClient: FetchHttpClient.layer,",
+          "note": "No CsrfClientLive provided; AuthCoreApi = SessionGroup + AccountGroup, both `.middleware(CsrfProtection)` since 409334e (api/src/Session.ts:64, Account.ts:38)."
+        },
+        {
+          "path": "../effect/packages/effect/src/unstable/httpapi/HttpApiClient.ts",
+          "line": 311,
+          "snippet": "      const middleware = services.mapUnsafe.get(middlewareKeys[index]) as\n        | HttpApiMiddleware.HttpApiMiddlewareClient<any, any, any>\n        | undefined\n      if (middleware === undefined) {\n        return executeMiddleware(group, endpoint, request, middlewareKeys, index - 1)",
+          "note": "A missing client middleware is skipped at runtime…"
+        },
+        {
+          "path": "../effect/packages/effect/src/unstable/reactivity/AtomHttpApi.ts",
+          "line": 212,
+          "snippet": "        Layer.provide(layer, options.httpClient) as Layer.Layer<Self>",
+          "note": "…and AtomHttpApi casts away the ForClient<CsrfProtection> requirement, so nothing type-checks it."
+        }
+      ],
+      "fix": "Provide CsrfClientLive in ReactAuthClient's httpClient layer (done structurally by BE-004's makeReactClient; minimal interim fix: `httpClient: Layer.merge(FetchHttpClient.layer, AuthClient.CsrfClientLive)` + add @awthaq/client dep). Test: EAR-004 scenario (5).",
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "NF-11-2",
+      "title": "applyRotatedSession is not exported from @awthaq/next",
+      "severity": "high",
+      "workstream": "next-getsession-hardening",
+      "evidence": [
+        {
+          "path": "packages/next/src/index.ts",
+          "line": 9,
+          "snippet": "export { getSession } from \"./GetSession.ts\";",
+          "note": "Folded into RRS-002's plan."
+        }
+      ],
+      "fix": "See RRS-002.",
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "NF-11-3",
+      "title": "@awthaq/jwt's standalone makeVerifier is unreachable after the ./* export removal (cross-slice: jwt)",
+      "severity": "medium",
+      "workstream": "next-edge-stateless-tier",
+      "evidence": [
+        {
+          "path": "packages/jwt/src/index.ts",
+          "line": 11,
+          "snippet": "export * as Jwt from \"./Jwt.ts\";\nexport * as JwtApi from \"./JwtApi.ts\";\nexport * as JwtCodec from \"./JwtCodec.ts\";",
+          "note": "verify.ts not exported; package.json exports only \".\" (387838f)."
+        }
+      ],
+      "fix": "Add a `./verify` subpath export to packages/jwt/package.json (keeps the lite verifier free of core/server). Prereq of BO-006 option C.",
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "NF-11-4",
+      "title": "Providers' initialSession/initialSubject are Schema.Class instances — not passable from a Server Component",
+      "severity": "medium",
+      "workstream": "next-react-ssr-bridge",
+      "evidence": [
+        {
+          "path": "packages/api/src/Session.ts",
+          "line": 18,
+          "snippet": "export class SessionDto extends Schema.Class<SessionDto>(\"SessionDto\")({",
+          "note": "Class instances are not serializable Client Component props; folded into RSC-005's plan (accept Encoded + decode)."
+        }
+      ],
+      "fix": "See RSC-005.",
+      "recommended_status": "ready-for-agent"
+    }
+  ],
+  "cross_slice_notes": [
+    "NF-11-3: @awthaq/jwt src/verify.ts (makeVerifier) is unexported since 387838f — jwt slice.",
+    "NSA-008 residual: no handler passes request ip/userAgent into Sessions.issue (Password.ts:866, Passkey.ts:832, OAuth.ts:853) — password/passkey/oauth slices.",
+    "DESS-001 drift guard: 20 other package READMEs carry the same 'planned package' banner.",
+    "RSC-005 hoists toSessionDto into @awthaq/server and replaces private copies in password/admin/passkey.",
+    "MNA-006 is blocked by MNA-001 (server bearer delivery, decision ticket 17).",
+    "PDR-002/EHA-003 share root cause with APS-001/CDS-001/NHS-001/PIL-001/TMS-001 (all fixed by 409334e); `{ csrf: false }` in Auth.make (decision ticket 24, BEH-EA-171/079) remains unimplemented."
+  ]
+}

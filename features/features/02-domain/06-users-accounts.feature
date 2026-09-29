@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @domain @users-accounts
-@skip @unwired
 Feature: Users and Accounts
 
   # BEH-EA-041 — spec/behaviors/06-domain-users-accounts.md
@@ -128,6 +127,7 @@ Feature: Users and Accounts
       Then the refusal is reported as an invalid request outcome
       And it is not reported as a system defect
 
+    # PV-221: the policy is `Accounts.config({ allowZeroAccounts })`, applied to the call here.
     @REQ-EA-125
     Scenario: A deployment that explicitly allows zero-credential accounts permits the unlink
       Given a signed-in user "grace" with exactly one Account, "password"
@@ -208,3 +208,78 @@ Feature: Users and Accounts
       When a client submits a generic update setting "isElevated"
       Then the update is applied
       And the resulting corruption is attributable to the contributing plugin's own schema, not to the base system or to any other plugin that later trusts the field
+
+    # SAM-004/ADR-EA-035: the write-gate is the plugin's own declaration — `UserFields.field` is
+    # client-writable, `UserFields.serverOnly` is not — and trusted server code is never gated.
+    @REQ-EA-985
+    Scenario: Trusted server code can write a field its plugin declared non-writable
+      Given a plugin contributes a field "billingTier" to "User" and declares it non-writable in its own schema
+      When trusted server code sets "billingTier" to "pro"
+      Then the user's account shows "billingTier" as "pro"
+      And a client submitting a generic update of "billingTier" still gets it refused
+
+    @REQ-EA-986
+    Scenario: A refused field leaves the rest of the profile update unapplied
+      Given a plugin contributes a field "billingTier" to "User" and declares it non-writable in its own schema
+      When a client submits a generic update renaming the user and setting "nickname" and "billingTier"
+      Then the update to "billingTier" is not applied
+      And the user's name and "nickname" are unchanged
+
+    @REQ-EA-987
+    Scenario: A field no plugin declared is refused as unknown
+      Given a plugin contributes a field "nickname" to "User" without declaring it non-writable
+      When a client submits a generic update setting "undeclared"
+      Then the update is refused as an unknown field
+
+    @REQ-EA-988
+    Scenario: A value the field's own schema refuses is not stored
+      Given a plugin contributes a field "nickname" to "User" without declaring it non-writable
+      When a client submits a generic update setting "nickname" to a value its schema refuses
+      Then the update is refused as an invalid value
+      And "nickname" holds no value
+
+  # BEH-EA-254 — spec/behaviors/06-domain-users-accounts.md; see also ADR-EA-031, ADR-EA-033
+  @BEH-EA-254
+  Rule: A person can export everything the system holds about them as one document, and no plugin can be left out
+
+    @REQ-EA-989
+    Scenario: An authenticated user downloads one JSON attachment with core's data and every plugin's section
+      Given a signed-in user "ada" with a linked "google" Account and a second live session
+      When "ada" requests her data export
+      Then the response is one JSON attachment that caches nowhere
+      And the document holds her user, both Accounts, both sessions and her own audit activity
+      And the document has a section for the "profile" plugin under its own id
+
+    @REQ-EA-990
+    Scenario: The document carries no secret of any kind
+      Given a signed-in user "ada" with a linked "google" Account and a second live session
+      When "ada" requests her data export
+      Then the document contains no password hash, provider token, session secret or key material
+
+    @REQ-EA-991
+    Scenario: The document carries nothing about anyone else
+      Given a signed-in user "ada" with a linked "google" Account and a second live session
+      And another user "bob" exists
+      When "ada" requests her data export
+      Then the document does not mention "bob"
+
+    @REQ-EA-992
+    Scenario: A contribution that cannot read its store fails the whole export
+      Given a signed-in user "ada" with a linked "google" Account and a second live session
+      And the "profile" plugin's store is unavailable
+      When "ada" requests her data export
+      Then the export is refused as a store outage
+      And no document is produced and no export is recorded
+
+    @REQ-EA-993
+    Scenario: Producing an export is recorded by an event that carries ids only
+      Given a signed-in user "ada" with a linked "google" Account and a second live session
+      When "ada" requests her data export
+      Then "auth.user.dataExported" is published for "ada" as a self-service request, carrying ids only
+
+    @REQ-EA-994
+    Scenario: Exports are rate-limited per account
+      Given a signed-in user "ada" with a linked "google" Account and a second live session
+      And rate limits are enforced
+      When "ada" requests her data export 6 times in a row
+      Then the first 5 exports succeed and the 6th is refused as rate-limited

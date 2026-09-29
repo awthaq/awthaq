@@ -3,56 +3,21 @@
   "ignore": [".scratch/**"],
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.mjs"],
+      "entry": ["scripts/*.mjs", "spec/scripts/*.mjs"],
       "ignoreDependencies": ["@arethetypeswrong/cli"]
     },
-    "packages/api-key": {
-      "ignoreDependencies": [
-        "@awthaq/api",
-        "@awthaq/core",
-        "@awthaq/ports",
-        "@awthaq/server",
-        "@awthaq/sql",
-        "@effect/vitest",
-        "effect"
-      ]
-    },
-    "packages/two-factor": {
-      "ignoreDependencies": [
-        "@awthaq/api",
-        "@awthaq/core",
-        "@awthaq/ports",
-        "@awthaq/server",
-        "@awthaq/sql",
-        "@effect/vitest",
-        "effect"
-      ]
-    },
-    "packages/magic-link": {
-      "ignoreDependencies": [
-        "@awthaq/api",
-        "@awthaq/core",
-        "@awthaq/ports",
-        "@awthaq/server",
-        "@awthaq/sql",
-        "@effect/vitest",
-        "effect"
-      ]
+    "packages/ports": {
+      "entry": ["src/passwordHasherWorker.ts"]
     },
     "packages/cli": {
-      "ignoreDependencies": [
-        "@awthaq/api",
-        "@awthaq/core",
-        "@awthaq/ports",
-        "@awthaq/qadi",
-        "@awthaq/server",
-        "@awthaq/sql",
-        "@effect/vitest",
-        "effect"
-      ]
+      "entry": ["test/fixtures/*.config.ts"],
+      "ignoreExportsUsedInFile": true
     },
-    "packages/next": {
-      "ignoreDependencies": ["@awthaq/react"]
+    "packages/migrate-better-auth": {
+      "ignore": ["test/fixtures/generate-better-auth-export.mjs"]
+    },
+    "features": {
+      "entry": ["step-definitions/**/*.ts", "features/**/*.steps.test.ts"]
     }
   }
 }

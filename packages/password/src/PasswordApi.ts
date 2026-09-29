@@ -8,8 +8,8 @@
 // plugin's own package (`spec/overview.md`: "Each plugin's own groups,
 // schemas, errors, and contract `HttpApi`").
 
-import { Api, SessionContract } from "@awthaq/api";
-import { HookPoint, Hooks } from "@awthaq/core";
+import { Api, EmailContract, SessionContract } from "@awthaq/api";
+import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -68,33 +68,83 @@ export class EmailNotVerified extends Schema.TaggedError<EmailNotVerified>()(
   { httpApiStatus: 403 },
 ) {}
 
+/**
+ * ARF-005 (BEH-EA-259): the account has a second factor and the reset request carried none — the
+ * `Hooks.BeforeCredentialReset` veto refused with code `TWO_FACTOR_REQUIRED`. `401`, like
+ * `Hooks.TwoFactorRequired` at sign-in: the emailed link was valid, but that alone no longer
+ * suffices; clients branch on `_tag` and resubmit with `secondFactorCode`. Any other veto code
+ * reaches the caller as the generic `HookAborted`.
+ */
+export class SecondFactorRequired extends Schema.TaggedError<SecondFactorRequired>()(
+  "SecondFactorRequired",
+  {},
+  { httpApiStatus: 401 },
+) {}
+
+/**
+ * BAM-009: the change-email confirmation mail could not be delivered. The requester is
+ * authenticated, so unlike the enumeration-uniform flows the failure is surfaced (the token stays
+ * unconsumed and expires; asking again mints a fresh one). `502`, like the organization
+ * plugin's `InvitationDeliveryFailed`.
+ */
+export class EmailDeliveryFailed extends Schema.TaggedError<EmailDeliveryFailed>()(
+  "EmailDeliveryFailed",
+  {},
+  { httpApiStatus: 502 },
+) {}
+
+/**
+ * BAM-009: the account has no email identity to replace (a phone-only or anonymous user): the
+ * change-email flow replaces an address, it does not introduce one.
+ */
+export class EmailChangeNotSupported extends Schema.TaggedError<EmailChangeNotSupported>()(
+  "EmailChangeNotSupported",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
+/**
+ * ESS-006: config-independent ceiling on a submitted password. `minLength` and
+ * the breach check live in `checkPolicy` because they read the runtime
+ * `PasswordConfig`, which a static schema cannot; the upper bound needs no
+ * config and stops a multi-megabyte "password" from reaching the hasher
+ * (hash-wasm input cost is linear in its length).
+ */
+export const MAX_PASSWORD_LENGTH = 1024;
+const PasswordInput = Schema.Redacted(Schema.String.check(Schema.isMaxLength(MAX_PASSWORD_LENGTH)));
+
 export const SignUpPayload = Schema.Struct({
-  email: Schema.String,
-  password: Schema.Redacted(Schema.String),
+  email: EmailContract.Email,
+  password: PasswordInput,
 });
 export type SignUpPayload = typeof SignUpPayload.Type;
 
 export const SignInPayload = Schema.Struct({
-  email: Schema.String,
-  password: Schema.Redacted(Schema.String),
+  email: EmailContract.Email,
+  password: PasswordInput,
 });
 export type SignInPayload = typeof SignInPayload.Type;
 
 /** BEH-EA-064/117: answered identically whether or not `email` resolves to an account. */
 export const RequestResetPayload = Schema.Struct({
-  email: Schema.String,
+  email: EmailContract.Email,
 });
 export type RequestResetPayload = typeof RequestResetPayload.Type;
 
 /** Upstream-hardening map, ticket 04: same shape as `RequestResetPayload` — answered identically regardless of whether `email` resolves to an account, or is already verified. */
 export const ResendVerificationPayload = Schema.Struct({
-  email: Schema.String,
+  email: EmailContract.Email,
 });
 export type ResendVerificationPayload = typeof ResendVerificationPayload.Type;
 
 export const ConfirmResetPayload = Schema.Struct({
   token: Schema.Redacted(Schema.String),
-  password: Schema.Redacted(Schema.String),
+  password: PasswordInput,
+  /**
+   * ARF-005: a TOTP or recovery code, required only when the account has a second factor
+   * (`@awthaq/two-factor`'s `credentialResetGate`); ignored otherwise.
+   */
+  secondFactorCode: Schema.optionalKey(Schema.Redacted(Schema.String)),
 });
 export type ConfirmResetPayload = typeof ConfirmResetPayload.Type;
 
@@ -103,9 +153,21 @@ export const VerifyEmailPayload = Schema.Struct({
 });
 export type VerifyEmailPayload = typeof VerifyEmailPayload.Type;
 
+/** BAM-009: `POST /change-email` — the address the confirmation mail is sent to; nothing changes until its owner confirms. */
+export const ChangeEmailPayload = Schema.Struct({
+  newEmail: EmailContract.Email,
+});
+export type ChangeEmailPayload = typeof ChangeEmailPayload.Type;
+
+/** BAM-009: `POST /change-email/confirm` — the token from the mail sent to the new address. */
+export const ConfirmEmailChangePayload = Schema.Struct({
+  token: Schema.Redacted(Schema.String),
+});
+export type ConfirmEmailChangePayload = typeof ConfirmEmailChangePayload.Type;
+
 export const ChangePasswordPayload = Schema.Struct({
-  currentPassword: Schema.Redacted(Schema.String),
-  newPassword: Schema.Redacted(Schema.String),
+  currentPassword: PasswordInput,
+  newPassword: PasswordInput,
 });
 export type ChangePasswordPayload = typeof ChangePasswordPayload.Type;
 
@@ -117,7 +179,7 @@ export type ChangePasswordPayload = typeof ChangePasswordPayload.Type;
  * which mints and returns a fresh, superseding one).
  */
 export const ReauthenticatePayload = Schema.Struct({
-  password: Schema.Redacted(Schema.String),
+  password: PasswordInput,
 });
 export type ReauthenticatePayload = typeof ReauthenticatePayload.Type;
 
@@ -150,7 +212,10 @@ export const PasswordGroup = HttpApiGroup.make("password")
   .add(
     HttpApiEndpoint.post("signUp", "/password/sign-up", {
       payload: SignUpPayload,
-      success: SessionContract.SessionDto,
+      // TMS-005: `200` with the session (`signUpEnumeration: "reveal"`, the
+      // default) or an empty `202` (`"conceal"`: same answer for a fresh and
+      // an existing address, no session until the mailbox is proven).
+      success: [SessionContract.SessionDto, HttpApiSchema.Empty(202)],
       // Each error's own `httpApiStatus` is only honored per member when
       // `error` is a plain array — `HttpApiEndpoint.getErrorSchemas` reads
       // `endpoint.error` as a `Set` of individually-annotated schemas
@@ -161,7 +226,15 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // Wayfinder ticket 03 (AOMS-006/BCR-004): `HookPoint.HookAborted`
       // from a `Hooks.BeforeSignUp` veto tap (e.g. an email-domain
       // allow-list).
-      error: [WeakPassword, EmailAlreadyExists, Api.RateLimited, HookPoint.HookAborted],
+      // MNA-001: `Api.InvalidTokenDelivery` (400) for an unrecognised
+      // `X-Awthaq-Token-Delivery` value.
+      error: [
+        WeakPassword,
+        EmailAlreadyExists,
+        Api.RateLimited,
+        HookPoint.HookAborted,
+        Api.InvalidTokenDelivery,
+      ],
     }),
   )
   .add(
@@ -171,8 +244,19 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // Ticket 12: rate-limited. Upstream-hardening ticket 04: hard-blocks
       // an unverified account. Wayfinder ticket 03 (BCR-004/THS-002):
       // `Hooks.TwoFactorRequired` when a `Hooks.BeforeSessionIssue` tap
-      // (a future `TwoFactor` plugin) diverts.
-      error: [Api.InvalidCredentials, EmailNotVerified, Api.RateLimited, Hooks.TwoFactorRequired],
+      // (a future `TwoFactor` plugin) diverts. NAM-002: `HookPoint.HookAborted`
+      // from a `Hooks.BeforeSignIn` veto tap.
+      // SCP-001: `Users.UserSuspended` when `Users.assertCanSignIn` refuses.
+      // MNA-001: `Api.InvalidTokenDelivery` for an unrecognised `X-Awthaq-Token-Delivery` value.
+      error: [
+        Api.InvalidCredentials,
+        EmailNotVerified,
+        Users.UserSuspended,
+        Api.RateLimited,
+        HookPoint.HookAborted,
+        Hooks.TwoFactorRequired,
+        Api.InvalidTokenDelivery,
+      ],
     }),
   )
   .add(
@@ -190,7 +274,14 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // (`minLength`/`breachCheck`) any other newly-set password is. A
       // plain array, not `Schema.Union` — see `signUp`'s own comment above.
       // Ticket 12: rate-limited.
-      error: [TokenConsumed, WeakPassword, Api.RateLimited],
+      // ARF-005: `SecondFactorRequired` (401) / `HookAborted` when a `BeforeCredentialReset` tap refuses.
+      error: [
+        TokenConsumed,
+        WeakPassword,
+        Api.RateLimited,
+        SecondFactorRequired,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(
@@ -198,9 +289,8 @@ export const PasswordGroup = HttpApiGroup.make("password")
     // route, not nested under `/password/*` — account-lifecycle actions
     // apply regardless of which auth method a user signed up with, even
     // though this particular capability happens to be implemented here
-    // (it reuses this module's own `VERIFY_PREFIX`/token-encoding, which
-    // already exists only in this file). No `success` schema — defaults
-    // to `204`, matching `signOut`'s own convention.
+    // (it consumes the token `signUp` mails). No `success` schema —
+    // defaults to `204`, matching `signOut`'s own convention.
     HttpApiEndpoint.post("verifyEmail", "/verify-email", {
       payload: VerifyEmailPayload,
       error: [TokenConsumed, Api.RateLimited],
@@ -220,13 +310,38 @@ export const PasswordGroup = HttpApiGroup.make("password")
     }),
   )
   .add(
+    // BAM-009: the confirming half of the mailed change-email flow. Public like `verifyEmail`
+    // (the link may be opened in another browser than the one that asked), and safe to be: the
+    // token exists only because a signed-in user, or an administrator, asked for it, and it was
+    // mailed to the new address alone. Replaces the address and marks it verified, in one
+    // transaction with the token's consumption (BEH-EA-058). `EmailAlreadyExists` (409) tells
+    // only the holder of the new mailbox that the address has since been taken.
+    HttpApiEndpoint.post("confirmEmailChange", "/change-email/confirm", {
+      payload: ConfirmEmailChangePayload,
+      error: [TokenConsumed, EmailAlreadyExists, Api.RateLimited],
+    }),
+  )
+  // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: every endpoint here
+  // is an unsafe method, and most (signUp/signIn/requestReset/
+  // confirmReset/verifyEmail/resendVerification) are otherwise-public —
+  // exactly the login-CSRF surface `CsrfProtectionLive` exists to close,
+  // and `CsrfProtection` doesn't require an authenticated principal, so it
+  // applies at the group level. The authenticated endpoints are in
+  // `PasswordAccountGroup`.
+  .middleware(Api.CsrfProtection);
+
+/**
+ * EHA-007: the endpoints that need a live session, in a dotted sub-id group of
+ * their own with group-level `Authentication` (the `passkey`/`passkey.credentials`
+ * and `jwt` convention), not per-endpoint middleware inside the public group.
+ * Wire paths are unchanged. `CsrfProtection` is declared last so it runs first.
+ */
+export const PasswordAccountGroup = HttpApiGroup.make("password.account")
+  .add(
     // Shipping-gap map (.scratch/shipping-gaps), ticket 11: authenticated
     // change-password, distinct from the unauthenticated forgot-password
-    // pair (`requestReset`/`confirmReset`) above — per-endpoint
-    // `Authentication` middleware, since this is the one endpoint in this
-    // group that requires a live session. Top-level route, matching
-    // `verifyEmail`'s own convention. No `success` schema — defaults to
-    // `204`.
+    // pair (`requestReset`/`confirmReset`) in the `password` group. Top-level
+    // route, matching `verifyEmail`'s own convention.
     HttpApiEndpoint.post("changePassword", "/change-password", {
       payload: ChangePasswordPayload,
       // PIL-002/RRS-001/SMS-001: BEH-EA-053 requires every privilege-change
@@ -235,29 +350,33 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // response carries the new session the same way signUp/signIn's do.
       success: SessionContract.SessionDto,
       // Ticket 14: rate-limited.
-      error: [WrongPassword, WeakPassword, Api.RateLimited],
-    }).middleware(Api.Authentication),
+      error: [WrongPassword, WeakPassword, Api.RateLimited, Api.InvalidTokenDelivery],
+    }),
+  )
+  .add(
+    // BAM-009: the requesting half — mails a confirmation token to the *new* address (never the
+    // current one) and changes nothing yet. Answers 202 for an address that is free and one that
+    // is taken alike (no ownership oracle for an authenticated prober); a taken address is only
+    // discovered by the mailbox owner at confirmation. The requester is authenticated, so a mail
+    // delivery failure is surfaced (`EmailDeliveryFailed`), not swallowed.
+    HttpApiEndpoint.post("changeEmail", "/change-email", {
+      payload: ChangeEmailPayload,
+      success: HttpApiSchema.Empty(202),
+      error: [EmailChangeNotSupported, EmailDeliveryFailed, Api.RateLimited],
+    }),
   )
   .add(
     // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
     // (AAPS-001): this obligation's own real discharge path — re-verifies
     // the submitted password (reusing `signIn`'s own hash-comparison
-    // path) and, on success, calls `Sessions.reauthenticate`. Top-level
-    // route, matching `changePassword`'s own convention; authenticated,
-    // same as `changePassword`. No `success` schema — defaults to `204`,
-    // since this never mints a new session.
+    // path) and, on success, calls `Sessions.reauthenticate`. No `success`
+    // schema — defaults to `204`, since this never mints a new session.
     HttpApiEndpoint.post("reauthenticate", "/password/reauthenticate", {
       payload: ReauthenticatePayload,
       error: [WrongPassword, Api.RateLimited],
-    }).middleware(Api.Authentication),
+    }),
   )
-  // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: every endpoint here
-  // is an unsafe method, and most (signUp/signIn/requestReset/
-  // confirmReset/verifyEmail/resendVerification) are otherwise-public —
-  // exactly the login-CSRF surface `CsrfProtectionLive` exists to close,
-  // and `CsrfProtection` doesn't require an authenticated principal, so it
-  // applies at the group level regardless of `changePassword`'s own
-  // per-endpoint `Authentication`.
+  .middleware(Api.Authentication)
   .middleware(Api.CsrfProtection);
 
-export const PasswordApi = HttpApi.make("auth").add(PasswordGroup);
+export const PasswordApi = HttpApi.make("auth").add(PasswordGroup).add(PasswordAccountGroup);

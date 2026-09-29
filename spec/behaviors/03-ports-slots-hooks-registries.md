@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-03 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-006, previously uncited by any behavior file (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-006, previously uncited by any behavior file (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 
 ---
 
-> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/design/plugins-as-layers.md` §3 and `archive/PRD.md` §9.3 — not code that has shipped.
+> Implemented in `@awthaq/core` (`Slots.ts`, `HookPoint.ts`, `Hooks.ts`, `RateLimits.ts`, the config references) and `@awthaq/ports`; tests `packages/core/test/Slots.test.ts`, `HookPoint.test.ts`; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/design/plugins-as-layers.md` §3 and `archive/PRD.md` §9.3.
 
 ## BEH-EA-017: Configuration is a `Context.Reference` with a default value
 
@@ -97,6 +97,8 @@ REQUIREMENT: No plugin's Layer MAY include a port service (`PasswordHasher`,
              remain in that plugin's `RIn` until the application provides
              it.
 ```
+
+JH-008 (as shipped): `Auth.make`'s `Validate<P>` enforces this at the type level — `PortProvidedByPlugin` inspects each plugin layer's `ROut` for a service keyed `awthaq/ports/*` (every awthaq port) or Effect's `SqlClient`/`Crypto`, and a hit narrows the tuple to `plugin "evil" provides port "awthaq/ports/Mailer" — a plugin may only require ports, never provide them`.
 
 `archive/design/plugins-as-layers.md` §3.3 states the consequence this rule is designed to produce: "a 'bcrypt plugin' is not a plugin at all; it is `BcryptHasher.layer`, which is what it should have been." Because two plugins can never both "provide" the same port, the whole class of conflict a naive plugin model needs a rule for — two plugins both claiming to be *the* password hasher — cannot arise; providing two Layers for one port in application code is a visible, ordinary `Layer.provide` shadow, not a plugin-system special case (`archive/design/usage-examples-v4.md` §17).
 

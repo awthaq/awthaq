@@ -6,23 +6,32 @@
 // `it.effect`) is the ambient `Clock` both `DateTime.now` and the SQL
 // model's own constructor defaults read from, so `TestClock.adjust`
 // controls simulated time identically for either backend.
+import { Api } from "@awthaq/api";
 import { Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as LayerMap from "effect/LayerMap";
+import * as PlatformError from "effect/PlatformError";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { LockTimeoutError, SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Sessions from "../src/Sessions.ts";
+import * as Tenant from "../src/Tenant.ts";
 import * as Users from "../src/Users.ts";
 
 const MemoryLayer = Sessions.layerMemory.pipe(
@@ -67,7 +76,11 @@ const Migrated = Layer.effectDiscard(
         familyId TEXT NOT NULL,
         supersededBy TEXT,
         supersededAt TEXT,
-        reusedAt TEXT
+        reusedAt TEXT,
+        amr TEXT NOT NULL DEFAULT '[]',
+        tenantId TEXT,
+        previousSecretHash TEXT,
+        previousSecretExpiresAt TEXT
       )
     `;
   }),
@@ -90,6 +103,32 @@ const ShortLivedSqlLayer = Sessions.layerSql.pipe(
   Layer.provideMerge(Migrated),
 );
 
+/** EP-007: the application's own map, tenant id -> that tenant's `SessionConfig` layer. */
+class TenantSessionConfig extends LayerMap.Service<TenantSessionConfig>()(
+  "test/TenantSessionConfig",
+  {
+    lookup: (tenantId: string) =>
+      Layer.merge(
+        Layer.succeed(
+          Sessions.SessionConfig,
+          tenantId === "strict"
+            ? {
+                absolute: Duration.minutes(1),
+                idle: Duration.seconds(30),
+                touchEvery: Duration.seconds(5),
+              }
+            : {
+                absolute: Duration.hours(1),
+                idle: Duration.minutes(30),
+                touchEvery: Duration.minutes(1),
+              },
+        ),
+        Tenant.configApplied(tenantId),
+      ),
+    idleTimeToLive: "1 minute",
+  },
+) {}
+
 const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
 
 const suite = (
@@ -98,6 +137,18 @@ const suite = (
   shortLivedLayer: Layer.Layer<Sessions.Sessions, unknown, never>,
 ): void => {
   describe(name, () => {
+    // EOTS-004: the session id is the public half of a bearer credential and error messages reach logs.
+    it.effect("EOTS-004: SessionNotFound's message never contains the session id", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const failure = yield* sessions
+          .verify(Redacted.make("enumerable-session-id.deadbeefdeadbeef"))
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+        assert.notInclude(failure.message, "enumerable-session-id");
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect(
       "BEH-EA-049/050: issues an opaque id.secret token, never storing the secret itself",
       () =>
@@ -112,6 +163,23 @@ const suite = (
           assert.strictEqual(view.id, session.id);
           assert.strictEqual(view.userId, userId);
         }).pipe(Effect.provide(layer)),
+    );
+
+    // DRS-001 (ADR-EA-018): a session carries the tenant it was issued under,
+    // so a multi-tenant host can refuse a cookie minted for another tenant.
+    it.effect("DRS-001: issue stamps the ambient tenant and verify reports it", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const tenanted = yield* sessions.issue({ userId }).pipe(Tenant.withTenant("tenant-1"));
+        assert.deepStrictEqual(tenanted.session.tenantId, Option.some("tenant-1"));
+        const plain = yield* sessions.issue({ userId });
+        assert.isTrue(Option.isNone(plain.session.tenantId));
+        // Read under a different ambient tenant: the recorded one is what comes back.
+        const { session } = yield* sessions
+          .verify(tenanted.token)
+          .pipe(Tenant.withTenant("tenant-2"));
+        assert.deepStrictEqual(session.tenantId, Option.some("tenant-1"));
+      }).pipe(Effect.provide(layer)),
     );
 
     // RSC-001: a `SessionView` must never carry the stored secret hash (or
@@ -136,6 +204,8 @@ const suite = (
           "ipAddress",
           "userAgent",
           "actingAs",
+          "amr",
+          "tenantId",
         ].sort();
         assert.deepStrictEqual(Object.keys(session).sort(), expectedKeys);
         assert.notProperty(session, "secretHash");
@@ -152,7 +222,7 @@ const suite = (
         const { session } = yield* sessions.issue({ userId });
         const bogus = Redacted.make(`${session.id}.not-the-real-secret`);
         const failure = yield* sessions.verify(bogus).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -186,6 +256,21 @@ const suite = (
           yield* TestClock.adjust(Duration.millis(600));
           const failure = yield* sessions.verify(token).pipe(Effect.flip);
           assert.strictEqual(failure._tag, "SessionExpired");
+        }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    // PIL-007: an id-only caller must learn nothing about expiry — the state
+    // branches run only after the presented secret is proven.
+    it.effect(
+      "PIL-007/BEH-EA-056: an expired row with a WRONG secret fails SessionNotFound, not SessionExpired",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { session } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.millis(600));
+          const forged = Redacted.make(`${session.id}.deadbeef`);
+          const failure = yield* sessions.verify(forged).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
         }).pipe(Effect.provide(shortLivedLayer)),
     );
 
@@ -275,7 +360,7 @@ const suite = (
         const failure = yield* sessions
           .reauthenticate(Sessions.SessionId("does-not-exist"))
           .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "SessionNotFound");
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -301,7 +386,7 @@ const suite = (
     );
 
     it.effect(
-      "upstream-hardening ticket 01: the same throttled touch rotates the secret, invalidating the old token immediately",
+      "upstream-hardening ticket 01: the same throttled touch rotates the secret; the old token survives only as the grace-window previous",
       () =>
         Effect.gen(function* () {
           const sessions = yield* Sessions.Sessions;
@@ -316,9 +401,11 @@ const suite = (
           const touched = yield* sessions.verify(token);
           assert.isTrue(Option.isSome(touched.rotated));
 
-          // The old token no longer verifies — no grace window.
-          const oldFails = yield* sessions.verify(token).pipe(Effect.flip);
-          assert.strictEqual(oldFails._tag, "SessionNotFound");
+          // RRS-005: the replaced secret is only the grace-window previous — presenting it
+          // re-rotates and hands back a fresh secret (immediate invalidation is
+          // `rotationGrace: 0`, and expiry of the window is covered by the grace suite).
+          const recovered = yield* sessions.verify(token);
+          assert.isTrue(Option.isSome(recovered.rotated));
 
           // The freshly-rotated token verifies and resolves the same session.
           const rotatedToken = Option.getOrThrow(touched.rotated);
@@ -341,7 +428,7 @@ const suite = (
           const newWorks = yield* sessions.verify(second.token);
           assert.strictEqual(newWorks.session.id, second.session.id);
           const oldFails = yield* sessions.verify(first.token).pipe(Effect.flip);
-          assert.strictEqual(oldFails._tag, "SessionNotFound");
+          assert.strictEqual(oldFails._tag, "Sessions/NotFound");
         }).pipe(Effect.provide(layer)),
     );
 
@@ -356,15 +443,15 @@ const suite = (
         const current = listed.find((row) => row.current);
         assert.strictEqual(current?.id, a.session.id);
 
-        yield* sessions.revokeOthers(userId, a.session.id);
+        yield* sessions.revokeOthers(userId, a.session.id, "userRevoked");
         const bFails = yield* sessions.verify(b.token).pipe(Effect.flip);
-        assert.strictEqual(bFails._tag, "SessionNotFound");
+        assert.strictEqual(bFails._tag, "Sessions/NotFound");
         const aStillWorks = yield* sessions.verify(a.token);
         assert.strictEqual(aStillWorks.session.id, a.session.id);
 
-        yield* sessions.revoke(a.session.id);
+        yield* sessions.revoke(a.session.id, "signOut");
         const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
-        assert.strictEqual(aFails._tag, "SessionNotFound");
+        assert.strictEqual(aFails._tag, "Sessions/NotFound");
       }).pipe(Effect.provide(layer)),
     );
 
@@ -376,12 +463,12 @@ const suite = (
           const a = yield* sessions.issue({ userId, request: { userAgent: "device-a" } });
           const b = yield* sessions.issue({ userId, request: { userAgent: "device-b" } });
 
-          yield* sessions.revokeAll(userId);
+          yield* sessions.revokeAll(userId, "userRevoked");
 
           const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
-          assert.strictEqual(aFails._tag, "SessionNotFound");
+          assert.strictEqual(aFails._tag, "Sessions/NotFound");
           const bFails = yield* sessions.verify(b.token).pipe(Effect.flip);
-          assert.strictEqual(bFails._tag, "SessionNotFound");
+          assert.strictEqual(bFails._tag, "Sessions/NotFound");
         }).pipe(Effect.provide(layer)),
     );
 
@@ -467,6 +554,219 @@ const suite = (
         }).pipe(Effect.provide(layer)),
     );
 
+    // EP-007 (ADR-EA-018 Decision 8): the lifetimes are decided per operation, so one layer instance
+    // serves two tenants with different `SessionConfig`, and with no override the build-time
+    // (here: default) configuration applies exactly as before.
+    it.effect("EP-007: SessionConfig provided per request changes the session lifetimes", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const lifetimes = (tenantId: string | undefined) =>
+          Effect.gen(function* () {
+            const issued = sessions.issue({ userId });
+            const { session } = yield* tenantId === undefined
+              ? issued
+              : issued.pipe(Effect.provide(TenantSessionConfig.get(tenantId)));
+            return {
+              absolute:
+                DateTime.toEpochMillis(session.absoluteExpiresAt) -
+                DateTime.toEpochMillis(session.createdAt),
+              idle:
+                DateTime.toEpochMillis(session.idleExpiresAt) -
+                DateTime.toEpochMillis(session.createdAt),
+            };
+          });
+        const strict = yield* lifetimes("strict");
+        const relaxed = yield* lifetimes("relaxed");
+        const fallback = yield* lifetimes(undefined);
+        assert.deepStrictEqual(strict, { absolute: 60_000, idle: 30_000 });
+        assert.deepStrictEqual(relaxed, { absolute: 3_600_000, idle: 1_800_000 });
+        // No tenant: the default 30d absolute / 7d idle, untouched.
+        assert.deepStrictEqual(fallback, {
+          absolute: Duration.toMillis(Duration.days(30)),
+          idle: Duration.toMillis(Duration.days(7)),
+        });
+      }).pipe(Effect.provide(Layer.merge(layer, TenantSessionConfig.layer))),
+    );
+
+    it.effect("EP-007: a tenant's touchEvery decides whether verify rotates the secret", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.seconds(10));
+        // The default throttle is an hour: no rotation. The tenant asks for every 5 seconds.
+        const untouched = yield* sessions.verify(token);
+        assert.isTrue(Option.isNone(untouched.rotated));
+        const touched = yield* sessions
+          .verify(token)
+          .pipe(Effect.provide(TenantSessionConfig.get("strict")));
+        assert.isTrue(Option.isSome(touched.rotated));
+      }).pipe(Effect.provide(Layer.merge(layer, TenantSessionConfig.layer))),
+    );
+
+    // IDS-008: the self-act-as invariant lives in the primitive, not only in
+    // the Admin plugin — a producer that skips its own guard dies loudly.
+    it.effect("BEH-EA-209: issue refuses actingAs naming the session's own userId", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const exit = yield* sessions
+          .issue({ userId, actingAs: { type: "user", id: userId } })
+          .pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(exit));
+        if (!Exit.isFailure(exit)) return;
+        assert.isTrue(Cause.hasDies(exit.cause));
+        assert.instanceOf(Cause.squash(exit.cause), Sessions.InvalidActingAs);
+        // A different actor is still fine.
+        yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-1" } });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // THS-003/APS-007: RFC 8176 `amr` — recorded at issue, monotone within a session.
+    it.effect("THS-003: issue records amr and verify, list and findOwned return it", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session, token } = yield* sessions.issue({ userId, amr: ["hwk", "user"] });
+        assert.deepStrictEqual(session.amr, ["hwk", "user"]);
+        assert.deepStrictEqual((yield* sessions.verify(token)).session.amr, ["hwk", "user"]);
+        assert.deepStrictEqual((yield* sessions.list(userId))[0]?.amr, ["hwk", "user"]);
+        const owned = yield* sessions.findOwned(userId, session.id);
+        assert.deepStrictEqual(Option.getOrThrow(owned).amr, ["hwk", "user"]);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("THS-003: a session issued without amr records none", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { session } = yield* sessions.issue({ userId });
+        assert.deepStrictEqual(session.amr, []);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "THS-003: reauthenticate unions amr in — order-preserving, no duplicates, never removed",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { session } = yield* sessions.issue({ userId, amr: ["pwd"] });
+          const stepped = yield* sessions.reauthenticate(session.id, ["otp", "pwd", "mfa"]);
+          assert.deepStrictEqual(stepped.amr, ["pwd", "otp", "mfa"]);
+          const plain = yield* sessions.reauthenticate(session.id);
+          assert.deepStrictEqual(plain.amr, ["pwd", "otp", "mfa"]);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    // ESS-005/SMS-002: `list` is exactly the live sessions, newest activity
+    // first, identically in both layers.
+    it.effect("BEH-EA-054: list excludes idle-expired sessions", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        yield* sessions.issue({ userId });
+        // idle is 500ms, absolute 1000ms: past idle only.
+        yield* TestClock.adjust(Duration.millis(600));
+        assert.strictEqual((yield* sessions.list(userId)).length, 0);
+      }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    it.effect("BEH-EA-054: list excludes absolute-expired sessions", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        // Keep the idle window alive across the absolute ceiling.
+        yield* TestClock.adjust(Duration.millis(400));
+        const first = yield* sessions.verify(token);
+        const t1 = Option.getOrElse(first.rotated, () => token);
+        yield* TestClock.adjust(Duration.millis(400));
+        yield* sessions.verify(t1);
+        assert.strictEqual((yield* sessions.list(userId)).length, 1);
+        yield* TestClock.adjust(Duration.millis(300));
+        assert.strictEqual((yield* sessions.list(userId)).length, 0);
+      }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    it.effect("BEH-EA-054: list orders newest activity first and flags the current row", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.millis(10));
+        const b = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.millis(10));
+        const c = yield* sessions.issue({ userId });
+        // Touch `a` last (past touchEvery), making it the most recently active.
+        yield* TestClock.adjust(Duration.millis(120));
+        yield* sessions.verify(a.token);
+        const listed = yield* sessions.list(userId, b.session.id);
+        assert.deepStrictEqual(
+          listed.map((row) => row.id),
+          [a.session.id, c.session.id, b.session.id],
+        );
+        assert.deepStrictEqual(
+          listed.map((row) => row.current),
+          [false, false, true],
+        );
+      }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    // TIR-003: the keyed ownership lookup every point query goes through.
+    it.effect("TIR-003: findOwned resolves an owned live session and only that", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const otherUser = Users.UserId("22222222-2222-2222-2222-222222222222");
+        const mine = yield* sessions.issue({ userId });
+        const theirs = yield* sessions.issue({ userId: otherUser });
+
+        const found = yield* sessions.findOwned(userId, mine.session.id);
+        assert.isTrue(Option.isSome(found));
+        assert.strictEqual(Option.getOrThrow(found).id, mine.session.id);
+        assert.isFalse(Option.getOrThrow(found).current);
+        // Another user's session and an unknown id are the same `None`.
+        assert.isTrue(Option.isNone(yield* sessions.findOwned(userId, theirs.session.id)));
+        assert.isTrue(
+          Option.isNone(yield* sessions.findOwned(userId, Sessions.SessionId("missing"))),
+        );
+        // A tombstoned (superseded) row and an expired row are not live.
+        const next = yield* sessions.issue({ userId, supersedes: mine.session.id });
+        assert.isTrue(Option.isNone(yield* sessions.findOwned(userId, mine.session.id)));
+        assert.isTrue(Option.isSome(yield* sessions.findOwned(userId, next.session.id)));
+        yield* TestClock.adjust(Duration.millis(600));
+        assert.isTrue(Option.isNone(yield* sessions.findOwned(userId, next.session.id)));
+      }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    // GC-005: ownership enforced atomically in the domain operation.
+    it.effect("GC-005: revokeOwned revokes an owned session", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const mine = yield* sessions.issue({ userId });
+        yield* sessions.revokeOwned(userId, mine.session.id, "userRevoked");
+        const failure = yield* sessions.verify(mine.token).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "GC-005: revokeOwned on another user's session fails SessionNotFound and leaves it live",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const otherUser = Users.UserId("22222222-2222-2222-2222-222222222222");
+          const theirs = yield* sessions.issue({ userId: otherUser });
+          const failure = yield* sessions
+            .revokeOwned(userId, theirs.session.id, "userRevoked")
+            .pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
+          yield* sessions.verify(theirs.token);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("GC-005: revokeOwned on an unknown id fails SessionNotFound", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const failure = yield* sessions
+          .revokeOwned(userId, Sessions.SessionId("missing"), "userRevoked")
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect(
       "an ordinary session's own idle-refresh is unaffected by the actingAs skip logic",
       () =>
@@ -539,19 +839,19 @@ const reuseSuite = (
           // A's own token, presented again — A is already tombstoned
           // (superseded by B), so this is the reuse signal.
           const firstReplay = yield* sessions.verify(a.token).pipe(Effect.flip);
-          assert.strictEqual(firstReplay._tag, "SessionNotFound");
+          assert.strictEqual(firstReplay._tag, "Sessions/NotFound");
 
           // C — the only still-live member of the family — is revoked as
           // a side effect of that one reuse.
           const cFails = yield* sessions.verify(c.token).pipe(Effect.flip);
-          assert.strictEqual(cFails._tag, "SessionNotFound");
+          assert.strictEqual(cFails._tag, "Sessions/NotFound");
 
           // A second presentation of the same already-flagged row is
           // still met with the uniform `SessionNotFound` — no
           // distinguishable signal leaked — but does not publish a
           // second event.
           const secondReplay = yield* sessions.verify(a.token).pipe(Effect.flip);
-          assert.strictEqual(secondReplay._tag, "SessionNotFound");
+          assert.strictEqual(secondReplay._tag, "Sessions/NotFound");
 
           const collected = yield* Fiber.join(reused);
           assert.strictEqual(collected.length, 1);
@@ -563,6 +863,81 @@ const reuseSuite = (
             assert.strictEqual(event.userId, userId);
           }
         }).pipe(Effect.provide(layer)),
+    );
+
+    // PIL-007: the session id is the public half of the token (cookies, JWT
+    // `sid`, error messages). Reuse detection must only fire for a caller who
+    // also holds the secret — otherwise anyone who knows a superseded id can
+    // force-log-out the user's live session.
+    it.effect(
+      "PIL-007/RRS-003: presenting a superseded id with a WRONG secret revokes nothing and publishes no reuse event",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const events = yield* AuthEvents.AuthEvents;
+
+          const seen = yield* Ref.make(0);
+          yield* Effect.forkChild(
+            events.stream.pipe(
+              Stream.filter((event) => event._tag === "auth.session.reuse"),
+              Stream.runForEach(() => Ref.update(seen, (n) => n + 1)),
+            ),
+            { startImmediately: true },
+          );
+
+          const a = yield* sessions.issue({ userId });
+          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
+
+          const forged = Redacted.make(`${a.session.id}.deadbeef`);
+          const failure = yield* sessions.verify(forged).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
+
+          // The successor is untouched.
+          const successor = yield* sessions.verify(b.token);
+          assert.strictEqual(successor.session.id, b.session.id);
+
+          for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+          assert.strictEqual(yield* Ref.get(seen), 0);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "PIL-007: replaying the full pre-supersede token still triggers reuse detection",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
+
+          const replay = yield* sessions.verify(a.token).pipe(Effect.flip);
+          assert.strictEqual(replay._tag, "Sessions/NotFound");
+          const successor = yield* sessions.verify(b.token).pipe(Effect.flip);
+          assert.strictEqual(successor._tag, "Sessions/NotFound");
+        }).pipe(Effect.provide(layer)),
+    );
+
+    // ESR-002: the supersede is one atomic step, and only a still-live row can
+    // be tombstoned — two concurrent supersedes of one row never fork its
+    // family (exactly one successor inherits it; the other founds its own).
+    it.effect("ESR-002: two concurrent issue(supersedes: same id) never fork the family", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const [x, y] = yield* Effect.all(
+          [
+            sessions.issue({ userId, supersedes: a.session.id }),
+            sessions.issue({ userId, supersedes: a.session.id }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        // Replaying A's token is reuse: it revokes A's family only.
+        yield* sessions.verify(a.token).pipe(Effect.flip);
+        const outcomes = yield* Effect.all([
+          Effect.exit(sessions.verify(x.token)),
+          Effect.exit(sessions.verify(y.token)),
+        ]);
+        assert.strictEqual(outcomes.filter(Exit.isSuccess).length, 1);
+      }).pipe(Effect.provide(layer)),
     );
 
     it.effect("Sessions.list excludes a tombstoned (superseded) row", () =>
@@ -579,18 +954,583 @@ const reuseSuite = (
   });
 };
 
+// ESA-006/TIR-008: `Sessions` itself publishes the lifecycle events, so every
+// issuance/revocation path is observable and lands in `AuditLog`.
+const eventsSuite = (
+  name: string,
+  layer: Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
+): void => {
+  /** Runs `body`, returning every session-lifecycle event published while it ran, in order. */
+  const collecting = <A, E>(body: Effect.Effect<A, E, Sessions.Sessions>) =>
+    Effect.gen(function* () {
+      const events = yield* AuthEvents.AuthEvents;
+      const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+      yield* Effect.forkChild(
+        events.stream.pipe(
+          Stream.filter((event) => event._tag.startsWith("auth.session.")),
+          Stream.runForEach((event) =>
+            Ref.update(seen, (all) => [...all, AuthEvents.payloadOf(event)]),
+          ),
+        ),
+        { startImmediately: true },
+      );
+      yield* body;
+      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+      return yield* Ref.get(seen);
+    });
+
+  describe(name, () => {
+    it.effect("ESA-006: issue publishes exactly one auth.session.issued with the family id", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        let issuedId = "";
+        const seen = yield* collecting(
+          sessions.issue({ userId }).pipe(
+            Effect.tap(({ session }) =>
+              Effect.sync(() => {
+                issuedId = session.id;
+              }),
+            ),
+          ),
+        );
+        assert.strictEqual(seen.length, 1);
+        const [event] = seen;
+        assert.strictEqual(event?._tag, "auth.session.issued");
+        if (event?._tag === "auth.session.issued") {
+          assert.strictEqual(event.sessionId, issuedId);
+          assert.strictEqual(event.familyId, issuedId);
+          assert.strictEqual(event.userId, userId);
+          assert.isUndefined(event.actingAs);
+        }
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "ESA-006: an actingAs session's issued event carries actingAs; a rotation keeps the family",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          const seen = yield* collecting(
+            Effect.gen(function* () {
+              yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-1" } });
+              yield* sessions.issue({ userId, supersedes: a.session.id });
+            }),
+          );
+          const issued = seen.filter((e) => e._tag === "auth.session.issued");
+          assert.strictEqual(issued.length, 2);
+          const [acting, rotated] = issued;
+          if (acting?._tag === "auth.session.issued") {
+            assert.deepStrictEqual(acting.actingAs, { type: "user", id: "admin-1" });
+          }
+          if (rotated?._tag === "auth.session.issued") {
+            assert.strictEqual(rotated.familyId, a.session.id);
+          }
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("TIR-008: revoke publishes one auth.session.revoked with sessionId and reason", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const seen = yield* collecting(sessions.revoke(a.session.id, "signOut"));
+        assert.deepStrictEqual(seen, [
+          {
+            _tag: "auth.session.revoked",
+            userId,
+            sessionId: a.session.id,
+            scope: "one",
+            reason: "signOut",
+          },
+        ]);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "RRS-008: issue({ supersedes }) publishes auth.session.superseded, then the successor's issued",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          let successorId = "";
+          const seen = yield* collecting(
+            sessions.issue({ userId, supersedes: a.session.id }).pipe(
+              Effect.tap((issued) =>
+                Effect.sync(() => {
+                  successorId = issued.session.id;
+                }),
+              ),
+            ),
+          );
+          assert.deepStrictEqual(
+            seen.map((event) => event._tag),
+            ["auth.session.superseded", "auth.session.issued"],
+          );
+          const [superseded] = seen;
+          if (superseded?._tag === "auth.session.superseded") {
+            assert.strictEqual(superseded.sessionId, a.session.id);
+            assert.strictEqual(superseded.supersededBy, successorId);
+            assert.strictEqual(superseded.familyId, a.session.id);
+          }
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "RRS-008: a superseding issue whose ancestor is not live publishes no superseded event",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const seen = yield* collecting(
+            sessions.issue({ userId, supersedes: Sessions.SessionId("gone") }),
+          );
+          assert.deepStrictEqual(
+            seen.map((event) => event._tag),
+            ["auth.session.issued"],
+          );
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "RRS-008: two concurrent verifies of a stale session publish exactly one auth.session.rotated",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          // Past the throttled-touch interval, so a verify both refreshes and rotates.
+          yield* TestClock.adjust(Duration.hours(1));
+          const seen = yield* collecting(
+            Effect.all(
+              [Effect.exit(sessions.verify(a.token)), Effect.exit(sessions.verify(a.token))],
+              {
+                concurrency: 2,
+              },
+            ),
+          );
+          // RRS-005: a concurrent request that read after the winner's write is a grace-window
+          // recovery (`viaGrace`), not a second primary rotation: exactly one rotation is not.
+          assert.strictEqual(
+            seen.filter((event) => event._tag === "auth.session.rotated" && !event.viaGrace).length,
+            1,
+          );
+          const rotated = seen.find((event) => event._tag === "auth.session.rotated");
+          if (rotated?._tag === "auth.session.rotated") {
+            assert.strictEqual(rotated.sessionId, a.session.id);
+            assert.strictEqual(rotated.familyId, a.session.id);
+          }
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("TIR-008: a failed revoke (unknown id) publishes nothing", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const seen = yield* collecting(
+          sessions.revoke(Sessions.SessionId("missing"), "admin").pipe(Effect.ignore),
+        );
+        assert.deepStrictEqual(seen, []);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "TIR-008: revokeOwned, revokeOthers and revokeAll each publish one event with their scope",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          const b = yield* sessions.issue({ userId });
+          yield* sessions.issue({ userId });
+          const seen = yield* collecting(
+            Effect.gen(function* () {
+              yield* sessions.revokeOwned(userId, b.session.id, "userRevoked");
+              yield* sessions.revokeOthers(userId, a.session.id, "passwordChanged");
+              yield* sessions.revokeAll(userId, "userDeleted");
+            }),
+          );
+          assert.deepStrictEqual(
+            seen.map((event) =>
+              event._tag === "auth.session.revoked"
+                ? [event.scope, event.sessionId, event.reason]
+                : [event._tag],
+            ),
+            [
+              ["one", b.session.id, "userRevoked"],
+              ["others", null, "passwordChanged"],
+              ["all", null, "userDeleted"],
+            ],
+          );
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "TIR-008: reuse detection also publishes a family auth.session.revoked (reuseDetected)",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          yield* sessions.issue({ userId, supersedes: a.session.id });
+          const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.ignore));
+          assert.deepStrictEqual(
+            seen.map((event) => event._tag),
+            ["auth.session.reuse", "auth.session.revoked"],
+          );
+          const revoked = seen[1];
+          if (revoked?._tag === "auth.session.revoked") {
+            assert.strictEqual(revoked.scope, "family");
+            assert.strictEqual(revoked.reason, "reuseDetected");
+            assert.isNull(revoked.sessionId);
+          }
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "ESA-006: verify publishes auth.session.expired when an expired session is presented",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          // Default idle is 7 days.
+          yield* TestClock.adjust(Duration.days(8));
+          const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.ignore));
+          assert.strictEqual(seen.length, 1);
+          const [event] = seen;
+          assert.strictEqual(event?._tag, "auth.session.expired");
+          if (event?._tag === "auth.session.expired") {
+            assert.strictEqual(event.sessionId, a.session.id);
+            assert.strictEqual(event.kind, "idle");
+          }
+        }).pipe(Effect.provide(layer)),
+    );
+  });
+};
+
+// SMS-003: the opt-in concurrent-session cap.
+const cappedConfig = Layer.succeed(Sessions.SessionConfig, {
+  absolute: Duration.days(30),
+  idle: Duration.days(7),
+  touchEvery: Duration.hours(1),
+  maxConcurrent: { limit: 2, onExceed: "evictOldest" },
+});
+
+const CappedMemoryLayer = Sessions.layerMemory.pipe(
+  Layer.provide(Layer.mergeAll(NodeCrypto.layer, cappedConfig)),
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+);
+
+const CappedSqlLayer = Sessions.layerSql.pipe(
+  Layer.provide(Repositories.SessionsRepositoryLive),
+  Layer.provide(Layer.mergeAll(NodeCrypto.layer, cappedConfig)),
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(Migrated),
+);
+
+const capSuite = (
+  name: string,
+  cappedLayer: Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
+  uncappedLayer: Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
+): void => {
+  describe(name, () => {
+    it.effect(
+      "SMS-003: maxConcurrent {limit: 2, evictOldest} — a 3rd session evicts the least-recently-active and publishes auth.session.revoked (limitEvicted)",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const events = yield* AuthEvents.AuthEvents;
+          const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+          yield* Effect.forkChild(
+            events.stream.pipe(
+              Stream.filter((event) => event._tag === "auth.session.revoked"),
+              Stream.runForEach((event) =>
+                Ref.update(seen, (all) => [...all, AuthEvents.payloadOf(event)]),
+              ),
+            ),
+            { startImmediately: true },
+          );
+          const a = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.millis(10));
+          const b = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.millis(10));
+          // Touch `a` so `b` is now the least recently active — eviction is by
+          // activity, not creation order.
+          yield* TestClock.adjust(Duration.hours(2));
+          yield* sessions.verify(a.token);
+          const c = yield* sessions.issue({ userId });
+
+          const live = yield* sessions.list(userId);
+          assert.deepStrictEqual(
+            new Set(live.map((row) => row.id)),
+            new Set([a.session.id, c.session.id]),
+          );
+          assert.strictEqual(live.length, 2);
+          const failure = yield* sessions.verify(b.token).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
+
+          for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+          const revoked = yield* Ref.get(seen);
+          assert.deepStrictEqual(revoked, [
+            {
+              _tag: "auth.session.revoked",
+              userId,
+              sessionId: b.session.id,
+              scope: "one",
+              reason: "limitEvicted",
+            },
+          ]);
+        }).pipe(Effect.provide(cappedLayer)),
+    );
+
+    it.effect("SMS-003: an actingAs session neither counts toward nor triggers the cap", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const b = yield* sessions.issue({ userId });
+        yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-1" } });
+        yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-2" } });
+        // Both ordinary sessions survive: impersonation never evicted them.
+        yield* sessions.verify(a.token);
+        yield* sessions.verify(b.token);
+      }).pipe(Effect.provide(cappedLayer)),
+    );
+
+    it.effect("BEH-EA-047: the default config never evicts", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const issued = [];
+        for (let i = 0; i < 5; i++) issued.push(yield* sessions.issue({ userId }));
+        assert.strictEqual((yield* sessions.list(userId)).length, 5);
+      }).pipe(Effect.provide(uncappedLayer)),
+    );
+  });
+};
+
+capSuite("Sessions concurrent cap (layerMemory)", CappedMemoryLayer, MemoryLayerWithEvents);
+capSuite("Sessions concurrent cap (layerSql)", CappedSqlLayer, SqlLayerWithEvents);
+
+eventsSuite("Sessions lifecycle events (layerMemory)", MemoryLayerWithEvents);
+eventsSuite("Sessions lifecycle events (layerSql)", SqlLayerWithEvents);
+
 reuseSuite("Sessions reuse detection (layerMemory)", MemoryLayerWithEvents);
 reuseSuite("Sessions reuse detection (layerSql)", SqlLayerWithEvents);
 
-describe("Sessions", () => {
-  it("BEH-EA-055: the session cookie name and attributes are fixed", () => {
-    assert.strictEqual(Sessions.SESSION_COOKIE_NAME, "__Host-session");
-    assert.deepStrictEqual(Sessions.SESSION_COOKIE_ATTRIBUTES, {
-      secure: true,
-      httpOnly: true,
-      sameSite: "strict",
-      path: "/",
+// RRS-005/RRC-006: a bounded rotation grace window. The throttled touch moves the outgoing secret's
+// hash aside for `rotationGrace`; presenting it inside that window is accepted (and re-delivers a
+// fresh secret), after it the secret is dead — and reuse detection (RRS-003, the `supersedes` path)
+// is neither weakened nor triggered by it.
+const graceConfig = (rotationGrace?: Duration.Duration) =>
+  Layer.succeed(Sessions.SessionConfig, {
+    absolute: Duration.days(30),
+    idle: Duration.days(7),
+    touchEvery: Duration.hours(1),
+    ...(rotationGrace === undefined ? {} : { rotationGrace }),
+  });
+
+const graceMemoryLayer = (rotationGrace?: Duration.Duration) =>
+  Sessions.layerMemory.pipe(
+    Layer.provide(Layer.mergeAll(NodeCrypto.layer, graceConfig(rotationGrace))),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+  );
+
+const graceSqlLayer = (rotationGrace?: Duration.Duration) =>
+  Sessions.layerSql.pipe(
+    Layer.provide(Repositories.SessionsRepositoryLive),
+    Layer.provide(Layer.mergeAll(NodeCrypto.layer, graceConfig(rotationGrace))),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
+
+const graceSuite = (
+  name: string,
+  layerFor: (
+    rotationGrace?: Duration.Duration,
+  ) => Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
+): void => {
+  const collecting = <A, E>(body: Effect.Effect<A, E, Sessions.Sessions>) =>
+    Effect.gen(function* () {
+      const events = yield* AuthEvents.AuthEvents;
+      const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+      yield* Effect.forkChild(
+        events.stream.pipe(
+          Stream.filter((event) => event._tag.startsWith("auth.session.")),
+          Stream.runForEach((event) =>
+            Ref.update(seen, (all) => [...all, AuthEvents.payloadOf(event)]),
+          ),
+        ),
+        { startImmediately: true },
+      );
+      yield* body;
+      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+      return yield* Ref.get(seen);
     });
+
+  describe(name, () => {
+    it.effect(
+      "RRS-005: a rotation whose response was lost is recoverable — the previous secret verifies inside the grace window and delivers a fresh one",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(1));
+          const first = yield* sessions.verify(token);
+          assert.isTrue(Option.isSome(first.rotated));
+          // The client never saw `first.rotated`; it retries the secret it still holds.
+          yield* TestClock.adjust(Duration.seconds(5));
+          const retry = yield* sessions.verify(token);
+          assert.strictEqual(retry.session.id, first.session.id);
+          const recovered = Option.getOrThrow(retry.rotated);
+          assert.notStrictEqual(Redacted.value(recovered), Redacted.value(token));
+          // The token the retry was handed is the durable credential from here on.
+          yield* TestClock.adjust(Duration.minutes(5));
+          const { rotated } = yield* sessions.verify(recovered);
+          assert.isTrue(Option.isNone(rotated));
+        }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect("RRS-005: the previous secret is dead once the grace window has passed", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(1));
+        const first = yield* sessions.verify(token);
+        const current = Option.getOrThrow(first.rotated);
+        yield* TestClock.adjust(Duration.seconds(31));
+        const failure = yield* sessions.verify(token).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+        // Expiry of the window is not a theft signal: the session itself is untouched.
+        const { session } = yield* sessions.verify(current);
+        assert.strictEqual(session.id, first.session.id);
+      }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect("RRS-005: rotationGrace of zero restores immediate invalidation", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(1));
+        yield* sessions.verify(token);
+        const failure = yield* sessions.verify(token).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+      }).pipe(Effect.provide(layerFor(Duration.zero))),
+    );
+
+    it.effect("RRS-005: a configured window is honoured, not a fixed 30 seconds", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(1));
+        yield* sessions.verify(token);
+        yield* TestClock.adjust(Duration.minutes(4));
+        yield* sessions.verify(token);
+        yield* TestClock.adjust(Duration.minutes(2));
+        const failure = yield* sessions.verify(token).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "Sessions/NotFound");
+      }).pipe(Effect.provide(layerFor(Duration.minutes(5)))),
+    );
+
+    it.effect("RRS-005: a previous secret is only ever valid for its own session", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const b = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(1));
+        yield* sessions.verify(a.token);
+        yield* sessions.verify(b.token);
+        const aSecret = Redacted.value(a.token).slice(Redacted.value(a.token).indexOf(".") + 1);
+        const crossed = yield* sessions
+          .verify(Redacted.make(`${b.session.id}.${aSecret}`))
+          .pipe(Effect.flip);
+        assert.strictEqual(crossed._tag, "Sessions/NotFound");
+      }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect(
+      "RRS-005/RRS-003: presenting a previous secret in the window never revokes the family or publishes auth.session.reuse — even for a session since superseded",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(1));
+          yield* sessions.verify(a.token);
+          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
+          const seen = yield* collecting(
+            sessions.verify(a.token).pipe(
+              Effect.flip,
+              Effect.tap((failure) =>
+                Effect.sync(() => assert.strictEqual(failure._tag, "Sessions/NotFound")),
+              ),
+            ),
+          );
+          assert.isUndefined(seen.find((event) => event._tag === "auth.session.reuse"));
+          assert.isUndefined(seen.find((event) => event._tag === "auth.session.revoked"));
+          const { session } = yield* sessions.verify(b.token);
+          assert.strictEqual(session.id, b.session.id);
+        }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect(
+      "RRS-003: reuse detection still fires for a tombstoned row's current secret with a grace window configured",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const a = yield* sessions.issue({ userId });
+          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
+          const seen = yield* collecting(sessions.verify(a.token).pipe(Effect.flip));
+          assert.isDefined(seen.find((event) => event._tag === "auth.session.reuse"));
+          const failure = yield* sessions.verify(b.token).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "Sessions/NotFound");
+        }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect(
+      "RRC-006: every concurrent caller of a rotation keeps a token that still verifies",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(1));
+          const outcomes = yield* Effect.all([sessions.verify(token), sessions.verify(token)], {
+            concurrency: 2,
+          });
+          // Whatever each concurrent caller ended up holding — its own rotated token, or the
+          // token it presented when it lost the compare-and-swap — still verifies.
+          for (const outcome of outcomes) {
+            const held = Option.getOrElse(outcome.rotated, () => token);
+            const { session } = yield* sessions.verify(held);
+            assert.strictEqual(session.id, outcome.session.id);
+          }
+        }).pipe(Effect.provide(layerFor())),
+    );
+
+    it.effect(
+      "RRS-005: a grace-window rotation is announced as auth.session.rotated with viaGrace",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(1));
+          yield* sessions.verify(token);
+          const seen = yield* collecting(sessions.verify(token));
+          const rotated = seen.filter((event) => event._tag === "auth.session.rotated");
+          assert.strictEqual(rotated.length, 1);
+          const [event] = rotated;
+          if (event?._tag === "auth.session.rotated") assert.strictEqual(event.viaGrace, true);
+        }).pipe(Effect.provide(layerFor())),
+    );
+  });
+};
+
+graceSuite("Sessions rotation grace (layerMemory)", graceMemoryLayer);
+graceSuite("Sessions rotation grace (layerSql)", graceSqlLayer);
+
+describe("Sessions", () => {
+  it("BEH-EA-055: the default session cookie name is fixed", () => {
+    assert.strictEqual(Sessions.SESSION_COOKIE_NAME, "__Host-session");
+    // CSS-007: one source — core derives from the contract stratum's constant.
+    assert.strictEqual(Sessions.SESSION_COOKIE_NAME, Api.SessionCookie.key);
+    assert.strictEqual(Sessions.SESSION_COOKIE_NAME, Api.SESSION_COOKIE_NAME);
   });
 
   // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
@@ -611,4 +1551,228 @@ describe("Sessions", () => {
       assert.isFalse(Sessions.isStale(authenticatedAt, 300, now));
     });
   });
+});
+
+// ESR-002/RRS-004: a failing successor insert must roll the tombstone back.
+const failNextInsert = Effect.runSync(Ref.make(false));
+
+const FlakyInsertRepository = Layer.effect(
+  Repositories.SessionsRepository,
+  Effect.gen(function* () {
+    const real = yield* Repositories.SessionsRepository;
+    return {
+      ...real,
+      insert: (input: Parameters<typeof real.insert>[0]) =>
+        Ref.get(failNextInsert).pipe(
+          Effect.flatMap((fail) =>
+            fail
+              ? Effect.fail(
+                  new SqlError({
+                    reason: new UnknownError({ cause: new Error("simulated insert failure") }),
+                  }),
+                )
+              : real.insert(input),
+          ),
+        ),
+    };
+  }),
+).pipe(Layer.provide(Repositories.SessionsRepositoryLive));
+
+const FlakySqlLayer = Sessions.layerSql.pipe(
+  Layer.provide(FlakyInsertRepository),
+  Layer.provide(NodeCrypto.layer),
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(Migrated),
+);
+
+// MA-004: an infrastructure failure is one typed, retryable `StoreUnavailable` in the Shape's `E`,
+// for both layers — never a defect and never the raw `SqlError`/`PlatformError`.
+describe("Sessions infrastructure failures (MA-004)", () => {
+  it.effect(
+    "layerSql: a SqlError from the repository surfaces as StoreUnavailable, not a defect",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        yield* Ref.set(failNextInsert, true);
+        const failure = yield* sessions.issue({ userId }).pipe(Effect.flip);
+        yield* Ref.set(failNextInsert, false);
+        assert.strictEqual(failure._tag, "StoreUnavailable");
+        assert.strictEqual(failure.operation, "Sessions.issue");
+        // The cause is logged where it happened; it is not a field a response could carry.
+        assert.notProperty(failure, "cause");
+      }).pipe(Effect.provide(FlakySqlLayer)),
+  );
+
+  // SEA-002: a `SQLITE_BUSY`-class failure (a retryable `SqlError`) is retried a bounded number of
+  // times before it becomes `StoreUnavailable`; anything else is not retried at all.
+  const insertAttempts = Effect.runSync(Ref.make(0));
+  const failFirstInserts = Effect.runSync(Ref.make(0));
+  const failWith = Effect.runSync(Ref.make<"busy" | "unknown">("busy"));
+
+  const BusyInsertRepository = Layer.effect(
+    Repositories.SessionsRepository,
+    Effect.gen(function* () {
+      const real = yield* Repositories.SessionsRepository;
+      return {
+        ...real,
+        insert: (input: Parameters<typeof real.insert>[0]) =>
+          Effect.gen(function* () {
+            yield* Ref.update(insertAttempts, (n) => n + 1);
+            const remaining = yield* Ref.get(failFirstInserts);
+            if (remaining <= 0) return yield* real.insert(input);
+            yield* Ref.set(failFirstInserts, remaining - 1);
+            const kind = yield* Ref.get(failWith);
+            return yield* Effect.fail(
+              new SqlError({
+                reason:
+                  kind === "busy"
+                    ? new LockTimeoutError({ cause: new Error("SQLITE_BUSY: database is locked") })
+                    : new UnknownError({ cause: new Error("boom") }),
+              }),
+            );
+          }),
+      };
+    }),
+  ).pipe(Layer.provide(Repositories.SessionsRepositoryLive));
+
+  const BusySqlLayer = Sessions.layerSql.pipe(
+    Layer.provide(BusyInsertRepository),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provideMerge(SqlLive),
+    Layer.provideMerge(Migrated),
+  );
+
+  const reset = (failures: number, kind: "busy" | "unknown") =>
+    Ref.set(insertAttempts, 0).pipe(
+      Effect.andThen(Ref.set(failFirstInserts, failures)),
+      Effect.andThen(Ref.set(failWith, kind)),
+    );
+
+  it.effect("SEA-002: issue retries a busy write and succeeds once the lock frees", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      yield* reset(2, "busy");
+      const fiber = yield* Effect.forkChild(sessions.issue({ userId }));
+      yield* TestClock.adjust(Duration.seconds(5));
+      const issued = yield* Fiber.join(fiber);
+      assert.strictEqual(issued.session.userId, userId);
+      assert.strictEqual(yield* Ref.get(insertAttempts), 3);
+    }).pipe(Effect.provide(BusySqlLayer)),
+  );
+
+  it.effect(
+    "SEA-002: the retry is bounded — a write that stays busy becomes StoreUnavailable",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        yield* reset(1000, "busy");
+        const fiber = yield* Effect.forkChild(sessions.issue({ userId }).pipe(Effect.flip));
+        yield* TestClock.adjust(Duration.seconds(5));
+        const failure = yield* Fiber.join(fiber);
+        assert.strictEqual(failure._tag, "StoreUnavailable");
+        // The first try plus three retries, and no more.
+        assert.strictEqual(yield* Ref.get(insertAttempts), 4);
+      }).pipe(Effect.provide(BusySqlLayer)),
+  );
+
+  it.effect("SEA-002: a non-retryable failure is not retried", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      yield* reset(1000, "unknown");
+      const failure = yield* sessions.issue({ userId }).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "StoreUnavailable");
+      assert.strictEqual(yield* Ref.get(insertAttempts), 1);
+    }).pipe(Effect.provide(BusySqlLayer)),
+  );
+
+  const BrokenCrypto = Layer.succeed(
+    Crypto.Crypto,
+    Crypto.make({
+      randomBytes: (size) => new Uint8Array(size),
+      digest: () =>
+        Effect.fail(
+          PlatformError.systemError({
+            module: "Crypto",
+            method: "digest",
+            _tag: "Unknown",
+            description: "provider down",
+          }),
+        ),
+    }),
+  );
+  const BrokenCryptoLayer = Sessions.layerMemory.pipe(
+    Layer.provide(BrokenCrypto),
+    Layer.provide(AuthEvents.layer),
+    Layer.provide(AuditLog.layerMemory),
+  );
+
+  it.effect("layerMemory: a crypto PlatformError surfaces as StoreUnavailable", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const issueFailure = yield* sessions.issue({ userId }).pipe(Effect.flip);
+      assert.strictEqual(issueFailure._tag, "StoreUnavailable");
+      const verifyFailure = yield* sessions
+        .verify(Redacted.make("some-id.some-secret"))
+        .pipe(Effect.flip);
+      assert.strictEqual(verifyFailure._tag, "StoreUnavailable");
+    }).pipe(Effect.provide(BrokenCryptoLayer)),
+  );
+});
+
+describe("Sessions atomic supersede (layerSql)", () => {
+  it.effect(
+    "BEH-EA-053: a failing insert during issue(supersedes) leaves the superseded session live and untombstoned",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const events = yield* AuthEvents.AuthEvents;
+        const reuse = yield* Ref.make(0);
+        yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((event) => event._tag === "auth.session.reuse"),
+            Stream.runForEach(() => Ref.update(reuse, (n) => n + 1)),
+          ),
+          { startImmediately: true },
+        );
+
+        const a = yield* sessions.issue({ userId });
+        yield* Ref.set(failNextInsert, true);
+        const exit = yield* sessions.issue({ userId, supersedes: a.session.id }).pipe(Effect.exit);
+        yield* Ref.set(failNextInsert, false);
+        assert.isTrue(Exit.isFailure(exit));
+
+        // The old token still verifies: the tombstone rolled back with the insert.
+        const verified = yield* sessions.verify(a.token);
+        assert.strictEqual(verified.session.id, a.session.id);
+        for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+        assert.strictEqual(yield* Ref.get(reuse), 0);
+      }).pipe(Effect.provide(FlakySqlLayer)),
+  );
+});
+
+// TIR-003/ESS-005: pagination past one repository page (MAX_PAGE_SIZE = 200).
+describe("Sessions.list past one page (layerSql)", () => {
+  it.effect(
+    "BEH-EA-054: list returns all 250 live sessions, findOwned resolves the newest of them",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        let newest = yield* sessions.issue({ userId });
+        for (let i = 1; i < 250; i++) newest = yield* sessions.issue({ userId });
+        const listed = yield* sessions.list(userId, newest.session.id);
+        assert.strictEqual(listed.length, 250);
+        assert.strictEqual(new Set(listed.map((row) => row.id)).size, 250);
+        assert.strictEqual(listed.filter((row) => row.current).length, 1);
+        const found = yield* sessions.findOwned(userId, newest.session.id);
+        assert.isTrue(Option.isSome(found));
+        // GC-005: an owned session beyond the first repository page revokes fine.
+        yield* sessions.revokeOwned(userId, newest.session.id, "userRevoked");
+        assert.strictEqual((yield* sessions.list(userId)).length, 249);
+      }).pipe(Effect.provide(SqlLayer)),
+    30_000,
+  );
 });

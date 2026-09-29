@@ -1,29 +1,60 @@
 // Shipping-gap map (.scratch/shipping-gaps), ticket 20.
+//
+// P20a: Givens arrange (or assert) state and Whens perform the request the scenario's When names
+// (AH-004); every entity a step names is looked up by that exact name (AH-008/BDD-008); no step
+// claims an outcome it does not observe (TIR-005/AH-009).
 import { defineSteps } from "@effect-cucumber/vitest";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { PasswordHasher } from "@awthaq/ports";
-import { Password } from "@awthaq/password";
+import { mailedToken } from "./MailedToken.ts";
 import {
   World,
   configureApp,
-  request,
-  cookieFrom,
-  setLastResponse,
-  getLastResponse,
-  setActor,
+  createUserWithoutCredential,
+  currentActor,
+  currentHasherNeedsRehash,
+  currentHasherVerifies,
+  currentOptions,
+  emailIsVerified,
   getActor,
-  letForkedFibersRun,
-  sentMail,
+  getLastResponse,
+  getNote,
+  getSessionCookie,
+  hashUnderArgon2Params,
+  plantCredentialHash,
   publishedEvents,
+  request,
+  sentMail,
+  sessionIsLive,
+  setActor,
+  setFault,
+  setLastResponse,
+  setNote,
+  setSession,
+  settle,
+  storedCredentialHash,
+  userExists,
   verifyLatestSignUp,
-  STRONG_PASSWORD,
 } from "./PasswordWorld.ts";
+import type { BreachFailure } from "./PasswordWorld.ts";
+import type { PasswordConfigOptions } from "./PasswordParameterTypes.ts";
+import {
+  cheapArgon2id,
+  cheapScrypt,
+  cookieFrom,
+  letForkedFibersRun,
+  STRONG_PASSWORD,
+} from "./shared/Harness.ts";
+
+const NEW_PASSWORD = "a whole new strong password";
+const WRONG_PASSWORD = "not the right password at all";
 
 /** REQ-EA-327: an HttpClient that answers any HIBP range lookup with `password`'s own real SHA-1 suffix, so it reads back as "found in a known breach" regardless of which prefix the plugin actually queried. */
 const breachedPasswordHttpClient = (password: string): Layer.Layer<HttpClient.HttpClient> =>
@@ -38,7 +69,7 @@ const breachedPasswordHttpClient = (password: string): Layer.Layer<HttpClient.Ht
     }),
   );
 
-/** REQ-EA-322/323/324: a real `HttpClientError` — the typed failure `Password.ts`'s own `isBreached` catches via `Effect.catch`, not a defect it would never recover from. */
+/** REQ-EA-322/323: a real `HttpClientError` — the typed failure `Password.ts`'s own `isBreached` catches via `Effect.catch`, not a defect it would never recover from. */
 const unreachableHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   HttpClient.HttpClient,
   HttpClient.make((httpRequest) =>
@@ -54,17 +85,21 @@ const unreachableHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   ),
 );
 
-const respondingWith = (status: number, body: unknown): Layer.Layer<HttpClient.HttpClient> =>
-  Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((httpRequest) =>
-      Effect.succeed(
-        HttpClientResponse.fromWeb(httpRequest, new Response(JSON.stringify(body), { status })),
-      ),
+/**
+ * CSD-009: a 5xx whose body is a perfectly well-formed range listing that does not contain the
+ * password — so only the status check (`filterStatusOk`) can tell it from a real "not breached"
+ * answer; a malformed body would be caught by the shape check regardless.
+ */
+const serverErrorWithValidBodyHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
+  HttpClient.HttpClient,
+  HttpClient.make((httpRequest) =>
+    Effect.succeed(
+      HttpClientResponse.fromWeb(httpRequest, new Response(`${"0".repeat(35)}:1`, { status: 503 })),
     ),
-  );
+  ),
+);
 
-/** REQ-EA-324's third failure mode: a 200 whose body isn't the newline-delimited `SUFFIX:COUNT` format `isBreached` expects — its own `.split("\n")`/`.split(":")` parse never throws on this, so this exercises the "response shape doesn't contain the suffix" branch rather than a parse failure, which is `isBreached`'s own real behavior for a malformed body. */
+/** A 200 whose body isn't the newline-delimited `SUFFIX:COUNT` range listing `isBreached` expects — PHS-004: that counts as "unavailable", not as "not breached". */
 const malformedHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   HttpClient.HttpClient,
   HttpClient.make((httpRequest) =>
@@ -74,23 +109,104 @@ const malformedHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   ),
 );
 
+/** A provider that never answers: only `breachCheckTimeout` ends the lookup (kept short by `arrangeBreachFailure`). */
+const neverRespondingHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
+  HttpClient.HttpClient,
+  HttpClient.make(() => Effect.never),
+);
+
+/** CSD-009: arranges the named provider failure on top of whatever `Password.config` is already in force. */
+const arrangeBreachFailure = (failure: BreachFailure) => {
+  switch (failure) {
+    case "timeout":
+      return configureApp({
+        breachHttpClient: neverRespondingHttpClient,
+        passwordConfig: { breachCheckTimeout: Duration.millis(50) },
+      });
+    case "5xx":
+      return configureApp({ breachHttpClient: serverErrorWithValidBodyHttpClient });
+    case "malformed":
+      return configureApp({ breachHttpClient: malformedHttpClient });
+  }
+};
+
+/** Signs `email` up through the wire, registering the actor and, when a session was issued, its cookie. */
+export const signUpActor = Effect.fn("features.password.signUpActor")(function* (
+  name: string,
+  email: string,
+  password: string,
+) {
+  const response = yield* request("/password/sign-up", { email, password });
+  yield* setLastResponse("_last", response);
+  const cookie = response.status === 200 ? cookieFrom(response) : undefined;
+  yield* setActor(name, { email, password, cookie });
+  return { response, cookie };
+});
+
+export const signInAs = Effect.fn("features.password.signInAs")(function* (
+  email: string,
+  password: string,
+) {
+  return yield* request("/password/sign-in", { email, password });
+});
+
+/** The reset token mailed to `email`, read from the captured mail. */
+export const latestResetToken = Effect.fn("features.password.latestResetToken")(function* (
+  email: string,
+) {
+  yield* letForkedFibersRun;
+  const mail = (yield* sentMail()).findLast(
+    (message) => message.template === "reset-password" && message.to === email,
+  );
+  assert.ok(mail !== undefined, `expected a reset-password mail for ${email}`);
+  return mailedToken(mail);
+});
+
+const responseBodyText = (response: Response) => Effect.promise(() => response.clone().text());
+
 export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- REQ-EA-304: sign-up creates the user and initial session ----
 
-  Given("no user exists with email {string}", function* (_email: string) {
-    yield* Effect.void;
+  Given("no user exists with email {string}", function* (email: string) {
+    // AH-004: asserted against the store, not assumed.
+    assert.equal(yield* userExists(email), false, `expected no user for ${email}`);
+  });
+
+  Given("the initial session cannot be issued", function* () {
+    // TIR-005: the atomicity claim is only observable over a real transaction.
+    yield* configureApp({ storage: "sqlite" });
+    yield* setFault("sessionIssue");
   });
 
   When("{string} signs up with a password", function* (email: string) {
-    const response = yield* request("/password/sign-up", { email, password: STRONG_PASSWORD });
-    yield* setLastResponse("_last", response);
-    yield* setActor(email, { email, password: STRONG_PASSWORD, cookie: cookieFrom(response) });
+    yield* signUpActor(email, email, STRONG_PASSWORD);
   });
 
   Then("the User row and the initial session are both created under one transaction", function* () {
     const response = yield* getLastResponse("_last");
     assert.equal(response.status, 200, "expected sign-up to succeed");
-    assert.match(cookieFrom(response), /^__Host-session=/);
+    const actor = yield* currentActor();
+    assert.match(actor.cookie ?? "", /^__Host-session=/);
+    // Both halves of the unit are observed: the row, and a live session issued for it.
+    assert.equal(yield* userExists(actor.email), true, "the User row must exist");
+    assert.equal(
+      yield* sessionIsLive(actor.cookie ?? ""),
+      true,
+      "the initial session must be live",
+    );
+  });
+
+  Then("the sign-up fails with a server error", function* () {
+    const response = yield* getLastResponse("_last");
+    assert.equal(response.status, 500);
+  });
+
+  Then("no User row exists for {string}", function* (email: string) {
+    assert.equal(
+      yield* userExists(email),
+      false,
+      `the failed sign-up left a User row for ${email}`,
+    );
   });
 
   // ---- REQ-EA-305: verification mail dispatched detached ----
@@ -113,7 +229,8 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* () {
       const response = yield* getLastResponse("_last");
       assert.equal(response.status, 200);
-      const body = (yield* Effect.promise(() => response.json())) as { current: boolean };
+      const body = yield* Effect.promise(() => response.json());
+      assert.ok(typeof body === "object" && body !== null && "current" in body);
       assert.equal(body.current, true);
     },
   );
@@ -127,48 +244,103 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
     );
   });
 
-  // ---- REQ-EA-307: uniform InvalidCredentials outline ----
+  // ---- REQ-EA-306: sign-up does not wait on the mail provider, and (conceal) does not tell the two apart ----
 
-  Given("a sign-in attempt where {string}", function* (reason: string) {
-    if (reason === "the email is unknown") {
-      const response = yield* request("/password/sign-in", {
-        email: "nobody-at-all@example.com",
+  Given("a slow-responding mail provider", function* () {
+    yield* configureApp({ slowMailer: true });
+  });
+
+  Given("the application conceals account existence on sign-up", function* () {
+    yield* configureApp({ passwordConfig: { signUpEnumeration: "conceal" } });
+  });
+
+  Given(
+    "two sign-up requests, one for an email with no existing account and one for an email that already has one",
+    function* () {
+      // The existing account: a first sign-up (answered although the provider never answers).
+      const first = yield* request("/password/sign-up", {
+        email: "existing@example.com",
         password: STRONG_PASSWORD,
       });
-      yield* setLastResponse("outline", response);
+      assert.equal(first.status, 202);
+      yield* setNote("fresh", "fresh@example.com");
+      yield* setNote("existing", "existing@example.com");
+    },
+  );
+
+  When("both requests are handled", function* () {
+    const attempt = (email: string) =>
+      Effect.gen(function* () {
+        const started = Date.now();
+        const response = yield* request("/password/sign-up", {
+          email,
+          password: STRONG_PASSWORD,
+        }).pipe(Effect.timeoutOption("5 seconds"));
+        return { response, elapsed: Date.now() - started };
+      });
+    const fresh = yield* attempt(yield* getNote("fresh"));
+    const existing = yield* attempt(yield* getNote("existing"));
+    assert.ok(fresh.response._tag === "Some", "the fresh sign-up never answered");
+    assert.ok(existing.response._tag === "Some", "the existing-address sign-up never answered");
+    yield* setLastResponse("fresh", fresh.response.value);
+    yield* setLastResponse("existing", existing.response.value);
+    yield* setNote("freshMillis", String(fresh.elapsed));
+    yield* setNote("existingMillis", String(existing.elapsed));
+  });
+
+  Then("neither response's timing varies with the mail provider's latency", function* () {
+    // The provider's latency is unbounded, and both answered within moments: it is not in the path.
+    assert.ok(Number(yield* getNote("freshMillis")) < 3000);
+    assert.ok(Number(yield* getNote("existingMillis")) < 3000);
+  });
+
+  Then("the response timing does not leak which email already had an account", function* () {
+    // Nothing else tells the two apart either: under `conceal` status and body are the same.
+    const fresh = yield* getLastResponse("fresh");
+    const existing = yield* getLastResponse("existing");
+    assert.equal(fresh.status, 202);
+    assert.equal(existing.status, 202);
+    const [a, b] = yield* Effect.promise(() => Promise.all([fresh.text(), existing.text()]));
+    assert.equal(a, b);
+  });
+
+  // ---- REQ-EA-307: uniform InvalidCredentials outline ----
+
+  // AH-004: the Given only arranges — it stores the attempt (and creates whatever account the
+  // reason needs); the request is the When's.
+  Given("a sign-in attempt where {string}", function* (reason: string) {
+    if (reason === "the email is unknown") {
+      const email = "nobody-at-all@example.com";
+      assert.equal(yield* userExists(email), false);
+      yield* setActor("outline", { email, password: STRONG_PASSWORD, cookie: undefined });
       return;
     }
     if (reason === "the password is wrong") {
-      yield* request("/password/sign-up", {
-        email: "wrong-password@example.com",
-        password: STRONG_PASSWORD,
-      });
-      const response = yield* request("/password/sign-in", {
-        email: "wrong-password@example.com",
-        password: "not the right password at all",
-      });
-      yield* setLastResponse("outline", response);
+      const email = "alice@example.com";
+      yield* signUpActor("_setup", email, STRONG_PASSWORD);
+      yield* setActor("outline", { email, password: WRONG_PASSWORD, cookie: undefined });
       return;
     }
-    // "the account has no password credential at all" — no such account was ever
-    // created via `password.signUp`, so sign-in resolves the same "unknown
-    // credential" path as an unknown email — this plugin owns no other
-    // credential source to seed one under (an OAuth-only account, say).
-    const response = yield* request("/password/sign-in", {
-      email: "no-credential-at-all@example.com",
-      password: STRONG_PASSWORD,
-    });
-    yield* setLastResponse("outline", response);
+    if (reason === "the account has no password credential at all") {
+      // A real user with no password account (e.g. an account created some other way).
+      const email = "no-credential@example.com";
+      yield* createUserWithoutCredential(email);
+      yield* setActor("outline", { email, password: STRONG_PASSWORD, cookie: undefined });
+      return;
+    }
+    throw new Error(`unrecognised sign-in failure reason "${reason}"`);
   });
 
   When('"password.signIn" is called', function* () {
-    yield* Effect.void;
+    const attempt = yield* getActor("outline");
+    yield* setLastResponse("outline", yield* signInAs(attempt.email, attempt.password));
   });
 
   Then('the response is "401 Unauthenticated" with the "InvalidCredentials" error', function* () {
     const response = yield* getLastResponse("outline");
     assert.equal(response.status, 401);
-    const body = (yield* Effect.promise(() => response.json())) as { _tag?: string };
+    const body = yield* Effect.promise(() => response.json());
+    assert.ok(typeof body === "object" && body !== null && "_tag" in body);
     assert.equal(body._tag, "InvalidCredentials");
   });
 
@@ -177,31 +349,72 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a sign-in attempt for an unknown email, one for a known email with a wrong password, and one for an account with no password credential",
     function* () {
-      yield* request("/password/sign-up", {
-        email: "indistinguishable@example.com",
-        password: STRONG_PASSWORD,
-      });
-      const unknown = yield* request("/password/sign-in", {
+      assert.equal(yield* userExists("no-such-email@example.com"), false);
+      yield* setActor("three:unknown", {
         email: "no-such-email@example.com",
         password: STRONG_PASSWORD,
+        cookie: undefined,
       });
-      const wrongPassword = yield* request("/password/sign-in", {
+      yield* signUpActor("_setup", "indistinguishable@example.com", STRONG_PASSWORD);
+      yield* setActor("three:wrongPassword", {
         email: "indistinguishable@example.com",
         password: "definitely not it",
+        cookie: undefined,
       });
-      const noCredential = yield* request("/password/sign-in", {
+      yield* createUserWithoutCredential("no-credential-either@example.com");
+      yield* setActor("three:noCredential", {
         email: "no-credential-either@example.com",
         password: STRONG_PASSWORD,
+        cookie: undefined,
       });
-      yield* setLastResponse("three:unknown", unknown);
-      yield* setLastResponse("three:wrongPassword", wrongPassword);
-      yield* setLastResponse("three:noCredential", noCredential);
     },
   );
 
   When("each is handled", function* () {
-    yield* Effect.void;
+    for (const key of ["unknown", "wrongPassword", "noCredential"]) {
+      const attempt = yield* getActor(`three:${key}`);
+      const started = Date.now();
+      yield* setLastResponse(`three:${key}`, yield* signInAs(attempt.email, attempt.password));
+      yield* setNote(`three:${key}:millis`, String(Date.now() - started));
+    }
   });
+
+  // REQ-EA-309: the same three attempts, under a configured timing floor.
+  Given(
+    "the same three sign-in attempts, differing only in which of the three reasons applies",
+    function* () {
+      yield* configureApp({ passwordConfig: { signInTimingFloor: Duration.millis(250) } });
+      yield* setActor("three:unknown", {
+        email: "no-such-email@example.com",
+        password: STRONG_PASSWORD,
+        cookie: undefined,
+      });
+      yield* signUpActor("_setup", "indistinguishable@example.com", STRONG_PASSWORD);
+      yield* setActor("three:wrongPassword", {
+        email: "indistinguishable@example.com",
+        password: "definitely not it",
+        cookie: undefined,
+      });
+      yield* createUserWithoutCredential("no-credential-either@example.com");
+      yield* setActor("three:noCredential", {
+        email: "no-credential-either@example.com",
+        password: STRONG_PASSWORD,
+        cookie: undefined,
+      });
+    },
+  );
+
+  Then(
+    "the response latency does not vary in a way that would let an attacker distinguish the reasons by timing",
+    function* () {
+      // None of the three came back before the floor: the cheap reasons (no such user, no credential)
+      // are held to what the expensive one costs, so a fast answer no longer names the reason.
+      for (const key of ["unknown", "wrongPassword", "noCredential"]) {
+        const millis = Number(yield* getNote(`three:${key}:millis`));
+        assert.ok(millis >= 240, `${key} answered in ${millis}ms, before the 250ms floor`);
+      }
+    },
+  );
 
   Then("all three responses have the identical status and the identical body", function* () {
     const unknown = yield* getLastResponse("three:unknown");
@@ -210,99 +423,245 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(unknown.status, wrongPassword.status);
     assert.equal(wrongPassword.status, noCredential.status);
     const [a, b, c] = yield* Effect.promise(() =>
-      Promise.all([unknown.json(), wrongPassword.json(), noCredential.json()]),
+      Promise.all([
+        unknown.clone().json(),
+        wrongPassword.clone().json(),
+        noCredential.clone().json(),
+      ]),
     );
     assert.deepEqual(a, b);
     assert.deepEqual(b, c);
   });
 
   Then("none of them reveals which of the three reasons applied", function* () {
-    yield* Effect.void;
+    // Beyond an identical status/body: no response header differs across the three (bar the
+    // per-response `date`), and none echoes the address it was asked about.
+    const keys = ["unknown", "wrongPassword", "noCredential"];
+    const headerViews: Array<string> = [];
+    for (const key of keys) {
+      const response = yield* getLastResponse(`three:${key}`);
+      const attempt = yield* getActor(`three:${key}`);
+      const text = yield* responseBodyText(response);
+      assert.ok(!text.includes(attempt.email), `the ${key} response echoes the address`);
+      headerViews.push(
+        JSON.stringify([...response.headers.entries()].filter(([name]) => name !== "date").sort()),
+      );
+    }
+    assert.equal(new Set(headerViews).size, 1, "response headers differ across the three reasons");
   });
 
   // ---- REQ-EA-310/311: PasswordHasher is a swappable port ----
 
+  // The composition is the World's own; naming it here composes it explicitly.
   Given("an application composing {string}", function* (_name: string) {
-    yield* Effect.void;
+    yield* configureApp({});
   });
 
   Given(
     "an application composing {string} for a WebCrypto-only runtime",
     function* (_name: string) {
-      yield* Effect.void;
+      yield* configureApp({});
     },
   );
 
+  // P20a: the KDF layers run at the smallest legal cost (`shared/Harness.ts`); the algorithm, salt
+  // and PHC format are the real ones, which is what the Thens check.
   When('the application provides "PasswordHasher.layerArgon2id"', function* () {
-    yield* configureApp({ hasher: PasswordHasher.layerArgon2id });
+    yield* configureApp({ hasher: cheapArgon2id });
   });
 
   When(
     'the application provides "PasswordHasher.layerScrypt" in place of the default',
     function* () {
-      yield* configureApp({ hasher: PasswordHasher.layerScrypt });
+      yield* configureApp({ hasher: cheapScrypt });
     },
   );
+
+  const signUpVerifySignIn = Effect.fn("features.password.signUpVerifySignIn")(function* (
+    email: string,
+  ) {
+    const signUp = yield* request("/password/sign-up", { email, password: STRONG_PASSWORD });
+    assert.equal(signUp.status, 200);
+    yield* verifyLatestSignUp(email);
+    const signIn = yield* signInAs(email, STRONG_PASSWORD);
+    assert.equal(signIn.status, 200);
+    return yield* storedCredentialHash(email);
+  });
 
   Then(
     '"Password" hashes and verifies passwords using the provided "PasswordHasher"',
     function* () {
-      const signUp = yield* request("/password/sign-up", {
-        email: "argon2id-user@example.com",
-        password: STRONG_PASSWORD,
-      });
-      assert.equal(signUp.status, 200);
-      yield* verifyLatestSignUp();
-      const signIn = yield* request("/password/sign-in", {
-        email: "argon2id-user@example.com",
-        password: STRONG_PASSWORD,
-      });
-      assert.equal(signIn.status, 200);
+      const stored = yield* signUpVerifySignIn("argon2id-user@example.com");
+      assert.match(stored, /^\$argon2id\$/);
     },
   );
 
   Then('"Password" hashes and verifies passwords using "PasswordHasher.layerScrypt"', function* () {
-    const signUp = yield* request("/password/sign-up", {
-      email: "scrypt-user@example.com",
-      password: STRONG_PASSWORD,
-    });
-    assert.equal(signUp.status, 200);
-    yield* verifyLatestSignUp();
-    const signIn = yield* request("/password/sign-in", {
-      email: "scrypt-user@example.com",
-      password: STRONG_PASSWORD,
-    });
-    assert.equal(signIn.status, 200);
+    const stored = yield* signUpVerifySignIn("scrypt-user@example.com");
+    assert.match(stored, /^\$scrypt\$/);
   });
 
   Then('no change is made to "Password"\'s own code to accept the substitution', function* () {
-    yield* Effect.void;
+    // The harness-level observation of "no change to Password": swapping the hasher touched
+    // nothing but the hasher — no plugin option, config override or storage choice moved.
+    const options = yield* currentOptions();
+    const changed = Object.entries(options)
+      .filter(([, value]) => value !== undefined)
+      .filter(
+        ([key, value]) => !(key === "passwordConfig" && Object.keys(value ?? {}).length === 0),
+      )
+      .map(([key]) => key);
+    assert.deepEqual(changed, ["hasher"]);
   });
+
+  // ---- REQ-EA-313/314/315: rehash on login (PHS-005) ----
+
+  // Weaker than the World's configured argon2id cost (m=1024, t=1), so the planted hash is
+  // "computed under previously configured parameters".
+  const PREVIOUS_PARAMS = { AUTH_ARGON2_MEMORY_KIB: "512", AUTH_ARGON2_ITERATIONS: "1" };
+
+  const arrangeVerifiedUser = Effect.fn("features.password.arrangeVerifiedUser")(function* (
+    name: string,
+  ) {
+    const email = `${name}@example.com`;
+    yield* signUpActor(name, email, STRONG_PASSWORD);
+    yield* verifyLatestSignUp(email);
+    return email;
+  });
+
+  Given(
+    "a user {string} whose stored password hash was computed under previously configured {string} parameters",
+    function* (name: string, _port: string) {
+      const email = yield* arrangeVerifiedUser(name);
+      const outdated = yield* hashUnderArgon2Params(PREVIOUS_PARAMS, STRONG_PASSWORD);
+      yield* plantCredentialHash(email, outdated);
+      yield* setNote(`hashBefore:${name}`, outdated);
+    },
+  );
+
+  Given(
+    "{string}'s currently configured parameters are stronger than those under which the hash was stored",
+    function* (_port: string) {
+      const actor = yield* currentActor();
+      const outdated = yield* getNote(`hashBefore:${actor.email.split("@")[0]}`);
+      assert.equal(
+        yield* currentHasherNeedsRehash(outdated),
+        true,
+        "the configured hasher must consider the planted hash outdated",
+      );
+    },
+  );
+
+  Given(
+    "a user {string} whose stored password hash already matches {string}'s currently configured parameters",
+    function* (name: string, _port: string) {
+      const email = yield* arrangeVerifiedUser(name);
+      const stored = yield* storedCredentialHash(email);
+      assert.equal(yield* currentHasherNeedsRehash(stored), false);
+      yield* setNote(`hashBefore:${name}`, stored);
+    },
+  );
+
+  Given(
+    "a user {string} whose stored hash's parameters differ from the currently configured parameters",
+    function* (name: string) {
+      const email = yield* arrangeVerifiedUser(name);
+      const outdated = yield* hashUnderArgon2Params(PREVIOUS_PARAMS, STRONG_PASSWORD);
+      yield* plantCredentialHash(email, outdated);
+      assert.equal(yield* currentHasherNeedsRehash(outdated), true);
+      yield* setNote(`hashBefore:${name}`, outdated);
+    },
+  );
+
+  When("{string} signs in successfully with {word} password", function* (name: string) {
+    const actor = yield* getActor(name);
+    const response = yield* signInAs(actor.email, actor.password);
+    assert.equal(response.status, 200, "expected a successful sign-in");
+    yield* setLastResponse(`signIn:${name}`, response);
+    // Read straight away: no scheduler turn is granted before the hash is inspected.
+    yield* setNote(`hashAfter:${name}`, yield* storedCredentialHash(actor.email));
+  });
+
+  When("{string} signs in successfully", function* (name: string) {
+    const actor = yield* getActor(name);
+    const response = yield* signInAs(actor.email, actor.password);
+    assert.equal(response.status, 200, "expected a successful sign-in");
+    yield* setLastResponse(`signIn:${name}`, response);
+    yield* setNote(`hashAfter:${name}`, yield* storedCredentialHash(actor.email));
+  });
+
+  Then(
+    "the password is rehashed with the current parameters within the same request",
+    function* () {
+      const actor = yield* currentActor();
+      const name = actor.email.split("@")[0] ?? actor.email;
+      const after = yield* getNote(`hashAfter:${name}`);
+      assert.equal(
+        yield* currentHasherNeedsRehash(after),
+        false,
+        "the new hash is at current cost",
+      );
+      assert.match(after, /^\$argon2id\$v=19\$m=1024,t=1,p=1\$/);
+      assert.equal(yield* currentHasherVerifies(STRONG_PASSWORD, after), true);
+    },
+  );
+
+  Then("the stored hash is replaced with the new one", function* () {
+    const actor = yield* currentActor();
+    const name = actor.email.split("@")[0] ?? actor.email;
+    assert.notEqual(yield* getNote(`hashAfter:${name}`), yield* getNote(`hashBefore:${name}`));
+  });
+
+  Then("the stored hash is not replaced", function* () {
+    const actor = yield* currentActor();
+    const name = actor.email.split("@")[0] ?? actor.email;
+    assert.equal(yield* getNote(`hashAfter:${name}`), yield* getNote(`hashBefore:${name}`));
+  });
+
+  Then(
+    "the rehash completes within the same request that serves the sign-in response",
+    function* () {
+      const actor = yield* currentActor();
+      const name = actor.email.split("@")[0] ?? actor.email;
+      // `hashAfter` was read before any scheduler turn followed the response.
+      assert.notEqual(yield* getNote(`hashAfter:${name}`), yield* getNote(`hashBefore:${name}`));
+    },
+  );
+
+  Then(
+    "no separate background migration job is relied upon to update the stored hash",
+    function* () {
+      const actor = yield* currentActor();
+      const name = actor.email.split("@")[0] ?? actor.email;
+      // Once every detached fiber and timer has had its turn nothing changes the hash again:
+      // the value the request left behind is the final one.
+      yield* settle;
+      assert.equal(yield* storedCredentialHash(actor.email), yield* getNote(`hashAfter:${name}`));
+    },
+  );
 
   // ---- REQ-EA-316/317/318: reset ----
 
   Given(
-    'an email "alice@example.com" with an existing account and an email "nobody@example.com" with no account',
-    function* () {
-      const response = yield* request("/password/sign-up", {
-        email: "alice-reset@example.com",
-        password: STRONG_PASSWORD,
-      });
-      yield* setActor("alice-reset", {
-        email: "alice-reset@example.com",
-        password: STRONG_PASSWORD,
-        cookie: cookieFrom(response),
-      });
+    "an email {string} with an existing account and an email {string} with no account",
+    function* (known: string, unknown: string) {
+      yield* signUpActor("known", known, STRONG_PASSWORD);
+      assert.equal(yield* userExists(unknown), false, `expected no account for ${unknown}`);
+      yield* setActor("unknown", { email: unknown, password: STRONG_PASSWORD, cookie: undefined });
     },
   );
 
   When("each requests a password reset", function* () {
-    const known = yield* request("/password/request-reset", { email: "alice-reset@example.com" });
-    const unknown = yield* request("/password/request-reset", {
-      email: "nobody-reset@example.com",
-    });
-    yield* setLastResponse("reset:known", known);
-    yield* setLastResponse("reset:unknown", unknown);
+    const known = yield* getActor("known");
+    const unknown = yield* getActor("unknown");
+    yield* setLastResponse(
+      "reset:known",
+      yield* request("/password/request-reset", { email: known.email }),
+    );
+    yield* setLastResponse(
+      "reset:unknown",
+      yield* request("/password/request-reset", { email: unknown.email }),
+    );
   });
 
   Then('both responses are "202 Accepted" with identical bodies', function* () {
@@ -319,145 +678,179 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Given(
     "a live password-reset token for {string} and an existing session {string} for {string}",
-    function* (name: string, _sessionName: string, _forName: string) {
-      const signUp = yield* request("/password/sign-up", {
-        email: `${name}-reset-flow@example.com`,
-        password: STRONG_PASSWORD,
-      });
-      yield* setActor(name, {
-        email: `${name}-reset-flow@example.com`,
-        password: STRONG_PASSWORD,
-        cookie: cookieFrom(signUp),
-      });
-      yield* verifyLatestSignUp();
-      yield* request("/password/request-reset", { email: `${name}-reset-flow@example.com` });
+    function* (name: string, sessionName: string, forName: string) {
+      assert.equal(name, forName, "this step wires one user: the token's owner holds the session");
+      // TIR-005: the reset unit is only atomic over a real transaction.
+      yield* configureApp({ storage: "sqlite" });
+      const email = `${name}@example.com`;
+      const { cookie } = yield* signUpActor(name, email, STRONG_PASSWORD);
+      assert.ok(cookie !== undefined, "sign-up must have issued the session");
+      yield* setSession(sessionName, cookie);
+      yield* setNote(`resetSession:${name}`, sessionName);
+      assert.equal(yield* sessionIsLive(cookie), true, `session ${sessionName} must be live`);
+      yield* verifyLatestSignUp(email);
+      yield* request("/password/request-reset", { email });
       // `requestReset`'s own mail dispatch is `Effect.forkDetach`ed
       // (BEH-EA-064: response latency must not be an enumeration oracle)
-      // — never awaited by the HTTP response, so the very next step's
-      // `sentMail()` read needs these scheduler turns first, the same
-      // race `verifyLatestSignUp` above already guards against for its
-      // own `signUp`-dispatched mail.
-      yield* letForkedFibersRun;
+      // — never awaited by the HTTP response, so the mail read needs these
+      // scheduler turns first.
+      yield* setNote(`resetToken:${name}`, yield* latestResetToken(email));
     },
   );
 
   When("{string} confirms the reset with that token and a new password", function* (name: string) {
     const actor = yield* getActor(name);
-    const messages = yield* sentMail();
-    const resetMail = messages.findLast((m) => m.template === "reset-password");
-    if (resetMail === undefined) throw new Error("expected a reset-password mail");
-    const token = (resetMail.data as { token: string }).token;
-    const response = yield* request("/password/confirm-reset", {
-      token,
-      password: "a whole new strong password",
-    });
+    const token = yield* getNote(`resetToken:${name}`);
+    const response = yield* request("/password/confirm-reset", { token, password: NEW_PASSWORD });
     yield* setLastResponse(`confirm:${name}`, response);
-    yield* setActor(name, { ...actor, password: "a whole new strong password" });
+    yield* setNote(`previousPassword:${name}`, actor.password);
+    yield* setActor(name, { ...actor, password: NEW_PASSWORD });
   });
 
   Then("the token is consumed", function* () {
-    yield* Effect.void;
+    const actor = yield* currentActor();
+    const name = actor.email.split("@")[0] ?? actor.email;
+    const confirm = yield* getLastResponse(`confirm:${name}`);
+    assert.equal(confirm.status, 204, "the reset itself must have succeeded");
+    // TIR-005: consumption is observed by replaying the token, not assumed.
+    const replay = yield* request("/password/confirm-reset", {
+      token: yield* getNote(`resetToken:${name}`),
+      password: "yet another strong password",
+    });
+    assert.equal(replay.status, 410);
+    const body = yield* Effect.promise(() => replay.json());
+    assert.ok(typeof body === "object" && body !== null && "_tag" in body);
+    assert.equal(body._tag, "TokenConsumed");
   });
 
   Then("the new password is set", function* () {
-    const actor = yield* getActor("alice");
-    const signIn = yield* request("/password/sign-in", {
-      email: actor.email,
-      password: actor.password,
-    });
-    assert.equal(signIn.status, 200);
+    const actor = yield* currentActor();
+    const name = actor.email.split("@")[0] ?? actor.email;
+    assert.equal((yield* signInAs(actor.email, actor.password)).status, 200);
+    const previous = yield* getNote(`previousPassword:${name}`);
+    assert.equal(
+      (yield* signInAs(actor.email, previous)).status,
+      401,
+      "the old password must be dead",
+    );
   });
 
-  Then("session {string} is revoked", function* (_sessionName: string) {
-    const actor = yield* getActor("alice");
-    // Shipping-gap map, ticket 20: the pre-reset session cookie ("s1") is
-    // `actor.cookie` as it stood before the confirm-reset overwrote it above
-    // — re-derived here from the sign-up response captured in the Given step.
-    const response = yield* request(
-      "/change-password",
-      { currentPassword: actor.password, newPassword: actor.password },
-      actor.cookie,
-    );
-    assert.equal(response.status, 401);
+  Then("session {string} is revoked", function* (sessionName: string) {
+    assert.equal(yield* sessionIsLive(yield* getSessionCookie(sessionName)), false);
   });
 
   Then("all three effects commit under one transaction", function* () {
-    yield* Effect.void;
+    // The three effects are observed together, over the real transaction the Given arranged;
+    // that they can only ever appear together is the rollback scenario's claim (an injected
+    // fault after the hash update leaves none of them applied).
+    assert.equal((yield* currentOptions()).storage, "sqlite");
+    const actor = yield* currentActor();
+    const name = actor.email.split("@")[0] ?? actor.email;
+    const replay = yield* request("/password/confirm-reset", {
+      token: yield* getNote(`resetToken:${name}`),
+      password: "yet another strong password",
+    });
+    assert.equal(replay.status, 410, "the token stays consumed");
+    assert.equal((yield* signInAs(actor.email, actor.password)).status, 200, "new password live");
+    const resetSession = yield* getNote(`resetSession:${name}`);
+    assert.equal(
+      yield* sessionIsLive(yield* getSessionCookie(resetSession)),
+      false,
+      `${resetSession} stays revoked`,
+    );
   });
 
+  Given("the reset fails after the credential hash update", function* () {
+    yield* setFault("revokeAll");
+  });
+
+  Then("the request fails with a server error", function* () {
+    const actor = yield* currentActor();
+    const name = actor.email.split("@")[0] ?? actor.email;
+    assert.equal((yield* getLastResponse(`confirm:${name}`)).status, 500);
+  });
+
+  Then("the old password still signs in", function* () {
+    const actor = yield* currentActor();
+    const name = actor.email.split("@")[0] ?? actor.email;
+    const previous = yield* getNote(`previousPassword:${name}`);
+    assert.equal((yield* signInAs(actor.email, previous)).status, 200);
+    assert.equal(
+      (yield* signInAs(actor.email, actor.password)).status,
+      401,
+      "the new password must not have been applied",
+    );
+  });
+
+  Then("session {string} is still valid", function* (sessionName: string) {
+    assert.equal(yield* sessionIsLive(yield* getSessionCookie(sessionName)), true);
+  });
+
+  Then("the reset token is still redeemable", function* () {
+    const actor = yield* currentActor();
+    const name = actor.email.split("@")[0] ?? actor.email;
+    yield* setFault("none");
+    const retry = yield* request("/password/confirm-reset", {
+      token: yield* getNote(`resetToken:${name}`),
+      password: NEW_PASSWORD,
+    });
+    assert.equal(retry.status, 204, "the token was burned by the rolled-back attempt");
+  });
+
+  // REQ-EA-318
   Given(
     "an attacker holding a session {string} for {string} obtained before she resets her password",
     function* (sessionName: string, name: string) {
-      const signUp = yield* request("/password/sign-up", {
-        email: `${name}-attacker-flow@example.com`,
-        password: STRONG_PASSWORD,
-      });
-      yield* setActor(name, {
-        email: `${name}-attacker-flow@example.com`,
-        password: STRONG_PASSWORD,
-        cookie: cookieFrom(signUp),
-      });
-      yield* setActor(sessionName, {
-        email: `${name}-attacker-flow@example.com`,
-        password: STRONG_PASSWORD,
-        cookie: cookieFrom(signUp),
-      });
+      const email = `${name}@example.com`;
+      const { cookie } = yield* signUpActor(name, email, STRONG_PASSWORD);
+      assert.ok(cookie !== undefined, "sign-up must have issued the session");
+      yield* setSession(sessionName, cookie);
+      assert.equal(yield* sessionIsLive(cookie), true, "the attacker's session starts out live");
     },
   );
 
   When("{string} confirms a password reset", function* (name: string) {
-    yield* request("/password/request-reset", { email: (yield* getActor(name)).email });
-    // See the identical comment on the sibling reset-confirmation step
-    // above: `requestReset`'s mail dispatch is forked and detached, never
-    // awaited by the response.
-    yield* letForkedFibersRun;
-    const messages = yield* sentMail();
-    const resetMail = messages.findLast((m) => m.template === "reset-password");
-    if (resetMail === undefined) throw new Error("expected a reset-password mail");
-    const token = (resetMail.data as { token: string }).token;
-    yield* request("/password/confirm-reset", { token, password: "another whole new password" });
+    const actor = yield* getActor(name);
+    yield* request("/password/request-reset", { email: actor.email });
+    const token = yield* latestResetToken(actor.email);
+    const response = yield* request("/password/confirm-reset", { token, password: NEW_PASSWORD });
+    assert.equal(response.status, 204, "the reset itself must have succeeded");
+    yield* setActor(name, { ...actor, password: NEW_PASSWORD });
   });
 
   Then("session {string} is no longer valid", function* (sessionName: string) {
-    const attacker = yield* getActor(sessionName);
-    const response = yield* request(
-      "/change-password",
-      { currentPassword: "another whole new password", newPassword: "yet another password" },
-      attacker.cookie,
-    );
-    assert.equal(response.status, 401);
+    assert.equal(yield* sessionIsLive(yield* getSessionCookie(sessionName)), false);
   });
 
   // ---- REQ-EA-319/320/321: verification token replay ----
 
   Given("a verification token that has already been consumed", function* () {
-    const signUp = yield* request("/password/sign-up", {
-      email: "replay-token@example.com",
-      password: STRONG_PASSWORD,
-    });
-    yield* setActor("replay", {
-      email: "replay-token@example.com",
-      password: STRONG_PASSWORD,
-      cookie: cookieFrom(signUp),
-    });
+    const email = "replay-token@example.com";
+    yield* signUpActor("replay", email, STRONG_PASSWORD);
     yield* letForkedFibersRun;
-    const messages = yield* sentMail();
-    const verifyMail = messages.findLast((m) => m.template === "verify-email");
-    if (verifyMail === undefined) throw new Error("expected a verify-email mail");
-    const token = (verifyMail.data as { token: string }).token;
+    const verifyMail = (yield* sentMail()).findLast(
+      (m) => m.template === "verify-email" && m.to === email,
+    );
+    assert.ok(verifyMail !== undefined, "expected a verify-email mail");
+    const token = mailedToken(verifyMail);
     const firstUse = yield* request("/verify-email", { token });
     assert.equal(firstUse.status, 204, "expected the token's first use to succeed");
-    yield* setActor("replay-token-value", {
-      email: token,
-      password: "",
-      cookie: undefined,
-    });
+    yield* setNote("verificationToken", token);
   });
 
   When('the same token is presented to "verification.confirm" again', function* () {
-    const token = (yield* getActor("replay-token-value")).email;
+    const token = yield* getNote("verificationToken");
+    // AH-009: what the replay must NOT change is captured first.
+    yield* settle;
+    const { eventTags } = yield* World;
+    yield* Ref.set(
+      eventTags,
+      (yield* publishedEvents()).map((event) => event._tag),
+    );
+    yield* setNote("verifiedBefore", String(yield* emailIsVerified("replay-token@example.com")));
     const response = yield* request("/verify-email", { token });
     yield* setLastResponse("replay", response);
+    yield* settle;
   });
 
   Then('the request fails with "410 TokenConsumed"', function* () {
@@ -471,7 +864,16 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Then("the replayed action is not performed a second time", function* () {
-    yield* Effect.void;
+    const { eventTags } = yield* World;
+    const before = yield* Ref.get(eventTags);
+    const added = (yield* publishedEvents()).slice(before.length).map((event) => event._tag);
+    // The replay is observable as exactly one replay signal — no second verification, no other
+    // side effect event — and the user's verified state is what it was.
+    assert.deepEqual(added, ["auth.token.replay"]);
+    assert.equal(
+      String(yield* emailIsVerified("replay-token@example.com")),
+      yield* getNote("verifiedBefore"),
+    );
   });
 
   Then(
@@ -482,50 +884,40 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  // ---- REQ-EA-322/323/324: breach-check fail-open/closed ----
+  // ---- REQ-EA-322/323/324 and the CSD-009 outline: breach-check fail-open/closed ----
 
-  // Cucumber Expressions treat `(`/`)`/`{`/`}` as syntax (optional text,
-  // parameter holes) — these two steps' own text is a literal TypeScript
-  // snippet full of them, so both are matched as one bare `{string}`
-  // (the whole step is a single quoted string) and dispatched on content,
-  // rather than trying to escape each structural character individually.
-  Given("{string}", function* (configExpr: string) {
-    if (configExpr.includes("onUnavailable")) {
-      yield* configureApp({
-        config: Password.config({ breachCheck: { onUnavailable: "reject" } }),
-      });
-    } else if (configExpr.includes("minLength: 12")) {
-      yield* configureApp({
-        config: Password.config({ breachCheck: true, minLength: 12 }),
-        breachHttpClient: breachedPasswordHttpClient("hunter2hunter2"),
-      });
-    } else {
-      // REQ-EA-322/324's own bare `"password({ breachCheck: true })"` line —
-      // reachable on its own only if this ever ran without the " with no
-      // ... override" suffix (below), which currently never happens.
-      yield* configureApp({ config: Password.config({ breachCheck: true }) });
-    }
-  });
+  // AH-007: a named parameter type resolves each config literal exactly; an unknown literal fails
+  // the step instead of configuring a default.
+  Given(
+    "{passwordConfig} with no {string} override",
+    function* (options: PasswordConfigOptions, knob: string) {
+      // The literal really does leave the knob unset (`breachCheck: true`, no `onUnavailable`).
+      assert.equal(knob, "onUnavailable", `no other override is named by this feature ("${knob}")`);
+      assert.equal(typeof options.breachCheck, "boolean", "the config must not set onUnavailable");
+      yield* configureApp({ passwordConfig: options });
+    },
+  );
 
-  Given("{string} with no {string} override", function* (_configExpr: string, _knob: string) {
-    yield* configureApp({ config: Password.config({ breachCheck: true }) });
+  Given("{passwordConfig}", function* (options: PasswordConfigOptions) {
+    yield* configureApp({ passwordConfig: options });
   });
 
   Given("the breach-database provider is unreachable", function* () {
-    // Deliberately no `config` override here — the preceding Given
-    // ("password({ breachCheck: ... })...") already set the breachCheck
-    // policy (default `allow`, REQ-EA-322; or `{ onUnavailable: "reject" }`,
-    // REQ-EA-323); `configureApp`'s merge preserves it, this step only adds
-    // the failing transport on top.
+    // Deliberately no config override here — the preceding Given already set the breachCheck
+    // policy (default `allow`, REQ-EA-322; or `{ onUnavailable: "reject" }`, REQ-EA-323);
+    // `configureApp`'s merge preserves it, this step only adds the failing transport on top.
     yield* configureApp({ breachHttpClient: unreachableHttpClient });
   });
 
+  Given(
+    "the breach-database provider fails by {breachFailure}",
+    function* (failure: BreachFailure) {
+      yield* arrangeBreachFailure(failure);
+    },
+  );
+
   When("a user signs up with a password", function* () {
-    const response = yield* request("/password/sign-up", {
-      email: "breach-check@example.com",
-      password: STRONG_PASSWORD,
-    });
-    yield* setLastResponse("_last", response);
+    yield* signUpActor("breach", "breach-check@example.com", STRONG_PASSWORD);
   });
 
   Then("sign-up proceeds", function* () {
@@ -541,60 +933,42 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "the breach-database provider fails by timeout in one attempt, by a 5xx response in another, and with a malformed response in a third",
     function* () {
-      yield* Effect.void;
+      const { breachFailures } = yield* World;
+      yield* Ref.set(breachFailures, ["timeout", "5xx", "malformed"]);
     },
   );
 
   When("a user signs up with a password in each case", function* () {
-    yield* configureApp({
-      config: Password.config({ breachCheck: true }),
-      breachHttpClient: unreachableHttpClient,
-    });
-    const timeout = yield* request("/password/sign-up", {
-      email: "breach-timeout@example.com",
-      password: STRONG_PASSWORD,
-    });
-    yield* configureApp({
-      config: Password.config({ breachCheck: true }),
-      breachHttpClient: respondingWith(503, { error: "service unavailable" }),
-    });
-    const fiveHundred = yield* request("/password/sign-up", {
-      email: "breach-5xx@example.com",
-      password: STRONG_PASSWORD,
-    });
-    yield* configureApp({
-      config: Password.config({ breachCheck: true }),
-      breachHttpClient: malformedHttpClient,
-    });
-    const malformed = yield* request("/password/sign-up", {
-      email: "breach-malformed@example.com",
-      password: STRONG_PASSWORD,
-    });
-    yield* setLastResponse("breach:timeout", timeout);
-    yield* setLastResponse("breach:5xx", fiveHundred);
-    yield* setLastResponse("breach:malformed", malformed);
+    const { breachFailures } = yield* World;
+    for (const failure of yield* Ref.get(breachFailures)) {
+      yield* arrangeBreachFailure(failure);
+      yield* setLastResponse(
+        `breach:${failure}`,
+        (yield* signUpActor(failure, `breach-${failure}@example.com`, STRONG_PASSWORD)).response,
+      );
+    }
   });
 
   Then(
     'sign-up proceeds in all three cases, each treated as "unavailable" rather than handled inconsistently by cause',
     function* () {
-      const timeout = yield* getLastResponse("breach:timeout");
-      const fiveHundred = yield* getLastResponse("breach:5xx");
-      const malformed = yield* getLastResponse("breach:malformed");
-      assert.equal(timeout.status, 200);
-      assert.equal(fiveHundred.status, 200);
-      assert.equal(malformed.status, 200);
+      const { breachFailures } = yield* World;
+      const failures = yield* Ref.get(breachFailures);
+      assert.equal(failures.length, 3);
+      for (const failure of failures) {
+        assert.equal((yield* getLastResponse(`breach:${failure}`)).status, 200, failure);
+      }
     },
   );
 
   // ---- REQ-EA-325/327: Password.config ----
 
   Given('an application composing the single "Password" plugin', function* () {
-    yield* Effect.void;
+    yield* configureApp({});
   });
 
-  When("it provides {string}", function* (_configExpr: string) {
-    yield* configureApp({ config: Password.config({ minLength: 16 }) });
+  When("it provides {passwordConfig}", function* (options: PasswordConfigOptions) {
+    yield* configureApp({ passwordConfig: options });
   });
 
   Then(
@@ -609,6 +983,9 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   When("a user signs up with a password that appears in a known breach", function* () {
+    // The breached-corpus transport is part of *this* step's arrangement, layered over the
+    // config the Given set (AH-007: no config Given picks an HTTP client any more).
+    yield* configureApp({ breachHttpClient: breachedPasswordHttpClient("hunter2hunter2") });
     const response = yield* request("/password/sign-up", {
       email: "breached@example.com",
       password: "hunter2hunter2",
@@ -623,9 +1000,8 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then('the failure carries hints including "appears in known breaches"', function* () {
     const response = yield* getLastResponse("_last");
-    const body = (yield* Effect.promise(() => response.json())) as {
-      readonly hints?: ReadonlyArray<string>;
-    };
-    assert.ok(body.hints?.includes("appears in known breaches"));
+    const body = yield* Effect.promise(() => response.json());
+    assert.ok(typeof body === "object" && body !== null && "hints" in body);
+    assert.ok(Array.isArray(body.hints) && body.hints.includes("appears in known breaches"));
   });
 });

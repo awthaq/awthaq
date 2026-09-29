@@ -59,6 +59,10 @@ const flagsByte = (input: {
   readonly at: boolean;
 }): number => (input.up ? 0x01 : 0) | (input.uv ? 0x04 : 0) | (input.at ? 0x40 : 0);
 
+/** Parses a canonical `8-4-4-4-12` AAGUID into its 16 raw bytes. */
+const aaguidBytes = (aaguid: string): Uint8Array_ =>
+  new Uint8Array(Buffer.from(aaguid.replaceAll("-", ""), "hex"));
+
 const counterBytes = (counter: number): Uint8Array_ => {
   const bytes = new Uint8Array(4);
   new DataView(bytes.buffer).setUint32(0, counter, false);
@@ -70,10 +74,16 @@ const buildRegistrationAuthenticatorData = (input: {
   readonly authenticator: SoftwareAuthenticator;
   readonly counter?: number;
   readonly userVerified?: boolean;
+  readonly userPresent?: boolean;
+  readonly aaguid?: string;
 }): Uint8Array_ => {
   const rpIdHash = sha256(isoUint8Array.fromUTF8String(input.rpId));
-  const flags = flagsByte({ up: true, uv: input.userVerified ?? true, at: true });
-  const aaguid = new Uint8Array(16);
+  const flags = flagsByte({
+    up: input.userPresent ?? true,
+    uv: input.userVerified ?? true,
+    at: true,
+  });
+  const aaguid = input.aaguid === undefined ? new Uint8Array(16) : aaguidBytes(input.aaguid);
   const credentialIdLength = new Uint8Array(2);
   new DataView(credentialIdLength.buffer).setUint16(
     0,
@@ -95,9 +105,14 @@ const buildAuthenticationAuthenticatorData = (input: {
   readonly rpId: string;
   readonly counter: number;
   readonly userVerified?: boolean;
+  readonly userPresent?: boolean;
 }): Uint8Array_ => {
   const rpIdHash = sha256(isoUint8Array.fromUTF8String(input.rpId));
-  const flags = flagsByte({ up: true, uv: input.userVerified ?? true, at: false });
+  const flags = flagsByte({
+    up: input.userPresent ?? true,
+    uv: input.userVerified ?? true,
+    at: false,
+  });
   return isoUint8Array.concat([rpIdHash, new Uint8Array([flags]), counterBytes(input.counter)]);
 };
 
@@ -105,17 +120,20 @@ const buildClientDataJSON = (input: {
   readonly type: "webauthn.create" | "webauthn.get";
   readonly challenge: string;
   readonly origin: string;
+  readonly crossOrigin?: boolean;
+  readonly topOrigin?: string;
 }): string =>
   isoBase64URL.fromUTF8String(
     JSON.stringify({
       type: input.type,
       challenge: input.challenge,
       origin: input.origin,
-      crossOrigin: false,
+      crossOrigin: input.crossOrigin ?? false,
+      ...(input.topOrigin === undefined ? {} : { topOrigin: input.topOrigin }),
     }),
   );
 
-const buildAttestationObject = (authData: Uint8Array_): Uint8Array_ => {
+const buildNoneAttestationObject = (authData: Uint8Array_): Uint8Array_ => {
   const map = new Map<string, string | Uint8Array_ | Map<string, never>>();
   map.set("fmt", "none");
   map.set("attStmt", new Map<string, never>());
@@ -123,7 +141,34 @@ const buildAttestationObject = (authData: Uint8Array_): Uint8Array_ => {
   return isoCBOR.encode(map);
 };
 
-/** BEH-EA-135's default: `"none"` attestation carries no attestation signature at all, so no signing is needed here — only the client-data/authenticator-data shape matters. */
+/**
+ * HSK-008: a `packed` *self*-attestation — the attestation statement is an
+ * ES256 signature over `authData || SHA-256(clientDataJSON)` made with the
+ * credential's own private key (no `x5c` chain), exactly what a real
+ * security key that does not ship a batch attestation certificate answers.
+ */
+const buildPackedSelfAttestationObject = (
+  authData: Uint8Array_,
+  clientDataJSON: string,
+  authenticator: SoftwareAuthenticator,
+): Uint8Array_ => {
+  const clientDataHash = sha256(isoBase64URL.toBuffer(clientDataJSON));
+  const signature = nodeSign(
+    "sha256",
+    isoUint8Array.concat([authData, clientDataHash]),
+    authenticator.privateKey,
+  );
+  const attStmt = new Map<string, number | Uint8Array_>();
+  attStmt.set("alg", cose.COSEALG.ES256);
+  attStmt.set("sig", new Uint8Array(signature));
+  const map = new Map<string, string | Uint8Array_ | Map<string, number | Uint8Array_>>();
+  map.set("fmt", "packed");
+  map.set("attStmt", attStmt);
+  map.set("authData", authData);
+  return isoCBOR.encode(map);
+};
+
+/** BEH-EA-135's default: `"none"` attestation carries no attestation signature at all, so no signing is needed here — only the client-data/authenticator-data shape matters. `attestation: "packed-self"` (HSK-008) builds a real, self-signed packed statement instead. */
 export const buildRegistrationResponse = (input: {
   readonly authenticator: SoftwareAuthenticator;
   readonly rpId: string;
@@ -131,20 +176,35 @@ export const buildRegistrationResponse = (input: {
   readonly challenge: string;
   readonly counter?: number;
   readonly userVerified?: boolean;
+  readonly userPresent?: boolean;
+  /** Canonical `8-4-4-4-12` AAGUID; the all-zero one when omitted. */
+  readonly aaguid?: string;
+  readonly attestation?: "none" | "packed-self";
+  /** What the browser reports via `getTransports()`. */
+  readonly transports?: ReadonlyArray<"usb" | "nfc" | "ble" | "internal" | "hybrid">;
+  readonly crossOrigin?: boolean;
+  readonly topOrigin?: string;
 }): RegistrationResponseJSON => {
   const authData = buildRegistrationAuthenticatorData(input);
   const clientDataJSON = buildClientDataJSON({
     type: "webauthn.create",
     challenge: input.challenge,
     origin: input.origin,
+    ...(input.crossOrigin === undefined ? {} : { crossOrigin: input.crossOrigin }),
+    ...(input.topOrigin === undefined ? {} : { topOrigin: input.topOrigin }),
   });
   const credentialIdB64 = isoBase64URL.fromBuffer(input.authenticator.credentialId);
+  const attestationObject =
+    input.attestation === "packed-self"
+      ? buildPackedSelfAttestationObject(authData, clientDataJSON, input.authenticator)
+      : buildNoneAttestationObject(authData);
   return {
     id: credentialIdB64,
     rawId: credentialIdB64,
     response: {
       clientDataJSON,
-      attestationObject: isoBase64URL.fromBuffer(buildAttestationObject(authData)),
+      attestationObject: isoBase64URL.fromBuffer(attestationObject),
+      ...(input.transports === undefined ? {} : { transports: [...input.transports] }),
     },
     clientExtensionResults: {},
     type: "public-key",
@@ -158,12 +218,18 @@ export const buildAuthenticationResponse = (input: {
   readonly challenge: string;
   readonly counter: number;
   readonly userVerified?: boolean;
+  readonly userPresent?: boolean;
+  readonly userHandle?: string;
+  readonly crossOrigin?: boolean;
+  readonly topOrigin?: string;
 }): AuthenticationResponseJSON => {
   const authData = buildAuthenticationAuthenticatorData(input);
   const clientDataJSON = buildClientDataJSON({
     type: "webauthn.get",
     challenge: input.challenge,
     origin: input.origin,
+    ...(input.crossOrigin === undefined ? {} : { crossOrigin: input.crossOrigin }),
+    ...(input.topOrigin === undefined ? {} : { topOrigin: input.topOrigin }),
   });
   const clientDataHash = sha256(isoBase64URL.toBuffer(clientDataJSON));
   const signature = nodeSign(
@@ -179,6 +245,7 @@ export const buildAuthenticationResponse = (input: {
       clientDataJSON,
       authenticatorData: isoBase64URL.fromBuffer(authData),
       signature: isoBase64URL.fromBuffer(new Uint8Array(signature)),
+      ...(input.userHandle === undefined ? {} : { userHandle: input.userHandle }),
     },
     clientExtensionResults: {},
     type: "public-key",

@@ -1,10 +1,9 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
+# Acceptance scenarios restating spec/behaviors/ as Gherkin (see spec/README.md
+# and features/README.md). A file tagged @unwired is registered with zero steps and
+# does not run; a wired file runs under `pnpm test:bdd` against the real plugins,
+# so only its passing scenarios are runtime evidence.
 
 @client-integration @effect-client
-@skip @unwired
 Feature: The Effect Client
 
   # BEH-EA-169 — spec/behaviors/22-client-effect.md; see also ADR-EA-003
@@ -60,28 +59,11 @@ Feature: The Effect Client
       Then the gap is reported as a compile-time failure
       And no runtime request against a live server is needed to discover it as a 403 in production
 
-  # BEH-EA-171 — spec/behaviors/22-client-effect.md
-  @BEH-EA-171
-  Rule: Bearer mode is a separate contract variant
-
-    @REQ-EA-482
-    Scenario: A contract compiled with csrf false carries no CsrfProtection middleware on any group
-      Given an application compiles "NativeApi" from its plugin contracts with "{ csrf: false }"
-      When the groups of "NativeApi" are inspected
-      Then none of them carry "CsrfProtection" middleware
-
-    @REQ-EA-483
-    Scenario: A bearer-mode client built against that contract requires no CsrfProtection client layer
-      Given "NativeApi" compiled with "{ csrf: false }"
-      When "HttpApiClient.make" builds a bearer-mode client against "NativeApi", providing only "transformClient" for the bearer token
-      Then the client composes without any "CsrfProtection" client Layer being provided
-
-    @REQ-EA-484
-    Scenario: A bearer client is built against the csrf-false contract rather than padding the cookie-mode contract with a no-op layer
-      Given the application's cookie-mode "AuthApi" contract, which does carry "CsrfProtection" middleware
-      When a bearer-mode client is assembled
-      Then it is built against "NativeApi", the "{ csrf: false }" variant
-      And it is not built against the cookie-mode "AuthApi" contract with a "CsrfProtection" Layer added merely to satisfy that contract's type
+  # BEH-EA-171 — spec/behaviors/22-client-effect.md. Retired (PV-262, decision 24 / MNA-008): the
+  # { csrf: false } contract variant this behavior described is not built, so its Rule has no scenarios
+  # left (REQ-EA-482..484 were removed). What shipped instead: the bearer exemption is server-side
+  # (REQ-EA-689 in 10-csrf.feature) and a bearer client attaches its token through transformClient
+  # (REQ-EA-495 below).
 
   # BEH-EA-172 — spec/behaviors/22-client-effect.md
   # Compile-time contract: the enforcing mechanism is the TypeScript
@@ -107,7 +89,7 @@ Feature: The Effect Client
 
     @REQ-EA-487
     Scenario: An untranslated new error tag fails to type-check against the i18n catalog's declared shape
-      Given an i18n "messages" catalog declared as "satisfies Partial<Record<AuthErrorCode, string>>"
+      Given an i18n "messages" catalog declared as "satisfies Record<AuthErrorCode, string>"
       And a contract change adds a new error tag the catalog has not yet translated
       When the catalog is type-checked against the updated "AuthErrorCode"
       Then it fails to type-check
@@ -119,8 +101,8 @@ Feature: The Effect Client
     @REQ-EA-488
     Scenario: urlBuilder generates the OAuth authorize link from the same contract as the request-issuing client
       Given the merged "AuthApi" contract declares an "oauth.authorize" endpoint
-      When "HttpApiClient.urlBuilder(AuthApi).oauth.authorize" is called with params "{ provider: \"google\" }" and query "{ redirect: \"/dashboard\" }"
-      Then the returned URL correctly encodes the "provider" path parameter and the "redirect" query parameter
+      When "HttpApiClient.urlBuilder(AuthApi).oauth.authorize" is called with params "{ provider: \"google\" }" and query "{ callbackURL: \"/dashboard\" }"
+      Then the returned URL correctly encodes the "provider" path parameter and the "callbackURL" query parameter
 
     @REQ-EA-489
     Scenario: A parameter that would fail schema encoding in a real request fails the same way through urlBuilder
@@ -130,7 +112,7 @@ Feature: The Effect Client
 
     @REQ-EA-490
     Scenario: A redirect value containing characters unsafe for hand string concatenation is correctly encoded by urlBuilder
-      Given a "redirect" query value containing characters that would corrupt a hand-concatenated URL, such as "&" and "?"
+      Given a "callbackURL" query value containing characters that would corrupt a hand-concatenated URL, such as "&" and "?"
       When the "unsubscribe" link is built with "urlBuilder" against the contract
       Then the returned URL correctly percent-encodes those characters
       And the link is not assembled by string-concatenating a path and query parameters by hand
@@ -152,9 +134,9 @@ Feature: The Effect Client
       Then the store's current value becomes "initialSession"
 
     @REQ-EA-493
-    Scenario: A later hydrate call with a null value does not overwrite an already-seeded non-null session
+    Scenario: A later hydrate call does not overwrite an already-seeded non-null session
       Given a client session store already seeded with a non-null session via "hydrate"
-      When "authClient.session.hydrate(null)" is called afterward
+      When "authClient.session.hydrate(otherSession)" is called afterward
       Then the store's current value remains the original non-null session, because the first non-null value wins
 
     @REQ-EA-494
@@ -192,13 +174,13 @@ Feature: The Effect Client
 
     @REQ-EA-498
     Scenario: A Promise-facade call resolves through the same underlying client and evaluator as the Effect-native call
-      Given a Promise-returning wrapper "makeQadi(QadiLive)" built for non-Effect callers
-      When "qadi.check(subject, canReadProject, { resource })" is called through the wrapper
-      Then the call is dispatched through the same underlying client and the same evaluator the Effect-native client uses
+      Given a Promise-returning wrapper "AuthClient.toPromiseFacade(client)" built for non-Effect callers
+      When "facade.session.signOut()" is called through the wrapper
+      Then the call is dispatched through the same underlying client and the same generated method the Effect-native client uses
 
     @REQ-EA-499
     Scenario: An Effect caller and a Promise-facade caller invoking the same operation observe identical behavior
-      Given the same subject, policy, and resource evaluated once via the Effect-native client and once via the Promise facade
+      Given the same operation evaluated once via the Effect-native client and once via the Promise facade
       When both calls complete
       Then both report the same decision, because neither is a separately implemented evaluation path
 

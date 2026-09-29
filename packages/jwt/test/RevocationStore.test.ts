@@ -7,7 +7,6 @@
 // plugin's first-ever declared migrations actually produce a working
 // schema for both `jwt_signing_key` and `jwt_token_revocation`.
 import { Migrations } from "@awthaq/core";
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -17,8 +16,9 @@ import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Jwt from "../src/Jwt.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
+import * as TestSql from "../../sql/test/support/TestSql.ts";
 
-const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLive = TestSql.layer("jwt_RevocationStore");
 
 const Migrated = Layer.effectDiscard(Migrations.run(Jwt.Jwt.migrations)).pipe(
   Layer.provide(SqlLive),
@@ -52,16 +52,18 @@ const suite = (
       }).pipe(Effect.provide(StoreLayer)),
     );
 
-    it.effect("a revocation entry self-prunes on read once past its own expiresAt (lazy expiry)", () =>
-      Effect.gen(function* () {
-        const store = yield* RevocationStore.RevocationStore;
-        const now = yield* DateTime.now;
-        yield* store.revoke("jti-c", DateTime.addDuration(now, Duration.minutes(5)));
-        assert.isTrue(yield* store.isRevoked("jti-c"));
+    it.effect(
+      "a revocation entry self-prunes on read once past its own expiresAt (lazy expiry)",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* RevocationStore.RevocationStore;
+          const now = yield* DateTime.now;
+          yield* store.revoke("jti-c", DateTime.addDuration(now, Duration.minutes(5)));
+          assert.isTrue(yield* store.isRevoked("jti-c"));
 
-        yield* TestClock.adjust(Duration.minutes(6));
-        assert.isFalse(yield* store.isRevoked("jti-c"));
-      }).pipe(Effect.provide(StoreLayer)),
+          yield* TestClock.adjust(Duration.minutes(6));
+          assert.isFalse(yield* store.isRevoked("jti-c"));
+        }).pipe(Effect.provide(StoreLayer)),
     );
 
     it.effect("revoke is idempotent — revoking the same jti twice keeps it revoked", () =>
@@ -87,7 +89,7 @@ describe("Jwt.Jwt.migrations", () => {
   it.effect("creates both jwt_signing_key and jwt_token_revocation from a fresh database", () =>
     Effect.gen(function* () {
       const applied = yield* Migrations.run(Jwt.Jwt.migrations);
-      assert.strictEqual(applied.length, 3);
+      assert.strictEqual(applied.length, 4);
       const sql = yield* SqlClient.SqlClient;
       // A working `SELECT` against each table is the real proof — a
       // missing table fails the query itself, not merely the migration
@@ -105,8 +107,13 @@ describe("Jwt.Jwt.migrations", () => {
     Effect.gen(function* () {
       yield* Migrations.run(Jwt.Jwt.migrations);
       const sql = yield* SqlClient.SqlClient;
-      const rows = yield* sql<{ readonly name: string }>`
-        SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'jwt_signing_key_active_idx'`;
+      const rows = yield* sql.onDialectOrElse({
+        pg: () => sql<{ readonly name: string }>`
+          SELECT indexname AS name FROM pg_indexes
+          WHERE schemaname = current_schema() AND indexname = 'jwt_signing_key_active_idx'`,
+        orElse: () => sql<{ readonly name: string }>`
+          SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'jwt_signing_key_active_idx'`,
+      });
       assert.strictEqual(rows.length, 1);
     }).pipe(Effect.provide(SqlLive)),
   );

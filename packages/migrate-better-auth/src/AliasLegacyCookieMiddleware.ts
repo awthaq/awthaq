@@ -21,7 +21,7 @@
 // only constrain what a *client* may store, not what a server may read
 // off an incoming `Cookie` header) are not a concern here.
 
-import { Sessions } from "@awthaq/core";
+import { SessionCookie } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import * as Headers from "effect/unstable/http/Headers";
 import * as HttpMiddleware from "effect/unstable/http/HttpMiddleware";
@@ -31,15 +31,17 @@ export const make = (options: {
   readonly legacyCookieName: string;
 }): HttpMiddleware.HttpMiddleware =>
   HttpMiddleware.make((httpApp) =>
-    Effect.updateService(httpApp, HttpServerRequest.HttpServerRequest, (request) => {
-      if (request.cookies[Sessions.SESSION_COOKIE_NAME] !== undefined) return request;
-      const legacyValue = request.cookies[options.legacyCookieName];
-      if (legacyValue === undefined) return request;
-      const existing = request.headers.cookie ?? "";
-      const rewritten =
-        existing.length > 0
-          ? `${existing}; ${Sessions.SESSION_COOKIE_NAME}=${legacyValue}`
-          : `${Sessions.SESSION_COOKIE_NAME}=${legacyValue}`;
-      return request.modify({ headers: Headers.set(request.headers, "cookie", rewritten) });
+    Effect.flatMap(SessionCookie.SessionCookieConfig, (cfg) => {
+      // IC-007: alias to the configured session-cookie name (default `__Host-session`).
+      const name = SessionCookie.cookieName(cfg);
+      return Effect.updateService(httpApp, HttpServerRequest.HttpServerRequest, (request) => {
+        if (request.cookies[name] !== undefined) return request;
+        const legacyValue = request.cookies[options.legacyCookieName];
+        if (legacyValue === undefined) return request;
+        const existing = request.headers["cookie"] ?? "";
+        const rewritten =
+          existing.length > 0 ? `${existing}; ${name}=${legacyValue}` : `${name}=${legacyValue}`;
+        return request.modify({ headers: Headers.set(request.headers, "cookie", rewritten) });
+      });
     }),
   );

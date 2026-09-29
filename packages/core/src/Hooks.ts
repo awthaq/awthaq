@@ -29,12 +29,45 @@
 
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as DataExportRegistry from "./DataExportRegistry.ts";
+import * as ErasureRegistry from "./ErasureRegistry.ts";
 import * as HookPoint from "./HookPoint.ts";
 
 // BEH-EA-090: veto — a plugin may reject a sign-up outright (e.g. an
-// Auth0-Rule-style email-domain allow-list or subscription gate).
-const SignUpInput = Schema.Struct({ email: Schema.String, name: Schema.String });
+// Auth0-Rule-style email-domain allow-list or subscription gate). Consulted on
+// *every* user-creating path (NAM-002/SCP-008: password sign-up and the OAuth
+// first-login creation), so `strategy` says which one — `"password"`, or the
+// OAuth provider id — and one tap can tell them apart.
+// FAMS-002: `email` is absent for a sign-up that has none (an OAuth profile without one).
+const SignUpInput = Schema.Struct({
+  email: Schema.optional(Schema.String),
+  name: Schema.String,
+  strategy: Schema.String,
+});
 export class BeforeSignUp extends HookPoint.veto<BeforeSignUp>()("auth.user.signUp", SignUpInput) {}
+
+// NAM-002: observe — fired once a new user's creation has committed, whichever
+// strategy created it (the after-the-fact twin of `BeforeSignUp`; welcome mail,
+// provisioning fan-out, CRM sync).
+const SignedUp = Schema.Struct({
+  userId: Schema.String,
+  email: Schema.optional(Schema.String),
+  strategy: Schema.String,
+});
+export class AfterSignUp extends HookPoint.observe<AfterSignUp>()("auth.user.signedUp", SignedUp) {}
+
+// NAM-002: veto — consulted by every sign-in-completing flow (password,
+// oauth, passkey) once the credential has been proven and before
+// `BeforeSessionIssue`. This is where an Auth.js `signIn` callback returning
+// `false` lands (a domain allow-list, a banned user): a tap fails with
+// `HookAbort({ code })`, surfaced to the client as `HookAborted` (403). The
+// amended value is ignored: a sign-in cannot change who is signing in.
+const SignInInput = Schema.Struct({
+  userId: Schema.String,
+  email: Schema.optional(Schema.String),
+  strategy: Schema.String,
+});
+export class BeforeSignIn extends HookPoint.veto<BeforeSignIn>()("auth.user.signIn", SignInInput) {}
 
 // BEH-EA-092: observe — fired once a session-backed sign-in completes,
 // regardless of which strategy (password/oauth/passkey) produced it.
@@ -64,7 +97,14 @@ export class TwoFactorRequired extends Schema.TaggedError<TwoFactorRequired>()(
   { userId: Schema.String, challengeId: Schema.String },
   { httpApiStatus: 401 },
 ) {}
-const SessionIssueContext = Schema.Struct({ userId: Schema.String, strategy: Schema.String });
+// THS-001/AOMS-003: `amr` is how the first factor authenticated (RFC 8176 values, e.g. `["pwd"]`), so
+// a second-factor tap can record `[...amr, "otp", "mfa"]` on the session it mints once the second
+// factor passes, without guessing the first factor from the strategy name.
+const SessionIssueContext = Schema.Struct({
+  userId: Schema.String,
+  strategy: Schema.String,
+  amr: Schema.optionalKey(Schema.Array(Schema.String)),
+});
 const SessionIssueDiverted = Schema.Union([TwoFactorRequired]);
 export class BeforeSessionIssue extends HookPoint.divert<BeforeSessionIssue>()(
   "auth.session.beforeIssue",
@@ -76,24 +116,71 @@ export class BeforeSessionIssue extends HookPoint.divert<BeforeSessionIssue>()(
 // not observe: a plugin must be able to block a delete outright (a GDPR
 // legal hold, an org-ownership-transfer requirement), not just react
 // after the fact.
-const UserDeleteInput = Schema.Struct({ id: Schema.String, email: Schema.String });
+// FAMS-002: `email` is absent for a Phone/Anonymous user (`Users.emailOf` is `None`).
+const UserDeleteInput = Schema.Struct({ id: Schema.String, email: Schema.optional(Schema.String) });
 export class BeforeUserDelete extends HookPoint.veto<BeforeUserDelete>()(
   "auth.user.beforeDelete",
   UserDeleteInput,
 ) {}
 
 /**
+ * ARF-005 (wayfinder ticket 05, Fix B): veto — consulted by `@awthaq/password`'s `confirmReset`
+ * inside its transaction, after the emailed token is consumed and before the credential is
+ * rewritten and the user's sessions revoked. Possession of the mailbox alone must not be able to
+ * downgrade an account protected by a stronger factor: `@awthaq/two-factor`'s
+ * `credentialResetGate` taps this and aborts (`TWO_FACTOR_REQUIRED`) unless a valid second-factor
+ * code accompanies the reset. `secondFactorCode` is what the caller presented, if anything; the
+ * amended value is ignored (a reset cannot change whose credential is being reset).
+ */
+const CredentialResetInput = Schema.Struct({
+  userId: Schema.String,
+  secondFactorCode: Schema.optionalKey(Schema.Redacted(Schema.String)),
+});
+export class BeforeCredentialReset extends HookPoint.veto<BeforeCredentialReset>()(
+  "auth.credential.beforeReset",
+  CredentialResetInput,
+) {}
+
+/**
+ * AAPS-005: observe — fired once a user's awthaq-owned, policy-readable
+ * attributes actually change (`Users.updateProfile` → `name`,
+ * `Users.verifyEmail` → `emailVerified`, and only when it flips). qadi's
+ * `UserAttributes` resolver reads those attributes, so an application-scoped
+ * `DecisionCache` needs a signal to flush on — `@awthaq/qadi`'s
+ * `DecisionCacheInvalidationLive` taps this one. Optional at the call site:
+ * `Users` reads it through `Effect.serviceOption`, so a composition that does
+ * not provide it (or does not care) is unchanged.
+ */
+const UserAttributesChangedInput = Schema.Struct({
+  userId: Schema.String,
+  attributes: Schema.Array(Schema.String),
+});
+export class AfterUserAttributesChanged extends HookPoint.observe<AfterUserAttributesChanged>()(
+  "auth.user.attributesChanged",
+  UserAttributesChangedInput,
+) {}
+
+/**
  * Every point's own default (no-tap) layer, merged into one — an
  * application composing any of `Users`/`Password`/`OAuth`/`Passkey`
  * needs this once, the same way `OrganizationHooksLive` already covers
- * `@awthaq/organization`'s own points. A composition that also wants to
- * `.tap(...)` one merges that tap's own layer in alongside this (taps and
- * a point's own `.layer` are independent effects over the same shared,
- * module-scoped registry — see `HookPoint.ts`'s own header comment).
+ * `@awthaq/organization`'s own points. A tap's Layer requires its point
+ * (ELC-001), so a composition that `.tap(...)`s one provides this *to* the
+ * tap (`Tap.pipe(Layer.provideMerge(HooksLive))`): the registry lives in the
+ * point's built layer, per composition — see `HookPoint.ts`'s header.
  */
 export const HooksLive = Layer.mergeAll(
   BeforeSignUp.layer,
+  AfterSignUp.layer,
+  BeforeSignIn.layer,
   AfterSignIn.layer,
   BeforeSessionIssue.layer,
+  BeforeCredentialReset.layer,
   BeforeUserDelete.layer,
+  AfterUserAttributesChanged.layer,
+  // CSG-001: the erasure registry rides here too — every composition already
+  // provides `HooksLive`, and each plugin holding personal data contributes its
+  // erasure to it (`Erasure.contribute`), so erasure is not something a host opts into.
+  ErasureRegistry.registryLayer,
+  DataExportRegistry.registryLayer,
 );

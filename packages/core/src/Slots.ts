@@ -36,22 +36,17 @@
 // explains (never module-level state, so unrelated compositions/tests never
 // share one registry and one test's read never freezes another's writes).
 //
-// Unlike `RateLimits.rule`, providing `SlotsRegistry` is optional, not
-// required: `override`'s own requirement is only the implementation
-// `Effect`'s own `R` — `Effect.serviceOption` looks the registry up without
-// ever placing it in `RIn`, so a plugin using `override` (like
-// `@awthaq/roles`'s `Roles`) does not force every caller to also
-// provide `Slots.layer`. An application that wants the real conflict check
-// provides `Slots.layer` once, application-wide, the same way it opts into
-// `RateLimits.layer` or `AuthEvents.layer` today; one that doesn't still
-// gets the correct default/override *value* semantics (BEH-EA-021's actual
-// runtime behavior), just without the conflict check.
+// MA-005: like `RateLimits.rule`, `override` *requires* `SlotsRegistry` (it
+// joins the returned layer's `RIn`), so an unchecked override is a type error,
+// not a silent last-wins. `Auth.make` provides one registry per composition
+// (`composeLayer`), which is why no application code needs to mention
+// `Slots.layer`; only a plugin layer built outside `Auth.make` (a unit test of
+// one plugin) provides it by hand.
 
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 /**
@@ -170,10 +165,9 @@ export const layer: Layer.Layer<SlotsRegistry> = Layer.effect(
 
 /**
  * BEH-EA-021: a plugin overrides a slot by providing its implementation —
- * `override` also registers the claim (best-effort — see this module's own
- * header comment for why `SlotsRegistry` is looked up, never required) so a
- * composition that provides `Slots.layer` gets a real conflict check for
- * free.
+ * `override` also registers the claim with the composition's `SlotsRegistry`
+ * (MA-005: required, so a conflict is always checked — see this module's own
+ * header comment).
  *
  * `owner` is typed `PluginOwner` (`{ readonly id: string }`), not
  * `AuthPlugin.Any` — see that interface's own doc comment for why: a plugin
@@ -187,13 +181,9 @@ export const override = <Name extends string, Shape, E, R>(
   owner: PluginOwner,
   slot: Slot<Name, Shape>,
   implementation: Effect.Effect<Shape, E, R>,
-): Layer.Layer<never, E | SlotConflict, R> =>
+): Layer.Layer<never, E | SlotConflict, R | SlotsRegistry> =>
   Layer.effect(slot, implementation).pipe(
     Layer.provideMerge(
-      Layer.effectDiscard(
-        Effect.flatMap(Effect.serviceOption(SlotsRegistry), (registry) =>
-          Option.isSome(registry) ? registry.value.claim(owner, slot) : Effect.void,
-        ),
-      ),
+      Layer.effectDiscard(Effect.flatMap(SlotsRegistry, (registry) => registry.claim(owner, slot))),
     ),
   );

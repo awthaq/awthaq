@@ -17,12 +17,14 @@
 // - `passkey.credentials` — list/rename/delete (BEH-EA-134), also
 //   `.middleware(Api.Authentication)`.
 //
-// `register/options`/`authenticate/options` both answer `Schema.Unknown` —
-// `PublicKeyCredentialCreationOptionsJSON`/`PublicKeyCredentialRequestOptionsJSON`
-// are the browser's own WebAuthn dictionary shapes (`@simplewebauthn/server`
-// merely reproduces them), not a domain concept this contract owns; the
-// same "the shape belongs to someone else, so it travels as opaque JSON"
-// reasoning `Verification.ts`'s own `payload: unknown` already documents.
+// AVS-003: the `.../options` endpoints answer real, typed schemas
+// (`PublicKeyCredentialCreationOptionsSchema`/`PublicKeyCredentialRequestOptionsSchema`
+// below) mirroring the WebAuthn L3 `...OptionsJSON` dictionaries, so a
+// generated client and the OpenAPI document see the actual shape instead of
+// `{}`. They are owned by the WebAuthn spec, not by this plugin, so they are
+// modeled member-for-member and shaped to be assignable to
+// `@simplewebauthn/browser`'s own option types — the client hands them
+// straight to `startRegistration`/`startAuthentication` with no runtime guard.
 // `register/verify`/`authenticate/verify`'s own request bodies
 // (`RegistrationCredentialSchema`/`AuthenticationCredentialSchema` below)
 // are narrower — they capture only the handful of fields this plugin
@@ -32,23 +34,28 @@
 //
 // **Enumeration safety (BEH-EA-136), a real design decision, not an
 // oversight:** `authenticate/verify` declares only `PasskeyChallengeInvalid`,
-// `PasskeyUserVerificationRequired`, and `Api.InvalidCredentials` as its
-// errors — never `PasskeyCredentialNotFound` or the generic
-// `PasskeyVerificationFailed`. Neither a stale/replayed challenge nor a
-// missing-UV rejection reveals anything about whether any credential was
-// ever registered for the presented identifier (BEH-EA-136's own
-// enumeration-safety text), so reporting those two distinctly is safe;
+// `PasskeyUserVerificationRequired`, `PasskeyCounterAnomaly` (only reachable
+// after a valid signature from a registered credential), rate-limiting and
+// `Api.InvalidCredentials` as its errors — never `PasskeyCredentialNotFound`
+// or the generic `PasskeyVerificationFailed`. Neither a stale/replayed
+// challenge nor a missing-UV rejection reveals anything about whether any
+// credential was ever registered for the presented identifier (BEH-EA-136's
+// own enumeration-safety text), so reporting those distinctly is safe;
 // every other authentication failure (unknown credential id, a wrong
 // signature, an origin/rpId mismatch) *would* leak that distinction, so
 // `Passkey.ts`'s handler collapses all of them into the same
 // `Api.InvalidCredentials` uniform response `@awthaq/password`'s own
-// `signIn` already uses for the identical reason. `register/verify`, in
+// `signIn` already uses for the identical reason. TC-001: the envelope
+// covers the *options* half too — `authenticate/options` answers an unknown
+// email with deterministic decoy `allowCredentials` shaped like a registered
+// user's (and is rate-limited), never an empty list that gives the
+// registered/unregistered distinction away. `register/verify`, in
 // contrast, only ever runs for an already-authenticated caller adding a
 // credential to their own account — there is no identifier to enumerate —
 // so it reports the full, precise BEH-EA-136 taxonomy.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { Hooks } from "@awthaq/core";
+import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
@@ -85,10 +92,31 @@ export class PasskeyUserVerificationRequired extends Schema.TaggedError<PasskeyU
   { httpApiStatus: 400 },
 ) {}
 
+/** TC-008: `GET /.well-known/webauthn` when `PasskeyConfig.relatedOrigins` is empty (the default) — Related Origin Requests are not enabled. */
+export class PasskeyRelatedOriginsNotConfigured extends Schema.TaggedError<PasskeyRelatedOriginsNotConfigured>()(
+  "PasskeyRelatedOriginsNotConfigured",
+  {},
+  { httpApiStatus: 404 },
+) {}
+
 export class PasskeyCredentialNotFound extends Schema.TaggedError<PasskeyCredentialNotFound>()(
   "PasskeyCredentialNotFound",
   {},
   { httpApiStatus: 404 },
+) {}
+
+/** HSK-002: the registration's attestation does not satisfy `PasskeyConfig.attestationPolicy` (no attestation at all, a self-signed one, or an authenticator model outside the allow-list). Only reachable from the authenticated `register/verify`, so it can be precise. */
+export class PasskeyAttestationRejected extends Schema.TaggedError<PasskeyAttestationRejected>()(
+  "PasskeyAttestationRejected",
+  {},
+  { httpApiStatus: 400 },
+) {}
+
+/** WPS-010: the credential id is already registered (to this account or another). Only reachable from the authenticated `register/verify`, so it is safe to say precisely. */
+export class PasskeyAlreadyRegistered extends Schema.TaggedError<PasskeyAlreadyRegistered>()(
+  "PasskeyAlreadyRegistered",
+  {},
+  { httpApiStatus: 409 },
 ) {}
 
 /** BEH-EA-045/134: mapped from core's `Accounts.LastAccountRefusal` at this plugin's own handler boundary. */
@@ -98,7 +126,11 @@ export class PasskeyLastCredential extends Schema.TaggedError<PasskeyLastCredent
   { httpApiStatus: 409 },
 ) {}
 
-/** Ticket 07: `PasskeyConfig.conditionalCreate: false` disables `register/options/conditional` — reported the same way a genuinely absent endpoint would be, not a distinguishable "feature flag off" response. */
+/**
+ * Ticket 07: `PasskeyConfig.conditionalCreate: false` disables `register/options/conditional` — reported the same way a genuinely absent endpoint would be, not a distinguishable "feature flag off" response.
+ *
+ * Also answered under `authenticatorSelection.userVerification: "required"` (CB-009: Conditional Create cannot produce UV=1). HSK-007: Conditional Create always requests a discoverable credential (`residentKey: "required"`), so U2F-only and early-CTAP2 security keys cannot complete it — a fleet of them should set `conditionalCreate: false`.
+ */
 export class PasskeyConditionalCreateDisabled extends Schema.TaggedError<PasskeyConditionalCreateDisabled>()(
   "PasskeyConditionalCreateDisabled",
   {},
@@ -122,13 +154,14 @@ export class PasskeyReauthRequired extends Schema.TaggedError<PasskeyReauthRequi
 ) {}
 
 /**
- * BEH-EA-136's eighth named error. Declared here for completeness with that
- * behavior's own closed list, but deliberately never appears in any
- * endpoint's `error` union below: ticket 08's "log + step-up, not an
- * instant kill" means a counter regression is published as
- * `AuthEvents.PasskeyCounterAnomalyEvent` and the ceremony still succeeds —
- * this type exists so a future caller has a real tag to `catchTag` against
- * if that policy ever changes, not because any current response can carry it.
+ * BEH-EA-136's eighth named error. Ticket 08's "log + step-up, not an
+ * instant kill" is the default (`PasskeyConfig.counterAnomalyPolicy:
+ * "flag"`): a counter regression is published as
+ * `AuthEvents.PasskeyCounterAnomalyEvent`, the credential is flagged and
+ * the ceremony still succeeds. Under `"reject"` the ceremony instead fails
+ * with this error — raised only after the assertion's signature verified
+ * against a registered credential, so it reveals nothing an anonymous
+ * caller could not already learn by holding that credential.
  */
 export class PasskeyCounterAnomaly extends Schema.TaggedError<PasskeyCounterAnomaly>()(
   "PasskeyCounterAnomaly",
@@ -141,6 +174,14 @@ export class PasskeyCounterAnomaly extends Schema.TaggedError<PasskeyCounterAnom
 export const AttestationResponseSchema = Schema.Struct({
   clientDataJSON: Schema.String,
   attestationObject: Schema.String,
+  /**
+   * HSK-003: what the browser reported via `getTransports()`, so the stored
+   * credential's `transports` (and later `excludeCredentials`/
+   * `allowCredentials` hints) reflect the real authenticator. Any string is
+   * accepted on the wire (a future transport must not fail registration);
+   * `Passkey.ts` keeps only the ones it recognizes.
+   */
+  transports: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 export const RegistrationCredentialSchema = Schema.Struct({
@@ -166,13 +207,100 @@ export const AuthenticationCredentialSchema = Schema.Struct({
 });
 export type AuthenticationCredentialInput = typeof AuthenticationCredentialSchema.Type;
 
-export const RegisterVerifyPayload = Schema.Struct({ credential: RegistrationCredentialSchema });
+/**
+ * WPS-003: which registration ceremony this response completes. The two
+ * ceremonies each keep their own `ChallengeStore` scope; naming the ceremony
+ * lets `register/verify` consume exactly one of them instead of probing both
+ * (which destroyed the sibling's still-valid challenge). Absent means the
+ * ordinary, modal one.
+ */
+export const RegistrationCeremony = Schema.Literals(["modal", "conditional"]);
+export type RegistrationCeremony = typeof RegistrationCeremony.Type;
+
+export const RegisterVerifyPayload = Schema.Struct({
+  credential: RegistrationCredentialSchema,
+  ceremony: Schema.optionalKey(RegistrationCeremony),
+});
 export type RegisterVerifyPayload = typeof RegisterVerifyPayload.Type;
 
 export const AuthenticateOptionsPayload = Schema.Struct({
   email: Schema.optional(Schema.String),
 });
 export type AuthenticateOptionsPayload = typeof AuthenticateOptionsPayload.Type;
+
+// ---- WebAuthn L3 options dictionaries (AVS-003) ---------------------------
+//
+// Mutable arrays throughout (`Schema.mutable`): `@simplewebauthn/browser`'s
+// own option types declare mutable arrays, and these schemas' `Type` must be
+// assignable to them for the client to pass an options payload straight to
+// `startRegistration`/`startAuthentication`.
+
+const CredentialDescriptorSchema = Schema.Struct({
+  id: Schema.String,
+  type: Schema.String,
+  transports: Schema.optionalKey(Schema.mutable(Schema.Array(Schema.String))),
+});
+
+const PublicKeyCredentialHintSchema = Schema.Literals(["hybrid", "security-key", "client-device"]);
+
+const ExtensionsSchema = Schema.Struct({
+  appid: Schema.optionalKey(Schema.String),
+  credProps: Schema.optionalKey(Schema.Boolean),
+  hmacCreateSecret: Schema.optionalKey(Schema.Boolean),
+  minPinLength: Schema.optionalKey(Schema.Boolean),
+});
+
+export const PublicKeyCredentialCreationOptionsSchema = Schema.Struct({
+  rp: Schema.Struct({ name: Schema.String, id: Schema.optionalKey(Schema.String) }),
+  user: Schema.Struct({ id: Schema.String, name: Schema.String, displayName: Schema.String }),
+  challenge: Schema.String,
+  pubKeyCredParams: Schema.mutable(
+    Schema.Array(Schema.Struct({ alg: Schema.Number, type: Schema.Literal("public-key") })),
+  ),
+  timeout: Schema.optionalKey(Schema.Number),
+  excludeCredentials: Schema.optionalKey(Schema.mutable(Schema.Array(CredentialDescriptorSchema))),
+  authenticatorSelection: Schema.optionalKey(
+    Schema.Struct({
+      authenticatorAttachment: Schema.optionalKey(Schema.Literals(["cross-platform", "platform"])),
+      requireResidentKey: Schema.optionalKey(Schema.Boolean),
+      residentKey: Schema.optionalKey(Schema.Literals(["discouraged", "preferred", "required"])),
+      userVerification: Schema.optionalKey(
+        Schema.Literals(["discouraged", "preferred", "required"]),
+      ),
+    }),
+  ),
+  hints: Schema.optionalKey(Schema.mutable(Schema.Array(PublicKeyCredentialHintSchema))),
+  attestation: Schema.optionalKey(Schema.Literals(["direct", "enterprise", "indirect", "none"])),
+  attestationFormats: Schema.optionalKey(
+    Schema.mutable(
+      Schema.Array(
+        Schema.Literals([
+          "fido-u2f",
+          "packed",
+          "android-safetynet",
+          "android-key",
+          "tpm",
+          "apple",
+          "none",
+        ]),
+      ),
+    ),
+  ),
+  extensions: Schema.optionalKey(ExtensionsSchema),
+});
+export type PublicKeyCredentialCreationOptions =
+  typeof PublicKeyCredentialCreationOptionsSchema.Type;
+
+export const PublicKeyCredentialRequestOptionsSchema = Schema.Struct({
+  challenge: Schema.String,
+  timeout: Schema.optionalKey(Schema.Number),
+  rpId: Schema.optionalKey(Schema.String),
+  allowCredentials: Schema.optionalKey(Schema.mutable(Schema.Array(CredentialDescriptorSchema))),
+  userVerification: Schema.optionalKey(Schema.Literals(["discouraged", "preferred", "required"])),
+  hints: Schema.optionalKey(Schema.mutable(Schema.Array(PublicKeyCredentialHintSchema))),
+  extensions: Schema.optionalKey(ExtensionsSchema),
+});
+export type PublicKeyCredentialRequestOptions = typeof PublicKeyCredentialRequestOptionsSchema.Type;
 
 /**
  * The registration ceremonies (BEH-EA-130, ticket 07) scope their own
@@ -186,7 +314,7 @@ export type AuthenticateOptionsPayload = typeof AuthenticateOptionsPayload.Type;
  */
 export const AuthenticateOptionsResult = Schema.Struct({
   ceremonyId: Schema.String,
-  options: Schema.Unknown,
+  options: PublicKeyCredentialRequestOptionsSchema,
 });
 export type AuthenticateOptionsResult = typeof AuthenticateOptionsResult.Type;
 
@@ -223,21 +351,47 @@ export class PasskeyCredentialDto extends Schema.Class<PasskeyCredentialDto>(
   name: Schema.String,
   deviceType: Schema.Literals(["singleDevice", "multiDevice"]),
   backedUp: Schema.Boolean,
+  /** HSK-003: the authenticator transports recorded at registration. */
+  transports: Schema.Array(Schema.String),
+  /** HSK-003: the authenticator model id (`00000000-...` when the authenticator does not disclose one). */
+  aaguid: Schema.String,
   createdAt: Schema.String,
   lastUsedAt: Schema.String,
+  /** WPS-006: when a signature-counter regression (a possibly cloned key) was last seen on this credential, or `null`. */
+  counterAnomalyAt: Schema.NullOr(Schema.String),
+}) {}
+
+/**
+ * BPAS-006/TC-004: what the browser's WebAuthn Signals API needs to reconcile
+ * its credential manager with the server — `signalAllAcceptedCredentials`
+ * keyed on the user's stable handle (BPAS-003), `signalCurrentUserDetails`
+ * for a profile change. Authenticated, so no enumeration concern.
+ */
+export class PasskeySignalsDto extends Schema.Class<PasskeySignalsDto>("PasskeySignalsDto")({
+  rpId: Schema.String,
+  /** The user's stable WebAuthn user handle (base64url) — `user.id` of every registration ceremony. */
+  userId: Schema.String,
+  name: Schema.String,
+  displayName: Schema.String,
+  allAcceptedCredentialIds: Schema.Array(Schema.String),
+}) {}
+
+/** TC-008: the document WebAuthn Related Origin Requests defines for `/.well-known/webauthn`. */
+export class RelatedOriginsDto extends Schema.Class<RelatedOriginsDto>("RelatedOriginsDto")({
+  origins: Schema.Array(Schema.String),
 }) {}
 
 export const PasskeyGroup = HttpApiGroup.make("passkey")
   .add(
     HttpApiEndpoint.post("registerOptions", "/passkey/register/options", {
-      success: Schema.Unknown,
+      success: PublicKeyCredentialCreationOptionsSchema,
       // Ticket 15: gated behind the same freshness check as `registerVerify`.
       error: PasskeyReauthRequired,
     }),
   )
   .add(
     HttpApiEndpoint.post("registerOptionsConditional", "/passkey/register/options/conditional", {
-      success: Schema.Unknown,
+      success: PublicKeyCredentialCreationOptionsSchema,
       error: [PasskeyConditionalCreateDisabled, PasskeyReauthRequired],
     }),
   )
@@ -251,6 +405,8 @@ export const PasskeyGroup = HttpApiGroup.make("passkey")
         PasskeyRpIdMismatch,
         PasskeyVerificationFailed,
         PasskeyUserVerificationRequired,
+        PasskeyAttestationRejected,
+        PasskeyAlreadyRegistered,
         // Ticket 15 (BPAS-001): re-checked here too, not just at
         // `.../options` time — closes the window between a caller
         // fetching options while still fresh and presenting the
@@ -269,6 +425,8 @@ export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate"
     HttpApiEndpoint.post("authenticateOptions", "/passkey/authenticate/options", {
       payload: AuthenticateOptionsPayload,
       success: AuthenticateOptionsResult,
+      // TC-001/WPS-005: anonymous and mints server state per call.
+      error: Api.RateLimited,
     }),
   )
   .add(
@@ -276,12 +434,21 @@ export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate"
       payload: AuthenticateVerifyPayload,
       success: SessionContract.SessionDto,
       // Wayfinder ticket 03 (BCR-004/THS-002): `Hooks.TwoFactorRequired`
-      // when a `Hooks.BeforeSessionIssue` tap diverts.
+      // when a `Hooks.BeforeSessionIssue` tap diverts. NAM-002:
+      // `HookPoint.HookAborted` from a `Hooks.BeforeSignIn` veto.
       error: [
         PasskeyChallengeInvalid,
         PasskeyUserVerificationRequired,
+        // CB-004: only under `counterAnomalyPolicy: "reject"`.
+        PasskeyCounterAnomaly,
         Api.InvalidCredentials,
+        // SCP-001: `Users.assertCanSignIn` refused a suspended user.
+        Users.UserSuspended,
+        Api.RateLimited,
+        HookPoint.HookAborted,
         Hooks.TwoFactorRequired,
+        // MNA-001: an unrecognised `X-Awthaq-Token-Delivery` value.
+        Api.InvalidTokenDelivery,
       ],
     }),
   )
@@ -294,12 +461,17 @@ export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate"
 
 export const PasskeyCredentialsGroup = HttpApiGroup.make("passkey.credentials")
   .add(
-    HttpApiEndpoint.get("list", "/passkey/credentials", {
+    HttpApiEndpoint.get("listCredentials", "/passkey/credentials", {
       success: Schema.Array(PasskeyCredentialDto),
     }),
   )
   .add(
-    HttpApiEndpoint.patch("rename", "/passkey/credentials/:id", {
+    HttpApiEndpoint.get("signals", "/passkey/signals", {
+      success: PasskeySignalsDto,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.patch("renameCredential", "/passkey/credentials/:id", {
       params: CredentialIdParams,
       payload: RenamePayload,
       success: PasskeyCredentialDto,
@@ -307,7 +479,7 @@ export const PasskeyCredentialsGroup = HttpApiGroup.make("passkey.credentials")
     }),
   )
   .add(
-    HttpApiEndpoint.make("DELETE")("remove", "/passkey/credentials/:id", {
+    HttpApiEndpoint.delete("removeCredential", "/passkey/credentials/:id", {
       params: CredentialIdParams,
       success: HttpApiSchema.Empty(204),
       error: [PasskeyCredentialNotFound, PasskeyLastCredential],
@@ -334,7 +506,7 @@ export const PasskeyCredentialsGroup = HttpApiGroup.make("passkey.credentials")
 export const PasskeyReauthenticateGroup = HttpApiGroup.make("passkey.reauthenticate")
   .add(
     HttpApiEndpoint.post("reauthenticateOptions", "/passkey/reauthenticate/options", {
-      success: Schema.Unknown,
+      success: PublicKeyCredentialRequestOptionsSchema,
     }),
   )
   .add(
@@ -348,6 +520,7 @@ export const PasskeyReauthenticateGroup = HttpApiGroup.make("passkey.reauthentic
         PasskeyVerificationFailed,
         PasskeyUserVerificationRequired,
         PasskeyCredentialNotFound,
+        PasskeyCounterAnomaly,
       ],
     }),
   )
@@ -356,8 +529,21 @@ export const PasskeyReauthenticateGroup = HttpApiGroup.make("passkey.reauthentic
   .middleware(Api.Authentication)
   .middleware(Api.CsrfProtection);
 
+/**
+ * TC-008: WebAuthn Related Origin Requests. Public and anonymous — the browser fetches it, without
+ * credentials, from `https://<rpId>/.well-known/webauthn`; a `GET` with no state to protect (no CSRF
+ * middleware), 404 unless `PasskeyConfig.relatedOrigins` is set.
+ */
+export const PasskeyWellKnownGroup = HttpApiGroup.make("passkey.wellKnown").add(
+  HttpApiEndpoint.get("relatedOrigins", "/.well-known/webauthn", {
+    success: RelatedOriginsDto,
+    error: PasskeyRelatedOriginsNotConfigured,
+  }),
+);
+
 export const PasskeyApi = HttpApi.make("auth")
   .add(PasskeyGroup)
   .add(PasskeyAuthenticateGroup)
   .add(PasskeyCredentialsGroup)
-  .add(PasskeyReauthenticateGroup);
+  .add(PasskeyReauthenticateGroup)
+  .add(PasskeyWellKnownGroup);

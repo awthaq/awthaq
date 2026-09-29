@@ -48,7 +48,7 @@ describe("AliasLegacyCookieMiddleware", () => {
           `${Sessions.SESSION_COOKIE_NAME}=real-value; better-auth.session_token=legacy-value`,
         );
         const seen = yield* seenThroughMiddleware(original);
-        assert.strictEqual(seen?.headers.cookie, original.headers.cookie);
+        assert.strictEqual(seen?.headers["cookie"], original.headers["cookie"]);
         assert.strictEqual(seen?.cookies[Sessions.SESSION_COOKIE_NAME], "real-value");
       }),
   );
@@ -59,7 +59,7 @@ describe("AliasLegacyCookieMiddleware", () => {
       Effect.gen(function* () {
         const original = requestWithCookie(undefined);
         const seen = yield* seenThroughMiddleware(original);
-        assert.strictEqual(seen?.headers.cookie, original.headers.cookie);
+        assert.strictEqual(seen?.headers["cookie"], original.headers["cookie"]);
         assert.isUndefined(seen?.cookies[Sessions.SESSION_COOKIE_NAME]);
       }),
   );

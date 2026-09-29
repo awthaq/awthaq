@@ -5,16 +5,16 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-02 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
 
 ---
 
-> awthaq is pre-implementation (see `spec/README.md`). Every signature, requirement, and behavior in this file specifies intended design — drawn from `archive/design/plugins-as-layers.md` §4 and `archive/PRD.md` §9.4 — not code that has shipped.
+> Implemented in `@awthaq/core` (`packages/core/src/Auth.ts`; tests `packages/core/test/AuthPlugin.test.ts`, `RouteConflict.test.ts`, `Migrations.test.ts`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note. The design was drawn from `archive/design/plugins-as-layers.md` §4 and `archive/PRD.md` §9.4.
 
 ## BEH-EA-009: `Auth.make` computes three outputs from one plugin tuple
 
@@ -83,6 +83,8 @@ REQUIREMENT: If a plugin in the tuple depends (via `dependsOn`) on a plugin
 
 > **Invariant:** [INV-EA-001](../invariants.md#inv-ea-001-a-plugin-dependency-that-is-not-installed-keeps-the-application-from-compiling)
 
+JH-006: the same walk refuses an out-of-order tuple. `Validate<P>`'s `OutOfOrderDep` check requires every dependency to be listed *before* its dependent (`Auth.make([Pong, Ping])` fails with `plugin "pong" depends on plugin "ping", which must be listed before it`), so the type-level fold that computes `Built<P>["layer"]` (left to right over `P`) is provably the runtime fold (`composeLayer` over the topologically sorted order); the topological sort is still what orders migrations and detects cycles (BEH-EA-016). ELC-006: `AuthPlugin.layer` throws `ConflictingDependsOn` at definition time when a class is registered a second time with a different `dependsOn` set (an identical re-registration, as `Roles.layer`/`Roles.layerSql` do, is allowed).
+
 Because a plugin dependency is a service instance whose key literally contains `awthaq/plugin/<id>` (BEH-EA-002), `MissingDep<P>` can extract that id from the type and report it by name rather than leave the author with an opaque "some service is missing" diagnostic. `research/09-plugin-architecture.md` Q22 treats this as the central lesson of tRPC's `TS2589` failures: graph reasoning belongs to a shallow, purpose-built conditional type over a small tuple, never to open-ended recursive inference — which is exactly the shape `DuplicateId`/`MissingDep`/`SlotConflict` share.
 
 ## BEH-EA-012: `Validate<P>`'s `SlotConflict` check refuses two plugins overriding one exclusive slot
@@ -101,7 +103,9 @@ REQUIREMENT: If two plugins in the tuple both provide the same slot
 
 > **Invariant:** [INV-EA-004](../invariants.md#inv-ea-004-two-plugins-overriding-the-same-exclusive-slot-is-a-compile-time-error-at-authmake)
 
-`SlotConflict<P>` walks the tuple's `ROut` types pairwise for a shared slot key (`archive/design/plugins-as-layers.md` §3.5, §4.2). The alternative — silent last-registration-wins, which is how Angular's non-`multi` DI providers and NestJS's global modules behave (`research/09-plugin-architecture.md` Q23) — is exactly the ambiguity a slot is designed to rule out: two plugins that both want to be *the* `SubjectResolver` must either compose explicitly or have one depend on and wrap the other; the compiler refuses to pick silently.
+MA-005 (as shipped): a `Context.Reference` never appears in a layer's `ROut` in this Effect version, so `SlotConflict` is refused at layer-build time rather than by `Validate<P>`, but always: `Slots.override` requires `SlotsRegistry`, and `Auth.make` provides one per composition (`Built<P>["layer"]` no longer requires it and exposes it), so two plugins overriding one slot fail the build with `SlotConflict` naming both owners without the application ever mentioning `Slots.layer`. A plugin layer built outside `Auth.make` provides `Slots.layer` itself.
+
+The compile-time design: `SlotConflict<P>` walks the tuple's `ROut` types pairwise for a shared slot key (`archive/design/plugins-as-layers.md` §3.5, §4.2). The alternative — silent last-registration-wins, which is how Angular's non-`multi` DI providers and NestJS's global modules behave (`research/09-plugin-architecture.md` Q23) — is exactly the ambiguity a slot is designed to rule out: two plugins that both want to be *the* `SubjectResolver` must either compose explicitly or have one depend on and wrap the other; the compiler refuses to pick silently.
 
 ## BEH-EA-013: `api` and `layer` diverging from one another is unrepresentable, not merely untested
 

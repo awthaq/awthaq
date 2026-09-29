@@ -15,6 +15,7 @@ import { PasskeyApi } from "@awthaq/passkey";
 import { afterEach, assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -170,8 +171,11 @@ const credentialDtoJSON = {
   name: "Passkey",
   deviceType: "singleDevice" as const,
   backedUp: false,
+  transports: ["internal"],
+  aaguid: "00000000-0000-0000-0000-000000000000",
   createdAt: "2026-01-01T00:00:00.000Z",
   lastUsedAt: "2026-01-01T00:00:00.000Z",
+  counterAnomalyAt: null,
 };
 
 const sessionDtoJSON = {
@@ -187,7 +191,7 @@ const sessionDtoJSON = {
 // plain objects — these are what `deepStrictEqual` compares a decoded
 // result against, built from the same JSON these fake routes serve.
 const credentialDto = new PasskeyApi.PasskeyCredentialDto(credentialDtoJSON);
-const sessionDto = new SessionContract.SessionDto(sessionDtoJSON);
+const sessionDto = Schema.decodeUnknownSync(SessionContract.SessionDto)(sessionDtoJSON);
 
 describe("PasskeyClient.passkeyClient — registerPasskey", () => {
   it.effect("happy path: converts the returned credential and calls registerVerify with it", () =>
@@ -251,7 +255,7 @@ describe("PasskeyClient.passkeyClient — registerPasskey", () => {
   );
 
   it.effect(
-    "a malformed registerOptions response (missing pubKeyCredParams) fails PasskeyCeremonyFailed without ever attempting the ceremony",
+    "AVS-003: a malformed registerOptions response (missing pubKeyCredParams) is rejected by the contract's own schema without ever attempting the ceremony",
     () =>
       Effect.gen(function* () {
         let createCalls = 0;
@@ -267,13 +271,9 @@ describe("PasskeyClient.passkeyClient — registerPasskey", () => {
             "POST /passkey/register/options": {
               status: 200,
               // `@simplewebauthn/browser`'s own `startRegistration` never
-              // reads `pubKeyCredParams` directly (only spreads the whole
-              // options object into `navigator.credentials.create`'s own
-              // arguments) — so, unlike a missing `challenge`, a missing
-              // `pubKeyCredParams` would NOT crash the library on its own;
-              // this genuinely exercises `isCreationOptionsJSON`'s own
-              // guard, not just downstream library behavior it happens to
-              // share.
+              // reads `pubKeyCredParams` directly, so the library would not
+              // catch this on its own — the typed options schema in
+              // `PasskeyApi.ts` (AVS-003) is what rejects it, at decode.
               body: {
                 rp: creationOptionsJSON.rp,
                 user: creationOptionsJSON.user,
@@ -285,7 +285,7 @@ describe("PasskeyClient.passkeyClient — registerPasskey", () => {
         );
         const client = PasskeyClient.passkeyClient(rawClient);
         const failure = yield* client.registerPasskey().pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "PasskeyCeremonyFailed");
+        assert.strictEqual(failure._tag, "SchemaError");
         assert.strictEqual(createCalls, 0);
       }),
   );
@@ -427,7 +427,7 @@ describe("PasskeyClient.passkeyClient — authenticate", () => {
   );
 
   it.effect(
-    "a malformed authenticateOptions response (missing challenge) fails PasskeyCeremonyFailed",
+    "AVS-003: a malformed authenticateOptions response (missing challenge) is rejected by the contract's own schema",
     () =>
       Effect.gen(function* () {
         installPlatform({ get: () => Promise.resolve(fakeAuthenticationCredential("auth-cred")) });
@@ -443,7 +443,7 @@ describe("PasskeyClient.passkeyClient — authenticate", () => {
         );
         const client = PasskeyClient.passkeyClient(rawClient);
         const failure = yield* client.authenticate().pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "PasskeyCeremonyFailed");
+        assert.strictEqual(failure._tag, "SchemaError");
       }),
   );
 
@@ -482,7 +482,7 @@ describe("PasskeyClient.passkeyClient — authenticate", () => {
 });
 
 describe("PasskeyClient.passkeyClient — credential management", () => {
-  it.effect("listPasskeys calls passkey.credentials.list", () =>
+  it.effect("listPasskeys calls passkey.credentials.listCredentials", () =>
     Effect.gen(function* () {
       const recorded: Array<RecordedRequest> = [];
       const rawClient = yield* buildClient(
@@ -542,6 +542,10 @@ describe("PasskeyClient.passkeyClient — getClientCapabilities", () => {
         hybridTransport: "unsupported",
         passkeyPlatformAuthenticator: "unsupported",
         userVerifyingPlatformAuthenticator: "unsupported",
+        signalAllAcceptedCredentials: "unsupported",
+        signalCurrentUserDetails: "unsupported",
+        signalUnknownCredential: "unsupported",
+        relatedOrigins: "unsupported",
       });
       assert.strictEqual(recorded.length, 0);
     }),
@@ -558,7 +562,7 @@ describe("PasskeyClient.passkeyClient — getClientCapabilities", () => {
             passkeyPlatformAuthenticator: true,
             userVerifyingPlatformAuthenticator: false,
             relatedOrigins: false,
-            signalAllAcceptedCredentials: false,
+            signalAllAcceptedCredentials: true,
             signalCurrentUserDetails: false,
             signalUnknownCredential: false,
           });
@@ -574,7 +578,295 @@ describe("PasskeyClient.passkeyClient — getClientCapabilities", () => {
         hybridTransport: "supported",
         passkeyPlatformAuthenticator: "supported",
         userVerifyingPlatformAuthenticator: "unsupported",
+        signalAllAcceptedCredentials: "supported",
+        signalCurrentUserDetails: "unsupported",
+        signalUnknownCredential: "unsupported",
+        relatedOrigins: "unsupported",
       });
+    }),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// HSK-003 / WPS-003: what the ceremony sends to register/verify.
+// ---------------------------------------------------------------------------
+
+/** The body the client posted to `register/verify`, typed for the assertions below. */
+const registerVerifyBody = (
+  recorded: ReadonlyArray<RecordedRequest>,
+): { credential: { response: { transports?: unknown } }; ceremony?: unknown } => {
+  const call = recorded.find((r) => r.path === "/passkey/register/verify");
+  if (call === undefined) throw new Error("register/verify was never called");
+  return call.body as { credential: { response: { transports?: unknown } }; ceremony?: unknown };
+};
+
+describe("PasskeyClient.passkeyClient — registration wire (HSK-003, WPS-003)", () => {
+  it.effect("HSK-003: the browser-reported transports reach registerVerify", () =>
+    Effect.gen(function* () {
+      installPlatform({
+        create: () =>
+          Promise.resolve({
+            ...fakeRegistrationCredential("new-cred"),
+            response: {
+              clientDataJSON: arrayBuffer("client-data"),
+              attestationObject: arrayBuffer("attestation-object"),
+              getTransports: () => ["usb", "nfc"],
+            },
+          }),
+      });
+      const recorded: Array<RecordedRequest> = [];
+      const rawClient = yield* buildClient(
+        {
+          "POST /passkey/register/options": { status: 200, body: creationOptionsJSON },
+          "POST /passkey/register/verify": { status: 200, body: credentialDtoJSON },
+        },
+        recorded,
+      );
+      yield* PasskeyClient.passkeyClient(rawClient).registerPasskey();
+      const body = registerVerifyBody(recorded);
+      assert.deepStrictEqual(body.credential.response.transports, ["usb", "nfc"]);
+      // The ordinary (modal) ceremony does not name a ceremony at all.
+      assert.isUndefined(body.ceremony);
+    }),
+  );
+
+  it.effect("WPS-003: a conditional registration names its ceremony", () =>
+    Effect.gen(function* () {
+      installPlatform({
+        create: () => Promise.resolve(fakeRegistrationCredential("conditional-cred")),
+      });
+      const recorded: Array<RecordedRequest> = [];
+      const rawClient = yield* buildClient(
+        {
+          "POST /passkey/register/options/conditional": { status: 200, body: creationOptionsJSON },
+          "POST /passkey/register/verify": { status: 200, body: credentialDtoJSON },
+        },
+        recorded,
+      );
+      yield* PasskeyClient.passkeyClient(rawClient).registerPasskeyConditional();
+      assert.strictEqual(registerVerifyBody(recorded).ceremony, "conditional");
+    }),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// TC-004 / BPAS-006: WebAuthn Signals, fire-and-forget.
+// ---------------------------------------------------------------------------
+
+const signalsDtoJSON = {
+  rpId: "example.com",
+  userId: b64url("stable-handle"),
+  name: "user@example.com",
+  displayName: "User",
+  allAcceptedCredentialIds: ["cred-2", "cred-3"],
+};
+
+/** A `PublicKeyCredential` global exposing the Signals API, recording every call. */
+const installSignalsPlatform = (
+  calls: Array<{ readonly signal: string; readonly args: unknown }>,
+  options?: { readonly rejectWith?: Error },
+): void => {
+  const record = (signal: string) => (args: unknown) => {
+    calls.push({ signal, args });
+    return options?.rejectWith === undefined
+      ? Promise.resolve()
+      : Promise.reject(options.rejectWith);
+  };
+  class FakePublicKeyCredential {
+    static signalAllAcceptedCredentials = record("allAcceptedCredentials");
+    static signalCurrentUserDetails = record("currentUserDetails");
+    static signalUnknownCredential = record("unknownCredential");
+  }
+  Reflect.set(globalThis, "PublicKeyCredential", FakePublicKeyCredential);
+};
+
+describe("PasskeyClient.passkeyClient — Signals (TC-004, BPAS-006)", () => {
+  it.effect(
+    "BPAS-006: deletePasskey signals allAcceptedCredentials with the remaining ids and the stable user handle",
+    () =>
+      Effect.gen(function* () {
+        installPlatform({});
+        const calls: Array<{ readonly signal: string; readonly args: unknown }> = [];
+        installSignalsPlatform(calls);
+        const recorded: Array<RecordedRequest> = [];
+        const rawClient = yield* buildClient(
+          {
+            "DELETE /passkey/credentials/cred-1": { status: 204 },
+            "GET /passkey/signals": { status: 200, body: signalsDtoJSON },
+          },
+          recorded,
+        );
+        yield* PasskeyClient.passkeyClient(rawClient).deletePasskey("cred-1");
+        assert.deepStrictEqual(calls, [
+          {
+            signal: "allAcceptedCredentials",
+            args: {
+              rpId: "example.com",
+              userId: b64url("stable-handle"),
+              allAcceptedCredentialIds: ["cred-2", "cred-3"],
+            },
+          },
+        ]);
+      }),
+  );
+
+  it.effect("a browser without the Signals API never fails the delete", () =>
+    Effect.gen(function* () {
+      installPlatform({});
+      const recorded: Array<RecordedRequest> = [];
+      const rawClient = yield* buildClient(
+        {
+          "DELETE /passkey/credentials/cred-1": { status: 204 },
+          "GET /passkey/signals": { status: 200, body: signalsDtoJSON },
+        },
+        recorded,
+      );
+      // `installPlatform` gives a `PublicKeyCredential` with no `signal*` methods.
+      yield* PasskeyClient.passkeyClient(rawClient).deletePasskey("cred-1");
+      assert.isDefined(recorded.find((r) => r.method === "DELETE"));
+    }),
+  );
+
+  it.effect("a rejected signal and a failed signals fetch never fail the delete either", () =>
+    Effect.gen(function* () {
+      installPlatform({});
+      const calls: Array<{ readonly signal: string; readonly args: unknown }> = [];
+      installSignalsPlatform(calls, { rejectWith: new Error("signal refused") });
+      const recorded: Array<RecordedRequest> = [];
+      const rejected = yield* buildClient(
+        {
+          "DELETE /passkey/credentials/cred-1": { status: 204 },
+          "GET /passkey/signals": { status: 200, body: signalsDtoJSON },
+        },
+        recorded,
+      );
+      yield* PasskeyClient.passkeyClient(rejected).deletePasskey("cred-1");
+      assert.strictEqual(calls.length, 1);
+
+      const unreachable = yield* buildClient(
+        {
+          "DELETE /passkey/credentials/cred-1": { status: 204 },
+          "GET /passkey/signals": { status: 500, body: { message: "boom" } },
+        },
+        recorded,
+      );
+      yield* PasskeyClient.passkeyClient(unreachable).deletePasskey("cred-1");
+      assert.strictEqual(calls.length, 1);
+    }),
+  );
+
+  it.effect("every successful authenticate signals the now-signed-in account's accepted set", () =>
+    Effect.gen(function* () {
+      installPlatform({ get: () => Promise.resolve(fakeAuthenticationCredential("auth-cred")) });
+      const calls: Array<{ readonly signal: string; readonly args: unknown }> = [];
+      installSignalsPlatform(calls);
+      const recorded: Array<RecordedRequest> = [];
+      const rawClient = yield* buildClient(
+        {
+          "POST /passkey/authenticate/options": {
+            status: 200,
+            body: { ceremonyId: "ceremony-1", options: requestOptionsJSON },
+          },
+          "POST /passkey/authenticate/verify": { status: 200, body: sessionDtoJSON },
+          "GET /passkey/signals": { status: 200, body: signalsDtoJSON },
+        },
+        recorded,
+      );
+      const result = yield* PasskeyClient.passkeyClient(rawClient).authenticate();
+      assert.deepStrictEqual(result, sessionDto);
+      assert.deepStrictEqual(
+        calls.map((call) => call.signal),
+        ["allAcceptedCredentials"],
+      );
+    }),
+  );
+
+  it.effect(
+    "a failed anonymous authenticate never sends signalUnknownCredential (BEH-EA-136 stays uniform)",
+    () =>
+      Effect.gen(function* () {
+        installPlatform({ get: () => Promise.resolve(fakeAuthenticationCredential("auth-cred")) });
+        const calls: Array<{ readonly signal: string; readonly args: unknown }> = [];
+        installSignalsPlatform(calls);
+        const recorded: Array<RecordedRequest> = [];
+        const rawClient = yield* buildClient(
+          {
+            "POST /passkey/authenticate/options": {
+              status: 200,
+              body: { ceremonyId: "ceremony-1", options: requestOptionsJSON },
+            },
+            "POST /passkey/authenticate/verify": {
+              status: 401,
+              body: { _tag: "InvalidCredentials" },
+            },
+          },
+          recorded,
+        );
+        const failure = yield* PasskeyClient.passkeyClient(rawClient)
+          .authenticate()
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "InvalidCredentials");
+        assert.deepStrictEqual(calls, []);
+      }),
+  );
+
+  it.effect(
+    "decision B: a signed-in reauthenticate whose credential the server does not know signals unknownCredential",
+    () =>
+      Effect.gen(function* () {
+        installPlatform({ get: () => Promise.resolve(fakeAuthenticationCredential("stale-cred")) });
+        const calls: Array<{ readonly signal: string; readonly args: unknown }> = [];
+        installSignalsPlatform(calls);
+        const recorded: Array<RecordedRequest> = [];
+        const rawClient = yield* buildClient(
+          {
+            "POST /passkey/reauthenticate/options": {
+              status: 200,
+              body: { ...requestOptionsJSON, rpId: "example.com" },
+            },
+            "POST /passkey/reauthenticate/verify": {
+              status: 404,
+              body: { _tag: "PasskeyCredentialNotFound" },
+            },
+          },
+          recorded,
+        );
+        const failure = yield* PasskeyClient.passkeyClient(rawClient)
+          .reauthenticate()
+          .pipe(Effect.flip);
+        // The error still reaches the caller unchanged.
+        assert.strictEqual(failure._tag, "PasskeyCredentialNotFound");
+        assert.deepStrictEqual(calls, [
+          {
+            signal: "unknownCredential",
+            args: { rpId: "example.com", credentialId: "stale-cred" },
+          },
+        ]);
+      }),
+  );
+
+  it.effect("signalCurrentUserDetails sends the server's account name and display name", () =>
+    Effect.gen(function* () {
+      installPlatform({});
+      const calls: Array<{ readonly signal: string; readonly args: unknown }> = [];
+      installSignalsPlatform(calls);
+      const recorded: Array<RecordedRequest> = [];
+      const rawClient = yield* buildClient(
+        { "GET /passkey/signals": { status: 200, body: signalsDtoJSON } },
+        recorded,
+      );
+      yield* PasskeyClient.passkeyClient(rawClient).signalCurrentUserDetails();
+      assert.deepStrictEqual(calls, [
+        {
+          signal: "currentUserDetails",
+          args: {
+            rpId: "example.com",
+            userId: b64url("stable-handle"),
+            name: "user@example.com",
+            displayName: "User",
+          },
+        },
+      ]);
     }),
   );
 });

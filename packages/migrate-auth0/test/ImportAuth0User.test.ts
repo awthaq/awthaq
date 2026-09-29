@@ -3,7 +3,7 @@
 // freshly-imported account's bcrypt hash actually verifies and flags
 // itself for rehash — the whole point of the finding.
 import { Accounts, Hooks, Users } from "@awthaq/core";
-import { PasswordHasher } from "@awthaq/ports";
+import { PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import bcrypt from "bcryptjs";
@@ -14,10 +14,11 @@ import * as Redacted from "effect/Redacted";
 import * as BcryptVerifier from "../src/BcryptVerifier.ts";
 import * as ImportAuth0User from "../src/ImportAuth0User.ts";
 
-const DomainLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory).pipe(
-  Layer.provide(NodeCrypto.layer),
-  Layer.provide(Hooks.HooksLive),
-);
+const DomainLive = Layer.mergeAll(
+  Users.layerMemory,
+  Accounts.layerMemory,
+  SqlTransaction.layerNoop,
+).pipe(Layer.provide(NodeCrypto.layer), Layer.provide(Hooks.HooksLive));
 
 const HasherLive = PasswordHasher.layerArgon2id.pipe(
   Layer.provideMerge(BcryptVerifier.layer),
@@ -37,8 +38,8 @@ describe("ImportAuth0User", () => {
         passwordHash: legacyHash,
       });
 
-      assert.strictEqual(user.email, "migrated@example.com");
-      assert.isTrue(user.emailVerified);
+      assert.strictEqual(Option.getOrUndefined(Users.emailOf(user)), "migrated@example.com");
+      assert.isTrue(Users.isEmailVerified(user));
       assert.strictEqual(account.subject, user.id);
       assert.strictEqual(account.providerId, Accounts.PASSWORD_PROVIDER_ID);
 
@@ -56,7 +57,7 @@ describe("ImportAuth0User", () => {
         emailVerified: false,
         passwordHash: bcrypt.hashSync("whatever", 4),
       });
-      assert.isFalse(user.emailVerified);
+      assert.isFalse(Users.isEmailVerified(user));
     }).pipe(Effect.provide(DomainLive)),
   );
 

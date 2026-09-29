@@ -1,6 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["index.ts"],
+  "include": ["index.ts", "app.ts"],
   "compilerOptions": {
     "composite": true,
     "noEmit": false,
@@ -13,6 +13,8 @@
       "@awthaq/organization": ["../../packages/organization/src/index.ts"],
       "@awthaq/password": ["../../packages/password/src/index.ts"],
       "@awthaq/ports": ["../../packages/ports/src/index.ts"],
+      "@awthaq/qadi": ["../../packages/qadi/src/index.ts"],
+      "@awthaq/roles": ["../../packages/roles/src/index.ts"],
       "@awthaq/server": ["../../packages/server/src/index.ts"],
       "@awthaq/test": ["../../packages/test/src/index.ts"]
     }
@@ -22,6 +24,8 @@
     { "path": "../../packages/organization/tsconfig.src.json" },
     { "path": "../../packages/password/tsconfig.src.json" },
     { "path": "../../packages/ports/tsconfig.src.json" },
+    { "path": "../../packages/qadi/tsconfig.src.json" },
+    { "path": "../../packages/roles/tsconfig.src.json" },
     { "path": "../../packages/server/tsconfig.src.json" },
     { "path": "../../packages/test/tsconfig.src.json" }
   ]

@@ -1,22 +1,25 @@
 // spec/behaviors/20-qadi-bridge-path-b.md, BEH-EA-153.
 import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Api } from "@awthaq/api";
 import { Authentication } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
+import * as Cookies from "effect/unstable/http/Cookies";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { SubjectExtractor as QadiSubjectExtractor } from "@qadi/http";
 import * as SubjectExtractor from "../src/SubjectExtractor.ts";
+import { TestAuth } from "@awthaq/test";
 
 const CoreLive = Layer.mergeAll(Users.layerMemory, Sessions.layerMemory).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(TestAuth.memoryFoundation),
 );
 
 const TestLayer = SubjectExtractor.SubjectExtractorLive.pipe(
@@ -62,7 +65,10 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const sessions = yield* Sessions.Sessions;
         const users = yield* Users.Users;
         const extractor = yield* QadiSubjectExtractor;
-        const user = yield* users.create({ email: "path-b@example.com", name: "Path B" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "path-b@example.com" },
+          name: "Path B",
+        });
         const { token } = yield* sessions.issue({ userId: user.id });
         const request = HttpServerRequest.fromWeb(
           new Request("http://localhost/whatever", {
@@ -81,7 +87,10 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const sessions = yield* Sessions.Sessions;
         const users = yield* Users.Users;
         const extractor = yield* QadiSubjectExtractor;
-        const user = yield* users.create({ email: "path-b-bearer@example.com", name: "Path B" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "path-b-bearer@example.com" },
+          name: "Path B",
+        });
         const { token } = yield* sessions.issue({ userId: user.id });
         const request = HttpServerRequest.fromWeb(
           new Request("http://localhost/whatever", {
@@ -90,6 +99,45 @@ describe("SubjectExtractor (Path B adapter)", () => {
         );
         const subject = yield* extractor.extract(request);
         assert.strictEqual(subject.id, `user:${user.id}`);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "APS-006: an __Host-impersonation cookie shadows __Host-session and resolves the impersonated user; an ordinary session planted there is ignored",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const users = yield* Users.Users;
+        const extractor = yield* QadiSubjectExtractor;
+        const admin = yield* users.create({
+          identity: { _tag: "Email", email: "aps006-admin@example.com" },
+          name: "Admin",
+        });
+        const target = yield* users.create({
+          identity: { _tag: "Email", email: "aps006-target@example.com" },
+          name: "Target",
+        });
+        const own = yield* sessions.issue({ userId: admin.id });
+        const impersonation = yield* sessions.issue({
+          userId: target.id,
+          actingAs: { type: "user", id: admin.id },
+        });
+        const extract = (cookie: string) =>
+          extractor.extract(
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/whatever", { headers: { cookie } }),
+            ),
+          );
+
+        const shadowed = yield* extract(
+          `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(impersonation.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+        );
+        assert.strictEqual(shadowed.id, `user:${target.id}`);
+
+        const planted = yield* extract(
+          `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(own.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+        );
+        assert.strictEqual(planted.id, `user:${admin.id}`);
       }).pipe(Effect.provide(TestLayer)),
   );
 
@@ -115,7 +163,10 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const users = yield* Users.Users;
         const resolver = yield* Authentication.PrincipalResolver;
         const extractor = yield* QadiSubjectExtractor;
-        const user = yield* users.create({ email: "both-bridges@example.com", name: "Both" });
+        const user = yield* users.create({
+          identity: { _tag: "Email", email: "both-bridges@example.com" },
+          name: "Both",
+        });
         const { token } = yield* sessions.issue({ userId: user.id });
 
         // Past touchEvery — the next verify rotates the session secret.
@@ -130,9 +181,12 @@ describe("SubjectExtractor (Path B adapter)", () => {
         // Path A: Api.Authentication's own resolution, against the raw
         // (pre-rotation) credential — this is the call that actually
         // rotates the secret, exactly as it would inside AuthenticationLive.
-        const principal = yield* Authentication.resolvePrincipal(sessions, resolver, token).pipe(
-          Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-        );
+        const principal = yield* Authentication.resolvePrincipal(
+          sessions,
+          resolver,
+          token,
+          "cookie",
+        ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request));
         assert.strictEqual(principal.ref.id, user.id);
 
         // Path B: SubjectExtractorLive, independently, on the SAME request
@@ -145,4 +199,104 @@ describe("SubjectExtractor (Path B adapter)", () => {
         Effect.provide(Layer.mergeAll(Authentication.PrincipalResolverLive, ShortLivedTestLayer)),
       ),
   );
+
+  it.effect(
+    "PIL-005: a Path-B-only route delivers the rotated secret on its response (Set-Cookie)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const users = yield* Users.Users;
+          const extractor = yield* QadiSubjectExtractor;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: "path-b-only@example.com" },
+            name: "PathB",
+          });
+          const { token } = yield* sessions.issue({ userId: user.id });
+          yield* TestClock.adjust(Duration.millis(200));
+
+          const request = HttpServerRequest.fromWeb(
+            new Request("http://localhost/whatever", {
+              headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+            }),
+          );
+          const subject = yield* extractor.extract(request);
+          assert.strictEqual(subject.id, `user:${user.id}`);
+
+          // Pre-response handlers run when the request's response is written.
+          let written: HttpServerResponse.HttpServerResponse | undefined;
+          yield* HttpEffect.toHandled(
+            Effect.succeed(HttpServerResponse.empty()),
+            (_request, response) =>
+              Effect.sync(() => {
+                written = response;
+              }),
+          ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request));
+          const rotated =
+            written === undefined
+              ? Option.none()
+              : Cookies.getValue(written.cookies, Sessions.SESSION_COOKIE_NAME);
+          assert.isTrue(Option.isSome(rotated));
+          if (Option.isNone(rotated)) return;
+          assert.notStrictEqual(rotated.value, Redacted.value(token));
+          yield* sessions.verify(Redacted.make(rotated.value));
+        }),
+      ).pipe(
+        Effect.provide(Layer.mergeAll(Authentication.PrincipalResolverLive, ShortLivedTestLayer)),
+      ),
+  );
+
+  // MAPS-001/OCM-002: Path B recognises exactly the credentials `Authentication` does.
+  describe("contributed credential resolvers", () => {
+    const service = (id: string) =>
+      new Api.ServicePrincipal({
+        ref: new Api.PrincipalRef({ type: "service", id }),
+        scopes: [],
+      });
+    const contributions = Layer.mergeAll(
+      Authentication.contribute("bearer", {
+        id: "svc-jwt",
+        claims: (raw) => raw.startsWith("svc."),
+        resolve: () => Effect.succeed(service("from-bearer")),
+      }),
+      Authentication.contribute("apiKey", {
+        id: "keys",
+        claims: (raw) => raw.startsWith("ak_"),
+        resolve: () => Effect.succeed(service("from-key")),
+      }),
+    ).pipe(Layer.provideMerge(Authentication.CredentialResolversLive));
+    const WithResolvers = SubjectExtractor.SubjectExtractorLive.pipe(
+      Layer.provide(Authentication.PrincipalResolverLive),
+      Layer.provideMerge(contributions),
+      Layer.provideMerge(CoreLive),
+    );
+    const extract = (headers: Record<string, string>) =>
+      Effect.gen(function* () {
+        const extractor = yield* QadiSubjectExtractor;
+        return yield* extractor.extract(
+          HttpServerRequest.fromWeb(new Request("http://localhost/whatever", { headers })),
+        );
+      });
+
+    it.effect("a claimed bearer credential resolves to its principal's subject", () =>
+      Effect.gen(function* () {
+        const subject = yield* extract({ authorization: "Bearer svc.x.y" });
+        assert.strictEqual(subject.id, "service:from-bearer");
+      }).pipe(Effect.provide(WithResolvers)),
+    );
+
+    it.effect("an x-api-key credential resolves through the apiKey carrier", () =>
+      Effect.gen(function* () {
+        const subject = yield* extract({ "x-api-key": "ak_1.secret" });
+        assert.strictEqual(subject.id, "service:from-key");
+      }).pipe(Effect.provide(WithResolvers)),
+    );
+
+    it.effect("an unclaimed x-api-key is anonymous, never treated as a session token", () =>
+      Effect.gen(function* () {
+        const subject = yield* extract({ "x-api-key": "not-a-key" });
+        assert.strictEqual(subject.id, "anonymous");
+      }).pipe(Effect.provide(WithResolvers)),
+    );
+  });
 });

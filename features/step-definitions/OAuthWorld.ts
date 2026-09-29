@@ -17,20 +17,13 @@
 // depends on (e.g. `DateTime.now`) see the same simulated `TestClock` every
 // other step does. Several of this feature's own scenarios (REQ-EA-334's
 // flow-TTL expiry) depend on that.
-import {
-  AuditLog,
-  AuthEvents,
-  Accounts,
-  Hooks,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, RateLimits, Sessions, Users, Verification } from "@awthaq/core";
 import { ClientAddress, RateLimiter, SqlTransaction, Encryption, KeyProvider } from "@awthaq/ports";
 import { Authentication } from "@awthaq/server";
 import { OAuth, OAuthProvider } from "@awthaq/oauth";
+import { CoreMigrations, Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
@@ -40,6 +33,8 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as Migrator from "effect/unstable/sql/Migrator";
+import { TestAuth } from "@awthaq/test";
 
 // ---- fake HttpClient: routes by URL substring ----
 
@@ -123,12 +118,7 @@ const CoreLive = Layer.mergeAll(
   Accounts.layerMemory,
   Sessions.layerMemory,
   Verification.layerMemory,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer),
-  Layer.provideMerge(AuditLog.layerMemory),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
 
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(
@@ -145,12 +135,37 @@ const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
+/**
+ * REQ-EA-345: `Users`/`Accounts` over a real in-memory SQLite database migrated by core's own
+ * migrations — the `(provider, subject, issuer)` UNIQUE constraint is the only thing that can
+ * arbitrate two concurrent links, which the memory `Accounts` (one atomic `Ref` update) cannot
+ * show. `Accounts.layerSql` inserts with no application-level pre-check, so a rejected duplicate
+ * is the constraint's doing.
+ */
+const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const Migrated = Layer.effectDiscard(
+  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
+).pipe(Layer.provide(SqlLive));
+
+export const SqliteIdentityStores = Layer.mergeAll(
+  Users.layerSql.pipe(Layer.provide(Repositories.UsersRepositoryLive)),
+  Accounts.layerSql.pipe(
+    Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
+  ),
+).pipe(
+  Layer.provideMerge(TestAuth.memoryFoundation),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(Migrated),
+);
+
 export interface BuildOptions {
   readonly providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>;
   readonly linking?: "explicit" | { readonly trustedProviders: ReadonlyArray<string> };
   readonly trustedOrigins?: ReadonlyArray<string>;
   readonly httpRoutes?: FakeRoutes;
   readonly baseUrl?: string;
+  /** MNA-004: private-use-scheme deep links a native-mode flow may return to. */
+  readonly nativeRedirectURLs?: ReadonlyArray<string>;
 }
 
 const buildLayer = (options: BuildOptions) =>
@@ -181,6 +196,9 @@ const buildLayer = (options: BuildOptions) =>
         linking: options.linking ?? "explicit",
         trustedOrigins: options.trustedOrigins ?? [],
         baseUrl: options.baseUrl ?? "https://app.example.com",
+        ...(options.nativeRedirectURLs === undefined
+          ? {}
+          : { nativeRedirectURLs: options.nativeRedirectURLs }),
       }),
     ),
   );
@@ -190,6 +208,7 @@ export interface WorldShape {
   readonly accounts: Ref.Ref<Accounts.AccountsShape | undefined>;
   readonly users: Ref.Ref<Users.UsersShape | undefined>;
   readonly sessions: Ref.Ref<Sessions.SessionsShape | undefined>;
+  readonly verification: Ref.Ref<Verification.VerificationShape | undefined>;
   readonly outcomes: Ref.Ref<Record<string, unknown>>;
 }
 
@@ -203,6 +222,7 @@ export const WorldLive = Layer.effect(
       accounts: yield* Ref.make<Accounts.AccountsShape | undefined>(undefined),
       users: yield* Ref.make<Users.UsersShape | undefined>(undefined),
       sessions: yield* Ref.make<Sessions.SessionsShape | undefined>(undefined),
+      verification: yield* Ref.make<Verification.VerificationShape | undefined>(undefined),
       outcomes: yield* Ref.make<Record<string, unknown>>({}),
     });
   }),
@@ -223,6 +243,7 @@ export const configure = Effect.fn("features.oauth.configure")(function* (option
   yield* Ref.set(world.accounts, Context.get(context, Accounts.Accounts));
   yield* Ref.set(world.users, Context.get(context, Users.Users));
   yield* Ref.set(world.sessions, Context.get(context, Sessions.Sessions));
+  yield* Ref.set(world.verification, Context.get(context, Verification.Verification));
 });
 
 /** Only builds and returns the raw `Layer` — for REQ-EA-350/351, which need to observe *layer construction itself* failing (boot-time), not a successfully-built service. */
@@ -241,6 +262,15 @@ export const accountsService = Effect.fn("features.oauth.accountsService")(funct
   const { accounts } = yield* World;
   const found = yield* Ref.get(accounts);
   if (found === undefined) throw new Error("Accounts not configured yet — call configure() first");
+  return found;
+});
+
+/** The core `Verification` store the OAuth flow state lives in — the same instance `OAuth.OAuth` resolved against (REQ-EA-331). */
+export const verificationService = Effect.fn("features.oauth.verificationService")(function* () {
+  const { verification } = yield* World;
+  const found = yield* Ref.get(verification);
+  if (found === undefined)
+    throw new Error("Verification not configured yet — call configure() first");
   return found;
 });
 

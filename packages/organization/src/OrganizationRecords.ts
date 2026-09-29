@@ -6,6 +6,7 @@
 // `effect/unstable/sql`'s `SqlSchema`, owned by this plugin rather than the
 // shared persistence stratum.
 
+import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -26,6 +27,19 @@ export interface OrganizationRecord {
   readonly slug: string;
   readonly logo: Option.Option<string>;
   readonly metadata: Option.Option<string>;
+  /**
+   * DRS-007: the organization's residency region, drawn from the configured
+   * `OrganizationConfig.regions` vocabulary. `None` until set. Application
+   * routing (which shard or database serves this tenant) reads it through
+   * `homeRegionOf`; nothing here interprets it.
+   */
+  readonly homeRegion: Option.Option<string>;
+  /**
+   * EP-003: `Some` while the organization is suspended by a platform
+   * administrator (ADR-EA-018). Reversible — a suspended organization keeps
+   * every row and is refused access until reinstated.
+   */
+  readonly suspendedAt: Option.Option<DateTime.Utc>;
   readonly createdAt: DateTime.Utc;
 }
 
@@ -43,6 +57,7 @@ export interface OrganizationRecordsShape {
     readonly slug: string;
     readonly logo?: string | undefined;
     readonly metadata?: string | undefined;
+    readonly homeRegion?: string | undefined;
   }) => Effect.Effect<OrganizationRecord, OrganizationRecordSlugTaken>;
   readonly findById: (id: string) => Effect.Effect<Option.Option<OrganizationRecord>>;
   readonly findBySlug: (slug: string) => Effect.Effect<Option.Option<OrganizationRecord>>;
@@ -53,8 +68,19 @@ export interface OrganizationRecordsShape {
       readonly slug?: string | undefined;
       readonly logo?: string | null | undefined;
       readonly metadata?: string | null | undefined;
+      readonly homeRegion?: string | null | undefined;
     },
   ) => Effect.Effect<OrganizationRecord, OrganizationRecordNotFound | OrganizationRecordSlugTaken>;
+  /** EP-003: suspends (`Some(at)`) or reinstates (`None`) the organization. */
+  readonly setSuspended: (
+    id: string,
+    at: Option.Option<DateTime.Utc>,
+  ) => Effect.Effect<OrganizationRecord, OrganizationRecordNotFound>;
+  /** EP-003: every organization, keyset-paginated on `(createdAt, id)` ascending — the platform administrator's listing, never a tenant-scoped read. */
+  readonly listPage: (input: {
+    readonly after: Option.Option<{ readonly createdAt: DateTime.Utc; readonly id: string }>;
+    readonly limit: number;
+  }) => Effect.Effect<ReadonlyArray<OrganizationRecord>>;
   readonly delete: (id: string) => Effect.Effect<void, OrganizationRecordNotFound>;
   readonly listByIds: (
     ids: ReadonlyArray<string>,
@@ -98,6 +124,8 @@ export const layerMemory = Layer.effect(
             slug: input.slug,
             logo: Option.fromNullishOr(input.logo),
             metadata: Option.fromNullishOr(input.metadata),
+            homeRegion: Option.fromNullishOr(input.homeRegion),
+            suspendedAt: Option.none(),
             createdAt: now,
           };
           return [Result.succeed(record), HashMap.set(s, id, record)] as const;
@@ -140,10 +168,48 @@ export const layerMemory = Layer.effect(
             ...(input.metadata !== undefined
               ? { metadata: Option.fromNullishOr(input.metadata) }
               : {}),
+            ...(input.homeRegion !== undefined
+              ? { homeRegion: Option.fromNullishOr(input.homeRegion) }
+              : {}),
           };
           return [Result.succeed(updated), HashMap.set(s, id, updated)] as const;
         },
       ).pipe(Effect.flatMap(Effect.fromResult));
+
+    const setSuspended: OrganizationRecordsShape["setSuspended"] = (id, at) =>
+      Ref.modify(
+        state,
+        (s): readonly [Result.Result<OrganizationRecord, OrganizationRecordNotFound>, State] => {
+          const existing = HashMap.get(s, id);
+          if (Option.isNone(existing)) return [Result.fail(notFound(id)), s] as const;
+          const updated: OrganizationRecord = { ...existing.value, suspendedAt: at };
+          return [Result.succeed(updated), HashMap.set(s, id, updated)] as const;
+        },
+      ).pipe(Effect.flatMap(Effect.fromResult));
+
+    const listPage: OrganizationRecordsShape["listPage"] = ({ after, limit }) =>
+      Ref.get(state).pipe(
+        Effect.map((s) =>
+          Array.from(HashMap.values(s))
+            .sort(
+              (a, b) =>
+                DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
+                a.id.localeCompare(b.id),
+            )
+            .filter((row) =>
+              Option.match(after, {
+                onNone: () => true,
+                onSome: (cursor) => {
+                  const delta =
+                    DateTime.toEpochMillis(row.createdAt) -
+                    DateTime.toEpochMillis(cursor.createdAt);
+                  return delta > 0 || (delta === 0 && row.id > cursor.id);
+                },
+              }),
+            )
+            .slice(0, limit),
+        ),
+      );
 
     const delete_: OrganizationRecordsShape["delete"] = (id) =>
       Ref.modify(state, (s): readonly [Result.Result<void, OrganizationRecordNotFound>, State] => {
@@ -156,27 +222,43 @@ export const layerMemory = Layer.effect(
         Effect.map((s) => ids.flatMap((id) => Option.toArray(HashMap.get(s, id)))),
       );
 
-    return { create, findById, findBySlug, update, delete: delete_, listByIds };
+    return {
+      create,
+      findById,
+      findBySlug,
+      update,
+      setSuspended,
+      listPage,
+      delete: delete_,
+      listByIds,
+    };
   }),
 );
 
 // ---- layerSql -----------------------------------------------------------------
 
-const OrganizationRow = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  slug: Schema.String,
-  logo: Schema.NullOr(Schema.String),
-  metadata: Schema.NullOr(Schema.String),
-  createdAt: Schema.DateTimeUtcFromString,
-});
+const makeOrganizationRow = (wire: SqlModels.DialectWire) =>
+  Schema.Struct({
+    id: Schema.String,
+    name: Schema.String,
+    slug: Schema.String,
+    logo: Schema.NullOr(Schema.String),
+    metadata: Schema.NullOr(Schema.String),
+    homeRegion: Schema.NullOr(Schema.String),
+    suspendedAt: wire.nullableDateTime,
+    createdAt: wire.dateTime,
+  });
 
-const toRecord = (row: typeof OrganizationRow.Type): OrganizationRecord => ({
+type OrganizationRow = ReturnType<typeof makeOrganizationRow>["Type"];
+
+const toRecord = (row: OrganizationRow): OrganizationRecord => ({
   id: row.id,
   name: row.name,
   slug: row.slug,
   logo: Option.fromNullishOr(row.logo),
   metadata: Option.fromNullishOr(row.metadata),
+  homeRegion: Option.fromNullishOr(row.homeRegion),
+  suspendedAt: Option.fromNullishOr(row.suspendedAt),
   createdAt: row.createdAt,
 });
 
@@ -184,6 +266,9 @@ export const layerSql = Layer.effect(
   OrganizationRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
+    const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
+    const OrganizationRow = makeOrganizationRow(wire);
     const crypto = yield* Crypto.Crypto;
 
     const insert = SqlSchema.findOne({
@@ -193,12 +278,13 @@ export const layerSql = Layer.effect(
         slug: Schema.String,
         logo: Schema.NullOr(Schema.String),
         metadata: Schema.NullOr(Schema.String),
-        createdAt: Schema.DateTimeUtcFromString,
+        homeRegion: Schema.NullOr(Schema.String),
+        createdAt: wire.dateTime,
       }),
       Result: OrganizationRow,
       execute: (r) => sql`
-          INSERT INTO organization_org (id, name, slug, logo, metadata, createdAt)
-          VALUES (${r.id}, ${r.name}, ${r.slug}, ${r.logo}, ${r.metadata}, ${r.createdAt})
+          INSERT INTO organization_org (id, name, slug, logo, metadata, "homeRegion", "createdAt")
+          VALUES (${r.id}, ${r.name}, ${r.slug}, ${r.logo}, ${r.metadata}, ${r.homeRegion}, ${r.createdAt})
           RETURNING *
         `,
     });
@@ -229,7 +315,7 @@ export const layerSql = Layer.effect(
 
     const listByIdsQuery = (ids: ReadonlyArray<string>) =>
       Effect.gen(function* () {
-        const empty: ReadonlyArray<typeof OrganizationRow.Type> = [];
+        const empty: ReadonlyArray<OrganizationRow> = [];
         if (ids.length === 0) return empty;
         return yield* listByIdsBase(ids);
       });
@@ -243,6 +329,7 @@ export const layerSql = Layer.effect(
         slug: input.slug,
         logo: input.logo ?? null,
         metadata: input.metadata ?? null,
+        homeRegion: input.homeRegion ?? null,
         createdAt: now,
       }).pipe(
         Effect.catchTag("SqlError", (error) =>
@@ -269,6 +356,7 @@ export const layerSql = Layer.effect(
       const nextSlug = input.slug ?? current.slug;
       const nextLogo = input.logo === undefined ? current.logo : input.logo;
       const nextMetadata = input.metadata === undefined ? current.metadata : input.metadata;
+      const nextHomeRegion = input.homeRegion === undefined ? current.homeRegion : input.homeRegion;
       const updateQuery = SqlSchema.findOneOption({
         Request: Schema.Struct({
           id: Schema.String,
@@ -276,10 +364,11 @@ export const layerSql = Layer.effect(
           slug: Schema.String,
           logo: Schema.NullOr(Schema.String),
           metadata: Schema.NullOr(Schema.String),
+          homeRegion: Schema.NullOr(Schema.String),
         }),
         Result: OrganizationRow,
         execute: (r) => sql`
-            UPDATE organization_org SET name = ${r.name}, slug = ${r.slug}, logo = ${r.logo}, metadata = ${r.metadata}
+            UPDATE organization_org SET name = ${r.name}, slug = ${r.slug}, logo = ${r.logo}, metadata = ${r.metadata}, "homeRegion" = ${r.homeRegion}
             WHERE id = ${r.id}
             RETURNING *
           `,
@@ -290,6 +379,7 @@ export const layerSql = Layer.effect(
         slug: nextSlug,
         logo: nextLogo,
         metadata: nextMetadata,
+        homeRegion: nextHomeRegion,
       }).pipe(
         Effect.catchTag("SqlError", (error) =>
           error.reason._tag === "UniqueViolation"
@@ -302,6 +392,49 @@ export const layerSql = Layer.effect(
       return toRecord(row.value);
     });
 
+    const setSuspendedQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({ id: Schema.String, suspendedAt: wire.nullableDateTime }),
+      Result: OrganizationRow,
+      execute: (r) => sql`
+          UPDATE organization_org SET "suspendedAt" = ${r.suspendedAt} WHERE id = ${r.id} RETURNING *
+        `,
+    });
+
+    const setSuspended: OrganizationRecordsShape["setSuspended"] = Effect.fnUntraced(
+      function* (id, at) {
+        const row = yield* setSuspendedQuery({ id, suspendedAt: Option.getOrNull(at) }).pipe(
+          Effect.orDie,
+        );
+        if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
+        return toRecord(row.value);
+      },
+    );
+
+    const listPageQuery = SqlSchema.findAll({
+      Request: Schema.Struct({
+        afterCreatedAt: wire.nullableDateTime,
+        afterId: Schema.NullOr(Schema.String),
+        limit: Schema.Number,
+      }),
+      Result: OrganizationRow,
+      execute: (r) =>
+        r.afterCreatedAt === null || r.afterId === null
+          ? sql`SELECT * FROM organization_org ORDER BY "createdAt", id LIMIT ${r.limit}`
+          : sql`SELECT * FROM organization_org
+                WHERE ("createdAt", id) > (${r.afterCreatedAt}, ${r.afterId})
+                ORDER BY "createdAt", id LIMIT ${r.limit}`,
+    });
+
+    const listPage: OrganizationRecordsShape["listPage"] = ({ after, limit }) =>
+      listPageQuery({
+        afterCreatedAt: Option.match(after, { onNone: () => null, onSome: (c) => c.createdAt }),
+        afterId: Option.match(after, { onNone: () => null, onSome: (c) => c.id }),
+        limit,
+      }).pipe(
+        Effect.map((rows) => rows.map(toRecord)),
+        Effect.orDie,
+      );
+
     const delete_: OrganizationRecordsShape["delete"] = Effect.fnUntraced(function* (id) {
       const row = yield* deleteQuery(id).pipe(Effect.orDie);
       if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
@@ -313,6 +446,15 @@ export const layerSql = Layer.effect(
         Effect.orDie,
       );
 
-    return { create, findById, findBySlug, update, delete: delete_, listByIds };
+    return {
+      create,
+      findById,
+      findBySlug,
+      update,
+      setSuspended,
+      listPage,
+      delete: delete_,
+      listByIds,
+    };
   }),
 );
