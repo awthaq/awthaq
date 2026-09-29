@@ -62,6 +62,10 @@ ORDER = [
     "12-multi-tenancy/28-tenancy.feature",
     "13-enterprise-federation/29-saml-sp.feature",
     "13-enterprise-federation/30-scim.feature",
+    "14-mfa-passwordless/31-two-factor.feature",
+    "14-mfa-passwordless/32-magic-link.feature",
+    "14-mfa-passwordless/33-email-otp.feature",
+    "15-webhooks/34-webhooks.feature",
 ]
 
 # Explicit feature-file -> source-behavior-md map (most basenames match
@@ -99,6 +103,10 @@ SOURCE_MD = {
     "28-tenancy.feature": "28-tenancy.md",
     "29-saml-sp.feature": "29-saml-sp.md",
     "30-scim.feature": "30-scim.md",
+    "31-two-factor.feature": "31-two-factor.md",
+    "32-magic-link.feature": "32-magic-link.md",
+    "33-email-otp.feature": "33-email-otp.md",
+    "34-webhooks.feature": "34-webhooks.md",
 }
 
 # DAG-007: a feature for a plugin that has no BEH-EA range yet traces to its model

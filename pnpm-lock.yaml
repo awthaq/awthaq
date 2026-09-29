@@ -223,6 +223,9 @@ importers:
       '@awthaq/jwt':
         specifier: workspace:*
         version: link:../packages/jwt
+      '@awthaq/magic-link':
+        specifier: workspace:*
+        version: link:../packages/magic-link
       '@awthaq/next':
         specifier: workspace:*
         version: link:../packages/next
@@ -250,6 +253,9 @@ importers:
       '@awthaq/roles':
         specifier: workspace:*
         version: link:../packages/roles
+      '@awthaq/saml':
+        specifier: workspace:*
+        version: link:../packages/saml
       '@awthaq/scim':
         specifier: workspace:*
         version: link:../packages/scim
@@ -262,6 +268,12 @@ importers:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../packages/test
+      '@awthaq/two-factor':
+        specifier: workspace:*
+        version: link:../packages/two-factor
+      '@awthaq/webhooks':
+        specifier: workspace:*
+        version: link:../packages/webhooks
       '@effect-cucumber/vitest':
         specifier: ^0.10.1
         version: 0.10.1(@effect/platform-node@4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1))(@effect/vitest@4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0))(effect@4.0.0-rc.116)(vitest@5.0.0)

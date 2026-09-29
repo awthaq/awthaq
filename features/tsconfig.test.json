@@ -26,6 +26,10 @@
       "@awthaq/react": ["../packages/react/src/index.ts"],
       "@awthaq/roles": ["../packages/roles/src/index.ts"],
       "@awthaq/scim": ["../packages/scim/src/index.ts"],
+      "@awthaq/two-factor": ["../packages/two-factor/src/index.ts"],
+      "@awthaq/magic-link": ["../packages/magic-link/src/index.ts"],
+      "@awthaq/webhooks": ["../packages/webhooks/src/index.ts"],
+      "@awthaq/saml": ["../packages/saml/src/index.ts"],
       "@awthaq/test": ["../packages/test/src/index.ts"]
     }
   }
