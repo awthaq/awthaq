@@ -14,7 +14,9 @@ import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage";
 import * as Jwt from "./Jwt.ts";
 
 export interface OAuthEndpoints {
@@ -97,13 +99,24 @@ export interface ResolvedProvider {
   readonly mapProfile: (claims: Record<string, unknown>) => OAuthProfile;
 }
 
-interface DiscoveryDocument {
-  readonly issuer?: string;
-  readonly authorization_endpoint?: string;
-  readonly token_endpoint?: string;
-  readonly jwks_uri?: string;
-  readonly userinfo_endpoint?: string;
-}
+/**
+ * ESS-002/TTE-003/AP-008/JR-010: the discovery document is untrusted,
+ * network-fetched input — decoded, never cast. An endpoint that is present
+ * must be an absolute URL, so a malformed one dies at boot instead of
+ * surfacing as a `new URL()` throw inside a request handler. Members this
+ * plugin doesn't read are ignored.
+ */
+const AbsoluteUrl = Schema.String.check(
+  Schema.makeFilter((value) => URL.canParse(value) || "must be an absolute URL"),
+);
+
+const DiscoveryDocumentSchema = Schema.Struct({
+  issuer: Schema.String,
+  authorization_endpoint: Schema.optional(AbsoluteUrl),
+  token_endpoint: Schema.optional(AbsoluteUrl),
+  jwks_uri: Schema.optional(AbsoluteUrl),
+  userinfo_endpoint: Schema.optional(AbsoluteUrl),
+});
 
 /**
  * BEH-EA-127: runs once, at plugin boot (this plugin's own `make`, per
@@ -130,6 +143,33 @@ export const resolve = (
       );
     }
 
+    // JR-009: an oidc provider that never asks for `openid` gets no
+    // `id_token` back, which would otherwise surface only as an opaque
+    // runtime 400 at the first callback.
+    if (config.kind === "oidc" && !config.scopes.includes("openid")) {
+      return yield* Effect.die(
+        new Error(`awthaq/oauth: provider "${config.id}" is oidc but its scopes omit "openid"`),
+      );
+    }
+
+    // OAP-005 (RFC 9700 §2.1.1): `skipPkce` is a per-vendor escape hatch for
+    // *confidential* clients only — with no secret and no PKCE, the bare
+    // authorization code is the whole credential.
+    const skipPkce = config.quirks?.skipPkce ?? false;
+    if (skipPkce) {
+      if (Option.isNone(clientSecret)) {
+        return yield* Effect.die(
+          new Error(
+            `awthaq/oauth: provider "${config.id}" sets quirks.skipPkce but has no clientSecret — ` +
+              "a public client must use PKCE (RFC 9700 §2.1.1)",
+          ),
+        );
+      }
+      yield* Effect.logWarning(
+        `awthaq/oauth: provider "${config.id}" runs the authorization-code flow without PKCE (quirks.skipPkce)`,
+      );
+    }
+
     let authorizationEndpoint = config.endpoints?.authorizationEndpoint;
     let tokenEndpoint = config.endpoints?.tokenEndpoint;
     let jwksUri = config.endpoints?.jwksUri;
@@ -138,9 +178,15 @@ export const resolve = (
     if (config.discoveryUrl !== undefined) {
       const discoveryUrl = yield* config.discoveryUrl;
       const document = yield* httpClient.get(discoveryUrl).pipe(
-        Effect.flatMap((response) => response.json),
-        Effect.map((body) => body as DiscoveryDocument),
-        Effect.orDie,
+        Effect.flatMap(HttpIncomingMessage.schemaBodyJson(DiscoveryDocumentSchema)),
+        Effect.catch((error) =>
+          Effect.die(
+            new Error(
+              `awthaq/oauth: provider "${config.id}" discovery document is invalid ` +
+                `or unfetchable: ${error.message}`,
+            ),
+          ),
+        ),
       );
       if (Option.isSome(configuredIssuer) && document.issuer !== configuredIssuer.value) {
         return yield* Effect.die(
@@ -165,6 +211,23 @@ export const resolve = (
       );
     }
 
+    // ESS-002: explicit endpoints get the same absolute-URL guarantee the
+    // discovery schema gives fetched ones.
+    for (const [field, value] of [
+      ["authorizationEndpoint", authorizationEndpoint],
+      ["tokenEndpoint", tokenEndpoint],
+      ["jwksUri", jwksUri],
+      ["userinfoEndpoint", userinfoEndpoint],
+    ]) {
+      if (value !== undefined && !URL.canParse(value)) {
+        return yield* Effect.die(
+          new Error(
+            `awthaq/oauth: provider "${config.id}" ${field} "${value}" is not an absolute URL`,
+          ),
+        );
+      }
+    }
+
     return {
       id: config.id,
       kind: config.kind,
@@ -177,7 +240,7 @@ export const resolve = (
       clientId,
       clientSecret,
       scopes: config.scopes,
-      skipPkce: config.quirks?.skipPkce ?? false,
+      skipPkce,
       mapProfile: config.mapProfile,
     };
   }).pipe(Effect.orDie);

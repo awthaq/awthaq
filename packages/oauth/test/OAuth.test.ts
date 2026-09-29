@@ -22,6 +22,7 @@ import { ClientAddress, Encryption, KeyProvider, RateLimiter, SqlTransaction } f
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { Authentication } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
@@ -712,6 +713,83 @@ describe("OAuth", () => {
           );
           assert.strictEqual(exit._tag, "Failure");
         }),
+    );
+  });
+
+  describe("boot-time provider configuration validation (ESS-002/OAP-005/JR-009)", () => {
+    /** The rendered defect message of a boot that must die, or `undefined` if it booted. */
+    const bootDefect = (
+      options: Parameters<typeof buildLayer>[0],
+    ): Effect.Effect<string | undefined> =>
+      Effect.void.pipe(
+        Effect.provide(buildLayer(options)),
+        Effect.exit,
+        Effect.map((exit) => (exit._tag === "Failure" ? Cause.pretty(exit.cause) : undefined)),
+      );
+
+    it.effect("ESS-002: a discovery token_endpoint that is not a string dies at boot naming the field", () =>
+      Effect.gen(function* () {
+        const message = yield* bootDefect({
+          providers: [okta()],
+          httpRoutes: {
+            ".well-known/openid-configuration": { ...oktaDiscovery, token_endpoint: 42 },
+          },
+        });
+        assert.isDefined(message);
+        assert.include(message, "okta");
+        assert.include(message, "token_endpoint");
+      }),
+    );
+
+    it.effect("ESS-002: a JSON array discovery body dies at boot", () =>
+      Effect.gen(function* () {
+        const message = yield* bootDefect({
+          providers: [okta()],
+          httpRoutes: { ".well-known/openid-configuration": [] },
+        });
+        assert.isDefined(message);
+        assert.include(message, "discovery document is invalid");
+      }),
+    );
+
+    it.effect("ESS-002: a discovery endpoint that is not an absolute URL dies at boot", () =>
+      Effect.gen(function* () {
+        const message = yield* bootDefect({
+          providers: [okta()],
+          httpRoutes: {
+            ".well-known/openid-configuration": { ...oktaDiscovery, token_endpoint: "not a url" },
+          },
+        });
+        assert.isDefined(message);
+        assert.include(message, "token_endpoint");
+      }),
+    );
+
+    it.effect("OAP-005: quirks.skipPkce without a clientSecret dies at boot", () =>
+      Effect.gen(function* () {
+        const { clientSecret: _omitted, ...publicClient } = acme({ quirks: { skipPkce: true } });
+        const message = yield* bootDefect({ providers: [publicClient] });
+        assert.isDefined(message);
+        assert.include(message, "skipPkce");
+      }),
+    );
+
+    it.effect("OAP-005: quirks.skipPkce with a clientSecret still boots", () =>
+      Effect.gen(function* () {
+        const message = yield* bootDefect({ providers: [acme({ quirks: { skipPkce: true } })] });
+        assert.isUndefined(message);
+      }),
+    );
+
+    it.effect("JR-009: an oidc provider whose scopes omit openid dies at boot", () =>
+      Effect.gen(function* () {
+        const message = yield* bootDefect({
+          providers: [okta({ scopes: ["email", "profile"] })],
+          httpRoutes: { ".well-known/openid-configuration": oktaDiscovery },
+        });
+        assert.isDefined(message);
+        assert.include(message, "openid");
+      }),
     );
   });
 

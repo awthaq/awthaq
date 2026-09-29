@@ -29,6 +29,8 @@ REQUIREMENT: Every OAuth authorization-code flow MUST use PKCE with the S256
 
 research/05-oauth-oidc.md's Q54 recommendation is explicit: "PKCE S256 always... No `\"none\"` checks escape hatch," a stricter stance than Auth.js's `checks: ("none"|"state"|"pkce")[]` array. RFC 9700 (Jan 2025) mandates PKCE for all clients; making the field's type `true` rather than a boolean means a provider author cannot accidentally configure it off — only the documented quirk path (Apple, which rejects PKCE) may skip it, and that skip is visible in the quirk table, not buried in per-call configuration.
 
+**`skipPkce` is for confidential clients only (OAP-005, RFC 9700 §2.1.1).** Provider registration MUST fail at boot when `quirks.skipPkce` is set on a provider with no `clientSecret` — with neither a secret nor PKCE, the bare authorization code would be the entire credential. Every permitted use (a confidential client) logs a warning naming the provider at boot.
+
 _Previous: [BEH-EA-120](15-password.md#beh-ea-120-password-policy-is-configuration-not-a-plugin-variant) | Next: [BEH-EA-122](16-oauth.md#beh-ea-122-flow-state-lives-server-side-in-verification)_
 
 ## BEH-EA-122: Flow state lives server-side, in Verification
@@ -132,6 +134,8 @@ REQUIREMENT: When a provider is configured via discovery, the fetched
 ```
 
 research/05-oauth-oidc.md's Q88 table cites two real incidents this guards against: Keycloak's CVE-2020-10770 and a Cognito SSRF case, both rooted in trusting a provider-controlled endpoint without an exact-match check on the thing that identifies the provider. RFC 8414 and OIDC Discovery already require the returned `issuer` to match the expected value; treating a mismatch as a registration failure (fail closed at boot, not per-request) keeps a compromised or misconfigured discovery document from ever reaching request-serving code.
+
+**Boot-time configuration validation (ESS-002, JR-009).** The discovery document is decoded with a schema, never asserted: a non-object body, a non-string `issuer`, or a present-but-malformed endpoint (`authorization_endpoint`, `token_endpoint`, `jwks_uri`, `userinfo_endpoint` must each be an absolute URL) fails provider registration with a defect naming the provider and the offending field. Explicitly configured endpoints get the same absolute-URL check, and an `oidc` provider whose `scopes` omit `openid` also fails at boot (it would otherwise never receive an `id_token`).
 
 **Claim precedence (OIT-001, OIDC Core 5.3.2).** For an `oidc` provider that also exposes a userinfo endpoint, the userinfo response `sub` MUST equal the verified `id_token` `sub` (a mismatch fails the callback closed with no account created or linked), and the identity-bearing claims `sub`, `email` and `email_verified` MUST be taken from the signed `id_token` whenever it carries them. Userinfo only enriches the profile (`name`, `picture`, …); it can never re-anchor the identity or flip `email_verified` for the BEH-EA-124 auto-link decision. A plain `oauth2` provider (no `id_token`) still sources everything from userinfo.
 
