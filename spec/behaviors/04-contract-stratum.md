@@ -128,7 +128,7 @@ REQUIREMENT: An `HttpApi` group carrying `CsrfProtection` MUST fail to
 
 `archive/PRD.md` §10 states the intended effect directly: "a generated client does not type-check without the client half." `archive/design/usage-examples-v4.md` §11.1 shows the failure mode this closes off: removing the `CsrfClient` layer from a client program is designed to be a compile error naming `ForClient<CsrfProtection>` as still required, not a runtime 403 discovered by a user mid-session.
 
-## BEH-EA-031: Core owns a `session` group at the API root, with `current`, `list`, `signOut`, `revoke`, and `revokeOthers`
+## BEH-EA-031: Core owns a `session` group at the API root, with `current`, `list`, `signOut`, `revoke`, `revokeOthers`, and `revokeAll`
 
 ```
 GET  /auth/session
@@ -136,18 +136,19 @@ GET  /auth/session/list
 POST /auth/session/sign-out
 POST /auth/session/revoke
 POST /auth/session/revoke-others
+POST /auth/session/revoke-all
 ```
 
 ```text
 REQUIREMENT: The core `session` group MUST mount at the root of the
              composed `HttpApi` (not under any plugin's namespace prefix)
-             and MUST expose `current`, `list`, `signOut`, `revoke`, and
-             `revokeOthers` as its endpoints.
+             and MUST expose `current`, `list`, `signOut`, `revoke`,
+             `revokeOthers`, and `revokeAll` as its endpoints.
 ```
 
 MW-008: `SessionDto`'s `createdAt`, `lastActiveAt` and `expiresAt` are ISO-8601 date-time strings on the wire (`format: "date-time"` in the generated OpenAPI document) that decode to `DateTime.Utc`; a malformed timestamp neither decodes nor encodes, and constructing a `SessionDto` takes `DateTime.Utc` values, not strings.
 
-`archive/design/plugins-as-layers.md` §6 states core's one privilege plainly: "its groups sit at the root of `/auth` and its ids are reserved." `archive/design/usage-examples-v4.md` §5.1 is the worked example of every one of these five endpoints in use (listing devices, revoking one, revoking the rest, signing out) through the same client the plugin groups are reached through — core's session surface is designed to need no plugin to exist at all.
+`archive/design/plugins-as-layers.md` §6 states core's one privilege plainly: "its groups sit at the root of `/auth` and its ids are reserved." `archive/design/usage-examples-v4.md` §5.1 is the worked example of these endpoints in use (listing devices, revoking one, revoking the rest, signing out) through the same client the plugin groups are reached through — core's session surface is designed to need no plugin to exist at all. `revokeAll` (TIR-006) is the sixth endpoint: it kills every session for the caller *including the current one* and, like `signOut`, its response expires the `__Host-session` cookie, which is what a password reset relies on.
 
 ## BEH-EA-032: `Auth.api` merges contracts and refuses a duplicate group id
 

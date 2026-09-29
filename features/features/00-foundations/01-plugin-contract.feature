@@ -1,18 +1,13 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @foundations @plugin-contract
-@skip @unwired
 Feature: Plugin Contract
 
   # BEH-EA-001 — spec/behaviors/01-plugin-contract.md; see also
   # ADR-EA-008, ADR-EA-001.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-001 @compile-time
   Rule: A plugin is a Context.Service class produced by AuthPlugin.Service
 
@@ -69,8 +64,9 @@ Feature: Plugin Contract
   # BEH-EA-004 — spec/behaviors/01-plugin-contract.md; see also INV-EA-006.
   # Compile-time contract: the enforcing mechanism is the TypeScript
   # compiler (Validate<P>), not a runtime step. These scenarios record the
-  # intended developer-facing outcome; the eventual verification artifact
-  # is a type-level test (definitions-of-done.md gate 5).
+  # intended developer-facing outcome; the compiler-checked half is proven in
+  # features/step-definitions/PluginTypeGates.ts (compiled by the typecheck gate),
+  # and each step also asserts its runtime shadow where one exists.
   @BEH-EA-004 @compile-time
   Rule: A plugin's contract groups are constrained to its own namespace by a template-literal type
 

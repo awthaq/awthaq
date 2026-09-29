@@ -1,10 +1,4 @@
-# awthaq is pre-implementation (see spec/README.md). Every scenario in
-# this file specifies intended behavior of a system that does not exist yet
-# — a target the future testing harness (BEH-EA-193..200) is meant to
-# execute against, not a record of anything verified today.
-
 @foundations @persistence
-@skip @unwired
 Feature: The Persistence Stratum
 
   # BEH-EA-033 — spec/behaviors/05-persistence-stratum.md; see also ADR-EA-004
@@ -54,7 +48,7 @@ Feature: The Persistence Stratum
 
     @REQ-EA-089
     Scenario: A Redacted Model.Sensitive field never reaches logs, spans, or events
-      Given an "Account" entity whose "accessToken" field is declared Model.Sensitive(Schema.Redacted(Schema.String))
+      Given an "Account" entity whose "accessToken" field is declared Model.Sensitive
       When the entity passes through logging, tracing spans, and emitted events
       Then no Redacted value for "accessToken" reaches any log, span, or event
 
@@ -74,6 +68,8 @@ Feature: The Persistence Stratum
       When the method executes
       Then it does not call SqlClient.withTransaction itself
 
+    # @skip: atomic commit/rollback of confirmReset needs a SQLite-backed Password composition with fault injection (the memory World's SqlTransaction is a no-op); tracked by TIR-005's companion rollback scenario in 15-password.feature
+    @skip
     @REQ-EA-092
     Scenario: A domain service composing two repository calls holds the transaction boundary
       Given "Password.confirmReset" consuming a verification token and rotating a session in one operation
@@ -177,12 +173,17 @@ Feature: The Persistence Stratum
   @BEH-EA-040
   Rule: A plugin migration may only alter tables under its own prefix; shared tables are altered only through a declared extension point
 
+    # @skip: @awthaq/roles creates `role_assignments` (its id is "roles") and AuthPlugin.Service's `tables` prefix check is bypassable by inference, so this cannot pass until the table is renamed and the constraint is tightened; blocked by PV-253. Wired and green for every other shipped plugin.
+    @skip
     @REQ-EA-105
     Scenario: A plugin's migration creates or alters only tables under its own prefix
-      Given a plugin "password" whose migrations create the table "password_account"
-      When the plugin's migrations run
-      Then the plugin creates or alters only tables named "password_<table>"
+      Given the shipped plugins that declare migrations
+      When core's migrations and then each plugin's migrations run
+      Then every table a plugin created is named "<plugin>_<table>" under its own id
+      And the tables core created are unchanged
 
+    # @skip: INV-EA-016 has no enforcement today (spec/invariants.md: 'Planned: packages/sql/test/MigrationOwnership.test.ts', no such test) — Auth.make never validates what a migration's `up` alters; blocked by PV-252
+    @skip
     @REQ-EA-106
     Scenario: A plugin's migration that directly alters a core-owned shared table is rejected
       Given a plugin migration that attempts to ALTER TABLE "users" directly
@@ -190,6 +191,8 @@ Feature: The Persistence Stratum
       Then the migration is rejected
       And the shared table "users" is not altered
 
+    # @skip: INV-EA-016 has no enforcement today (spec/invariants.md: 'Planned: packages/sql/test/MigrationOwnership.test.ts', no such test) — Auth.make never validates what a migration's `up` alters; blocked by PV-252 (there is also no SessionClaims registry in the shipped code)
+    @skip
     @REQ-EA-107
     Scenario: A plugin extends a shared table only through a declared extension point
       Given a plugin that needs to attach derived data to a signed-in user's session
@@ -197,6 +200,8 @@ Feature: The Persistence Stratum
       Then the shared table's own schema is not modified by the plugin's migration
       And the extension is visible only through the declared extension point
 
+    # @skip: INV-EA-016 has no enforcement today (spec/invariants.md: 'Planned: packages/sql/test/MigrationOwnership.test.ts', no such test) — Auth.make never validates what a migration's `up` alters; blocked by PV-252
+    @skip
     @REQ-EA-108
     Scenario: A shared-table extension is limited to a primitive, nullable or defaulted scalar
       Given a declared extension point for the shared "users" table
