@@ -57,6 +57,7 @@
 // e.g. `users.create`, "already-typed, internal data" no longer holds for a
 // value that originates in third-party tap code.
 
+import { Defects } from "@awthaq/ports";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -385,10 +386,9 @@ const exerciseWith =
   (value: unknown): Effect.Effect<Exit.Exit<unknown, unknown>> =>
     isInput(value)
       ? Effect.exit(handler(value))
-      : Effect.die(
-          new Error(
-            `awthaq: the stub input given to a tap on hook point "${key}" does not match the point's input schema`,
-          ),
+      : Defects.invalidConfiguration(
+          `${key}.exercise`,
+          `awthaq: the stub input given to a tap on hook point "${key}" does not match the point's input schema`,
         );
 
 /**
