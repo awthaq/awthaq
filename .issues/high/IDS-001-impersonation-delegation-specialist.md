@@ -3,7 +3,7 @@ ID: "IDS-001"
 Title: "canImpersonate never sees the target, so no host can refuse impersonating a more privileged account"
 Level: high
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/Admin.ts:214"
 Auditor: "impersonation-delegation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `security` · `admin` · reported by **Impersonation & Delegation Specialist** (`impersonation-delegation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/admin/src/Admin.ts:214` (`const allowed = yield* adminConfig.canImpersonate(subjectOf(caller));`) matches verbatim, and reading `impersonate` in full (lines 195-230) confirms `targetUserId` is in scope but never passed to `canImpersonate`, nor compared against caller privilege anywhere else in the file. `subjectOf` (line 137-138) confirms the identity-only, caller-only subject shape. Widening the gate's signature to accept the target is a well-scoped, unambiguous mechanical change. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `admin-impersonation-gate-target`. Evidence at HEAD ec065a7: `packages/admin/src/Admin.ts:43`. Fix: Make the impersonation gate target-aware: `canImpersonate({ admin, target })` for impersonate, and episode-aware predicates for forceStop/list, all fail-closed. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`.
+
+**Resolved (2026-09-29):** packages/admin/src/Admin.ts: AdminConfigShape.canImpersonate now takes { admin, target } (identity-only AuthSubjects); new canManageEpisode({ admin, episode }) defaults (via Admin.config) to canImpersonate over the episode target. impersonate order is self -> nested -> gate(admin,target) -> target existence -> issue; forceStop looks the episode up first (404 when absent) then gates per episode and publishes impersonationDenied only on a real gate rejection; list filters rows through canManageEpisode (Effect.filter, concurrency 8) so a deny-all host exposes nothing. Tests written first and confirmed red (predicate saw target undefined; list/forceStop unfiltered): Admin.test.ts 'IDS-001: canImpersonate receives the target...', 'forceStop/list are filtered by canManageEpisode', 'list under a deny-all gate exposes no episodes'. BDD: REQ-EA-628 (protected target), REQ-EA-620 rewritten per-episode; spec BEH-EA-212/213/217/219 amended. Gates: typecheck (tsc -b minus pre-existing packages/react TS2883 baseline errors + tsconfig.test.json clean), pnpm test 825 pass, test:bdd 106 pass, spec:verify:strict 19/19, oxlint clean. Decision note: list no longer answers 403 for a non-admin (200 with filtered rows); documented in BEH-EA-212.

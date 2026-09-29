@@ -3,7 +3,7 @@ ID: "OHS-001"
 Title: "Team model is flat: no parent pointers, closure structure, or hierarchy queries"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/TeamRecords.ts:26"
 Auditor: "organization-hierarchy-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `organization` · reported by **Organization Hierarchy Specialist** (`organization-hierarchy-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [Team hierarchy model (parent pointers / closure structure)](../../.scratch/resolve-ready-for-human-findings/issues/34-team-hierarchy-model.md) — add real nesting: a nullable self-referencing `parentId` on `organization_team` as the write model plus an `organization_team_closure` table as the read model, with new `moveTeam`/`getAncestors`/`getDescendants`/`getSubtree` operations, a write-time cycle guard, and a real migration (the first `Organization` has ever shipped). Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-team-hierarchy`. Evidence at HEAD ec065a7: `packages/organization/src/TeamRecords.ts:26`. Fix: Implement ticket 34: parentId write model + closure-table read model, cycle guard, move/ancestor/descendant/subtree operations, exposed through Organization and its HTTP contract. (effort XL). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`.
+
+**Resolved (2026-09-29):** Team hierarchy shipped (ticket 34, per the plan's recommended option 1: parentId adjacency + closure table). Migration organization_team_hierarchy (parentId column + index, organization_team_closure(ancestorId, descendantId, depth) with a descendant index, self-row backfill for existing teams; proven by a test that migrates a pre-hierarchy schema, inserts a team, then upgrades). TeamRecords (memory derives from parent pointers, SQL reads the closure) gained createTeam(parentId?), moveTeam, getAncestors/getDescendants/getSubtree and errors TeamHierarchyCycle/TeamHasChildren; create/move/remove/removeAll maintain the closure inside sql.withTransaction. Organization/API: createTeam parentId, PATCH teams/:id/parent (team:update; 409 cycle), GET teams/:id/ancestors|descendants (member-only), removeTeam 409 TeamHasChildren (checked before the veto hook, re-checked atomically), TeamDto.parentId, hooks BeforeMoveTeam/AfterMoveTeam, event auth.organization.teamMoved (AuditLog case added). Deviation: no SQL foreign keys (matches every other table here). Permission inheritance is deliberately not part of this (OHS-004). Tests: TeamRecords (both layers + closure row counts + backfill), Organization, AuthHttp; TenantScoping allowlist and AuthComposition manifest updated. tsc/tsconfig.test clean.

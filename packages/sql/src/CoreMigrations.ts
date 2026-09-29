@@ -417,4 +417,42 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // BAM-008: the provider's OIDC `id_token`, stored (encrypted at rest, like
+  // `accessToken`/`refreshToken`) so a better-auth import has a destination
+  // and RP-initiated logout can send `id_token_hint`. Nullable: an existing
+  // row's `NULL` is simply "no stored id_token for this pre-existing link".
+  migration(18, "add_accounts_id_token_column", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`ALTER TABLE accounts ADD COLUMN "idToken" TEXT`,
+      sqlite: () => sql`ALTER TABLE accounts ADD COLUMN idToken TEXT`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
+  // PPS-002/SEA-006/SSMS-008: the session device-list page query filters on
+  // `userId` and live (`supersededAt IS NULL`) rows and orders by
+  // `(createdAt, id)`. The single-column `sessions_user_id` index forced a
+  // sort of the user's whole row set; this partial composite index matches
+  // filter and order. `sessions_user_id` stays — bulk deletes also remove
+  // tombstoned rows, which this partial index excludes. `IF NOT EXISTS`
+  // keeps an out-of-band `CREATE INDEX CONCURRENTLY` (a large table) possible.
+  migration(19, "create_sessions_user_created_live_index", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`CREATE INDEX IF NOT EXISTS sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL`,
+      sqlite: () =>
+        sql`CREATE INDEX IF NOT EXISTS sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
+  // THS-003/APS-007: RFC 8176 `amr` — the authentication methods that proved a
+  // session, a JSON array of strings. NOT NULL with a `'[]'` default so every
+  // pre-existing row reads as "no recorded methods" rather than needing a
+  // backfill.
+  migration(20, "add_sessions_amr_column", (sql) =>
+    sql.onDialectOrElse({
+      pg: () => sql`ALTER TABLE sessions ADD COLUMN amr TEXT NOT NULL DEFAULT '[]'`,
+      sqlite: () => sql`ALTER TABLE sessions ADD COLUMN amr TEXT NOT NULL DEFAULT '[]'`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);

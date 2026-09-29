@@ -30,7 +30,7 @@ describe("CoreMigrations", () => {
         const applied = yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
         assert.deepStrictEqual(
           applied.map(([id]) => id),
-          [9, 10, 11, 12, 13, 14, 15, 16, 17],
+          [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
         );
       }).pipe(Effect.provide(SqlLive)),
   );

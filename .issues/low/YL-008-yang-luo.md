@@ -3,7 +3,7 @@ ID: "YL-008"
 Title: "Correct middleware order is counterintuitive and unenforced by types"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/src/AuthorizedSubject.ts:26"
 Auditor: "yang-luo"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `qadi` · reported by **Yang Luo — Creator of Casbin** (`yang-luo`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -44,3 +44,5 @@ Ship a composed AuthGroupExt helper (e.g. .withAuthSubjects()) that applies the 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `qadi-bridge-hardening`. Evidence at HEAD ec065a7: `packages/qadi/src/AuthorizedSubject.ts:23`. Fix: Ship a helper that applies the pair in the proven order and pin the type-level behaviour with a test. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** AuthorizedSubject.ts: withAuthorizedSubject / withOptionalAuthorizedSubject apply the pair in the proven order, threading the group's own type parameters (no assertion, no return annotation). Test: AuthorizedSubject.test.ts 'withAuthorizedSubject (YL-008)' — expectTypeOf pins MiddlewareServices to never for the helper and for the correct hand order, and shows CurrentPrincipal unsatisfied for the reversed order (checked by tsc). SubjectApi.ts keeps the explicit chain because it exports the group and TS2883 (declaration portability) needs Api in that file's scope; documented there. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 915 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

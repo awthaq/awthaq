@@ -21,6 +21,7 @@
 import { Api } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Headers from "effect/unstable/http/Headers";
 import * as HttpMiddleware from "effect/unstable/http/HttpMiddleware";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -37,10 +38,20 @@ export const routes: typeof HttpApiBuilder.layer = HttpApiBuilder.layer;
  */
 export const docs: typeof HttpApiScalar.layer = HttpApiScalar.layer;
 
-// The header `Authentication.ts` sets a rotated bearer token on. It is repeated
-// here until the contract stratum owns one shared constant (CSS-007); a browser
-// only lets a cross-origin caller read it if it is listed in `exposedHeaders`.
-const ROTATED_TOKEN_HEADER = "set-auth-token";
+/**
+ * MAPS-008: Effect's default redacted header names (`authorization`,
+ * `cookie`, `set-cookie`, `x-api-key`) do not include the rotated session
+ * token (`Api.ROTATED_TOKEN_HEADER`, a long-lived secret) or `x-jwt-token`, so
+ * any request logger or tracer built on `Headers.CurrentRedactedNames` would
+ * log them verbatim. Provide this layer wherever HTTP requests/responses are
+ * logged or traced; a host-supplied logger that does not read that reference
+ * must redact these names itself.
+ */
+export const layerRedactedHeaders = Layer.succeed(Headers.CurrentRedactedNames, [
+  ...Headers.CurrentRedactedNames.defaultValue(),
+  Api.ROTATED_TOKEN_HEADER,
+  "x-jwt-token",
+]);
 
 export interface CorsOptions {
   /** Extra request headers a cross-origin caller may send, beyond `content-type`, the CSRF header and `authorization`. */
@@ -80,7 +91,7 @@ export const cors = (options?: CorsOptions) =>
             "authorization",
             ...(options?.allowedHeaders ?? []),
           ],
-          exposedHeaders: [ROTATED_TOKEN_HEADER, ...(options?.exposedHeaders ?? [])],
+          exposedHeaders: [Api.ROTATED_TOKEN_HEADER, ...(options?.exposedHeaders ?? [])],
           maxAge: options?.maxAge,
         }),
         { global: true },

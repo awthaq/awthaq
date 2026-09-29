@@ -1,10 +1,13 @@
 // spec/behaviors/18-roles-subject-resolver.md, BEH-EA-138 through BEH-EA-141.
 import { Api } from "@awthaq/api";
-import { Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, Users } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import { anonymous, permission, role } from "@qadi/core";
 import * as Roles from "../src/Roles.ts";
 
@@ -13,7 +16,21 @@ const projectDelete = permission("project", "delete");
 const editor = role({ name: "editor", permissions: [projectRead] });
 const owner = role({ name: "owner", permissions: [projectDelete], inherits: [editor] });
 
-const TestLayer = Roles.Roles.layer.pipe(Layer.provide(Roles.config([editor, owner])));
+// `Roles` now publishes `auth.roles.assigned/revoked` (RRM-005), so it needs `AuthEvents`;
+// `provideMerge` also exposes `AuditLog` so tests can read the durable record back.
+const CoreLive = AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layerMemory));
+
+const layerFor = (catalog: ReadonlyArray<ReturnType<typeof role>>) =>
+  Roles.Roles.layer.pipe(Layer.provide(Roles.config(catalog)), Layer.provideMerge(CoreLive));
+
+const TestLayer = layerFor([editor, owner]);
+
+const captured: Array<{ level: string; message: unknown }> = [];
+const CaptureLogs = Logger.layer([
+  Logger.make((options) => {
+    captured.push({ level: options.logLevel, message: options.message });
+  }),
+]);
 
 const userPrincipal = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({ ref: new Api.PrincipalRef({ type: "user", id }), sessionId: "s-1" });
@@ -46,14 +63,16 @@ describe("Roles (SubjectResolver override)", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("an assigned role name absent from the configured catalog is silently ignored", () =>
+  // RRM-003 (+YL-005, TS-008): a typo'd or stale role name is loud at assign time.
+  it.effect("assign of a name outside the catalog fails UnknownRole and stores nothing", () =>
     Effect.gen(function* () {
       const roles = yield* Roles.Roles;
-      const resolver = yield* QadiSubjectResolver.SubjectResolver;
       const userId = Users.UserId("33333333-3333-3333-3333-333333333333");
-      yield* roles.assign(userId, "does-not-exist-in-catalog");
-      const subject = yield* resolver.resolve(userPrincipal(userId));
-      assert.strictEqual(subject.roles.size, 0);
+      const failure = yield* roles.assign(userId, "does-not-exist-in-catalog").pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "UnknownRole");
+      assert.strictEqual(failure.roleName, "does-not-exist-in-catalog");
+      assert.deepStrictEqual(yield* roles.listRoleNames(userId), []);
+      assert.deepStrictEqual(yield* roles.listUnknownAssignments, []);
     }).pipe(Effect.provide(TestLayer)),
   );
 
@@ -87,6 +106,75 @@ describe("Roles (SubjectResolver override)", () => {
       });
       const subject = yield* resolver.resolve(principal);
       assert.deepStrictEqual(subject.attributes["actingAs"], { type: "user", id: "admin-1" });
+    }).pipe(Effect.provide(TestLayer)),
+  );
+});
+
+// RRM-004: a duplicate catalog name can never silently win.
+describe("Roles catalog validation (RRM-004, RRM-010)", () => {
+  it.effect("Roles.layer with two catalog entries named editor fails to build, naming editor", () =>
+    Effect.gen(function* () {
+      const other = role({ name: "editor", permissions: [projectDelete] });
+      const exit = yield* Effect.exit(Layer.build(layerFor([editor, other])).pipe(Effect.scoped));
+      assert.isTrue(Exit.isFailure(exit));
+      assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "editor");
+    }),
+  );
+
+  it.effect("building Roles.layer without any catalog logs awthaq.roles.emptyCatalog", () =>
+    Effect.gen(function* () {
+      captured.length = 0;
+      yield* Layer.build(layerFor([])).pipe(Effect.scoped);
+      const warned = captured.filter(
+        (entry) =>
+          entry.level === "Warn" &&
+          JSON.stringify(entry.message).includes("awthaq.roles.emptyCatalog"),
+      );
+      assert.strictEqual(warned.length, 1);
+    }).pipe(Effect.provide(CaptureLogs)),
+  );
+
+  it.effect("a configured catalog does not log the empty-catalog warning", () =>
+    Effect.gen(function* () {
+      captured.length = 0;
+      yield* Layer.build(TestLayer).pipe(Effect.scoped);
+      assert.strictEqual(
+        captured.filter((entry) => JSON.stringify(entry.message).includes("emptyCatalog")).length,
+        0,
+      );
+    }).pipe(Effect.provide(CaptureLogs)),
+  );
+});
+
+// RRM-005 (+PCS-003): every real global role change is durably audited with its actor.
+describe("Roles audit events (RRM-005)", () => {
+  it.effect("assign publishes auth.roles.assigned once; re-assign publishes nothing", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const auditLog = yield* AuditLog.AuditLog;
+      const userId = Users.UserId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+      const actor = Users.UserId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+      yield* roles.assign(userId, "owner", { actorId: actor });
+      yield* roles.assign(userId, "owner", { actorId: actor });
+      const recorded = yield* auditLog.list({ eventTag: "auth.roles.assigned" });
+      assert.strictEqual(recorded.length, 1);
+      assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some(actor));
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("revoke publishes auth.roles.revoked for a held role, nothing for an unheld one", () =>
+    Effect.gen(function* () {
+      const roles = yield* Roles.Roles;
+      const auditLog = yield* AuditLog.AuditLog;
+      const userId = Users.UserId("cccccccc-cccc-cccc-cccc-cccccccccccc");
+      yield* roles.revoke(userId, "owner");
+      assert.strictEqual((yield* auditLog.list({ eventTag: "auth.roles.revoked" })).length, 0);
+      yield* roles.assign(userId, "owner");
+      yield* roles.revoke(userId, "owner");
+      const recorded = yield* auditLog.list({ eventTag: "auth.roles.revoked" });
+      assert.strictEqual(recorded.length, 1);
+      // No actor supplied: the service is a trusted primitive, the audit row is actorless.
+      assert.deepStrictEqual(recorded[0]?.actorUserId, Option.none());
     }).pipe(Effect.provide(TestLayer)),
   );
 });

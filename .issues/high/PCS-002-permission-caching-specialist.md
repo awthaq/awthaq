@@ -3,7 +3,7 @@ ID: "PCS-002"
 Title: "No event-driven invalidation path exists: AuthEvents are published but nothing connects them to a cache flush"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:1213"
 Auditor: "permission-caching-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `organization` · reported by **Permission Caching Specialist** (`permission-caching-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/organization/src/Organization.ts:1213` matches the evidence exactly (the `memberRemoved` publish), and a repo-wide grep for `DecisionCache`/`AuthEvents.on(` outside `node_modules` finds zero subscribers or invalidation wiring anywhere in `packages/` or `examples/`. Recommended fix (an optional layer bridging `AuthEvents.on` to `DecisionCache.clear`) is a well-scoped, additive piece of code with an existing hook/event surface to build on. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `qadi-decision-cache-invalidation`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1571`. Fix: Ship ticket 12's opt-in invalidation bridge (DecisionCacheInvalidationLive) for application-scoped DecisionCache deployments, and close the leave() hook gap it depends on. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`.
+
+**Resolved (2026-09-29):** leave() now runs beforeRemove (veto) and afterRemove hooks (Organization.ts, HookAborted added to the leave error union and endpoint); DecisionCacheInvalidationLive (see PCS-001) taps all organization observe points incl. AfterAcceptInvitation and role CRUD. Test: packages/qadi/test/DecisionCacheInvalidation.test.ts 'leave clears the cache' (red before, green after) plus removeMember/updateMemberRole/delete/removeTeamMember cases.

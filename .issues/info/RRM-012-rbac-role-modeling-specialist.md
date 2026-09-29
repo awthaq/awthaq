@@ -3,7 +3,7 @@ ID: "RRM-012"
 Title: "Slot-conflict enforcement lands at layer build, not Auth.make as spec promises"
 Level: info
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/src/SubjectResolver.ts:20"
 Auditor: "rbac-role-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `qadi` · reported by **RBAC Role Modeling Specialist** (`rbac-role-modeling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Amend BEH-EA-138's enforcement wording to 'at composition/Layer-build time via t
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `authz-docs-truthfulness`. Evidence at HEAD ec065a7: `spec/behaviors/18-roles-subject-resolver.md:44`. Fix: Align BEH-EA-138/REQ-EA-385-387 with the real enforcement point and pin it with a roles-specific test. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** BEH-EA-138 REQUIREMENT and its code comment restated: the exclusivity failure happens during composition when layers are built (Slots.SlotsRegistry via Slots.layer), before any request, with the structural reason (a Context.Reference override is invisible to Auth.make's type checks); feature scenarios REQ-EA-386/387 reworded to match (the feature stays @skip @unwired). Test: packages/roles/test/AuthComposition.test.ts 'two SubjectResolver overrides with Slots.layer fail with SlotConflict at build' (Roles claims first, a second plugin's override fails naming roles/organization). Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, tests/bdd green apart from load-induced timeouts in password/ports (machine load average ~170 from parallel agents; each green in isolation), spec:verify:strict PASS, oxlint clean.

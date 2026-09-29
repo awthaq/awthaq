@@ -3,7 +3,7 @@ ID: "BAM-012"
 Title: "Impersonation semantics differ from better-auth's cookie-swap model"
 Level: info
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/Admin.ts:76"
 Auditor: "better-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `api` · `admin` · reported by **better-auth Migration Specialist** (`better-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Document the behavioral delta (client must hold both tokens; return-to-admin is 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `admin-impersonation-cookie-contract`. Evidence at HEAD ec065a7: `packages/admin/src/Admin.ts:75`. Fix: Document the impersonation client contract (and its delta from better-auth) once APS-006's cookie contract is decided. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/admin/README.md rewritten: the stale 'planned package' banner is replaced with the shipped contract - gate configuration (target-aware canImpersonate/canManageEpisode/canManageUsers), the impersonation client contract for cookie mode (__Host-impersonation shadows __Host-session; stop expires it) and bearer mode, expiry sweep, user/session administration endpoints, the admin tier (publicApi/adminApi, AdminAuthentication), audit integrity (triggers, ledger, verifyChain, AuditChain key), the setRole non-goal (ADR-EA-009), and a better-auth endpoint mapping table incl. the not-yet-shipped ones. Docs-only; spec:verify:strict 19/19. Note: DTWS-002 (P19 docs truthfulness) also targets this banner - this commit already replaced it for admin.

@@ -3,7 +3,7 @@ ID: "CSS-006"
 Title: "Consumed __Host-oauth-state cookie is never expired at the callback"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:336"
 Auditor: "cookie-security-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `oauth` · reported by **Cookie Security Specialist** (`cookie-security-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ On both callback outcomes (success and OAuthCallbackFailed), append a Set-Cookie
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-callback-http-hardening`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:431`. Fix: Expire __Host-oauth-state on every callback response: success, link, and typed failure. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Callback registers HttpEffect.appendPreResponseHandler expiring __Host-oauth-state (Path=/, Secure, HttpOnly, SameSite=Lax, Max-Age=0) so success, link and typed-failure responses all clear it, alongside the session Set-Cookie. AuthHttp.test.ts: success 302 carries both cookies, 400 carries the expiry; mutation-checked red (handler removed). Gates as CSS-004.

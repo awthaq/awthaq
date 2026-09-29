@@ -249,6 +249,7 @@ describe("Repositories (SQLite specifics)", () => {
           {
             accessToken: "a",
             refreshToken: "r",
+            idToken: null,
             accessTokenExpiresAt: now,
             refreshTokenExpiresAt: now,
             scope: null,
@@ -340,6 +341,8 @@ describe("Repositories (SQLite specifics)", () => {
         for (;;) {
           const page: Repositories.Page<Models.Session> = yield* sessions.listByUser(
             user.id,
+            // Each fixture row expires at its own createdAt, so list from just before the first.
+            DateTime.subtract(base, { seconds: 1 }),
             cursor,
             3,
           );
@@ -350,5 +353,24 @@ describe("Repositories (SQLite specifics)", () => {
         const expected = offsets.map((o) => DateTime.toEpochMillis(base) + o);
         assert.deepStrictEqual(collected, expected);
       }).pipe(Effect.provide(RepositoriesLive)),
+  );
+  // PPS-002: the page query must be served by the partial composite index,
+  // with no temp B-tree sort. This is the exact statement `listByUser` runs.
+  it.effect("PPS-002: the page query is served by sessions_user_created_live, with no sort", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const plan = yield* sql.unsafe<{ readonly detail: string }>(
+        `EXPLAIN QUERY PLAN SELECT * FROM sessions WHERE "userId" = ?
+           AND "supersededAt" IS NULL
+           AND "absoluteExpiresAt" > ?
+           AND "idleExpiresAt" > ?
+           AND ("createdAt", id) > (?, ?)
+           ORDER BY "createdAt" ASC, id ASC LIMIT ?`,
+        ["u", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", "2026-01-01", "x", 10],
+      );
+      const detail = plan.map((row) => row.detail).join("\n");
+      assert.include(detail, "sessions_user_created_live");
+      assert.notInclude(detail, "USE TEMP B-TREE FOR ORDER BY");
+    }).pipe(Effect.provide(RepositoriesLive)),
   );
 });

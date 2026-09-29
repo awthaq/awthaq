@@ -8,6 +8,11 @@
 // the README's own single-plugin Postgres quickstart (that one stays
 // exactly as `shipping-gaps` ticket 29 shipped it).
 //
+// TRBS-005: this composition is single-process by construction — every
+// memory layer here is a per-process `Ref`, so a session revoked on one
+// instance is not revoked on another and state is lost on restart. Use the
+// `layerSql` variants for anything multi-instance.
+//
 // Run it:
 //   node --experimental-strip-types index.ts
 import {
@@ -23,12 +28,17 @@ import {
 import { Password } from "@awthaq/password";
 import { AuditLog, Auth, AuthEvents, Verification } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
+import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
+import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
 import { Authentication, BodyLimit, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
+import { EvaluationServicesNone, role } from "@qadi/core";
+import { RequirePermissionLive } from "@qadi/http";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import { createServer } from "node:http";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
@@ -39,7 +49,31 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 //    pair, the same call the README's own quickstart makes with just
 //    `[Password.Password]`. `dependsOn` is left unset on both: neither
 //    requires the other to exist first.
-const built = Auth.make([Password.Password, Organization.Organization]);
+//    `Roles` + `RolesAdmin` (YL-009) add global role administration guarded
+//    by qadi's Path B: the in-repo dogfood for `RequirePermission` (YL-004).
+//    `GET /roles/catalog` answers 403 without `roles:read`.
+const built = Auth.make([
+  Password.Password,
+  Organization.Organization,
+  Roles.Roles,
+  RolesAdmin.RolesAdmin,
+]);
+
+// The role catalog the demo ships: a platform admin who may manage roles.
+// Bootstrap the first admin by assigning `platform:admin` to a user id
+// (`Roles.assign` is the trusted primitive; the HTTP surface needs the role).
+const platformAdmin = role({
+  name: "platform:admin",
+  permissions: [RolesAdminApi.rolesManage],
+});
+
+// Path B: `RequirePermission` resolves the subject itself through the Roles
+// resolver, evaluating with qadi's fail-closed default ports.
+const GuardLive = RequirePermissionLive.pipe(
+  Layer.provide(EvaluationServicesNone),
+  Layer.provide(SubjectExtractor.SubjectExtractorLive),
+  Layer.provide(Authentication.PrincipalResolverLive),
+);
 
 // 2. `Authentication` is `@awthaq/test`'s own required second parameter
 //    (see `TestAuth.layer`'s own doc comment) — every plugin below that
@@ -87,14 +121,32 @@ const PasswordExtras = Layer.mergeAll(
   FetchHttpClient.layer,
 ).pipe(Layer.provideMerge(AuthEvents.layer), Layer.provideMerge(AuditLog.layerMemory));
 
+// `Roles` publishes audit events, so it is built over the same `AuthEvents`/`AuditLog`
+// the Password extras provide.
+const RolesLive = Roles.Roles.layer.pipe(
+  Layer.provide(Roles.config([platformAdmin])),
+  Layer.provideMerge(PasswordExtras),
+);
+
 // 3. `TestAuth.layer` is the whole pipeline over memory — the same
 //    machinery `packages/*/test/AuthHttp.test.ts` files and this repo's
 //    own BDD suite already exercise for real, just not previously
 //    packaged as something runnable on its own.
 const AppLayer = TestAuth.layer(
   built,
-  Layer.mergeAll(AuthenticationLive, CsrfProtectionLive, OrganizationMemory, PasswordExtras),
+  Layer.mergeAll(
+    AuthenticationLive,
+    CsrfProtectionLive,
+    OrganizationMemory,
+    RolesLive,
+    GuardLive,
+  ),
 );
+
+// Composition-time counterpart of `RequirePermission`'s per-request refusal
+// (BEH-EA-156): refuse to start if an endpoint in a guarded group declares
+// neither a permission requirement nor `publicEndpoint(...)`.
+const audited = AuthorizationAudit.auditAuthorizationAnnotations(built.api);
 
 // 4. A real listening server — the same `HttpRouter.serve` +
 //    `NodeHttpServer.layer` pair the README's own quickstart uses, not an
@@ -106,4 +158,4 @@ const ServerLive = HttpRouter.serve(BodyLimit.layer.pipe(Layer.provideMerge(AppL
 );
 
 console.log("awthaq example (memory-backed, Password + Organization) listening on :3001");
-Layer.launch(ServerLive).pipe(NodeRuntime.runMain);
+audited.pipe(Effect.andThen(Layer.launch(ServerLive)), NodeRuntime.runMain);

@@ -3,7 +3,7 @@ ID: "GC-003"
 Title: "Brand re-entry into the domain is by unchecked nominal casts in the imperative shell"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Session.ts:62"
 Auditor: "giulio-canti"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `server` · reported by **Giulio Canti — Creator of fp-ts and io-ts** (`giulio-canti`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Brand at the decode boundary instead: declare the DTO id fields as `Schema.Strin
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `session-handler-hardening`. Evidence at HEAD ec065a7: `packages/server/src/Session.ts:33`. Fix: Re-establish brands once per request in one shared helper, not at 12 call sites, and delete the duplicated currentUserPrincipal. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/server/src/internal/CurrentUser.ts: the single re-brand point (currentUser -> {principal, userId, sessionId}); both duplicated currentUserPrincipal copies (Session.ts, Account.ts) and the per-handler UserId()/SessionId() casts are gone; the one remaining wire cast is revoke's payload.id (Sessions.SessionId(payload.id)), as the dossier allows. Step 3 (branded RevokePayload.id) not taken: it would force every client to pass a branded string. Side note: Account.ts exports a small AccountPrincipal type alias that keeps @awthaq/api nameable for declaration emit (TS2883).

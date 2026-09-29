@@ -13,7 +13,8 @@
       "@awthaq/core": ["../core/src/index.ts"],
       "@awthaq/sql": ["../sql/src/index.ts"],
       "@awthaq/ports": ["../ports/src/index.ts"],
-      "@awthaq/api": ["../api/src/index.ts"]
+      "@awthaq/api": ["../api/src/index.ts"],
+      "@awthaq/organization": ["../organization/src/index.ts"]
     }
   },
   "references": [
@@ -31,6 +32,9 @@
     },
     {
       "path": "../api/tsconfig.src.json"
+    },
+    {
+      "path": "../organization/tsconfig.src.json"
     }
   ]
 }

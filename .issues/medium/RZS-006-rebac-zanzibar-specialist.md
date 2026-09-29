@@ -3,7 +3,7 @@ ID: "RZS-006"
 Title: "Split-brain: plugin endpoint gating uses PermissionEngine statements while qadi sees only the built-in role triad"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:1004"
 Auditor: "rebac-zanzibar-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `organization` · reported by **ReBAC / Zanzibar-style Specialist** (`rebac-zanzibar-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Derive qadi relations and PermissionEngine statements from one source (e.g. expr
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-qadi-relationships`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1355`. Fix: Derive every org relation qadi sees from the same functions the plugin's own gating uses, so a qadi policy and requirePermission can never disagree. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Relation grammar member | has-role:<name> (any built-in/static/dynamic role; admin/owner aliases) | <resource>:<action> answered from organization.attributesFor's permissions (the same effectivePermissionsOf requirePermission uses) | team-member, exported as OrganizationQadi.relations. DEVIATION: the role relation is has-role:<name>, not role:<name>, because 'role' is a built-in statement resource (role:create/read/update/delete) and role:<name> collides with the <resource>:<action> form (caught by the agreement test on owner role:create). Tests: OrganizationQadi.test.ts 'relation grammar (RZS-006)' (roles of every kind; dynamic role granting team:create; agreement with attributesFor for every membership x vocabulary and with the real createTeam/delete gates), OrganizationQadiPolicy.test.ts (a real hasRelationship('member:update') policy allows exactly what updateMemberRole allows). BEH-EA-162 prose documents the grammar. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 896 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

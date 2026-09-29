@@ -6,7 +6,8 @@
 // — neither changes this service's public interface, the same deferral
 // `Migrations.ts` documents for the persistence stratum generally.
 
-import { LegacySessionBridge } from "@awthaq/ports";
+import { Api } from "@awthaq/api";
+import { Hmac, LegacySessionBridge } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -23,17 +24,19 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Model from "effect/unstable/schema/Model";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
-/** BEH-EA-049: the public half of a session's `id.secret` token. */
+/**
+ * BEH-EA-049: the public half of a session's `id.secret` token. INV-EA-018: an id is an identifier, never a capability — it appears in cookies, JWT `sid` claims and error messages, so nothing may act on it without the secret's proof (PIL-007).
+ */
 // MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
 export type SessionId = SqlModels.SessionId;
 export const SessionId = Brand.nominal<SessionId>();
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+const { toHex } = Hmac;
 
 /** BEH-EA-050: the one hash both `Layer`s persist in place of the plaintext secret. */
 const hashSecret = (
@@ -43,35 +46,51 @@ const hashSecret = (
   crypto.digest("SHA-256", new TextEncoder().encode(secret)).pipe(Effect.map(toHex));
 
 /**
- * BEH-EA-056: both operands are the fixed-length output of the same digest
- * algorithm, so a byte-length mismatch (should never occur in practice, but
- * is checked first so the loop below never runs over mismatched lengths) is
- * itself not a security-relevant timing signal — only the loop over
- * equal-length operands needs to run in constant time.
- */
-const constantTimeEqual = (a: Uint8Array, b: Uint8Array): boolean => {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
-  return diff === 0;
-};
-
-/**
  * PIL-007: the hash an unknown session id is compared against, so a miss does
  * the same hash + constant-time compare work as a known id with a wrong
  * secret. Never equals any real `hashSecret` output (SHA-256 of a secret
  * whose digest is all zeros is not computable in practice).
  */
+/**
+ * CSD-003: the persisted `userAgent` is caller-supplied (a request header), so
+ * it is capped at the persistence boundary — every issuing plugin benefits,
+ * none has to remember.
+ */
+export const MAX_USER_AGENT_LENGTH = 512;
+
+const cappedUserAgent = (userAgent: string | undefined): string | undefined =>
+  userAgent?.slice(0, MAX_USER_AGENT_LENGTH);
+
 const UNKNOWN_SESSION_HASH = "0".repeat(64);
 
+// BEH-EA-056/ACS-005: both operands are the fixed-length hex output of the
+// same digest, compared in constant time by the shared `Hmac` primitive.
 const secretMatches = (presentedHash: string, storedHash: string): boolean =>
-  constantTimeEqual(new TextEncoder().encode(presentedHash), new TextEncoder().encode(storedHash));
+  Hmac.constantTimeEqualString(presentedHash, storedHash);
+
+/**
+ * SMS-003: an opt-in cap on one user's simultaneously live sessions. Absent by
+ * default — BEH-EA-047 forbids an implied base-model limit; this is a
+ * deployment policy. `evictOldest` ends the least-recently-active surplus
+ * session(s) in the same atomic step as the issue that would exceed `limit`,
+ * publishing `auth.session.revoked` (`limitEvicted`) for each, so `issue`'s
+ * error channel is unchanged. Impersonation (`actingAs`) sessions neither
+ * count toward nor trigger the cap — an admin's support session must never end
+ * the target's own sessions.
+ */
+export interface ConcurrentSessionPolicy {
+  /** At least 1. */
+  readonly limit: number;
+  readonly onExceed: "evictOldest";
+}
 
 /** BEH-EA-051: `SessionConfig` — absolute/idle expiry and the idle-refresh throttle. */
 export interface SessionConfig {
   readonly absolute: Duration.Duration;
   readonly idle: Duration.Duration;
   readonly touchEvery: Duration.Duration;
+  /** SMS-003: opt-in concurrent-session cap; absent = uncapped (the default). */
+  readonly maxConcurrent?: ConcurrentSessionPolicy;
 }
 
 /**
@@ -101,6 +120,51 @@ export interface ActingAs {
   readonly id: string;
 }
 
+/**
+ * THS-003/APS-007: RFC 8176 authentication method references — how a session
+ * was authenticated, not merely how recently (`authenticatedAt`). A closed set,
+ * so a typo cannot silently fail a policy check: `pwd` password, `hwk`
+ * hardware-bound key (passkey), `swk` software key, `user` user verification,
+ * `otp` one-time password, `mfa` multiple factors, `fed` federated identity
+ * (OAuth), `email` proof of mailbox control.
+ */
+export type AuthMethod = "pwd" | "hwk" | "swk" | "user" | "otp" | "mfa" | "fed" | "email";
+
+const AUTH_METHODS: ReadonlySet<string> = new Set([
+  "pwd",
+  "hwk",
+  "swk",
+  "user",
+  "otp",
+  "mfa",
+  "fed",
+  "email",
+]);
+
+const isAuthMethod = (value: unknown): value is AuthMethod =>
+  typeof value === "string" && AUTH_METHODS.has(value);
+
+/** Order-preserving union — `amr` only ever grows within a session. */
+export const unionAmr = (
+  existing: ReadonlyArray<AuthMethod>,
+  additions: ReadonlyArray<AuthMethod>,
+): ReadonlyArray<AuthMethod> => [
+  ...existing,
+  ...additions.filter(
+    (method, index) => !existing.includes(method) && additions.indexOf(method) === index,
+  ),
+];
+
+/** Decodes the stored JSON text, dropping anything that is not a known method. */
+const parseAmr = (text: string): ReadonlyArray<AuthMethod> => {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed.filter(isAuthMethod) : [];
+  } catch {
+    return [];
+  }
+};
+
 /** What `Sessions.verify`/`issue` return — never the secret, never the stored hash. */
 export interface SessionView {
   readonly id: SessionId;
@@ -124,6 +188,8 @@ export interface SessionView {
   readonly userAgent: Option.Option<string>;
   /** BEH-EA-209/210: present only for a session minted with `actingAs`; such a session never idle-refreshes. */
   readonly actingAs: Option.Option<ActingAs>;
+  /** THS-003: the authentication methods recorded at issue (and unioned in by `reauthenticate`); empty when the issuing path recorded none. */
+  readonly amr: ReadonlyArray<AuthMethod>;
 }
 
 /** BEH-EA-054: one row of `Sessions.list`. */
@@ -135,6 +201,8 @@ export interface SessionListItem {
   readonly lastActiveAt: DateTime.Utc;
   readonly expiresAt: DateTime.Utc;
   readonly userAgent: Option.Option<string>;
+  /** THS-003: see `SessionView.amr`. */
+  readonly amr: ReadonlyArray<AuthMethod>;
   readonly current: boolean;
 }
 
@@ -152,6 +220,29 @@ export const isStale = (
 ): boolean =>
   Duration.isGreaterThan(DateTime.distance(authenticatedAt, now), Duration.seconds(maxAgeSeconds));
 
+/**
+ * IDS-008: a programming error in the producing plugin, not a request-level
+ * condition — a session may not name its own user as the acting party
+ * (BEH-EA-209). Raised as a defect from `issue` in both layers, so `issue`'s
+ * public error channel is unchanged. The nesting rule (a caller who is
+ * already acting-as may not mint a further acting-as session, BEH-EA-214)
+ * needs the caller's own session, which `issue` never sees — that stays with
+ * the producer (`@awthaq/admin`'s `impersonate` is the reference).
+ */
+export class InvalidActingAs extends Data.TaggedError("InvalidActingAs")<{
+  readonly reason: "self";
+}> {}
+
+const refuseSelfActingAs = (input: {
+  readonly userId: UserId;
+  readonly actingAs?: ActingAs;
+}): Effect.Effect<void> =>
+  input.actingAs !== undefined &&
+  input.actingAs.type === "user" &&
+  input.actingAs.id === input.userId
+    ? Effect.die(new InvalidActingAs({ reason: "self" }))
+    : Effect.void;
+
 export class SessionNotFound extends Data.TaggedError("SessionNotFound")<{
   readonly message: string;
 }> {}
@@ -161,14 +252,19 @@ export class SessionExpired extends Data.TaggedError("SessionExpired")<{
   readonly id: SessionId;
 }> {}
 
-/** BEH-EA-055: the one session cookie's fixed, non-configurable attribute set. */
-export const SESSION_COOKIE_NAME = "__Host-session";
-export const SESSION_COOKIE_ATTRIBUTES = {
-  secure: true,
-  httpOnly: true,
-  sameSite: "strict",
-  path: "/",
-} as const;
+/**
+ * BEH-EA-055: the default session cookie's name. IC-007: the cookie's
+ * attributes and (for `SecureDomain`) name are `SessionCookie`'s
+ * `SessionCookieConfig`; every writer renders through `SessionCookie.render`.
+ */
+export const SESSION_COOKIE_NAME = Api.SESSION_COOKIE_NAME;
+/**
+ * APS-006: impersonation sessions travel under their own cookie, with the
+ * identical attributes, so `impersonate` never overwrites the admin's own
+ * `__Host-session` and `stopImpersonating` can hand the browser back to it.
+ * `Authentication` only accepts a session carrying `actingAs` from this name.
+ */
+export const IMPERSONATION_COOKIE_NAME = Api.IMPERSONATION_COOKIE_NAME;
 
 export interface SessionsShape {
   /**
@@ -178,13 +274,34 @@ export interface SessionsShape {
    * `supersededAt` set, never deleted) rather than leaving both live. The
    * new row inherits the old row's `familyId` — see `verify`'s own doc
    * comment for what presenting a tombstoned row again means.
+   *
+   * ESA-006: publishes exactly one `auth.session.issued` (session id, user id,
+   * family id, and `actingAs` when present) after the row is persisted, for
+   * every caller — plugins no longer publish it themselves.
+   *
+   * ESR-002/RRS-004: the tombstone and the successor's insert are one atomic
+   * unit in both layers (`layerSql`: one transaction; `layerMemory`: one
+   * `Ref.modify`), so a failed or interrupted issue never leaves a tombstoned
+   * session without its successor. Only a still-live row can be superseded:
+   * of two concurrent issues naming the same `supersedes`, one inherits its
+   * family and the other founds a fresh one.
    */
   readonly issue: (input: {
     readonly userId: UserId;
     readonly request?: { readonly ip?: string; readonly userAgent?: string };
     readonly supersedes?: SessionId;
-    /** BEH-EA-209/210: sets a hard expiry (`idleExpiresAt = absoluteExpiresAt`) and disables idle-refresh for this session's whole lifetime. */
+    /**
+     * BEH-EA-209/210: sets a hard expiry (`idleExpiresAt = absoluteExpiresAt`) and disables idle-refresh for this session's whole lifetime.
+     * IDS-008: naming the session's own `userId` dies with `InvalidActingAs`. A producer MUST also refuse a caller whose own session already carries `actingAs` (BEH-EA-214) — `issue` cannot see the caller's session; `Admin.impersonate` is the reference implementation.
+     */
     readonly actingAs?: ActingAs;
+    /**
+     * THS-003/APS-007: how the caller just authenticated, set by the
+     * authenticating plugin (password `["pwd"]`, OAuth `["fed"]`, passkey
+     * `["hwk", "user"]` under user verification). Defaults to none (a legacy
+     * bridge, an impersonation session).
+     */
+    readonly amr?: ReadonlyArray<AuthMethod>;
     /** BEH-EA-212: overrides `SessionConfig.absolute` for this one call — e.g. `@awthaq/admin`'s own `AdminConfig.maxDuration`, generally shorter than an ordinary session's absolute lifetime. */
     readonly absoluteDuration?: Duration.Duration;
   }) => Effect.Effect<
@@ -198,7 +315,10 @@ export interface SessionsShape {
    * is the one to have earned.
    *
    * Upstream-hardening map, ticket 01: the same throttled-touch write also
-   * rotates the session's secret (the standard session-fixation defense) —
+   * rotates the session's secret (PIL-006: this is not the session-fixation
+   * defense — fixation is prevented by minting a fresh session at every
+   * sign-in and privilege change, BEH-EA-053; rotation limits the useful life
+   * of a leaked secret or a stale hash snapshot) —
    * `rotated` carries the freshly-minted full token exactly when this call
    * performed that rotation, `Option.none()` otherwise (including every
    * `actingAs` session, which never touches this path at all). The old
@@ -220,11 +340,12 @@ export interface SessionsShape {
    *
    * Resolved (upstream-hardening-followups map, ticket 03):
    * `@awthaq/server`'s `Authentication.resolveSession` now memoizes its
-   * result per request, keyed on the ambient `HttpServerRequest`'s own
-   * identity — both `AuthenticationLive`/`OptionalAuthenticationLive` and
-   * `SubjectExtractorLive` funnel through it, so a second call within the
-   * same request reuses the first's outcome (including whether it
-   * rotated) rather than calling `verify` again.
+   * result per request, single-flight and keyed on the request's
+   * underlying `source` (TS-003/NHS-006) — both `AuthenticationLive`/
+   * `OptionalAuthenticationLive` and `SubjectExtractorLive` funnel through
+   * it, so a second call within the same request reuses the first's
+   * outcome rather than calling `verify` again. The call that rotated also
+   * delivers the new secret on that request's response (PIL-005).
    *
    * RRS-003: presenting a tombstoned row (one `issue`'s own `supersedes`
    * already rotated away) is refresh-token reuse — every still-live
@@ -240,16 +361,64 @@ export interface SessionsShape {
     { readonly session: SessionView; readonly rotated: Option.Option<Redacted.Redacted<string>> },
     SessionNotFound | SessionExpired | PlatformError.PlatformError
   >;
-  readonly revoke: (id: SessionId) => Effect.Effect<void, SessionNotFound>;
+  /**
+   * TIR-008: every revocation primitive takes the `reason` the session ended
+   * and publishes exactly one `auth.session.revoked` (`AuditLog` records it)
+   * once the delete has happened — so sign-out, account deletion and admin
+   * stops are observable, not just the password plugin's bulk revocations.
+   */
+  readonly revoke: (
+    id: SessionId,
+    reason: AuthEvents.SessionRevocationReason,
+  ) => Effect.Effect<void, SessionNotFound>;
+  /**
+   * GC-005: revokes session `id` only if it belongs to `userId`, atomically —
+   * ownership is enforced by the domain operation, not by a caller-side
+   * list-then-check. Fails `SessionNotFound` for an unknown id and a foreign
+   * id alike (BEH-EA-086/ADR-EA-013's enumeration safety). Use bare `revoke`
+   * only in already-authorized contexts (admin, the caller's own sign-out).
+   */
+  readonly revokeOwned: (
+    userId: UserId,
+    id: SessionId,
+    reason: AuthEvents.SessionRevocationReason,
+  ) => Effect.Effect<void, SessionNotFound>;
   /** BEH-EA-054: revokes every session for `userId` except `keep`. */
-  readonly revokeOthers: (userId: UserId, keep: SessionId) => Effect.Effect<void>;
+  readonly revokeOthers: (
+    userId: UserId,
+    keep: SessionId,
+    reason: AuthEvents.SessionRevocationReason,
+  ) => Effect.Effect<void>;
   /** Ticket 02: revokes every session for `userId`, no exceptions — including the caller's own current session. */
-  readonly revokeAll: (userId: UserId) => Effect.Effect<void>;
-  /** BEH-EA-054: `current` is set on whichever row's id equals `current`. */
+  readonly revokeAll: (
+    userId: UserId,
+    reason: AuthEvents.SessionRevocationReason,
+  ) => Effect.Effect<void>;
+  /**
+   * BEH-EA-054: exactly the user's *live* sessions — not tombstoned, past
+   * neither `absoluteExpiresAt` nor `idleExpiresAt` — newest activity first
+   * (`lastActiveAt` descending), identically in both layers (ESS-005/
+   * SMS-002). `current` is set on whichever row's id equals `current`.
+   * Exhaustive: `layerSql` drains every repository page rather than silently
+   * truncating (TIR-003), bounded by `LIST_LIMIT` with a logged warning if a
+   * user somehow exceeds it. Not for keyed lookups — use `findOwned`.
+   */
   readonly list: (
     userId: UserId,
     current?: SessionId,
   ) => Effect.Effect<ReadonlyArray<SessionListItem>>;
+  /**
+   * TIR-003/ESS-005: the keyed ownership lookup every point query goes
+   * through — one `findById` plus ownership, tombstone and expiry checks,
+   * never `list`'s per-user scan. `None` for an unknown id, another user's
+   * session, a tombstoned row, or one past either expiry. `current` on the
+   * returned item is always `false`: the caller already knows which id it
+   * asked about.
+   */
+  readonly findOwned: (
+    userId: UserId,
+    id: SessionId,
+  ) => Effect.Effect<Option.Option<SessionListItem>>;
   /**
    * TIR-002/FAMS-009/MAPS-006: the exact liveness check a caller holding
    * only a bare `id` (no secret — `verify`'s own credential) needs — e.g.
@@ -262,7 +431,7 @@ export interface SessionsShape {
    * authenticate the caller, only to answer "is this session still live."
    * `false` for a session belonging to a different `userId` than claimed,
    * already tombstoned, past either expiry, or simply absent — a single
-   * keyed lookup, not `list`'s full per-user scan.
+   * keyed lookup (`findOwned`), not `list`'s full per-user scan.
    */
   readonly isLive: (userId: UserId, id: SessionId) => Effect.Effect<boolean>;
   /**
@@ -275,10 +444,85 @@ export interface SessionsShape {
    * `@awthaq/password`/`@awthaq/passkey`'s own `reauthenticate` endpoints),
    * not a passive idle refresh, so it gets its own always-available method.
    */
-  readonly reauthenticate: (id: SessionId) => Effect.Effect<SessionView, SessionNotFound>;
+  readonly reauthenticate: (
+    id: SessionId,
+    /** THS-003: methods this step-up just proved; unioned into the session's `amr` (monotone — never removed). */
+    amr?: ReadonlyArray<AuthMethod>,
+  ) => Effect.Effect<SessionView, SessionNotFound>;
 }
 
 export class Sessions extends Context.Service<Sessions, SessionsShape>()("awthaq/core/Sessions") {}
+
+/**
+ * TIR-003/SMS-002: the one liveness predicate — the same absolute and idle
+ * checks `verify` applies (modulo the secret), a tombstoned (RRS-003) row
+ * being not live. `list`, `findOwned` and `isLive` share it so the layers
+ * and the operations cannot drift.
+ */
+const isLiveAt = (
+  now: DateTime.Utc,
+  row: {
+    readonly absoluteExpiresAt: DateTime.Utc;
+    readonly idleExpiresAt: DateTime.Utc;
+    readonly supersededAt: Option.Option<DateTime.Utc>;
+  },
+): boolean =>
+  Option.isNone(row.supersededAt) &&
+  DateTime.toEpochMillis(now) < DateTime.toEpochMillis(row.absoluteExpiresAt) &&
+  DateTime.toEpochMillis(now) < DateTime.toEpochMillis(row.idleExpiresAt);
+
+/** ESS-005: newest activity first, ties broken by id so both layers order identically. */
+const newestActivityFirst = (
+  items: ReadonlyArray<SessionListItem>,
+): ReadonlyArray<SessionListItem> =>
+  [...items].sort(
+    (a, b) =>
+      DateTime.toEpochMillis(b.lastActiveAt) - DateTime.toEpochMillis(a.lastActiveAt) ||
+      (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+  );
+
+/**
+ * Upper bound on how many live sessions `list` drains for one user — far past
+ * any realistic device list; a logged warning (never silent truncation) if a
+ * user somehow exceeds it.
+ */
+export const LIST_LIMIT = 1000;
+
+/**
+ * SMS-003: which of a user's existing live, non-impersonation sessions the
+ * about-to-be-issued one evicts — the least-recently-active surplus so that
+ * (existing - evicted) + 1 <= limit. Pure, shared by both layers.
+ */
+const evictionOrder = (
+  limit: number,
+  existing: ReadonlyArray<{ readonly id: string; readonly lastActiveAt: DateTime.Utc }>,
+): ReadonlyArray<string> => {
+  const surplus = existing.length + 1 - Math.max(1, limit);
+  if (surplus <= 0) return [];
+  return [...existing]
+    .sort(
+      (a, b) =>
+        DateTime.toEpochMillis(a.lastActiveAt) - DateTime.toEpochMillis(b.lastActiveAt) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    )
+    .slice(0, surplus)
+    .map((row) => row.id);
+};
+
+/** ESA-006: the one `auth.session.issued` both layers publish. */
+const publishIssued = (
+  events: AuthEvents.AuthEventsShape,
+  session: { readonly id: string; readonly userId: UserId },
+  familyId: string,
+  actingAs: Option.Option<ActingAs>,
+) =>
+  events.publish({
+    _tag: "auth.session.issued",
+    sessionId: session.id,
+    userId: session.userId,
+    familyId,
+    ...(Option.isSome(actingAs) ? { actingAs: actingAs.value } : {}),
+  });
 
 interface SessionRow {
   readonly id: SessionId;
@@ -292,6 +536,7 @@ interface SessionRow {
   readonly ipAddress: Option.Option<string>;
   readonly userAgent: Option.Option<string>;
   readonly actingAs: Option.Option<ActingAs>;
+  readonly amr: ReadonlyArray<AuthMethod>;
   /**
    * RRS-003: this row's founding session id — its own `id` when it has no
    * ancestor, inherited from the superseded row's own `familyId`
@@ -325,8 +570,17 @@ const toView = (row: SessionRow): SessionView => ({
   ipAddress: row.ipAddress,
   userAgent: row.userAgent,
   actingAs: row.actingAs,
+  amr: row.amr,
 });
 
+/**
+ * TRBS-005: single-process, test-grade storage. State is one per-process
+ * `Ref`: it is not shared across instances (a revocation on one instance does
+ * not propagate to another), it is lost on restart, and it grows without bound
+ * until a retention sweep (CSG-003) prunes it. Use `layerSql` (or a future KV
+ * layer, ADR-EA-014) for any multi-instance deployment. `AuthEvents`' in-process
+ * `PubSub` has the same process boundary.
+ */
 export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvents.AuthEvents> =
   Layer.effect(
     Sessions,
@@ -338,31 +592,11 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
       const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
       const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
+        yield* refuseSelfActingAs(input);
         const id = SessionId(yield* crypto.randomUUIDv7);
         const secret = toHex(yield* crypto.randomBytes(32));
         const secretHash = yield* hashSecret(crypto, secret);
         const now = yield* DateTime.now;
-        // RRS-003: tombstoned, not deleted — the old row's own `familyId` is
-        // what this new row inherits; a row this new one has no `supersedes`
-        // ancestor for founds a fresh family, `familyId = id`.
-        let familyId = id;
-        if (input.supersedes !== undefined) {
-          const supersedes = input.supersedes;
-          const ancestor = yield* Ref.modify(
-            state,
-            (s): readonly [Option.Option<SessionRow>, HashMap.HashMap<SessionId, SessionRow>] => {
-              const current = HashMap.get(s, supersedes);
-              if (Option.isNone(current)) return [Option.none(), s] as const;
-              const tombstoned: SessionRow = {
-                ...current.value,
-                supersededBy: Option.some(id),
-                supersededAt: Option.some(now),
-              };
-              return [Option.some(tombstoned), HashMap.set(s, tombstoned.id, tombstoned)] as const;
-            },
-          );
-          if (Option.isSome(ancestor)) familyId = ancestor.value.familyId;
-        }
         const absoluteExpiresAt = DateTime.addDuration(
           now,
           input.absoluteDuration ?? config.absolute,
@@ -374,31 +608,92 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           input.actingAs === undefined
             ? DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt)
             : absoluteExpiresAt;
-        const row: SessionRow = {
-          id,
-          userId: input.userId,
-          secretHash,
-          createdAt: now,
-          authenticatedAt: now,
-          lastActiveAt: now,
-          absoluteExpiresAt,
-          idleExpiresAt,
-          ipAddress: Option.fromNullishOr(input.request?.ip),
-          userAgent: Option.fromNullishOr(input.request?.userAgent),
-          actingAs: Option.fromNullishOr(input.actingAs),
-          familyId,
-          supersededBy: Option.none(),
-          supersededAt: Option.none(),
-          reusedAt: Option.none(),
-        };
-        // TMS-004: rows are otherwise removed only on revoke; prune expired ones once the map is large.
-        yield* Ref.update(state, (s) =>
-          HashMap.set(
-            pruneExpiredAbove(s, now, (r) => r.absoluteExpiresAt),
-            id,
-            row,
-          ),
+        // ESR-002/RRS-004: tombstoning the superseded row and inserting its
+        // successor are ONE `Ref.modify`, so no interruption or failure can
+        // leave a tombstoned session without its successor (whose next
+        // presentation would read as refresh-token reuse — a false theft
+        // alarm and a family revocation). RRS-003: tombstoned, not deleted —
+        // the ancestor's own `familyId` is what this row inherits; a row with
+        // no live `supersedes` ancestor founds a fresh family, `familyId = id`.
+        const { row, evicted } = yield* Ref.modify(
+          state,
+          (
+            s,
+          ): readonly [
+            { readonly row: SessionRow; readonly evicted: ReadonlyArray<SessionRow> },
+            HashMap.HashMap<SessionId, SessionRow>,
+          ] => {
+            // TMS-004: rows are otherwise removed only on revoke; prune
+            // expired ones once the map is large, in the same atomic step.
+            const pruned = pruneExpiredAbove(s, now, (r) => r.absoluteExpiresAt);
+            const ancestor =
+              input.supersedes === undefined
+                ? Option.none()
+                : Option.filter(HashMap.get(pruned, input.supersedes), (r) =>
+                    Option.isNone(r.supersededAt),
+                  );
+            const created: SessionRow = {
+              id,
+              userId: input.userId,
+              secretHash,
+              createdAt: now,
+              authenticatedAt: now,
+              lastActiveAt: now,
+              absoluteExpiresAt,
+              idleExpiresAt,
+              ipAddress: Option.fromNullishOr(input.request?.ip),
+              userAgent: Option.fromNullishOr(cappedUserAgent(input.request?.userAgent)),
+              actingAs: Option.fromNullishOr(input.actingAs),
+              amr: input.amr ?? [],
+              familyId: Option.match(ancestor, {
+                onNone: () => id,
+                onSome: (r) => r.familyId,
+              }),
+              supersededBy: Option.none(),
+              supersededAt: Option.none(),
+              reusedAt: Option.none(),
+            };
+            const withAncestor = Option.match(ancestor, {
+              onNone: () => pruned,
+              onSome: (r) =>
+                HashMap.set(pruned, r.id, {
+                  ...r,
+                  supersededBy: Option.some(id),
+                  supersededAt: Option.some(now),
+                }),
+            });
+            // SMS-003: the cap is enforced in this same modify — count the
+            // user's other live, non-impersonation sessions and drop the
+            // least-recently-active surplus alongside the insert.
+            const policy = input.actingAs === undefined ? config.maxConcurrent : undefined;
+            const existing =
+              policy === undefined
+                ? []
+                : Array.from(HashMap.values(withAncestor)).filter(
+                    (r) =>
+                      r.userId === input.userId && isLiveAt(now, r) && Option.isNone(r.actingAs),
+                  );
+            const evictedIds = new Set<string>(
+              policy === undefined ? [] : evictionOrder(policy.limit, existing),
+            );
+            const evictedRows = existing.filter((r) => evictedIds.has(r.id));
+            const kept = HashMap.filter(withAncestor, (r) => !evictedIds.has(r.id));
+            return [
+              { row: created, evicted: evictedRows },
+              HashMap.set(kept, id, created),
+            ] as const;
+          },
         );
+        for (const gone of evicted) {
+          yield* events.publish({
+            _tag: "auth.session.revoked",
+            userId: gone.userId,
+            sessionId: gone.id,
+            scope: "one",
+            reason: "limitEvicted",
+          });
+        }
+        yield* publishIssued(events, row, row.familyId, row.actingAs);
         return { session: toView(row), token: Redacted.make(`${id}.${secret}`) };
       });
 
@@ -484,17 +779,36 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
               familyId,
               userId: row.value.userId,
             });
+            yield* events.publish({
+              _tag: "auth.session.revoked",
+              userId: row.value.userId,
+              sessionId: null,
+              scope: "family",
+              reason: "reuseDetected",
+            });
           }
           return yield* Effect.fail(
             new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
           );
         }
         if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.absoluteExpiresAt)) {
+          yield* events.publish({
+            _tag: "auth.session.expired",
+            sessionId: id,
+            userId: row.value.userId,
+            kind: "absolute",
+          });
           return yield* Effect.fail(
             new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),
           );
         }
         if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.idleExpiresAt)) {
+          yield* events.publish({
+            _tag: "auth.session.expired",
+            sessionId: id,
+            userId: row.value.userId,
+            kind: "idle",
+          });
           return yield* Effect.fail(
             new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
           );
@@ -555,92 +869,161 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         };
       });
 
-      const revoke: SessionsShape["revoke"] = (id) =>
+      // TIR-008: each primitive removes the row(s) in one `Ref.modify` and
+      // then publishes exactly one `auth.session.revoked` for the call.
+      const removeOne = (
+        userId: UserId | undefined,
+        id: SessionId,
+      ): Effect.Effect<SessionRow, SessionNotFound> =>
         Ref.modify(
           state,
           (
             s,
           ): readonly [
-            Result.Result<void, SessionNotFound>,
+            Result.Result<SessionRow, SessionNotFound>,
             HashMap.HashMap<SessionId, SessionRow>,
           ] => {
-            if (!HashMap.has(s, id)) {
+            const row = HashMap.get(s, id);
+            if (Option.isNone(row) || (userId !== undefined && row.value.userId !== userId)) {
               return [
                 Result.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
                 s,
               ] as const;
             }
-            const ok: Result.Result<void, SessionNotFound> = Result.succeed(undefined);
-            return [ok, HashMap.remove(s, id)] as const;
+            const removed: Result.Result<SessionRow, SessionNotFound> = Result.succeed(row.value);
+            return [removed, HashMap.remove(s, id)] as const;
           },
         ).pipe(Effect.flatMap(Effect.fromResult));
 
-      const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep) =>
-        Ref.update(state, (s) =>
-          HashMap.filter(s, (row, id) => id === keep || row.userId !== userId),
-        );
-
-      const revokeAll: SessionsShape["revokeAll"] = (userId) =>
-        Ref.update(state, (s) => HashMap.filter(s, (row) => row.userId !== userId));
-
-      // RRS-003: `Option.isNone(row.supersededAt)` — load-bearing, not
-      // cosmetic. A tombstoned row must never appear in a user's device
-      // list, and this is also what makes `verifyLive`/`Jwt.introspectLive`
-      // correctly reject a reused/family-revoked session's JWT for free —
-      // both call this same `list`.
-      const list: SessionsShape["list"] = (userId, current) =>
-        Ref.get(state).pipe(
-          Effect.map((s) =>
-            Array.from(HashMap.values(s))
-              .filter((row) => row.userId === userId && Option.isNone(row.supersededAt))
-              .map((row): SessionListItem => ({
-                id: row.id,
-                createdAt: row.createdAt,
-                authenticatedAt: row.authenticatedAt,
-                lastActiveAt: row.lastActiveAt,
-                expiresAt: row.absoluteExpiresAt,
-                userAgent: row.userAgent,
-                current: row.id === current,
-              })),
+      const revoke: SessionsShape["revoke"] = (id, reason) =>
+        removeOne(undefined, id).pipe(
+          Effect.flatMap((row) =>
+            events.publish({
+              _tag: "auth.session.revoked",
+              userId: row.userId,
+              sessionId: row.id,
+              scope: "one",
+              reason,
+            }),
           ),
         );
 
-      const isLive: SessionsShape["isLive"] = (userId, id) =>
-        Effect.gen(function* () {
-          const row = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
-          if (Option.isNone(row)) return false;
-          if (row.value.userId !== userId) return false;
-          if (Option.isSome(row.value.supersededAt)) return false;
-          const now = yield* DateTime.now;
-          if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.absoluteExpiresAt)) {
-            return false;
-          }
-          if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.idleExpiresAt)) {
-            return false;
-          }
-          return true;
-        });
-
-      const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id) {
-        const now = yield* DateTime.now;
-        const updated = yield* Ref.modify(
-          state,
-          (s): readonly [Option.Option<SessionRow>, HashMap.HashMap<SessionId, SessionRow>] => {
-            const current = HashMap.get(s, id);
-            if (Option.isNone(current)) return [Option.none(), s] as const;
-            const refreshed: SessionRow = { ...current.value, authenticatedAt: now };
-            return [Option.some(refreshed), HashMap.set(s, id, refreshed)] as const;
-          },
+      const revokeOwned: SessionsShape["revokeOwned"] = (userId, id, reason) =>
+        removeOne(userId, id).pipe(
+          Effect.flatMap((row) =>
+            events.publish({
+              _tag: "auth.session.revoked",
+              userId: row.userId,
+              sessionId: row.id,
+              scope: "one",
+              reason,
+            }),
+          ),
         );
-        if (Option.isNone(updated)) {
-          return yield* Effect.fail(
-            new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
-          );
-        }
-        return toView(updated.value);
+
+      const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep, reason) =>
+        Ref.update(state, (s) =>
+          HashMap.filter(s, (row, id) => id === keep || row.userId !== userId),
+        ).pipe(
+          Effect.andThen(
+            events.publish({
+              _tag: "auth.session.revoked",
+              userId,
+              sessionId: null,
+              scope: "others",
+              reason,
+            }),
+          ),
+        );
+
+      const revokeAll: SessionsShape["revokeAll"] = (userId, reason) =>
+        Ref.update(state, (s) => HashMap.filter(s, (row) => row.userId !== userId)).pipe(
+          Effect.andThen(
+            events.publish({
+              _tag: "auth.session.revoked",
+              userId,
+              sessionId: null,
+              scope: "all",
+              reason,
+            }),
+          ),
+        );
+
+      const toItem = (row: SessionRow, current: SessionId | undefined): SessionListItem => ({
+        id: row.id,
+        createdAt: row.createdAt,
+        authenticatedAt: row.authenticatedAt,
+        lastActiveAt: row.lastActiveAt,
+        expiresAt: row.absoluteExpiresAt,
+        userAgent: row.userAgent,
+        amr: row.amr,
+        current: row.id === current,
       });
 
-      return { issue, verify, revoke, revokeOthers, revokeAll, list, isLive, reauthenticate };
+      // RRS-003/SMS-002: `isLiveAt` — load-bearing, not cosmetic. A
+      // tombstoned or expired row must never appear in a user's device list
+      // (and is what makes `verifyLive`/`Jwt.introspectLive` reject a
+      // reused/family-revoked session's JWT — they call `isLive`).
+      const list: SessionsShape["list"] = (userId, current) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const s = yield* Ref.get(state);
+          return newestActivityFirst(
+            Array.from(HashMap.values(s))
+              .filter((row) => row.userId === userId && isLiveAt(now, row))
+              .map((row) => toItem(row, current)),
+          );
+        });
+
+      const findOwned: SessionsShape["findOwned"] = (userId, id) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const row = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
+          return Option.filter(row, (r) => r.userId === userId && isLiveAt(now, r)).pipe(
+            Option.map((r) => toItem(r, undefined)),
+          );
+        });
+
+      const isLive: SessionsShape["isLive"] = (userId, id) =>
+        findOwned(userId, id).pipe(Effect.map(Option.isSome));
+
+      const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(
+        function* (id, amr) {
+          const now = yield* DateTime.now;
+          const updated = yield* Ref.modify(
+            state,
+            (s): readonly [Option.Option<SessionRow>, HashMap.HashMap<SessionId, SessionRow>] => {
+              const current = HashMap.get(s, id);
+              if (Option.isNone(current)) return [Option.none(), s] as const;
+              const refreshed: SessionRow = {
+                ...current.value,
+                authenticatedAt: now,
+                amr: unionAmr(current.value.amr, amr ?? []),
+              };
+              return [Option.some(refreshed), HashMap.set(s, id, refreshed)] as const;
+            },
+          );
+          if (Option.isNone(updated)) {
+            return yield* Effect.fail(
+              new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+            );
+          }
+          return toView(updated.value);
+        },
+      );
+
+      return {
+        issue,
+        verify,
+        revoke,
+        revokeOwned,
+        revokeOthers,
+        revokeAll,
+        list,
+        findOwned,
+        isLive,
+        reauthenticate,
+      };
     }),
   );
 
@@ -658,25 +1041,25 @@ const toSessionView = (row: SqlModels.Session): SessionView => ({
     row.actingAsType === null || row.actingAsId === null
       ? Option.none()
       : Option.some({ type: row.actingAsType, id: row.actingAsId }),
+  amr: parseAmr(row.amr),
 });
-
-/** Generous enough for `Sessions.list`'s realistic device-list sizes; real UI-facing pagination (BEH-EA-036) is a repository-level concern this Shape doesn't itself expose. */
-const LIST_PAGE_SIZE = 200;
 
 export const layerSql: Layer.Layer<
   Sessions,
   never,
-  SqlRepositories.SessionsRepository | Crypto.Crypto | AuthEvents.AuthEvents
+  SqlRepositories.SessionsRepository | SqlClient.SqlClient | Crypto.Crypto | AuthEvents.AuthEvents
 > = Layer.effect(
   Sessions,
   Effect.gen(function* () {
     const repo = yield* SqlRepositories.SessionsRepository;
+    const sql = yield* SqlClient.SqlClient;
     const crypto = yield* Crypto.Crypto;
     const config = yield* SessionConfig;
     const events = yield* AuthEvents.AuthEvents;
     const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
     const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
+      yield* refuseSelfActingAs(input);
       // Generated here, not left to `Model.UuidV7Insert`'s own
       // constructor-default: `familyId` needs this row's own `id` before
       // insert (to self-reference when it founds a fresh family), so `id`
@@ -686,22 +1069,6 @@ export const layerSql: Layer.Layer<
       const secret = toHex(yield* crypto.randomBytes(32));
       const secretHash = yield* hashSecret(crypto, secret);
       const now = yield* DateTime.now;
-      // RRS-003: tombstoned, not deleted — the old row's own `familyId` is
-      // what this new row inherits; no `supersedes` ancestor founds a
-      // fresh family, `familyId = id`.
-      let familyId = id;
-      if (input.supersedes !== undefined) {
-        const ancestor = yield* repo
-          .tombstone({ id: input.supersedes, supersededBy: id, supersededAt: now })
-          .pipe(
-            Effect.catchTags({
-              NoSuchElementError: () => Effect.succeed(undefined),
-              SchemaError: Effect.die,
-              SqlError: Effect.die,
-            }),
-          );
-        if (ancestor !== undefined) familyId = SessionId(ancestor.familyId);
-      }
       const absoluteExpiresAt = DateTime.addDuration(
         now,
         input.absoluteDuration ?? config.absolute,
@@ -712,25 +1079,82 @@ export const layerSql: Layer.Layer<
         input.actingAs === undefined
           ? DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt)
           : absoluteExpiresAt;
-      const insert = yield* repo.models.Session.insert
-        .makeEffect({
-          id,
+      // ESR-002/RRS-004: the tombstone and the successor's insert commit
+      // together or not at all — a crash between them would leave the client
+      // holding a tombstoned token whose next use reads as refresh-token
+      // reuse (family revocation and a false `auth.session.reuse`). The
+      // hash/id/clock work above stays outside the transaction.
+      const persist = Effect.gen(function* () {
+        // RRS-003: tombstoned, not deleted — the ancestor's own `familyId` is
+        // what this new row inherits; no live `supersedes` ancestor founds a
+        // fresh family, `familyId = id`.
+        let familyId = id;
+        if (input.supersedes !== undefined) {
+          const ancestor = yield* repo
+            .tombstone({ id: input.supersedes, supersededBy: id, supersededAt: now })
+            .pipe(
+              Effect.catchTags({
+                NoSuchElementError: () => Effect.succeed(undefined),
+                SchemaError: Effect.die,
+                SqlError: Effect.die,
+              }),
+            );
+          if (ancestor !== undefined) familyId = SessionId(ancestor.familyId);
+        }
+        const insert = yield* repo.models.Session.insert
+          .makeEffect({
+            id,
+            userId: input.userId,
+            secretHash,
+            ipAddress: input.request?.ip ?? null,
+            userAgent: cappedUserAgent(input.request?.userAgent) ?? null,
+            absoluteExpiresAt,
+            idleExpiresAt: Model.Override(idleExpiresAt),
+            actingAsType: input.actingAs?.type ?? null,
+            actingAsId: input.actingAs?.id ?? null,
+            amr: JSON.stringify(input.amr ?? []),
+            familyId,
+            supersededBy: null,
+            supersededAt: null,
+            reusedAt: null,
+          })
+          .pipe(Effect.orDie);
+        const inserted = yield* repo.insert(insert).pipe(Effect.orDie);
+        // SMS-003: enforced in this same transaction — list the user's other
+        // live, non-impersonation sessions (oldest activity first) and delete
+        // the surplus. Under Postgres' default isolation two racing issues can
+        // each see room and transiently exceed the cap by one; the next issue
+        // evicts back to `limit`.
+        const policy = input.actingAs === undefined ? config.maxConcurrent : undefined;
+        const evicted: Array<string> = [];
+        if (policy !== undefined) {
+          const live = yield* repo.listLiveIds(input.userId, now).pipe(Effect.orDie);
+          for (const goneId of evictionOrder(
+            policy.limit,
+            live.filter((r) => r.id !== id),
+          )) {
+            yield* repo.delete(SessionId(goneId)).pipe(Effect.orDie);
+            evicted.push(goneId);
+          }
+        }
+        return { inserted, evicted };
+      });
+      const { inserted: row, evicted } = yield* input.supersedes === undefined &&
+      config.maxConcurrent === undefined
+        ? persist
+        : sql.withTransaction(persist).pipe(Effect.catchTag("SqlError", Effect.die));
+      for (const goneId of evicted) {
+        yield* events.publish({
+          _tag: "auth.session.revoked",
           userId: input.userId,
-          secretHash,
-          ipAddress: input.request?.ip ?? null,
-          userAgent: input.request?.userAgent ?? null,
-          absoluteExpiresAt,
-          idleExpiresAt: Model.Override(idleExpiresAt),
-          actingAsType: input.actingAs?.type ?? null,
-          actingAsId: input.actingAs?.id ?? null,
-          familyId,
-          supersededBy: null,
-          supersededAt: null,
-          reusedAt: null,
-        })
-        .pipe(Effect.orDie);
-      const row = yield* repo.insert(insert).pipe(Effect.orDie);
-      return { session: toSessionView(row), token: Redacted.make(`${row.id}.${secret}`) };
+          sessionId: goneId,
+          scope: "one",
+          reason: "limitEvicted",
+        });
+      }
+      const view = toSessionView(row);
+      yield* publishIssued(events, view, row.familyId, view.actingAs);
+      return { session: view, token: Redacted.make(`${row.id}.${secret}`) };
     });
 
     /**
@@ -809,17 +1233,36 @@ export const layerSql: Layer.Layer<
             familyId,
             userId: UserId(row.userId),
           });
+          yield* events.publish({
+            _tag: "auth.session.revoked",
+            userId: UserId(row.userId),
+            sessionId: null,
+            scope: "family",
+            reason: "reuseDetected",
+          });
         }
         return yield* Effect.fail(
           new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
         );
       }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
+        yield* events.publish({
+          _tag: "auth.session.expired",
+          sessionId: id,
+          userId: UserId(row.userId),
+          kind: "absolute",
+        });
         return yield* Effect.fail(
           new SessionExpired({ message: `awthaq: session expired: ${id}`, id }),
         );
       }
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
+        yield* events.publish({
+          _tag: "auth.session.expired",
+          sessionId: id,
+          userId: UserId(row.userId),
+          kind: "idle",
+        });
         return yield* Effect.fail(
           new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
         );
@@ -873,7 +1316,9 @@ export const layerSql: Layer.Layer<
       };
     });
 
-    const revoke: SessionsShape["revoke"] = (id) =>
+    // TIR-008: each primitive deletes, then publishes exactly one
+    // `auth.session.revoked` for the call.
+    const revoke: SessionsShape["revoke"] = (id, reason) =>
       repo.findById(id).pipe(
         Effect.catchTags({
           NoSuchElementError: () =>
@@ -881,59 +1326,149 @@ export const layerSql: Layer.Layer<
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
-        Effect.flatMap(() => repo.delete(id).pipe(Effect.orDie)),
+        Effect.flatMap((row) =>
+          repo.delete(id).pipe(
+            Effect.orDie,
+            Effect.andThen(
+              events.publish({
+                _tag: "auth.session.revoked",
+                userId: UserId(row.userId),
+                sessionId: id,
+                scope: "one",
+                reason,
+              }),
+            ),
+          ),
+        ),
       );
 
-    const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep) =>
-      repo.deleteAllForUserExcept(userId, keep).pipe(Effect.orDie);
+    const revokeOwned: SessionsShape["revokeOwned"] = (userId, id, reason) =>
+      repo.deleteOwned(id, userId).pipe(
+        Effect.orDie,
+        Effect.flatMap((deleted) =>
+          deleted
+            ? events.publish({
+                _tag: "auth.session.revoked",
+                userId,
+                sessionId: id,
+                scope: "one",
+                reason,
+              })
+            : Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+        ),
+      );
 
-    const revokeAll: SessionsShape["revokeAll"] = (userId) =>
-      repo.deleteAllByUser(userId).pipe(Effect.orDie);
+    const revokeOthers: SessionsShape["revokeOthers"] = (userId, keep, reason) =>
+      repo.deleteAllForUserExcept(userId, keep).pipe(
+        Effect.orDie,
+        Effect.andThen(
+          events.publish({
+            _tag: "auth.session.revoked",
+            userId,
+            sessionId: null,
+            scope: "others",
+            reason,
+          }),
+        ),
+      );
+
+    const revokeAll: SessionsShape["revokeAll"] = (userId, reason) =>
+      repo.deleteAllByUser(userId).pipe(
+        Effect.orDie,
+        Effect.andThen(
+          events.publish({
+            _tag: "auth.session.revoked",
+            userId,
+            sessionId: null,
+            scope: "all",
+            reason,
+          }),
+        ),
+      );
+
+    const toItem = (row: SqlModels.Session, current: SessionId | undefined): SessionListItem => ({
+      id: SessionId(row.id),
+      createdAt: row.createdAt,
+      authenticatedAt: row.authenticatedAt,
+      lastActiveAt: row.lastActiveAt,
+      expiresAt: row.absoluteExpiresAt,
+      userAgent: Option.fromNullishOr(row.userAgent),
+      amr: parseAmr(row.amr),
+      current: row.id === current,
+    });
+
+    // TIR-003/ESS-005: drains every page of the user's live rows (the
+    // repository applies the liveness predicate at `now`, SMS-002) rather
+    // than one 200-row page — a silent truncation used to drop the newest,
+    // i.e. current, session from the list.
+    const drainLive = Effect.fnUntraced(function* (userId: UserId) {
+      const now = yield* DateTime.now;
+      const rows: Array<SqlModels.Session> = [];
+      let cursor: Option.Option<SqlRepositories.Cursor> = Option.none();
+      while (rows.length < LIST_LIMIT) {
+        const page = yield* repo
+          .listByUser(userId, now, Option.getOrUndefined(cursor), SqlRepositories.MAX_PAGE_SIZE)
+          .pipe(Effect.orDie);
+        rows.push(...page.items);
+        if (Option.isNone(page.nextCursor)) return rows;
+        cursor = page.nextCursor;
+      }
+      yield* Effect.logWarning(
+        `awthaq: Sessions.list stopped at ${LIST_LIMIT} live sessions for user ${userId}`,
+      );
+      return rows;
+    });
 
     const list: SessionsShape["list"] = (userId, current) =>
-      repo.listByUser(userId, undefined, LIST_PAGE_SIZE).pipe(
-        Effect.map((page) =>
-          page.items.map((row): SessionListItem => ({
-            id: SessionId(row.id),
-            createdAt: row.createdAt,
-            authenticatedAt: row.authenticatedAt,
-            lastActiveAt: row.lastActiveAt,
-            expiresAt: row.absoluteExpiresAt,
-            userAgent: Option.fromNullishOr(row.userAgent),
-            current: row.id === current,
-          })),
-        ),
-        Effect.orDie,
+      drainLive(userId).pipe(
+        Effect.map((rows) => newestActivityFirst(rows.map((row) => toItem(row, current)))),
       );
 
-    const isLive: SessionsShape["isLive"] = (userId, id) =>
+    const findOwned: SessionsShape["findOwned"] = (userId, id) =>
       Effect.gen(function* () {
         const row = yield* repo.findById(id).pipe(
+          Effect.map(Option.some),
           Effect.catchTags({
-            NoSuchElementError: () => Effect.succeed(null),
+            NoSuchElementError: () => Effect.succeed(Option.none()),
             SchemaError: Effect.die,
             SqlError: Effect.die,
           }),
         );
-        if (row === null) return false;
-        if (row.userId !== userId) return false;
-        if (row.supersededAt !== null) return false;
         const now = yield* DateTime.now;
-        if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
-          return false;
-        }
-        if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
-          return false;
-        }
-        return true;
+        return Option.filter(
+          row,
+          (r) =>
+            r.userId === userId &&
+            isLiveAt(now, {
+              absoluteExpiresAt: r.absoluteExpiresAt,
+              idleExpiresAt: r.idleExpiresAt,
+              supersededAt: Option.fromNullishOr(r.supersededAt),
+            }),
+        ).pipe(Option.map((r) => toItem(r, undefined)));
       });
 
-    const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id) {
+    const isLive: SessionsShape["isLive"] = (userId, id) =>
+      findOwned(userId, id).pipe(Effect.map(Option.isSome));
+
+    const reauthenticate: SessionsShape["reauthenticate"] = Effect.fnUntraced(function* (id, amr) {
       const now = yield* DateTime.now;
-      const row = yield* repo.reauthenticate(id, now).pipe(
+      const notFound = () =>
+        Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` }));
+      // THS-003: union the newly proven methods into the stored `amr` (monotone).
+      const unioned =
+        amr === undefined || amr.length === 0
+          ? undefined
+          : yield* repo.findById(id).pipe(
+              Effect.map((current) => JSON.stringify(unionAmr(parseAmr(current.amr), amr))),
+              Effect.catchTags({
+                NoSuchElementError: notFound,
+                SchemaError: Effect.die,
+                SqlError: Effect.die,
+              }),
+            );
+      const row = yield* repo.reauthenticate(id, now, unioned).pipe(
         Effect.catchTags({
-          NoSuchElementError: () =>
-            Effect.fail(new SessionNotFound({ message: `awthaq: no such session: ${id}` })),
+          NoSuchElementError: notFound,
           SchemaError: Effect.die,
           SqlError: Effect.die,
         }),
@@ -941,6 +1476,17 @@ export const layerSql: Layer.Layer<
       return toSessionView(row);
     });
 
-    return { issue, verify, revoke, revokeOthers, revokeAll, list, isLive, reauthenticate };
+    return {
+      issue,
+      verify,
+      revoke,
+      revokeOwned,
+      revokeOthers,
+      revokeAll,
+      list,
+      findOwned,
+      isLive,
+      reauthenticate,
+    };
   }),
 );

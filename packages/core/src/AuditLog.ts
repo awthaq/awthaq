@@ -77,6 +77,7 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.session.reuse":
     case "auth.session.issued":
     case "auth.session.revoked":
+    case "auth.session.expired":
     case "auth.password.changed":
     case "auth.password.resetCompleted":
     case "auth.passkey.counterAnomaly":
@@ -85,11 +86,26 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.organization.memberRoleUpdated":
     case "auth.organization.invitationAccepted":
     case "auth.organization.teamMemberAdded":
+    case "auth.organization.teamMemberRoleUpdated":
     case "auth.organization.teamMemberRemoved":
+    case "auth.organization.permissionDenied":
       return Option.some(event.userId);
     case "auth.admin.impersonationStarted":
     case "auth.admin.impersonationDenied":
+    case "auth.admin.actionDenied":
+    case "auth.admin.userUpdated":
+    case "auth.admin.sessionRevoked":
       return Option.some(event.adminUserId);
+    case "auth.roles.assigned":
+    case "auth.roles.revoked":
+    case "auth.user.claimsUpdated":
+      // The actor is who *changed* the roles, not whose roles changed.
+      return Option.fromNullishOr(event.actorUserId);
+    case "auth.authz.denied":
+      // qadi's own subject id: only a `user:` subject names an awthaq user.
+      return event.subjectId.startsWith("user:")
+        ? Option.some(UserId(event.subjectId.slice("user:".length)))
+        : Option.none();
     case "auth.organization.created":
       return Option.some(event.creatorUserId);
     case "auth.token.replay":
@@ -106,6 +122,7 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.organization.roleDeleted":
     case "auth.organization.teamCreated":
     case "auth.organization.teamUpdated":
+    case "auth.organization.teamMoved":
     case "auth.organization.teamDeleted":
       return Option.none();
     default: {

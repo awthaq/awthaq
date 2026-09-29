@@ -3,7 +3,7 @@ ID: "PCS-001"
 Title: "Spec's reference wiring recommends an application-scoped decision cache with no invalidation path"
 Level: high
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/appendices/02-qadi-path-a-end-to-end.md:59"
 Auditor: "permission-caching-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `security` · `—` · reported by **Permission Caching Specialist** (`permission-caching-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `spec/appendices/02-qadi-path-a-end-to-end.md:59` matches the evidence verbatim, and `packages/qadi/node_modules/@qadi/core/src/DecisionCache.ts:259-266`'s own doc comment confirms an app-scoped cache is "safe against token downgrade and unsafe against backend revocation"; `packages/organization/src/OrganizationQadi.ts:89-113`'s relationship resolver answers member/admin/owner from store-backed records, matching the unsafe case exactly. Fixing this means choosing the canonical caching posture for the reference wiring (per-request scope vs. app scope paired with a mandatory invalidation bridge), which is a design decision for the spec's blessed pattern, not a mechanical edit. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `qadi-decision-cache-invalidation`. Evidence at HEAD ec065a7: `spec/appendices/02-qadi-path-a-end-to-end.md:59`. Fix: Implement decision ticket 12: move decisionCacheLayer to per-request scope in the canonical wiring (Path A middleware / Path B extractor), and ship an opt-in `DecisionCacheInvalidationLive` in @awthaq/qadi that taps every OrganizationHooks observe point and calls DecisionCache.clear, documented as mandatory for app-scoped caches, with the coverage caveat. (effort M). Full dossier: `.plan/slices/12-spec.md`.
+
+**Resolved (2026-09-29):** Per-request decision cache is now the default: new packages/qadi/src/RequestDecisionCache.ts (HttpApiMiddleware RequestDecisionCache + RequestDecisionCacheLive({capacity}) providing a fresh decisionCacheLayer around each request's handler pipeline; declare last/outermost on Path A and Path B groups); opt-in packages/qadi/src/DecisionCacheInvalidation.ts DecisionCacheInvalidationLive taps every OrganizationHooks observe point (add/remove/updateRole member, accept invitation, delete org, team add/remove member, update/delete team, role CRUD) and calls DecisionCache.clear, with the coverage caveat in its doc. spec/appendices/02 (rev 1.2) no longer wires an app-scoped cache; BEH-EA-145/153/162 prose updated (no new BEH id: avoids cross-agent numbering collisions). Tests: packages/qadi/test/DecisionCacheInvalidation.test.ts (7 tests; 5 red with a stub Live returning stale Allow, green after; control test shows the stale Allow without the bridge) and RequestDecisionCache.test.ts (real HTTP: 1 lookup for 2 evaluations in a request, revocation visible on the next request). Gates: tsc -b (only pre-existing packages/react errors), tsconfig.test clean, pnpm test 827 pass, test:bdd green, spec:verify:strict PASS, oxlint clean. Not done here: AAPS-005 (user-attribute hook), README sections (folded into authz-docs-truthfulness).

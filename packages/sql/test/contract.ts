@@ -322,6 +322,7 @@ export const contractCases = (
           yield* M.User.insert.makeEffect({ email: "many-sessions@example.com", name: "M" }),
         );
         const now = yield* DateTime.now;
+        const future = DateTime.addDuration(now, Duration.days(1));
         for (let i = 0; i < 5; i++) {
           yield* sessions.insert(
             yield* M.Session.insert.makeEffect({
@@ -329,8 +330,8 @@ export const contractCases = (
               secretHash: `hash-${i}`,
               ipAddress: null,
               userAgent: null,
-              absoluteExpiresAt: now,
-              idleExpiresAt: Model.Override(now),
+              absoluteExpiresAt: future,
+              idleExpiresAt: Model.Override(future),
               actingAsType: null,
               actingAsId: null,
               familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
@@ -341,19 +342,20 @@ export const contractCases = (
           );
         }
 
-        const firstPage = yield* sessions.listByUser(user.id, undefined, 2);
+        const firstPage = yield* sessions.listByUser(user.id, now, undefined, 2);
         assert.strictEqual(firstPage.items.length, 2);
         assert.isTrue(Option.isSome(firstPage.nextCursor));
 
         const cursor = firstPage.nextCursor.pipe(
           Option.getOrThrowWith(() => new Error("expected a cursor")),
         );
-        const secondPage = yield* sessions.listByUser(user.id, cursor, 2);
+        const secondPage = yield* sessions.listByUser(user.id, now, cursor, 2);
         assert.strictEqual(secondPage.items.length, 2);
         assert.isTrue(Option.isSome(secondPage.nextCursor));
 
         const thirdPage = yield* sessions.listByUser(
           user.id,
+          now,
           secondPage.nextCursor.pipe(Option.getOrThrowWith(() => new Error("expected a cursor"))),
           2,
         );
@@ -375,6 +377,7 @@ export const contractCases = (
           yield* M.User.insert.makeEffect({ email: "revoke@example.com", name: "R" }),
         );
         const now = yield* DateTime.now;
+        const future = DateTime.addDuration(now, Duration.days(1));
         const make = () =>
           sessions.insert(
             M.Session.insert.make({
@@ -382,8 +385,8 @@ export const contractCases = (
               secretHash: "h",
               ipAddress: null,
               userAgent: null,
-              absoluteExpiresAt: now,
-              idleExpiresAt: Model.Override(now),
+              absoluteExpiresAt: future,
+              idleExpiresAt: Model.Override(future),
               actingAsType: null,
               actingAsId: null,
               familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
@@ -397,7 +400,7 @@ export const contractCases = (
         yield* make();
 
         yield* sessions.deleteAllForUserExcept(user.id, keep.id);
-        const remaining = yield* sessions.listByUser(user.id, undefined, 10);
+        const remaining = yield* sessions.listByUser(user.id, now, undefined, 10);
         assert.strictEqual(remaining.items.length, 1);
         assert.strictEqual(remaining.items[0]?.id, keep.id);
       }).pipe(Effect.provide(RepositoriesLive)),
@@ -413,6 +416,7 @@ export const contractCases = (
             yield* M.User.insert.makeEffect({ email: "revoke-all@example.com", name: "R" }),
           );
           const now = yield* DateTime.now;
+          const future = DateTime.addDuration(now, Duration.days(1));
           const make = () =>
             sessions.insert(
               M.Session.insert.make({
@@ -420,8 +424,8 @@ export const contractCases = (
                 secretHash: "h",
                 ipAddress: null,
                 userAgent: null,
-                absoluteExpiresAt: now,
-                idleExpiresAt: Model.Override(now),
+                absoluteExpiresAt: future,
+                idleExpiresAt: Model.Override(future),
                 actingAsType: null,
                 actingAsId: null,
                 familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
@@ -434,7 +438,7 @@ export const contractCases = (
           yield* make();
 
           yield* sessions.deleteAllByUser(user.id);
-          const remaining = yield* sessions.listByUser(user.id, undefined, 10);
+          const remaining = yield* sessions.listByUser(user.id, now, undefined, 10);
           assert.strictEqual(remaining.items.length, 0);
         }).pipe(Effect.provide(RepositoriesLive)),
     );
@@ -790,6 +794,183 @@ export const contractCases = (
           all.map((row) => row.id),
           ["c", "b", "a"],
         );
+      }).pipe(Effect.provide(RepositoriesLive)),
+    );
+    it.effect("BAM-008: idToken round-trips through the repository and is ciphertext at rest", () =>
+      Effect.gen(function* () {
+        const accounts = yield* Repositories.AccountsRepository;
+        const users = yield* Repositories.UsersRepository;
+        const sql = yield* SqlClient.SqlClient;
+        const user = yield* users.insert(
+          yield* M.User.insert.makeEffect({ email: "idtoken@example.com", name: "Id" }),
+        );
+        const account = yield* accounts.insert(
+          yield* M.Account.insert.makeEffect({
+            userId: user.id,
+            providerId: "google",
+            subject: "gh-id-token",
+            issuer: "",
+            passwordHash: null,
+            accessToken: "access",
+            refreshToken: null,
+            idToken: "plaintext.id.token",
+          }),
+        );
+        assert.strictEqual(account.idToken, "plaintext.id.token");
+        assert.strictEqual((yield* accounts.findById(account.id)).idToken, "plaintext.id.token");
+        const rows = yield* sql<{
+          readonly idToken: string;
+        }>`SELECT "idToken" FROM accounts WHERE id = ${account.id}`;
+        assert.isDefined(rows[0]);
+        assert.notInclude(rows[0]?.idToken, "plaintext.id.token");
+        // Never in the JSON variant.
+        const json = yield* Schema.encodeUnknownEffect(M.Account.json)(account);
+        assert.notProperty(json, "idToken");
+      }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    // SMS-002/ESR-010/GC-005/ESR-002: the session device-list page query and owned delete.
+    const makeUser = (email: string) =>
+      Effect.gen(function* () {
+        const users = yield* Repositories.UsersRepository;
+        return yield* users.insert(yield* M.User.insert.makeEffect({ email, name: "S" }));
+      });
+
+    const insertLiveSession = (
+      userId: Models.UserId,
+      options: {
+        readonly absoluteExpiresAt: DateTime.Utc;
+        readonly idleExpiresAt: DateTime.Utc;
+        readonly supersededAt?: DateTime.Utc;
+      },
+    ) =>
+      Effect.gen(function* () {
+        const sessions = yield* Repositories.SessionsRepository;
+        return yield* sessions.insert(
+          M.Session.insert.make({
+            userId,
+            secretHash: "h",
+            ipAddress: null,
+            userAgent: null,
+            absoluteExpiresAt: options.absoluteExpiresAt,
+            idleExpiresAt: Model.Override(options.idleExpiresAt),
+            actingAsType: null,
+            actingAsId: null,
+            familyId: Schema.decodeUnknownSync(Models.SessionId)("fixture-family"),
+            supersededBy: null,
+            supersededAt: options.supersededAt ?? null,
+            reusedAt: null,
+          }),
+        );
+      });
+
+    it.effect("SMS-002: listByUser omits absolute-expired, idle-expired and tombstoned rows", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Repositories.SessionsRepository;
+        const user = yield* makeUser("live-only@example.com");
+        const now = yield* DateTime.now;
+        const future = DateTime.addDuration(now, Duration.days(1));
+        const past = DateTime.subtractDuration(now, Duration.minutes(1));
+        const live = yield* insertLiveSession(user.id, {
+          absoluteExpiresAt: future,
+          idleExpiresAt: future,
+        });
+        yield* insertLiveSession(user.id, { absoluteExpiresAt: past, idleExpiresAt: future });
+        yield* insertLiveSession(user.id, { absoluteExpiresAt: future, idleExpiresAt: past });
+        yield* insertLiveSession(user.id, {
+          absoluteExpiresAt: future,
+          idleExpiresAt: future,
+          supersededAt: past,
+        });
+        const page = yield* sessions.listByUser(user.id, now);
+        assert.deepStrictEqual(
+          page.items.map((row) => row.id),
+          [live.id],
+        );
+      }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect("ESR-010: listByUser clamps limit 0 to 1 and still returns a nextCursor", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Repositories.SessionsRepository;
+        const user = yield* makeUser("clamp-zero@example.com");
+        const now = yield* DateTime.now;
+        const future = DateTime.addDuration(now, Duration.days(1));
+        yield* insertLiveSession(user.id, { absoluteExpiresAt: future, idleExpiresAt: future });
+        yield* insertLiveSession(user.id, { absoluteExpiresAt: future, idleExpiresAt: future });
+        const page = yield* sessions.listByUser(user.id, now, undefined, 0);
+        assert.strictEqual(page.items.length, 1);
+        assert.isTrue(Option.isSome(page.nextCursor));
+      }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect("ESR-010: a negative limit does not raise a SqlError", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Repositories.SessionsRepository;
+        const user = yield* makeUser("clamp-negative@example.com");
+        const now = yield* DateTime.now;
+        const future = DateTime.addDuration(now, Duration.days(1));
+        yield* insertLiveSession(user.id, { absoluteExpiresAt: future, idleExpiresAt: future });
+        const page = yield* sessions.listByUser(user.id, now, undefined, -5);
+        assert.strictEqual(page.items.length, 1);
+      }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect(
+      "ESR-010: listByUser caps the page at MAX_PAGE_SIZE",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Repositories.SessionsRepository;
+          const user = yield* makeUser("clamp-huge@example.com");
+          const now = yield* DateTime.now;
+          const future = DateTime.addDuration(now, Duration.days(1));
+          for (let i = 0; i < Repositories.MAX_PAGE_SIZE + 5; i++) {
+            yield* insertLiveSession(user.id, {
+              absoluteExpiresAt: future,
+              idleExpiresAt: future,
+            });
+          }
+          const page = yield* sessions.listByUser(user.id, now, undefined, 100_000);
+          assert.strictEqual(page.items.length, Repositories.MAX_PAGE_SIZE);
+          assert.isTrue(Option.isSome(page.nextCursor));
+        }).pipe(Effect.provide(RepositoriesLive)),
+      30_000,
+    );
+
+    it.effect("GC-005: deleteOwned deletes only the owner's row, in one statement", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Repositories.SessionsRepository;
+        const owner = yield* makeUser("owner@example.com");
+        const other = yield* makeUser("not-owner@example.com");
+        const now = yield* DateTime.now;
+        const future = DateTime.addDuration(now, Duration.days(1));
+        const row = yield* insertLiveSession(owner.id, {
+          absoluteExpiresAt: future,
+          idleExpiresAt: future,
+        });
+        assert.isFalse(yield* sessions.deleteOwned(row.id, other.id));
+        assert.strictEqual((yield* sessions.findById(row.id)).id, row.id);
+        assert.isTrue(yield* sessions.deleteOwned(row.id, owner.id));
+        assert.isFalse(yield* sessions.deleteOwned(row.id, owner.id));
+      }).pipe(Effect.provide(RepositoriesLive)),
+    );
+
+    it.effect("ESR-002: tombstone applies only to a still-live row", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Repositories.SessionsRepository;
+        const user = yield* makeUser("tombstone-once@example.com");
+        const now = yield* DateTime.now;
+        const future = DateTime.addDuration(now, Duration.days(1));
+        const row = yield* insertLiveSession(user.id, {
+          absoluteExpiresAt: future,
+          idleExpiresAt: future,
+        });
+        const successor = Schema.decodeUnknownSync(Models.SessionId)("successor-1");
+        yield* sessions.tombstone({ id: row.id, supersededBy: successor, supersededAt: now });
+        const again = yield* sessions
+          .tombstone({ id: row.id, supersededBy: successor, supersededAt: now })
+          .pipe(Effect.flip);
+        assert.strictEqual(again._tag, "NoSuchElementError");
       }).pipe(Effect.provide(RepositoriesLive)),
     );
   });

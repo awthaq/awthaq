@@ -131,9 +131,37 @@ export class OrgRoleNotFound extends Schema.TaggedError<OrgRoleNotFound>()(
   { httpApiStatus: 404 },
 ) {}
 
+/** MTI-003/OHS-006: the user already holds a membership in this organization; a role change goes through `updateMemberRole`, never through add/invite/accept. */
+export class AlreadyMember extends Schema.TaggedError<AlreadyMember>()(
+  "AlreadyMember",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
+/** OHS-003: the user is already on this team. */
+export class AlreadyTeamMember extends Schema.TaggedError<AlreadyTeamMember>()(
+  "AlreadyTeamMember",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
+/** RZS-005/N8: a dynamic role may not take a built-in tier's name (`owner`/`admin`/`member`) or an `OrganizationConfig.permissionStatements` key. */
+export class ReservedOrgRoleName extends Schema.TaggedError<ReservedOrgRoleName>()(
+  "ReservedOrgRoleName",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
 /** RRM-001/RRM-002: a role name that is not built-in, static-custom, or a live dynamic role of this organization. */
 export class UnknownOrgRole extends Schema.TaggedError<UnknownOrgRole>()(
   "UnknownOrgRole",
+  {},
+  { httpApiStatus: 422 },
+) {}
+
+/** OHS-004: a team role name that `OrganizationConfig.teamStatements` (plus the default `member`) does not define. */
+export class UnknownTeamRole extends Schema.TaggedError<UnknownTeamRole>()(
+  "UnknownTeamRole",
   {},
   { httpApiStatus: 422 },
 ) {}
@@ -186,6 +214,20 @@ export class TeamMemberLimitReached extends Schema.TaggedError<TeamMemberLimitRe
 /** spec.md's `allowRemovingAllTeams` guard (default `false`). */
 export class LastTeamCannotBeRemoved extends Schema.TaggedError<LastTeamCannotBeRemoved>()(
   "LastTeamCannotBeRemoved",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
+/** OHS-001: a move would place a team under itself or one of its own descendants. */
+export class TeamHierarchyCycle extends Schema.TaggedError<TeamHierarchyCycle>()(
+  "TeamHierarchyCycle",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
+/** OHS-001: a team that still has child teams cannot be removed. */
+export class TeamHasChildren extends Schema.TaggedError<TeamHasChildren>()(
+  "TeamHasChildren",
   {},
   { httpApiStatus: 409 },
 ) {}
@@ -280,6 +322,13 @@ export type InvitePayload = typeof InvitePayload.Type;
 export const InvitationIdParams = Schema.Struct({ invitationId: Schema.String });
 export type InvitationIdParams = typeof InvitationIdParams.Type;
 
+/** MTI-010: the emailed capability. The invitation id in the path is not the secret; accepting/rejecting needs this too. */
+export const InvitationTokenPayload = Schema.Struct({ token: Schema.String });
+export type InvitationTokenPayload = typeof InvitationTokenPayload.Type;
+
+export const InvitationTokenParams = Schema.Struct({ token: Schema.String });
+export type InvitationTokenParams = typeof InvitationTokenParams.Type;
+
 export class InvitationDto extends Schema.Class<InvitationDto>("InvitationDto")({
   id: Schema.String,
   email: Schema.String,
@@ -343,11 +392,19 @@ export class OrgRoleDto extends Schema.Class<OrgRoleDto>("OrgRoleDto")({
 
 // ---- teams --------------------------------------------------------------------
 
-export const CreateTeamPayload = Schema.Struct({ name: Schema.String });
+export const CreateTeamPayload = Schema.Struct({
+  name: Schema.String,
+  /** OHS-001: create the team under this parent (same organization). */
+  parentId: Schema.optional(Schema.String),
+});
 export type CreateTeamPayload = typeof CreateTeamPayload.Type;
 
 export const UpdateTeamPayload = Schema.Struct({ name: Schema.String });
 export type UpdateTeamPayload = typeof UpdateTeamPayload.Type;
+
+/** OHS-001: `null` moves the team to the root. */
+export const MoveTeamPayload = Schema.Struct({ parentId: Schema.NullOr(Schema.String) });
+export type MoveTeamPayload = typeof MoveTeamPayload.Type;
 
 export const TeamIdParams = Schema.Struct({
   organizationId: Schema.String,
@@ -362,8 +419,16 @@ export const TeamMemberParams = Schema.Struct({
 });
 export type TeamMemberParams = typeof TeamMemberParams.Type;
 
-export const AddTeamMemberPayload = Schema.Struct({ userId: Schema.String });
+export const AddTeamMemberPayload = Schema.Struct({
+  userId: Schema.String,
+  /** OHS-004: team role names to confer; defaults to `["member"]`. */
+  role: Schema.optional(Schema.Array(Schema.String)),
+});
 export type AddTeamMemberPayload = typeof AddTeamMemberPayload.Type;
+
+/** OHS-004 */
+export const UpdateTeamMemberRolePayload = Schema.Struct({ role: Schema.Array(Schema.String) });
+export type UpdateTeamMemberRolePayload = typeof UpdateTeamMemberRolePayload.Type;
 
 export const SetActiveTeamPayload = Schema.Struct({ teamId: Schema.NullOr(Schema.String) });
 export type SetActiveTeamPayload = typeof SetActiveTeamPayload.Type;
@@ -373,6 +438,8 @@ export class TeamDto extends Schema.Class<TeamDto>("TeamDto")({
   name: Schema.String,
   organizationId: Schema.String,
   memberCount: Schema.Number,
+  /** OHS-001: `null` for a root team. */
+  parentId: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 }) {}
@@ -381,6 +448,7 @@ export class TeamMembershipDto extends Schema.Class<TeamMembershipDto>("TeamMemb
   id: Schema.String,
   teamId: Schema.String,
   userId: Schema.String,
+  role: Schema.Array(Schema.String),
   createdAt: Schema.String,
 }) {}
 
@@ -522,7 +590,12 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
     HttpApiEndpoint.post("leave", "/organization/:organizationId/leave", {
       params: OrganizationIdParams,
       success: HttpApiSchema.Empty(204),
-      error: [OrganizationNotFound, MembershipNotFound, OwnerInvariantViolation],
+      error: [
+        OrganizationNotFound,
+        MembershipNotFound,
+        OwnerInvariantViolation,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(
@@ -535,6 +608,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrganizationPermissionDenied,
         InvitationLimitReached,
         MembershipLimitReached,
+        AlreadyMember,
         TeamsDisabled,
         TeamNotFound,
         RolePermissionEscalation,
@@ -567,8 +641,16 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
     }),
   )
   .add(
+    HttpApiEndpoint.get("getInvitationByToken", "/organization/invitations/by-token/:token", {
+      params: InvitationTokenParams,
+      success: InvitationDto,
+      error: InvitationNotFound,
+    }),
+  )
+  .add(
     HttpApiEndpoint.post("acceptInvitation", "/organization/invitations/:invitationId/accept", {
       params: InvitationIdParams,
+      payload: InvitationTokenPayload,
       success: MembershipDto,
       error: [
         InvitationNotFound,
@@ -576,6 +658,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         InvitationExpired,
         InvitationEmailMismatch,
         MembershipLimitReached,
+        AlreadyMember,
         EmailVerificationRequired,
         TeamMemberLimitReached,
         HookPoint.HookAborted,
@@ -585,8 +668,14 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
   .add(
     HttpApiEndpoint.post("rejectInvitation", "/organization/invitations/:invitationId/reject", {
       params: InvitationIdParams,
+      payload: InvitationTokenPayload,
       success: HttpApiSchema.Empty(204),
-      error: [InvitationNotFound, InvitationNotPending, InvitationEmailMismatch, HookPoint.HookAborted],
+      error: [
+        InvitationNotFound,
+        InvitationNotPending,
+        InvitationEmailMismatch,
+        HookPoint.HookAborted,
+      ],
     }),
   )
   .add(
@@ -611,6 +700,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         DynamicAccessControlDisabled,
         OrganizationPermissionDenied,
         OrgRoleNameTaken,
+        ReservedOrgRoleName,
         RolePermissionEscalation,
         RoleLimitReached,
         HookPoint.HookAborted,
@@ -673,6 +763,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrganizationNotFound,
         TeamsDisabled,
         OrganizationPermissionDenied,
+        TeamNotFound,
         TeamLimitReached,
         HookPoint.HookAborted,
       ],
@@ -716,9 +807,47 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OrganizationPermissionDenied,
         TeamNotFound,
         LastTeamCannotBeRemoved,
+        TeamHasChildren,
         HookPoint.HookAborted,
       ],
     }),
+  )
+  .add(
+    HttpApiEndpoint.patch("moveTeam", "/organization/:organizationId/teams/:teamId/parent", {
+      params: TeamIdParams,
+      payload: MoveTeamPayload,
+      success: TeamDto,
+      error: [
+        OrganizationNotFound,
+        TeamsDisabled,
+        OrganizationPermissionDenied,
+        TeamNotFound,
+        TeamHierarchyCycle,
+        HookPoint.HookAborted,
+      ],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get(
+      "listTeamAncestors",
+      "/organization/:organizationId/teams/:teamId/ancestors",
+      {
+        params: TeamIdParams,
+        success: Schema.Array(TeamDto),
+        error: [OrganizationNotFound, TeamsDisabled, TeamNotFound, OrganizationPermissionDenied],
+      },
+    ),
+  )
+  .add(
+    HttpApiEndpoint.get(
+      "listTeamDescendants",
+      "/organization/:organizationId/teams/:teamId/descendants",
+      {
+        params: TeamIdParams,
+        success: Schema.Array(TeamDto),
+        error: [OrganizationNotFound, TeamsDisabled, TeamNotFound, OrganizationPermissionDenied],
+      },
+    ),
   )
   .add(
     HttpApiEndpoint.get("listTeamMembers", "/organization/:organizationId/teams/:teamId/members", {
@@ -739,9 +868,33 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         TeamNotFound,
         MembershipNotFound,
         TeamMemberLimitReached,
+        AlreadyTeamMember,
+        RolePermissionEscalation,
+        UnknownTeamRole,
         HookPoint.HookAborted,
       ],
     }),
+  )
+  .add(
+    HttpApiEndpoint.patch(
+      "updateTeamMemberRole",
+      "/organization/:organizationId/teams/:teamId/members/:userId",
+      {
+        params: TeamMemberParams,
+        payload: UpdateTeamMemberRolePayload,
+        success: TeamMembershipDto,
+        error: [
+          OrganizationNotFound,
+          TeamsDisabled,
+          OrganizationPermissionDenied,
+          TeamNotFound,
+          TeamMembershipNotFound,
+          RolePermissionEscalation,
+          UnknownTeamRole,
+          HookPoint.HookAborted,
+        ],
+      },
+    ),
   )
   .add(
     HttpApiEndpoint.delete(

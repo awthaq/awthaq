@@ -165,6 +165,16 @@ export interface UsersRepositoryShape {
     id: UserId,
   ) => Effect.Effect<User, Cause.NoSuchElementError | RepositoryError>;
   readonly delete: (id: UserId) => Effect.Effect<void, RepositoryError>;
+  /**
+   * BAM-005/BEH-EA-036: keyset page over every user, oldest first —
+   * `cursor` is opaque and derived from `(createdAt, id)`; at most `limit`
+   * rows are returned (`nextCursor` present iff a full page came back and
+   * more may follow).
+   */
+  readonly listPage: (
+    cursor?: Cursor,
+    limit?: number,
+  ) => Effect.Effect<Page<User>, RepositoryError>;
 }
 
 export class UsersRepository extends Context.Service<UsersRepository, UsersRepositoryShape>()(
@@ -254,6 +264,50 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
         traced("Users.findByEmail"),
       );
 
+    const usersPage = SqlSchema.findAll({
+      Request: Schema.Struct({
+        cursorCreatedAt: models.wire.nullableDateTime,
+        cursorId: Schema.NullOr(Schema.String),
+        limit: Schema.Int,
+      }),
+      Result: models.User,
+      execute: (request) =>
+        request.cursorCreatedAt === null || request.cursorId === null
+          ? sql`SELECT * FROM users ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit + 1}`
+          : sql`SELECT * FROM users
+                  WHERE "createdAt" > ${request.cursorCreatedAt}
+                     OR ("createdAt" = ${request.cursorCreatedAt} AND id > ${request.cursorId})
+                  ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit + 1}`,
+    });
+
+    // Reads `limit + 1` rows: the extra one only proves a next page exists, so an
+    // exactly-full final page never invents a cursor.
+    const listPage: UsersRepositoryShape["listPage"] = (cursor, limit) => {
+      const effectiveLimit = limit ?? DEFAULT_PAGE_SIZE;
+      return usersPage({
+        cursorCreatedAt: cursor?.createdAt ?? null,
+        cursorId: cursor?.id ?? null,
+        limit: effectiveLimit,
+      }).pipe(
+        Effect.flatMap((rows) =>
+          Effect.forEach(rows.slice(0, effectiveLimit), revealUser).pipe(
+            Effect.map((items) => ({ items, more: rows.length > effectiveLimit })),
+          ),
+        ),
+        Effect.map(({ items, more }): Page<User> => {
+          const last = items.at(-1);
+          return {
+            items,
+            nextCursor:
+              more && last !== undefined
+                ? Option.some({ createdAt: last.createdAt, id: last.id })
+                : Option.none(),
+          };
+        }),
+        traced("Users.listPage"),
+      );
+    };
+
     // PPS-007: one `UPDATE ... RETURNING *`, decoded through the dialect
     // model. The boolean binds through the dialect's own wire codec (`TRUE`
     // on pg, `1` on SQLite), so there is no per-dialect literal branch (TS-002).
@@ -283,6 +337,7 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
       delete: repo.delete,
       findByEmail,
       verifyEmail,
+      listPage,
     };
   });
 
@@ -406,13 +461,14 @@ export interface AccountsRepositoryShape {
 export interface AccountTokenColumns {
   readonly accessToken: string | null;
   readonly refreshToken: string | null;
+  readonly idToken: string | null;
   readonly accessTokenExpiresAt: DateTime.Utc | null;
   readonly refreshTokenExpiresAt: DateTime.Utc | null;
   readonly scope: string | null;
   readonly tokenType: string | null;
 }
 
-type TokenField = "accessToken" | "refreshToken";
+type TokenField = "accessToken" | "refreshToken" | "idToken";
 
 /**
  * SMS-002: a stored token ciphertext that `Encryption` could not open — the
@@ -551,7 +607,9 @@ export const AccountsRepositoryLive: Layer.Layer<
     const persistRefreshed = (row: Account, field: TokenField, old: string, fresh: string) =>
       (field === "accessToken"
         ? sql`UPDATE accounts SET "accessToken" = ${fresh} WHERE id = ${row.id} AND "accessToken" = ${old}`
-        : sql`UPDATE accounts SET "refreshToken" = ${fresh} WHERE id = ${row.id} AND "refreshToken" = ${old}`
+        : field === "refreshToken"
+          ? sql`UPDATE accounts SET "refreshToken" = ${fresh} WHERE id = ${row.id} AND "refreshToken" = ${old}`
+          : sql`UPDATE accounts SET "idToken" = ${fresh} WHERE id = ${row.id} AND "idToken" = ${old}`
       ).pipe(
         Effect.asVoid,
         Effect.catchTag("SqlError", (error) =>
@@ -569,6 +627,7 @@ export const AccountsRepositoryLive: Layer.Layer<
         const config = yield* AccountsRepositoryConfig;
         const access = yield* read(row, "accessToken");
         const refresh = yield* read(row, "refreshToken");
+        const idTok = yield* read(row, "idToken");
         if (config.reencryptOnRead) {
           if (Option.isSome(access.refreshed) && access.stored !== null) {
             yield* persistRefreshed(row, "accessToken", access.stored, access.refreshed.value);
@@ -576,11 +635,15 @@ export const AccountsRepositoryLive: Layer.Layer<
           if (Option.isSome(refresh.refreshed) && refresh.stored !== null) {
             yield* persistRefreshed(row, "refreshToken", refresh.stored, refresh.refreshed.value);
           }
+          if (Option.isSome(idTok.refreshed) && idTok.stored !== null) {
+            yield* persistRefreshed(row, "idToken", idTok.stored, idTok.refreshed.value);
+          }
         }
         return models.Account.make({
           ...row,
           accessToken: access.plaintext,
           refreshToken: refresh.plaintext,
+          idToken: idTok.plaintext,
         });
       });
 
@@ -602,7 +665,13 @@ export const AccountsRepositoryLive: Layer.Layer<
           "refreshToken",
           input.refreshToken,
         );
-        const row = yield* repo.insert({ ...input, accessToken, refreshToken });
+        const idToken = yield* encryptToken(
+          input.providerId,
+          input.userId,
+          "idToken",
+          input.idToken,
+        );
+        const row = yield* repo.insert({ ...input, accessToken, refreshToken, idToken });
         return yield* decryptRow(row);
       });
 
@@ -620,7 +689,8 @@ export const AccountsRepositoryLive: Layer.Layer<
           "refreshToken",
           input.refreshToken,
         );
-        const row = yield* repo.update({ ...input, accessToken, refreshToken });
+        const idToken = yield* encryptToken(aad.providerId, aad.userId, "idToken", input.idToken);
+        const row = yield* repo.update({ ...input, accessToken, refreshToken, idToken });
         return yield* decryptRow(row);
       });
 
@@ -670,6 +740,7 @@ export const AccountsRepositoryLive: Layer.Layer<
         id: AccountId,
         accessToken: Schema.NullOr(Schema.String),
         refreshToken: Schema.NullOr(Schema.String),
+        idToken: Schema.NullOr(Schema.String),
         accessTokenExpiresAt: models.wire.nullableDateTime,
         refreshTokenExpiresAt: models.wire.nullableDateTime,
         scope: Schema.NullOr(Schema.String),
@@ -681,6 +752,7 @@ export const AccountsRepositoryLive: Layer.Layer<
         UPDATE accounts
         SET "accessToken" = ${request.accessToken},
             "refreshToken" = ${request.refreshToken},
+            "idToken" = ${request.idToken},
             "accessTokenExpiresAt" = ${request.accessTokenExpiresAt},
             "refreshTokenExpiresAt" = ${request.refreshTokenExpiresAt},
             scope = ${request.scope},
@@ -709,12 +781,14 @@ export const AccountsRepositoryLive: Layer.Layer<
           "refreshToken",
           tokens.refreshToken,
         );
+        const idToken = yield* encryptToken(aad.providerId, aad.userId, "idToken", tokens.idToken);
         const updatedAt = yield* DateTime.now;
         const row = yield* updateProviderTokensQuery({
           ...tokens,
           id,
           accessToken,
           refreshToken,
+          idToken,
           updatedAt,
         });
         return yield* decryptRow(row);
@@ -787,6 +861,9 @@ export interface SessionsRepositoryShape {
   ) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
   /**
    * BEH-EA-036: `cursor` is opaque and derived from `(createdAt, id)`.
+   * SMS-002/BEH-EA-054: lists only *live* rows — not tombstoned and past
+   * neither `absoluteExpiresAt` nor `idleExpiresAt` at `now`. ESR-010:
+   * `limit` is clamped to `[1, MAX_PAGE_SIZE]`.
    *
    * RRC-001: reads the primary unless `options.consistency` is `"eventual"`,
    * which a display-only caller (a device list) passes to allow a configured
@@ -794,6 +871,7 @@ export interface SessionsRepositoryShape {
    */
   readonly listByUser: (
     userId: UserId,
+    now: DateTime.Utc,
     cursor?: Cursor,
     limit?: number,
     options?: ReadRouting.ReadOptions,
@@ -829,9 +907,32 @@ export interface SessionsRepositoryShape {
    */
   readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
   /**
+   * SMS-003: the user's live (not tombstoned, past neither expiry at `now`),
+   * non-impersonation sessions' ids and last activity — what a concurrent-
+   * session cap counts and evicts from. Impersonation (`actingAs`) rows are
+   * excluded: an admin's support session never counts against the target.
+   */
+  readonly listLiveIds: (
+    userId: UserId,
+    now: DateTime.Utc,
+  ) => Effect.Effect<
+    ReadonlyArray<{ readonly id: string; readonly lastActiveAt: DateTime.Utc }>,
+    RepositoryError
+  >;
+  /**
+   * GC-005: deletes session `id` only when it belongs to `userId`, in one
+   * statement — ownership is enforced atomically, not by a preceding lookup.
+   * `true` when a row was deleted (owned and present), `false` for an unknown
+   * id and a foreign id alike, so a caller cannot tell them apart.
+   */
+  readonly deleteOwned: (id: SessionId, userId: UserId) => Effect.Effect<boolean, SqlError>;
+  /**
    * RRS-003: tombstones the superseded row in a rotation — sets
    * `supersededBy`/`supersededAt`, never deletes it. Returns the
    * now-tombstoned row (its own `familyId` is what the new row inherits).
+   * ESR-002: applies only to a still-live row (`supersededAt IS NULL`), so two
+   * concurrent supersedes of one row cannot both tombstone it and fork its
+   * family — the loser gets `NoSuchElementError`.
    */
   readonly tombstone: (input: {
     readonly id: SessionId;
@@ -855,6 +956,8 @@ export interface SessionsRepositoryShape {
   readonly reauthenticate: (
     id: SessionId,
     authenticatedAt: DateTime.Utc,
+    /** THS-003: the already-unioned `amr` JSON to store; `undefined` leaves it untouched. */
+    amr?: string,
   ) => Effect.Effect<Session, Cause.NoSuchElementError | RepositoryError>;
 }
 
@@ -864,6 +967,14 @@ export class SessionsRepository extends Context.Service<
 >()("awthaq/sql/SessionsRepository") {}
 
 const DEFAULT_PAGE_SIZE = 50;
+
+/**
+ * ESR-010: the hard upper bound on any one session page. `listByUser` clamps
+ * to it, and the request schema below enforces it as defense in depth, so no
+ * caller-supplied limit can yield a `SqlError` (0, negative) or an unbounded
+ * page.
+ */
+export const MAX_PAGE_SIZE = 200;
 
 const sessionAad = (id: string, field: "ipAddress" | "userAgent") => `session:${id}:${field}`;
 
@@ -962,37 +1073,56 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
       SqlSchema.findAll({
         Request: Schema.Struct({
           userId: UserId,
+          /** SMS-002: the caller's clock (so `TestClock` controls it) — rows past either expiry are not listed. */
+          now: models.wire.dateTime,
           cursorCreatedAt: models.wire.nullableDateTime,
           cursorId: Schema.NullOr(Schema.String),
-          limit: Schema.Int,
+          limit: Schema.Int.pipe(
+            Schema.check(Schema.isBetween({ minimum: 1, maximum: MAX_PAGE_SIZE })),
+          ),
         }),
         Result: models.Session,
+        // SMS-002: the two expiry predicates make the list exactly the rows
+        // `verify` would still accept (modulo the secret). PPS-002: the cursor
+        // is a row-value comparison over `(createdAt, id)` so the partial
+        // composite index `sessions_user_created_live` (migration 19) serves
+        // both the filter and the order with no sort node.
         execute: (request) =>
           request.cursorCreatedAt === null || request.cursorId === null
             ? client`SELECT * FROM sessions WHERE "userId" = ${request.userId}
                   AND "supersededAt" IS NULL
+                  AND "absoluteExpiresAt" > ${request.now}
+                  AND "idleExpiresAt" > ${request.now}
                   ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit}`
             : client`SELECT * FROM sessions WHERE "userId" = ${request.userId}
                   AND "supersededAt" IS NULL
-                  AND ("createdAt" > ${request.cursorCreatedAt}
-                       OR ("createdAt" = ${request.cursorCreatedAt} AND id > ${request.cursorId}))
+                  AND "absoluteExpiresAt" > ${request.now}
+                  AND "idleExpiresAt" > ${request.now}
+                  AND ("createdAt", id) > (${request.cursorCreatedAt}, ${request.cursorId})
                   ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit}`,
       }),
     );
 
-    const listByUser: SessionsRepositoryShape["listByUser"] = (userId, cursor, limit, options) =>
-      pageOn(options?.consistency ?? "authoritative").pipe(
+    const listByUser: SessionsRepositoryShape["listByUser"] = (
+      userId,
+      now,
+      cursor,
+      limit,
+      options,
+    ) => {
+      const effectiveLimit = Math.min(Math.max(limit ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+      return pageOn(options?.consistency ?? "authoritative").pipe(
         Effect.flatMap((page) =>
           page({
             userId,
+            now,
             cursorCreatedAt: cursor?.createdAt ?? null,
             cursorId: cursor?.id ?? null,
-            limit: limit ?? DEFAULT_PAGE_SIZE,
+            limit: effectiveLimit,
           }),
         ),
         Effect.flatMap((rows) => Effect.forEach(rows, revealSession)),
         Effect.map((items): Page<Session> => {
-          const effectiveLimit = limit ?? DEFAULT_PAGE_SIZE;
           const last = items.at(-1);
           const nextCursor =
             items.length === effectiveLimit && last !== undefined
@@ -1002,6 +1132,7 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
         }),
         traced("Sessions.listByUser", { userId }),
       );
+    };
 
     const touchQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
@@ -1061,6 +1192,29 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
         traced("Sessions.deleteAllByUser", { userId }),
       );
 
+    const liveIdsQuery = SqlSchema.findAll({
+      Request: Schema.Struct({ userId: UserId, now: models.wire.dateTime }),
+      Result: Schema.Struct({ id: Schema.String, lastActiveAt: models.wire.dateTime }),
+      execute: (request) => sql`
+          SELECT id, "lastActiveAt" FROM sessions
+          WHERE "userId" = ${request.userId}
+            AND "supersededAt" IS NULL
+            AND "actingAsId" IS NULL
+            AND "absoluteExpiresAt" > ${request.now}
+            AND "idleExpiresAt" > ${request.now}
+          ORDER BY "lastActiveAt" ASC, id ASC
+        `,
+    });
+
+    const listLiveIds: SessionsRepositoryShape["listLiveIds"] = (userId, now) =>
+      liveIdsQuery({ userId, now }).pipe(traced("Sessions.listLiveIds", { userId }));
+
+    const deleteOwned: SessionsRepositoryShape["deleteOwned"] = (id, userId) =>
+      sql`DELETE FROM sessions WHERE id = ${id} AND "userId" = ${userId} RETURNING id`.pipe(
+        Effect.map((rows) => rows.length > 0),
+        traced("Sessions.deleteOwned", { id, userId }),
+      );
+
     const tombstoneQuery = SqlSchema.findOne({
       Request: Schema.Struct({
         id: SessionId,
@@ -1071,7 +1225,7 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
       execute: (request) => sql`
           UPDATE sessions
           SET "supersededBy" = ${request.supersededBy}, "supersededAt" = ${request.supersededAt}
-          WHERE "id" = ${request.id}
+          WHERE "id" = ${request.id} AND "supersededAt" IS NULL
           RETURNING *
         `,
     });
@@ -1105,18 +1259,20 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
       Request: Schema.Struct({
         id: SessionId,
         authenticatedAt: models.wire.dateTime,
+        amr: Schema.NullOr(Schema.String),
       }),
       Result: models.Session,
       execute: (request) => sql`
           UPDATE sessions
-          SET "authenticatedAt" = ${request.authenticatedAt}
+          SET "authenticatedAt" = ${request.authenticatedAt},
+              "amr" = COALESCE(${request.amr}, "amr")
           WHERE "id" = ${request.id}
           RETURNING *
         `,
     });
 
-    const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (id, authenticatedAt) =>
-      reauthenticateQuery({ id, authenticatedAt }).pipe(
+    const reauthenticate: SessionsRepositoryShape["reauthenticate"] = (id, authenticatedAt, amr) =>
+      reauthenticateQuery({ id, authenticatedAt, amr: amr ?? null }).pipe(
         Effect.flatMap(revealSession),
         traced("Sessions.reauthenticate", { id }),
       );
@@ -1131,6 +1287,8 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
       touch,
       deleteAllForUserExcept,
       deleteAllByUser,
+      deleteOwned,
+      listLiveIds,
       tombstone,
       markReused,
       revokeFamily,

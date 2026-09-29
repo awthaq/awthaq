@@ -3,7 +3,7 @@ ID: "WPS-003"
 Title: "Dual-scope challenge probe in registerVerify destroys the non-matching sibling challenge"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/ChallengeStore.ts:95"
 Auditor: "webauthn-passkeys-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `passkey` · reported by **WebAuthn/Passkeys Implementation Specialist** (`webauthn-passkeys-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Make consume value-checked atomically (DELETE FROM passkey_challenge WHERE scope
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-challenge-store-hardening`. Evidence at HEAD ec065a7: `packages/passkey/src/ChallengeStore.ts:95`. Fix: Stop probing both registration scopes: the verify payload names its ceremony, and only that scope is consumed. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** register/verify no longer probes both scopes. PasskeyApi.RegisterVerifyPayload gains ceremony?: 'modal'|'conditional' (absent = modal); Passkey.ts registerVerify consumes exactly that ceremony's ChallengeStore scope; client registerPasskeyConditional sends ceremony:'conditional'. Tests: PasskeyCeremony.test.ts 'completing a conditional ceremony leaves a concurrently-issued modal challenge usable' (red before: PasskeyChallengeInvalid) + 'a conditional challenge presented as modal is not accepted'; client PasskeyClient.test.ts 'a conditional registration names its ceremony'. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

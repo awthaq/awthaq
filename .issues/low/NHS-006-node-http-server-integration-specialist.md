@@ -3,7 +3,7 @@ ID: "NHS-006"
 Title: "Per-request session cache relies on framework-internal request object identity"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Authentication.ts:123"
 Auditor: "node-http-server-integration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `server` · reported by **Node HTTP Server Integration Specialist** (`node-http-server-integration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Provide the cache through a tiny first middleware that scopes an empty Ref to th
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `per-request-session-cache`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:123`. Fix: Key the per-request cache on `request.source`, not the HttpServerRequest wrapper, so re-wrapping (HttpRouter prefix mounts) cannot fork it. Fix the doc comment's false 'mutated in place, never replaced' invariant. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Covered by the TS-003 rewrite: cache keyed on request.source; doc comment rewritten (cites Effect's requestPreResponseHandlers WeakMap and HttpRouter's sliceRequestUrl re-wrap). Test 'a re-wrapped request (request.modify) shares the original's verification' was red (timed out) before.

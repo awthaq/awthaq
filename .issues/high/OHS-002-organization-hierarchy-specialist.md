@@ -3,7 +3,7 @@ ID: "OHS-002"
 Title: "Organization deletion cascade runs five repository calls with no transaction"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:1152"
 Auditor: "organization-hierarchy-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `correctness` · `organization` · reported by **Organization Hierarchy Specialist** (`organization-hierarchy-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `delete_` (packages/organization/src/Organization.ts:1139-1166) runs four sequential, unwrapped repository calls (`members.removeAllForOrganization`, `invitations.removeAllForOrganization`, `teams.removeAllTeamsForOrganization`, `orgRoles.removeAllForOrganization`, lines 1152-1155) before `orgs.delete`, and a package-wide grep for `withTransaction` in `packages/organization/` returns zero matches. `removeAllTeamsForOrganization` (TeamRecords.ts:505-514) and `removeTeam` (TeamRecords.ts:495-503) each issue two separate, unwrapped SQL statements, confirming the same non-transactional pattern. `withTransaction` is an established pattern elsewhere in the codebase (e.g. packages/ports/src/SqlTransaction.ts, packages/core/src/Accounts.ts), so the fix is mechanical. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-write-atomicity-and-uniqueness`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1506`. Fix: Make the organization-delete and team-delete cascades (and each multi-statement TeamRecords SQL op) commit or roll back as one unit via the existing SqlTransaction port. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`.
+
+**Resolved (2026-09-29):** Organization.layer now requires SqlTransaction (@awthaq/ports); delete_ wraps members/invitations/teams/roles/org deletes in sqlTransaction.withTransaction (hooks/events after commit) and removeTeam wraps teams.removeTeam; every multi-statement TeamRecords.layerSql op (removeTeam, removeAllTeamsForOrganization, addTeamMember, removeTeamMember, new removeUserFromOrganizationTeams) is its own sql.withTransaction (savepoint when nested; BEH-EA-035 got a bounded-exception note). Test compositions provide SqlTransaction.layerNoop. Tests: new packages/organization/test/OrganizationSql.test.ts (real sqlite + migrations + SqlTransaction.layerSql; trigger-injected failure on the final organization_org delete leaves every table untouched — proven red with layerNoop swapped in) and TeamRecords.test.ts 'TeamRecords (layerSql) atomicity' x3 (red against the old TeamRecords: team row lost / orphan membership / stale row). Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 853 pass, test:bdd green, spec:verify:strict PASS, oxlint clean.

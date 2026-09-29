@@ -3,7 +3,7 @@ ID: "MTI-007"
 Title: "Roles plugin is global and tenant-blind while organization permissions are per-org — two uncomposed authority models"
 Level: medium
 Category: "architecture"
-Status: ready-for-human
+Status: resolved
 Package: "roles"
 Source: "packages/roles/src/Roles.ts:35"
 Auditor: "multi-tenant-isolation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `roles` · reported by **Multi-Tenant Isolation Specialist** (`multi-tenant-isolation-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Either add an optional scope (organizationId) to role assignment and expose scop
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `authz-model-boundaries`. Evidence at HEAD ec065a7: `packages/roles/src/Roles.ts:41`. Fix: Decide and codify the authority split between global Roles and per-organization roles (see Decisions); the recommended option is a documented, test-pinned contract plus naming guidance, not a third mechanism. (effort S). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option A per plan; user may revisit. New spec/decisions/017-global-roles-vs-organization-roles.md (ADR-EA-017, indexed and traced; number 017 was free at this base, other programs may also claim it), appendix 02 gains a platform-vs-tenant worked example (anyOf hasRole('platform:support') / hasRelationship('member:update')), Roles.ts header states the split. Naming guidance is advisory: the dossier's optional Roles.config guard rejecting catalog names owner/admin/member was NOT adopted (it would break existing catalogs and the plugin's own fixtures, and the confusion it prevents is one of reading — the two role stores are never merged); revisit if wanted. No third mechanism built; option C (resource-scoped AttributeResolver in ../qadi) left for a second consumer. Gates: spec:verify:strict PASS, tsc/tests unaffected (comment-only source change).

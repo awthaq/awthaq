@@ -148,7 +148,7 @@ Feature: Sessions
 
   # BEH-EA-053 — spec/behaviors/07-sessions.md
   @BEH-EA-053
-  Rule: A new session is issued — never reused — at sign-in and at privilege change; the superseded row is deleted
+  Rule: A new session is issued — never reused — at sign-in and at privilege change; the superseded row is tombstoned atomically with the new row's insertion
 
     @REQ-EA-147
     Scenario: Signing in issues a newly minted session rather than reusing an existing one
@@ -166,11 +166,11 @@ Feature: Sessions
     # restructuring the spec's authored Outline to dodge the gap.
     @skip
     @REQ-EA-148
-    Scenario Outline: A privilege-changing operation issues a new session and deletes the superseded row
+    Scenario Outline: A privilege-changing operation issues a new session and tombstones the superseded row
       Given a signed-in user "alice" with session "s0"
       When "alice" performs a "<operation>"
       Then a newly minted session replaces "s0"
-      And session "s0"'s row no longer exists, rather than merely being marked invalid
+      And session "s0" no longer verifies, its row tombstoned rather than left valid
 
       Examples:
         | operation       |

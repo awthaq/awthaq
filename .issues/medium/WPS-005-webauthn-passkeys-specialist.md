@@ -3,7 +3,7 @@ ID: "WPS-005"
 Title: "Expired challenges are never reclaimed; abandoned authenticate ceremonies grow storage without bound"
 Level: medium
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:506"
 Auditor: "webauthn-passkeys-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `performance` · `passkey` · reported by **WebAuthn/Passkeys Implementation Specialist** (`webauthn-passkeys-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Add TTL reclamation: opportunistically evict expired entries on issue, run a DEL
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-challenge-store-hardening`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:717`. Fix: Reclaim expired challenges opportunistically on issue, expose an explicit sweep, and throttle the anonymous options endpoint. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Reclaim expired challenges and throttle the anonymous options endpoint. ChallengeStore: layerMemory/layerSql reclaim expired entries on every issue, new sweepExpired: Effect<number> on the shape (cookie: 0), migration create_passkey_challenge_expires_at_index. Passkey.ts registers/enforces RateLimits rules on passkey.authenticate (per-IP on authenticateOptions and authenticateVerify, per-email on options; Api.RateLimited added to both endpoints' errors; handlers resolve the address through ClientAddress). Tests: ChallengeStore.test.ts (all three layers) 'an expired, never-consumed challenge is reclaimed by the next issue' + sweep tests (red before: sweepExpired undefined); PasskeyEnumeration.test.ts rate-limit tests over a real limiter. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

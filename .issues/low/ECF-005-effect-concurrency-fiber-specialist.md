@@ -58,3 +58,5 @@ Make get-or-create atomic: a single Ref.modify over the per-request map that ins
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `per-request-session-cache`. Duplicate of `TS-003-tim-smart` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:166`. Full dossier: `.plan/slices/06-server-api.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `TS-003-tim-smart` — closed by its fix (see that issue's Resolved comment).

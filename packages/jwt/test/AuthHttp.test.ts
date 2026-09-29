@@ -48,7 +48,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
     Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("jwt-authhttp-test-csrf-secret"),
+      secret: Redacted.make("jwt-authhttp-test-csrf-secret-padded-to-thirty-two-bytes"),
       allowedOrigins: [] as ReadonlyArray<string>,
     }),
   ),
@@ -139,7 +139,7 @@ const buildHandler = () => {
     withAppContext(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        yield* sessions.revoke(sessionId);
+        yield* sessions.revoke(sessionId, "admin");
       }),
     );
 

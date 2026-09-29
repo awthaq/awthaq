@@ -3,7 +3,7 @@ ID: "SAM-005"
 Title: "No RLS-to-qadi translation guidance; the mapping mechanics survive only as inline comments"
 Level: medium
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/OrganizationQadi.ts:12"
 Auditor: "supabase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `organization` · reported by **Supabase Auth Migration Specialist** (`supabase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Write the RLS-to-qadi migration guide: catalog every policy as a plain-language 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `authz-docs-truthfulness`. Evidence at HEAD ec065a7: `packages/organization/src/OrganizationQadi.ts:11`. Fix: Write the RLS→qadi migration guide as a spec appendix. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New spec/appendices/04-rls-to-qadi-migration.md (registered in appendices/index.yaml): policy-catalog-first method, RLS-term -> qadi/awthaq mapping table (auth.uid ownership, org membership/role EXISTS, per-org permissions, auth.jwt claims, anon), unsupported shapes (SECURITY DEFINER helpers, storage.objects prefixes) with workarounds, SQL pushdown for list queries (BEH-EA-166), and a worked members-read/editors-update project example using ResourceOrganizationLookup + has-role/`member:update`. spec:verify:strict passes with it registered. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, tests/bdd green apart from load-induced timeouts in password/ports (machine load average ~170 from parallel agents; each green in isolation), spec:verify:strict PASS, oxlint clean.

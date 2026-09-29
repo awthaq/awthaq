@@ -123,7 +123,7 @@ describe("PII column encryption (CSG-006)", () => {
           assert.notInclude(raw.ipAddress ?? "", "203.0.113");
 
           assert.strictEqual((yield* sessions.findById(session.id)).userAgent, "Agent/1.0");
-          const page = yield* sessions.listByUser(userId);
+          const page = yield* sessions.listByUser(userId, yield* DateTime.now);
           assert.strictEqual(page.items[0]?.ipAddress, "203.0.113.9");
 
           const now = yield* DateTime.now;

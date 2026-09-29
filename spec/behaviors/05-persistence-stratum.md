@@ -78,7 +78,9 @@ REQUIREMENT: A repository MUST be a `Context.Service` built via
              boundaries are the calling domain service's responsibility.
 ```
 
-`research/10-schema-migrations.md` Q72 documents why: `SqlClient.withTransaction`'s nested calls become savepoints rather than independent transactions, so a repository that opened its own transaction internally would silently change the atomicity boundary any caller composing two repository calls expects. Keeping repositories transaction-agnostic and letting the domain service (`Password.confirmReset`, for instance, consuming a token and rotating a session in one transaction — see [BEH-EA-058](08-verification-tokens.md#beh-ea-058-a-verification-tokens-consumption-and-the-state-change-it-authorizes-commit-in-one-transaction)) hold the boundary is what keeps composition safe.
+`research/10-schema-migrations.md` Q72 documents why: `SqlClient.withTransaction`'s nested calls become savepoints rather than independent transactions, so a repository that opened its own transaction internally would silently change the atomicity boundary any caller composing two repository calls expects. Keeping repositories transaction-agnostic and letting the domain service (`Password.confirmReset`, for instance, consuming a token and rotating a session in one transaction — see [BEH-EA-058](08-verification-tokens.md#beh-ea-058-a-verification-tokens-consumption-and-the-state-change-it-authorizes-commit-in-one-transaction)) hold the boundary is what keeps composition safe. A domain-service transaction spanning several core tables (OAuth's just-in-time create-and-link, `confirmReset`) is only atomic if those tables share one transaction domain — see [INV-EA-017](../invariants.md#inv-ea-017-the-core-identity-tables-share-one-transaction-domain-and-any-partitioning-scheme-co-locates-a-user-with-its-accounts): any sharding or partitioning scheme must co-locate a user with its accounts.
+
+**One bounded exception (OHS-002).** A plugin's own records service (`@awthaq/organization`'s `TeamRecords`, hand-written over `SqlSchema` rather than `SqlModel.makeRepository`) whose *single* operation is inherently several statements — delete a team and its membership rows, insert a membership and bump the team's `memberCount` — wraps that one operation in `sql.withTransaction` so it is atomic even when called directly. This does not move the caller's boundary: inside a domain service's own transaction the wrapper is a savepoint, and the outer commit/rollback still decides the outcome. Composing two records calls remains the domain service's job (`Organization.delete` holds the cascade's transaction via the `SqlTransaction` port).
 
 **Read replicas (RRC-001, [ADR-EA-024](../decisions/024-read-replica-routing.md)).** Everything above assumes one primary: a read issued after a committed write sees it. Replica routing is opt-in (`ReadRouting.replica(layer)`) and never changes that for anything that decides liveness or authorization: every write, `Users`/`Accounts` read, `Sessions` point read and CAS, and all `Verification`/`VerificationReservations` methods are primary-pinned, and carry write results back with `RETURNING` rather than re-reading. Only display/history listings may ask for `consistency: "eventual"` (`Sessions.listByUser`, `AuditLog.list`), and an eventual read on a fiber that has written (`ReadRouting.captureToken`) goes to the replica only once it has replayed past that write, else to the primary.
 
@@ -88,7 +90,7 @@ Every hand-written repository method (anything `SqlModel.makeRepository` does no
 
 ```ts
 type Cursor = { readonly createdAt: DateTime.Utc; readonly id: string }
-listByUser: (userId: UserId, cursor?: Cursor, limit?: number) => Effect.Effect<ReadonlyArray<Session>, RepositoryError>
+listByUser: (userId: UserId, now: DateTime.Utc, cursor?: Cursor, limit?: number) => Effect.Effect<Page<Session>, RepositoryError>
 ```
 
 ```text
@@ -99,6 +101,8 @@ REQUIREMENT: No repository's public interface MAY accept an offset
 ```
 
 `research/10-schema-migrations.md` Q72 and Q79 cite the reason directly: offset pagination forces the database to walk and discard every skipped row, a cost that grows linearly with the offset (Winand, "No Offset"; Slack's own migration off offset pagination is cited as the production case study). Session and verification-token tables are append-mostly with a monotonic `(createdAt, id)`, which is exactly the shape a keyset cursor needs — a tiebreaker on `id` is required because timestamps alone can collide within the same millisecond.
+
+Two refinements bind the session page query specifically. **Index-aligned (PPS-002):** the cursor is a row-value comparison `("createdAt", id) > (?, ?)` served by the partial composite index `sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL` (migration 19), so filter and order need no sort node. **Bounded by construction (ESR-010):** `listByUser` clamps the page size to `[1, MAX_PAGE_SIZE]` (200) and the request schema enforces the same bound, so no caller-supplied limit can produce a `SqlError` or an unbounded page; the query also takes the caller's clock and lists only live (unexpired, non-tombstoned) rows (SMS-002, [BEH-EA-054](07-sessions.md#beh-ea-054-sessions-expose-a-device-list-per-device-revocation-and-revoke-others)).
 
 ## BEH-EA-037: A plugin's migrations are v4 `Migrator` records, exported statically per plugin
 

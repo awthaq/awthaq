@@ -78,3 +78,7 @@ entries:
     file: "024-read-replica-routing.md"
     title: "Read-Replica Routing Is Opt-In, Classified Per Read, and Guarded by a Causal Token"
     status: "Accepted — implemented"
+  - id: "ADR-EA-025"
+    file: "025-global-roles-vs-organization-roles.md"
+    title: "Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority"
+    status: "Accepted — implemented (documentation and guidance)"

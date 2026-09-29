@@ -15,16 +15,25 @@ import {
   Hooks,
   HookPoint,
   RateLimits,
+  SessionCookie,
   Sessions,
   Users,
   Verification,
 } from "@awthaq/core";
-import { ClientAddress, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import {
+  ClientAddress,
+  Hmac,
+  Mailer,
+  PasswordHasher,
+  RateLimiter,
+  SqlTransaction,
+} from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Headers from "effect/unstable/http/Headers";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -85,6 +94,8 @@ export interface PasswordShape {
      * independently of the (attacker-chosen) email each attempt names.
      */
     readonly ip?: string;
+    /** CSD-003: recorded on the issued session (device list, forensics); capped by `Sessions.issue`. */
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     | PasswordApi.WeakPassword
@@ -115,6 +126,8 @@ export interface PasswordShape {
      * as a single shared "unknown origin" bucket, never as unthrottled.
      */
     readonly ip?: string;
+    /** CSD-003: recorded on the issued session; see `signUp`'s own `userAgent`. */
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     | Api.InvalidCredentials
@@ -161,7 +174,8 @@ export interface PasswordShape {
    */
   /**
    * PIL-002/RRS-001/SMS-001: BEH-EA-053 — every privilege-changing
-   * operation mints a fresh session and deletes the row it supersedes.
+   * operation mints a fresh session and tombstones the row it supersedes
+   * (atomically with the insert — ESR-002/RRS-004).
    * `currentSessionId` names the caller's own session so it can be
    * rotated (superseded, not merely kept) while every *other* session for
    * this user is revoked outright, closing the classic "attacker holds a
@@ -173,6 +187,9 @@ export interface PasswordShape {
     readonly currentSessionId: Sessions.SessionId;
     readonly currentPassword: Redacted.Redacted<string>;
     readonly newPassword: Redacted.Redacted<string>;
+    /** CSD-003: the superseding session records the caller's request context too. */
+    readonly ip?: string;
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited
@@ -192,8 +209,7 @@ export interface PasswordShape {
   }) => Effect.Effect<void, PasswordApi.WrongPassword | Api.RateLimited>;
 }
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+const { toHex } = Hmac;
 
 /**
  * `RateLimits.RateLimitKey`'s own `input` is untyped (`unknown`) — one
@@ -370,6 +386,19 @@ const checkPolicy = (
     return hints;
   });
 
+/** CSD-003: the `request` context `Sessions.issue` records — omitted keys, not `undefined` (`exactOptionalPropertyTypes`). */
+const sessionRequest = (input: { readonly ip?: string; readonly userAgent?: string }) => ({
+  ...(input.ip !== undefined ? { ip: input.ip } : {}),
+  ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
+});
+
+/** CSD-003: the caller's `User-Agent` header, when present. */
+const requestUserAgent = (request: HttpServerRequest.HttpServerRequest) =>
+  Option.match(Headers.get(request.headers, "user-agent"), {
+    onNone: () => ({}),
+    onSome: (userAgent) => ({ userAgent }),
+  });
+
 /** The response to `signUp`/`signIn` — the just-created/just-verified session is always `current`. */
 const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto =>
   new SessionContract.SessionDto({
@@ -378,6 +407,7 @@ const toSessionDto = (session: Sessions.SessionView): SessionContract.SessionDto
     lastActiveAt: DateTime.formatIso(session.lastActiveAt),
     expiresAt: DateTime.formatIso(session.absoluteExpiresAt),
     userAgent: Option.getOrNull(session.userAgent),
+    amr: session.amr,
     current: true,
   });
 
@@ -412,12 +442,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
         const issued = yield* password.signUp({
           ...payload,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...requestUserAgent(request),
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return toSessionDto(issued.session);
       }),
 
@@ -436,12 +463,9 @@ export const PasswordHandlers = HttpApiBuilder.group(
         const issued = yield* password.signIn({
           ...payload,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...requestUserAgent(request),
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return toSessionDto(issued.session);
       }),
 
@@ -491,10 +515,13 @@ export const PasswordHandlers = HttpApiBuilder.group(
 
       changePassword: Effect.fnUntraced(function* ({
         payload,
+        request,
       }: {
         payload: PasswordApi.ChangePasswordPayload;
+        request: HttpServerRequest.HttpServerRequest;
       }) {
         const principal = yield* Api.CurrentPrincipal;
+        const resolvedAddress = yield* clientAddress.resolve(request);
         // `changePassword`'s own `Authentication` middleware already
         // refused an unauthenticated request; a non-`User` principal
         // reaching it is a wiring defect, mirroring `Session.ts`'s own
@@ -511,12 +538,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
           currentSessionId: Sessions.SessionId(principal.sessionId),
           currentPassword: payload.currentPassword,
           newPassword: payload.newPassword,
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...requestUserAgent(request),
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return toSessionDto(issued.session);
       }),
 
@@ -817,17 +842,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                   credentialHash: Redacted.make(hash),
                 })
                 .pipe(Effect.orDie);
-              const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+              const issued = yield* sessions
+                .issue({ userId: user.id, request: sessionRequest(input), amr: ["pwd"] })
+                .pipe(Effect.orDie);
               return { user, issued };
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
         yield* events.publish({ _tag: "auth.user.created", userId: user.id });
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: user.id,
-        });
 
         // BEH-EA-113: dispatched, never awaited — response latency must
         // not depend on mail-provider latency, and per
@@ -931,16 +953,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         if (point._tag === "Diverted") {
           return yield* Effect.fail(point.value);
         }
-        const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        const issued = yield* sessions
+          .issue({ userId: user.id, request: sessionRequest(input), amr: ["pwd"] })
+          .pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.user.signedIn",
           userId: user.id,
           strategy: "password",
-        });
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: user.id,
         });
         yield* afterSignIn.run({ userId: user.id, strategy: "password" });
         return issued;
@@ -1089,7 +1108,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // `revokeAll` primitive, retiring the empty-string-id
               // `revokeOthers` trick this call site used to stand in for
               // it.
-              yield* sessions.revokeAll(userId);
+              // ESA-006/TIR-008: `Sessions.revokeAll` itself publishes the
+              // `auth.session.revoked` (reason `passwordReset`) — after this
+              // transaction's own write, like every other revocation.
+              yield* sessions.revokeAll(userId, "passwordReset");
             }),
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
@@ -1097,11 +1119,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // committed — mirroring `signUp`'s own `auth.user.created`
         // placement, never inside the transaction itself.
         yield* events.publish({ _tag: "auth.password.resetCompleted", userId });
-        yield* events.publish({
-          _tag: "auth.session.revoked",
-          userId,
-          reason: "passwordReset",
-        });
       });
 
       const verifyEmail: PasswordShape["verifyEmail"] = Effect.fnUntraced(function* (input) {
@@ -1205,20 +1222,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // row with a freshly minted one. Reversing this order would leave
         // `revokeOthers` nothing to `keep` (the superseded id no longer
         // exists once `issue` has run).
-        yield* sessions.revokeOthers(input.userId, input.currentSessionId);
-        yield* events.publish({
-          _tag: "auth.session.revoked",
-          userId: input.userId,
-          reason: "passwordChanged",
-        });
+        yield* sessions.revokeOthers(input.userId, input.currentSessionId, "passwordChanged");
         const issued = yield* sessions
-          .issue({ userId: input.userId, supersedes: input.currentSessionId })
+          .issue({
+            userId: input.userId,
+            supersedes: input.currentSessionId,
+            request: sessionRequest(input),
+            amr: ["pwd"],
+          })
           .pipe(Effect.orDie);
-        yield* events.publish({
-          _tag: "auth.session.issued",
-          sessionId: issued.session.id,
-          userId: input.userId,
-        });
         return issued;
       });
 
@@ -1248,7 +1260,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
           return yield* Effect.fail(new PasswordApi.WrongPassword());
         }
-        yield* sessions.reauthenticate(input.currentSessionId).pipe(
+        yield* sessions.reauthenticate(input.currentSessionId, ["pwd"]).pipe(
           Effect.catchTag("SessionNotFound", () =>
             // `changePassword`'s own `Authentication` middleware already
             // proved this exact session live moments ago — a

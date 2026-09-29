@@ -16,6 +16,7 @@
     "test:bdd": "pnpm --filter @awthaq/features test",
     "coverage": "vitest run --coverage",
     "circular": "node scripts/circular.mjs",
+    "check:readmes": "node scripts/check-readme-status.mjs",
     "quality:dashboard": "node scripts/generate-quality-dashboard.mjs",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
@@ -25,7 +26,7 @@
     "spec:verify": "bash spec/scripts/verify-traceability.sh",
     "spec:verify:strict": "bash spec/scripts/verify-traceability.sh --strict",
     "package:smoke": "node scripts/package-smoke.mjs",
-    "check": "pnpm typecheck && pnpm package:smoke && pnpm lint && pnpm knip && pnpm format:check && pnpm circular && pnpm coverage && pnpm test:bdd && pnpm spec:verify:strict",
+    "check": "pnpm typecheck && pnpm package:smoke && pnpm lint && pnpm knip && pnpm format:check && pnpm circular && pnpm check:readmes && pnpm coverage && pnpm test:bdd && pnpm spec:verify:strict",
     "changeset": "changeset",
     "changeset-version": "changeset version",
     "changeset-publish": "changeset publish"

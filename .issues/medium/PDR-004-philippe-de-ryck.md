@@ -3,7 +3,7 @@ ID: "PDR-004"
 Title: "No security headers anywhere: no Referrer-Policy on auth redirects, no HSTS, no CSP, no X-Content-Type-Options"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:335"
 Auditor: "philippe-de-ryck"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `oauth` · reported by **Philippe De Ryck — Web Application Security Trainer** (`philippe-de-ryck`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Add Referrer-Policy: no-referrer (or strict-origin-when-cross-origin) to the OAu
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-callback-http-hardening`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:431`. Fix: Set `Referrer-Policy: no-referrer` on the OAuth authorize and callback responses, and ship an opt-in security-headers middleware plus a deployment checklist. (effort M). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** OAuth authorize and callback register a pre-response handler setting Referrer-Policy: no-referrer, so it covers 302s and framework-encoded 400/503 bodies (AuthHttp.test.ts 'PDR-004' red before: header absent; mutation-checked). New opt-in @awthaq/server SecurityHeaders.layer(options) (global HttpRouter middleware: HSTS, nosniff, Referrer-Policy, X-Frame-Options DENY, CSP frame-ancestors 'none'; each overridable or false; never overrides a handler-set header) with test/SecurityHeaders.test.ts (defaults, override/omit, no-clobber) and a Deployment checklist section appended to packages/server/README.md. BEH-EA-122 amended. Files outside packages/oauth: packages/server/src/{SecurityHeaders,index}.ts, packages/server/README.md. Gates as CSS-004.

@@ -3,7 +3,7 @@ ID: "MTI-010"
 Title: "getInvitation serves cross-tenant invitation data with no auth binding, and the invitation id doubles as the emailed token"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:1601"
 Auditor: "multi-tenant-isolation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `organization` · reported by **Multi-Tenant Isolation Specialist** (`multi-tenant-isolation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Split the capability from the identifier: issue a separate high-entropy token ca
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-tenant-read-isolation`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1963`. Fix: Bind getInvitation to the invitee (or an org member with invitation rights) and split the emailed capability token from the REST id. (effort L). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** getInvitation(caller, id) is readable only by the invitee (email match) or a member with invitation:create, else InvitationNotFound; new getInvitationByToken + GET /organization/invitations/by-token/:token (invitee-only landing lookup); invite mints a 32-byte random token, stores only its SHA-256 (organization_invitation.tokenHash, migration organization_invitation_token_hash + UNIQUE index, InvitationRecords.findByTokenHash/setTokenHash on both layers), mails {token, invitationId, organizationId, organizationName, role}; acceptInvitation/rejectInvitation take a token payload and require constant-time hash equality plus the existing email match (unknown id / wrong token / pre-column invitation all answer InvitationNotFound); resend rotates the token; email comparison is now case-insensitive. Organization.layer's RIn gains Crypto. Tests: Organization.test.ts 'invitation capability (MTI-010)' x5, InvitationRecords.test.ts tokenHash x2 (both layers), AuthHttp.test.ts (no tokenHash/token on the wire). Constant-time compare is a local copy of Sessions.ts's (a shared helper is planned cross-program). Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test all pass (one unrelated ports PasswordHasher scrypt timing flake under machine load, green on rerun), test:bdd green, spec:verify:strict PASS, oxlint clean.

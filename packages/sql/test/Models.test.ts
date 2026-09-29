@@ -97,6 +97,7 @@ describe("Models.makeModels (TS-001)", () => {
         supersededBy: null,
         supersededAt: null,
         reusedAt: date,
+        amr: "[]",
       });
       assert.strictEqual(session.supersededAt, null);
       assert.isNotNull(session.reusedAt);

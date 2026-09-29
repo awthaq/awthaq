@@ -3,7 +3,7 @@ ID: "SMS-003"
 Title: "No concurrent-session limit exists in config, shape, or either layer"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Sessions.ts:56"
 Auditor: "session-management-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `core` · reported by **Session Management Specialist** (`session-management-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Add an optional maxSessions (plus eviction policy: deny-new or evict-oldest) to 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-policy`. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:58`. Fix: Add an opt-in concurrent-session cap to SessionConfig (default: none, preserving BEH-EA-047) with a typed eviction policy, enforced atomically in issue, publishing an event on eviction. (effort M). Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** SessionConfig.maxConcurrent (opt-in {limit, onExceed:'evictOldest'}, absent by default -> BEH-EA-047 unchanged). layerMemory.issue evicts the least-recently-active surplus inside the same Ref.modify as the insert; layerSql.issue does it inside the (now also cap-triggered) transaction via new SessionsRepository.listLiveIds(userId, now); evictionOrder is shared. Each evicted session publishes auth.session.revoked (new reason limitEvicted). actingAs sessions neither count toward nor trigger the cap. v1 ships evictOldest only so issue's error channel is unchanged (refuse deferred: would need a typed SessionLimitReached). Doc caveat: under Postgres read-committed two racing issues can transiently exceed by one. Tests (core/test/Sessions.test.ts, both layers): 3rd session evicts the least-recently-active (activity, not creation order) with the limitEvicted event; actingAs sessions do not evict; default config never evicts. Spec: BEH-EA-047 paragraph (no new BEH id, to keep the contiguous id range).

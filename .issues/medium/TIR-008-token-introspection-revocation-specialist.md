@@ -3,7 +3,7 @@ ID: "TIR-008"
 Title: "No auth.session.revoked event - revocation is invisible to subscribers"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/Admin.ts:259"
 Auditor: "token-introspection-revocation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `admin` · reported by **Token Introspection & Revocation Specialist** (`token-introspection-revocation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Add auth.session.revoked (sessionId, userId, cause) and auth.session.revokedAll 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `session-revocation-events`. Already fixed by commit 45325bb. Evidence at HEAD ec065a7: `packages/core/src/AuthEvents.ts:90`. Fix: Publish revocation from the Sessions primitives themselves with a per-row identity and a cause, so every revocation path is observable and durably audited. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Closed with ESA-006 (same implementation): every Sessions revocation primitive takes a required reason and publishes exactly one auth.session.revoked after the delete (sessionId for scope one, null for others/all/family); callers: server Session.ts (signOut, userRevoked), Account.ts (userDeleted), Password (passwordChanged/passwordReset; its manual publishes removed), Admin (impersonationStopped), reuse detection (reuseDetected). Tests: core Sessions.test.ts eventsSuite (both layers) and server AuthHttp.test.ts 'POST /session/sign-out records a signOut auth.session.revoked in AuditLog'; password tests confirm exactly one event per path.

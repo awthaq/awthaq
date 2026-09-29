@@ -244,6 +244,7 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
             tokens: {
               accessToken: Redacted.make("access-1"),
               refreshToken: Option.some(Redacted.make("refresh-1")),
+              idToken: Option.none(),
               accessTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
               refreshTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-02-01T00:00:00.000Z")),
               scope: Option.some("email profile"),
@@ -270,6 +271,69 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
         }).pipe(Effect.provide(layer)),
     );
 
+    it.effect("BAM-008: link persists the id_token and findProviderTokens returns it", () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts.Accounts;
+        const account = yield* accounts.link({
+          userId,
+          providerId: "google",
+          subject: "sub-id-token-1",
+          tokens: {
+            accessToken: Redacted.make("access-id"),
+            refreshToken: Option.none(),
+            idToken: Option.some(Redacted.make("header.payload.signature")),
+            accessTokenExpiresAt: Option.none(),
+            refreshTokenExpiresAt: Option.none(),
+            scope: Option.none(),
+            tokenType: Option.none(),
+          },
+        });
+        const tokens = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+        assert.strictEqual(
+          Redacted.value(Option.getOrThrow(tokens.idToken)),
+          "header.payload.signature",
+        );
+        assert.isFalse("idToken" in account);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("BAM-008: updateCredentialHash and updateProviderTokens treat the id_token correctly", () =>
+      Effect.gen(function* () {
+        const accounts = yield* Accounts.Accounts;
+        const account = yield* accounts.link({
+          userId,
+          providerId: "google",
+          subject: "sub-id-token-2",
+          credentialHash: Redacted.make("hash-1"),
+          tokens: {
+            accessToken: Redacted.make("access-id-2"),
+            refreshToken: Option.none(),
+            idToken: Option.some(Redacted.make("kept.id.token")),
+            accessTokenExpiresAt: Option.none(),
+            refreshTokenExpiresAt: Option.none(),
+            scope: Option.none(),
+            tokenType: Option.none(),
+          },
+        });
+        // Rewriting the credential hash must not null the id_token.
+        yield* accounts.updateCredentialHash(account.id, Redacted.make("hash-2"));
+        const afterHash = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+        assert.strictEqual(Redacted.value(Option.getOrThrow(afterHash.idToken)), "kept.id.token");
+        // A whole-set token update replaces it (here with none).
+        yield* accounts.updateProviderTokens(account.id, {
+          accessToken: Redacted.make("access-id-3"),
+          refreshToken: Option.none(),
+          idToken: Option.none(),
+          accessTokenExpiresAt: Option.none(),
+          refreshTokenExpiresAt: Option.none(),
+          scope: Option.none(),
+          tokenType: Option.none(),
+        });
+        const replaced = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
+        assert.isTrue(Option.isNone(replaced.idToken));
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("BE-002: a linked account with no tokens given has none stored", () =>
       Effect.gen(function* () {
         const accounts = yield* Accounts.Accounts;
@@ -293,6 +357,7 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
           tokens: {
             accessToken: Redacted.make("access-old"),
             refreshToken: Option.some(Redacted.make("refresh-old")),
+            idToken: Option.none(),
             accessTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
             refreshTokenExpiresAt: Option.none(),
             scope: Option.some("email"),
@@ -302,6 +367,7 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
         yield* accounts.updateProviderTokens(account.id, {
           accessToken: Redacted.make("access-new"),
           refreshToken: Option.none(),
+          idToken: Option.none(),
           accessTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-06-01T00:00:00.000Z")),
           refreshTokenExpiresAt: Option.none(),
           scope: Option.none(),
@@ -337,6 +403,7 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
             tokens: {
               accessToken: Redacted.make("access-stays"),
               refreshToken: Option.some(Redacted.make("refresh-stays")),
+              idToken: Option.none(),
               accessTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-03-01T00:00:00.000Z")),
               refreshTokenExpiresAt: Option.some(DateTime.makeUnsafe("2026-04-01T00:00:00.000Z")),
               scope: Option.some("stays-scope"),
@@ -378,6 +445,7 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
           yield* accounts.updateProviderTokens(account.id, {
             accessToken: Redacted.make("access-1"),
             refreshToken: Option.none(),
+            idToken: Option.none(),
             accessTokenExpiresAt: Option.none(),
             refreshTokenExpiresAt: Option.none(),
             scope: Option.none(),
@@ -398,6 +466,7 @@ const suite = (name: string, layer: Layer.Layer<Accounts.Accounts, unknown, neve
           .updateProviderTokens(unknown, {
             accessToken: Redacted.make("x"),
             refreshToken: Option.none(),
+            idToken: Option.none(),
             accessTokenExpiresAt: Option.none(),
             refreshTokenExpiresAt: Option.none(),
             scope: Option.none(),
@@ -419,6 +488,7 @@ describe("Accounts (layerSql) undecryptable provider tokens (SMS-002)", () => {
   const tokens = {
     accessToken: Redacted.make("access"),
     refreshToken: Option.none<Redacted.Redacted<string>>(),
+    idToken: Option.none<Redacted.Redacted<string>>(),
     accessTokenExpiresAt: Option.none<DateTime.Utc>(),
     refreshTokenExpiresAt: Option.none<DateTime.Utc>(),
     scope: Option.none<string>(),

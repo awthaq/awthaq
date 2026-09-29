@@ -8,7 +8,7 @@
 // (`hasRelationship("member", { depth: 2 })` inside a real policy).
 import { Api } from "@awthaq/api";
 import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -48,7 +48,7 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(
     Layer.succeed(Csrf.CsrfConfig, {
-      secret: Redacted.make("organization-test-csrf-secret"),
+      secret: Redacted.make("organization-test-csrf-secret-padded-to-thirty-two-bytes"),
       allowedOrigins: [] as ReadonlyArray<string>,
     }),
   ),
@@ -70,6 +70,7 @@ const buildOrganizationLayer = (
     Layer.provideMerge(OrgRoleRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(TeamRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer))),
     Layer.provideMerge(Mailer.layerMemory),
+    Layer.provideMerge(SqlTransaction.layerNoop),
     Layer.provideMerge(OrganizationHooks.OrganizationHooksLive),
   );
 
@@ -80,9 +81,12 @@ const buildOrganizationLayer = (
 // composition rule `spec/behaviors/21-qadi-resolvers-obligations.md` already
 // documents for this class of contribution.
 const buildQadiLayer = (configOverrides: Partial<Organization.OrganizationConfigShape> = {}) =>
-  Layer.mergeAll(EvaluationServicesNone, OrganizationQadi.relationships).pipe(
-    Layer.provideMerge(buildOrganizationLayer(configOverrides)),
-  );
+  Layer.mergeAll(
+    EvaluationServicesNone,
+    OrganizationQadi.relationships.pipe(
+      Layer.provide(OrganizationQadi.ResourceOrganizationLookup.layerNone),
+    ),
+  ).pipe(Layer.provideMerge(buildOrganizationLayer(configOverrides)));
 
 const asCaller = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({
@@ -148,6 +152,41 @@ describe("Organization.relationships composed into a real qadi policy", () => {
             },
           }),
         ),
+      ),
+  );
+
+  // RZS-006: a real policy over the plugin's own statement vocabulary allows
+  // exactly the members the plugin's own PATCH gate allows — one source of truth.
+  it.effect(
+    "hasRelationship('member:update') agrees with the plugin's own updateMemberRole gate",
+    () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-1");
+        const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        for (const [user, role] of [
+          ["hr-1", "hr"],
+          ["plain-1", "member"],
+          ["target-1", "member"],
+        ] as const) {
+          yield* organization.addMember({
+            organizationId: record.id,
+            userId: Users.UserId(user),
+            role: [role],
+          });
+        }
+        const policy = hasRelationship("member:update");
+        for (const user of ["owner-1", "hr-1", "plain-1"]) {
+          const decision = yield* evaluate(policy, { resource: { id: record.id } }).pipe(
+            Effect.provide(currentSubjectLayer(makeSubject({ id: `user:${user}` }))),
+          );
+          const attempt = yield* organization
+            .updateMemberRole(asCaller(user), record.id, Users.UserId("target-1"), ["member"])
+            .pipe(Effect.exit);
+          assert.strictEqual(isAllowed(decision), attempt._tag === "Success", user);
+        }
+      }).pipe(
+        Effect.provide(buildQadiLayer({ permissionStatements: { hr: { member: ["update"] } } })),
       ),
   );
 });

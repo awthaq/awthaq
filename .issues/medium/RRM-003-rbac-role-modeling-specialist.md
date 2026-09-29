@@ -3,7 +3,7 @@ ID: "RRM-003"
 Title: "Assigned role names absent from the catalog are silently dropped"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "roles"
 Source: "packages/roles/src/Roles.ts:134"
 Auditor: "rbac-role-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `roles` · reported by **RBAC Role Modeling Specialist** (`rbac-role-modeling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Validate roleName against the catalog in assign (typed UnknownRole error, mirror
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `roles-catalog-validation`. Evidence at HEAD ec065a7: `packages/roles/src/Roles.ts:194`. Fix: Validate assignments against the catalog at assign time and make resolve-time drift observable. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** RolesShape.assign is Effect<void, UnknownRole> (Data.TaggedError {roleName}) and rejects names absent from the catalog on both layers; subjectResolver logs awthaq.roles.unknownAssignedRole (userId, roleName) for each dropped stored name; new RolesShape.listUnknownAssignments (memory: filter; sql: role NOT IN catalog) for startup/doctor checks. The old test pinning silent ignore was rewritten. Tests: Roles.test.ts 'assign of a name outside the catalog fails UnknownRole and stores nothing'; RolesSql.test.ts 'a stored name later removed from the catalog logs a warning at resolve and is listed' + 'assign of a name outside the catalog fails UnknownRole and writes no row'. BEH-EA-139 text updated. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 923 pass, test:bdd green, spec:verify:strict PASS, oxlint (organization/qadi/roles) clean.

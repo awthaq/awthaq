@@ -19,6 +19,7 @@ describe("Auth.make([Organization])", () => {
           "organization_invitation",
           "organization_team",
           "organization_team_membership",
+          "organization_team_closure",
           "organization_role",
           "organization_active_context",
         ],

@@ -3,7 +3,7 @@ ID: "MTI-001"
 Title: "Tenant scoping is call-site discipline: the records layer is structurally unguarded"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/ActiveContextRecords.ts:38"
 Auditor: "multi-tenant-isolation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `organization` · reported by **Multi-Tenant Isolation Specialist** (`multi-tenant-isolation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ Make tenant scoping structural: wrap the org-scoped records services in a tenant
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `org-active-context-lifecycle`. Evidence at HEAD ec065a7: `packages/organization/src/ActiveContextRecords.ts:37`. Fix: Make an unvalidated active-context write unrepresentable at the type level, and pin tenant-predicate discipline in SQL with an architecture test (RLS for plugin tables follows ticket 18). (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** MembershipRecord/TeamMembershipRecord are now Brand.Branded types built through module-private Brand.nominal constructors (no assertions); ActiveContextRecords.setOrganization/setTeam take them as witnesses (unsetOrganization/unsetTeam take the userId), so an unvalidated active-context write does not typecheck (@ts-expect-error test in ActiveContextRecords.test.ts). packages/organization/test/TenantScoping.test.ts reads every src/*Records.ts sql template and fails on an organization_* statement without a tenant key unless it is on the justified allowlist (and on stale allowlist entries). RLS for plugin tables is left to ticket 18 as the dossier says. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 871 pass, test:bdd green, spec:verify:strict PASS, oxlint clean.

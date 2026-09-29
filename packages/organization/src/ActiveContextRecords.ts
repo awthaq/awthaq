@@ -6,15 +6,33 @@
 // already extended that once this cycle with `actingAs`). `setOrganization`
 // and `setTeam` are independent partial upserts — each touches only its own
 // column, so setting the active organization never clobbers an
-// already-set active team and vice versa (ticket 16 wires `setTeam` for
-// real; this ticket only needs the column to exist and round-trip).
+// already-set active team and vice versa.
 //
-// Deliberately not cascade-deleted when its underlying session is revoked
-// — an orphaned row is harmless (the next read simply finds no matching
-// session), the same "declare the gap rather than build unrequested
-// session-lifecycle plumbing" precedent `@awthaq/admin`'s own
-// `endedBy: "expired"` gap already sets for this codebase.
+// **`sessionId` is the key on purpose (DRS-008).** The active organization is
+// per-session — better-auth's `session.activeOrganizationId` semantics: two
+// devices of one user may be working in two organizations. `userId` is the
+// *index*, not the key: it is what lets a row be found for erasure
+// (`deleteAllByUser`) and for membership revocation (`clearOrganizationForUser`),
+// which the session key alone cannot answer. A row co-locates with the user's
+// session, so under any future shard/tenant split (ticket 18) it lives with the
+// session shard, never with an organization's. `userId` is nullable only for
+// rows written before that column existed; `Organization.getActive` re-validates
+// on read, so such a row can never name an organization the user has left.
+//
+// **The setters take a witness, not an id (MTI-001).** `setOrganization` needs
+// a `MembershipRecord` and `setTeam` a `TeamMembershipRecord`: both are branded
+// types only their records layers can produce, so pointing a session at an
+// organization or team the user does not belong to is unrepresentable rather
+// than a check every caller must remember.
+//
+// **Cleared on revocation (CWM-003), not left as an orphan.** A row whose
+// organization/team disappears is nulled by `clearOrganization`/
+// `clearOrganizationForUser`/`clearTeam` (called from `Organization`'s delete,
+// remove-member, leave and remove-team paths, inside their transactions). A row
+// whose *session* is revoked is still not cascade-deleted — that orphan is
+// harmless (the next read simply finds no matching session).
 
+import { Users } from "@awthaq/core";
 import { Models as SqlModels } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -26,26 +44,53 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import type { MembershipRecord } from "./MembershipRecords.ts";
+import type { TeamMembershipRecord } from "./TeamRecords.ts";
 
 export interface ActiveContextRecord {
   readonly sessionId: string;
+  /** DRS-008: the session's user; `none` only for a row that predates the column. */
+  readonly userId: Option.Option<string>;
   readonly activeOrganizationId: Option.Option<string>;
   readonly activeTeamId: Option.Option<string>;
   readonly updatedAt: DateTime.Utc;
 }
 
 export interface ActiveContextRecordsShape {
+  /** Points the session at the organization `membership` belongs to; the witness proves the user is a member. */
   readonly setOrganization: (
     sessionId: string,
-    organizationId: string | null,
+    membership: MembershipRecord,
   ) => Effect.Effect<ActiveContextRecord>;
+  /** Unsets the session's active organization; the active team is left alone. */
+  readonly unsetOrganization: (
+    sessionId: string,
+    userId: Users.UserId,
+  ) => Effect.Effect<ActiveContextRecord>;
+  /** Points the session at the team `membership` belongs to; the witness proves the user is on it. */
   readonly setTeam: (
     sessionId: string,
-    teamId: string | null,
+    membership: TeamMembershipRecord,
+  ) => Effect.Effect<ActiveContextRecord>;
+  /** Unsets the session's active team; the active organization is left alone. */
+  readonly unsetTeam: (
+    sessionId: string,
+    userId: Users.UserId,
   ) => Effect.Effect<ActiveContextRecord>;
   readonly findBySessionId: (
     sessionId: string,
   ) => Effect.Effect<Option.Option<ActiveContextRecord>>;
+  /** CWM-003: the organization is gone — null the active organization (and its team) of every session on it. */
+  readonly clearOrganization: (organizationId: string) => Effect.Effect<void>;
+  /** CWM-003: the user left/was removed from the organization — null it (and its team) for that user's sessions only. */
+  readonly clearOrganizationForUser: (
+    userId: Users.UserId,
+    organizationId: string,
+  ) => Effect.Effect<void>;
+  /** CWM-003: the team is gone — null the active team of every session on it. */
+  readonly clearTeam: (teamId: string) => Effect.Effect<void>;
+  /** DRS-008: erasure — deletes every row for a user, across every session. */
+  readonly deleteAllByUser: (userId: Users.UserId) => Effect.Effect<void>;
 }
 
 export class ActiveContextRecords extends Context.Service<
@@ -57,8 +102,13 @@ export class ActiveContextRecords extends Context.Service<
 
 type State = HashMap.HashMap<string, ActiveContextRecord>;
 
-const emptyRecord = (sessionId: string, now: DateTime.Utc): ActiveContextRecord => ({
+const emptyRecord = (
+  sessionId: string,
+  userId: string,
+  now: DateTime.Utc,
+): ActiveContextRecord => ({
   sessionId,
+  userId: Option.some(userId),
   activeOrganizationId: Option.none(),
   activeTeamId: Option.none(),
   updatedAt: now,
@@ -69,47 +119,98 @@ export const layerMemory = Layer.effect(
   Effect.gen(function* () {
     const state = yield* Ref.make<State>(HashMap.empty());
 
-    const setOrganization: ActiveContextRecordsShape["setOrganization"] = (
-      sessionId,
-      organizationId,
+    const upsert = (
+      sessionId: string,
+      userId: string,
+      patch: (existing: ActiveContextRecord, now: DateTime.Utc) => ActiveContextRecord,
     ) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
         const updated = yield* Ref.updateAndGet(state, (s) => {
           const existing = HashMap.get(s, sessionId).pipe(
-            Option.getOrElse(() => emptyRecord(sessionId, now)),
+            Option.getOrElse(() => emptyRecord(sessionId, userId, now)),
           );
-          const next: ActiveContextRecord = {
-            ...existing,
-            activeOrganizationId: Option.fromNullishOr(organizationId),
-            updatedAt: now,
-          };
+          const next = patch({ ...existing, userId: Option.some(userId) }, now);
           return HashMap.set(s, sessionId, next);
         });
         return HashMap.get(updated, sessionId).pipe(Option.getOrThrow);
       });
 
-    const setTeam: ActiveContextRecordsShape["setTeam"] = (sessionId, teamId) =>
-      Effect.gen(function* () {
-        const now = yield* DateTime.now;
-        const updated = yield* Ref.updateAndGet(state, (s) => {
-          const existing = HashMap.get(s, sessionId).pipe(
-            Option.getOrElse(() => emptyRecord(sessionId, now)),
-          );
-          const next: ActiveContextRecord = {
-            ...existing,
-            activeTeamId: Option.fromNullishOr(teamId),
-            updatedAt: now,
-          };
-          return HashMap.set(s, sessionId, next);
-        });
-        return HashMap.get(updated, sessionId).pipe(Option.getOrThrow);
-      });
+    const setOrganization: ActiveContextRecordsShape["setOrganization"] = (sessionId, membership) =>
+      upsert(sessionId, membership.userId, (existing, now) => ({
+        ...existing,
+        activeOrganizationId: Option.some(membership.organizationId),
+        updatedAt: now,
+      }));
+
+    const unsetOrganization: ActiveContextRecordsShape["unsetOrganization"] = (sessionId, userId) =>
+      upsert(sessionId, userId, (existing, now) => ({
+        ...existing,
+        activeOrganizationId: Option.none(),
+        updatedAt: now,
+      }));
+
+    const setTeam: ActiveContextRecordsShape["setTeam"] = (sessionId, membership) =>
+      upsert(sessionId, membership.userId, (existing, now) => ({
+        ...existing,
+        activeTeamId: Option.some(membership.teamId),
+        updatedAt: now,
+      }));
+
+    const unsetTeam: ActiveContextRecordsShape["unsetTeam"] = (sessionId, userId) =>
+      upsert(sessionId, userId, (existing, now) => ({
+        ...existing,
+        activeTeamId: Option.none(),
+        updatedAt: now,
+      }));
 
     const findBySessionId: ActiveContextRecordsShape["findBySessionId"] = (sessionId) =>
       Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, sessionId)));
 
-    return { setOrganization, setTeam, findBySessionId };
+    const mapRows = (f: (row: ActiveContextRecord) => ActiveContextRecord) =>
+      Ref.update(state, (s) => HashMap.map(s, f));
+
+    const clearOrganization: ActiveContextRecordsShape["clearOrganization"] = (organizationId) =>
+      mapRows((row) =>
+        Option.exists(row.activeOrganizationId, (id) => id === organizationId)
+          ? { ...row, activeOrganizationId: Option.none(), activeTeamId: Option.none() }
+          : row,
+      );
+
+    const clearOrganizationForUser: ActiveContextRecordsShape["clearOrganizationForUser"] = (
+      userId,
+      organizationId,
+    ) =>
+      mapRows((row) =>
+        Option.exists(row.userId, (id) => id === userId) &&
+        Option.exists(row.activeOrganizationId, (id) => id === organizationId)
+          ? { ...row, activeOrganizationId: Option.none(), activeTeamId: Option.none() }
+          : row,
+      );
+
+    const clearTeam: ActiveContextRecordsShape["clearTeam"] = (teamId) =>
+      mapRows((row) =>
+        Option.exists(row.activeTeamId, (id) => id === teamId)
+          ? { ...row, activeTeamId: Option.none() }
+          : row,
+      );
+
+    const deleteAllByUser: ActiveContextRecordsShape["deleteAllByUser"] = (userId) =>
+      Ref.update(state, (s) =>
+        HashMap.filter(s, (row) => !Option.exists(row.userId, (id) => id === userId)),
+      );
+
+    return {
+      setOrganization,
+      unsetOrganization,
+      setTeam,
+      unsetTeam,
+      findBySessionId,
+      clearOrganization,
+      clearOrganizationForUser,
+      clearTeam,
+      deleteAllByUser,
+    };
   }),
 );
 
@@ -118,6 +219,7 @@ export const layerMemory = Layer.effect(
 const makeActiveContextRow = (wire: SqlModels.DialectWire) =>
   Schema.Struct({
     sessionId: Schema.String,
+    userId: Schema.NullOr(Schema.String),
     activeOrganizationId: Schema.NullOr(Schema.String),
     activeTeamId: Schema.NullOr(Schema.String),
     updatedAt: wire.dateTime,
@@ -127,6 +229,7 @@ type ActiveContextRow = ReturnType<typeof makeActiveContextRow>["Type"];
 
 const toRecord = (row: ActiveContextRow): ActiveContextRecord => ({
   sessionId: row.sessionId,
+  userId: Option.fromNullishOr(row.userId),
   activeOrganizationId: Option.fromNullishOr(row.activeOrganizationId),
   activeTeamId: Option.fromNullishOr(row.activeTeamId),
   updatedAt: row.updatedAt,
@@ -150,14 +253,15 @@ export const layerSql = Layer.effect(
     const insert = SqlSchema.findOne({
       Request: Schema.Struct({
         sessionId: Schema.String,
+        userId: Schema.String,
         activeOrganizationId: Schema.NullOr(Schema.String),
         activeTeamId: Schema.NullOr(Schema.String),
         updatedAt: wire.dateTime,
       }),
       Result: ActiveContextRow,
       execute: (r) => sql`
-          INSERT INTO organization_active_context (sessionId, activeOrganizationId, activeTeamId, updatedAt)
-          VALUES (${r.sessionId}, ${r.activeOrganizationId}, ${r.activeTeamId}, ${r.updatedAt})
+          INSERT INTO organization_active_context (sessionId, userId, activeOrganizationId, activeTeamId, updatedAt)
+          VALUES (${r.sessionId}, ${r.userId}, ${r.activeOrganizationId}, ${r.activeTeamId}, ${r.updatedAt})
           RETURNING *
         `,
     });
@@ -165,12 +269,14 @@ export const layerSql = Layer.effect(
     const updateOrganizationQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         sessionId: Schema.String,
+        userId: Schema.String,
         activeOrganizationId: Schema.NullOr(Schema.String),
         updatedAt: wire.dateTime,
       }),
       Result: ActiveContextRow,
       execute: (r) => sql`
-          UPDATE organization_active_context SET activeOrganizationId = ${r.activeOrganizationId}, updatedAt = ${r.updatedAt}
+          UPDATE organization_active_context
+          SET activeOrganizationId = ${r.activeOrganizationId}, userId = ${r.userId}, updatedAt = ${r.updatedAt}
           WHERE sessionId = ${r.sessionId}
           RETURNING *
         `,
@@ -179,64 +285,121 @@ export const layerSql = Layer.effect(
     const updateTeamQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         sessionId: Schema.String,
+        userId: Schema.String,
         activeTeamId: Schema.NullOr(Schema.String),
         updatedAt: wire.dateTime,
       }),
       Result: ActiveContextRow,
       execute: (r) => sql`
-          UPDATE organization_active_context SET activeTeamId = ${r.activeTeamId}, updatedAt = ${r.updatedAt}
+          UPDATE organization_active_context
+          SET activeTeamId = ${r.activeTeamId}, userId = ${r.userId}, updatedAt = ${r.updatedAt}
           WHERE sessionId = ${r.sessionId}
           RETURNING *
         `,
     });
 
-    const setOrganization: ActiveContextRecordsShape["setOrganization"] = Effect.fnUntraced(
-      function* (sessionId, organizationId) {
-        const now = yield* DateTime.now;
-        const existing = yield* findBySessionIdQuery(sessionId).pipe(Effect.orDie);
-        if (Option.isNone(existing)) {
-          const row = yield* insert({
-            sessionId,
-            activeOrganizationId: organizationId,
-            activeTeamId: null,
-            updatedAt: now,
-          }).pipe(Effect.orDie);
-          return toRecord(row);
-        }
-        const row = yield* updateOrganizationQuery({
+    const writeOrganization = Effect.fnUntraced(function* (
+      sessionId: string,
+      userId: string,
+      activeOrganizationId: string | null,
+    ) {
+      const now = yield* DateTime.now;
+      const existing = yield* findBySessionIdQuery(sessionId).pipe(Effect.orDie);
+      if (Option.isNone(existing)) {
+        const row = yield* insert({
           sessionId,
-          activeOrganizationId: organizationId,
+          userId,
+          activeOrganizationId,
+          activeTeamId: null,
           updatedAt: now,
-        }).pipe(Effect.orDie, Effect.map(Option.getOrThrow));
+        }).pipe(Effect.orDie);
         return toRecord(row);
-      },
-    );
+      }
+      const row = yield* updateOrganizationQuery({
+        sessionId,
+        userId,
+        activeOrganizationId,
+        updatedAt: now,
+      }).pipe(Effect.orDie, Effect.map(Option.getOrThrow));
+      return toRecord(row);
+    });
 
-    const setTeam: ActiveContextRecordsShape["setTeam"] = Effect.fnUntraced(
-      function* (sessionId, teamId) {
-        const now = yield* DateTime.now;
-        const existing = yield* findBySessionIdQuery(sessionId).pipe(Effect.orDie);
-        if (Option.isNone(existing)) {
-          const row = yield* insert({
-            sessionId,
-            activeOrganizationId: null,
-            activeTeamId: teamId,
-            updatedAt: now,
-          }).pipe(Effect.orDie);
-          return toRecord(row);
-        }
-        const row = yield* updateTeamQuery({
+    const writeTeam = Effect.fnUntraced(function* (
+      sessionId: string,
+      userId: string,
+      activeTeamId: string | null,
+    ) {
+      const now = yield* DateTime.now;
+      const existing = yield* findBySessionIdQuery(sessionId).pipe(Effect.orDie);
+      if (Option.isNone(existing)) {
+        const row = yield* insert({
           sessionId,
-          activeTeamId: teamId,
+          userId,
+          activeOrganizationId: null,
+          activeTeamId,
           updatedAt: now,
-        }).pipe(Effect.orDie, Effect.map(Option.getOrThrow));
+        }).pipe(Effect.orDie);
         return toRecord(row);
-      },
-    );
+      }
+      const row = yield* updateTeamQuery({ sessionId, userId, activeTeamId, updatedAt: now }).pipe(
+        Effect.orDie,
+        Effect.map(Option.getOrThrow),
+      );
+      return toRecord(row);
+    });
+
+    const setOrganization: ActiveContextRecordsShape["setOrganization"] = (sessionId, membership) =>
+      writeOrganization(sessionId, membership.userId, membership.organizationId);
+
+    const unsetOrganization: ActiveContextRecordsShape["unsetOrganization"] = (sessionId, userId) =>
+      writeOrganization(sessionId, userId, null);
+
+    const setTeam: ActiveContextRecordsShape["setTeam"] = (sessionId, membership) =>
+      writeTeam(sessionId, membership.userId, membership.teamId);
+
+    const unsetTeam: ActiveContextRecordsShape["unsetTeam"] = (sessionId, userId) =>
+      writeTeam(sessionId, userId, null);
 
     const findBySessionId: ActiveContextRecordsShape["findBySessionId"] = (sessionId) =>
       findBySessionIdQuery(sessionId).pipe(Effect.map(Option.map(toRecord)), Effect.orDie);
 
-    return { setOrganization, setTeam, findBySessionId };
+    const clearOrganization: ActiveContextRecordsShape["clearOrganization"] = (organizationId) =>
+      sql`UPDATE organization_active_context SET activeOrganizationId = NULL, activeTeamId = NULL WHERE activeOrganizationId = ${organizationId}`.pipe(
+        Effect.orDie,
+        Effect.asVoid,
+      );
+
+    const clearOrganizationForUser: ActiveContextRecordsShape["clearOrganizationForUser"] = (
+      userId,
+      organizationId,
+    ) =>
+      sql`UPDATE organization_active_context SET activeOrganizationId = NULL, activeTeamId = NULL WHERE userId = ${userId} AND activeOrganizationId = ${organizationId}`.pipe(
+        Effect.orDie,
+        Effect.asVoid,
+      );
+
+    const clearTeam: ActiveContextRecordsShape["clearTeam"] = (teamId) =>
+      sql`UPDATE organization_active_context SET activeTeamId = NULL WHERE activeTeamId = ${teamId}`.pipe(
+        Effect.orDie,
+        Effect.asVoid,
+      );
+
+    const deleteAllByUser: ActiveContextRecordsShape["deleteAllByUser"] = (userId) =>
+      sql`DELETE FROM organization_active_context WHERE userId = ${userId}`.pipe(
+        Effect.orDie,
+        Effect.asVoid,
+      );
+
+    return {
+      setOrganization,
+      unsetOrganization,
+      setTeam,
+      unsetTeam,
+      findBySessionId,
+      clearOrganization,
+      clearOrganizationForUser,
+      clearTeam,
+      deleteAllByUser,
+    };
   }),
 );

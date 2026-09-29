@@ -13,9 +13,13 @@
     "@awthaq/organization": "workspace:*",
     "@awthaq/password": "workspace:*",
     "@awthaq/ports": "workspace:*",
+    "@awthaq/qadi": "workspace:*",
+    "@awthaq/roles": "workspace:*",
     "@awthaq/server": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@effect/platform-node": "catalog:",
+    "@qadi/core": "^0.7.0",
+    "@qadi/http": "^0.7.0",
     "effect": "catalog:"
   },
   "devDependencies": {

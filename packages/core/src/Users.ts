@@ -11,7 +11,7 @@ import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
-import type * as DateTime from "effect/DateTime";
+import * as DateTime from "effect/DateTime";
 import { now } from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
@@ -44,7 +44,7 @@ const beforeUserDeleteVeto = <A>(
     ),
   );
 
-/** BEH-EA-033: the id every `Account`/`Session` foreign-keys to. */
+/** BEH-EA-033: the id every `Account`/`Session` foreign-keys to. INV-EA-018: an identifier, never a capability — UUIDv7, time-ordered and partially predictable, so nothing may act on it without a credential's proof. */
 // MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
 export type UserId = SqlModels.UserId;
 export const UserId = Brand.nominal<UserId>();
@@ -106,7 +106,30 @@ export interface UsersShape {
    * surfaces as `HookPoint.HookAborted`, never a bare defect.
    */
   readonly delete: (id: UserId) => Effect.Effect<void, UserNotFound | HookPoint.HookAborted>;
+  /**
+   * BAM-005/BEH-EA-036: the admin surface's user listing — keyset-paginated on
+   * `(createdAt, id)`, oldest first, opaque cursor in / `nextCursor` out, never an
+   * offset, never more than `limit + 1` rows read (`limit` defaults to 50).
+   */
+  readonly list: (input?: {
+    readonly cursor?: UserCursor | undefined;
+    readonly limit?: number | undefined;
+  }) => Effect.Effect<UsersPage>;
 }
+
+/** BAM-005/BEH-EA-036: the keyset position of `Users.list`. */
+export interface UserCursor {
+  readonly createdAt: DateTime.Utc;
+  readonly id: string;
+}
+
+export interface UsersPage {
+  readonly items: ReadonlyArray<UserRecord>;
+  /** `None` on the last page. */
+  readonly nextCursor: Option.Option<UserCursor>;
+}
+
+const DEFAULT_LIST_LIMIT = 50;
 
 export class Users extends Context.Service<Users, UsersShape>()("awthaq/core/Users") {}
 
@@ -115,9 +138,25 @@ interface State {
   readonly byEmail: HashMap.HashMap<string, UserId>;
 }
 
+/**
+ * AAPS-005: fires `Hooks.AfterUserAttributesChanged` (an observe point) when a
+ * policy-readable attribute really changed. Read through `Effect.serviceOption`
+ * so it adds nothing to either layer's requirements — a composition that does
+ * not provide the point simply announces nothing.
+ */
+const attributesChangedAnnouncer = Effect.gen(function* () {
+  const hook = yield* Effect.serviceOption(Hooks.AfterUserAttributesChanged);
+  return (userId: UserId, attributes: ReadonlyArray<string>): Effect.Effect<void> =>
+    Option.isSome(hook) ? hook.value.run({ userId, attributes }) : Effect.void;
+});
+
 const emptyState: State = { byId: HashMap.empty(), byEmail: HashMap.empty() };
 
-/** BEH-EA-046: dropping a user's own row is this Layer's whole job — cascading to `Accounts`/`Sessions` is each of those services' own responsibility, triggered by the caller that also calls `Users.delete`, not by this module reaching into them. */
+/**
+ * TRBS-005: single-process, test-grade storage — see `Sessions.layerMemory`. Use `layerSql` for any multi-instance deployment.
+ *
+ * BEH-EA-046: dropping a user's own row is this Layer's whole job — cascading to `Accounts`/`Sessions` is each of those services' own responsibility, triggered by the caller that also calls `Users.delete`, not by this module reaching into them.
+ */
 export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.BeforeUserDelete> =
   Layer.effect(
     Users,
@@ -125,6 +164,7 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
       const state = yield* Ref.make(emptyState);
       const crypto = yield* Crypto.Crypto;
       const beforeDelete = yield* Hooks.BeforeUserDelete;
+      const announce = yield* attributesChangedAnnouncer;
 
       const findById: UsersShape["findById"] = (id) =>
         Ref.get(state).pipe(
@@ -206,26 +246,38 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
             Result.succeed(updated),
             { ...s, byId: HashMap.set(s.byId, id, updated) },
           ] as const;
-        }).pipe(Effect.flatMap(Effect.fromResult));
+        }).pipe(
+          Effect.flatMap(Effect.fromResult),
+          Effect.tap((record) => announce(record.id, ["name"])),
+        );
 
       const verifyEmail: UsersShape["verifyEmail"] = (id) =>
-        Ref.modify(state, (s): readonly [Result.Result<UserRecord, UserNotFound>, State] => {
-          const existing = HashMap.get(s.byId, id);
-          if (Option.isNone(existing)) {
+        Ref.modify(
+          state,
+          (s): readonly [Result.Result<readonly [UserRecord, boolean], UserNotFound>, State] => {
+            const existing = HashMap.get(s.byId, id);
+            if (Option.isNone(existing)) {
+              return [
+                Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
+                s,
+              ] as const;
+            }
+            if (existing.value.emailVerified) {
+              return [Result.succeed([existing.value, false] as const), s] as const;
+            }
+            const updated: UserRecord = { ...existing.value, emailVerified: true };
             return [
-              Result.fail(new UserNotFound({ message: `awthaq: no such user: ${id}`, id })),
-              s,
+              Result.succeed([updated, true] as const),
+              { ...s, byId: HashMap.set(s.byId, id, updated) },
             ] as const;
-          }
-          if (existing.value.emailVerified) {
-            return [Result.succeed(existing.value), s] as const;
-          }
-          const updated: UserRecord = { ...existing.value, emailVerified: true };
-          return [
-            Result.succeed(updated),
-            { ...s, byId: HashMap.set(s.byId, id, updated) },
-          ] as const;
-        }).pipe(Effect.flatMap(Effect.fromResult));
+          },
+        ).pipe(
+          Effect.flatMap(Effect.fromResult),
+          Effect.tap(([record, changed]) =>
+            changed ? announce(record.id, ["emailVerified"]) : Effect.void,
+          ),
+          Effect.map(([record]) => record),
+        );
 
       // AOMS-006/CSG-002: `Hooks.BeforeUserDelete` runs between the
       // existence read and the actual removal — ticket 03's own accepted
@@ -249,7 +301,39 @@ export const layerMemory: Layer.Layer<Users, never, Crypto.Crypto | Hooks.Before
           }));
         });
 
-      return { create, findById, findByEmail, updateProfile, verifyEmail, delete: delete_ };
+      const list: UsersShape["list"] = (input) =>
+        Ref.get(state).pipe(
+          Effect.map((s) => {
+            const limit = input?.limit ?? DEFAULT_LIST_LIMIT;
+            const cursor = input?.cursor;
+            const after = Array.from(HashMap.values(s.byId))
+              .sort((a, b) => {
+                const byTime =
+                  DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt);
+                return byTime !== 0 ? byTime : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+              })
+              .filter(
+                (user) =>
+                  cursor === undefined ||
+                  DateTime.toEpochMillis(user.createdAt) >
+                    DateTime.toEpochMillis(cursor.createdAt) ||
+                  (DateTime.toEpochMillis(user.createdAt) ===
+                    DateTime.toEpochMillis(cursor.createdAt) &&
+                    user.id > cursor.id),
+              );
+            const items = after.slice(0, limit);
+            const last = items.at(-1);
+            return {
+              items,
+              nextCursor:
+                after.length > limit && last !== undefined
+                  ? Option.some({ createdAt: last.createdAt, id: last.id })
+                  : Option.none(),
+            };
+          }),
+        );
+
+      return { create, findById, findByEmail, updateProfile, verifyEmail, delete: delete_, list };
     }),
   );
 
@@ -282,6 +366,7 @@ export const layerSql: Layer.Layer<
   Effect.gen(function* () {
     const repo = yield* SqlRepositories.UsersRepository;
     const beforeDelete = yield* Hooks.BeforeUserDelete;
+    const announce = yield* attributesChangedAnnouncer;
 
     const create: UsersShape["create"] = Effect.fnUntraced(function* (input) {
       const email = input.email.toLowerCase();
@@ -328,6 +413,7 @@ export const layerSql: Layer.Layer<
         .makeEffect({ id, email: existing.email, name: input.name, metadata: nextMetadata })
         .pipe(Effect.orDie);
       const row = yield* repo.update(update).pipe(Effect.orDie);
+      yield* announce(id, ["name"]);
       return toUserRecord(row);
     });
 
@@ -346,6 +432,7 @@ export const layerSql: Layer.Layer<
           SqlError: Effect.die,
         }),
       );
+      yield* announce(id, ["emailVerified"]);
       return toUserRecord(row);
     });
 
@@ -355,6 +442,15 @@ export const layerSql: Layer.Layer<
       yield* repo.delete(id).pipe(Effect.orDie);
     });
 
-    return { create, findById, findByEmail, updateProfile, verifyEmail, delete: delete_ };
+    const list: UsersShape["list"] = (input) =>
+      repo.listPage(input?.cursor, input?.limit).pipe(
+        Effect.map((page) => ({
+          items: page.items.map(toUserRecord),
+          nextCursor: page.nextCursor,
+        })),
+        Effect.orDie,
+      );
+
+    return { create, findById, findByEmail, updateProfile, verifyEmail, delete: delete_, list };
   }),
 );

@@ -68,14 +68,18 @@ const listCount = (
   sessions: Repositories.SessionsRepositoryShape,
   consistency?: ReadRouting.Consistency,
 ) =>
-  sessions
-    .listByUser(
-      userId,
-      undefined,
-      undefined,
-      consistency === undefined ? undefined : { consistency },
-    )
-    .pipe(Effect.map((page) => page.items.length));
+  DateTime.now.pipe(
+    Effect.flatMap((now) =>
+      sessions.listByUser(
+        userId,
+        now,
+        undefined,
+        undefined,
+        consistency === undefined ? undefined : { consistency },
+      ),
+    ),
+    Effect.map((page) => page.items.length),
+  );
 
 describe("ReadRouting (RRC-001)", () => {
   it.effect("with no replica provided, every read goes to the primary", () =>
@@ -272,7 +276,7 @@ describe("causal handoffs under replica lag (RRC-008)", () => {
         const { lag, sessions } = yield* sessionsUnderLag;
         const { session, token } = yield* sessions.issue({ userId });
         yield* lag.catchUp; // the replica now holds the live session…
-        yield* sessions.revoke(session.id); // …and is then left behind by the revoke
+        yield* sessions.revoke(session.id, "userRevoked"); // …and is then left behind by the revoke
         const failure = yield* sessions.verify(token).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "SessionNotFound");
       }).pipe(Effect.provide(MigratedSqlite)),

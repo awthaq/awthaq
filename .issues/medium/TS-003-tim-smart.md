@@ -3,7 +3,7 @@ ID: "TS-003"
 Title: "Per-request verify cache uses an unguarded module-level WeakMap get-or-create, so concurrent first access can orphan memoized verifications (and re-trigger secret rotation)"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Authentication.ts:129"
 Auditor: "tim-smart"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `server` · reported by **Effect Platform & Infrastructure Maintainer** (`tim-smart`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Make cache creation single-winner: register the Ref synchronously before any yie
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `per-request-session-cache`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:129`. Fix: Make per-request memoization single-flight by construction and key it on `request.source`, as Effect's own per-request state is keyed. (effort M). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/server/src/Authentication.ts: per-request memo is now WeakMap<request.source, Map<credential, Deferred>> with an atomic Effect.sync get-or-create and a single owner running Sessions.verify (Deferred.into); an interrupted owner deletes its slot so later callers retry. Removed Ref/HashMap/Effect.cached. Tests (server/test/Authentication.test.ts): 'two concurrent resolveSession calls ... exactly once', 'an interrupted first resolver does not wedge a second caller' (red before: 2nd caller timed out), request.modify sharing (NHS-006, red before).

@@ -3,7 +3,7 @@ ID: "WPS-010"
 Title: "Credential create has no duplicate-id guard and the two layers diverge on collision"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/PasskeyCredentials.ts:105"
 Auditor: "webauthn-passkeys-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `passkey` · reported by **WebAuthn/Passkeys Implementation Specialist** (`webauthn-passkeys-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Check findById before create and fail with a typed error (or make both layers ex
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-wire-contract`. Evidence at HEAD ec065a7: `packages/passkey/src/PasskeyCredentials.ts:104`. Fix: Make create collision-aware and identical across layers with a typed error. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** PasskeyCredentials.create fails PasskeyCredentialAlreadyExists identically in both layers (memory: checked inside Ref.modify; sql: INSERT ... ON CONFLICT(id) DO NOTHING RETURNING); registerVerify maps it to the new PasskeyAlreadyRegistered (409) and links no Accounts row. Tests: PasskeyCredentials.test.ts (both layers), PasskeyCeremony.test.ts, AuthHttp.test.ts (409 over HTTP). Red before: memory overwrote, sql died. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

@@ -3,7 +3,7 @@ ID: "MTI-003"
 Title: "addMember can mint duplicate membership rows, corrupting the row every isolation check consults"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/MembershipRecords.ts:306"
 Auditor: "multi-tenant-isolation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `organization` · reported by **Multi-Tenant Isolation Specialist** (`multi-tenant-isolation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Ship the organization_membership migration with UNIQUE(userId, organizationId), 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-write-atomicity-and-uniqueness`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1660`. Fix: Add UNIQUE(userId, organizationId) to organization_membership, a typed already-member error at the records layer, and an early duplicate check in addMember. (effort M). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** MembershipRecords: MembershipRecordAlreadyExists (memory: atomic Ref.modify, sql: UniqueViolation mapped); migration organization_membership_unique_user_org (dedupe keeping MIN(id) + UNIQUE(userId, organizationId)); OrganizationApi.AlreadyMember (409); Organization.addMember pre-checks and catches the race; create() for a brand-new org dies on the impossible collision. Tests: MembershipRecords.test.ts both layers (red: overwrite/duplicate), Organization.test.ts 'addMember for an existing member fails AlreadyMember'. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 853 pass, test:bdd green, spec:verify:strict PASS, oxlint clean.

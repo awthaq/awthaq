@@ -15,11 +15,14 @@
 export type Statements = Readonly<Record<string, ReadonlyArray<string>>>;
 
 /**
- * spec.md's defaults: owner/admin can manage the organization and its
- * members/invitations/teams; member is read-only (an empty statement set —
- * read/list operations are never gated by this engine at all, only
- * mutations are, so "read-only" falls out of member simply holding no
- * mutating statements).
+ * spec.md's defaults, in three strictly ordered tiers (OHS-005, better-auth
+ * parity): owner can do everything including deleting the organization;
+ * admin manages the organization (`update` only), its members, invitations,
+ * teams and roles but can neither delete the organization nor confer an
+ * owner-only statement (`canGrant` bounds every assignment/invite/role edit);
+ * member is read-only (an empty statement set — read/list operations are
+ * never gated by this engine at all, only mutations are, so "read-only" falls
+ * out of member simply holding no mutating statements).
  */
 export const defaultStatements: Readonly<Record<"owner" | "admin" | "member", Statements>> = {
   owner: {
@@ -30,7 +33,7 @@ export const defaultStatements: Readonly<Record<"owner" | "admin" | "member", St
     role: ["create", "read", "update", "delete"],
   },
   admin: {
-    organization: ["update", "delete"],
+    organization: ["update"],
     member: ["create", "update", "delete"],
     invitation: ["create", "cancel"],
     team: ["create", "update", "delete"],
@@ -45,7 +48,12 @@ export const defaultStatements: Readonly<Record<"owner" | "admin" | "member", St
   },
 };
 
-const mergeStatements = (a: Statements, b: Statements): Statements => {
+/** RZS-005/N8: the three built-in tiers, whose statements no custom or dynamic role may redefine. */
+export const isBuiltInRole = (name: string): boolean =>
+  Object.prototype.hasOwnProperty.call(defaultStatements, name);
+
+/** OHS-004: the union of two statement sets — org-level authority plus team-scoped authority. */
+export const mergeStatements = (a: Statements, b: Statements): Statements => {
   const merged: Record<string, ReadonlyArray<string>> = { ...a };
   for (const [resource, actions] of Object.entries(b)) {
     const existing = merged[resource] ?? [];
@@ -87,13 +95,25 @@ export const canGrant = (requested: Statements, granterPermissions: Statements):
     return actions.every((action) => held.includes(action));
   });
 
-/** Merges an application's own custom static roles (`OrganizationConfig.permissionStatements`) on top of the three built-in defaults, then resolves a lookup map ready for `effectivePermissions`. */
+/**
+ * Merges an application's own custom static roles
+ * (`OrganizationConfig.permissionStatements`) and an organization's dynamic
+ * roles with the three built-in defaults, then resolves a lookup map ready
+ * for `effectivePermissions`.
+ *
+ * RZS-005/N8: precedence is built-in > static custom > dynamic (a `Map`
+ * built from entries keeps the last duplicate, so the strongest source is
+ * listed last). A dynamic role named `owner`, or one that shadows a static
+ * custom role, can therefore never replace those statements — the guard
+ * lives here, not only in `createRole`, so a row written around the plugin
+ * (or one that predates the reservation) is inert too.
+ */
 export const statementsByRoleFrom = (
   customStatements: Readonly<Record<string, Statements>>,
   dynamicStatements?: Readonly<Record<string, Statements>>,
 ): ReadonlyMap<string, Statements> =>
   new Map<string, Statements>([
-    ...Object.entries(defaultStatements),
-    ...Object.entries(customStatements),
     ...Object.entries(dynamicStatements ?? {}),
+    ...Object.entries(customStatements),
+    ...Object.entries(defaultStatements),
   ]);

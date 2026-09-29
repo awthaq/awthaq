@@ -3,7 +3,7 @@ ID: "PERS-006"
 Title: "Retrying wrapper re-executes custom predicates with no idempotency contract"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "qadi"
 Source: "packages/qadi/node_modules/@qadi/core/src/CustomPredicate.ts:118"
 Auditor: "policy-engine-rego-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `qadi` · reported by **Policy Engine / Rego Specialist** (`policy-engine-rego-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ State the read-only/idempotent requirement on CustomPredicateShape.evaluate's co
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `qadi-upstream`. Evidence at HEAD ec065a7: `../qadi/packages/core/src/CustomPredicate.ts:117`. Fix: In ../qadi: state the read-only/idempotent contract and give predicates a replay signal. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** In ../qadi: CustomPredicateShape.evaluate documents the MUST read-only/idempotent contract (side effects belong in obligations); customPredicateRetrying repeats it and passes an increasing input.attempt (0 first, then 1, 2, ...). Test: core/test/CustomPredicate.test.ts 'customPredicateRetrying passes an increasing attempt number' (red before). Fixed UPSTREAM in ../qadi on branch plan/audit-fixes, commit b4b9270 (not merged, not released; ../qadi's checkout was returned to main). Gates run in ../qadi: typecheck, vitest (2254 tests), tstyche, lint+house-style, spec:api, spec:verify:strict, spec:examples. Still to do in awthaq after qadi releases (0.9.0 changeset included): bump @qadi/* from ^0.7.0 and let Path A/B pass request context (ip, userAgent) into EvaluateOptions.context; awthaq's QadiLive examples should then use customPredicateFromRecordChecked.

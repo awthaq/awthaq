@@ -3,7 +3,7 @@ ID: "ESR-010"
 Title: "listByUser limit is unvalidated before being bound into LIMIT"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:313"
 Auditor: "effect-sql-repository-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `sql` · reported by **Effect SQL Repository Specialist** (`effect-sql-repository-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Constrain the request schema (e.g. `Schema.Int.pipe(Schema.between(1, 200))`) or
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-list-liveness-and-pagination`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:328`. Fix: Bound the page size by construction: clamp in `listByUser` and enforce the bound in the request schema. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/sql Repositories.ts: exported MAX_PAGE_SIZE=200; listByUser computes effectiveLimit = clamp(limit ?? 50, 1, MAX_PAGE_SIZE) once for both query and nextCursor check; SessionCursorRequest.limit is Schema.Int + isBetween(1, MAX_PAGE_SIZE). Tests (Repositories.test.ts): limit 0 clamps to 1 with a nextCursor, negative limit raises no SqlError, huge limit capped at MAX_PAGE_SIZE. core no longer has its own LIST_PAGE_SIZE (uses SqlRepositories.MAX_PAGE_SIZE).

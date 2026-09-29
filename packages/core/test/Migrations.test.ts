@@ -62,7 +62,7 @@ describe("Migrations.run", () => {
       // The two owners keep separate ledgers.
       const core = yield* sql`SELECT migration_id FROM effect_sql_migrations`;
       const plugins = yield* sql`SELECT migration_id FROM awthaq_plugin_migrations`;
-      assert.strictEqual(core.length, 17);
+      assert.strictEqual(core.length, 20);
       assert.strictEqual(plugins.length, 2);
     }).pipe(Effect.provide(SqlLive)),
   );

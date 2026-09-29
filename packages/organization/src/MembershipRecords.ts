@@ -7,6 +7,7 @@
 
 import { Users } from "@awthaq/core";
 import { Models as SqlModels } from "@awthaq/sql";
+import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -21,7 +22,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
-export interface MembershipRecord {
+interface MembershipFields {
   readonly id: string;
   readonly userId: Users.UserId;
   readonly organizationId: string;
@@ -29,7 +30,25 @@ export interface MembershipRecord {
   readonly createdAt: DateTime.Utc;
 }
 
+/**
+ * MTI-001: branded, and the constructor below is module-private, so the only
+ * way to hold a `MembershipRecord` is to have read it from (or created it in)
+ * this records layer. `ActiveContextRecords.setOrganization` takes one as its
+ * witness that the caller really is a member — an active-organization write
+ * for a non-member is unrepresentable, not merely unchecked.
+ */
+export type MembershipRecord = Brand.Branded<MembershipFields, "MembershipRecord">;
+const brandMembership = Brand.nominal<MembershipRecord>();
+
 export class MembershipRecordNotFound extends Data.TaggedError("MembershipRecordNotFound")<{
+  readonly userId: string;
+  readonly organizationId: string;
+}> {}
+
+/** MTI-003: `(userId, organizationId)` is unique — a second `create` for the same pair is refused, never an overwrite. */
+export class MembershipRecordAlreadyExists extends Data.TaggedError(
+  "MembershipRecordAlreadyExists",
+)<{
   readonly userId: string;
   readonly organizationId: string;
 }> {}
@@ -46,7 +65,7 @@ export interface MembershipRecordsShape {
     readonly userId: Users.UserId;
     readonly organizationId: string;
     readonly role: ReadonlyArray<string>;
-  }) => Effect.Effect<MembershipRecord>;
+  }) => Effect.Effect<MembershipRecord, MembershipRecordAlreadyExists>;
   readonly findByUserAndOrg: (
     userId: Users.UserId,
     organizationId: string,
@@ -116,17 +135,29 @@ export const layerMemory = Layer.effect(
     const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const id = yield* crypto.randomUUIDv7.pipe(Effect.orDie);
       const now = yield* DateTime.now;
-      const record: MembershipRecord = {
+      const record = brandMembership({
         id,
         userId: input.userId,
         organizationId: input.organizationId,
         role: input.role,
         createdAt: now,
-      };
-      yield* Ref.update(state, (s) =>
-        HashMap.set(s, keyOf(input.userId, input.organizationId), record),
-      );
-      return record;
+      });
+      const key = keyOf(input.userId, input.organizationId);
+      return yield* Ref.modify(
+        state,
+        (s): readonly [Result.Result<MembershipRecord, MembershipRecordAlreadyExists>, State] =>
+          HashMap.has(s, key)
+            ? ([
+                Result.fail(
+                  new MembershipRecordAlreadyExists({
+                    userId: input.userId,
+                    organizationId: input.organizationId,
+                  }),
+                ),
+                s,
+              ] as const)
+            : ([Result.succeed(record), HashMap.set(s, key, record)] as const),
+      ).pipe(Effect.flatMap(Effect.fromResult));
     });
 
     const findByUserAndOrg: MembershipRecordsShape["findByUserAndOrg"] = (userId, organizationId) =>
@@ -238,13 +269,14 @@ type MembershipRow = ReturnType<typeof makeMembershipRow>["Type"];
 
 const parseRoleArray = (json: string): ReadonlyArray<string> => JSON.parse(json);
 
-const toRecord = (row: MembershipRow): MembershipRecord => ({
-  id: row.id,
-  userId: Users.UserId(row.userId),
-  organizationId: row.organizationId,
-  role: parseRoleArray(row.role),
-  createdAt: row.createdAt,
-});
+const toRecord = (row: MembershipRow): MembershipRecord =>
+  brandMembership({
+    id: row.id,
+    userId: Users.UserId(row.userId),
+    organizationId: row.organizationId,
+    role: parseRoleArray(row.role),
+    createdAt: row.createdAt,
+  });
 
 export const layerSql = Layer.effect(
   MembershipRecords,
@@ -305,6 +337,35 @@ export const layerSql = Layer.effect(
         `,
     });
 
+    // MTI-005: counts are COUNT(*) — never a full-row materialization. CAST keeps
+    // pg from returning a bigint string.
+    const CountRow = Schema.Struct({ count: Schema.Number });
+
+    const countByOrganizationQuery = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: CountRow,
+      execute: (organizationId) =>
+        sql`SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership WHERE organizationId = ${organizationId}`,
+    });
+
+    // `role` is a JSON array in a TEXT column; "contains the element owner" is
+    // dialect-specific JSON, so the query is branched like the migrations are.
+    const countOwnersQuery = SqlSchema.findOne({
+      Request: Schema.String,
+      Result: CountRow,
+      execute: (organizationId) =>
+        sql.onDialectOrElse({
+          sqlite: () => sql`
+            SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership
+            WHERE organizationId = ${organizationId}
+              AND EXISTS (SELECT 1 FROM json_each(organization_membership.role) WHERE value = 'owner')`,
+          pg: () => sql`
+            SELECT CAST(COUNT(*) AS INTEGER) AS count FROM organization_membership
+            WHERE organizationId = ${organizationId} AND role::jsonb @> '"owner"'::jsonb`,
+          orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for countOwners")),
+        }),
+    });
+
     const removeQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({ userId: Schema.String, organizationId: Schema.String }),
       Result: MembershipRow,
@@ -321,7 +382,20 @@ export const layerSql = Layer.effect(
         organizationId: input.organizationId,
         role: JSON.stringify(input.role),
         createdAt: now,
-      }).pipe(Effect.orDie);
+      }).pipe(
+        Effect.catchTag("SqlError", (error) =>
+          error.reason._tag === "UniqueViolation"
+            ? Effect.fail(
+                new MembershipRecordAlreadyExists({
+                  userId: input.userId,
+                  organizationId: input.organizationId,
+                }),
+              )
+            : Effect.die(error),
+        ),
+        Effect.catchTag("SchemaError", Effect.die),
+        Effect.catchTag("NoSuchElementError", Effect.die),
+      );
       return toRecord(row);
     });
 
@@ -347,14 +421,14 @@ export const layerSql = Layer.effect(
       );
 
     const countByOrganization: MembershipRecordsShape["countByOrganization"] = (organizationId) =>
-      listByOrganizationQuery(organizationId).pipe(
-        Effect.map((rows) => rows.length),
+      countByOrganizationQuery(organizationId).pipe(
+        Effect.map((row) => row.count),
         Effect.orDie,
       );
 
     const countOwners: MembershipRecordsShape["countOwners"] = (organizationId) =>
-      listByOrganizationQuery(organizationId).pipe(
-        Effect.map((rows) => rows.map(toRecord).filter((row) => row.role.includes("owner")).length),
+      countOwnersQuery(organizationId).pipe(
+        Effect.map((row) => row.count),
         Effect.orDie,
       );
 

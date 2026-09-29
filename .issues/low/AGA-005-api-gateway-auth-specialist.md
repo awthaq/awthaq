@@ -3,7 +3,7 @@ ID: "AGA-005"
 Title: "redirect_uri is config-derived only: spoof-proof against gateway Host headers, but silently breaks when baseUrl lags the public URL"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:496"
 Auditor: "api-gateway-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `oauth` · reported by **API Gateway Auth Specialist** (`api-gateway-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Document the behind-gateway requirement (baseUrl MUST be the public scheme+host;
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-config-safety`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:600`. Fix: Document that baseUrl must be the public scheme+host. The boot validation arrives with PDR-005. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/oauth/README.md 'Deploying behind a proxy or gateway': baseUrl must equal the public scheme+host(+port) the provider redirects to, redirect_uri must be registered verbatim, Host/X-Forwarded-Host never consulted (BEH-EA-128), ClientAddress.layerTrustedProxy is the separate knob for client IPs. The boot validation/warning and the per-provider redirect_uri info log landed with PDR-005 (tested). examples/memory-server has no README to annotate.

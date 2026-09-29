@@ -50,3 +50,5 @@ In the signOut and revokeAll handlers (and revoke when the target is the current
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `session-cookie-expiry`. Duplicate of `CSS-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/api/src/Session.ts:53`. Full dossier: `.plan/slices/06-server-api.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `CSS-002-cookie-security-specialist` — closed by its fix (see that issue's Resolved comment).

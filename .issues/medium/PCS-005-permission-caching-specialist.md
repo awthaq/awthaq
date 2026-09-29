@@ -3,7 +3,7 @@ ID: "PCS-005"
 Title: "Zero tests exercise the cached-decision path or any invalidation trigger in this repo"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "examples/memory-server/index.ts:40"
 Auditor: "permission-caching-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `—` · reported by **Permission Caching Specialist** (`permission-caching-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ Add one integration test that wires decisionCacheLayer at request scope plus the
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `qadi-decision-cache-invalidation`. Evidence at HEAD ec065a7: `spec/appendices/02-qadi-path-a-end-to-end.md:59`. Fix: Write the regression net that wayfinder ticket 12's decision (PCS-001/RZS-002) needs: tests for per-request cache scope and for DecisionCacheInvalidationLive clearing on organization membership/role hooks. (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Regression net added: packages/qadi/test/DecisionCacheInvalidation.test.ts (app-scoped cache + bridge: removeMember, leave, updateMemberRole, delete, removeTeamMember all deny on the next ask; a control test proves the stale Allow without the bridge) and packages/qadi/test/RequestDecisionCache.test.ts (real HTTP per-request scope). Roles-revocation case not added: a roles change alters the subject and therefore the cache key (PCS-003 note), so it never needed the bridge. Gates as PCS-001.
