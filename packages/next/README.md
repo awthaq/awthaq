@@ -139,6 +139,10 @@ on WebCrypto runtimes as it is. `getSession`, `serverActionClient` and the seed
 helpers need the origin (Sessions, Users, SQL); keep them out of any file your
 `proxy.ts` imports. `@awthaq/api` and `@awthaq/client` are runtime-neutral.
 
+When you do compose awthaq's server pieces on an edge runtime, provide `Crypto.Crypto`
+with `WebCrypto.layer` from `@awthaq/ports` (a `globalThis.crypto`-backed layer with no
+Node built-ins) instead of `NodeCrypto.layer` (ERAS-002).
+
 ## The real boundary: `getSession`
 
 ```ts

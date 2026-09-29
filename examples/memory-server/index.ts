@@ -27,7 +27,7 @@ import {
 } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
 import { AuditLog, Auth, AuthEvents, Verification } from "@awthaq/core";
-import { PasswordHasher } from "@awthaq/ports";
+import { PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
 import { Authentication, BodyLimit, Csrf } from "@awthaq/server";
@@ -132,9 +132,12 @@ const RolesLive = Roles.Roles.layer.pipe(
 //    machinery `packages/*/test/AuthHttp.test.ts` files and this repo's
 //    own BDD suite already exercise for real, just not previously
 //    packaged as something runnable on its own.
+//    `TestAuth`'s bundled limiter is the permissive test one; this example serves real
+//    HTTP, so it swaps in the real single-process limiter (RBS-007) via the same param.
 const AppLayer = TestAuth.layer(
   built,
   Layer.mergeAll(
+    RateLimiter.layerMemory,
     AuthenticationLive,
     CsrfProtectionLive,
     OrganizationMemory,

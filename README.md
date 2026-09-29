@@ -237,7 +237,7 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 |---|---|---|
 | `PasswordHasher` | `layerArgon2id` | `layerScrypt`; `PasswordHasherWorkerPool.layerArgon2id`/`layerScrypt` run the KDF in worker threads (Node), see [Password hashing](#password-hashing) |
 | `Mailer` | a one-line `console.log` stand-in | bring your own (`Mailer.Mailer.of({ send })`, any provider) |
-| `RateLimiter` | `layer` over `RateLimiterStoreSql.layerStoreSql` (shared across replicas) | `layer` over the bounded, single-process `layerStoreMemory`, or your own `RateLimiterStore`; `layerPermissive` disables limiting (tests only) |
+| `RateLimiter` | `layer` over `RateLimiterStoreSql.layerStoreSql` (shared across replicas) | `RateLimiter.layerMemory` (the bounded, single-process store in one line — the default when you have one instance), or `layer` over your own `RateLimiterStore`; `layerPermissive` disables limiting and logs a warning when a rule runs against it (tests only) |
 | `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS` + `AWTHAQ_ENCRYPTION_KEY_ID`) | a KMS-backed `KeyProvider` (implement the port directly; keeps raw key bytes out of the process) |
 | `Csrf.CsrfConfig` | `Csrf.layerConfig` (`AWTHAQ_CSRF_SECRET`, at least 32 bytes; optional `AWTHAQ_CSRF_ALLOWED_ORIGINS`, comma-separated) | `Layer.succeed(Csrf.CsrfConfig, { secret, allowedOrigins })` with a secret loaded from your own secret store |
 
@@ -260,6 +260,8 @@ const HasherLive = PasswordHasherWorkerPool.layerArgon2id.pipe(
 `AUTH_PASSWORD_HASH_WORKER_POOL_SIZE` (default 4) sets the number of workers, one hash each at a time. Hashes are identical across both families, so switching is safe on live data.
 
 Where to run it: password hash/verify belongs on your origin (long-running) runtime. A verify at the default cost is tens of milliseconds of CPU, above a Cloudflare Workers free-tier budget; let the edge tier verify sessions/JWTs and redirect. There is deliberately no cheaper "edge" storage profile.
+
+Crypto on an edge runtime: the quickstart provides `NodeCrypto.layer` for `Crypto.Crypto`, which does not exist on Workers/Edge. Provide `WebCrypto.layer` from `@awthaq/ports` in its place — the same service over `globalThis.crypto` (`randomBytes`, SHA-1/256/384/512 digests), no Node built-ins. NodeCrypto stays the right choice on Node.
 
 ### Encryption keys
 

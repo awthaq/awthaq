@@ -328,14 +328,33 @@ export const layerStoreMemory = layerStoreMemoryWith({
 });
 
 /**
+ * RBS-007: the one-line real limiter for a single process — `layer` over the bounded memory
+ * store. The documented default for anything that is not a test; multi-replica deployments
+ * still need a shared store (`RateLimiterStoreSql.layerStoreSql`).
+ */
+export const layerMemory = layer.pipe(Layer.provide(layerStoreMemory));
+
+/**
  * BEH-EA-112: a limiter that never rejects, under any iteration count —
  * `TestAuth.layer`'s own default, so a test that signs in fifty times in a
  * loop doesn't fail for a reason that has nothing to do with what it tests.
  *
  * Tests only, never production (NHS-005): it disables every rate-limit rule
- * every plugin registers. Production wiring is `layer` over a store.
+ * every plugin registers. Production wiring is `layerMemory` or `layer` over a store.
+ * RBS-007: the first `consume` — a rule actually running against it — logs one warning
+ * saying so, so a test composition copied into production is not silently unprotected.
  */
-export const layerPermissive: Layer.Layer<RateLimiter> = Layer.succeed(
+export const layerPermissive = Layer.effect(
   RateLimiter,
-  RateLimiter.of({ consume: () => Effect.void }),
+  Effect.gen(function* () {
+    const warned = yield* Ref.make(false);
+    const warnOnce = Effect.flatMap(Ref.getAndSet(warned, true), (already) =>
+      already
+        ? Effect.void
+        : Effect.logWarning(
+            "awthaq: RateLimiter.layerPermissive is active — every registered rate-limit rule is disabled (tests only; use RateLimiter.layerMemory or a shared store in production)",
+          ),
+    );
+    return RateLimiter.of({ consume: () => warnOnce });
+  }),
 );
