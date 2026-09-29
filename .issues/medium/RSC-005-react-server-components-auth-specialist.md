@@ -3,7 +3,7 @@ ID: "RSC-005"
 Title: "getSession's return struct is neither RSC-prop-safe nor Providers-compatible; no adapter bridges the two halves"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "next"
 Source: "packages/next/src/GetSession.ts:51"
 Auditor: "react-server-components-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `next` · reported by **React Server Components Auth Specialist** (`react-server-components-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Ship a toSessionDto(view: Sessions.SessionView): SessionContract.SessionDto help
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `next-react-ssr-bridge`. Evidence at HEAD ec065a7: `packages/next/src/GetSession.ts:54`. Fix: Ship the missing server→client seam: a public SessionView→SessionDto mapper, a next-side helper that produces RSC-safe (encoded, plain JSON) seed props, and Providers accepting the encoded shape. (effort M). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Session.toSessionDto(view, current=true) exported from @awthaq/server/Session.ts (test: server/test/SessionDto.test.ts); the password/admin/passkey private copies now delegate through a typed sessionResponse wrapper (the wrapper keeps SessionContract in scope so declaration emit avoids TS2883, so 'grep const toSessionDto' -> 0 holds and one mapper implementation remains). @awthaq/next: Seed.ts toInitialSession/toInitialSubject (structural SubjectLike; plain-JSON, tested with a plain-object walker), exported from index; GetSession.Session doc states it is server-only; README section 'Seeding Providers from a Server Component'. Providers accepts SessionSeed/SubjectSeed (instance or encoded), decodes with Schema.decodeUnknownExit; malformed seed seeds nothing and is reported once via onError. Tests: next/test/Seed.test.ts, react/test/ProvidersSeeds.test.tsx.

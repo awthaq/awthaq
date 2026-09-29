@@ -3,7 +3,7 @@ ID: "RSC-006"
 Title: "Server-decided gate seeding (BEH-EA-186/192) is unimplemented; first paint shows pending for every auth gate"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "react"
 Source: "packages/react/src/Providers.tsx:95"
 Auditor: "react-server-components-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `react` · reported by **React Server Components Auth Specialist** (`react-server-components-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Implement dehydrateDecisions/hydrateDecisions (qadi-owned, per the spec's usage-
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `next-react-ssr-bridge`. Evidence at HEAD ec065a7: `packages/react/src/index.ts:19`. Fix: Let Providers accept the server's dehydrated decisions (and arbitrary extra seeds), hydrate them against the seeded subject, and document the server half. (effort M). Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Providers gains decisions (DehydratedDecisions) and initialValues props; decisions are hydrated with @qadi/react hydrateDecisions against the trusted seeded subject (needs seeded session+subject), extra initialValues merged last. Tests (ProvidersSeeds.test.tsx): server-decided Can renders granted on first paint (control renders pending), other-subject payload dropped, no hydration without trusted seeds. README section 'Server-decided gates on first paint' (app-level wiring, no new next export, per the next-package decision). traceability row added.

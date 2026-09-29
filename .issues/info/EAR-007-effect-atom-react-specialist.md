@@ -54,3 +54,5 @@ Ship a reference composition (a Next.js example app or a documented helper in pa
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `next-react-ssr-bridge`. Duplicate of `RSC-005` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/next/src/GetSession.ts:13`. Full dossier: `.plan/slices/11-frontend-next-react-client.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `RSC-005-react-server-components-auth-specialist` — closed by its fix (see that issue's Resolved comment).
