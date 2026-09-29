@@ -61,7 +61,7 @@ REQUIREMENT: Every first-factor flow that consults `BeforeSessionIssue`
              composing the plugin without a gate is a compile error.
 ```
 
-Hook points freeze at first use (BEH-EA-24), so the taps cannot be folded into the plugin's own layer; the markers are what keep a forgotten gate from being a silent MFA bypass (type-system-first plugins, ADR-EA-020 decision 5). The divert passes the first factor's `amr` (`Hooks.BeforeSessionIssue`'s context), so the session finally minted records how *both* factors were proven. `bypassStrategies` (default none) lets an application declare, say, `["passkey"]` — a user-verified passkey is already multi-factor — and is the only way a first factor skips the divert. Infrastructure failures inside the divert die (the divert has no error channel): failing closed, a `500` rather than a session.
+Hook points freeze at first use (BEH-EA-024), so the taps cannot be folded into the plugin's own layer; the markers are what keep a forgotten gate from being a silent MFA bypass (type-system-first plugins, ADR-EA-020 decision 5). The divert passes the first factor's `amr` (`Hooks.BeforeSessionIssue`'s context), so the session finally minted records how *both* factors were proven. `bypassStrategies` (default none) lets an application declare, say, `["passkey"]` — a user-verified passkey is already multi-factor — and is the only way a first factor skips the divert. Infrastructure failures inside the divert die (the divert has no error channel): failing closed, a `500` rather than a session.
 
 _Previous: [BEH-EA-257](31-two-factor.md#beh-ea-257-totp-is-rfc-6238-computed-by-a-pure-module-checked-against-the-published-vectors) | Next: [BEH-EA-259](31-two-factor.md#beh-ea-259-the-challenge-is-a-single-use-verification-row-consumed-before-the-code-is-checked)_
 
@@ -77,7 +77,7 @@ REQUIREMENT: The challenge MUST be a `Verification` row under the identifier
              `two-factor-challenge:<userId>` with a ten-minute default TTL:
              issuing MUST supersede any earlier live challenge for the
              account, it MUST be single-use, and every failed or replayed
-             consume MUST publish `auth.token.replay` (BEH-EA-59). The
+             consume MUST publish `auth.token.replay` (BEH-EA-059). The
              endpoints MUST consume the challenge BEFORE checking the code.
              A challenge minted for one user MUST NOT be spendable as
              another's. A wrong code MUST re-issue a fresh challenge carrying

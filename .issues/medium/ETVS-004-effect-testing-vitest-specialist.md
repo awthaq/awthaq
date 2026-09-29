@@ -55,3 +55,22 @@ Complete the bundle (add AuthEvents.layer and Verification.layerMemory to Memory
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `test-harness-completeness`. Evidence at HEAD ec065a7: `packages/test/src/TestAuth.ts:94`. Fix: Complete the memory bundle, rename the second parameter, and migrate the hand-rolled suites onto TestAuth.layer. (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29):** Done: TestAuth's memory bundle is complete (Verification.layerMemory, a low-cost argon2id TestHasher, plus AuthEvents/AuditLog/HooksLive/erasure and export services), the second parameter is renamed middleware -> services with the doc comment rewritten, TestAuth.layer now also exposes the composed plugins' own services (so a test can yield* Password.Password), the memory-server example composes through it with no duplicate Verification/hasher (its composition is in examples/memory-server/app.ts), packages/test/test/TestAuth.test.ts has the Password bundle suite ('TestAuth.layer(Auth.make([Password]), ...) serves sign-up/sign-in with no extra layers'). NOT done (left open on purpose): step 3, migrating the hand-rolled wire-level suites onto TestAuth.layer - packages/password/test/AuthHttp.test.ts, packages/server/test/AuthHttp.test.ts (+ Cors.test.ts), packages/oauth/test/AuthHttp.test.ts, packages/passkey/test/AuthHttp.test.ts, packages/jwt/test/AuthHttp.test.ts and features/step-definitions/PasswordWorld.ts / SessionWorld.ts / PasskeyWorld.ts. Each of those swaps a port deliberately (a capturing Mailer, a listless or vanishing Sessions, a real argon2id, a stub HttpClient, a refusing RateLimiter) and several are edited concurrently by other programs (P12/P14/P16), so a bulk rewrite here would conflict for little safety gain; they now each need three more provisions after the P11 work (Erasure.layer, DataExport.layer, RateLimiter) which is exactly the duplication this issue describes, and is the argument for doing the migration as its own follow-up once those programs have landed. Acceptance grep (packages/core/test/AccountErasure.test.ts
+packages/oauth/test/AuthHttp.test.ts
+packages/password/test/PasswordHooksSignUp.test.ts
+packages/password/test/PasswordHooksSignIn.test.ts
+packages/core/test/Verification.test.ts
+packages/core/test/VerificationLink.test.ts
+packages/core/test/Retention.test.ts
+packages/core/test/AccountExport.test.ts
+packages/oauth/test/OAuthHooksVeto.test.ts
+packages/oauth/test/OAuthHooksSignIn.test.ts
+packages/password/test/PasswordHooksBeforeSignIn.test.ts
+packages/password/test/harness.ts
+packages/server/test/AuthHttp.test.ts
+packages/oauth/test/OAuth.test.ts
+packages/password/test/AuthHttp.test.ts
+packages/password/test/Password.test.ts
+packages/server/test/Cors.test.ts
+packages/jwt/test/AuthHttp.test.ts) is therefore not yet satisfied.

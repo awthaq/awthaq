@@ -1,10 +1,10 @@
-# ADR-EA-030: Hook Registries Belong to the Composition, and a Tap Requires Its Point
+# ADR-EA-033: Hook Registries Belong to the Composition, and a Tap Requires Its Point
 
 > **Document Control**
 >
 > | Property | Value |
 > |---|---|
-> | Document ID | EFAUTH-ADR-028 |
+> | Document ID | EFAUTH-ADR-033 |
 > | Revision | 1.0 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |
@@ -30,7 +30,7 @@ A hook point's tap registry lived in the closure of the module that declared it.
 
 **A `PluginOrder` reference provided by `Auth.make`.** Rejected: the point layer is usually provided outside the composed plugin layer, so it would not see the reference at build time, and a total topological index would make `order` and plugin id meaningless between plugins. Dependency depth read off the owners' `dependsOn` needs no composition context.
 
-**Keeping erasure taps opt-in.** Rejected: the singleton that forced it is gone; erasure itself moves to a core registry (ADR-EA-033) because a veto hook is the wrong shape for "must run, must abort the transaction on failure".
+**Keeping erasure taps opt-in.** Rejected: the singleton that forced it is gone; erasure itself moves to a core registry (ADR-EA-031) because a veto hook is the wrong shape for "must run, must abort the transaction on failure".
 
 ## Consequences
 

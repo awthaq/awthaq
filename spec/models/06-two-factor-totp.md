@@ -36,7 +36,7 @@ authenticator-app second factor as table stakes.
 
 | Property | Value |
 |---|---|
-| Status | Shipped (`@awthaq/two-factor`; normative behaviors in [behaviors/28-two-factor.md](../behaviors/28-two-factor.md), state decisions in [ADR-EA-020](../decisions/020-two-factor-state.md)) |
+| Status | Shipped (`@awthaq/two-factor`; normative behaviors in [behaviors/31-two-factor.md](../behaviors/31-two-factor.md), state decisions in [ADR-EA-020](../decisions/020-two-factor-state.md)) |
 | Priority | P1 |
 | Enabler(s) | E4 — Hook-point step-up/divert wiring |
 | Breaking? | Purely additive to Password as planned — `archive/PRD.md` §9.3 already describes "divert" as a hook-point kind "used by two-factor," so the MVP hook-point design anticipates this method; no MVP plugin needs to be reopened. |

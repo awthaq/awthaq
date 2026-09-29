@@ -3,7 +3,7 @@ ID: "EP-003"
 Title: "Admin surface is impersonation-only; no user lifecycle or tenant administration"
 Level: high
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "admin"
 Source: "packages/admin/src/AdminApi.ts:82"
 Auditor: "eugenio-pace"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `api` · `admin` · reported by **Co-founder/former CEO of Auth0** (`eugenio-pace`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `admin-surface-expansion`. Evidence at HEAD ec065a7: `packages/admin/src/AdminApi.ts:82`. Fix: Implement ticket 19 §3: an optional superadmin tenant-administration sub-surface on top of BAM-005's user/session admin. (effort L). Full dossier: `.plan/slices/10-passkey-admin.md`.
 
 **Plan note (2026-09-29):** Left open by P05, blocked. EP-003 depends on BAM-005 (only its first slice landed: canManageUsers + user/session endpoints; the canAdministerTenants predicate was intentionally not added yet, it has no consumer) and DRS-001 (ticket 18 TenantContext / tenant column - not in the repo). Its core is also outside packages/admin: an organization `suspended`/`suspendedAt` migration and enforcement wherever membership gates access (packages/organization - P04/P18 territory) plus an `OrganizationSuspended` error, then the admin side (AdminTenantsGroup listOrganizations/getOrganization/suspendOrganization/unsuspendOrganization behind canAdministerTenants, Admin.layerWithTenants with dependsOn [Organization], auth.admin.organizationSuspended/Unsuspended events). The admin-tier machinery it needs is in place: a group id with an `admin` segment (e.g. `admin.tenants`) is automatically admin-tier and sits behind Api.AdminAuthentication (AR-003), and the target-aware gate pattern is established (IDS-001/BAM-005). Suggested order: organization suspension (P04/P18) -> then this admin sub-surface.
+
+**Resolved (2026-09-29):** Tenant-administration sub-surface landed (ADR-EA-018, BEH-EA-237). Organization: organization_org."suspendedAt" (plugin migration), OrganizationRecords.setSuspended/listPage, requireOrganization refuses a suspended organization with OrganizationNotFound (MTI-009 posture, so no endpoint error contract changes), setActive/getActiveMember refuse it, qadi relationships (member, has-role, resource:action, team-member, team-role) answer Unrelated through it, member list still returns it flagged suspended. Admin: new opt-in plugin AdminTenants (id admin.tenants, dependsOn [Organization], group admin.tenants which is admin-tier by construction and behind Api.AdminAuthentication + CSRF): GET /admin/organizations (keyset), GET /admin/organizations/:id, POST .../suspend {reason?} (idempotent), POST .../unsuspend, all behind AdminConfig.canAdministerTenants (fail-closed; gate before existence; denials audited as auth.admin.actionDenied), events auth.admin.organizationSuspended/organizationUnsuspended (AuthEvents + AuditLog actor mapping). Deviation from the dossier: a separate plugin AdminTenants instead of Admin.layerWithTenants, because Auth.make composes plugin classes and the tuple type must carry the Organization dependency (RolesAdmin beside Roles is the same shape); Admin itself stays organization-free and @awthaq/admin gains a dependency on @awthaq/organization. Tests: AdminTenants (denied by default and audited, no id oracle, keyset list, suspend/unsuspend round trip with the member refused then restored, events), composition (Auth.make([Organization, Admin, AdminTenants]) orders and tiers correctly), Organization suspension and qadi suspension suites, OrganizationRecords suspension/listPage (memory, SQL, Postgres).

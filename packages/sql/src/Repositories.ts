@@ -10,7 +10,7 @@
 // commit together (BEH-EA-058). Every paginated query takes an opaque
 // `(createdAt, id)` cursor, never an offset (BEH-EA-036).
 
-import { Encryption } from "@awthaq/ports";
+import { Encryption, Tenant } from "@awthaq/ports";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -73,6 +73,23 @@ const traced = (name: string, attributes?: Record<string, unknown>) =>
   Effect.withSpan(name, attributes === undefined ? {} : { attributes }, {
     captureStackTrace: false,
   });
+
+// ---- Tenant attribution (DRS-001, ADR-EA-018) --------------------------------------
+
+/**
+ * Every insert path funnels through here: an explicit `tenantId` on the input
+ * wins, otherwise the ambient `TenantContext`, otherwise `NULL` — so a
+ * single-tenant deployment (nothing provides the context) writes exactly what
+ * it wrote before the column existed. Core service signatures do not change;
+ * the repositories are the one choke point a caller cannot forget.
+ */
+const stampTenant = <A extends { readonly tenantId: string | null }>(input: A): Effect.Effect<A> =>
+  input.tenantId !== null
+    ? Effect.succeed(input)
+    : Effect.map(Tenant.TenantContext, (tenant) => ({
+        ...input,
+        tenantId: Option.getOrNull(tenant),
+      }));
 
 // ---- Opt-in PII column encryption (CSG-006, option B) -------------------------------
 
@@ -285,7 +302,9 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
 
     const insert: UsersRepositoryShape["insert"] = (input) =>
       concealMetadata(input.id, input.metadata).pipe(
-        Effect.flatMap((metadata) => repo.insert({ ...input, metadata })),
+        Effect.flatMap((metadata) =>
+          Effect.flatMap(stampTenant(input), (stamped) => repo.insert({ ...stamped, metadata })),
+        ),
         Effect.flatMap(revealUser),
       );
 
@@ -346,7 +365,11 @@ const makeUsersRepository = (pii: Option.Option<PiiCodec>) =>
 
     const insertIfAbsent: UsersRepositoryShape["insertIfAbsent"] = (input) =>
       concealMetadata(input.id, input.metadata).pipe(
-        Effect.flatMap((metadata) => insertIfAbsentQuery({ ...input, metadata })),
+        Effect.flatMap((metadata) =>
+          Effect.flatMap(stampTenant(input), (stamped) =>
+            insertIfAbsentQuery({ ...stamped, metadata }),
+          ),
+        ),
         Effect.flatMap(([row]) =>
           row === undefined ? Effect.succeedNone : revealUser(row).pipe(Effect.map(Option.some)),
         ),
@@ -909,7 +932,8 @@ export const AccountsRepositoryLive: Layer.Layer<
           "idToken",
           input.idToken,
         );
-        const row = yield* repo.insert({ ...input, accessToken, refreshToken, idToken });
+        const stamped = yield* stampTenant(input);
+        const row = yield* repo.insert({ ...stamped, accessToken, refreshToken, idToken });
         return yield* decryptRow(row);
       });
 
@@ -1297,7 +1321,15 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
 
     const insert: SessionsRepositoryShape["insert"] = (input) =>
       concealPii(input.id, input).pipe(
-        Effect.flatMap((columns) => repo.insert({ ...input, ...columns })),
+        Effect.flatMap((columns) =>
+          Effect.flatMap(stampTenant(input), (stamped) =>
+            repo.insert({
+              ...stamped,
+              ipAddress: columns.ipAddress,
+              userAgent: columns.userAgent,
+            }),
+          ),
+        ),
         Effect.flatMap(revealSession),
       );
 
@@ -1711,6 +1743,7 @@ export const VerificationRepositoryLive: Layer.Layer<
         id: VerificationTokenId,
         identifier: Schema.String,
         userId: Schema.NullOr(UserId),
+        tenantId: Schema.NullOr(Schema.String),
         valueHash: Schema.String,
         expiresAt: models.wire.dateTime,
         createdAt: models.wire.dateTime,
@@ -1720,12 +1753,13 @@ export const VerificationRepositoryLive: Layer.Layer<
       }),
       Result: models.VerificationToken,
       execute: (request) => sql`
-        INSERT INTO verification_tokens (id, identifier, "userId", "valueHash", "expiresAt", "consumedAt", "createdAt", payload, "maxAttempts", attempts)
-        VALUES (${request.id}, ${request.identifier}, ${request.userId}, ${request.valueHash}, ${request.expiresAt}, NULL, ${request.createdAt}, ${request.payload}, ${request.maxAttempts}, ${request.attempts})
+        INSERT INTO verification_tokens (id, identifier, "userId", "tenantId", "valueHash", "expiresAt", "consumedAt", "createdAt", payload, "maxAttempts", attempts)
+        VALUES (${request.id}, ${request.identifier}, ${request.userId}, ${request.tenantId}, ${request.valueHash}, ${request.expiresAt}, NULL, ${request.createdAt}, ${request.payload}, ${request.maxAttempts}, ${request.attempts})
         ON CONFLICT(identifier) WHERE "consumedAt" IS NULL
         DO UPDATE SET
           id = excluded.id,
           "userId" = excluded."userId",
+          "tenantId" = excluded."tenantId",
           "valueHash" = excluded."valueHash",
           "expiresAt" = excluded."expiresAt",
           "createdAt" = excluded."createdAt",
@@ -1738,7 +1772,10 @@ export const VerificationRepositoryLive: Layer.Layer<
     });
 
     const upsertLive: VerificationRepositoryShape["upsertLive"] = (input) =>
-      upsertLiveQuery(input).pipe(traced("VerificationTokens.upsertLive", { id: input.id }));
+      Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
+        Effect.flatMap((tenantId) => upsertLiveQuery({ ...input, tenantId })),
+        traced("VerificationTokens.upsertLive", { id: input.id }),
+      );
 
     const deleteAllByUser: VerificationRepositoryShape["deleteAllByUser"] = (userId) =>
       sql`DELETE FROM verification_tokens WHERE "userId" = ${userId}`.pipe(
@@ -1810,7 +1847,7 @@ export const VerificationRepositoryLive: Layer.Layer<
 
     return {
       models,
-      insert: repo.insert,
+      insert: (input) => Effect.flatMap(stampTenant(input), repo.insert),
       update: repo.update,
       findById: repo.findById,
       delete: repo.delete,
@@ -1877,21 +1914,26 @@ export const VerificationReservationsRepositoryLive = Layer.effect(
     const attempt = SqlSchema.findOneOption({
       Request: Schema.Struct({
         identifier: Schema.String,
+        tenantId: Schema.NullOr(Schema.String),
         expiresAt: models.wire.dateTime,
         now: models.wire.dateTime,
       }),
       Result: models.VerificationReservation,
       execute: (request) => sql`
-        INSERT INTO verification_reservations (identifier, "expiresAt")
-        VALUES (${request.identifier}, ${request.expiresAt})
-        ON CONFLICT(identifier) DO UPDATE SET "expiresAt" = excluded."expiresAt"
+        INSERT INTO verification_reservations (identifier, "tenantId", "expiresAt")
+        VALUES (${request.identifier}, ${request.tenantId}, ${request.expiresAt})
+        ON CONFLICT(identifier) DO UPDATE SET "expiresAt" = excluded."expiresAt", "tenantId" = excluded."tenantId"
         WHERE verification_reservations."expiresAt" < ${request.now}
         RETURNING *
       `,
     });
 
     const claim: VerificationReservationsRepositoryShape["claim"] = (input) =>
-      attempt(input).pipe(Effect.map(Option.isSome), traced("VerificationReservations.claim"));
+      Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
+        Effect.flatMap((tenantId) => attempt({ ...input, tenantId })),
+        Effect.map(Option.isSome),
+        traced("VerificationReservations.claim"),
+      );
 
     const deleteExpiredQuery = SqlSchema.findAll({
       Request: Schema.Struct({ cutoff: models.wire.dateTime, limit: Schema.Number }),
@@ -1990,7 +2032,7 @@ export interface AuditLogRepositoryShape {
    * ALF-010: retention. Deletes up to `limit` rows that occurred before `cutoff`
    * — only those whose tag is in `eventTags` when it is given, and never those in
    * `exceptTags` — and resolves to how many went. The `occurredAt` index
-   * (core migration 24) serves the range.
+   * (core migration 26) serves the range.
    */
   readonly deleteOccurredBefore: (input: {
     readonly cutoff: DateTime.Utc;
@@ -2017,14 +2059,15 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
           id: Schema.String,
           eventTag: Schema.String,
           actorUserId: Schema.NullOr(Schema.String),
+          tenantId: Schema.NullOr(Schema.String),
           occurredAt: models.wire.dateTime,
           correlationId: Schema.NullOr(Schema.String),
           payload: Schema.fromJsonString(Schema.Unknown),
         }),
         Result: models.AuditLogRow,
         execute: (r) => sql`
-        INSERT INTO auth_audit_log (id, "eventTag", "actorUserId", "occurredAt", "correlationId", payload)
-        VALUES (${r.id}, ${r.eventTag}, ${r.actorUserId}, ${r.occurredAt}, ${r.correlationId}, ${r.payload})
+        INSERT INTO auth_audit_log (id, "eventTag", "actorUserId", "tenantId", "occurredAt", "correlationId", payload)
+        VALUES (${r.id}, ${r.eventTag}, ${r.actorUserId}, ${r.tenantId}, ${r.occurredAt}, ${r.correlationId}, ${r.payload})
         RETURNING *
       `,
       });
@@ -2122,7 +2165,8 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
         );
 
       const insert: AuditLogRepositoryShape["insert"] = (input) =>
-        insertQuery(input).pipe(
+        Effect.map(Tenant.TenantContext, Option.getOrNull).pipe(
+          Effect.flatMap((tenantId) => insertQuery({ ...input, tenantId })),
           traced("AuditLog.insert", { id: input.id, eventTag: input.eventTag }),
         );
 

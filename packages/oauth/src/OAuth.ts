@@ -1165,7 +1165,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
               // provider id), before anything is written.
               const vetoedSignUp = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
                 beforeSignUp.run({
-                  email: profile.email ?? `${providerId}:${profile.subject}`,
+                  ...(profile.email === undefined ? {} : { email: profile.email }),
                   name,
                   strategy: providerId,
                 }),
@@ -1180,7 +1180,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
                     const user = yield* users
                       .create({
                         identity:
-                          profile.email === undefined
+                          vetoedSignUp.email === undefined
                             ? { _tag: "Anonymous" }
                             : { _tag: "Email", email: vetoedSignUp.email },
                         name: vetoedSignUp.name,
@@ -1252,7 +1252,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
               yield* events.publish({ _tag: "auth.user.created", userId: created.id });
               yield* afterSignUp.run({
                 userId: created.id,
-                ...Users.emailField(created),
+                ...(vetoedSignUp.email === undefined ? {} : { email: vetoedSignUp.email }),
                 strategy: providerId,
               });
               return created.id;
@@ -1267,13 +1267,15 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
         // SCP-001/BAM-005: THE shared sign-in gate — the provider proved the
         // identity; a suspended user still gets no session.
-        const signedInUser = yield* users.findById(targetUserId).pipe(Effect.orDie);
-        yield* Users.assertCanSignIn(signedInUser);
+        const signedInUser = yield* users
+          .findById(targetUserId)
+          .pipe(Effect.orDie, Effect.tap(Users.assertCanSignIn));
         // NAM-002: the sign-in veto, before the MFA divert point below.
+        const signedInEmail = Users.emailOf(signedInUser);
         yield* HookPoint.aborted(Hooks.BeforeSignIn)(
           beforeSignIn.run({
             userId: targetUserId,
-            ...Users.emailField(signedInUser),
+            ...(Option.isSome(signedInEmail) ? { email: signedInEmail.value } : {}),
             strategy: providerId,
           }),
         );
@@ -1348,6 +1350,32 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         };
       });
 
+      /**
+       * CSD-004: a rejected callback (bad state, cookie mismatch, replayed flow,
+       * failed token exchange or ID-token check) is the OAuth strategy's failure
+       * signal — `auth.user.signInFailed`, so a detector sees every strategy. The
+       * provider's own "user said no" redirect and an availability failure are not.
+       */
+      const callback: OAuthShape["callback"] = (providerId, input) =>
+        callbackFlow(providerId, input).pipe(
+          Effect.tapError((error) =>
+            error._tag === "OAuthCallbackFailed"
+              ? events.publish({
+                  _tag: "auth.user.signInFailed",
+                  strategy: providerId,
+                  reason: "callbackRejected",
+                  ...(input.ip === undefined ? {} : { clientIp: input.ip }),
+                })
+              : Effect.void,
+          ),
+          // EOTS-001: `awthaq.oauth.callback`, with the provider id (a configured, bounded label).
+          Observability.authSpan("awthaq.oauth.callback", {
+            "awthaq.plugin": "oauth",
+            [Observability.Field.strategy]: providerId,
+          }),
+        );
+
+
       const exchange: OAuthShape["exchange"] = Effect.fnUntraced(function* (input) {
         yield* RateLimits.enforce({
           key: `oauth:token:${input.ip ?? "unknown"}`,
@@ -1411,32 +1439,6 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
           token,
         }).pipe(Effect.catchTag("SchemaError", () => CallbackFailure.callbackFailed("exchange-invalid")));
       });
-
-
-      /**
-       * CSD-004: a rejected callback (bad state, cookie mismatch, replayed flow,
-       * failed token exchange or ID-token check) is the OAuth strategy's failure
-       * signal — `auth.user.signInFailed`, so a detector sees every strategy. The
-       * provider's own "user said no" redirect and an availability failure are not.
-       */
-      const callback: OAuthShape["callback"] = (providerId, input) =>
-        callbackFlow(providerId, input).pipe(
-          Effect.tapError((error) =>
-            error._tag === "OAuthCallbackFailed"
-              ? events.publish({
-                  _tag: "auth.user.signInFailed",
-                  strategy: providerId,
-                  reason: "callbackRejected",
-                  ...(input.ip === undefined ? {} : { clientIp: input.ip }),
-                })
-              : Effect.void,
-          ),
-          // EOTS-001: `awthaq.oauth.callback`, with the provider id (a configured, bounded label).
-          Observability.authSpan("awthaq.oauth.callback", {
-            "awthaq.plugin": "oauth",
-            [Observability.Field.strategy]: providerId,
-          }),
-        );
 
       return OAuth.of({ authorize, callback, exchange });
     }),

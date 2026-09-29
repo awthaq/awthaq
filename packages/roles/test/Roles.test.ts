@@ -22,7 +22,7 @@ const owner = role({ name: "owner", permissions: [projectDelete], inherits: [edi
 const CoreLive = AuthEvents.layer.pipe(
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Slots.layer),
-  // CSG-001: the plugin contributes its erasure to the composition's registry.
+  // CSG-001/CSG-005: the plugin contributes its erasure and export to the composition's registries.
   Layer.provideMerge(Erasure.registryLayer),
   Layer.provideMerge(DataExport.registryLayer),
 );

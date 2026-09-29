@@ -38,8 +38,9 @@ import * as HookPoint from "./HookPoint.ts";
 // *every* user-creating path (NAM-002/SCP-008: password sign-up and the OAuth
 // first-login creation), so `strategy` says which one — `"password"`, or the
 // OAuth provider id — and one tap can tell them apart.
+// FAMS-002: `email` is absent for a sign-up that has none (an OAuth profile without one).
 const SignUpInput = Schema.Struct({
-  email: Schema.String,
+  email: Schema.optional(Schema.String),
   name: Schema.String,
   strategy: Schema.String,
 });
@@ -48,10 +49,9 @@ export class BeforeSignUp extends HookPoint.veto<BeforeSignUp>()("auth.user.sign
 // NAM-002: observe — fired once a new user's creation has committed, whichever
 // strategy created it (the after-the-fact twin of `BeforeSignUp`; welcome mail,
 // provisioning fan-out, CRM sync).
-// FAMS-002: `email` is absent for a phone/anonymous user.
 const SignedUp = Schema.Struct({
   userId: Schema.String,
-  email: Schema.optionalKey(Schema.String),
+  email: Schema.optional(Schema.String),
   strategy: Schema.String,
 });
 export class AfterSignUp extends HookPoint.observe<AfterSignUp>()("auth.user.signedUp", SignedUp) {}
@@ -62,10 +62,9 @@ export class AfterSignUp extends HookPoint.observe<AfterSignUp>()("auth.user.sig
 // `false` lands (a domain allow-list, a banned user): a tap fails with
 // `HookAbort({ code })`, surfaced to the client as `HookAborted` (403). The
 // amended value is ignored: a sign-in cannot change who is signing in.
-// FAMS-002: `email` is absent for a phone/anonymous user.
 const SignInInput = Schema.Struct({
   userId: Schema.String,
-  email: Schema.optionalKey(Schema.String),
+  email: Schema.optional(Schema.String),
   strategy: Schema.String,
 });
 export class BeforeSignIn extends HookPoint.veto<BeforeSignIn>()("auth.user.signIn", SignInInput) {}

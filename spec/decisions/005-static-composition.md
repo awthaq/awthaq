@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-005 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-09-29 |
 > | Status | Accepted — design; implementation deferred |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Strengthened "Alternatives considered" with OSGi's dynamic service registry as a real, grounded competing precedent (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Strengthened "Alternatives considered" with OSGi's dynamic service registry as a real, grounded competing precedent (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced "Not yet implemented" with a pointer to ADR-EA-018 (EP-001) |
 
 ---
 
@@ -36,4 +36,4 @@ A genuinely dynamic alternative *does* exist in the wider plugin-platform litera
 
 **Trade-off accepted**: awthaq gives up "hot" plugin registration/deregistration — a capability some deployments might want for operational flexibility — in exchange for a plugin set whose composition is fully checked by the type system before the application runs, which the project judges to be worth more than runtime flexibility given how much of the rest of the design (ADR-EA-001 through ADR-EA-003) depends on the plugin tuple being fixed and known statically.
 
-Not yet implemented — see spec/roadmap.md for milestone.
+The keyed/per-tenant seam this ADR reserves is realized by [ADR-EA-018](018-tenancy-is-an-organization.md): a tenant is an `Organization` row, carried as an ambient `TenantContext` and an opaque `"tenantId"` column, with per-organization OAuth connections and configuration as `LayerMap.Service`s. The plugin set itself remains static.

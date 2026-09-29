@@ -1,6 +1,6 @@
 // @awthaq/core — EventRelay
 //
-// CWM-004/MAPS-010 (decision D2, ADR-EA-032): cross-process event delivery. `AuthEvents` is an
+// CWM-004/MAPS-010 (decision D2, ADR-EA-030): cross-process event delivery. `AuthEvents` is an
 // in-process, bounded, at-most-once bus (BEH-EA-097/098): it is right for a subscriber in the same
 // process (`AuthEvents.on`), and wrong for another service, a webhook fan-out, a SIEM or a cache
 // that must hear about a revoked session. The reliable source for those is the durable audit
@@ -21,7 +21,7 @@
 //     much, in exchange for not missing late-committing rows. Raise it if your processes' clocks
 //     or commit latencies differ by more.
 //   - **Resumable.** The position lives in a `RelayCursorStore` (SQL: `auth_relay_cursor`, core
-//     migration 25; memory for tests), one row per relay `name`. Several relays with different
+//     migration 27; memory for tests), one row per relay `name`. Several relays with different
 //     names (one per consumer) each keep their own.
 //   - **One writer per name.** Two processes running the same name both deliver: that is safe
 //     (at-least-once) but wasteful, so run one per name, or accept the duplicates.
@@ -31,7 +31,7 @@
 //
 // What crosses the transport is exactly what a live subscriber sees: the typed event plus its
 // envelope (ids, timestamps, correlation id, client address and user agent) — identifiers only,
-// never a secret or an email (ADR-EA-031), so an external consumer inherits that posture.
+// never a secret or an email (ADR-EA-029), so an external consumer inherits that posture.
 
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -84,7 +84,7 @@ export const layerCursorMemory = Layer.effect(
   }),
 );
 
-/** Durable positions in `auth_relay_cursor` (run core migrations, including 25). */
+/** Durable positions in `auth_relay_cursor` (run core migrations, including 27). */
 export const layerCursorSql = Layer.effect(
   RelayCursorStore,
   Effect.gen(function* () {

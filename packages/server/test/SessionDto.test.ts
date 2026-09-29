@@ -20,6 +20,7 @@ const view: Sessions.SessionView = {
   userAgent: Option.some("test-agent"),
   actingAs: Option.none(),
   amr: ["pwd"],
+  tenantId: Option.none(),
 };
 
 describe("toSessionDto (RSC-005)", () => {

@@ -4,13 +4,13 @@
 import * as Effect from "effect/Effect";
 
 /** Rows deleted per statement. */
-export const PURGE_BATCH = 1000;
+const PURGE_BATCH = 1000;
 
 /** Runs `step` (which deletes at most `limit` rows and resolves to how many it deleted) until a batch comes back short, and resolves to the total. */
-export const drainBatches = (
-  step: (limit: number) => Effect.Effect<number>,
+export const drainBatches = <E>(
+  step: (limit: number) => Effect.Effect<number, E>,
   limit: number = PURGE_BATCH,
-): Effect.Effect<number> =>
+): Effect.Effect<number, E> =>
   Effect.gen(function* () {
     let total = 0;
     while (true) {

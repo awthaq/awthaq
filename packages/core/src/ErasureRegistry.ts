@@ -14,11 +14,10 @@ import * as ContributionRegistry from "./internal/contributionRegistry.ts";
 import type { StoreUnavailable } from "./Errors.ts";
 import type { UserId } from "./Users.ts";
 
-/** What a contribution is told about the user being erased. The email is carried so a plugin can sweep rows keyed by address (an invitation addressed to the user). */
+/** What a contribution is told about the user being erased. The email (absent for a phone or anonymous identity) is carried so a plugin can sweep rows keyed by address (an invitation addressed to the user). */
 export interface ErasureSubject {
   readonly userId: UserId;
-  /** Absent for a phone or anonymous user (FAMS-002). */
-  readonly email?: string;
+  readonly email?: string | undefined;
 }
 
 export interface ErasureContribution {
@@ -49,7 +48,7 @@ export class ErasureRegistry extends Context.Service<ErasureRegistry, ErasureReg
   "awthaq/core/ErasureRegistry",
 ) {}
 
-/** The registry, one per composition (like a hook point's, ADR-EA-030). */
+/** The registry, one per composition (like a hook point's, ADR-EA-033). */
 export const registryLayer: Layer.Layer<ErasureRegistry> = Layer.effect(
   ErasureRegistry,
   Effect.map(

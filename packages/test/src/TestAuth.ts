@@ -128,8 +128,8 @@ const MemoryStores = Layer.mergeAll(
   Users.layerMemory,
   Accounts.layerMemory,
   Sessions.layerMemory,
-  // MW-002: `AuthHttp.coreHandlers` (the always-served `account` group) needs it.
-  // ETVS-004: and every password-style composition needs a hasher beyond the core stores.
+  // ETVS-004/MW-002: what every password-style composition needs beyond the core stores
+  // (also `AuthHttp.coreHandlers`' always-served `account` group).
   Verification.layerMemory,
   TestHasher,
   Mailer.layerMemory,

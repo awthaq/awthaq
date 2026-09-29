@@ -284,11 +284,9 @@ const serve = (
   scheme: Scheme | "apiKey",
   httpEffect: Effect.Effect<HttpServerResponse.HttpServerResponse, unhandled, Api.CurrentPrincipal>,
   principal: Api.Principal,
-  session?: Sessions.SessionView,
 ) =>
   Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(
-    // MAPS-007: every log the handler writes names the principal (and session, when one exists).
-    Effect.annotateLogs(principalFields(principal, session)),
+    Effect.annotateLogs(principalFields(principal)),
     Effect.flatMap((response) =>
       Effect.flatMap(PostAuthResponseHook, (hook) =>
         hook.decorate(principal, response, { scheme }),
@@ -469,7 +467,12 @@ export const resolveSession = (
     // answers 503; only `SessionNotFound`/`SessionExpired` (a genuinely absent
     // or expired session) map to `Unauthenticated`.
     const verified = sessions.verify(Redacted.make(raw)).pipe(
-      // EOTS-003: observed before the mapping, so the log names the real reason.
+      // EOTS-003: a rejected credential is otherwise silent. One structured debug line
+      // (fixed vocabulary, ticket 27 §3) and a span outcome — never the credential or
+      // the session id: the id is the public half of the bearer credential, and a
+      // *rejected* one is attacker-supplied input that must not reach the logs. The
+      // failure counter lives in `Sessions.verify` itself
+      // (`awthaq_session_verify_failed_total{reason}`).
       Effect.tapError((error) =>
         Effect.annotateCurrentSpan({
           [Observability.Field.outcome]: "failure",
@@ -516,29 +519,25 @@ export const resolveSession = (
   );
 
 /**
- * MAPS-007: names the principal and session on the current span and on every log
- * the handler writes — ids only (`auth.principal.ref`, `auth.session.id`), never a
- * name, email or credential — so a trace or a log line identifies who and which
- * session without a join.
+ * MAPS-007: names the principal (and, for a user, its session) on the current span and on
+ * every log the handler writes — ids only (`auth.principal.ref`, `auth.session.id`), never
+ * a name, email or credential — so a trace or a log line identifies who and which session
+ * without a join.
  */
-const principalFields = (principal: Api.Principal, session?: Sessions.SessionView) => ({
+const principalFields = (principal: Api.Principal) => ({
   [Observability.Field.principalType]: principal.ref.type,
   [Observability.Field.principalRef]: principal.ref.id,
-  ...(session === undefined ? {} : { [Observability.Field.sessionId]: session.id }),
+  ...(principal._tag === "User" ? { [Observability.Field.sessionId]: principal.sessionId } : {}),
 });
 
-const resolveAndAnnotate = (
-  resolver: PrincipalResolverShape,
-  session: Sessions.SessionView,
-) =>
-  resolver.resolve(session).pipe(
-    Effect.tap((principal) =>
-      Effect.annotateCurrentSpan({
-        ...principalFields(principal, session),
-        [Observability.Field.outcome]: "success",
-      }),
-    ),
-  );
+const annotatePrincipal = (principal: Api.Principal) =>
+  Effect.annotateCurrentSpan({
+    ...principalFields(principal),
+    [Observability.Field.outcome]: "success",
+  });
+
+const resolveAndAnnotate = (resolver: PrincipalResolverShape, session: Sessions.SessionView) =>
+  resolver.resolve(session).pipe(Effect.tap(annotatePrincipal));
 
 /**
  * Exported (not module-private) so `@awthaq/qadi`'s `SubjectExtractor.ts`
@@ -635,8 +634,7 @@ const makeSessionTierHandlers = (machine: boolean) =>
         // never sees. See `serve` for the per-request `PostAuthResponseHook`.
         Effect.flatMap(({ session }) =>
           resolveAndAnnotate(resolver, session).pipe(
-            Effect.flatMap((principal) => serve(scheme, httpEffect, principal, session)),
-          ),
+            Effect.flatMap((principal) => serve(scheme, httpEffect, principal))),
         ),
       );
     // MAPS-001/OCM-002: a credential a registered resolver claims resolves to its
@@ -792,8 +790,7 @@ export const OptionalAuthenticationLive: Layer.Layer<
         Effect.flatMap((resolved) => requireImpersonationSession(scheme, resolved)),
         Effect.flatMap(({ session }) =>
           resolveAndAnnotate(resolver, session).pipe(
-            Effect.flatMap((principal) => serve(scheme, httpEffect, principal, session)),
-          ),
+            Effect.flatMap((principal) => serve(scheme, httpEffect, principal))),
         ),
       );
     // See the identical helper on `AuthenticationLive` above: this is the user

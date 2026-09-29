@@ -11,16 +11,16 @@ import * as Layer from "effect/Layer";
 import type * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as ContributionRegistry from "./internal/contributionRegistry.ts";
+import type { StoreUnavailable } from "./Errors.ts";
 import type { UserId } from "./Users.ts";
 
 /** A section is JSON-safe by construction: it is written straight into the export document. */
 export type ExportSection = typeof Schema.Json.Type;
 
-/** Who the export is for. The email is carried so a plugin can find rows keyed by address (an invitation addressed to the user). */
+/** Who the export is for. The email (absent for a phone or anonymous identity) is carried so a plugin can find rows keyed by address (an invitation addressed to the user). */
 export interface DataExportSubject {
   readonly userId: UserId;
-  /** Absent for a phone or anonymous user (FAMS-002). */
-  readonly email?: string;
+  readonly email?: string | undefined;
 }
 
 export interface DataExportContribution {
@@ -34,7 +34,7 @@ export interface DataExportContribution {
    * cannot read its store: a failing contribution fails the whole export, so a subject is
    * never handed an export that silently omits a category.
    */
-  readonly collect: (subject: DataExportSubject) => Effect.Effect<ExportSection>;
+  readonly collect: (subject: DataExportSubject) => Effect.Effect<ExportSection, StoreUnavailable>;
 }
 
 /** A contribution registered after the registry was first read — a composition-order bug. */

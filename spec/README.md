@@ -34,7 +34,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | [spec/roadmap.md](roadmap.md) | EFAUTH-RMP | The planned delivery roadmap (milestones M0–M8), derived from `archive/PRD.md` §23, restated against this tree's IDs. |
 | [spec/models/](models/) | `MOD-EA-001`–`015` | Sixteen files. `00-adoption-matrix.md` is an index with no `MOD` id of its own; `01`–`15` each specify one authentication-method or core-plugin domain model (see table below). |
 | [spec/decisions/](decisions/) | `ADR-EA-001`–`015` | Fifteen architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). |
-| [spec/behaviors/](behaviors/) | `BEH-EA-1`–`208` | Twenty-six files, eight behaviors each, grouped by subsystem — the catalog a future BDD/acceptance-test suite is meant to trace to (see table below). |
+| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`208` | Twenty-six files, eight behaviors each, grouped by subsystem — the catalog a future BDD/acceptance-test suite is meant to trace to (see table below). |
 | [spec/process/](process/) | EFAUTH-PROC-01/02 | Two files: the requirement-ID scheme in full, and the definitions of done applied at each stage of work. |
 | [spec/appendices/](appendices/) | — | Three files of supporting reference material, authored alongside the rest of the tree and cross-referenced from it rather than summarized here. |
 
@@ -87,11 +87,11 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `025-*.md` | ADR-EA-025 | Global Roles Answer Platform Authority; Organization Relations Answer Tenant Authority |
 | `027-*.md` | ADR-EA-027 | The CLI Is Built on effect/unstable/cli, With Typed Exit Codes and a Credential Store Port |
 | `028-*.md` | ADR-EA-028 | Infrastructure Failures Are One Typed StoreUnavailable, Not Defects |
-| `029-*.md` | ADR-EA-029 | Observability Reuses Effect's HTTP Middleware, Adds Business-Logic Spans and a Fixed Field Vocabulary, and Ships Metric Definitions Without a Backend |
-| `030-*.md` | ADR-EA-030 | Hook Registries Belong to the Composition, and a Tap Requires Its Point |
-| `031-*.md` | ADR-EA-031 | Events Carry Identifiers, Not Personal Data, and the Audit Trail Is Pseudonymized on Erasure |
-| `032-*.md` | ADR-EA-032 | Events Cross Process Boundaries by Tailing the Audit Log, Not by Widening the Bus |
-| `033-*.md` | ADR-EA-033 | Erasure Is a Core Domain Service over an Aggregating Registry, and Retention Is a Separate, Opt-In Sweep |
+| `032-*.md` | ADR-EA-032 | Observability Reuses Effect's HTTP Middleware, Adds Business-Logic Spans and a Fixed Field Vocabulary, and Ships Metric Definitions Without a Backend |
+| `033-*.md` | ADR-EA-033 | Hook Registries Belong to the Composition, and a Tap Requires Its Point |
+| `029-*.md` | ADR-EA-029 | Events Carry Identifiers, Not Personal Data, and the Audit Trail Is Pseudonymized on Erasure |
+| `030-*.md` | ADR-EA-030 | Events Cross Process Boundaries by Tailing the Audit Log, Not by Widening the Bus |
+| `031-*.md` | ADR-EA-031 | Erasure Is a Core Domain Service over an Aggregating Registry, and Retention Is a Separate, Opt-In Sweep |
 
 ### `spec/behaviors/` — twenty-six files, eight behaviors per file
 

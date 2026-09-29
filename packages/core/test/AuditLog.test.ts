@@ -29,6 +29,7 @@ const Migrated = Layer.effectDiscard(
         id TEXT PRIMARY KEY,
         eventTag TEXT NOT NULL,
         actorUserId TEXT,
+        tenantId TEXT,
         occurredAt TEXT NOT NULL,
         correlationId TEXT,
         payload TEXT NOT NULL
@@ -292,10 +293,52 @@ const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.EventOf<T
     _tag: "auth.admin.userBanned",
     adminUserId: otherUserId,
     userId,
-    reason: null,
+    reason: "abuse",
     until: null,
   },
   "auth.admin.userUnbanned": { _tag: "auth.admin.userUnbanned", adminUserId: otherUserId, userId },
+  "auth.admin.organizationSuspended": {
+    _tag: "auth.admin.organizationSuspended",
+    adminUserId: otherUserId,
+    organizationId: "org-1",
+    reason: null,
+  },
+  "auth.admin.organizationUnsuspended": {
+    _tag: "auth.admin.organizationUnsuspended",
+    adminUserId: otherUserId,
+    organizationId: "org-1",
+  },
+  "auth.scim.userProvisioned": {
+    _tag: "auth.scim.userProvisioned",
+    connectionId: "conn-1",
+    organizationId: "org-1",
+    userId,
+  },
+  "auth.scim.userDeactivated": {
+    _tag: "auth.scim.userDeactivated",
+    connectionId: "conn-1",
+    organizationId: "org-1",
+    userId,
+  },
+  "auth.scim.userReactivated": {
+    _tag: "auth.scim.userReactivated",
+    connectionId: "conn-1",
+    organizationId: "org-1",
+    userId,
+  },
+  "auth.scim.userDeleted": {
+    _tag: "auth.scim.userDeleted",
+    connectionId: "conn-1",
+    organizationId: "org-1",
+    userId,
+  },
+  "auth.scim.groupChanged": {
+    _tag: "auth.scim.groupChanged",
+    connectionId: "conn-1",
+    organizationId: "org-1",
+    teamId: "team-1",
+    change: "created",
+  },
   "auth.admin.seeded": {
     _tag: "auth.admin.seeded",
     targetUserId: userId,
@@ -309,16 +352,16 @@ const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.EventOf<T
     _tag: "auth.import.completed",
     source: "better-auth",
     runId: "run-1",
-    imported: 1,
+    imported: 2,
     skipped: 0,
     failed: 0,
-    unmapped: 0,
+    unmapped: 1,
   },
   "auth.import.failed": {
     _tag: "auth.import.failed",
     source: "better-auth",
     runId: "run-1",
-    imported: 0,
+    imported: 1,
     skipped: 0,
     failed: 1,
     unmapped: 0,
@@ -348,12 +391,12 @@ const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.EventOf<T
     keyId: "key-1",
     successorKeyId: "key-2",
   },
-  "auth.apiKey.clientRegistered": { _tag: "auth.apiKey.clientRegistered", userId, clientId: "client-1" },
-  "auth.apiKey.clientRevoked": { _tag: "auth.apiKey.clientRevoked", userId, clientId: "client-1" },
+  "auth.apiKey.clientRegistered": { _tag: "auth.apiKey.clientRegistered", userId, clientId: "c-1" },
+  "auth.apiKey.clientRevoked": { _tag: "auth.apiKey.clientRevoked", userId, clientId: "c-1" },
   "auth.apiKey.clientSecretRotated": {
     _tag: "auth.apiKey.clientSecretRotated",
     userId,
-    clientId: "client-1",
+    clientId: "c-1",
   },
 };
 
@@ -409,26 +452,9 @@ const suite = (name: string, layer: Layer.Layer<AuditLog.AuditLog, unknown, neve
     it.effect("records the CLI's admin-seed and import events with no actor", () =>
       Effect.gen(function* () {
         const auditLog = yield* AuditLog.AuditLog;
-        yield* auditLog.record(
-          stamped({
-          _tag: "auth.admin.seeded",
-          targetUserId: userId,
-          outcome: "created",
-          forced: false,
-          role: "admin",
-          via: "cli",
-        }, 1));
-        yield* auditLog.record(stamped({ _tag: "auth.admin.seedRefused", reason: "adminExists" }, 2));
-        yield* auditLog.record(
-          stamped({
-          _tag: "auth.import.completed",
-          source: "better-auth",
-          runId: "run-1",
-          imported: 2,
-          skipped: 0,
-          failed: 0,
-          unmapped: 1,
-        }, 3));
+        yield* auditLog.record(stamped(samples["auth.admin.seeded"], 1));
+        yield* auditLog.record(stamped(samples["auth.admin.seedRefused"], 2));
+        yield* auditLog.record(stamped(samples["auth.import.completed"], 3));
         const seeded = yield* auditLog.list({ eventTag: "auth.admin.seeded" });
         assert.strictEqual(seeded.length, 1);
         assert.deepStrictEqual(seeded[0]?.actorUserId, Option.none());

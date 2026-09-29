@@ -7,7 +7,7 @@
 // The state lives in `Verification` (not a cookie): `verification.issue` under the identifier
 // `two-factor-challenge:<userId>`. Issuing supersedes any earlier live challenge for that identifier
 // (one live challenge per account), the value is single-use, and every failed or replayed consume
-// publishes `auth.token.replay` (BEH-EA-59). The `challengeId` the client holds is
+// publishes `auth.token.replay` (BEH-EA-059). The `challengeId` the client holds is
 // `two-factor-challenge:<userId>.<value>` — the user id is not a secret here (`TwoFactorRequired`
 // already tells the client whose second factor is owed), and because the identifier is derived from
 // the claimed user, a challenge minted for user A cannot be consumed as user B's.

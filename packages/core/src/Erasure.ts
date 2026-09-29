@@ -8,7 +8,7 @@
 // It is an aggregating registry (ADR-EA-012): each plugin contributes its own
 // erasure, ordered by declared `order` then id, frozen at first read.
 //
-// The type system carries the guarantee (ADR-EA-030's principle): a plugin's
+// The type system carries the guarantee (ADR-EA-033's principle): a plugin's
 // `contribute` layer *requires* `ErasureRegistry`, so a composition that installs
 // a plugin holding personal data without providing the registry does not
 // compile — erasure is no longer something a host has to remember to opt in to.
@@ -40,7 +40,7 @@
 // (ALF-005), protected by database triggers on purpose, and its chain payload
 // embeds the ids it would have to rewrite. It is retained under the legal-
 // obligation basis (GDPR Art. 17(3)(b)/(e), SOC 2 access-review) and documented
-// as such in ADR-EA-033; a ledger designed to survive erasure (identifiers
+// as such in ADR-EA-031; a ledger designed to survive erasure (identifiers
 // replaced by per-user keyed digests) is the follow-up.
 
 import { SqlTransaction } from "@awthaq/ports";
@@ -51,12 +51,12 @@ import * as Option from "effect/Option";
 import { Accounts } from "./Accounts.ts";
 import { AuditLog } from "./AuditLog.ts";
 import { AuthEvents } from "./AuthEvents.ts";
-import * as HookPoint from "./HookPoint.ts";
 import type { StoreUnavailable } from "./Errors.ts";
+import * as HookPoint from "./HookPoint.ts";
 import { ErasureRegistry, type ErasureSubject } from "./ErasureRegistry.ts";
 import * as Hooks from "./Hooks.ts";
 import { Sessions } from "./Sessions.ts";
-import { Users, emailOf, type UserId, type UserNotFound } from "./Users.ts";
+import { emailOf, Users, type UserId, type UserNotFound } from "./Users.ts";
 import { Verification } from "./Verification.ts";
 
 export * from "./ErasureRegistry.ts";
@@ -112,12 +112,11 @@ export const layer = Layer.effect(
     const eraseAccount: AccountErasureShape["eraseAccount"] = (userId, options) =>
       Effect.gen(function* () {
         const user = yield* users.findById(userId);
-        // FAMS-002: only an email-identity user has an address to sweep rows keyed by one.
         const email = Option.getOrUndefined(emailOf(user));
-        const subject: ErasureSubject = email === undefined ? { userId } : { userId, email };
+        const subject: ErasureSubject = { userId, email };
         // Veto first: nothing has been touched yet (see the module header).
         yield* HookPoint.aborted(Hooks.BeforeUserDelete)(
-          beforeDelete.run(email === undefined ? { id: userId } : { id: userId, email }),
+          beforeDelete.run({ id: userId, ...(email === undefined ? {} : { email }) }),
         );
         const contributions = yield* registry.contributions;
         yield* sqlTransaction

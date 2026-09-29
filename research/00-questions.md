@@ -71,7 +71,7 @@ Conventions: `awthaq` = this project (`@awthaq/*`); PRD = `PRD.md` at repo root.
 47. Time handling: expiry via `Duration` + `TestClock`, clock skew (TOTP), token issuance/claims times?
 48. Email/SMS delivery abstraction: Mailer capability shape, template approach, what plugins may assume?
 49. Audit & events minimum set: event payloads as Schemas, redaction rules, retention?
-50. Anonymous users: anonymous→registered upgrade flows, deletion cascades (GDPR erasure)?
+50. Anonymous users: anonymous→registered upgrade flows, deletion cascades (GDPR erasure)? _(Answered: anonymous→registered is `Users.promoteIdentity`; a user delete runs the `BeforeUserDelete` cascade; data location is `packages/sql/README.md`, "Data location & residency".)_
 51. Core vs plugin boundary for the "identity graph": is organization/api-key/passkey strictly additive with zero core knowledge? Prove with a dependency audit of better-auth.
 
 ## F. Authentication strategies (Q52–Q63)

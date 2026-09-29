@@ -1,6 +1,6 @@
 // @awthaq/two-factor — TwoFactorConfig
 //
-// THS-001 step 4 (BEH-EA-17/ADR-EA-011): the policy knobs, a `Context.Reference` with a default,
+// THS-001 step 4 (BEH-EA-017/ADR-EA-011): the policy knobs, a `Context.Reference` with a default,
 // overridden by `TwoFactor.config({...})`. The defaults are what RFC 6238 and every authenticator
 // app assume (six digits, thirty-second steps, one step of drift either side) plus ticket 05's
 // challenge and recovery-code parameters.

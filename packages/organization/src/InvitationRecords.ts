@@ -87,7 +87,10 @@ export interface InvitationRecordsShape {
    * (`inviterId`) or one addressed to their email (compared case-insensitively;
    * the row holds the invitee's address in plaintext). Idempotent.
    */
-  readonly removeAllForUser: (userId: Users.UserId, email?: string) => Effect.Effect<void>;
+  readonly removeAllForUser: (
+    userId: Users.UserId,
+    email: string | undefined,
+  ) => Effect.Effect<void>;
 }
 
 export class InvitationRecords extends Context.Service<InvitationRecords, InvitationRecordsShape>()(
@@ -463,7 +466,6 @@ export const layerSql = Layer.effect(
       );
 
     const removeAllForUser: InvitationRecordsShape["removeAllForUser"] = (userId, email) =>
-      // FAMS-002: a phone/anonymous user has no address for invitations to name.
       (email === undefined
         ? sql`DELETE FROM organization_invitation WHERE "inviterId" = ${userId}`
         : sql`DELETE FROM organization_invitation WHERE "inviterId" = ${userId} OR lower("email") = lower(${email})`

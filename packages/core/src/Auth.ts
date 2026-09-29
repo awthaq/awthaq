@@ -17,8 +17,8 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthPlugin from "./AuthPlugin.ts";
-import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import * as HookPoint from "./HookPoint.ts";
+import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
 import * as Slots from "./Slots.ts";
 
@@ -290,8 +290,6 @@ export interface ManifestTap {
 /** BEH-EA-016: read off the composed classes, never authored (`archive/design/plugins-as-layers.md` §7). */
 export interface Manifest {
   readonly plugins: ReadonlyArray<ManifestPlugin>;
-  /** ECS-008: every installed plugin's configuration descriptors, in link order — static, no Layer evaluated. */
-  readonly config: ReadonlyArray<ManifestConfig>;
   /**
    * PERS-003/BEH-EA-096: every plugin-declared tap (`AuthPlugin.layer`'s `taps`
    * option), per hook point key, in the order the runtime chain runs them —
@@ -300,6 +298,8 @@ export interface Manifest {
    * not declared statically and run after every entry listed here.
    */
   readonly hooks: Readonly<Record<string, ReadonlyArray<ManifestTap>>>;
+  /** ECS-008: every installed plugin's configuration descriptors, in link order — static, no Layer evaluated. */
+  readonly config: ReadonlyArray<ManifestConfig>;
 }
 
 /**
@@ -566,10 +566,10 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
     dependsOn: plugin.dependsOn.map((dep) => dep.id),
     groups: Object.values(plugin.contract.groups).map((group) => group.identifier),
   })),
+  hooks: buildHooks(order),
   config: order.flatMap((plugin) =>
     (plugin.config ?? []).map((descriptor) => ({ pluginId: plugin.id, descriptor })),
   ),
-  hooks: buildHooks(order),
 });
 
 const hasRoute = (endpoint: object): endpoint is { readonly method: string; readonly path: string } =>

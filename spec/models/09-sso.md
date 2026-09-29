@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-09 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Noted that the `Organization` dependency is itself only the non-normative MOD-EA-014 adoption record, so this plugin's dependency on it is presently unresolved/blocked (CCR-EA-002) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Noted that the `Organization` dependency is itself only the non-normative MOD-EA-014 adoption record, so this plugin's dependency on it is presently unresolved/blocked (CCR-EA-002) <br> 1.2 (2026-09-29): the connection model now exists for OIDC/OAuth2 and the dispatch shape is decided (EP-004, SFS-006; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md), [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) |
 ---
 
 ## What it is
@@ -61,8 +61,11 @@ behavior file, `Sso`'s own design cannot proceed past this row either.
 ## Worked example
 No worked example drafted yet. Neither `archive/design/usage-examples-v4.md` nor `archive/design/usage-qadi.md` carries a section for SSO as of this revision.
 
+## What exists, and what is decided
+The **connection model exists** for OIDC/OAuth2: `@awthaq/organization` stores an organization's own IdP (`organization_oauth_connection`, encrypted client secret, unique email domains), `OrganizationConnections` resolves it into a provider `@awthaq/oauth` signs users in through (`org:<organizationId>:<connectionId>`), and `OrganizationConnectionStore.discover({ organizationId | email })` is the home-realm lookup ([BEH-EA-235](../behaviors/28-tenancy.md)). **Dispatch is decided** ([ADR-EA-023](../decisions/023-enterprise-federation-packages.md) Decision 4): `Saml` and `OAuth` remain standalone plugins that own their protocol routes (`saml.*`, `oauth.*` groups); `Sso` is a thin connection-resolver plugin (routes under `sso.*`) that resolves an organization's connection — by email domain or organization id — and redirects into the owning plugin (`POST /auth/sso/start { email | organizationId }`). SAML connections join the same table family when `@awthaq/saml` lands.
+
 ## What is missing
-No design beyond this row exists yet. There is no `SsoApi` contract, no connection model, no per-tenant resolution mechanism, and no decision on whether SSO wraps SAML and OIDC-based enterprise connections under one plugin or dispatches to the separate `Saml`/`OAuth` plugins underneath. See `research/03-auth-landscape.md` for the landscape context (Wave 3 "B2B money" framing, the WorkOS/Clerk/Logto pricing evidence) that justifies the Phase 3 placement; that file does not itself propose an awthaq-specific design.
+The `Sso` plugin itself (the `SsoApi` contract is the one endpoint above), the SAML connection kind, and HTTP CRUD for connections (an administrator surface). See `research/03-auth-landscape.md` for the landscape context (Wave 3 "B2B money" framing, the WorkOS/Clerk/Logto pricing evidence) that justifies the Phase 3 placement; that file does not itself propose an awthaq-specific design.
 
 ## Verification
 None yet — no test exists.

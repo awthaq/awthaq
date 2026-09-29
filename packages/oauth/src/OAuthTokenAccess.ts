@@ -185,7 +185,7 @@ export const layer: Layer.Layer<
               }),
           }),
         );
-        if (!providers.has(account.providerId) || Option.isNone(stored)) {
+        if (!(yield* providers.has(account.providerId)) || Option.isNone(stored)) {
           return yield* Effect.fail(
             new OAuthTokenUnavailable({
               accountId,

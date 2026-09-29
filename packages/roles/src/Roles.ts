@@ -29,7 +29,15 @@
 // same plugin-owned-table pattern this plugin now follows).
 import { Api } from "@awthaq/api";
 import { Defects, Users } from "@awthaq/core";
-import { AuthEvents, AuthPlugin, ConfigDescriptor, DataExport, Erasure, Migrations, Slots } from "@awthaq/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  ConfigDescriptor,
+  DataExport,
+  Erasure,
+  Migrations,
+  Slots,
+} from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -429,7 +437,7 @@ export const rolesErasure = Erasure.contribute({
 
 export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   apiVersion: 1,
-  // BEH-EA-18/roadmap M3: no HTTP contract of its own — this plugin's whole
+  // BEH-EA-018/roadmap M3: no HTTP contract of its own — this plugin's whole
   // job is the `SubjectResolver` override, per this module's own header
   // comment. Role administration over HTTP is the separate, opt-in `RolesAdmin`
   // plugin (YL-009), so `Auth.make([Roles])` stays contract-less. `HttpApi.make("auth")` with no `.add()` call is a real,
@@ -466,7 +474,7 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
    *
    * `Layer.provideMerge(subjectResolverOverride, ownLayer)` — `ownLayer`
    * (`AuthPlugin.layer(Roles, {make: rolesMake})`) provides `Roles` itself;
-   * `subjectResolverOverride` (built via `Slots.override`, BEH-EA-21)
+   * `subjectResolverOverride` (built via `Slots.override`, BEH-EA-021)
    * requires exactly that `Roles` to resolve role assignments, so folding
    * it underneath satisfies that requirement and the composed result
    * exposes both `Roles` and the overridden `SubjectResolver` in its

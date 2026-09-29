@@ -77,7 +77,7 @@ const passkeyAmr = (verified: {
   return verified.userVerified ? [key, "user"] : [key];
 };
 
-/** BEH-EA-44-style reserved provider id, this plugin's own concern (BEH-EA-4: confined to its own scope). */
+/** BEH-EA-044-style reserved provider id, this plugin's own concern (BEH-EA-004: confined to its own scope). */
 const PASSKEY_PROVIDER_ID = "passkey";
 
 /**
@@ -199,7 +199,7 @@ const defaultPasskeyConfig: PasskeyConfigShape = {
   counterAnomalyPolicy: "flag",
 };
 
-/** BEH-EA-17's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
+/** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
 export const PasskeyConfig: Context.Reference<PasskeyConfigShape> = Context.Reference(
   "awthaq/passkey/Config",
   { defaultValue: () => defaultPasskeyConfig },
@@ -561,8 +561,8 @@ export interface PasskeyShape {
     | PasskeyApi.PasskeyChallengeInvalid
     | PasskeyApi.PasskeyUserVerificationRequired
     | PasskeyApi.PasskeyCounterAnomaly
-    | Users.UserSuspended
     | HookPoint.HookAborted
+    | Users.UserSuspended
     | Hooks.TwoFactorRequired
     | Errors.StoreUnavailable
   >;
@@ -1519,19 +1519,20 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // session for a dead `userId` with no existence check of its
           // own: same uniform `InvalidCredentials` collapse BEH-EA-136
           // already applies to every other failure in this ceremony.
-          const signedInUser = yield* users
+          const user = yield* users
             .findById(stored.userId)
             .pipe(Effect.catchTag("UserNotFound", () => Effect.fail(new Api.InvalidCredentials())));
 
           // SCP-001/BAM-005: THE shared sign-in gate, after the credential is
           // proven and before any session exists.
-          yield* Users.assertCanSignIn(signedInUser);
+          yield* Users.assertCanSignIn(user);
 
           // NAM-002: the sign-in veto, before the MFA divert point below.
+          const signedInEmail = Users.emailOf(user);
           yield* HookPoint.aborted(Hooks.BeforeSignIn)(
             beforeSignIn.run({
               userId: stored.userId,
-              ...Users.emailField(signedInUser),
+              ...(Option.isSome(signedInEmail) ? { email: signedInEmail.value } : {}),
               strategy: "passkey",
             }),
           );
@@ -1632,7 +1633,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           if (Option.isNone(accountOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyCredentialNotFound());
           }
-          // BEH-EA-45/134: the existing cross-plugin invariant, not a
+          // BEH-EA-045/134: the existing cross-plugin invariant, not a
           // passkey-specific reimplementation of "don't strand the account".
           // Unlink MUST run first — it's the only place the last-credential
           // guard is enforced, so deleting the credential row before this

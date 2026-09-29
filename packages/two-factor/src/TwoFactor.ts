@@ -6,7 +6,7 @@
 // (`Hooks.BeforeCredentialReset`).
 //
 // **The gates are separate layers, and the plugin refuses to build without them.** A tap is a layer
-// that requires its hook point, and a point's tap list freezes at its first run (BEH-EA-24), so
+// that requires its hook point, and a point's tap list freezes at its first run (BEH-EA-024), so
 // the taps cannot be folded into `TwoFactor.layer` without ordering hazards; they ship as
 // `sessionGate` and `credentialResetGate`. Forgetting one would be a silent MFA bypass — every
 // first-factor flow would issue a session, or a stolen mailbox would reset the password — so

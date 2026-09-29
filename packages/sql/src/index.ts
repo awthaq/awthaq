@@ -10,7 +10,8 @@
 // tables' forward-only migrations (BEH-EA-037). RateLimiterStoreSql.ts: an
 // opt-in SQL rate-limit store. ReadRouting.ts: opt-in, default-off read-replica
 // routing with per-read consistency classes and causal tokens (RRC-001,
-// ADR-EA-024). See README.md for operations (drivers, pool configuration,
+// ADR-EA-024). TenantScope.ts: opt-in Postgres row-level security under the
+// `"tenantId"` column and `withTenant` (DRS-001, ADR-EA-018). See README.md for operations (drivers, pool configuration,
 // migrations, encryption boundary, replicas).
 // See spec/overview.md for the full package map.
 
@@ -19,3 +20,4 @@ export * as Models from "./Models.ts";
 export * as RateLimiterStoreSql from "./RateLimiterStoreSql.ts";
 export * as ReadRouting from "./ReadRouting.ts";
 export * as Repositories from "./Repositories.ts";
+export * as TenantScope from "./TenantScope.ts";

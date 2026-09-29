@@ -3,7 +3,7 @@ ID: "EP-005"
 Title: "No branding or custom-domain surface beyond org logo/metadata fields"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:457"
 Auditor: "eugenio-pace"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `organization` · reported by **Co-founder/former CEO of Auth0** (`eugenio-pace`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Either remove the illusion (document logo/metadata as host-owned data) or make t
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-config-and-tenancy`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:484`. Fix: Make the existing branding fields load-bearing where the plugin itself renders to tenants' users, and route custom-domain → tenant through ticket 18's TenantResolver. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Invitation mail data now carries organizationLogo next to organizationName (test captures the Mailer); TenantResolver.ts documents the Host-header/custom-domain recipe and packages/organization docs state logo/metadata are host-owned presentation data; no domain table (none until a real consumer exists). TenantResolver port + Organization.tenantMiddleware (BEH-EA-234) landed with this slice.

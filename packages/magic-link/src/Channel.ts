@@ -30,7 +30,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type * as Redacted from "effect/Redacted";
 
-/** The address exactly as compared and stored: trimmed and lower-cased (`Users` lower-cases too, BEH-EA-41). */
+/** The address exactly as compared and stored: trimmed and lower-cased (`Users` lower-cases too, BEH-EA-041). */
 export const normalizeEmail = (email: string): string => email.trim().toLowerCase();
 
 /**
@@ -116,9 +116,10 @@ export const make = Effect.gen(function* () {
     }
     // NAM-002/SCP-008: creation through any path is a sign-up, so the same veto guards it.
     const local = email.slice(0, Math.max(email.indexOf("@"), 1));
-    const vetoed = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
+    const vetoedSignUp = yield* HookPoint.aborted(Hooks.BeforeSignUp)(
       beforeSignUp.run({ email, name: local, strategy: completion.strategy }),
     );
+    const vetoed = { ...vetoedSignUp, email: vetoedSignUp.email ?? email };
     const created = yield* users
       .create({ identity: { _tag: "Email", email: vetoed.email }, name: vetoed.name })
       .pipe(

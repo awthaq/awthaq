@@ -34,21 +34,6 @@ export class AccountDto extends Schema.Class<AccountDto>("AccountDto")({
 }) {}
 
 /**
- * BAM-009/NAM-009: `image` is client-writable like `name`, so it is bounded and
- * limited to `http(s)` URLs — a stored `javascript:`/`data:` value would be an
- * XSS vector for any frontend that renders it as a link.
- */
-export const ImageUrl = Schema.String.check(
-  Schema.isMaxLength(2048),
-  Schema.isPattern(/^https?:\/\//i),
-);
-
-export const UpdateProfilePayload = Schema.Struct({
-  name: Schema.String,
-  image: Schema.optional(Schema.NullOr(ImageUrl)),
-});
-
-/**
  * CSG-005: the wire shape of `@awthaq/core`'s `AccountExportDocument` — a GDPR Art. 15/20
  * data-subject export. Never a secret (no password hash, provider token, session secret or
  * key); `sections` holds one entry per plugin that stores personal data, keyed by plugin id.
@@ -57,10 +42,11 @@ export class AccountExportDto extends Schema.Class<AccountExportDto>("AccountExp
   generatedAt: Schema.String,
   user: Schema.Struct({
     id: Schema.String,
-    // FAMS-002: the identity union (email, phone or anonymous), not a bare address.
     identity: IdentityDto,
     name: Schema.String,
+    image: Schema.NullOr(Schema.String),
     metadata: Schema.NullOr(Schema.String),
+    status: Schema.Literals(["active", "suspended"]),
     createdAt: Schema.String,
     updatedAt: Schema.String,
   }),
@@ -93,6 +79,20 @@ export class AccountExportDto extends Schema.Class<AccountExportDto>("AccountExp
   sections: Schema.Record(Schema.String, Schema.Json),
 }) {}
 
+/**
+ * BAM-009/NAM-009: `image` is client-writable like `name`, so it is bounded and
+ * limited to `http(s)` URLs — a stored `javascript:`/`data:` value would be an
+ * XSS vector for any frontend that renders it as a link.
+ */
+export const ImageUrl = Schema.String.check(
+  Schema.isMaxLength(2048),
+  Schema.isPattern(/^https?:\/\//i),
+);
+
+export const UpdateProfilePayload = Schema.Struct({
+  name: Schema.String,
+  image: Schema.optional(Schema.NullOr(ImageUrl)),
+});
 export type UpdateProfilePayload = typeof UpdateProfilePayload.Type;
 
 export const AccountGroup = HttpApiGroup.make("account")

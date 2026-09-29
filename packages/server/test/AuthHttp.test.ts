@@ -505,7 +505,11 @@ describe("GET /user/export (CSG-005)", () => {
           const body = (yield* jsonBody(response)) as {
             readonly user: {
               readonly id: string;
-              readonly identity: { readonly _tag: string; readonly email?: string };
+              readonly identity: {
+                readonly _tag: string;
+                readonly email?: string;
+                readonly emailVerified?: boolean;
+              };
             };
             readonly accounts: ReadonlyArray<{
               readonly providerId: string;
@@ -516,7 +520,11 @@ describe("GET /user/export (CSG-005)", () => {
             readonly sections: Record<string, unknown>;
           };
           assert.strictEqual(body.user.id, user.id);
-          assert.strictEqual(body.user.identity.email, "export-me@example.com");
+          assert.deepStrictEqual(body.user.identity, {
+            _tag: "Email",
+            email: "export-me@example.com",
+            emailVerified: false,
+          });
           assert.deepStrictEqual(
             body.accounts.map((account) => account.subject),
             ["sub-exp"],

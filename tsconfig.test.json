@@ -4,7 +4,8 @@
     "features/**/*.steps.test.ts",
     "packages/*/test/**/*.test.ts",
     "packages/*/test/**/*.test.tsx",
-    "examples/plugin-template/test/**/*.test.ts"
+    "examples/plugin-template/test/**/*.test.ts",
+    "examples/memory-server/test/**/*.test.ts"
   ],
   "compilerOptions": {
     "noEmit": true,
@@ -47,7 +48,8 @@
       "@awthaq/jwt": ["./packages/jwt/src/index.ts"],
       "@awthaq/migrate-auth0": ["./packages/migrate-auth0/src/index.ts"],
       "@awthaq/migrate-better-auth": ["./packages/migrate-better-auth/src/index.ts"],
-      "@awthaq/migrate-firebase": ["./packages/migrate-firebase/src/index.ts"]
+      "@awthaq/migrate-firebase": ["./packages/migrate-firebase/src/index.ts"],
+      "@awthaq/scim": ["./packages/scim/src/index.ts"]
     }
   }
 }

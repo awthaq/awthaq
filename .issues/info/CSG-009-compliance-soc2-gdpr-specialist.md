@@ -3,7 +3,7 @@ ID: "CSG-009"
 Title: "No residency, region, or subprocessor hooks; data location is undocumented deployer choice"
 Level: info
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/CoreMigrations.ts:224"
 Auditor: "compliance-soc2-gdpr-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `sql` · reported by **Compliance (SOC2/GDPR) Specialist** (`compliance-soc2-gdpr-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ State the data-location model explicitly in spec/overview.md (deployer-controlle
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `tenancy-residency`. Evidence at HEAD ec065a7: `packages/sql/src/CoreMigrations.ts:222`. Fix: Document the data-location model. Point multi-region at the seams that exist or are decided: the injected SqlClient, DRS-001's tenant column, and ADR-EA-005's `LayerMap.Service` for per-tenant/per-region SqlClient routing. Don't add per-table logic. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Data-location model documented: packages/sql/README.md "Data location & residency" (storage is whatever SqlClient points at; multi-region is a LayerMap.Service keyed by region/tenant yielding a SqlClient selected from TenantContext per ADR-EA-005; Organization.homeRegionOf as the data-driven helper; encryption boundary cross-referenced; the directory stays global), spec/overview.md "Tenancy and data location" paragraph, research/00-questions.md Q50 marked answered. Note: the dossier cites ErasureRegistry and Retention which are P11 work not yet landed, so the README points at the BeforeUserDelete cascade instead.

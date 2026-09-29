@@ -9,9 +9,9 @@ import { AuthEvents, DataExport, Erasure, RateLimits, Users } from "@awthaq/core
 import { RateLimiter } from "@awthaq/ports";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { currentUser } from "./internal/CurrentUser.ts";
 import { HandlerInvariantViolation } from "./internal/Defects.ts";

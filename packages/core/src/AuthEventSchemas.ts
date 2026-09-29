@@ -18,7 +18,7 @@
 // (`Brand.nominal<UserId>()`, `Brand.nominal<SessionId>()`), so the two are the
 // same nominal type without this module importing either of them.
 //
-// PII posture (ESA-005, ADR-EA-031): payloads carry identifiers, never contact
+// PII posture (ESA-005, ADR-EA-029): payloads carry identifiers, never contact
 // details or free text about a person. A subscriber that needs an email joins
 // through the record store, which the erasure cascade owns. The two exceptions
 // are declared in `PII_FIELDS` so erasure can scrub them: the impersonation
@@ -58,10 +58,10 @@ export type UserSignedInEvent = typeof UserSignedInEvent.Type;
 export const SignInFailureReason = Schema.Literals([
   "invalidCredentials",
   "emailNotVerified",
-  /** SCP-001: the credential was right but `Users.assertCanSignIn` refused. */
-  "suspended",
   "assertionInvalid",
   "callbackRejected",
+  // SCP-001: the credential was right but `Users.assertCanSignIn` refused (a suspended account).
+  "suspended",
 ]);
 export type SignInFailureReason = typeof SignInFailureReason.Type;
 
@@ -308,6 +308,18 @@ export const AdminUserUpdatedEvent = Schema.TaggedStruct("auth.admin.userUpdated
 export type AdminUserUpdatedEvent = typeof AdminUserUpdatedEvent.Type;
 
 /**
+ * BAM-005: published by `@awthaq/admin`'s `revokeUserSession`/`revokeUserSessions`.
+ * `sessionId` is the one revoked session, or `null` when every non-impersonation
+ * session of `userId` was revoked in one call.
+ */
+export const AdminSessionRevokedEvent = Schema.TaggedStruct("auth.admin.sessionRevoked", {
+  adminUserId: UserIdSchema,
+  userId: UserIdSchema,
+  sessionId: Schema.NullOr(SessionIdSchema),
+});
+export type AdminSessionRevokedEvent = typeof AdminSessionRevokedEvent.Type;
+
+/**
  * BAM-005/SCP-001: published by `@awthaq/admin`'s `banUser`, after `Users.setStatus("suspended")`
  * and `Sessions.revokeAll(userId, "suspended")` both completed. `reason`/`until` are the
  * operator's note and the optional expiry (ISO instant), `null` when not given.
@@ -328,16 +340,74 @@ export const AdminUserUnbannedEvent = Schema.TaggedStruct("auth.admin.userUnbann
 export type AdminUserUnbannedEvent = typeof AdminUserUnbannedEvent.Type;
 
 /**
- * BAM-005: published by `@awthaq/admin`'s `revokeUserSession`/`revokeUserSessions`.
- * `sessionId` is the one revoked session, or `null` when every non-impersonation
- * session of `userId` was revoked in one call.
+ * EP-003 (ADR-EA-018): published by `@awthaq/admin`'s `AdminTenants.suspendOrganization`,
+ * after the organization is marked suspended. `reason` is the operator's note, `null`
+ * when none was given.
  */
-export const AdminSessionRevokedEvent = Schema.TaggedStruct("auth.admin.sessionRevoked", {
-  adminUserId: UserIdSchema,
+export const AdminOrganizationSuspendedEvent = Schema.TaggedStruct(
+  "auth.admin.organizationSuspended",
+  {
+    adminUserId: UserIdSchema,
+    organizationId: Schema.String,
+    reason: Schema.NullOr(Schema.String),
+  },
+);
+export type AdminOrganizationSuspendedEvent = typeof AdminOrganizationSuspendedEvent.Type;
+
+/** EP-003: published by `AdminTenants.unsuspendOrganization`, after the suspension is lifted. */
+export const AdminOrganizationUnsuspendedEvent = Schema.TaggedStruct(
+  "auth.admin.organizationUnsuspended",
+  {
+    adminUserId: UserIdSchema,
+    organizationId: Schema.String,
+  },
+);
+export type AdminOrganizationUnsuspendedEvent = typeof AdminOrganizationUnsuspendedEvent.Type;
+
+/**
+ * CWM-002 (ADR-EA-023): published by `@awthaq/scim` when a directory connection provisions a
+ * user (a repeat `POST` that converges on an existing one publishes nothing). `connectionId`
+ * names the SCIM connection, `organizationId` its organization.
+ */
+export const ScimUserProvisionedEvent = Schema.TaggedStruct("auth.scim.userProvisioned", {
+  connectionId: Schema.String,
+  organizationId: Schema.String,
   userId: UserIdSchema,
-  sessionId: Schema.NullOr(SessionIdSchema),
 });
-export type AdminSessionRevokedEvent = typeof AdminSessionRevokedEvent.Type;
+export type ScimUserProvisionedEvent = typeof ScimUserProvisionedEvent.Type;
+
+/** CWM-002: published after a SCIM `active: false` (or `DELETE`, by default) suspended the user and revoked every session. */
+export const ScimUserDeactivatedEvent = Schema.TaggedStruct("auth.scim.userDeactivated", {
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+  userId: UserIdSchema,
+});
+export type ScimUserDeactivatedEvent = typeof ScimUserDeactivatedEvent.Type;
+
+/** CWM-002: published after a SCIM `active: true` lifted a suspension that same connection made. */
+export const ScimUserReactivatedEvent = Schema.TaggedStruct("auth.scim.userReactivated", {
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+  userId: UserIdSchema,
+});
+export type ScimUserReactivatedEvent = typeof ScimUserReactivatedEvent.Type;
+
+/** CWM-002: published after a SCIM `DELETE` configured to erase removed the user. */
+export const ScimUserDeletedEvent = Schema.TaggedStruct("auth.scim.userDeleted", {
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+  userId: UserIdSchema,
+});
+export type ScimUserDeletedEvent = typeof ScimUserDeletedEvent.Type;
+
+/** CWM-002: published when a SCIM connection creates, updates or deletes a group (an organization team). */
+export const ScimGroupChangedEvent = Schema.TaggedStruct("auth.scim.groupChanged", {
+  connectionId: Schema.String,
+  organizationId: Schema.String,
+  teamId: Schema.String,
+  change: Schema.Literals(["created", "updated", "deleted"]),
+});
+export type ScimGroupChangedEvent = typeof ScimGroupChangedEvent.Type;
 
 /**
  * ECS-006: published by `awthaq seed admin` after it grants the administrative role
@@ -669,10 +739,13 @@ export const ApiKeyClientRevokedEvent = Schema.TaggedStruct("auth.apiKey.clientR
 });
 export type ApiKeyClientRevokedEvent = typeof ApiKeyClientRevokedEvent.Type;
 
-export const ApiKeyClientSecretRotatedEvent = Schema.TaggedStruct("auth.apiKey.clientSecretRotated", {
-  userId: UserIdSchema,
-  clientId: Schema.String,
-});
+export const ApiKeyClientSecretRotatedEvent = Schema.TaggedStruct(
+  "auth.apiKey.clientSecretRotated",
+  {
+    userId: UserIdSchema,
+    clientId: Schema.String,
+  },
+);
 export type ApiKeyClientSecretRotatedEvent = typeof ApiKeyClientSecretRotatedEvent.Type;
 
 /**
@@ -769,6 +842,13 @@ export const AuthEventSchema = Schema.Union([
   AdminUserBannedEvent,
   AdminUserUnbannedEvent,
   AdminSessionRevokedEvent,
+  AdminOrganizationSuspendedEvent,
+  AdminOrganizationUnsuspendedEvent,
+  ScimUserProvisionedEvent,
+  ScimUserDeactivatedEvent,
+  ScimUserReactivatedEvent,
+  ScimUserDeletedEvent,
+  ScimGroupChangedEvent,
   AdminSeededEvent,
   AdminSeedRefusedEvent,
   ImportCompletedEvent,
@@ -867,7 +947,7 @@ export const payloadOf = Schema.decodeUnknownSync(AuthEventSchema);
 export const encodeEvent = Schema.encodeEffect(AuthEventSchema);
 
 /**
- * ESA-005/ADR-EA-031: the payload fields that hold free text about a person,
+ * ESA-005/ADR-EA-029: the payload fields that hold free text about a person,
  * per tag, scrubbed (set to `""`) when the person is erased. Everything else
  * an event carries is an identifier the erasure pass rewrites to a pseudonym.
  * A new event that carries free text must be listed here.

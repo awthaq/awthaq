@@ -127,10 +127,10 @@ export type PasskeyInvalidCredentials = Api.InvalidCredentials;
  * `src/`, which attw rejects); type-only, erased at runtime.
  */
 export type PasskeyTwoFactorRequired = Hooks.TwoFactorRequired;
-/** SCP-001: the same declaration-emit anchor for `Users.UserSuspended`, the sign-in gate's refusal. */
-export type PasskeyUserSuspended = Users.UserSuspended;
 /** NAM-002: a `BeforeSignIn` veto tap's abort, named here for the same declaration-emit reason. */
 export type PasskeyHookAborted = HookPoint.HookAborted;
+/** SCP-001: the same declaration-emit anchor for `Users.UserSuspended`, the sign-in gate's refusal. */
+export type PasskeyUserSuspended = Users.UserSuspended;
 
 const UNSUPPORTED_CAPABILITIES: PasskeyClientCapabilities = {
   conditionalCreate: "unsupported",

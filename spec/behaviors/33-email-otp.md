@@ -35,7 +35,7 @@ REQUIREMENT: `Verification.issue` MUST be able to mint a numeric value of 4 to
              no budget MUST behave exactly as before.
 ```
 
-A six-digit code is a million possibilities, so its safety is layered: hashed at rest like every verification value, single-use, a short TTL, one live code per identifier, this attempt budget, and the rate limits of BEH-EA-269/270. `layerMemory` spends the attempt inside its `Ref.modify`; `layerSql` in one `UPDATE ... SET attempts = attempts + 1, consumedAt = CASE WHEN attempts + 1 >= maxAttempts ...` (migration 26).
+A six-digit code is a million possibilities, so its safety is layered: hashed at rest like every verification value, single-use, a short TTL, one live code per identifier, this attempt budget, and the rate limits of BEH-EA-269/270. `layerMemory` spends the attempt inside its `Ref.modify`; `layerSql` in one `UPDATE ... SET attempts = attempts + 1, consumedAt = CASE WHEN attempts + 1 >= maxAttempts ...` (migration 28).
 
 _Next: [BEH-EA-269](33-email-otp.md#beh-ea-269-requesting-a-code-answers-202-for-every-address-inside-a-resend-window)_
 

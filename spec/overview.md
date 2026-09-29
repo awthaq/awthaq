@@ -109,6 +109,8 @@ Each table below is a planned surface, not a shipped one. "Source" is the intend
 | `Retention`, `SecuritySignals` | opt-in retention sweep and breach-signal detector | `Retention.ts`, `SecuritySignals.ts` |
 | `BeforeSignUp`, `BeforeSignIn`, `BeforeSessionIssue`, `AfterSignUp`, `AfterSignIn`, `BeforeUserDelete` | hook points (`HookPoint.Service`) | `Hooks.ts` |
 
+**Tenancy and data location.** A tenant is an `Organization` row ([ADR-EA-018](decisions/018-tenancy-is-an-organization.md)); the persistence stratum only carries an opaque, nullable `"tenantId"` on its core tables, stamped from an ambient `TenantContext` and null in every single-tenant deployment. Where data lives is whatever database the provided `SqlClient` points at; multi-region is a `LayerMap.Service` keyed by region or tenant that yields a `SqlClient` (ADR-EA-005), not per-table logic. See `packages/sql/README.md`, "Multi-tenancy" and "Data location & residency".
+
 **Edge and origin.** Persistence depends only on `effect`'s `SqlClient`, so where code runs is decided by the client provided. Edge runtimes (Workers, Vercel Edge) do stateless work — verifying a signed JWT (`@awthaq/jwt`), presence checks — and need no database; origin (Node) owns everything backed by a `SqlClient` (sessions, users, credentials, migrations), unless an HTTP-capable sqlite-dialect driver (libSQL) is used. The driver matrix and its tested/untested status is in `packages/sql/README.md`, "Runtimes & drivers" (ERAS-006).
 
 ### Qadi bridge (stratum 6)

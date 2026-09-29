@@ -47,7 +47,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as AuthEvents from "./AuthEvents.ts";
-import { storeUnavailable, type StoreUnavailable } from "./Errors.ts";
+import { orStoreUnavailable, storeUnavailable, type StoreUnavailable } from "./Errors.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { drainBatches } from "./internal/purgeBatches.ts";
 import { UserId } from "./Users.ts";
@@ -535,9 +535,15 @@ export const layerSql = Layer.effect(
     // sweep's forensic window passes; a bounded loop of short deletes, tokens then reservations.
     const purgeExpired: VerificationShape["purgeExpired"] = (before) =>
       Effect.all([
-        drainBatches((limit) => repo.deleteExpiredBefore(before, limit).pipe(Effect.orDie)),
         drainBatches((limit) =>
-          reservationsRepo.deleteExpiredBefore(before, limit).pipe(Effect.orDie),
+          repo
+            .deleteExpiredBefore(before, limit)
+            .pipe(orStoreUnavailable("Verification.purgeExpired")),
+        ),
+        drainBatches((limit) =>
+          reservationsRepo
+            .deleteExpiredBefore(before, limit)
+            .pipe(orStoreUnavailable("Verification.purgeExpired")),
         ),
       ]).pipe(Effect.map(([tokens, reserved]) => tokens + reserved));
 

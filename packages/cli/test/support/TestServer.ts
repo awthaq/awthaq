@@ -25,11 +25,12 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as NetAddress from "effect/unstable/net/NetAddress";
 
-// CSG-001/CSG-005: the account group's erasure cascade and export, built over the same stores.
-const Base = Layer.mergeAll(Erasure.layer, DataExport.layer, RateLimiter.layerPermissive).pipe(
+// The `account` group's handlers call core's erasure and export (CSG-001/CSG-005), over these stores.
+const Base = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       SqlTransaction.layerNoop,
+      RateLimiter.layerPermissive,
       Sessions.layerMemory,
       Users.layerMemory,
       Accounts.layerMemory,

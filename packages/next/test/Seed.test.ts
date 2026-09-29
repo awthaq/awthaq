@@ -23,6 +23,7 @@ const view: Sessions.SessionView = {
   userAgent: Option.some("test-agent"),
   actingAs: Option.none(),
   amr: ["pwd"],
+  tenantId: Option.none(),
 };
 
 const session = (): Session => ({
@@ -33,6 +34,7 @@ const session = (): Session => ({
     name: "User",
     metadata: Option.none(),
     image: Option.none(),
+    tenantId: Option.none(),
     status: "active",
     statusReason: Option.none(),
     suspendedUntil: Option.none(),

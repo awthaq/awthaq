@@ -3,7 +3,7 @@ ID: "TS-007"
 Title: "External-policy PEP seam (HookPoint) ships as mechanism with zero real flows"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/HookPoint.ts:50"
 Auditor: "torin-sandall"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `core` · reported by **Torin Sandall — Co-creator of Open Policy Agent (OPA)** (`torin-sandall`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Wire BeforeSignUp as a veto point in the core signUp flow and add an examples/ a
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `core-hook-point-coverage`. Evidence at HEAD ec065a7: `packages/password/src/Password.ts:550`. Fix: Extend examples/memory-server (or add examples/qadi-path-a) to compose Auth + AuthorizedSubject/SubjectExtractor (Path A) + one RequirePermission-protected endpoint + one BeforeSignUp domain-allow-list tap, and smoke-test it. (effort M). Full dossier: `.plan/slices/02-core-events-hooks.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** examples/memory-server is now split into app.ts (the composition, no side effects; exports buildApp, main, demoCsrfSecret) and index.ts (starts it), with test/smoke.test.ts booting the very same layers in-process via HttpRouter.toWebHandler (the example's vitest project and tsconfig.test.json entry are added; run by `pnpm run test`). The smoke test proves: (1) a BeforeSignUp email-domain allow-list tap (SignUpAllowList in app.ts, installed through TestAuth's `services`, so it registers in the same per-composition registry the sign-up flow consults - ADR-EA-028) refuses `intruder@evil.test` with the typed HookAborted (403, code EMAIL_DOMAIN_NOT_ALLOWED) and creates no user, and lets `ada@example.com` through; (2) qadi Path B `RequirePermission` on GET /roles/catalog answers 403 for an anonymous caller and for a signed-in user without roles:read/manage, and 200 once `platform:admin` is assigned. The smoke test found a real defect in the example: its Path B guard was inert. SubjectResolver is a slot (a Context.Reference with a fail-closed default) that Roles.layer overrides, and the guard was built beside Roles instead of on top of it, so it read the default and refused everybody; a second `Roles.Roles.layer` in `services` had also created a second Roles instance the plugin never saw. Fixed: the guard is built with Roles.layer beneath it (the same layer reference Auth.make installs, so the graph builds one shared instance) and Roles.config is provided with provideMerge. The breach-check transport is a parameter of buildApp so the suite is hermetic (the example's default is the real FetchHttpClient; the default Password config performs a pwnedpasswords lookup on sign-up). The README curl examples used a password that the breach corpus rejects and now use another. Deviation: dossier step 1 said 'Path A + RequirePermission'; the repo's dogfood is Path B (RequirePermission resolving the subject itself), which is what is exercised.

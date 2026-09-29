@@ -11,7 +11,7 @@
 // `Effect`s below it (session verify, password verify, hook dispatch, event
 // publish).
 //
-// Neutral on backends by design (ticket 27 §4, ADR-EA-029): the library
+// Neutral on backends by design (ticket 27 §4, ADR-EA-032): the library
 // ships metric *definitions* as plain `Metric` values, composable with
 // `OtlpMetrics`/`PrometheusMetrics` by the host; it does not pick a sink.
 //
@@ -26,7 +26,7 @@ import * as Effect from "effect/Effect";
 import * as Metric from "effect/Metric";
 
 /**
- * ADR-EA-029: the fixed annotation vocabulary for auth-domain spans and log
+ * ADR-EA-032: the fixed annotation vocabulary for auth-domain spans and log
  * lines, mirroring the `http.*` convention `HttpMiddleware` already uses.
  * Applied through `Effect.annotateLogs`/`Effect.annotateCurrentSpan`, never
  * by interpolating into a message, so every field stays queryable.

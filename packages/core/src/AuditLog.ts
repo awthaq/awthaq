@@ -203,6 +203,8 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.admin.userBanned":
     case "auth.admin.userUnbanned":
     case "auth.admin.sessionRevoked":
+    case "auth.admin.organizationSuspended":
+    case "auth.admin.organizationUnsuspended":
       return Option.some(UserId(event.adminUserId));
     case "auth.mail.failed":
       return Option.fromNullishOr(event.userId).pipe(Option.map(UserId));
@@ -221,6 +223,12 @@ const actorOf = (event: AuthEvent): Option.Option<UserId> => {
     case "auth.token.replay":
     case "auth.rateLimit.exceeded":
     case "auth.user.signInFailed":
+    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
+    case "auth.scim.userProvisioned":
+    case "auth.scim.userDeactivated":
+    case "auth.scim.userReactivated":
+    case "auth.scim.userDeleted":
+    case "auth.scim.groupChanged":
     // ECS-006/ECS-002: a CLI run has no session, so no actor; the seeded target is in the payload.
     case "auth.admin.seeded":
     case "auth.admin.seedRefused":

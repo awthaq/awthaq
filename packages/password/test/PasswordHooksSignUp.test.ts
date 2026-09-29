@@ -43,7 +43,7 @@ const CoreLive = Layer.mergeAll(
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(
     Hooks.BeforeSignUp.tap((input) =>
-      input.email.endsWith("@forbidden.example.com")
+      (input.email ?? "").endsWith("@forbidden.example.com")
         ? Effect.fail(new HookPoint.HookAbort({ code: "DOMAIN_BLOCKED" }))
         : Effect.succeed({ ...input, name: `${input.name} (tapped)` }),
     ),

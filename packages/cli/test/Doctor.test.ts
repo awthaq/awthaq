@@ -63,8 +63,8 @@ describe("doctor: graph", () => {
         plugins: [
           { id: "billing", apiVersion: 1 as const, tables: [], dependsOn: ["ledger"], groups: [] },
         ],
-        config: [],
         hooks: {},
+        config: [],
       };
       const config = configOf({ ...passwordAndRoles, manifest });
       const report = yield* Doctor.diagnose(config, development);

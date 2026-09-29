@@ -32,7 +32,7 @@ challenge cookie binds the challenge to the browser; recovery codes are 10 ×
 
 ## Recommended fix
 
-Specify the challenge as a first-class short-lived token: signed (or Encryption-envelope) cookie, TTL fixed (10 minutes is the cited default), AAD/content bound to userId, single-consume semantics via the existing Verification reserve/consume machinery, and revocation when 2FA is disabled — then port the session cookie's fixed-attribute rigor (BEH-EA-55) to it.
+Specify the challenge as a first-class short-lived token: signed (or Encryption-envelope) cookie, TTL fixed (10 minutes is the cited default), AAD/content bound to userId, single-consume semantics via the existing Verification reserve/consume machinery, and revocation when 2FA is disabled — then port the session cookie's fixed-attribute rigor (BEH-EA-055) to it.
 
 ## Context
 

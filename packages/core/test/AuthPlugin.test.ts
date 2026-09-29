@@ -340,8 +340,8 @@ describe("Auth.make", () => {
           { id: "ping", apiVersion: 1, tables: ["ping_state"], dependsOn: [], groups: ["ping"] },
           { id: "pong", apiVersion: 1, tables: [], dependsOn: ["ping"], groups: ["pong"] },
         ],
-        config: [],
         hooks: {},
+        config: [],
       });
     }),
   );

@@ -3,14 +3,16 @@
 // `MembershipRecords`, a hand-built `Api.UserPrincipal` the same way
 // `@awthaq/admin`'s own `Admin.test.ts` does.
 import { Api } from "@awthaq/api";
-import { AuditLog, Hooks, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Hooks, AuthEvents, Sessions, Tenant, Users } from "@awthaq/core";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as LayerMap from "effect/LayerMap";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Redacted from "effect/Redacted";
@@ -100,6 +102,22 @@ const mailedToken = (invitationId: string) =>
       }
     }
     return yield* Effect.die(new Error(`no invitation mail was sent for ${invitationId}`));
+  });
+
+/**
+ * EP-010: `requireEmailVerificationOnInvitation` defaults to `true`, so an invitee who
+ * is going to accept must own a verified address (the pre-EP-010 default let an
+ * unverified account through).
+ */
+const verifiedUser = (input: { readonly email: string; readonly name: string }) =>
+  Effect.gen(function* () {
+    const users = yield* Users.Users;
+    const created = yield* users.create({
+      identity: { _tag: "Email", email: input.email },
+      name: input.name,
+    });
+    yield* users.verifyEmail(created.id);
+    return created;
   });
 
 describe("Organization", () => {
@@ -569,14 +587,10 @@ describe("Organization", () => {
   it.effect("full invite -> accept round trip creates a real membership", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
-      const users = yield* Users.Users;
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
 
-      const invitee = yield* users.create({
-        identity: { _tag: "Email", email: "invitee@example.com" },
-        name: "Invitee",
-      });
+      const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
       const invitation = yield* organization.invite(owner, org.id, {
         email: Option.getOrThrow(Users.emailOf(invitee)),
         role: ["member"],
@@ -599,13 +613,9 @@ describe("Organization", () => {
   it.effect("reject marks the invitation rejected and creates no membership", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
-      const users = yield* Users.Users;
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const invitee = yield* users.create({
-        identity: { _tag: "Email", email: "invitee@example.com" },
-        name: "Invitee",
-      });
+      const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
       const invitation = yield* organization.invite(owner, org.id, {
         email: Option.getOrThrow(Users.emailOf(invitee)),
         role: ["member"],
@@ -717,13 +727,9 @@ describe("Organization", () => {
     () =>
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;
-        const users = yield* Users.Users;
         const owner = asCaller("owner-1");
         const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        const invitee = yield* users.create({
-          identity: { _tag: "Email", email: "invitee@example.com" },
-          name: "Invitee",
-        });
+        const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
 
         const invitation = yield* organization.invite(owner, org.id, {
           email: Option.getOrThrow(Users.emailOf(invitee)),
@@ -750,13 +756,9 @@ describe("Organization", () => {
   it.effect("accepting an expired invitation fails InvitationExpired", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
-      const users = yield* Users.Users;
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const invitee = yield* users.create({
-        identity: { _tag: "Email", email: "invitee@example.com" },
-        name: "Invitee",
-      });
+      const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
       const invitation = yield* organization.invite(owner, org.id, {
         email: Option.getOrThrow(Users.emailOf(invitee)),
         role: ["member"],
@@ -1611,14 +1613,10 @@ describe("Organization", () => {
   it.effect("a team-targeted invitation joins the accepting user to that team", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
-      const users = yield* Users.Users;
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
       const team = yield* organization.createTeam(owner, org.id, "Engineering");
-      const invitee = yield* users.create({
-        identity: { _tag: "Email", email: "invitee@example.com" },
-        name: "Invitee",
-      });
+      const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
 
       const invitation = yield* organization.invite(owner, org.id, {
         email: Option.getOrThrow(Users.emailOf(invitee)),
@@ -1674,13 +1672,9 @@ describe("Organization", () => {
     it.effect("inviting an existing member fails AlreadyMember and creates no invitation", () =>
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;
-        const users = yield* Users.Users;
         const owner = asCaller("owner-1");
         const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        const existing = yield* users.create({
-          identity: { _tag: "Email", email: "member@example.com" },
-          name: "Member",
-        });
+        const existing = yield* verifiedUser({ email: "member@example.com", name: "Member" });
         yield* organization.addMember({
           organizationId: org.id,
           userId: existing.id,
@@ -1703,13 +1697,9 @@ describe("Organization", () => {
       () =>
         Effect.gen(function* () {
           const organization = yield* Organization.Organization;
-          const users = yield* Users.Users;
           const owner = asCaller("owner-1");
           const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-          const invitee = yield* users.create({
-            identity: { _tag: "Email", email: "invitee@example.com" },
-            name: "Invitee",
-          });
+          const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
           const invitation = yield* organization.invite(owner, org.id, {
             email: Option.getOrThrow(Users.emailOf(invitee)),
             role: ["admin"],
@@ -1858,10 +1848,7 @@ describe("Organization", () => {
       const mailer = yield* Mailer.Mailer;
       const owner = asCaller("owner-1");
       const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const invitee = yield* users.create({
-        identity: { _tag: "Email", email: "invitee@example.com" },
-        name: "Invitee",
-      });
+      const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
       const stranger = yield* users.create({
         identity: { _tag: "Email", email: "stranger@example.com" },
         name: "Stranger",
@@ -2060,4 +2047,273 @@ describe("Organization", () => {
       }).pipe(Effect.provide(buildLayer())),
     );
   });
+});
+
+// ---- ADR-EA-018 organization-side tenancy fields ---------------------------------------
+
+describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)", () => {
+  it.effect("EP-010: by default an unverified user cannot accept an invitation", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const users = yield* Users.Users;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const invitee = yield* users.create({
+        identity: { _tag: "Email", email: "unverified@example.com" },
+        name: "Unverified",
+      });
+      const invitation = yield* organization.invite(owner, org.id, {
+        email: "unverified@example.com",
+        role: ["member"],
+      });
+      const refused = yield* organization
+        .acceptInvitation(asCaller(invitee.id), invitation.id, yield* mailedToken(invitation.id))
+        .pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "EmailVerificationRequired");
+      // Verifying the address is what unlocks it.
+      yield* users.verifyEmail(invitee.id);
+      const membership = yield* organization.acceptInvitation(
+        asCaller(invitee.id),
+        invitation.id,
+        yield* mailedToken(invitation.id),
+      );
+      assert.strictEqual(membership.userId, invitee.id);
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect("EP-010: requireEmailVerificationOnInvitation: false restores the old behaviour", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const users = yield* Users.Users;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const invitee = yield* users.create({
+        identity: { _tag: "Email", email: "unverified@example.com" },
+        name: "Unverified",
+      });
+      const invitation = yield* organization.invite(owner, org.id, {
+        email: "unverified@example.com",
+        role: ["member"],
+      });
+      const membership = yield* organization.acceptInvitation(
+        asCaller(invitee.id),
+        invitation.id,
+        yield* mailedToken(invitation.id),
+      );
+      assert.strictEqual(membership.userId, invitee.id);
+    }).pipe(Effect.provide(buildLayer({ requireEmailVerificationOnInvitation: false }))),
+  );
+
+  it.effect("EP-006: the default organizationLimit stops the eleventh owned organization", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const caller = asCaller("prolific-1");
+      for (let i = 0; i < 10; i++) {
+        yield* organization.create({ caller, name: `Org ${i}`, slug: `org-${i}` });
+      }
+      const refused = yield* organization
+        .create({ caller, name: "One too many", slug: "org-10" })
+        .pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "OrganizationLimitReached");
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect("EP-006: limitsFor overrides a quota for one organization only", () => {
+    let bigId = "";
+    return Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const small = yield* organization.create({ caller: owner, name: "Small", slug: "small" });
+      const big = yield* organization.create({ caller: owner, name: "Big", slug: "big" });
+      bigId = big.id;
+      const attempt = (organizationId: string, userId: string) =>
+        organization.addMember({
+          organizationId,
+          userId: Users.UserId(userId),
+          role: ["member"],
+        });
+      // Both start with one member (the owner) against a static limit of 1.
+      const refused = yield* attempt(small.id, "member-1").pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "MembershipLimitReached");
+      yield* attempt(big.id, "member-1");
+      yield* attempt(big.id, "member-2");
+      const full = yield* attempt(big.id, "member-3").pipe(Effect.flip);
+      assert.strictEqual(full._tag, "MembershipLimitReached");
+    }).pipe(
+      Effect.provide(
+        buildLayer({
+          membershipLimit: 1,
+          limitsFor: (organizationId) =>
+            Effect.succeed(organizationId === bigId ? { membershipLimit: 3 } : {}),
+        }),
+      ),
+    );
+  });
+
+  it.effect("DRS-007: homeRegion must come from the configured regions", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const pinned = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+        homeRegion: "eu-west",
+      });
+      assert.deepStrictEqual(Organization.homeRegionOf(pinned), Option.some("eu-west"));
+      const unknownOnCreate = yield* organization
+        .create({ caller: owner, name: "Mars", slug: "mars", homeRegion: "mars-1" })
+        .pipe(Effect.flip);
+      assert.strictEqual(unknownOnCreate._tag, "UnknownRegion");
+      const unknownOnUpdate = yield* organization
+        .update(owner, pinned.id, { homeRegion: "mars-1" })
+        .pipe(Effect.flip);
+      assert.strictEqual(unknownOnUpdate._tag, "UnknownRegion");
+      const moved = yield* organization.update(owner, pinned.id, { homeRegion: "us-east" });
+      assert.deepStrictEqual(Organization.homeRegionOf(moved), Option.some("us-east"));
+      const cleared = yield* organization.update(owner, pinned.id, { homeRegion: null });
+      assert.isTrue(Option.isNone(Organization.homeRegionOf(cleared)));
+    }).pipe(Effect.provide(buildLayer({ regions: ["eu-west", "us-east"] }))),
+  );
+
+  it.effect("DRS-007: with no regions configured any homeRegion is refused", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const refused = yield* organization
+        .create({ caller: asCaller("owner-1"), name: "Acme", slug: "acme", homeRegion: "eu-west" })
+        .pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "UnknownRegion");
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect("EP-005: the invitation mail carries the organization's name and logo", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const mailer = yield* Mailer.Mailer;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+        logo: "https://acme.example/logo.png",
+      });
+      yield* organization.invite(owner, org.id, { email: "invitee@example.com", role: ["member"] });
+      const sent = yield* mailer.sent;
+      assert.strictEqual(sent[0]?.data?.["organizationName"], "Acme");
+      assert.strictEqual(sent[0]?.data?.["organizationLogo"], "https://acme.example/logo.png");
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect("EP-003: a suspended organization is refused everywhere, and reinstating restores it", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const records = yield* OrganizationRecords.OrganizationRecords;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const now = yield* DateTime.now;
+      yield* records.setSuspended(org.id, Option.some(now));
+
+      const read = yield* organization.get(owner, org.id).pipe(Effect.flip);
+      assert.strictEqual(read._tag, "OrganizationNotFound");
+      const write = yield* organization.update(owner, org.id, { name: "Renamed" }).pipe(Effect.flip);
+      assert.strictEqual(write._tag, "OrganizationNotFound");
+      const invite = yield* organization
+        .invite(owner, org.id, { email: "x@example.com", role: ["member"] })
+        .pipe(Effect.flip);
+      assert.strictEqual(invite._tag, "OrganizationNotFound");
+      // The member's own listing still shows it, flagged, so they can see why.
+      const listed = yield* organization.list(owner);
+      assert.strictEqual(listed.length, 1);
+      assert.isTrue(Option.isSome(listed[0]?.suspendedAt ?? Option.none()));
+
+      yield* records.setSuspended(org.id, Option.none());
+      const restored = yield* organization.get(owner, org.id);
+      assert.strictEqual(restored.id, org.id);
+    }).pipe(Effect.provide(buildLayer())),
+  );
+});
+
+// ---- EP-007 (ADR-EA-018, BEH-EA-236): per-tenant configuration in one composition ------------
+
+describe("Per-tenant configuration (EP-007)", () => {
+  /** The application's own map: tenant id -> that tenant's `Organization.config(...)`. */
+  class TenantConfig extends LayerMap.Service<TenantConfig>()("test/TenantConfig", {
+    lookup: (tenantId: string) =>
+      Layer.merge(
+        Organization.config({
+          membershipLimit: tenantId === "small" ? 1 : 3,
+          requireEmailVerificationOnInvitation: tenantId !== "lax",
+        }),
+        Tenant.configApplied(tenantId),
+      ),
+    idleTimeToLive: "1 minute",
+  }) {}
+
+  const inTenant = (tenantId: string) => Effect.provide(TenantConfig.get(tenantId));
+
+  it.effect("two tenants with different Organization.config in one composition, same layer instance", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const small = yield* organization.create({ caller: owner, name: "Small", slug: "small" });
+      const big = yield* organization.create({ caller: owner, name: "Big", slug: "big" });
+      const add = (organizationId: string, userId: string) =>
+        organization.addMember({ organizationId, userId: Users.UserId(userId), role: ["member"] });
+      // Each organization is already at one member (its owner). The `small` tenant's limit is 1.
+      const refused = yield* add(small.id, "m-1").pipe(inTenant("small"), Effect.flip);
+      assert.strictEqual(refused._tag, "MembershipLimitReached");
+      yield* add(big.id, "m-1").pipe(inTenant("big"));
+      yield* add(big.id, "m-2").pipe(inTenant("big"));
+      const full = yield* add(big.id, "m-3").pipe(inTenant("big"), Effect.flip);
+      assert.strictEqual(full._tag, "MembershipLimitReached");
+    }).pipe(Effect.provide(Layer.provideMerge(TenantConfig.layer, buildLayer({ membershipLimit: 100 })))),
+  );
+
+  it.effect("with no tenant override the build-time configuration applies, exactly as before", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const org = yield* organization.create({
+        caller: asCaller("owner-1"),
+        name: "Acme",
+        slug: "acme",
+      });
+      const add = (userId: string) =>
+        organization.addMember({
+          organizationId: org.id,
+          userId: Users.UserId(userId),
+          role: ["member"],
+        });
+      yield* add("m-1");
+      const refused = yield* add("m-2").pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "MembershipLimitReached");
+    }).pipe(Effect.provide(buildLayer({ membershipLimit: 2 }))),
+  );
+
+  it.effect("a tenant's own invitation policy applies to its acceptances", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const users = yield* Users.Users;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const invitee = yield* users.create({
+        identity: { _tag: "Email", email: "unverified@example.com" },
+        name: "Unverified",
+      });
+      const invitation = yield* organization.invite(owner, org.id, {
+        email: "unverified@example.com",
+        role: ["member"],
+      });
+      const token = yield* mailedToken(invitation.id);
+      // Under the default tenant policy an unverified invitee is refused …
+      const strict = yield* organization
+        .acceptInvitation(asCaller(invitee.id), invitation.id, token)
+        .pipe(inTenant("strict"), Effect.flip);
+      assert.strictEqual(strict._tag, "EmailVerificationRequired");
+      // … under the `lax` tenant's own configuration the same acceptance goes through.
+      const membership = yield* organization
+        .acceptInvitation(asCaller(invitee.id), invitation.id, token)
+        .pipe(inTenant("lax"));
+      assert.strictEqual(membership.userId, invitee.id);
+    }).pipe(Effect.provide(Layer.provideMerge(TenantConfig.layer, buildLayer()))),
+  );
 });

@@ -19,7 +19,7 @@
 //   bounds how many codes an attacker can ask for, and so how many total guesses.
 //
 // `request` is uniform (`202` for every address, nothing that varies by account existence happens
-// on the response path, BEH-EA-64). `verify`'s every failure is the one `InvalidEmailOtp`. A proven
+// on the response path, BEH-EA-064). `verify`'s every failure is the one `InvalidEmailOtp`. A proven
 // mailbox goes through `Channel.complete`, so a 2FA-enrolled user is diverted to `TwoFactorRequired`
 // and the session records `["otp", "email"]` — one factor's worth of assurance (see `Assurance`).
 //

@@ -47,16 +47,16 @@ REQUIREMENT: `request` MUST answer `202` identically whether or not the
              whether or not the address is inside its resend window; the
              user lookup, the token and the mail MUST happen in background
              work so neither the body nor the timing of the response depends
-             on them (BEH-EA-64). It MUST be rate limited per source (30 per
+             on them (BEH-EA-064). It MUST be rate limited per source (30 per
              15 minutes) and per normalised address (5 per 15 minutes, `+tag`
              variants sharing one bucket). An address MUST be mailed at most
              one link per `resendWindow` (default 60 s), enforced with
-             `Verification.reserve` (BEH-EA-63). With `allowSignUp` off, an
+             `Verification.reserve` (BEH-EA-063). With `allowSignUp` off, an
              unknown address MUST be answered like any other and not mailed;
              asking for a link MUST NOT create a user.
 ```
 
-The mail is the template `magic-link` with `{ token: Redacted, expiresAt, url? }` (BEH-EA-57's shared codec); `url` is set when `baseUrl` or `link` is configured. Delivery goes through a `MailDispatch` dispatcher (retries, bounded concurrency, `auth.mail.failed` on loss).
+The mail is the template `magic-link` with `{ token: Redacted, expiresAt, url? }` (BEH-EA-057's shared codec); `url` is set when `baseUrl` or `link` is configured. Delivery goes through a `MailDispatch` dispatcher (retries, bounded concurrency, `auth.mail.failed` on loss).
 
 _Previous: [BEH-EA-264](32-magic-link.md#beh-ea-264-a-magic-link-is-consumed-only-by-post-and-its-token-travels-in-the-url-fragment) | Next: [BEH-EA-266](32-magic-link.md#beh-ea-266-presenting-a-link-proves-the-mailbox-and-signs-in-through-the-shared-gate-and-the-mfa-divert)_
 

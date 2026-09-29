@@ -36,7 +36,7 @@ describe("AuthCoreApi (BEH-EA-031)", () => {
     );
   });
 
-  it("account exposes updateProfile, deleteUser and exportData on /user", () => {
+  it("account exposes updateProfile, deleteUser and the export on /user", () => {
     expect(endpointsOf(Account.AccountGroup).sort()).toEqual([
       "deleteUser DELETE /user",
       "exportData GET /user/export",

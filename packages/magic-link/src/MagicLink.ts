@@ -280,7 +280,7 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
         yield* rateLimit(rules.requestByIp, { ip: input.ip });
         yield* rateLimit(rules.requestByEmail, { email: input.email });
         // The lookup, the token and the mail are all background work: the response is the same
-        // whether or not this address has an account (BEH-EA-64), in body and in timing.
+        // whether or not this address has an account (BEH-EA-064), in body and in timing.
         yield* mailDispatcher.dispatch(
           { template: "magic-link" },
           Effect.gen(function* () {

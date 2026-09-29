@@ -22,7 +22,7 @@ Magic Link is passwordless sign-in by email possession: the user submits their e
 ## Status
 | Property | Value |
 |---|---|
-| Status | Shipped (`@awthaq/magic-link`; normative behaviors in [behaviors/29-magic-link.md](../behaviors/29-magic-link.md)) |
+| Status | Shipped (`@awthaq/magic-link`; normative behaviors in [behaviors/32-magic-link.md](../behaviors/32-magic-link.md)) |
 | Priority | P2 |
 | Enabler(s) | E1 — Verification-token infrastructure |
 | Breaking? | Purely additive — it is a second consumer of the same verification-token table `Password`'s reset/verify flows already require, so nothing about `Password` or core `Verification` needs to change shape to add it. |

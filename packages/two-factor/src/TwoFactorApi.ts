@@ -1,7 +1,7 @@
 // @awthaq/two-factor — TwoFactorApi
 //
 // THS-001 step 10 (BEH-EA-257 to BEH-EA-263): this plugin's own HTTP contract — two groups, both
-// named `two_factor` or a dotted sub-id of it (BEH-EA-4):
+// named `two_factor` or a dotted sub-id of it (BEH-EA-004):
 //
 // - `two_factor` — public and anonymous by construction: `verify` / `verify-recovery` are how a
 //   caller who has passed a first factor and holds a `challengeId` (the `TwoFactorRequired` a

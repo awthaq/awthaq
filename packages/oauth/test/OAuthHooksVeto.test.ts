@@ -64,7 +64,11 @@ const fakeHttpClient = (routes: FakeRoutes): Layer.Layer<HttpClient.HttpClient> 
   );
 
 const signedUp = Ref.makeUnsafe<
-  ReadonlyArray<{ readonly userId: string; readonly email?: string; readonly strategy: string }>
+  ReadonlyArray<{
+    readonly userId: string;
+    readonly email?: string | undefined;
+    readonly strategy: string;
+  }>
 >([]);
 
 const CoreLive = Layer.mergeAll(
@@ -80,7 +84,7 @@ const CoreLive = Layer.mergeAll(
   Layer.provideMerge(
     Layer.mergeAll(
       Hooks.BeforeSignUp.tap((input) =>
-        input.email.endsWith("@blocked.example.com")
+        (input.email ?? "").endsWith("@blocked.example.com")
           ? Effect.fail(new HookPoint.HookAbort({ code: "DOMAIN_BLOCKED" }))
           : Effect.succeed(input),
       ),

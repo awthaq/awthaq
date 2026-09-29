@@ -9,7 +9,7 @@
 // default and would make every application that installs no roles plugin
 // fail to resolve it at all), plus a literal, introspectable key.
 //
-// **BEH-EA-12's compile-time `SlotConflict<P>` check (INV-EA-004: two
+// **BEH-EA-012's compile-time `SlotConflict<P>` check (INV-EA-004: two
 // plugins overriding the same slot is a type error at `Auth.make`) does not
 // exist, for a confirmed structural reason, not a gap left open for later**:
 // `Slots.ts`'s own header comment records the finding — `Context.Reference`'s

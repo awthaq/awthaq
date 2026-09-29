@@ -14,8 +14,8 @@ import type * as Record from "effect/Record";
 import type * as Scope from "effect/Scope";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type * as HookPoint from "./HookPoint.ts";
+import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
 
 /**
@@ -83,12 +83,12 @@ export interface Class<
   readonly tables: ReadonlyArray<`${Id}_${string}`>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
+  /** PERS-003: the taps this plugin declared statically (`AuthPlugin.layer`'s `taps` option), readable without building any layer. */
+  readonly taps: ReadonlyArray<DeclaredTap>;
   /** JH-007: tables owned by *other* plugins this one reads; `Auth.make` requires the owner in `dependsOn`. */
   readonly readsTables: ReadonlyArray<string>;
   /** ECS-008/BEH-EA-229: the configuration inputs this plugin reads, declared statically (none when it has no policy knobs). */
   readonly config: ReadonlyArray<ConfigDescriptor>;
-  /** PERS-003: the taps this plugin declared statically (`AuthPlugin.layer`'s `taps` option), readable without building any layer. */
-  readonly taps: ReadonlyArray<DeclaredTap>;
 }
 
 /** PERS-003: a statically declared tap, as far as `Auth.make`'s manifest needs it. */
@@ -122,12 +122,12 @@ export interface Any {
   readonly tables: ReadonlyArray<string>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
+  /** PERS-003: optional so a hand-built plugin value (a test fixture) need not declare any. */
+  readonly taps?: ReadonlyArray<DeclaredTap>;
   /** JH-007: optional here so a hand-built plugin value need not name it. */
   readonly readsTables?: ReadonlyArray<string>;
   /** Optional here (a hand-built `Any` may have none); every plugin made with `Service` carries the list. */
   readonly config?: ReadonlyArray<ConfigDescriptor>;
-  /** PERS-003: optional so a hand-built plugin value (a test fixture) need not declare any. */
-  readonly taps?: ReadonlyArray<DeclaredTap>;
   readonly layer: Layer.Layer<never, unknown, unknown>;
 }
 
