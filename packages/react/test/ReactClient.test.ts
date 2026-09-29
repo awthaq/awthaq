@@ -67,4 +67,25 @@ describe("ReactAuthClient", () => {
     };
     assert.isFunction(typeChecks);
   });
+
+  it("CDS-007: a cold browser's first mutation succeeds with no application code handling the 403", async () => {
+    vi.spyOn(document, "cookie", "get").mockReturnValue("");
+    const requests = installFetchStub({
+      "POST /session/sign-out": (request) => {
+        if (request.headers.get("x-csrf-token") === null) {
+          // The server's 403 carries the freshly minted cookie; the browser stores it.
+          vi.spyOn(document, "cookie", "get").mockReturnValue("__Host-csrf=fresh");
+          return jsonResponse({ _tag: "CsrfRejected" }, 403);
+        }
+        return new Response(null, { status: 204 });
+      },
+    });
+    const registry = AtomRegistry.make();
+    const signOut = ReactAuthClient.mutation("session", "signOut");
+    registry.mount(signOut);
+    registry.set(signOut, { reactivityKeys: [] });
+    await vi.waitFor(() => assert.isTrue(AsyncResult.isSuccess(registry.get(signOut))));
+    assert.strictEqual(requests.length, 2);
+    assert.strictEqual(requests[1]?.headers.get("x-csrf-token"), "fresh");
+  });
 });

@@ -1,10 +1,8 @@
 // spec/behaviors/22-client-effect.md, BEH-EA-169, BEH-EA-174, BEH-EA-176.
 //
-// `CsrfClientLive` (BEH-EA-170) has no dedicated behavioral test here — see
-// `AuthClient.ts`'s own header comment: no plugin group in this repository
-// declares `.middleware(Api.CsrfProtection)` yet, so there is no real,
-// generated client to exercise it against. `readCookie`'s own logic (what
-// `CsrfClientLive` actually reads) is tested directly below instead.
+// `CsrfClientLive` (BEH-EA-170) and its cold-start bootstrap (CDS-007) are
+// tested in `Csrf.test.ts`; `readCookie`'s own logic (what `CsrfClientLive`
+// actually reads) is tested directly below.
 import { SessionContract } from "@awthaq/api";
 import { afterEach, assert, describe, it } from "@effect/vitest";
 import * as Data from "effect/Data";

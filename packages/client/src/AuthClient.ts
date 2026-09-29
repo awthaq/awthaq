@@ -24,15 +24,13 @@
 // `HttpApiClient` binding either way (BEH-EA-169 offers both forms; this
 // file is only the first of them).
 //
-// **BEH-EA-171's `{ csrf: false }` contract variant has nothing to build
-// against yet.** No plugin's `HttpApiGroup` in this repository currently
-// declares `.middleware(Api.CsrfProtection)` at all — `Password`/`OAuth`/the
-// core `session` group all use `Authentication`/`OptionalAuthentication`
-// only — so there is no real, CSRF-carrying contract for a `{ csrf: false }`
-// variant to strip `CsrfProtection` middleware *from* today. A bearer-mode
-// client is, for now, simply `make(api, { baseUrl, transformClient })` with
-// no `CsrfClientLive` provided, which already type-checks and behaves
-// correctly against every contract this repository currently composes.
+// **BEH-EA-171's `{ csrf: false }` contract variant is still unbuilt** —
+// `Auth.make` has no composition-level CSRF opt-out yet (decision ticket 24),
+// so a bearer-mode client is, for now, `make(api, { baseUrl, transformClient })`
+// against a contract without the `CsrfProtection` middleware, or one that
+// supplies its own `csrfClientLayer`/transport. Every mutating production
+// group *does* declare `CsrfProtection` (CSRF is on by default), so a
+// cookie-mode client needs `CsrfClientLive` below.
 import { Api, SessionContract } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -40,6 +38,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Context from "effect/Context";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import type { HttpApi, HttpApiEndpoint } from "effect/unstable/httpapi";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
@@ -83,23 +82,87 @@ export const readCookie = (name: string): string | undefined => {
   return match === undefined ? undefined : decodeURIComponent(match.slice(prefix.length));
 };
 
+export interface CsrfClientOptions {
+  /**
+   * How the CSRF cookie is read (default: `document.cookie` via `readCookie`).
+   * A server-side caller — a Next.js server action dispatching in-process —
+   * passes a reader over its own request's `Cookie` header instead.
+   */
+  readonly readCookie?: ((name: string) => string | undefined) | undefined;
+  /**
+   * Retry a `CsrfRejected` response exactly once when a fresh CSRF cookie has
+   * appeared since the request was sent (default `true`) — see `csrfClientLayer`.
+   */
+  readonly bootstrapRetry?: boolean | undefined;
+}
+
+/** CDS-007: is this response the contract's own `CsrfRejected` (403 + its `_tag`)? Reading the body is safe — `HttpClientResponse` caches it for the decode that follows. */
+const isCsrfRejected = (response: HttpClientResponse.HttpClientResponse) =>
+  response.status === 403
+    ? response.json.pipe(
+        Effect.map(
+          (body) =>
+            typeof body === "object" &&
+            body !== null &&
+            Reflect.get(body, "_tag") === "CsrfRejected",
+        ),
+        Effect.orElseSucceed(() => false),
+      )
+    : Effect.succeed(false);
+
 /**
  * BEH-EA-170: a cookie-mode client program does not type-check without
  * providing this — `Api.CsrfProtection` declares `requiredForClient: true`,
  * so `HttpApiMiddleware.ForClient<Api.CsrfProtection>` is a real requirement
  * `HttpApiClient.make` leaves in the built client's own `R` until something
  * satisfies it.
+ *
+ * CDS-007 — self-bootstrapping. The server mints `__Host-csrf` from a
+ * pre-response handler on *any* response through a CSRF-guarded group
+ * (including `GET /session`, and including the 403 that rejects a request for
+ * lacking it), so a cold browser's first unsafe call carries no cookie and is
+ * rejected — once. The layer therefore (1) omits the header when no cookie is
+ * readable rather than sending an empty one, and (2) on a `CsrfRejected`
+ * response, when a cookie the rejected request did not carry is now readable
+ * (the browser stored the 403's `Set-Cookie`), re-issues the request once with
+ * it. A second rejection, or a rejection with the same cookie as was sent (a
+ * genuinely bad token), surfaces to the caller untouched. Safe to repeat: the
+ * guard rejects before any handler work runs.
  */
-export const CsrfClientLive: Layer.Layer<HttpApiMiddleware.ForClient<Api.CsrfProtection>> =
-  HttpApiMiddleware.layerClient(Api.CsrfProtection, ({ next, request }) =>
-    next(
-      HttpClientRequest.setHeader(
-        request,
-        Api.CSRF_HEADER_NAME,
-        readCookie(Api.CSRF_COOKIE_NAME) ?? "",
+export const csrfClientLayer = (options?: CsrfClientOptions) => {
+  const read = options?.readCookie ?? readCookie;
+  const retry = options?.bootstrapRetry ?? true;
+  // An empty cookie value is as unusable as an absent one.
+  const readToken = () => {
+    const token = read(Api.CSRF_COOKIE_NAME);
+    return token === "" ? undefined : token;
+  };
+  const withToken = (request: HttpClientRequest.HttpClientRequest, token: string | undefined) =>
+    token === undefined
+      ? request
+      : HttpClientRequest.setHeader(request, Api.CSRF_HEADER_NAME, token);
+  return HttpApiMiddleware.layerClient(Api.CsrfProtection, ({ next, request }) => {
+    const sent = readToken();
+    const first = next(withToken(request, sent));
+    if (!retry) return first;
+    return first.pipe(
+      Effect.flatMap((response) =>
+        isCsrfRejected(response).pipe(
+          Effect.flatMap((rejected) => {
+            if (!rejected) return Effect.succeed(response);
+            const fresh = readToken();
+            return fresh === undefined || fresh === sent
+              ? Effect.succeed(response)
+              : next(withToken(request, fresh));
+          }),
+        ),
       ),
-    ),
-  );
+    );
+  });
+};
+
+export const CsrfClientLive: Layer.Layer<HttpApiMiddleware.ForClient<Api.CsrfProtection>> =
+  csrfClientLayer();
 
 // ---------------------------------------------------------------------------
 // BEH-EA-172: error codes are derived from the contract

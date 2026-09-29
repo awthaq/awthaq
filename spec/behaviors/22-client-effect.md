@@ -51,6 +51,8 @@ REQUIREMENT: A cookie-mode client program MUST NOT type-check without
 
 PRD §10 states this directly: "`CsrfProtection` declares `requiredForClient: true`, so a generated client does not type-check without the client half." `usage-examples-v4.md` §11.1 shows the consequence in practice: deleting the `CsrfClient` line from a program's provided Layers is a compile error, not a runtime 403 discovered later — the security requirement and the type system's requirement are the same requirement.
 
+**Implementation (CDS-007).** The shipped `CsrfClientLive` (= `csrfClientLayer()`) is self-bootstrapping: it omits `x-csrf-token` when no cookie is readable (never the `?? ""` sketch above — an empty header is indistinguishable from a forged one), and on a `CsrfRejected` response, when a cookie the rejected request did not carry has since appeared (the server mints `__Host-csrf` on any response through a guarded group, including the 403), it re-issues the request exactly once with it. `csrfClientLayer({ readCookie, bootstrapRetry })` exposes the cookie reader (a server-side caller reads its request's `Cookie` header) and the retry opt-out.
+
 _Previous: [BEH-EA-169](22-client-effect.md#beh-ea-169-the-client-derives-from-the-merged-contract) | Next: [BEH-EA-171](22-client-effect.md#beh-ea-171-bearer-mode-is-a-separate-contract-variant)_
 
 ## BEH-EA-171: Bearer mode is a separate contract variant
