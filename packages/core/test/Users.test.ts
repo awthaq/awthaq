@@ -152,6 +152,41 @@ const suite = (name: string, layer: Layer.Layer<Users.Users, unknown, never>): v
           assert.isTrue(Option.isNone(cleared.metadata));
         }).pipe(Effect.provide(layer)),
     );
+
+    it.effect(
+      "BAM-005/BEH-EA-036: list pages users with a keyset cursor — every user once, oldest first, bounded reads",
+      () =>
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const created: Array<string> = [];
+          for (const n of [1, 2, 3, 4, 5]) {
+            created.push((yield* users.create({ email: `p${n}@example.com`, name: `P${n}` })).id);
+          }
+
+          const seen: Array<string> = [];
+          let cursor: Users.UserCursor | undefined = undefined;
+          let pages = 0;
+          for (;;) {
+            const page: Users.UsersPage = yield* users.list({
+              limit: 2,
+              ...(cursor === undefined ? {} : { cursor }),
+            });
+            pages++;
+            assert.isAtMost(page.items.length, 2);
+            seen.push(...page.items.map((user) => user.id));
+            if (Option.isNone(page.nextCursor)) break;
+            cursor = page.nextCursor.value;
+          }
+          assert.strictEqual(pages, 3);
+          assert.deepStrictEqual([...seen].sort(), [...created].sort());
+          assert.strictEqual(new Set(seen).size, 5);
+
+          // An exactly-full page reports no next cursor.
+          const exact = yield* users.list({ limit: 5 });
+          assert.strictEqual(exact.items.length, 5);
+          assert.isTrue(Option.isNone(exact.nextCursor));
+        }).pipe(Effect.provide(layer)),
+    );
   });
 };
 

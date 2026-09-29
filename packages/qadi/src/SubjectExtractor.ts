@@ -78,7 +78,32 @@ export const SubjectExtractorLive: Layer.Layer<
       extract: (request) =>
         Effect.gen(function* () {
           // IC-007: the configured session-cookie name (default `__Host-session`).
-          const cookieName = SessionCookie.cookieName(yield* SessionCookie.SessionCookieConfig);
+          const cfg = yield* SessionCookie.SessionCookieConfig;
+          const cookieName = SessionCookie.cookieName(cfg);
+          // APS-006: `Authentication` prefers a live impersonation cookie over
+          // the caller's own session, so authorization must evaluate the same
+          // identity the request is being served as — not the admin behind it.
+          const impersonation = request.cookies[SessionCookie.cookieName(cfg, "impersonation")];
+          if (impersonation !== undefined && impersonation.length > 0) {
+            const impersonated = yield* Authentication.resolvePrincipal(
+              sessions,
+              principalResolver,
+              Redacted.make(impersonation),
+              "impersonation",
+            ).pipe(
+              Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+              Effect.option,
+            );
+            // Only a session carrying `actingAs` counts from that cookie (mirrors
+            // `Authentication`'s `impersonation` scheme); anything else falls through.
+            if (
+              Option.isSome(impersonated) &&
+              impersonated.value._tag === "User" &&
+              impersonated.value.actingAs !== undefined
+            ) {
+              return yield* subjectResolver.resolve(impersonated.value);
+            }
+          }
           const { scheme, credential } = extractCredential(request, cookieName);
           // PIL-005: `scheme` tells a rotating `verify` how to deliver the
           // new secret — `resolveSession` registers that delivery on the

@@ -141,8 +141,20 @@ export const getSession = <Extra = never>(
     never
   >,
 ): Promise<Session | undefined> => {
-  const token = cookieValue(headers.get("cookie"), Api.SessionCookie.key);
-  return token === undefined ? Promise.resolve(undefined) : verifyCached(token, runtime);
+  const cookieHeader = headers.get("cookie");
+  const token = cookieValue(cookieHeader, Api.SessionCookie.key);
+  // APS-006: a live impersonation cookie shadows the caller's own session, the
+  // same precedence `Api.Authentication` applies; only a session carrying
+  // `actingAs` counts from it, otherwise fall through to the ordinary cookie.
+  const impersonationToken = cookieValue(cookieHeader, Api.ImpersonationCookie.key);
+  const own = () =>
+    token === undefined ? Promise.resolve(undefined) : verifyCached(token, runtime);
+  if (impersonationToken === undefined) return own();
+  return verifyCached(impersonationToken, runtime).then((impersonated) =>
+    impersonated !== undefined && Option.isSome(impersonated.session.actingAs)
+      ? impersonated
+      : own(),
+  );
 };
 
 /**

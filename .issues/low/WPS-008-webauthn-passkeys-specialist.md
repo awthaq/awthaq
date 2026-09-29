@@ -52,3 +52,5 @@ Route all three backends' final comparison through the same constantTimeEqual he
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `passkey-challenge-store-hardening`. Duplicate of `BPAS-008` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/passkey/src/ChallengeStore.ts:104`. Full dossier: `.plan/slices/10-passkey-admin.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `BPAS-008-biometric-platform-authenticator-specialist` — closed by its fix (see that issue's Resolved comment).

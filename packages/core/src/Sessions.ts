@@ -26,10 +26,11 @@ import * as Result from "effect/Result";
 import * as Model from "effect/unstable/schema/Model";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
+import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
 /**
- * BEH-EA-049: the public half of a session's `id.secret` token. INV-EA-017: an id is an identifier, never a capability — it appears in cookies, JWT `sid` claims and error messages, so nothing may act on it without the secret's proof (PIL-007).
+ * BEH-EA-049: the public half of a session's `id.secret` token. INV-EA-018: an id is an identifier, never a capability — it appears in cookies, JWT `sid` claims and error messages, so nothing may act on it without the secret's proof (PIL-007).
  */
 export type SessionId = string & Brand.Brand<"SessionId">;
 export const SessionId = Brand.nominal<SessionId>();
@@ -256,6 +257,13 @@ export class SessionExpired extends Data.TaggedError("SessionExpired")<{
  * `SessionCookieConfig`; every writer renders through `SessionCookie.render`.
  */
 export const SESSION_COOKIE_NAME = Api.SESSION_COOKIE_NAME;
+/**
+ * APS-006: impersonation sessions travel under their own cookie, with the
+ * identical attributes, so `impersonate` never overwrites the admin's own
+ * `__Host-session` and `stopImpersonating` can hand the browser back to it.
+ * `Authentication` only accepts a session carrying `actingAs` from this name.
+ */
+export const IMPERSONATION_COOKIE_NAME = Api.IMPERSONATION_COOKIE_NAME;
 
 export interface SessionsShape {
   /**
@@ -614,10 +622,13 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
             { readonly row: SessionRow; readonly evicted: ReadonlyArray<SessionRow> },
             HashMap.HashMap<SessionId, SessionRow>,
           ] => {
+            // TMS-004: rows are otherwise removed only on revoke; prune
+            // expired ones once the map is large, in the same atomic step.
+            const pruned = pruneExpiredAbove(s, now, (r) => r.absoluteExpiresAt);
             const ancestor =
               input.supersedes === undefined
                 ? Option.none()
-                : Option.filter(HashMap.get(s, input.supersedes), (r) =>
+                : Option.filter(HashMap.get(pruned, input.supersedes), (r) =>
                     Option.isNone(r.supersededAt),
                   );
             const created: SessionRow = {
@@ -642,9 +653,9 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
               reusedAt: Option.none(),
             };
             const withAncestor = Option.match(ancestor, {
-              onNone: () => s,
+              onNone: () => pruned,
               onSome: (r) =>
-                HashMap.set(s, r.id, {
+                HashMap.set(pruned, r.id, {
                   ...r,
                   supersededBy: Option.some(id),
                   supersededAt: Option.some(now),

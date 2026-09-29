@@ -3,7 +3,7 @@ ID: "KRS-002"
 Title: "Only shipped KeyProvider implementation is single-key, making rotation destructive"
 Level: high
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/KeyProvider.ts:98"
 Auditor: "key-rotation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `architecture` · `ports` · reported by **Key Rotation Specialist** (`key-rotation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/ports/src/KeyProvider.ts:97-100` matches the evidence verbatim; `layerEnv`'s `getKey` fails `UnknownKeyId` for any kid but the one loaded at construction, and the module's own header comment (lines 20-24) concedes "real rotation support ... is a property of a future multi-key implementation of this interface." No multi-key `KeyProvider` implementation or re-encryption/migration tool exists anywhere in the repo. Shipping a multi-key provider plus a re-encryption path is a real design decision (KMS shape, migration strategy), not a small mechanical patch. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `keyprovider-rotation`. Evidence at HEAD ec065a7: `packages/ports/src/KeyProvider.ts:96`. Fix: Multi-key layerEnv + staleKid-driven lazy re-encryption, exactly as decision 22 specifies. (effort L). Full dossier: `.plan/slices/09-ports-apikey-cli.md`.
+
+**Resolved (2026-09-29):** packages/ports/src/KeyProvider.ts: layerEnv now reads the AWTHAQ_ENCRYPTION_KEYS keyset (JSON [{kid,key}], Schema-decoded, base64 32-byte keys, empty/duplicate kid/bad length die, current kid AWTHAQ_ENCRYPTION_KEY_ID required and must be in the set); getKey is a lookup over the whole set. packages/ports/src/Encryption.ts: decrypt now returns {plaintext, staleKid: Option<string>}. Consumers: sql AccountsRepository lazy re-encrypts stale reads via CAS (see SMS-002); oauth PKCE/nonce read .plaintext. README (env vars, one-entry migration, retirement procedure) and ADR-EA-019 (spec/decisions/019-encryption-key-rotation.md, indexed + traceability). Tests: packages/ports/test/KeyProvider.test.ts + Encryption.test.ts (red first: keyset tests failed as AWTHAQ_ENCRYPTION_KEYS was ignored). Gates: typecheck, full vitest, bdd, spec:verify:strict, oxlint clean for touched files. Decision (2026-09-29): deviated from ticket 22 in ONE respect: the legacy single-key AWTHAQ_ENCRYPTION_KEY (kid defaults to env) is still accepted when AWTHAQ_ENCRYPTION_KEYS is unset, as a one-entry non-rotating keyset, so the many existing test fixtures in other packages keep working; a keyset always requires KEY_ID. User may revisit.

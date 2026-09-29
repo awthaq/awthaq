@@ -68,6 +68,13 @@ Feature: Admin and Impersonation
       Then the call is denied with "403 Forbidden"
       And no new session is issued for the target user
 
+    @REQ-EA-628
+    Scenario: The gate sees the target, so a host can protect an account
+      Given "Admin" configured with a "canImpersonate" predicate that refuses the target "superadmin-1"
+      When a signed-in user calls "admin.impersonate" naming the protected target "superadmin-1"
+      Then the call is denied with "403 Forbidden"
+      And no new session is issued for the target user
+
   # BEH-EA-213 — spec/behaviors/27-admin-impersonation.md
   @BEH-EA-213
   Rule: impersonate issues a new, dual-identity session for the target
@@ -90,6 +97,14 @@ Feature: Admin and Impersonation
       Given a signed-in admin permitted to impersonate
       When the admin calls "admin.impersonate" for a target user with a reason over 1000 characters long
       Then the call is rejected with "400 Bad Request"
+
+    @REQ-EA-629
+    Scenario: Impersonating an unknown user id is refused as not found
+      Given a signed-in admin permitted to impersonate
+      When the admin calls "admin.impersonate" for an unknown user id
+      Then the call is rejected with "404 Not Found" and the typed error "AdminTargetNotFound"
+      And no new session is issued for the target user
+      And the impersonation audit trail is still empty
 
   # BEH-EA-214 — spec/behaviors/27-admin-impersonation.md
   @BEH-EA-214
@@ -142,6 +157,12 @@ Feature: Admin and Impersonation
       When that session calls "admin.stopImpersonating"
       Then the call fails, since the session carries no "actingAs" to end
 
+    @REQ-EA-630
+    Scenario: After stopping impersonation in a browser, the admin is still signed in
+      Given an admin actively impersonating a target user through one browser cookie jar
+      When the browser calls "admin.stopImpersonating"
+      Then the browser's next request is served as the admin, with no re-login
+
   # BEH-EA-217 — spec/behaviors/27-admin-impersonation.md
   @BEH-EA-217
   Rule: forceStop lets another admin end someone else's impersonation
@@ -161,9 +182,9 @@ Feature: Admin and Impersonation
       Then the call fails with "404 Not Found" and the typed error "AdminImpersonationNotFound"
 
     @REQ-EA-620
-    Scenario: forceStop is gated by the identical canImpersonate predicate impersonate uses
-      Given "Admin" configured with a "canImpersonate" predicate that always resolves "false"
-      When a signed-in user calls "admin.forceStop" naming any session id
+    Scenario: forceStop is gated per episode by the impersonate predicate
+      Given an active impersonation episode that a second admin's gate refuses
+      When that second admin calls "admin.forceStop" naming that episode's session id
       Then the call is denied with "403 Forbidden", the same gate "admin.impersonate" itself is held to
 
   # BEH-EA-218 — spec/behaviors/27-admin-impersonation.md
@@ -219,3 +240,25 @@ Feature: Admin and Impersonation
       Given a target user with their own active session, issued before any impersonation begins
       When an admin impersonates that target user
       Then the target's own original session cookie still authenticates afterward, unaffected
+
+  # BEH-EA-221 — spec/behaviors/27-admin-impersonation.md
+  @BEH-EA-221
+  Rule: User and session administration is gated per capability, fail-closed, with the target in view
+
+    @REQ-EA-631
+    Scenario: With no canManageUsers configured, user administration is denied by default
+      Given an application composing "Admin" with no "canManageUsers" predicate configured
+      When a signed-in user calls "admin.listUsers"
+      Then the user-administration call is denied with "403 Forbidden"
+
+  # BEH-EA-223 — spec/behaviors/27-admin-impersonation.md
+  @BEH-EA-223
+  Rule: An admin manages a user's own sessions, never an impersonation episode's
+
+    @REQ-EA-632
+    Scenario: An admin revokes one of a user's sessions
+      Given "Admin" configured with a "canManageUsers" predicate that always resolves "true"
+      And a user with an active session of their own
+      When the admin calls "admin.revokeUserSession" naming that user's session
+      Then the user-administration call succeeds with "204 No Content"
+      And that session no longer authenticates

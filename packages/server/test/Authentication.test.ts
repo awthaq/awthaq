@@ -242,6 +242,55 @@ describe("Authentication", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  // APS-006: impersonation sessions travel under their own cookie so the
+  // admin's own `__Host-session` is never overwritten.
+  it.effect(
+    "APS-006: a session carrying actingAs authenticates from the __Host-impersonation cookie and shadows __Host-session",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const own = yield* sessions.issue({ userId: Users.UserId("admin-1") });
+        const impersonation = yield* sessions.issue({
+          userId,
+          actingAs: { type: "user", id: "admin-1" },
+        });
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+        const result = yield* client.required.whoAmI({
+          headers: {
+            cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(impersonation.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+          },
+        });
+        assert.strictEqual(result, userId);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "APS-006: an ordinary session planted in __Host-impersonation never authenticates and the chain falls through to __Host-session",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const own = yield* sessions.issue({ userId: Users.UserId("admin-1") });
+        const planted = yield* sessions.issue({ userId });
+        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+
+        const alone = yield* client.required
+          .whoAmI({
+            headers: {
+              cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(planted.token)}`,
+            },
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(alone._tag, "Unauthenticated");
+
+        const fallsThrough = yield* client.required.whoAmI({
+          headers: {
+            cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(planted.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+          },
+        });
+        assert.strictEqual(fallsThrough, "admin-1");
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
   // .scratch/jwt/issues/16-automatic-response-mirroring.md: `PostAuthResponseHook`
   // defaults to a no-op (every test above already proves this — none of
   // them override it, and all pass unchanged). This is the one test
@@ -276,6 +325,44 @@ describe("Authentication", () => {
           Layer.provide(TappedHook),
           Layer.provideMerge(Sessions.layerMemory),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
+          Layer.provideMerge(AuthEvents.layer),
+          Layer.provideMerge(AuditLog.layerMemory),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provideMerge(TestServices),
+        ),
+      ),
+    );
+  });
+
+  // PDR-003: a hook can tell a cookie-authenticated request from a bearer one.
+  it.effect("PostAuthResponseHook.decorate receives the authenticating scheme", () => {
+    const schemes = Effect.runSync(Ref.make<ReadonlyArray<string>>([]));
+    const TappedHook = Layer.succeed(Authentication.PostAuthResponseHook, {
+      decorate: (
+        _principal: Api.Principal,
+        response: HttpServerResponse.HttpServerResponse,
+        context: { readonly scheme: "cookie" | "bearer" | "impersonation" },
+      ) => Ref.update(schemes, (seen) => [...seen, context.scheme]).pipe(Effect.as(response)),
+    });
+    return Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const { token } = yield* sessions.issue({ userId });
+      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
+      yield* client.required.whoAmI({
+        headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
+      });
+      yield* client.required.whoAmI({
+        headers: { authorization: `Bearer ${Redacted.value(token)}` },
+      });
+      assert.deepStrictEqual(yield* Ref.get(schemes), ["cookie", "bearer"]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
+          Layer.provideMerge(Authentication.AuthenticationLive),
+          Layer.provideMerge(Authentication.OptionalAuthenticationLive),
+          Layer.provide(Authentication.PrincipalResolverLive),
+          Layer.provide(TappedHook),
+          Layer.provideMerge(Sessions.layerMemory),
           Layer.provideMerge(AuthEvents.layer),
           Layer.provideMerge(AuditLog.layerMemory),
           Layer.provide(NodeCrypto.layer),
@@ -655,9 +742,11 @@ describe("Authentication per-request cache (TS-003/NHS-006)", () => {
 
 // EHA-006/NHS-010: the contract and the wire.
 describe("Authentication contract (EHA-006, NHS-010)", () => {
-  it("NHS-010: both middlewares declare their security keys in order cookie, bearer", () => {
-    assert.deepStrictEqual(Object.keys(Api.Authentication.security), ["cookie", "bearer"]);
-    assert.deepStrictEqual(Object.keys(Api.OptionalAuthentication.security), ["cookie", "bearer"]);
+  it("NHS-010: the security middlewares declare their keys in order impersonation, cookie, bearer (APS-006)", () => {
+    const order = ["impersonation", "cookie", "bearer"];
+    assert.deepStrictEqual(Object.keys(Api.Authentication.security), order);
+    assert.deepStrictEqual(Object.keys(Api.AdminAuthentication.security), order);
+    assert.deepStrictEqual(Object.keys(Api.OptionalAuthentication.security), order);
   });
 
   it("EHA-006: the OpenAPI document lists a 401 for Authentication endpoints but none for OptionalAuthentication", () => {

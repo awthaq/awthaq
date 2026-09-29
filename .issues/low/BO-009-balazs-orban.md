@@ -3,7 +3,7 @@ ID: "BO-009"
 Title: "OAuth provider config: no vendor presets and Effect Config descriptions leak into user-facing typing"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuthProvider.ts:60"
 Auditor: "balazs-orban"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `oauth` · reported by **Balázs Orbán — Lead Maintainer, Auth.js** (`balazs-orban`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Keep the mechanism core but add a thin presets layer (clientSecret from env by c
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `oauth-provider-presets`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuthProvider.ts:55`. Fix: Accept `string | Config.Config<string>` for non-secret provider fields (issuer, discoveryUrl, clientId); keep clientSecret Config.Redacted-only per BEH-EA-126; presets tracked by IC-003. (effort S). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** OAuthProviderConfig.issuer/discoveryUrl/clientId accept string | Config<string> (OAuthProvider.liftConfig via Config.succeed, no casts; also used by OAuth.accountAnchorFor); clientSecret stays Config<Redacted> only per BEH-EA-126. Tests: plain-string oidc provider resolves and authorizes with the literal client_id; a plain-string clientSecret is a @ts-expect-error type failure. Gates as IC-003.

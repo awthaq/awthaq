@@ -183,6 +183,38 @@ export interface AdminImpersonationDeniedEvent {
   readonly adminUserId: UserId;
 }
 
+/**
+ * BAM-005: published by `@awthaq/admin` when an admin capability other than
+ * impersonation (`AdminConfig.canManageUsers`) resolves `false` — the same
+ * "genuine authorization rejection, never input-validation noise" signal
+ * `auth.admin.impersonationDenied` is for impersonation. `action` names the
+ * endpoint (`"listUsers"`, `"updateUser"`, ...).
+ */
+export interface AdminActionDeniedEvent {
+  readonly _tag: "auth.admin.actionDenied";
+  readonly adminUserId: UserId;
+  readonly action: string;
+}
+
+/** BAM-005: published by `@awthaq/admin`'s `updateUser`, after the profile change is persisted. */
+export interface AdminUserUpdatedEvent {
+  readonly _tag: "auth.admin.userUpdated";
+  readonly adminUserId: UserId;
+  readonly userId: UserId;
+}
+
+/**
+ * BAM-005: published by `@awthaq/admin`'s `revokeUserSession`/`revokeUserSessions`.
+ * `sessionId` is the one revoked session, or `null` when every non-impersonation
+ * session of `userId` was revoked in one call.
+ */
+export interface AdminSessionRevokedEvent {
+  readonly _tag: "auth.admin.sessionRevoked";
+  readonly adminUserId: UserId;
+  readonly userId: UserId;
+  readonly sessionId: string | null;
+}
+
 /** Published by `@awthaq/organization`'s `create`. */
 export interface OrganizationCreatedEvent {
   readonly _tag: "auth.organization.created";
@@ -313,6 +345,21 @@ export interface OrganizationTeamMemberRemovedEvent {
   readonly userId: UserId;
 }
 
+/**
+ * EOTS-007: published by `RateLimits.enforce` on every rate-limit breach.
+ * Deliberately carries no bucket key, email or IP (BEH-EA-108): it names the
+ * rule that fired, so a defender can see which throttle is being hit and how
+ * often without the event stream itself becoming an identifier oracle.
+ */
+export interface RateLimitExceededEvent {
+  readonly _tag: "auth.rateLimit.exceeded";
+  readonly group: string;
+  readonly endpoint: string;
+  readonly rule: string;
+  readonly dimension: "identity" | "ip" | "principal" | "custom";
+  readonly retryAfterMillis: number;
+}
+
 /** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */
 export type AuthEvent =
   | TokenReplayEvent
@@ -329,6 +376,9 @@ export type AuthEvent =
   | AdminImpersonationStartedEvent
   | AdminImpersonationStoppedEvent
   | AdminImpersonationDeniedEvent
+  | AdminActionDeniedEvent
+  | AdminUserUpdatedEvent
+  | AdminSessionRevokedEvent
   | OrganizationCreatedEvent
   | OrganizationUpdatedEvent
   | OrganizationDeletedEvent
@@ -346,7 +396,8 @@ export type AuthEvent =
   | OrganizationTeamUpdatedEvent
   | OrganizationTeamDeletedEvent
   | OrganizationTeamMemberAddedEvent
-  | OrganizationTeamMemberRemovedEvent;
+  | OrganizationTeamMemberRemovedEvent
+  | RateLimitExceededEvent;
 
 export interface AuthEventsShape {
   /** BEH-EA-098: returns once the event is enqueued — never suspends on a subscriber. */

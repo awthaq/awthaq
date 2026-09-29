@@ -57,3 +57,5 @@ Add ES256/EdDSA verification via the same crypto.subtle path (keys are already J
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jose-algorithm-coverage`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:313`. Fix: Generalize OAuth id_token verification to RS256/PS256/ES256/ES384/EdDSA under a per-provider allowlist seeded from discovery, checked at boot. (effort M). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29):** Not done in P03: packages/oauth is owned by the P02 agent and this is blocked by ESS-002-effect-schema-specialist (discovery decoding). The jwt package now has the reusable pieces: JwtCodec's single AlgorithmSpec table (EdDSA/ES256/ES384/RS256/PS256: import/sign params + kty per alg) and JwtCodec.isAlgorithm; packages/oauth cannot import @awthaq/jwt (it would add a plugin-to-plugin dependency), so the OAuth side should mirror the table in packages/oauth/src/Jwt.ts per the dossier steps, or the table could be lifted into @awthaq/ports if the P02 agent prefers one copy.

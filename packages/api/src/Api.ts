@@ -91,7 +91,7 @@ export class InvalidCredentials extends Schema.TaggedError<InvalidCredentials>()
 
 /**
  * Shipping-gap map (.scratch/shipping-gaps), ticket 12. BEH-EA-106: the
- * wire counterpart of `@awthaq/ports`' `RateLimiter.RateLimited` —
+ * wire counterpart of `@awthaq/ports`' `RateLimiter.RateLimitExceeded` —
  * `retryAfterMillis` carried as a typed field (not folded into a message
  * string) so a client can render "try again in n seconds" without parsing
  * text. Declared here, not per-plugin, since every rate-limited endpoint
@@ -121,6 +121,18 @@ export const ROTATED_TOKEN_HEADER = "set-auth-token";
 
 /** BEH-EA-065: cookie scheme keyed on `SESSION_COOKIE_NAME`. */
 export const SessionCookie = HttpApiSecurity.apiKey({ key: SESSION_COOKIE_NAME, in: "cookie" });
+/**
+ * APS-006/BEH-EA-213: where `@awthaq/admin`'s `impersonate` delivers the
+ * impersonation session in cookie mode — a name of its own, so the admin's
+ * `__Host-session` is shadowed (not replaced) and restored by clearing this one.
+ * `Sessions.IMPERSONATION_COOKIE_NAME` derives from this constant, as
+ * `SESSION_COOKIE_NAME` does (CSS-007).
+ */
+export const IMPERSONATION_COOKIE_NAME = "__Host-impersonation";
+export const ImpersonationCookie = HttpApiSecurity.apiKey({
+  key: IMPERSONATION_COOKIE_NAME,
+  in: "cookie",
+});
 export const BearerToken = HttpApiSecurity.bearer;
 
 /** BEH-EA-080: the CSRF cookie/header names are fixed, never per-plugin configurable. */
@@ -133,13 +145,34 @@ export const CsrfCookie = HttpApiSecurity.apiKey({ key: CSRF_COOKIE_NAME, in: "c
  * first — the *declaration's* `security` key order is the entire strategy
  * chain (NHS-010: Effect looks the Live handlers up by key, so the order of
  * the record `@awthaq/server` returns is irrelevant; only this declaration's
- * matters).
+ * matters). APS-006: `impersonation` is declared first of all, so an
+ * impersonation cookie shadows the caller's own session cookie; its handler
+ * only accepts a session carrying `actingAs` and otherwise falls through.
  */
 export class Authentication extends HttpApiMiddleware.Service<
   Authentication,
   { provides: CurrentPrincipal }
 >()("Authentication", {
-  security: { cookie: SessionCookie, bearer: BearerToken },
+  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
+  error: Unauthenticated,
+}) {}
+
+/**
+ * AR-003/BEH-EA-071: the authentication scheme of the admin tier — every group whose id
+ * has an `admin` segment (`AuthPlugin.isAdminTier`) is declared behind this instead of
+ * `Authentication`. Same security record, same error, same `CurrentPrincipal`, so
+ * `@awthaq/server`'s default `AdminAuthenticationLive` simply delegates to
+ * `Authentication` and a co-hosted deployment behaves exactly as before. A host that
+ * runs the admin surface on its own listener swaps the layer (mTLS, a service
+ * principal, an internal SSO) without forking any contract: an override implements the
+ * same three handlers however it likes — e.g. `bearer` resolving a client-certificate
+ * identity — and still provides `CurrentPrincipal`.
+ */
+export class AdminAuthentication extends HttpApiMiddleware.Service<
+  AdminAuthentication,
+  { provides: CurrentPrincipal }
+>()("AdminAuthentication", {
+  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
   error: Unauthenticated,
 }) {}
 
@@ -156,7 +189,7 @@ export class OptionalAuthentication extends HttpApiMiddleware.Service<
   OptionalAuthentication,
   { provides: CurrentPrincipal }
 >()("OptionalAuthentication", {
-  security: { cookie: SessionCookie, bearer: BearerToken },
+  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
 }) {}
 
 /** BEH-EA-030/076/079: a plain (non-security) middleware — CSRF is a request-property check, not a credential scheme. */

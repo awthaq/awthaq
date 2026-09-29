@@ -3,7 +3,7 @@ ID: "TIR-007"
 Title: "Every authenticated response mints a JWT that survives session revocation"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/Jwt.ts:160"
 Auditor: "token-introspection-revocation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `jwt` · reported by **Token Introspection & Revocation Specialist** (`token-introspection-revocation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Either bound the exposure (shorten default ttl, or document the residual window 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `jwt-revocation-propagation`. Evidence at HEAD ec065a7: `packages/jwt/src/Jwt.ts:361`. Fix: Finish ticket 11's intent: let `/jwt/introspect` apply the session-liveness check whenever `Sessions` is composed (captured via `Effect.serviceOption`, keeping R = never), and document the bare-`verify` revocation-lag bound. (effort M). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Jwt.make captures Sessions optionally (Effect.serviceOption, R stays never, dependsOn stays empty); new introspectComposed (JwtShape) = introspect + session-liveness check when Sessions was composed, sharing sidStillLiveIn with verifyLive/introspectLive; POST /jwt/introspect now calls it. README/model 08/ADR-EA-017 document that bare verify lags revocation by at most ttl. Tests: packages/jwt/test/JwtIntrospection.test.ts (active:false after revoke when composed; unchanged without Sessions) and AuthHttp.test.ts 'POST /jwt/introspect session liveness (TIR-007)' over real HTTP. SCIM-contract note (SCP-007 step 4) left for when SCIM is specified.

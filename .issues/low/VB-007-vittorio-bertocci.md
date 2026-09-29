@@ -48,3 +48,5 @@ Update spec/models/08-jwt-bearer.md to describe the shipped Jwt plugin, the bear
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `jwt-key-rotation-runbook`. Duplicate of `KRS-008` — closed by that issue's fix. Evidence at HEAD ec065a7: `spec/models/08-jwt-bearer.md:80`. Full dossier: `.plan/slices/12-spec.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `KRS-008-key-rotation-specialist` — closed by its fix (see that issue's Resolved comment).

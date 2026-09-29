@@ -3,7 +3,7 @@ ID: "PHS-001"
 Title: "Argon2 verify is not constant-time: hash-wasm argon2Verify compares with plain ==="
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/PasswordHasher.ts:144"
 Auditor: "password-hashing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `ports` · reported by **Password Hashing Specialist** (`password-hashing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Do not delegate comparison: parse the stored PHC's salt/params, recompute with a
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-hasher-verify-hardening`. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:175`. Fix: Stop delegating argon2 comparison to hash-wasm: parse, recompute, compare in constant time. (effort M). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/ports/src/PasswordHasher.ts: layerArgon2id.verify no longer calls hash-wasm argon2Verify (plain ===). New strict parseArgon2id (v=19 argon2id only, integer params, salt>=8B, digest 4..128B, unpadded-base64 decode) -> recompute with argon2id(outputType binary, hashLength=stored digest length) -> exported timingSafeEqualBytes. Misleading header/JSDoc comment fixed. Tests packages/ports/test/PasswordHasher.test.ts: timingSafeEqualBytes unit test (red: not exported), non-default 64-byte digest accept + bit-flip reject, argon2i encoding rejected (red: old path verified it). Note: the dossier's 'hashLength 64' test also passes on the old code (argon2Verify handled it); the constant-time property itself is not black-box observable. BEH-EA-116 spec text documents the new verify path. Gates: typecheck (pre-existing react TS2883 only), test 864, bdd 104, spec:verify 19/19.

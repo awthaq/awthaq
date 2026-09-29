@@ -47,6 +47,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as AuthEvents from "./AuthEvents.ts";
+import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
 import { UserId } from "./Users.ts";
 
 export type VerificationTokenId = string & Brand.Brand<"VerificationTokenId">;
@@ -177,7 +178,14 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           expiresAt: DateTime.addDuration(now, input.ttl),
           payload: input.payload,
         };
-        yield* Ref.update(state, (s) => HashMap.set(s, input.identifier, row));
+        // TMS-004: an unconsumed token was never removed; prune expired rows once the map is large.
+        yield* Ref.update(state, (s) =>
+          HashMap.set(
+            pruneExpiredAbove(s, now, (r) => r.expiresAt),
+            input.identifier,
+            row,
+          ),
+        );
         return {
           token: {
             id,
@@ -255,9 +263,14 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           ) {
             return [false, s] as const;
           }
+          // TMS-004: expired reservations are otherwise never removed.
           return [
             true,
-            HashMap.set(s, input.identifier, DateTime.addDuration(now, input.ttl)),
+            HashMap.set(
+              pruneExpiredAbove(s, now, (expiresAt) => expiresAt),
+              input.identifier,
+              DateTime.addDuration(now, input.ttl),
+            ),
           ] as const;
         });
       });

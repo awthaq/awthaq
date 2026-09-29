@@ -19,10 +19,14 @@
 // produce; see `test/AuthHttp.test.ts` for both exercised end to end.
 
 import { Api } from "@awthaq/api";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Headers from "effect/unstable/http/Headers";
+import * as HttpMiddleware from "effect/unstable/http/HttpMiddleware";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
+import * as Csrf from "./Csrf.ts";
 
 /** BEH-EA-083/084: registers `api`'s routes with the ambient `HttpRouter`. */
 export const routes: typeof HttpApiBuilder.layer = HttpApiBuilder.layer;
@@ -48,3 +52,49 @@ export const layerRedactedHeaders = Layer.succeed(Headers.CurrentRedactedNames, 
   Api.ROTATED_TOKEN_HEADER,
   "x-jwt-token",
 ]);
+
+export interface CorsOptions {
+  /** Extra request headers a cross-origin caller may send, beyond `content-type`, the CSRF header and `authorization`. */
+  readonly allowedHeaders?: ReadonlyArray<string>;
+  /** Extra response headers a cross-origin caller may read, beyond the rotated-token header. */
+  readonly exposedHeaders?: ReadonlyArray<string>;
+  /** Seconds a browser may cache a preflight answer. */
+  readonly maxAge?: number;
+}
+
+/**
+ * AGA-002: awthaq ships **no CORS by default**. Without this layer no
+ * cross-origin response carries an `Access-Control-Allow-Origin` header, so a
+ * browser refuses to let another origin read any response: same-origin,
+ * default-deny. `cors` is the supported way to open access to a separate SPA
+ * origin, and its allowlist *is* `CsrfConfig.allowedOrigins`, the value the CSRF
+ * origin check reads, so the edge policy and the CSRF policy cannot drift.
+ *
+ * Opening CORS never relaxes `CsrfProtection`: a cross-site mutation still
+ * needs the double-submit pair. An empty allowlist opens nothing (Effect's own
+ * `cors` would answer `*` for an empty list; a credentialed API must never).
+ */
+export const cors = (options?: CorsOptions) =>
+  Layer.unwrap(
+    Effect.map(Csrf.CsrfConfig, ({ allowedOrigins }) =>
+      // `HttpMiddleware.cors` rather than `HttpRouter.cors`: only the former takes a
+      // predicate, and given exactly one origin as a list Effect echoes it on every
+      // response, allowed caller or not.
+      HttpRouter.middleware(
+        HttpMiddleware.cors({
+          allowedOrigins: (origin) => allowedOrigins.includes(origin),
+          credentials: true,
+          allowedMethods: ["GET", "POST", "PATCH", "DELETE"],
+          allowedHeaders: [
+            "content-type",
+            Api.CSRF_HEADER_NAME,
+            "authorization",
+            ...(options?.allowedHeaders ?? []),
+          ],
+          exposedHeaders: [Api.ROTATED_TOKEN_HEADER, ...(options?.exposedHeaders ?? [])],
+          maxAge: options?.maxAge,
+        }),
+        { global: true },
+      ),
+    ),
+  );

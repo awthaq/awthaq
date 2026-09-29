@@ -12,10 +12,16 @@
 // directly against `Sessions` through the same shared `MemoMap` the app's
 // own handler resolves against — the identical technique
 // `AuthHttp.test.ts`'s own `issueSessionCookieHeader` uses.
-import { AuditLog, AuthEvents, Accounts, Hooks, Sessions, Users } from "@awthaq/core";
-import { ClientAddress, WebAuthn } from "@awthaq/ports";
+import { AuditLog, AuthEvents, Accounts, Hooks, RateLimits, Sessions, Users } from "@awthaq/core";
+import { ClientAddress, RateLimiter, WebAuthn } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
-import { Passkey, PasskeyApi, ChallengeStore, PasskeyCredentials } from "@awthaq/passkey";
+import {
+  Passkey,
+  PasskeyApi,
+  ChallengeStore,
+  PasskeyCredentials,
+  PasskeyUserHandles,
+} from "@awthaq/passkey";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { CSRF_TEST_COOKIE_VALUE, CsrfConfigForTests, withCsrfCookie } from "./CsrfTestSupport.ts";
 import * as Context from "effect/Context";
@@ -100,11 +106,14 @@ const mockWebAuthn = (behavior: Ref.Ref<MockWebAuthnOverrides>): Layer.Layer<Web
           credentialDeviceType: "singleDevice" as const,
           credentialBackedUp: false,
           userVerified: true,
+          userPresent: true,
+          attestationFormat: "none",
+          attestationType: "none" as const,
           ...overrides.registrationVerified,
         };
       }),
     authenticationOptions: (input) => Effect.succeed({ challenge: input.challenge }),
-    verifyAuthentication: () =>
+    verifyAuthentication: (input) =>
       Effect.gen(function* () {
         const overrides = yield* Ref.get(behavior);
         if (overrides.failVerifyAuthentication === true) {
@@ -113,11 +122,13 @@ const mockWebAuthn = (behavior: Ref.Ref<MockWebAuthnOverrides>): Layer.Layer<Web
           );
         }
         return {
-          credentialId: "cred-mock-1",
+          // The credential id the client presented, like a real authenticator's.
+          credentialId: input.response.id,
           newCounter: 1,
           credentialDeviceType: "singleDevice" as const,
           credentialBackedUp: false,
           userVerified: true,
+          userPresent: true,
           ...overrides.authenticationVerified,
         };
       }),
@@ -131,6 +142,8 @@ const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Session
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Hooks.HooksLive),
+  Layer.provideMerge(RateLimits.layer),
+  Layer.provideMerge(RateLimiter.layerPermissive),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -149,6 +162,7 @@ export interface AppOptions {
   readonly attestation?: WebAuthn.AttestationConveyance;
   readonly conditionalCreate?: boolean;
   readonly authenticatorSelection?: WebAuthn.AuthenticatorSelection;
+  readonly counterAnomalyPolicy?: "flag" | "reject";
   readonly webAuthn?: MockWebAuthnOverrides;
 }
 
@@ -167,11 +181,12 @@ const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAut
           ...(options.authenticatorSelection === undefined
             ? {}
             : { authenticatorSelection: options.authenticatorSelection }),
+          ...(options.counterAnomalyPolicy === undefined
+            ? {}
+            : { counterAnomalyPolicy: options.counterAnomalyPolicy }),
         }),
       ),
       Layer.provide(AuthenticationLive),
-      // CSD-003: `Passkey.layer` now needs `ClientAddress` (handler records ip/userAgent).
-      Layer.provide(ClientAddress.layerDirect),
     ),
     AuthHttp.docs(PasskeyApi.PasskeyApi),
   ).pipe(
@@ -182,6 +197,8 @@ const buildAppLayer = (options: AppOptions, webAuthnBehavior: Ref.Ref<MockWebAut
         mockWebAuthn(webAuthnBehavior),
         ChallengeStore.layerMemory,
         PasskeyCredentials.layerMemory,
+        PasskeyUserHandles.layerMemory,
+        ClientAddress.layerDirect,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
     ),
     Layer.provideMerge(TestServices),

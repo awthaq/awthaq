@@ -3,7 +3,7 @@ ID: "TMS-007"
 Title: "Trusted-provider auto-link ignores the local account's emailVerified — email-squatting account pre-takeover"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:651"
 Auditor: "threat-modeling-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `oauth` · reported by **Threat Modeling Specialist** (`threat-modeling-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Require the matched local account to be emailVerified before auto-linking (other
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `oauth-account-linking-policy`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:762`. Fix: Auto-link only into a local account whose email is already verified. Otherwise answer AccountExists, as the explicit path does. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** OAuth.callback auto-links only when trustedProviders includes the provider AND profile.emailVerified AND the existing local user's emailVerified; otherwise AccountExists. Tests (OAuth.test.ts 'account-linking trust policy'): trusted provider vs unverified local account -> AccountExists and nothing linked (red before: it linked), verified local account still links; the two existing auto-link tests now verify the local user first. BDD: new REQ-EA-339-tagged scenario 'A trusted provider never auto-links into a local account whose email is unverified' + step defs (existing Given now verifies the local user). BEH-EA-124 amended. Gates: tsc -b, tsconfig.test.json, vitest (password/ports hashing tests flaked once under machine load, green on rerun), test:bdd 105, spec:verify:strict, oxlint packages/oauth.

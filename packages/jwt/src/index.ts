@@ -15,3 +15,4 @@ export * as JwtConfig from "./JwtConfig.ts";
 export * as KeyRing from "./KeyRing.ts";
 export * as RevocationStore from "./RevocationStore.ts";
 export * as SigningKeyRecords from "./SigningKeyRecords.ts";
+export * as Verify from "./verify.ts";

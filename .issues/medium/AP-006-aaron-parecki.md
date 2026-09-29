@@ -3,7 +3,7 @@ ID: "AP-006"
 Title: "Token endpoint auth hardwired to client_secret_post; basic unsupported and discovery metadata ignored"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:206"
 Auditor: "aaron-parecki"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `oauth` · reported by **IETF OAuth Working Group / Creator of IndieAuth** (`aaron-parecki`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Read token_endpoint_auth_methods_supported during resolve; default to basic when
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-token-endpoint-client-auth`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:244`. Fix: Support client_secret_basic (the RFC 6749 §2.3.1 default) and client_secret_post, selected from config or discovery, validated at boot. (effort M). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New TokenEndpoint.ts (formUrlEncode + clientAuthentication) used by both OAuth.exchangeCode and OAuthTokenAccess.refresh; OAuthProviderConfig.tokenEndpointAuthMethod ('client_secret_basic' | 'client_secret_post' | 'none'), ResolvedProvider.tokenEndpointAuthMethod, discovery schema reads token_endpoint_auth_methods_supported. resolve picks: explicit config, else none without a secret, else basic (advertised or list absent), else post, else dies at boot; also dies for explicit method not advertised, secret method without secret, none with secret. Basic = Authorization: Basic base64(formUrlEncode(id):formUrlEncode(secret)) with no client_secret in the body (RFC 6749 2.3.1). Behaviour change: explicit-endpoint confidential providers now default to basic (was post); providers that need the secret in the body (e.g. Apple) set tokenEndpointAuthMethod: 'client_secret_post' -- IC-003's presets should do so. Tests (OAuth.test.ts 'token endpoint client authentication' + OAuthTokenAccess refresh): basic-only, post-only, default basic, explicit overrides discovery, reserved-char encoding, boot failures, public client; red before (no such config / always post). BEH-EA-126 amended. Gates: tsc -b, tsconfig.test.json, vitest 899 pass, test:bdd 106, spec:verify:strict, oxlint.

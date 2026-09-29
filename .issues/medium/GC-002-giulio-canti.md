@@ -3,7 +3,7 @@ ID: "GC-002"
 Title: "JWT claims have no schema on either side of the codec"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/JwtCodec.ts:133"
 Auditor: "giulio-canti"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `jwt` · reported by **Giulio Canti — Creator of fp-ts and io-ts** (`giulio-canti`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Define a Claims Schema (iss/aud/exp/sub, aud as string-or-array) and use it for 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jwt-claims-codec-hardening`. Evidence at HEAD ec065a7: `packages/jwt/src/JwtCodec.ts:53`. Fix: One `RegisteredClaims` Schema used by both `JwtCodec.sign` (encode) and `parse` (decode); `verify` keeps only relational/temporal checks; `aud` accepts string or array. (effort M). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/jwt/src/JwtCodec.ts: one RegisteredClaims Schema (StructWithRest: iss, aud string|NonEmptyArray, exp Int required; iat/nbf/jti/sub optional + extras) used to encode in sign and decode in parse; aud may be an array (RFC 7519 4.1.3); verify keeps only relational/temporal checks; Jwt.ts signClaims builds a Claims value with no casts. Tests: packages/jwt/test/JwtCodec.test.ts 'an aud array containing the expected audience verifies', 'an aud array without it fails', 'a non-integer exp fails as malformed', 'an absent exp fails as malformed' (red first: array aud rejected, malformed exp reported differently). Gates: typecheck, full vitest, bdd, spec:verify:strict, oxlint.

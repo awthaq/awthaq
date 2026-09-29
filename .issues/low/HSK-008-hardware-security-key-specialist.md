@@ -3,7 +3,7 @@ ID: "HSK-008"
 Title: "No test coverage for direct/enterprise attestation, transports, or cross-platform attachment"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/test/passkeyTestFixtures.ts:65"
 Auditor: "hardware-security-key-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `passkey` · reported by **Hardware Security Key (FIDO U2F/CTAP) Specialist** (`hardware-security-key-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Extend webauthnFixtures with a packed-attestation (self-attestation) builder and
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `passkey-wire-contract`. Evidence at HEAD ec065a7: `packages/passkey/test/passkeyTestFixtures.ts:60`. Fix: Add real-shaped fixtures (packed self-attestation, non-zero AAGUID, transports) and end-to-end plugin tests over the real port. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Real-shaped fixtures and end-to-end coverage: ports webauthnFixtures gain packed self-attestation, AAGUID, transports, UP/UV, userHandle and cross-origin parameters; new packages/passkey/test/PasskeyRealPort.test.ts composes Passkey.layer with WebAuthn.layerSimpleWebAuthn (packed attestation with a Google Password Manager AAGUID -> credential named accordingly, transports persisted, non-zero counter, regression, attestation policy, UP=0). The real-port test also exposed and fixed a real defect: the library emits `extensions: undefined`, which the strict options schema rejected. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

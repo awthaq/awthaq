@@ -3,7 +3,7 @@ ID: "SMS-005"
 Title: "Key material is never zeroized and raw bytes escape Redacted at the WebCrypto boundary"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/KeyProvider.ts:43"
 Auditor: "secrets-management-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `ports` · reported by **Secrets Management Specialist** (`secrets-management-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Document the zeroization limitation explicitly in KeyProvider's header; zero the
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `keyprovider-rotation`. Evidence at HEAD ec065a7: `packages/ports/src/KeyProvider.ts:43`. Fix: Minimise raw key-byte lifetime and document the residual exposure. (effort S). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Encryption.layer caches one non-extractable CryptoKey per (kid,usage) in a Ref<HashMap> (raw bytes unwrapped once per kid) and zeroes the transient copy passed to importKey; layerEnv zeroes the decoded buffer on the wrong-length die path; KeyProvider.ts header + README document that JS cannot guarantee zeroization and Redacted only prevents logging, recommending a KMS-backed KeyProvider. Test: Encryption.test.ts 'imports each (kid, usage) once across 10 encrypt+decrypt round trips' (spy on subtle.importKey; was 20 imports before).

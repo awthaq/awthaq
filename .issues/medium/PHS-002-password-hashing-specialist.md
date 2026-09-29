@@ -3,7 +3,7 @@ ID: "PHS-002"
 Title: "needsRehash uses strict equality, enabling silent downgrade of stronger hashes"
 Level: medium
 Category: "security"
-Status: ready-for-human
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/PasswordHasher.ts:152"
 Auditor: "password-hashing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `ports` · reported by **Password Hashing Specialist** (`password-hashing-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Implement floor semantics: needsRehash returns true only when the stored hash's 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `password-hasher-verify-hardening`. Evidence at HEAD ec065a7: `packages/ports/src/PasswordHasher.ts:183`. Fix: (Recommended option C) Add a rehash policy knob defaulting to floor semantics, amend BEH-EA-116, fix the header comment. (effort S). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option C per plan; user may revisit. New AUTH_PASSWORD_REHASH_POLICY = floor|exact (Config.Literals, default floor) on both layers: floor rewrites only foreign/unparseable/over-ceiling or below-target hashes (argon2 m or t, scrypt N or r; p alone never), exact keeps the old any-difference rule. Header comment rewritten; BEH-EA-116 REQUIREMENT amended (below the floor, exact opt-in) and the skipped 15-password.feature Given reworded. Tests in PasswordHasher.test.ts (floor keeps stronger, exact rewrites, below-floor rewrites, p-only no-op, scrypt both) - red first. Not added: the packages/password signIn-level 'does not rewrite a stronger stored hash' test (hasher-level tests cover the decision; the password plugin only reads needsRehash). Gates as PHS-001.

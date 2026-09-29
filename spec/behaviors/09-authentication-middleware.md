@@ -22,16 +22,22 @@
 
 ```ts
 export class Authentication extends HttpApiMiddleware.Service<Authentication>()("Authentication", {
-  security: { cookie: SessionCookie, bearer: BearerToken }
+  security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken }
 }) {}
 ```
 
 ```text
 REQUIREMENT: `Authentication`'s cookie handler MUST attempt to resolve
-             `__Host-session` to a live, unexpired `Session` before any
-             other declared scheme is attempted, per BEH-EA-028's
-             declaration-order rule.
+             `__Host-session` to a live, unexpired `Session` before the
+             bearer scheme is attempted, per BEH-EA-028's
+             declaration-order rule. The `impersonation` handler, declared
+             ahead of it, MUST attempt `__Host-impersonation` first and MUST
+             accept only a session carrying `actingAs` (BEH-EA-209) — an
+             ordinary session presented in that cookie MUST NOT authenticate,
+             and the chain falls through to `__Host-session`.
 ```
+
+APS-006: `impersonation` exists so `@awthaq/admin`'s `impersonate` (BEH-EA-213) can deliver its session without overwriting the browser's single `__Host-session`; the admin's own cookie survives untouched and is restored the moment the impersonation cookie is cleared or its session hard-expires (a failed `impersonation` handler simply falls through). `OptionalAuthentication` declares the identical record. `@awthaq/qadi`'s Path B extractor and `@awthaq/next`'s `getSession` apply the same precedence so every entry point evaluates one identity per request.
 
 `archive/PRD.md` §10 places the cookie scheme first in the record shown throughout the design (`security: { cookie: SessionCookie, bearer }`), matching the browser-first cookie flow every worked example in `archive/design/usage-examples-v4.md` §1–§5 exercises. Because the record's own key order is the strategy chain (BEH-EA-028), moving bearer ahead of cookie is a one-line, explicit change to the middleware's definition, never an implicit precedence a caller has to infer.
 
@@ -144,6 +150,8 @@ REQUIREMENT: An `HttpApi` group MUST be free to select a different
 
 `archive/design/usage-examples-v4.md` §4.3 documents machine-to-machine endpoints choosing `ApiKeyAuthentication` (an `x-api-key` header scheme resolving to `ServicePrincipal`) alongside ordinary application endpoints under `Authentication`, within one composed API — per-group middleware selection is designed to be independent groups making independent, explicit choices, not a single global authentication policy every endpoint shares.
 
+**Admin tier (AR-003).** A group is *admin-tier* when any dot-separated segment of its identifier is `admin` (`admin`, `admin.tenants`, `billing.admin`; `AuthPlugin.isAdminTier`, mirrored at the type level by `AdminTierId`). Admin-tier groups select their own scheme, `AdminAuthentication` (same security record and `CurrentPrincipal` as `Authentication`; `@awthaq/server`'s default `AdminAuthenticationLive` delegates to it, so a co-hosted deployment is unchanged). `Auth.make` additionally returns `publicApi` (every group except the admin tier) and `adminApi` (only the admin tier), each typed to exactly its groups, beside the unchanged `api` (all groups): a host that wants the admin surface on its own listener/port, behind its own authentication (mTLS, a service principal), serves `adminApi` there with its own `AdminAuthentication` layer and `publicApi` on the public listener — handlers still come from the one composed `layer`, and no contract is forked. `@awthaq/admin`'s `admin` group is the first admin-tier group.
+
 ## BEH-EA-072: The security record's declaration order is the entire strategy chain — no separate ordering mechanism exists
 
 ```text
@@ -154,9 +162,9 @@ REQUIREMENT: There MUST be no configuration, priority number, or runtime
              declaration itself.
 ```
 
-This entry closes the loop opened by BEH-EA-028 and BEH-EA-065: `archive/PRD.md` §10 states "the record *is* the strategy chain" as a design commitment, not merely a today's-default — there is deliberately no second, independent ordering knob to keep in sync with the declaration, which is exactly the kind of implicit, easy-to-desynchronize convention `research/09-plugin-architecture.md` Q27 documents Babel's plugin/preset ordering rules as a cautionary example of.
+This entry closes the loop opened by BEH-EA-028 and BEH-EA-065 (whose first entry, `impersonation`, is itself a declaration in the record — APS-006 needed no ordering knob to put it ahead of `cookie`): `archive/PRD.md` §10 states "the record *is* the strategy chain" as a design commitment, not merely a today's-default — there is deliberately no second, independent ordering knob to keep in sync with the declaration, which is exactly the kind of implicit, easy-to-desynchronize convention `research/09-plugin-architecture.md` Q27 documents Babel's plugin/preset ordering rules as a cautionary example of.
 
-Only the *declaration's* key order matters (NHS-010): Effect iterates the declaration's `security` record and looks the Live handlers up by key, so the key order of the record an implementation returns is irrelevant, and no Live-side code depends on a scheme's position. A test pins `Object.keys(Authentication.security)` and `Object.keys(OptionalAuthentication.security)` to `["cookie", "bearer"]`.
+Only the *declaration's* key order matters (NHS-010): Effect iterates the declaration's `security` record and looks the Live handlers up by key, so the key order of the record an implementation returns is irrelevant, and no Live-side code depends on a scheme's position. A test pins the `security` keys of `Authentication`, `AdminAuthentication` and `OptionalAuthentication` to `["impersonation", "cookie", "bearer"]` (APS-006 declares `impersonation` first).
 
 _Previous: [BEH-EA-064](08-verification-tokens.md#beh-ea-064-purpose-scoped-flows-respond-uniformly-regardless-of-whether-their-target-exists)_
 _Next: [BEH-EA-073](10-csrf.md#beh-ea-073-sec-fetch-site-is-the-primary-csrf-signal)_

@@ -51,3 +51,5 @@ Add a configurable cache TTL (sized relative to keyGracePeriod) to makeVerifier 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `jwt-lite-verifier-jwks-cache`. Duplicate of `ECF-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/jwt/src/verify.ts:92`. Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Fixed by the packages/jwt half of ECF-002: verifier cache TTL (verify.ts) plus Cache-Control: public, max-age=<JwtConfig.jwksMaxAge> on GET /jwt/jwks (Jwt.ts JwtHandlers); tests verifyCache.test.ts and AuthHttp.test.ts 'GET /jwt/jwks carries Cache-Control max-age'.

@@ -3,7 +3,7 @@ ID: "BAM-008"
 Title: "OAuth token lifecycle is thinner: no refresh, no idToken/expiry/scope columns"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:14"
 Auditor: "better-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `oauth` · reported by **better-auth Migration Specialist** (`better-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Add accessTokenExpiresAt/scope columns and a refresh operation to the OAuth plug
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `provider-token-storage`. Evidence at HEAD ec065a7: `packages/core/src/Accounts.ts:85`. Fix: Persist the provider's id_token (encrypted at rest, like access/refresh tokens) as part of ProviderTokenSet so better-auth account imports have a destination and a future RP-initiated logout can send id_token_hint. (effort M). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ProviderTokenSet gains idToken: Option<Redacted<string>> (core Accounts: layerMemory carries it, layerSql maps tokenSetToRow/rowToProviderTokenSet; updateCredentialHash now passes existing.idToken through so its constructor-default null cannot wipe it); sql Models.Account.idToken (Model.Sensitive, constructor default null), AccountsRepositoryLive encrypts/decrypts it with AAD providerId:userId:idToken; new forward-only CoreMigrations migration 18 add_accounts_id_token_column (pg + sqlite). OAuth.toProviderTokenSet stores tokens.idToken; OAuthTokenAccess.refresh keeps the stored id_token when the refresh response has none and replaces it when one is sent. Tests: core Accounts.test.ts (both layers: link persists id_token, updateCredentialHash keeps it, updateProviderTokens replaces), sql Repositories.test.ts (round trip, ciphertext at rest, absent from JSON variant), OAuth.test.ts (oidc sign-up persists the exact returned JWT), OAuthTokenAccess.test.ts (keep/replace on refresh); existing token-set literals gained idToken: Option.none(). Migration number 18 may collide with other programs' migrations (orchestrator: renumber). Not done: packages/migrate-better-auth mapping of better-auth's idToken onto this column (P09/P17 territory, BEH-EA-207) -- the destination now exists. GDPR cascade already deletes account rows; no separate PII store added. Files outside packages/oauth: packages/core/src/Accounts.ts, packages/sql/src/{Models,Repositories,CoreMigrations}.ts and their tests. Gates: tsc -b, tsconfig.test.json, vitest 907 pass, test:bdd 106, spec:verify:strict, oxlint (only pre-existing core HttpApiTypes.test.ts error).

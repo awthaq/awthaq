@@ -3,7 +3,7 @@ ID: "NHS-004"
 Title: "No request-body size limit anywhere on the serving path"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "node_modules/.pnpm/effect@4.0.0-rc.116/node_modules/effect/dist/unstable/http/HttpIncomingMessage.js:57"
 Auditor: "node-http-server-integration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `—` · reported by **Node HTTP Server Integration Specialist** (`node-http-server-integration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Set MaxBodySize (a few hundred KB is generous for these payloads) in @awthaq/ser
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `server-request-limits`. Evidence at HEAD ec065a7: `../effect/packages/effect/src/unstable/http/HttpIncomingMessage.ts:133`. Fix: Ship a default request-body cap in @awthaq/server: a global HttpRouter middleware layer that provides `HttpIncomingMessage.MaxBodySize` (configurable, default ~256 KiB) and maps the resulting parse failure to a typed 413, and wire it into the canonical composition. (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** New packages/server/src/BodyLimit.ts (exported from index): BodyLimitConfig Context.Reference (default 256 KiB) + config(); layer = global HttpRouter middleware that provides HttpIncomingMessage.MaxBodySize (Node body reader cuts off chunked oversize bodies; Effect destroys the socket so the client sees a dropped connection, not a 413) and answers 413 {_tag:'PayloadTooLarge'} before the handler when declared content-length exceeds the cap (this is the bound on toWebHandler, where the runtime does not read MaxBodySize). Wired into README quickstart and examples/memory-server. Tests packages/server/test/BodyLimit.test.ts (6: real Node server 413/no handler, normal, chunked cut-off, configurable; toWebHandler 413/normal; red first: module absent). Spec: BEH-EA-085 addendum (no new BEH id, avoids traceability renumbering) + traceability row. Decisions/deviations: 413 body is a middleware-level response, not a typed error in @awthaq/api (the dossier's alternative), since a typed error would have to join every endpoint's error union; chunked oversize on web path is left to host limits (documented). Header-size limits are Node server options (maxHeaderSize), not touched. Gates: typecheck (pre-existing react TS2883 only), test 849, bdd 104, spec:verify 19/19.

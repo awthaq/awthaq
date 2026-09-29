@@ -7,7 +7,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as Duration from "effect/Duration";
-import { Users } from "@awthaq/core";
+import { Accounts, Users } from "@awthaq/core";
 import * as Config from "effect/Config";
 import {
   World,
@@ -92,6 +92,42 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
       });
       yield* setOutcome("location", location);
       yield* setOutcome("state", state);
+    }),
+  );
+
+  When(
+    "the provider redirects back with the authorization error {string}",
+    Effect.fn(function* (error: string) {
+      const oauth = yield* oauthService();
+      const state = (yield* getOutcome("state")) as string;
+      const failure = yield* oauth
+        .callback("google", { code: undefined, state, iss: undefined, cookieState: state, error })
+        .pipe(Effect.flip);
+      yield* setOutcome("denial", failure);
+    }),
+  );
+
+  Then(
+    "the callback fails with the typed denial {string}",
+    function* (error: string) {
+      const failure = (yield* getOutcome("denial")) as {
+        readonly _tag: string;
+        readonly error?: string;
+      };
+      assert.strictEqual(failure._tag, "OAuthAuthorizationDenied");
+      assert.strictEqual(failure.error, error);
+    },
+  );
+
+  Then(
+    "the flow is consumed, so a replay carrying a code fails",
+    Effect.fn(function* () {
+      const oauth = yield* oauthService();
+      const state = (yield* getOutcome("state")) as string;
+      const replay = yield* oauth
+        .callback("google", { code: "auth-code", state, iss: undefined, cookieState: state })
+        .pipe(Effect.flip);
+      assert.strictEqual(replay._tag, "OAuthCallbackFailed");
     }),
   );
 
@@ -276,7 +312,13 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
     "an existing account with email {string} that has not linked {string}",
     function* (email: string, _providerId: string) {
       const users = yield* usersService();
-      yield* users.create({ email, name: "Alice" }).pipe(Effect.orDie);
+      const accounts = yield* accountsService();
+      const user = yield* users.create({ email, name: "Alice" }).pipe(Effect.orDie);
+      // NAM-006: `AccountExists` reports the providers the account really
+      // has, so this account is a real password account, not a bare user row.
+      yield* accounts
+        .link({ userId: user.id, providerId: Accounts.PASSWORD_PROVIDER_ID, subject: email })
+        .pipe(Effect.orDie);
     },
   );
 
@@ -296,14 +338,14 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   Then(
-    'the response is "409 Conflict" with the typed error "AccountExists" naming provider {string}',
+    'the response is "409 Conflict" with the typed error "AccountExists" listing provider {string}',
     function* (providerName: string) {
       const failure = (yield* getOutcome("callbackFailure")) as {
         readonly _tag: string;
-        readonly provider?: string;
+        readonly providers?: ReadonlyArray<string>;
       };
       assert.strictEqual(failure._tag, "AccountExists");
-      assert.strictEqual(failure.provider, providerName);
+      assert.deepStrictEqual(failure.providers, [providerName]);
     },
   );
 
@@ -393,6 +435,20 @@ export const oauthSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Given(
     "a {string} callback whose verified email matches an existing, unlinked account",
+    function* (providerId: string) {
+      const users = yield* usersService();
+      const alice = yield* users
+        .create({ email: "alice@example.com", name: "Alice" })
+        .pipe(Effect.orDie);
+      // TMS-007: the local account's own email is proven, so only the
+      // provider-trust policy decides whether this links.
+      yield* users.verifyEmail(alice.id).pipe(Effect.orDie);
+      yield* setOutcome("trustedProvider", providerId);
+    },
+  );
+
+  Given(
+    "a {string} callback whose verified email matches an existing, unlinked account whose own email is unverified",
     function* (providerId: string) {
       const users = yield* usersService();
       yield* users.create({ email: "alice@example.com", name: "Alice" }).pipe(Effect.orDie);

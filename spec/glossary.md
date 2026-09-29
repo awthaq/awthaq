@@ -60,7 +60,7 @@ The planned testing harness's entry point: `TestAuth.layer` runs the whole plugi
 
 ### Redacted
 
-Effect's wrapper type for a value that must never reach a log line, a span, or a published event in cleartext — passwords, session secrets, and verification tokens are carried as `Redacted` throughout. The planned plugin contract-test harness (`runPluginContractTests`) is meant to assert mechanically that no `Redacted` value reaches a span or an event, rather than trusting that property to manual review of every plugin's logging call sites. See: [BEH-EA-199](behaviors/25-testing-harness.md#beh-ea-199-redaction-and-contract-hash-stability).
+Effect's wrapper type for a value that must never reach a log line, a span, or a published event in cleartext — passwords, session secrets, and verification tokens are carried as `Redacted` throughout every domain-service and HTTP boundary; repository rows below core hold the plain value only transiently (a `Redacted` encoded form is not a bindable SQL parameter). The planned plugin contract-test harness (`runPluginContractTests`) is meant to assert mechanically that no `Redacted` value reaches a span or an event, rather than trusting that property to manual review of every plugin's logging call sites. See: [BEH-EA-199](behaviors/25-testing-harness.md#beh-ea-199-redaction-and-contract-hash-stability).
 
 ### Contract
 

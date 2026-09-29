@@ -1078,6 +1078,61 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 
+  // ---- CB-004/WPS-006: counter-anomaly policy (REQ-EA-381) ----
+
+  Given(
+    "a stored credential with a nonzero counter, and an authentication assertion whose returned counter does not exceed it, under the {string} counter-anomaly policy",
+    Effect.fn(function* (policy: string) {
+      yield* configureApp({ counterAnomalyPolicy: policy === "reject" ? "reject" : "flag" });
+      const cookie = yield* signIn(`counter-${policy}@example.com`);
+      yield* registerCredential(cookie);
+      // The mocked port always reports `newCounter: 1`: this first sign-in
+      // leaves the stored counter at 1, so the next identical assertion
+      // (1 <= 1) is a regression.
+      yield* authenticate();
+      yield* setOutcome("counterCookie", cookie);
+    }),
+  );
+
+  When(
+    '"authenticateVerify" processes the regressed assertion',
+    Effect.fn(function* () {
+      const response = yield* authenticate();
+      yield* setOutcome("counterResponse", response);
+    }),
+  );
+
+  Then(
+    "the outcome is {string}",
+    Effect.fn(function* (outcome: string) {
+      const response = (yield* getOutcome("counterResponse")) as Response;
+      if (outcome === "PasskeyCounterAnomaly") {
+        if (response.status !== 409) throw new Error(`expected 409, got ${response.status}`);
+        const body = (yield* Effect.promise(() => response.clone().json())) as { _tag?: string };
+        if (body._tag !== "PasskeyCounterAnomaly") {
+          throw new Error(`expected PasskeyCounterAnomaly, got ${body._tag}`);
+        }
+      } else {
+        if (response.status !== 200) throw new Error(`expected 200, got ${response.status}`);
+        cookieFrom(response);
+      }
+    }),
+  );
+
+  Then(
+    "the credential is flagged for the counter anomaly",
+    Effect.fn(function* () {
+      const cookie = (yield* getOutcome("counterCookie")) as string;
+      const response = yield* request("GET", "/passkey/credentials", { headers: { cookie } });
+      const listed = (yield* Effect.promise(() => response.json())) as ReadonlyArray<{
+        counterAnomalyAt: string | null;
+      }>;
+      if (listed[0]?.counterAnomalyAt == null) {
+        throw new Error("expected the credential to carry a counterAnomalyAt timestamp");
+      }
+    }),
+  );
+
   Then(
     "the response does not reveal whether any credential exists for that identifier, distinguishably from a credential that exists but fails verification",
     Effect.fn(function* () {

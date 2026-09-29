@@ -10,7 +10,7 @@
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) <br> 1.3 (2026-09-29): Added INV-EA-017 (identifiers are never capabilities, APS-010) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) <br> 1.3 (2026-09-29): Added INV-EA-018 (identifiers are never capabilities, APS-010) |
 
 ---
 
@@ -168,6 +168,16 @@ These are properties intended to hold at runtime once the corresponding domain s
 
 **Related**: [BEH-EA-121 through 128](behaviors/16-oauth.md).
 
+## INV-EA-017: The core identity tables share one transaction domain, and any partitioning scheme co-locates a user with its accounts
+
+**Source**: `OAuth` plugin's just-in-time sign-up and `Password.confirmReset` — the two transactions that depend on it. OAuth's first sign-in creates a `users` row and links its `accounts` row inside one `SqlTransaction.withTransaction` (a failure between the two would otherwise leave an orphaned, unlinked user with no way back in), and `confirmReset` consumes a verification token and rotates credentials in one (BEH-EA-058). `SqlTransaction` (`layerSql`) is one `SqlClient` transaction: it is atomic only across tables that live in the same logical database.
+
+**Implication**: The core identity tables — `users`, `accounts`, `sessions`, `verification_tokens` — must share a single transaction domain. A deployment that shards or partitions them (by tenant, region or user id) must place a user and all of that user's accounts (and sessions and verification tokens) in the same shard, or the cross-table transactions above silently stop being atomic. There is deliberately no runtime assertion: the boundary is a deployment/partitioning choice, and detecting it would be speculative infrastructure; the invariant is a design constraint every shard-key proposal (multi-tenancy, data residency) must respect. `SqlTransaction.layerNoop` (in-memory compositions) is atomic only per `Ref`, so a memory composition can still orphan a user if `accounts.link` dies — acceptable for development and tests only.
+
+**Enforcement**: Design constraint, no runtime check. Referenced from [BEH-EA-035](behaviors/05-persistence-stratum.md#beh-ea-035-repositories-are-built-with-sqlmodelmakerepository-over-the-ambient-sqlclient-never-opening-their-own-transactions); the transactions relying on it are covered by `packages/oauth/test/OAuth.test.ts` and `packages/password/test/Password.test.ts`.
+
+**Related**: [BEH-EA-035](behaviors/05-persistence-stratum.md), [BEH-EA-058](behaviors/08-verification-tokens.md), [BEH-EA-121 through 128](behaviors/16-oauth.md).
+
 ## INV-EA-016: A plugin cannot alter a shared table outside its declared extension points
 
 **Source**: Persistence stratum, plugin table-prefix constraint (planned) — `archive/PRD.md` §9.1 and `archive/design/plugins-as-layers.md` §2.1-§2.2 require a plugin's `tables` to be named `${Id}_${string}`, and shared tables (`users`, `sessions`, `accounts`) are owned by core plugins; the intended runtime rule (beyond the compile-time namespace check, INV-EA-006's persistence analogue) is that a plugin's migrations may only create or alter tables under its own prefix, and any extension to a shared table happens only through a declared extension point (a hook point contributing derived data, or a registry such as `SessionClaims`), never a direct `ALTER TABLE` on `users` or `sessions` from plugin migration code.
@@ -178,7 +188,7 @@ These are properties intended to hold at runtime once the corresponding domain s
 
 **Related**: [BEH-EA-033 through 040](behaviors/05-persistence-stratum.md), [BEH-EA-089 through 096](behaviors/12-hooks.md), [ADR-EA-004](decisions/004-database-neutral-models.md).
 
-## INV-EA-017: Identifiers are never capabilities — no state transition acts on a principal or session id without a credential's proof
+## INV-EA-018: Identifiers are never capabilities — no state transition acts on a principal or session id without a credential's proof
 
 **Source**: APS-010, and PIL-007's own finding — principal and session ids are UUIDv7 (time-ordered, therefore partially predictable), and the session id in particular is the *public* half of the `id.secret` token: it appears in cookies, JWT `sid` claims, error messages and logs. Any path that authorizes, or even changes state, on an id alone is one leaked or guessed id away from abuse (PIL-007: presenting `<supersededId>.<anything>` used to trigger reuse detection and revoke the user's whole live session family).
 

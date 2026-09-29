@@ -20,7 +20,7 @@ import * as Data from "effect/Data";
 import * as Layer from "effect/Layer";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
-import type * as AuthPlugin from "./AuthPlugin.ts";
+import * as AuthPlugin from "./AuthPlugin.ts";
 import type { Migrations } from "./Migrations.ts";
 
 // ---------------------------------------------------------------------------
@@ -258,6 +258,20 @@ type FoldLayerFrom<
  */
 export interface Built<P extends ReadonlyArray<AuthPlugin.Any>> {
   readonly api: HttpApi.HttpApi<"auth", GroupsOf<P[number]>>;
+  /**
+   * AR-003: `api` minus the admin-tier groups (`AuthPlugin.isAdminTier`) — what a host
+   * serves on its public listener when it firewalls the admin surface separately.
+   * Handlers still come from the one composed `layer`; serving fewer groups needs no more.
+   */
+  readonly publicApi: HttpApi.HttpApi<
+    "auth",
+    Exclude<GroupsOf<P[number]>, AuthPlugin.AdminTierGroup>
+  >;
+  /** AR-003: only the admin-tier groups, for a separate listener/port (empty when no plugin has one). */
+  readonly adminApi: HttpApi.HttpApi<
+    "auth",
+    Extract<GroupsOf<P[number]>, AuthPlugin.AdminTierGroup>
+  >;
   readonly layer: FoldLayer<P>;
   readonly migrations: Migrations;
   readonly manifest: Manifest;
@@ -418,6 +432,25 @@ const composeApi = (
 };
 
 /**
+ * AR-003: the groups of `order`'s contracts on one side of the admin tier, as its
+ * own `HttpApi`. Unlike `composeApi`, an empty side is legitimate (a composition
+ * with no admin group has nothing to firewall), hence the union with the
+ * no-groups `HttpApi`; the precise per-tier type is `Built<P>`'s, as for `api`.
+ */
+const composeTier = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+  admin: boolean,
+): HttpApi.HttpApi<"auth", never> | HttpApi.HttpApi<"auth", HttpApiGroup.Constraint> => {
+  const groups = order
+    .flatMap((plugin) => Object.values(plugin.contract.groups))
+    .filter((group) => AuthPlugin.isAdminTier(group.identifier) === admin);
+  const [firstGroup, ...restGroups] = groups;
+  return firstGroup === undefined
+    ? HttpApi.make("auth")
+    : HttpApi.make("auth").add(firstGroup, ...restGroups);
+};
+
+/**
  * `Layer.provideMerge` folded left over the first plugin's own `layer`, in
  * `order`'s topological order (dependencies before dependents): each new
  * plugin is provided everything folded in so far, so a later plugin's
@@ -482,6 +515,8 @@ export function make(plugins: ReadonlyArray<AuthPlugin.Any>) {
   const order = linkPlugins(plugins);
   return {
     api: composeApi(order),
+    publicApi: composeTier(order, false),
+    adminApi: composeTier(order, true),
     layer: composeLayer(order),
     migrations: renumberMigrations(order),
     manifest: buildManifest(order),

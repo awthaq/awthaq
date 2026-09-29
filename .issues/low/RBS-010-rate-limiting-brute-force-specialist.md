@@ -3,7 +3,7 @@ ID: "RBS-010"
 Title: "Two distinct RateLimited classes share the _tag 'RateLimited' with divergent payloads"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/RateLimiter.ts:45"
 Auditor: "rate-limiting-brute-force-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `ports` · reported by **Rate Limiting & Brute-Force Defense Specialist** (`rate-limiting-brute-force-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Rename the port's tag (e.g. RateLimitExceeded) or namespace wire tags per group;
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `ratelimit-signal-and-escalation`. Evidence at HEAD ec065a7: `packages/ports/src/RateLimiter.ts:45`. Fix: Rename the port error and drop its raw key. (effort S). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Renamed the port error to RateLimitExceeded (tag 'RateLimitExceeded', only retryAfterMillis; key dropped) in packages/ports/src/RateLimiter.ts; updated catchTag sites in packages/password/src/Password.ts and packages/oauth/src/OAuth.ts (1-line each) and comments in api/core; BEH-EA-106 prose clarifies wire vs port error. Test: packages/ports/test/RateLimiter.test.ts (red: tag was 'RateLimited'). Gates: typecheck (only pre-existing react TS2883), test 827, bdd 104, spec:verify 19/19.

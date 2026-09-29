@@ -72,9 +72,23 @@ export const SessionCookieConfig: Context.Reference<SessionCookieConfigShape> = 
 export const config = (partial: Partial<SessionCookieConfigShape>): Layer.Layer<never> =>
   Layer.succeed(SessionCookieConfig, { ...defaultConfig, ...partial });
 
+/**
+ * APS-006: impersonation sessions travel under their own cookie (so the admin's
+ * own session cookie is shadowed, not replaced) with the identical attributes.
+ * `session` is the ordinary cookie; `impersonation` is `__Host-impersonation`
+ * (`__Secure-impersonation` under `SecureDomain`, the same prefix rule).
+ */
+export type CookieKind = "session" | "impersonation";
+
 /** The name every reader (Authentication, SubjectExtractor, adapters) must use for this config. */
-export const cookieName = (cfg: SessionCookieConfigShape): string =>
-  cfg.mode._tag === "SecureDomain" ? "__Secure-session" : Api.SESSION_COOKIE_NAME;
+export const cookieName = (cfg: SessionCookieConfigShape, kind: CookieKind = "session"): string =>
+  kind === "impersonation"
+    ? cfg.mode._tag === "SecureDomain"
+      ? "__Secure-impersonation"
+      : Api.IMPERSONATION_COOKIE_NAME
+    : cfg.mode._tag === "SecureDomain"
+      ? "__Secure-session"
+      : Api.SESSION_COOKIE_NAME;
 
 export interface CookieOptions {
   readonly secure: true;
@@ -120,11 +134,12 @@ export const renderAt = (
   token: string,
   absoluteExpiresAt: DateTime.Utc,
   now: DateTime.Utc,
+  kind: CookieKind = "session",
 ): RenderedCookie => {
   const base = baseOptions(cfg);
   const remaining = DateTime.toEpochMillis(absoluteExpiresAt) - DateTime.toEpochMillis(now);
   return {
-    name: cookieName(cfg),
+    name: cookieName(cfg, kind),
     value: token,
     options:
       cfg.persistence === "absolute"
@@ -137,11 +152,12 @@ export const renderAt = (
 export const render = (
   session: { readonly absoluteExpiresAt: DateTime.Utc },
   token: Redacted.Redacted<string>,
+  kind: CookieKind = "session",
 ) =>
   Effect.gen(function* () {
     const cfg = yield* SessionCookieConfig;
     const now = yield* DateTime.now;
-    return renderAt(cfg, Redacted.value(token), session.absoluteExpiresAt, now);
+    return renderAt(cfg, Redacted.value(token), session.absoluteExpiresAt, now, kind);
   });
 
 /**
@@ -153,8 +169,9 @@ export const render = (
 export const set = (
   session: { readonly absoluteExpiresAt: DateTime.Utc },
   token: Redacted.Redacted<string>,
+  kind: CookieKind = "session",
 ) =>
-  render(session, token).pipe(
+  render(session, token, kind).pipe(
     Effect.flatMap((cookie) =>
       HttpEffect.appendPreResponseHandler((_request, response) =>
         HttpServerResponse.setCookie(response, cookie.name, cookie.value, cookie.options).pipe(
@@ -171,14 +188,20 @@ export const set = (
  * it was, since expiry is hygiene and must never fail the request that
  * triggered it.
  */
-export const expire = Effect.gen(function* () {
-  const cfg = yield* SessionCookieConfig;
-  yield* HttpEffect.appendPreResponseHandler((_request, response) =>
-    HttpServerResponse.expireCookie(response, cookieName(cfg), baseOptions(cfg)).pipe(
-      Effect.catch(() => Effect.succeed(response)),
-    ),
-  );
-});
+const expireKind = (kind: CookieKind) =>
+  Effect.gen(function* () {
+    const cfg = yield* SessionCookieConfig;
+    yield* HttpEffect.appendPreResponseHandler((_request, response) =>
+      HttpServerResponse.expireCookie(response, cookieName(cfg, kind), baseOptions(cfg)).pipe(
+        Effect.catch(() => Effect.succeed(response)),
+      ),
+    );
+  });
+
+export const expire = expireKind("session");
+
+/** APS-006: expires the impersonation cookie (`stopImpersonating`), handing the browser back to the admin's own session cookie. */
+export const expireImpersonation = expireKind("impersonation");
 
 /**
  * AGA-004: the CSRF cookie's cross-site attributes follow the session

@@ -55,3 +55,5 @@ Gate mirroring behind JwtConfig (default off), and/or stamp mirrored tokens with
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `jwt-response-mirroring-opt-in`. Duplicate of `PDR-003` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/jwt/src/Jwt.ts:217`. Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `PDR-003-philippe-de-ryck` — closed by its fix (see that issue's Resolved comment).

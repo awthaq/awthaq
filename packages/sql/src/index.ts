@@ -12,4 +12,5 @@
 
 export * as CoreMigrations from "./CoreMigrations.ts";
 export * as Models from "./Models.ts";
+export * as RateLimiterStoreSql from "./RateLimiterStoreSql.ts";
 export * as Repositories from "./Repositories.ts";

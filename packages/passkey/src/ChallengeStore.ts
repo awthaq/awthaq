@@ -49,24 +49,63 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import { concatBytes, constantTimeEqual, hmacSha256 } from "./Hmac.ts";
 
 /** BEH-EA-132: e.g. `registration:<sessionId>`, `authentication:<nonce>` — the plugin's own concern, opaque here. */
 export type ChallengeScope = string;
 
-/** BEH-EA-132: five minutes, non-configurable — the one value the behavior itself fixes. */
-const TTL = Duration.minutes(5);
+/** BEH-EA-132: five minutes, non-configurable — the one value the behavior itself fixes. Exported so `PasskeyConfig.ceremonyTimeout` (TC-003) can be validated against it. */
+export const CHALLENGE_TTL = Duration.minutes(5);
+const TTL = CHALLENGE_TTL;
 const RANDOM_BYTES = 32;
 
+/**
+ * WPS-009: what a backend really promises, stated in the type so a host
+ * (and `Passkey.layer`, which warns at build time) can see it instead of
+ * reading prose. `layerMemory`/`layerSql` claim both; `layerCookie` is
+ * stateless and structurally cannot (see this module's own header).
+ */
+export interface ChallengeStoreGuarantees {
+  /** A consumed (or failed-attempt) challenge can never be consumed again. */
+  readonly singleUse: boolean;
+  /** Issuing for a scope invalidates that scope's prior, unconsumed challenge. */
+  readonly replacesPriorOnIssue: boolean;
+}
+
 export interface ChallengeStoreShape {
-  /** Mints a fresh challenge scoped to `scope`, replacing whatever this scope's own prior (unconsumed) challenge was, if any. */
+  readonly guarantees: ChallengeStoreGuarantees;
+  /** Mints a fresh challenge scoped to `scope`. When `guarantees.replacesPriorOnIssue`, replaces whatever this scope's own prior (unconsumed) challenge was, if any. Also reclaims expired entries (WPS-005). */
   readonly issue: (scope: ChallengeScope) => Effect.Effect<Redacted.Redacted<string>>;
-  /** BEH-EA-132: `true` only for the exact value just issued for `scope`, while unexpired — `false`, and the entry gone either way, for every other outcome. */
+  /** BEH-EA-132: `true` only for the exact value just issued for `scope`, while unexpired — `false`, and (when `guarantees.singleUse`) the entry gone either way, for every other outcome. */
   readonly consume: (scope: ChallengeScope, challenge: string) => Effect.Effect<boolean>;
+  /** WPS-005: removes every expired, never-consumed challenge and answers how many it removed, so a host can schedule reclamation. Stateless stores answer `0`. */
+  readonly sweepExpired: Effect.Effect<number>;
 }
 
 export class ChallengeStore extends Context.Service<ChallengeStore, ChallengeStoreShape>()(
   "awthaq/passkey/ChallengeStore",
 ) {}
+
+const isExpired = (expiresAt: DateTime.Utc, now: DateTime.Utc): boolean =>
+  DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(expiresAt);
+
+const STATEFUL_GUARANTEES: ChallengeStoreGuarantees = {
+  singleUse: true,
+  replacesPriorOnIssue: true,
+};
+
+/**
+ * BPAS-008 (+CB-007/WPS-008/HSK-010): the final comparison of a stored
+ * challenge against a presented one runs over decoded bytes in constant time
+ * (the same `constantTimeEqual` `layerCookie` already used), never `===`. A
+ * presented value that is not base64url is simply not a match.
+ */
+const challengeMatches = (stored: string, presented: string): boolean => {
+  const storedBytes = Encoding.decodeBase64Url(stored);
+  const presentedBytes = Encoding.decodeBase64Url(presented);
+  if (Result.isFailure(storedBytes) || Result.isFailure(presentedBytes)) return false;
+  return constantTimeEqual(storedBytes.success, presentedBytes.success);
+};
 
 // ---- layerMemory ----------------------------------------------------------
 
@@ -86,8 +125,14 @@ export const layerMemory: Layer.Layer<ChallengeStore, never, Crypto.Crypto> = La
         yield* crypto.randomBytes(RANDOM_BYTES).pipe(Effect.orDie),
       );
       const now = yield* DateTime.now;
+      // WPS-005: drop every already-expired entry in the same atomic update
+      // (bounded by the live set, since anything older than the TTL is gone).
       yield* Ref.update(state, (s) =>
-        HashMap.set(s, scope, { value, expiresAt: DateTime.addDuration(now, TTL) }),
+        HashMap.set(
+          HashMap.filter(s, (entry) => !isExpired(entry.expiresAt, now)),
+          scope,
+          { value, expiresAt: DateTime.addDuration(now, TTL) },
+        ),
       );
       return Redacted.make(value);
     });
@@ -100,12 +145,19 @@ export const layerMemory: Layer.Layer<ChallengeStore, never, Crypto.Crypto> = La
       );
       if (Option.isNone(popped)) return false;
       const now = yield* DateTime.now;
-      if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(popped.value.expiresAt))
-        return false;
-      return popped.value.value === challenge;
+      if (isExpired(popped.value.expiresAt, now)) return false;
+      return challengeMatches(popped.value.value, challenge);
     });
 
-    return { issue, consume };
+    const sweepExpired: ChallengeStoreShape["sweepExpired"] = Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      return yield* Ref.modify(state, (s) => {
+        const live = HashMap.filter(s, (entry) => !isExpired(entry.expiresAt, now));
+        return [HashMap.size(s) - HashMap.size(live), live] as const;
+      });
+    });
+
+    return { guarantees: STATEFUL_GUARANTEES, issue, consume, sweepExpired };
   }),
 );
 
@@ -160,6 +212,16 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
         `,
       });
 
+      /** WPS-005: `expiresAt` is indexed (`create_passkey_challenge_expires_at_index`), so this stays a range scan. */
+      const deleteExpired = SqlSchema.findAll({
+        Request: Schema.DateTimeUtcFromString,
+        Result: Schema.Struct({ scope: Schema.String }),
+        execute: (now) => sql`
+          DELETE FROM passkey_challenge WHERE expiresAt <= ${now}
+          RETURNING scope
+        `,
+      });
+
       const issue: ChallengeStoreShape["issue"] = Effect.fnUntraced(function* (scope) {
         const value = Encoding.encodeBase64Url(
           yield* crypto.randomBytes(RANDOM_BYTES).pipe(Effect.orDie),
@@ -171,6 +233,9 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
           expiresAt: DateTime.addDuration(now, TTL),
           createdAt: now,
         }).pipe(Effect.orDie);
+        // WPS-005: abandoned (anonymous, never-consumed) ceremonies would
+        // otherwise accumulate forever — reclaim them on every issue.
+        yield* deleteExpired(now).pipe(Effect.orDie);
         return Redacted.make(value);
       });
 
@@ -179,35 +244,22 @@ export const layerSql: Layer.Layer<ChallengeStore, never, SqlClient.SqlClient | 
           const popped = yield* popByScope(scope).pipe(Effect.orDie);
           if (Option.isNone(popped)) return false;
           const now = yield* DateTime.now;
-          if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(popped.value.expiresAt))
-            return false;
-          return popped.value.value === challenge;
+          if (isExpired(popped.value.expiresAt, now)) return false;
+          return challengeMatches(popped.value.value, challenge);
         },
       );
 
-      return { issue, consume };
+      const sweepExpired: ChallengeStoreShape["sweepExpired"] = Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const removed = yield* deleteExpired(now).pipe(Effect.orDie);
+        return removed.length;
+      });
+
+      return { guarantees: STATEFUL_GUARANTEES, issue, consume, sweepExpired };
     }),
   );
 
 // ---- layerCookie --------------------------------------------------------
-
-const concatBytes = (...parts: ReadonlyArray<Uint8Array>): Uint8Array => {
-  const total = parts.reduce((sum, part) => sum + part.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-};
-
-/** ACS-005: the one shared RFC 2104 HMAC (`@awthaq/ports`' `Hmac`) — a `PlatformError` from the digest is a defect here, as it was in the copy this replaces. */
-const hmacSha256 = (
-  crypto: Crypto.Crypto,
-  key: Uint8Array,
-  message: Uint8Array,
-): Effect.Effect<Uint8Array> => Hmac.hmacSha256(crypto, key, message).pipe(Effect.orDie);
 
 export interface ChallengeCookieConfigShape {
   /** Signs every issued value; never defaulted, the same posture `@awthaq/server`'s `CsrfConfig.secret` takes. */
@@ -277,6 +329,12 @@ export const layerCookie: Layer.Layer<
       return DateTime.toEpochMillis(now) < unpackExpiryMillis(payload.slice(RANDOM_BYTES));
     });
 
-    return { issue, consume };
+    return {
+      // WPS-009: nothing is stored, so neither property is enforceable; only the TTL bounds a captured value.
+      guarantees: { singleUse: false, replacesPriorOnIssue: false },
+      issue,
+      consume,
+      sweepExpired: Effect.succeed(0),
+    };
   }),
 );

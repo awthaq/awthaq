@@ -4,6 +4,7 @@
 import { Api } from "@awthaq/api";
 import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
+import { SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -43,6 +44,7 @@ const buildLayer = (overrides?: Partial<JwtConfig.JwtConfigShape>) =>
   Jwt.Jwt.layer.pipe(
     Layer.provide(KeyRing.KeyRing.layer),
     Layer.provide(SigningKeyRecords.layerMemory),
+    Layer.provide(SqlTransaction.layerNoop),
     Layer.provide(AuthenticationLive),
     // `provideMerge`, not `provide`: `verifyLive` (ticket 12) requires
     // `Sessions` at its own call site, not captured in `make` — the test
@@ -92,7 +94,9 @@ describe("Jwt sign/verify", () => {
       const token = yield* jwt.sign(caller);
       const claims = yield* jwt.verify(token);
 
-      assert.deepStrictEqual(claims["act"], { type: "user", id: "target-1" });
+      // JR-005: RFC 8693 §4.1 — the actor is identified by `sub`; its principal
+      // type is a private member.
+      assert.deepStrictEqual(claims["act"], { sub: "target-1", awthaq_actor_type: "user" });
     }).pipe(Effect.provide(buildLayer())),
   );
 
@@ -282,7 +286,7 @@ describe("Jwt introspect/introspectLive", () => {
       const jwt = yield* Jwt.Jwt;
       const revocationStore = yield* RevocationStore.RevocationStore;
       const token = yield* jwt.signJWT({ sub: "service-a" });
-      const claims = yield* jwt.verify(token);
+      const claims = yield* jwt.verifyJWT(token);
       const jti = claims["jti"] as string;
 
       const beforeRevoke = yield* jwt.introspect(token);

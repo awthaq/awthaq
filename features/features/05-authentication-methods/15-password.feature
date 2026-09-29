@@ -111,7 +111,7 @@ Feature: Password Authentication
     @REQ-EA-313
     Scenario: A sign-in against a hash stored under outdated parameters triggers a rehash with current parameters
       Given a user "alice" whose stored password hash was computed under previously configured "PasswordHasher" parameters
-      And "PasswordHasher"'s currently configured parameters differ from those under which the hash was stored
+      And "PasswordHasher"'s currently configured parameters are stronger than those under which the hash was stored
       When "alice" signs in successfully with her password
       Then the password is rehashed with the current parameters within the same request
       And the stored hash is replaced with the new one

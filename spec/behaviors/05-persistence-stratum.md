@@ -45,7 +45,7 @@ REQUIREMENT: `User`, `Account`, `Session`, and `VerificationToken` MUST each
 class Account extends Model.Class<Account>("Account")({
   id: Model.UuidV7Insert,
   passwordHash: Model.Sensitive(Schema.String),
-  accessToken: Model.Sensitive(Schema.Redacted(Schema.String))
+  accessToken: Model.Sensitive(Schema.NullOr(Schema.String))
 }) {}
 ```
 
@@ -55,6 +55,8 @@ REQUIREMENT: A field declared `Model.Sensitive` MUST be excluded from every
              handler can accidentally serialize it into an HTTP response
              merely by returning the entity value.
 ```
+
+The shipped `Account` model types its token columns as plain nullable strings, not `Schema.Redacted`: `Schema.Redacted`'s *encoded* form is itself a wrapped value and cannot be bound as a SQL parameter, so the repository stratum cannot carry it. The boundary is deliberate (SMS-007): a repository row holds the plaintext token in memory only transiently, the database holds AES-GCM ciphertext bound to the row and column through additional authenticated data (`ports/Encryption`), `Redacted` appears at the `Encryption` seam and again from core's domain records upward (`ProviderTokenSet.accessToken` is `Redacted<string>`), and JSON exclusion is guaranteed by `Model.Sensitive` regardless of the value's wrapper type.
 
 `archive/PRD.md` §12 and §18 both require this: "`Model.Sensitive` for hashes and secrets so they never appear in JSON variants," and separately, "contract tests assert no `Redacted` value reaches spans or events." `better-auth/01-core-domain/01-entities-and-invariants.md` §6.1 documents the analogous rule in better-auth's schema (`returned:false` on `password`, `accessToken`, `refreshToken`, `idToken`) as a per-field attribute a schema author must set correctly; awthaq's plan folds the same guarantee into `Model.Sensitive` so the exclusion is a type-level fact about the field, not an attribute that could be omitted.
 
@@ -72,7 +74,7 @@ REQUIREMENT: A repository MUST be a `Context.Service` built via
              boundaries are the calling domain service's responsibility.
 ```
 
-`research/10-schema-migrations.md` Q72 documents why: `SqlClient.withTransaction`'s nested calls become savepoints rather than independent transactions, so a repository that opened its own transaction internally would silently change the atomicity boundary any caller composing two repository calls expects. Keeping repositories transaction-agnostic and letting the domain service (`Password.confirmReset`, for instance, consuming a token and rotating a session in one transaction — see [BEH-EA-058](08-verification-tokens.md#beh-ea-058-a-verification-tokens-consumption-and-the-state-change-it-authorizes-commit-in-one-transaction)) hold the boundary is what keeps composition safe.
+`research/10-schema-migrations.md` Q72 documents why: `SqlClient.withTransaction`'s nested calls become savepoints rather than independent transactions, so a repository that opened its own transaction internally would silently change the atomicity boundary any caller composing two repository calls expects. Keeping repositories transaction-agnostic and letting the domain service (`Password.confirmReset`, for instance, consuming a token and rotating a session in one transaction — see [BEH-EA-058](08-verification-tokens.md#beh-ea-058-a-verification-tokens-consumption-and-the-state-change-it-authorizes-commit-in-one-transaction)) hold the boundary is what keeps composition safe. A domain-service transaction spanning several core tables (OAuth's just-in-time create-and-link, `confirmReset`) is only atomic if those tables share one transaction domain — see [INV-EA-017](../invariants.md#inv-ea-017-the-core-identity-tables-share-one-transaction-domain-and-any-partitioning-scheme-co-locates-a-user-with-its-accounts): any sharding or partitioning scheme must co-locate a user with its accounts.
 
 ## BEH-EA-036: Pagination is keyset-only; no repository interface accepts an offset
 
@@ -90,7 +92,7 @@ REQUIREMENT: No repository's public interface MAY accept an offset
 
 `research/10-schema-migrations.md` Q72 and Q79 cite the reason directly: offset pagination forces the database to walk and discard every skipped row, a cost that grows linearly with the offset (Winand, "No Offset"; Slack's own migration off offset pagination is cited as the production case study). Session and verification-token tables are append-mostly with a monotonic `(createdAt, id)`, which is exactly the shape a keyset cursor needs — a tiebreaker on `id` is required because timestamps alone can collide within the same millisecond.
 
-Two refinements bind the session page query specifically. **Index-aligned (PPS-002):** the cursor is a row-value comparison `("createdAt", id) > (?, ?)` served by the partial composite index `sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL` (migration 18), so filter and order need no sort node. **Bounded by construction (ESR-010):** `listByUser` clamps the page size to `[1, MAX_PAGE_SIZE]` (200) and the request schema enforces the same bound, so no caller-supplied limit can produce a `SqlError` or an unbounded page; the query also takes the caller's clock and lists only live (unexpired, non-tombstoned) rows (SMS-002, [BEH-EA-054](07-sessions.md#beh-ea-054-sessions-expose-a-device-list-per-device-revocation-and-revoke-others)).
+Two refinements bind the session page query specifically. **Index-aligned (PPS-002):** the cursor is a row-value comparison `("createdAt", id) > (?, ?)` served by the partial composite index `sessions_user_created_live ON sessions("userId", "createdAt", id) WHERE "supersededAt" IS NULL` (migration 19), so filter and order need no sort node. **Bounded by construction (ESR-010):** `listByUser` clamps the page size to `[1, MAX_PAGE_SIZE]` (200) and the request schema enforces the same bound, so no caller-supplied limit can produce a `SqlError` or an unbounded page; the query also takes the caller's clock and lists only live (unexpired, non-tombstoned) rows (SMS-002, [BEH-EA-054](07-sessions.md#beh-ea-054-sessions-expose-a-device-list-per-device-revocation-and-revoke-others)).
 
 ## BEH-EA-037: A plugin's migrations are v4 `Migrator` records, exported statically per plugin
 

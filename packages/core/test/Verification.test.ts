@@ -316,3 +316,21 @@ const suite = (
 
 suite("Verification (layerMemory)", MemoryLayer);
 suite("Verification (layerSql)", SqlLayer);
+
+describe("Verification (layerMemory) pruning (TMS-004)", () => {
+  it.effect("reserve stays correct once expired reservations are pruned", () =>
+    Effect.gen(function* () {
+      const verification = yield* Verification.Verification;
+      for (let i = 0; i < 10_050; i++) {
+        yield* verification.reserve({ identifier: `spray:${i}`, ttl: Duration.seconds(1) });
+      }
+      yield* verification.reserve({ identifier: "live", ttl: Duration.minutes(10) });
+      yield* TestClock.adjust(Duration.seconds(2));
+      // The prune runs on this call: expired spray reservations go, the live one stays.
+      assert.isTrue(
+        yield* verification.reserve({ identifier: "spray:0", ttl: Duration.seconds(1) }),
+      );
+      assert.isFalse(yield* verification.reserve({ identifier: "live", ttl: Duration.minutes(10) }));
+    }).pipe(Effect.provide(MemoryLayer)),
+  );
+});

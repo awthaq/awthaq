@@ -3,7 +3,7 @@ ID: "NHS-005"
 Title: "Canonical quickstart wires a no-op rate limiter while the contract advertises 429s"
 Level: medium
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/RateLimiter.ts:136"
 Auditor: "node-http-server-integration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `dx` · `ports` · reported by **Node HTTP Server Integration Specialist** (`node-http-server-integration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Make the quickstart default a real store-backed limiter (the README's own layerS
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `ratelimit-distributed-store`. Evidence at HEAD ec065a7: `README.md:216`. Fix: Make the quickstart enforce limits and flag the permissive layer. (effort S). Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** README quickstart now wires RateLimiter.layer over RateLimiterStoreSql.layerStoreSql (with its migration) instead of layerPermissive; Configuration table row updated; layerPermissive JSDoc says tests only. Deferred: the BE-003 doctor check that flags layerPermissive in production config (CLI program P17). Doc-only change; no smoke test covers the README snippet.

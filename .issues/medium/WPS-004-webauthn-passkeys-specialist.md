@@ -57,3 +57,5 @@ Either move post-authentication cookie delivery into a shared core/server mechan
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-delivery`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:362`. Fix: Introduce one shared session-delivery helper (owned by @awthaq/api/server, implementing ticket 17's cookie-or-bearer choice) and route every session-minting handler through it; amend BEH-EA-131 accordingly. (effort M). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29, P08):** left open. P08 (passkey) kept its own `securitySetCookie` in the `authenticateVerify` handler untouched (`packages/passkey/src/Passkey.ts`, handler group `passkey.authenticate`); moving it to the shared session-delivery abstraction belongs to P16/`session-delivery`. When that lands, the passkey handler only needs to swap its cookie call for the shared helper. P08 also made `authenticateVerify`'s handler receive the resolved client address (via `ClientAddress`), which is the natural place for the delivery context.

@@ -44,11 +44,11 @@ Save this as `server.ts` inside a clone of this repository (it imports workspace
 ```ts
 import { createServer } from "node:http";
 import { Auth, AuthEvents, RateLimits, Sessions, Users, Accounts, Verification } from "@awthaq/core";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { CoreMigrations, RateLimiterStoreSql, Repositories } from "@awthaq/sql";
 import { Encryption, KeyProvider, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthCore } from "@awthaq/api";
 import { Password } from "@awthaq/password";
-import { Account, Authentication, AuthHttp, Session } from "@awthaq/server";
+import { Account, Authentication, AuthHttp, BodyLimit, Session } from "@awthaq/server";
 import { NodeCrypto, NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
 import * as Effect from "effect/Effect";
@@ -78,9 +78,10 @@ const Migrated = Layer.effectDiscard(
 ).pipe(Layer.provide(SqlLive));
 
 // 3. Provider tokens (OAuth access/refresh tokens) are encrypted at rest;
-//    `KeyProvider.layerEnv` reads the key from `AWTHAQ_ENCRYPTION_KEY`
-//    (base64, 32 bytes) even when no OAuth plugin is installed, since the
-//    `accounts` table's encryption columns are shared, core-owned schema.
+//    `KeyProvider.layerEnv` reads the keyset from `AWTHAQ_ENCRYPTION_KEYS` /
+//    `AWTHAQ_ENCRYPTION_KEY_ID` (see "Encryption keys" below) even when no
+//    OAuth plugin is installed, since the `accounts` table's encryption
+//    columns are shared, core-owned schema.
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(KeyProvider.layerEnv),
   Layer.provide(NodeCrypto.layer),
@@ -110,10 +111,24 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
-// 5. Swap these ports for your own: a real mailer (SMTP/SES/Resend/...)
-//    in place of this console stand-in, and — if you want breach
-//    checking or a persistent rate-limit store — `PasswordHasher`'s and
-//    `RateLimiter`'s other layers instead of the defaults below.
+// 5. The rate limiter enforces the limits every plugin registers (the
+//    sign-in / sign-up / reset rules) against a shared SQL store, so the
+//    limits hold across replicas and restarts. `RateLimiter.layerPermissive`
+//    disables limiting: tests only, never production. If the store is
+//    unreachable, `RateLimiter.layer` fails open by default; see
+//    `RateLimiter.config`.
+const RateLimiterMigrated = Layer.effectDiscard(RateLimiterStoreSql.migrate).pipe(
+  Layer.provide(SqlLive),
+);
+const RateLimiterLive = RateLimiter.layer.pipe(
+  Layer.provide(RateLimiterStoreSql.layerStoreSql),
+  Layer.provide(RateLimiterMigrated),
+  Layer.provide(SqlLive),
+);
+
+//    Swap the remaining ports for your own: a real mailer
+//    (SMTP/SES/Resend/...) in place of this console stand-in, and — if you
+//    want breach checking — `Password.config(...)`.
 const consoleMailer = Layer.succeed(
   Mailer.Mailer,
   Mailer.Mailer.of({
@@ -136,7 +151,7 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(AuthenticationLive),
   Layer.provideMerge(CoreLive),
   Layer.provideMerge(
-    Layer.mergeAll(PasswordHasher.layerArgon2id, consoleMailer, RateLimiter.layerPermissive).pipe(
+    Layer.mergeAll(PasswordHasher.layerArgon2id, consoleMailer, RateLimiterLive).pipe(
       Layer.provideMerge(NodeCrypto.layer),
     ),
   ),
@@ -155,7 +170,10 @@ const AppLayer = Layer.mergeAll(
 //    instead in tests, and in any Fetch-native runtime — Bun, Deno,
 //    Cloudflare Workers — since it returns a portable `(Request) =>
 //    Promise<Response>` handler rather than binding a Node socket).
-const ServerLive = HttpRouter.serve(AppLayer).pipe(
+//    `BodyLimit.layer` bounds every request body (256 KiB by default, 413
+//    beyond it; `BodyLimit.config({ maxBytes })` overrides): Effect's server
+//    reads bodies with no cap unless one is set.
+const ServerLive = HttpRouter.serve(BodyLimit.layer.pipe(Layer.provideMerge(AppLayer))).pipe(
   Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 })),
 );
 
@@ -168,7 +186,8 @@ Run migrations and start it:
 
 ```sh
 export DATABASE_URL="postgres://user:pass@localhost:5432/awthaq"
-export AWTHAQ_ENCRYPTION_KEY="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))")"
+export AWTHAQ_ENCRYPTION_KEYS="[{\"kid\":\"k1\",\"key\":\"$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))")\"}]"
+export AWTHAQ_ENCRYPTION_KEY_ID="k1"
 node --experimental-strip-types server.ts
 ```
 
@@ -213,11 +232,30 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 |---|---|---|
 | `PasswordHasher` | `layerArgon2id` | `layerScrypt` |
 | `Mailer` | a one-line `console.log` stand-in | bring your own (`Mailer.Mailer.of({ send })`, any provider) |
-| `RateLimiter` | `layerPermissive` (no real limiting) | `layer` over `layerStoreMemory`, or your own `RateLimiterStore` |
-| `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEY`) | a KMS-backed `KeyProvider` (implement the port directly) |
+| `RateLimiter` | `layer` over `RateLimiterStoreSql.layerStoreSql` (shared across replicas) | `layer` over the bounded, single-process `layerStoreMemory`, or your own `RateLimiterStore`; `layerPermissive` disables limiting (tests only) |
+| `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS` + `AWTHAQ_ENCRYPTION_KEY_ID`) | a KMS-backed `KeyProvider` (implement the port directly; keeps raw key bytes out of the process) |
 | `Csrf.CsrfConfig` | `Csrf.layerConfig` (`AWTHAQ_CSRF_SECRET`, at least 32 bytes; optional `AWTHAQ_CSRF_ALLOWED_ORIGINS`, comma-separated) | `Layer.succeed(Csrf.CsrfConfig, { secret, allowedOrigins })` with a secret loaded from your own secret store |
 
+### Encryption keys
+
+`AWTHAQ_ENCRYPTION_KEYS` is a JSON array of `{ "kid", "key" }` (`key` is base64 of exactly 32 bytes, kids unique); `AWTHAQ_ENCRYPTION_KEY_ID` names the entry new ciphertext is written under and must appear in the array. Both are validated when the layer is built. An older single `AWTHAQ_ENCRYPTION_KEY` deployment migrates by wrapping its value: `[{"kid":"env","key":"<old value>"}]` with `AWTHAQ_ENCRYPTION_KEY_ID=env`.
+
+To rotate: add a new entry, point `AWTHAQ_ENCRYPTION_KEY_ID` at it, and keep the old entry. Existing ciphertext stays readable under the old key and is re-encrypted under the new one the next time it is read. Remove the old entry only once nothing written under it remains (retirement, not a timer; see `spec/decisions/019-encryption-key-rotation.md`). Raw key bytes cannot be scrubbed from a JS process; deployments that must not hold them in memory should implement `KeyProvider` over a KMS.
+
 `Sessions.SessionConfig` (absolute/idle expiry, idle-refresh throttle) and `Password.config({...})` (breach checking, off by default) are `Context.Reference`s with defaults — override either with `Layer.succeed`/`Password.config(...)` only if the defaults documented in `packages/core/src/Sessions.ts`/`packages/password/src/Password.ts` don't fit.
+
+### Cross-origin SPAs (CORS)
+
+awthaq ships no CORS by default: a browser on another origin cannot read any response (same-origin, default-deny). To serve a separate SPA origin, merge `AuthHttp.cors()` into the same layer list as `AuthHttp.routes(...)`. Its allowlist is `CsrfConfig.allowedOrigins`, the value CSRF's `Origin` check already uses, so the two cannot drift:
+
+```ts
+const AppLayer = Layer.mergeAll(
+  AuthHttp.routes(auth.api, {}).pipe(Layer.provide(auth.layer)),
+  AuthHttp.cors(), // reads CsrfConfig.allowedOrigins, e.g. ["https://app.example.com"]
+);
+```
+
+CORS never relaxes CSRF: cross-site mutations still need the double-submit cookie and `x-csrf-token` header, which the SPA must send with `credentials: "include"`.
 
 ## Plugins
 

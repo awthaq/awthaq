@@ -3,7 +3,7 @@ ID: "NAM-005"
 Title: "Auto-linking is stricter than Auth.js — silent behavior change for migrated users"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuth.ts:651"
 Auditor: "nextauth-authjs-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `oauth` · reported by **NextAuth.js/Auth.js Migration Specialist** (`nextauth-authjs-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Keep the stricter default but document the mapping (Auth.js per-provider flag �
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `oauth-account-linking-policy`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:762`. Fix: Document the Auth.js to awthaq linking mapping. (effort S). Full dossier: `.plan/slices/03-oauth-flow.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/oauth/README.md rewritten from the 'planned package' stub: 'Migrating from Auth.js' maps allowDangerousEmailAccountLinking on provider x to linking { trustedProviders: ['x'] }, states awthaq additionally requires provider email_verified and (TMS-007) a verified local email, and that affected users see AccountExists and must sign in then link; plus an Auth.js provider-id to preset table. Docs only.

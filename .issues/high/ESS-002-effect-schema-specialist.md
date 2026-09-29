@@ -3,7 +3,7 @@ ID: "ESS-002"
 Title: "OIDC discovery document cast, not decoded, at plugin boot"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/OAuthProvider.ts:142"
 Auditor: "effect-schema-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `correctness` · `oauth` · reported by **Effect Schema Specialist** (`effect-schema-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `packages/oauth/src/OAuthProvider.ts:142` still reads `Effect.map((body) => body as DiscoveryDocument),` followed by `Effect.orDie` (line 143), with `??=` fallback assignment onto unvalidated fields at lines 151-154 and an issuer-pin comparison at line 144 that trusts the cast. Same mechanical fix as ESS-001/GC-001 (a `DiscoveryDocumentSchema` decode). Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `oauth-provider-boot-validation`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuthProvider.ts:140`. Fix: Decode the discovery document with a Schema at boot; a shape error dies with a message naming provider and field. (effort S). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`.
+
+**Resolved (2026-09-29):** OAuthProvider.resolve now decodes the discovery document with DiscoveryDocumentSchema (issuer required string; endpoints optional absolute URLs) via HttpIncomingMessage.schemaBodyJson and dies at boot with a message naming the provider and field; explicit endpoints get the same absolute-URL check; no more `as DiscoveryDocument`. Tests (OAuth.test.ts 'boot-time provider configuration validation'): non-string token_endpoint, array body, non-URL endpoint -- red before (booted / wrong message), green after. Gates: typecheck (only pre-existing packages/react TS2883 errors), tsconfig.test.json, full vitest 825 pass, test:bdd, spec:verify:strict, oxlint packages/oauth.

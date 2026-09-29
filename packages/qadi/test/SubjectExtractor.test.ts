@@ -97,6 +97,39 @@ describe("SubjectExtractor (Path B adapter)", () => {
       }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect(
+    "APS-006: an __Host-impersonation cookie shadows __Host-session and resolves the impersonated user; an ordinary session planted there is ignored",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const users = yield* Users.Users;
+        const extractor = yield* QadiSubjectExtractor;
+        const admin = yield* users.create({ email: "aps006-admin@example.com", name: "Admin" });
+        const target = yield* users.create({ email: "aps006-target@example.com", name: "Target" });
+        const own = yield* sessions.issue({ userId: admin.id });
+        const impersonation = yield* sessions.issue({
+          userId: target.id,
+          actingAs: { type: "user", id: admin.id },
+        });
+        const extract = (cookie: string) =>
+          extractor.extract(
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/whatever", { headers: { cookie } }),
+            ),
+          );
+
+        const shadowed = yield* extract(
+          `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(impersonation.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+        );
+        assert.strictEqual(shadowed.id, `user:${target.id}`);
+
+        const planted = yield* extract(
+          `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(own.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
+        );
+        assert.strictEqual(planted.id, `user:${admin.id}`);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("BEH-EA-153: an unknown session resolves to anonymous, never a failure", () =>
     Effect.gen(function* () {
       const extractor = yield* QadiSubjectExtractor;

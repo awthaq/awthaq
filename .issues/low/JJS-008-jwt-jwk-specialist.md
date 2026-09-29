@@ -3,7 +3,7 @@ ID: "JJS-008"
 Title: "typ header minted but never validated; spec's RFC 8725 strict alg/typ/iss/aud posture only partially implemented"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/JwtCodec.ts:136"
 Auditor: "jwt-jwk-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `jwt` · reported by **JWT/JWK Specialist** (`jwt-jwk-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Add typ to HeaderSchema and reject non-'JWT' (or accept an optional expectedTyp 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jwt-claims-codec-hardening`. Evidence at HEAD ec065a7: `packages/jwt/src/JwtCodec.ts:48`. Fix: Decode and enforce `typ` (RFC 8725 §3.11) and honour `nbf`/`iat` in `JwtCodec.verify` and the lite verifier. (effort S). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** JwtCodec HeaderSchema decodes typ; verify takes expectedTyp (string or list, case-insensitive per RFC 7515 4.1.9) and rejects nbf/iat in the future beyond clockSkew; lite verifier VerifierOptions gains expectedTyp (default at+jwt) and clockSkew. Tests in packages/jwt/test/JwtCodec.test.ts: typ mismatch, case-insensitive typ, nbf future (then valid after TestClock), iat far future with/without clockSkew (all red before: typ/nbf/iat were never checked).

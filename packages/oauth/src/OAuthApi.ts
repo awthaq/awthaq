@@ -27,10 +27,27 @@ export class ProviderNotFound extends Schema.TaggedError<ProviderNotFound>()(
 ) {}
 
 /**
- * BEH-EA-122: covers every one of a callback's indistinguishable failure
- * reasons uniformly — malformed/unknown/replayed/expired flow state, a
- * correlation-cookie mismatch, a mix-up (`iss`) mismatch, a token-exchange
- * failure, or a failed `id_token` claim/signature check. Collapsing all of
+ * EEM-004: the provider itself could not be reached in time — a transport
+ * failure, a deadline overrun (ECF-001), or a 5xx/429 answer from its token,
+ * JWKS, userinfo or discovery endpoint. A 503, distinct from the 400
+ * `OAuthCallbackFailed` so a client can tell "try again shortly" from "this
+ * flow is dead". Field-less like every uniform error here: it can only be
+ * reached after state, cookie and PKCE validation of a flow the caller
+ * initiated, so distinguishing it leaks nothing an attacker could use.
+ */
+export class ProviderUnavailable extends Schema.TaggedError<ProviderUnavailable>()(
+  "ProviderUnavailable",
+  {},
+  { httpApiStatus: 503 },
+) {}
+
+/**
+ * BEH-EA-122: covers every one of a callback's indistinguishable *protocol*
+ * failure reasons uniformly — malformed/unknown/replayed/expired flow state,
+ * a correlation-cookie mismatch, a mix-up (`iss`) mismatch, a token endpoint
+ * that answered but rejected the exchange (or returned a body that doesn't
+ * decode), or a failed `id_token` claim/signature check. Transport, timeout
+ * and 5xx failures are `ProviderUnavailable`, split out (EEM-004). Collapsing all of
  * these into one shape is deliberate (research/05-oauth-oidc.md's Q88
  * "unknown state, expired state, and nonce mismatch all ... the same
  * generic ?error" guidance, applied to a typed response instead of a
@@ -45,12 +62,50 @@ export class OAuthCallbackFailed extends Schema.TaggedError<OAuthCallbackFailed>
 ) {}
 
 /**
+ * AP-005 (RFC 6749 §4.1.2.1): the provider redirected back with an
+ * authorization *error* instead of a code — most commonly `access_denied`
+ * (the user declined consent). Raised only after the correlation cookie and
+ * `state` have been validated and the flow consumed, so its enumerated
+ * `error` code is echoed to the very browser that initiated the flow and
+ * nobody else (an attacker cannot forge a valid state+cookie pair for a
+ * victim). `error_description`/`error_uri` are provider-controlled free text
+ * and are never echoed; an `error` outside the RFC's enumerated set is a
+ * plain `OAuthCallbackFailed`. Decision (2026-09-29): option B of the plan.
+ */
+export class OAuthAuthorizationDenied extends Schema.TaggedError<OAuthAuthorizationDenied>()(
+  "OAuthAuthorizationDenied",
+  {
+    error: Schema.Literals([
+      "access_denied",
+      "invalid_request",
+      "unauthorized_client",
+      "unsupported_response_type",
+      "invalid_scope",
+      "server_error",
+      "temporarily_unavailable",
+    ]),
+  },
+  { httpApiStatus: 400 },
+) {}
+
+/** The RFC 6749 §4.1.2.1 error codes `OAuthAuthorizationDenied` can carry. */
+export const AuthorizationErrorCode = OAuthAuthorizationDenied.fields.error;
+
+/**
  * BEH-EA-123: the default, explicit-linking outcome — a callback whose
  * (verified) email matches an existing, unlinked account.
+ *
+ * NAM-006: `providers` are the provider ids the existing account really has
+ * (`"password"`, `"passkey"`, another OAuth provider, ...), so a client can
+ * drive its "sign in with X, then link" flow. Populated only when the
+ * callback's own provider asserted `email_verified` — someone holding an
+ * unverified identity for the victim's address is not handed a map of the
+ * victim's sign-in methods. Otherwise `[]`. The error's existence is already
+ * disclosed by BEH-EA-123 itself; this adds only the method list.
  */
 export class AccountExists extends Schema.TaggedError<AccountExists>()(
   "AccountExists",
-  { provider: Schema.String },
+  { providers: Schema.Array(Schema.String) },
   { httpApiStatus: 409 },
 ) {}
 
@@ -72,8 +127,13 @@ export const CallbackParams = Schema.Struct({ provider: Schema.String });
 export type CallbackParams = typeof CallbackParams.Type;
 
 export const CallbackQuery = Schema.Struct({
-  code: Schema.String,
+  /** Absent on an authorization-error redirect (RFC 6749 §4.1.2.1), which carries `error` instead. */
+  code: Schema.optional(Schema.String),
   state: Schema.String,
+  /** AP-005: the RFC 6749 §4.1.2.1 error response members. */
+  error: Schema.optional(Schema.String),
+  error_description: Schema.optional(Schema.String),
+  error_uri: Schema.optional(Schema.String),
   /** RFC 9207 mix-up countermeasure — validated when the provider sends it. */
   iss: Schema.optional(Schema.String),
 });
@@ -89,7 +149,7 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
       // for `?link=true` from an anonymous caller — `OptionalAuthentication`
       // itself never fails (BEH-EA-029/068's own doc comment), it only
       // ever resolves `CurrentPrincipal`, defaulting to anonymous.
-      error: [ProviderNotFound, Api.Unauthenticated],
+      error: [ProviderNotFound, ProviderUnavailable, Api.Unauthenticated, Api.RateLimited],
     }),
   )
   .add(
@@ -102,7 +162,9 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
       // when a `Hooks.BeforeSessionIssue` tap diverts.
       error: [
         ProviderNotFound,
+        ProviderUnavailable,
         OAuthCallbackFailed,
+        OAuthAuthorizationDenied,
         AccountExists,
         Api.RateLimited,
         Hooks.TwoFactorRequired,
