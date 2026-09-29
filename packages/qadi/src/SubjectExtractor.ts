@@ -37,17 +37,17 @@ const BEARER_PREFIX = "bearer ";
  */
 const extractCredential = (
   request: HttpServerRequest.HttpServerRequest,
-): Redacted.Redacted<string> => {
+): { readonly scheme: "cookie" | "bearer"; readonly credential: Redacted.Redacted<string> } => {
   const cookie = request.cookies[Sessions.SESSION_COOKIE_NAME];
   if (cookie !== undefined && cookie.length > 0) {
-    return Redacted.make(cookie);
+    return { scheme: "cookie", credential: Redacted.make(cookie) };
   }
   const header = Headers.get(request.headers, "authorization");
   if (Option.isSome(header) && header.value.toLowerCase().startsWith(BEARER_PREFIX)) {
     const token = header.value.slice(BEARER_PREFIX.length).trim();
-    if (token.length > 0) return Redacted.make(token);
+    if (token.length > 0) return { scheme: "bearer", credential: Redacted.make(token) };
   }
-  return Redacted.make("");
+  return { scheme: "bearer", credential: Redacted.make("") };
 };
 
 /**
@@ -76,11 +76,15 @@ export const SubjectExtractorLive: Layer.Layer<
     return {
       extract: (request) =>
         Effect.gen(function* () {
-          const credential = extractCredential(request);
+          const { scheme, credential } = extractCredential(request);
+          // PIL-005: `scheme` tells a rotating `verify` how to deliver the
+          // new secret — `resolveSession` registers that delivery on the
+          // request itself, so a Path-B-only route still rotates cleanly.
           const principal = yield* Authentication.resolvePrincipal(
             sessions,
             principalResolver,
             credential,
+            scheme,
           ).pipe(
             // Ticket 03: `resolvePrincipal` reads the ambient
             // `HttpServerRequest` to key its per-request verify memoization

@@ -332,6 +332,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@awthaq/api':
+        specifier: workspace:*
+        version: link:../api
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports

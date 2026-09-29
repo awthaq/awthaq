@@ -6,6 +6,7 @@
 // `it.effect`) is the ambient `Clock` both `DateTime.now` and the SQL
 // model's own constructor defaults read from, so `TestClock.adjust`
 // controls simulated time identically for either backend.
+import { Api } from "@awthaq/api";
 import { Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
@@ -650,6 +651,9 @@ reuseSuite("Sessions reuse detection (layerSql)", SqlLayerWithEvents);
 describe("Sessions", () => {
   it("BEH-EA-055: the session cookie name and attributes are fixed", () => {
     assert.strictEqual(Sessions.SESSION_COOKIE_NAME, "__Host-session");
+    // CSS-007: one source — core derives from the contract stratum's constant.
+    assert.strictEqual(Sessions.SESSION_COOKIE_NAME, Api.SessionCookie.key);
+    assert.strictEqual(Sessions.SESSION_COOKIE_NAME, Api.SESSION_COOKIE_NAME);
     assert.deepStrictEqual(Sessions.SESSION_COOKIE_ATTRIBUTES, {
       secure: true,
       httpOnly: true,

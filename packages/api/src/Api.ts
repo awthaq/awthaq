@@ -95,11 +95,23 @@ export class RateLimited extends Schema.TaggedError<RateLimited>()(
 ) {}
 
 /**
- * BEH-EA-065: cookie name matches `@awthaq/core`'s `Sessions.SESSION_COOKIE_NAME`
- * exactly (`api` cannot import `core`, so the literal is repeated here rather
- * than shared — both are `"__Host-session"` by construction, not by convention).
+ * CSS-007: the one definition of the session cookie's name. `@awthaq/core`'s
+ * `Sessions.SESSION_COOKIE_NAME` derives from this (core, stratum 4, may
+ * depend on api, stratum 1), so the security scheme and the cookie every
+ * issuance site sets can never drift apart.
  */
-export const SessionCookie = HttpApiSecurity.apiKey({ key: "__Host-session", in: "cookie" });
+export const SESSION_COOKIE_NAME = "__Host-session";
+
+/**
+ * CSS-007/PIL-005: the response header a bearer client reads a rotated
+ * session token from (`Sessions.verify`'s throttled touch, BEH-EA-052) —
+ * one constant shared by the server that sets it and any client that
+ * captures it.
+ */
+export const ROTATED_TOKEN_HEADER = "set-auth-token";
+
+/** BEH-EA-065: cookie scheme keyed on `SESSION_COOKIE_NAME`. */
+export const SessionCookie = HttpApiSecurity.apiKey({ key: SESSION_COOKIE_NAME, in: "cookie" });
 export const BearerToken = HttpApiSecurity.bearer;
 
 /** BEH-EA-080: the CSRF cookie/header names are fixed, never per-plugin configurable. */

@@ -3,7 +3,7 @@ ID: "ELC-007"
 Title: "Per-request session-resolution memoization lives in a module-level WeakMap with an ambient HttpServerRequest requirement"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Authentication.ts:123"
 Auditor: "effect-layer-context-architect"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `server` · reported by **Effect Layer/Context Architect** (`effect-layer-context-architect`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Attach the cache Ref to the request's own scope (e.g. a FiberRef or Effect.scope
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `per-request-session-cache`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:123`. Fix: Documentation only. The module-level WeakMap is Effect v4's own idiom (there is no FiberRef in v4), and the ambient HttpServerRequest requirement is already visible in resolveSession's R type. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Doc-only: resolveSession/sessionResolutionCache comments now state HttpServerRequest is a hard R requirement and that lifetime is tied to request.source as Effect's own pre-response handlers are.

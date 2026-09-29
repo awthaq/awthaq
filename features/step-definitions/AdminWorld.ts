@@ -262,6 +262,7 @@ export const resolvePrincipal: (token: string) => Effect.Effect<Api.Principal, n
                 sessions,
                 resolver,
                 Redacted.make(token),
+                "cookie",
               ).pipe(
                 // Ticket 03: `resolvePrincipal` keys its per-request verify
                 // memoization off the ambient `HttpServerRequest` — this

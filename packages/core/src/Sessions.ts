@@ -6,6 +6,7 @@
 // — neither changes this service's public interface, the same deferral
 // `Migrations.ts` documents for the persistence stratum generally.
 
+import { Api } from "@awthaq/api";
 import { LegacySessionBridge } from "@awthaq/ports";
 import { Models as SqlModels, Repositories as SqlRepositories } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
@@ -160,7 +161,7 @@ export class SessionExpired extends Data.TaggedError("SessionExpired")<{
 }> {}
 
 /** BEH-EA-055: the one session cookie's fixed, non-configurable attribute set. */
-export const SESSION_COOKIE_NAME = "__Host-session";
+export const SESSION_COOKIE_NAME = Api.SESSION_COOKIE_NAME;
 export const SESSION_COOKIE_ATTRIBUTES = {
   secure: true,
   httpOnly: true,
@@ -218,11 +219,12 @@ export interface SessionsShape {
    *
    * Resolved (upstream-hardening-followups map, ticket 03):
    * `@awthaq/server`'s `Authentication.resolveSession` now memoizes its
-   * result per request, keyed on the ambient `HttpServerRequest`'s own
-   * identity — both `AuthenticationLive`/`OptionalAuthenticationLive` and
-   * `SubjectExtractorLive` funnel through it, so a second call within the
-   * same request reuses the first's outcome (including whether it
-   * rotated) rather than calling `verify` again.
+   * result per request, single-flight and keyed on the request's
+   * underlying `source` (TS-003/NHS-006) — both `AuthenticationLive`/
+   * `OptionalAuthenticationLive` and `SubjectExtractorLive` funnel through
+   * it, so a second call within the same request reuses the first's
+   * outcome rather than calling `verify` again. The call that rotated also
+   * delivers the new secret on that request's response (PIL-005).
    *
    * RRS-003: presenting a tombstoned row (one `issue`'s own `supersedes`
    * already rotated away) is refresh-token reuse — every still-live

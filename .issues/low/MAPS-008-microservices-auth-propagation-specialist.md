@@ -55,3 +55,5 @@ Document the header-logging hazard prominently, and consider bounding the exposu
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `session-rotation-delivery`. Evidence at HEAD ec065a7: `packages/server/src/Authentication.ts:233`. Fix: Reduce the exposure of the rotated long-lived secret in transit and in logs. Header delivery itself stays, as ticket 01 decided. (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29):** Partially done under PIL-005: every rotation response (Set-Cookie and set-auth-token) now carries `Cache-Control: no-store` (tests in packages/server/test/Authentication.test.ts). Left open: step 2 (provide `Headers.CurrentRedactedNames` with `set-auth-token`/`x-jwt-token` via `AuthHttp.requestLogger`/`tracer`) is blocked on MW-001 (observability substrate, slice 02), which does not exist yet, and the README hazard note.

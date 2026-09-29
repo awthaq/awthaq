@@ -4,6 +4,12 @@ import { Api } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
+import * as Cookies from "effect/unstable/http/Cookies";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -331,11 +337,217 @@ describe("Authentication", () => {
         const exit = yield* Authentication.resolveSession(
           yield* Sessions.Sessions,
           Redacted.make("some-id.some-secret"),
+          "cookie",
         ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request), Effect.exit);
         assert.isTrue(Exit.isFailure(exit));
         if (!Exit.isFailure(exit)) return;
         assert.isTrue(Cause.hasDies(exit.cause));
         assert.isFalse(Cause.hasFails(exit.cause));
       }).pipe(Effect.provide(UnreliableSessions)),
+  );
+});
+
+// PIL-005/TS-003/NHS-006/MAPS-008: real serving path. Pre-response handlers
+// only run under `HttpEffect.toHandled`, so these tests drive the router the
+// way a real server does and inspect the response actually written.
+class Boom extends Schema.TaggedError<Boom>()("Boom", {}, { httpApiStatus: 404 }) {}
+
+const RotationApi = HttpApi.make("rotation").add(
+  HttpApiGroup.make("g")
+    .add(HttpApiEndpoint.get("ok", "/ok", { success: Schema.String }))
+    .add(HttpApiEndpoint.get("boom", "/boom", { success: Schema.String, error: Boom }))
+    .middleware(Api.Authentication),
+);
+
+const RotationHandlers = HttpApiBuilder.group(RotationApi, "g", (handlers) =>
+  handlers.handle("ok", () => Effect.succeed("ok")).handle("boom", () => Effect.fail(new Boom())),
+);
+
+const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
+  Layer.provide(RotationHandlers),
+  Layer.provideMerge(Authentication.AuthenticationLive),
+  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provideMerge(Sessions.layerMemory),
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provide(NodeCrypto.layer),
+  Layer.provideMerge(TestServices),
+  Layer.provideMerge(HttpRouter.layer),
+);
+
+const serve = (path: string, headers: Record<string, string>) =>
+  Effect.gen(function* () {
+    const router = yield* HttpRouter.HttpRouter;
+    let written: HttpServerResponse.HttpServerResponse | undefined;
+    yield* HttpEffect.toHandled(router.asHttpEffect(), (_request, response) =>
+      Effect.sync(() => {
+        written = response;
+      }),
+    ).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(new Request(`http://localhost${path}`, { headers })),
+      ),
+    );
+    if (written === undefined) return yield* Effect.die("no response was written");
+    return written;
+  });
+
+const cookieOf = (response: HttpServerResponse.HttpServerResponse) =>
+  Cookies.getValue(response.cookies, Sessions.SESSION_COOKIE_NAME);
+
+describe("Authentication rotation delivery (PIL-005)", () => {
+  it.effect(
+    "a handler failing with a typed error after a rotating verify still carries the rotated cookie",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(2));
+          const response = yield* serve("/boom", {
+            cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+          });
+          assert.strictEqual(response.status, 404);
+          const rotated = cookieOf(response);
+          assert.isTrue(Option.isSome(rotated));
+          if (Option.isNone(rotated)) return;
+          assert.notStrictEqual(rotated.value, Redacted.value(token));
+          // The delivered secret is the live one — the old one no longer verifies.
+          yield* sessions.verify(Redacted.make(rotated.value));
+          assert.strictEqual(response.headers["cache-control"], "no-store");
+        }),
+      ).pipe(Effect.provide(RotationLayer)),
+  );
+
+  it.effect("a successful response carries the rotated cookie exactly once", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(2));
+        const response = yield* serve("/ok", {
+          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+        });
+        assert.strictEqual(response.status, 200);
+        assert.strictEqual(Object.keys(response.cookies.cookies).length, 1);
+        assert.isTrue(Option.isSome(cookieOf(response)));
+      }),
+    ).pipe(Effect.provide(RotationLayer)),
+  );
+
+  it.effect("bearer rotation sets the rotated-token header and Cache-Control: no-store", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(2));
+        const response = yield* serve("/ok", { authorization: `Bearer ${Redacted.value(token)}` });
+        assert.strictEqual(response.status, 200);
+        const rotated = response.headers[Api.ROTATED_TOKEN_HEADER];
+        assert.isDefined(rotated);
+        assert.notStrictEqual(rotated, Redacted.value(token));
+        assert.strictEqual(response.headers["cache-control"], "no-store");
+        assert.isTrue(Option.isNone(cookieOf(response)));
+        yield* sessions.verify(Redacted.make(rotated ?? ""));
+      }),
+    ).pipe(Effect.provide(RotationLayer)),
+  );
+
+  it.effect("no rotation, no delivery: a fresh session's response is left untouched", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        const response = yield* serve("/ok", {
+          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+        });
+        assert.isTrue(Option.isNone(cookieOf(response)));
+        assert.isUndefined(response.headers["cache-control"]);
+      }),
+    ).pipe(Effect.provide(RotationLayer)),
+  );
+});
+
+describe("Authentication per-request cache (TS-003/NHS-006)", () => {
+  const countingSessions = (verifies: Ref.Ref<number>): Layer.Layer<Sessions.Sessions> =>
+    Layer.succeed(Sessions.Sessions, {
+      issue: () => Effect.die("not used in this test"),
+      verify: () =>
+        Ref.update(verifies, (n) => n + 1).pipe(
+          Effect.andThen(Effect.sleep(Duration.millis(10))),
+          Effect.andThen(
+            Effect.fail(new Sessions.SessionNotFound({ message: "awthaq: no such session" })),
+          ),
+        ),
+      revoke: () => Effect.die("not used in this test"),
+      revokeOthers: () => Effect.die("not used in this test"),
+      revokeAll: () => Effect.die("not used in this test"),
+      list: () => Effect.die("not used in this test"),
+      isLive: () => Effect.die("not used in this test"),
+      reauthenticate: () => Effect.die("not used in this test"),
+    });
+
+  const sessionsWith = (verifies: Ref.Ref<number>) =>
+    Effect.gen(function* () {
+      return yield* Sessions.Sessions;
+    }).pipe(Effect.provide(countingSessions(verifies)));
+
+  it.effect("two concurrent resolveSession calls for one request call verify exactly once", () =>
+    Effect.gen(function* () {
+      const verifies = yield* Ref.make(0);
+      const sessions = yield* sessionsWith(verifies);
+      const request = HttpServerRequest.fromWeb(new Request("http://localhost/x"));
+      const credential = Redacted.make("some-id.some-secret");
+      const call = Authentication.resolveSession(sessions, credential, "cookie").pipe(Effect.flip);
+      const fiber = yield* Effect.all([call, call, call], { concurrency: "unbounded" }).pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust(Duration.millis(20));
+      yield* Fiber.join(fiber);
+      assert.strictEqual(yield* Ref.get(verifies), 1);
+    }),
+  );
+
+  it.effect("a re-wrapped request (request.modify) shares the original's verification", () =>
+    Effect.gen(function* () {
+      const verifies = yield* Ref.make(0);
+      const sessions = yield* sessionsWith(verifies);
+      const request = HttpServerRequest.fromWeb(new Request("http://localhost/x"));
+      const prefixed = request.modify({ url: "/y" });
+      const credential = Redacted.make("some-id.some-secret");
+      const resolve = (r: HttpServerRequest.HttpServerRequest) =>
+        Authentication.resolveSession(sessions, credential, "cookie").pipe(
+          Effect.provideService(HttpServerRequest.HttpServerRequest, r),
+          Effect.flip,
+        );
+      const first = yield* resolve(request).pipe(Effect.forkChild);
+      yield* TestClock.adjust(Duration.millis(20));
+      yield* Fiber.join(first);
+      yield* resolve(prefixed);
+      assert.strictEqual(yield* Ref.get(verifies), 1);
+    }),
+  );
+
+  it.effect("an interrupted first resolver does not wedge a second caller", () =>
+    Effect.gen(function* () {
+      const verifies = yield* Ref.make(0);
+      const sessions = yield* sessionsWith(verifies);
+      const request = HttpServerRequest.fromWeb(new Request("http://localhost/x"));
+      const credential = Redacted.make("some-id.some-secret");
+      const resolve = Authentication.resolveSession(sessions, credential, "cookie").pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+        Effect.flip,
+      );
+      const first = yield* resolve.pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(first);
+      const second = yield* resolve.pipe(Effect.forkChild);
+      yield* TestClock.adjust(Duration.millis(20));
+      const failure = yield* Fiber.join(second);
+      assert.strictEqual(failure._tag, "Unauthenticated");
+      assert.strictEqual(yield* Ref.get(verifies), 2);
+    }),
   );
 });

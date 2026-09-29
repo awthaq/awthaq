@@ -3,7 +3,7 @@ ID: "CSS-007"
 Title: "Session cookie name exists as two independent literals — aligned 'by construction, not by convention'"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "api"
 Source: "packages/api/src/Api.ts:102"
 Auditor: "cookie-security-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `api` · reported by **Cookie Security Specialist** (`cookie-security-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Add one compile-time equality check in a package that imports both (server or te
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `wire-constant-single-source`. Evidence at HEAD ec065a7: `packages/api/src/Api.ts:97`. Fix: Make the session cookie name (and the rotation header name) one constant owned by the contract stratum, with core deriving from it. core (stratum 4) may depend on api (stratum 1). (effort S). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Api.SESSION_COOKIE_NAME and Api.ROTATED_TOKEN_HEADER are now the single definitions in packages/api/src/Api.ts (SessionCookie is keyed on the constant); core's Sessions.SESSION_COOKIE_NAME derives from Api.SESSION_COOKIE_NAME (new @awthaq/api dependency in packages/core/package.json; tsconfig reference already existed). Test: core/test/Sessions.test.ts BEH-EA-055 now asserts core === Api.SessionCookie.key (red until core imported api). Test-file literals left as intentional wire pins. Gates: typecheck, tests, bdd, spec:verify:strict, oxlint clean.

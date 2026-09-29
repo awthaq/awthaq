@@ -119,6 +119,8 @@ REQUIREMENT: `CurrentPrincipal` MUST be available to a handler only as a
 
 `archive/design/usage-examples-v4.md` §4.1 is the worked example: `CurrentPrincipal` is read with an ordinary `yield*` inside the handler body, exactly as any other service dependency would be, because the middleware's own Layer is what places it in scope. This is the HTTP-stratum instance of the same principle BEH-EA-001 states for plugins generally — no second mechanism for "is this value available here," just Effect's own context.
 
+**Per-request resolution is memoized (PCS-006).** Session resolution is single-flight per (request, credential): `Sessions.verify` runs at most once per underlying request, and a second resolution (Path A and Path B on one route, or a prefix-mounted re-wrap of the request) awaits the first outcome. The consequence is a deliberate staleness budget: a session revoked mid-request keeps resolving for the remainder of *that* request (bounded by its lifetime; a streaming response or long upload inherits the window). Invalidating the memo on revoke-of-current is deliberately not done.
+
 ## BEH-EA-071: Different groups may select different authentication schemes
 
 ```ts
