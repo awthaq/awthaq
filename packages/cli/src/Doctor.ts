@@ -106,7 +106,13 @@ const graphFindings = (config: CliConfig) =>
     );
     const routes = yield* Routes.routesOf(config.auth);
     const unprotected = routes
-      .filter((route) => MUTATING.has(route.method) && !route.middleware.includes("CsrfProtection"))
+      .filter(
+        (route) =>
+          MUTATING.has(route.method) &&
+          !route.middleware.includes("CsrfProtection") &&
+          // A back channel (token endpoints for non-browser clients) has no ambient credential to forge.
+          !route.backChannel,
+      )
       .map((route) =>
         finding(
           route.plugin ?? route.group,

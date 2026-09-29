@@ -132,14 +132,14 @@ caveat.
 | SAML | Implemented (SP only; `@awthaq/saml`) | P3 | E2 | [10-saml.md](10-saml.md) |
 | OIDC Provider | Planned-Phase3 | P3 | E2, E5 | [11-oidc-provider.md](11-oidc-provider.md) |
 | SCIM | Shipped-Unpublished (`@awthaq/scim`, `packages/scim/test`) | P4 | E5 | [12-scim.md](12-scim.md) |
-| Device Authorization | Planned-Phase3 (specified, no code) | P4 | E4 | [13-device-authorization.md](13-device-authorization.md) |
+| Device Authorization | Shipped-Unpublished (`@awthaq/device-authorization`, `packages/device-authorization/test`) | P4 | E4 | [13-device-authorization.md](13-device-authorization.md) |
 
 ## 5. A note on honesty
 
-Eight entries are Shipped-Unpublished (Password, OAuth, Passkey, API Keys, JWT,
-Organization, Admin, SCIM): each names its package and test directory, and its
-model file's "Verification" cell points at real tests. The other seven (Magic
-Link, Email OTP, Two-Factor, SSO, SAML, OIDC Provider, Device Authorization)
+Nine entries are Shipped-Unpublished (Password, OAuth, Passkey, API Keys, JWT,
+Organization, Admin, SCIM, Device Authorization): each names its package and test directory, and its
+model file's "Verification" cell points at real tests. The others (Magic
+Link, Email OTP, Two-Factor, SSO, SAML, OIDC Provider)
 describe a shape, not a delivery. Read the two groups differently: for a
 shipped entry, the model file is an adoption record that has been reconciled
 with the package (its "What is missing" lists only what is genuinely unbuilt);

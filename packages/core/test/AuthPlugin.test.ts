@@ -341,6 +341,8 @@ describe("Auth.make", () => {
           { id: "pong", apiVersion: 1, tables: [], dependsOn: ["ping"], groups: ["pong"] },
         ],
         hooks: {},
+        rateLimits: [],
+        ports: [],
         config: [],
         userFields: [],
       });

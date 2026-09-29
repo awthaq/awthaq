@@ -10,6 +10,7 @@
       "@awthaq/cli",
       "@awthaq/client",
       "@awthaq/core",
+      "@awthaq/device-authorization",
       "@awthaq/jwt",
       "@awthaq/magic-link",
       "@awthaq/migrate-auth0",

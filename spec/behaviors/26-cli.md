@@ -43,7 +43,7 @@ REQUIREMENT: `awthaq doctor` MUST report every plugin-graph linking
 
 `usage-examples-v4.md` §23 lists exactly this scope. Running against the statically derived manifest (BEH-EA-208) rather than a live process means `doctor` can be run in CI, before deploy, and catch a `sameSite: "lax"` or a `Mailer.layerMemory` left in production configuration before either one reaches a real user. `--build` is the one opt-in step past the manifest: it evaluates the application's own Layer once, in a scope that is closed straight away, so an unprovided port or a malformed `Config` value (a CSRF secret under 32 bytes, an absent encryption key) surfaces as a finding instead of a crash at first boot; it is a database-backed command in BEH-EA-208's sense and still never starts the HTTP server. A finding is data (a code, a severity, a plugin id, a message), so the same list backs the human report and `--json`.
 
-*Implementation* (`Doctor.ts`, `ConfigList.ts`; `test/Doctor.test.ts`, `test/ConfigLoader.test.ts`). Findings come from: a `dependsOn` id no installed plugin has, and an `Auth.make` link failure (cycle, duplicate group id, route conflict) the loader hands over as a finding instead of a crash; every configuration descriptor's audit (the manifest's, `@awthaq/core`'s and `@awthaq/server`'s `BodyLimit`) read against the configuration Layer the module exports; a mutating endpoint without `CsrfProtection`; and, with `--build`, a build failure, a development `Mailer` (`layerNoop`/`layerMemory`) and `RateLimiter.layerPermissive` (NHS-005). A build failure is reported by the failure's name and never its message, because a `Config` error can quote the value it rejected. `--production` (else the module's `production`, else `NODE_ENV`) decides whether an insecure default is a warning or a note.
+*Implementation* (`Doctor.ts`, `ConfigList.ts`; `test/Doctor.test.ts`, `test/ConfigLoader.test.ts`). Findings come from: a `dependsOn` id no installed plugin has, and an `Auth.make` link failure (cycle, duplicate group id, route conflict) the loader hands over as a finding instead of a crash; every configuration descriptor's audit (the manifest's, `@awthaq/core`'s and `@awthaq/server`'s `BodyLimit`) read against the configuration Layer the module exports; a mutating endpoint without `CsrfProtection` (except a group annotated `Api.BackChannel`, the credential-in-the-request endpoints a non-browser client calls: `apikey.token` and the device authorization `code`/`token` pair, which read and set no cookie); and, with `--build`, a build failure, a development `Mailer` (`layerNoop`/`layerMemory`) and `RateLimiter.layerPermissive` (NHS-005). A build failure is reported by the failure's name and never its message, because a `Config` error can quote the value it rejected. `--production` (else the module's `production`, else `NODE_ENV`) decides whether an insecure default is a warning or a note.
 
 _Previous: [BEH-EA-200](25-testing-harness.md#beh-ea-200-veto-only-in-veto-points-and-observer-isolation) | Next: [BEH-EA-202](26-cli.md#beh-ea-202-plugin-list---graph-shows-topology-ports-and-hook-chains)_
 
@@ -59,17 +59,17 @@ REQUIREMENT: `plugin list --graph` MUST print the installed plugins in
              `dependsOn` edges, contract groups and owned tables; the
              ordering printed MUST match the order the linker actually uses
              for migrations and hook resolution. `--format json|dot` MUST
-             emit the same graph as data. Each plugin's required ports and
-             resolved hook-tap chain belong in this output too, but are not
-             derivable from the manifest (below): until they are, the command
-             MUST say they are not printed rather than omit them silently.
+             emit the same graph as data. It MUST also print each plugin's
+             required ports and the position of each of its declared hook
+             taps in the resolved chain of the point it taps; both are read
+             off the manifest (static declarations, no Layer built).
 ```
 
 PRD §21 and `usage-examples-v4.md` §14's "Resolved order is printable: `awthaq plugin list --hooks`" both point at the same need: the composition order that determines behavior (which hook tap runs first, which migration applies first) must be inspectable as data, not something a developer has to infer by reading `Auth.make`'s plugin array and reasoning about `dependsOn` by hand.
 
-*Implementation* (`Plugin.ts`; `test/Inspection.test.ts`). `manifest.plugins` is `linkPlugins`' topological order, so the printed order is the linker's by construction. What is **not** printed: a plugin's required ports are its layer's requirements (`RIn`), a type-level fact with no runtime trace short of building the layer; so a manifest-only command (BEH-EA-208) cannot print it, and the report ends with a line saying so; ports would need a static declaration on the plugin, which this revision does not add (it would duplicate what the types already say and could drift from them).
+*Implementation* (`Plugin.ts`; `test/Inspection.test.ts`). `manifest.plugins` is `linkPlugins`' topological order, so the printed order is the linker's by construction. A plugin's required ports are its layer's requirements (`RIn`), a type-level fact with no runtime trace short of building the layer, which a manifest-only command (BEH-EA-208) may not do. So the plugin *declares* them, `AuthPlugin.layer(Self, { ports: [Mailer.Mailer, ...] })`, and the declaration cannot silently drift: the declared classes join the layer's `RIn` like `dependsOn`, and a port-keyed service (`.../ports/...`) that `make`, the handlers or a contribution require but `ports` omits fails to type-check, naming the missing keys. The declarations reach `Manifest.ports` (link order, then declaration order) and the class static `Plugin.ports`; the report prints them per plugin, beside where the plugin's declared taps sit in each point's chain (`manifest.hooks`, `HookPoint.compareTaps`, BEH-EA-096). Application taps (`Point.tap` in the host) register when a layer is built and run after every listed entry, so they are not shown; the report says so.
 
-**As shipped (PV-241):** `plugin list --hooks` (`--format json` for data) prints `Auth.make(...).manifest.hooks`: each hook point's taps that plugins declare statically (`AuthPlugin.layer`'s `taps`), in the order the runtime chain runs them (`HookPoint.compareTaps`, BEH-EA-096). Application taps (`Point.tap` in the host) register when a layer is built and run after every listed entry, so they are not shown. Rate-limit rules register at layer build and have no static declaration, so a rule listing (BEH-EA-111's `plugin list --hooks` counterpart) is not shipped.
+**As shipped (PV-241):** `plugin list --hooks` (`--format json` for data) prints `Auth.make(...).manifest.hooks`: each hook point's taps that plugins declare statically (`AuthPlugin.layer`'s `taps`), in the order the runtime chain runs them. `plugin list --rules` prints `manifest.rateLimits`, the rate-limit rules plugins declare statically (`AuthPlugin.Service`'s `rateLimits`, BEH-EA-111): plugin, rule, endpoint, dimension and the default limit and window. A rule's `group` is confined at the type level to the plugin's own contract groups (BEH-EA-107 as a compile error), and each shipped plugin's suite asserts its declaration equals what its layer registers (`RateLimits.declarationDrift`); the numbers are the defaults, which a configurable plugin's `Context.Reference` may tune at build.
 
 _Previous: [BEH-EA-201](26-cli.md#beh-ea-201-doctor-checks-link-config-and-insecure-defaults) | Next: [BEH-EA-203](26-cli.md#beh-ea-203-routes-lists-every-endpoint-with-its-owning-plugin-and-middleware)_
 
@@ -314,7 +314,7 @@ _Previous: [BEH-EA-225](26-cli.md#beh-ea-225-every-cli-command-exits-with-a-stab
 
 ```bash
 awthaq login --token "$AWTHAQ_TOKEN" --base-url https://auth.acme.com
-awthaq login                      # device-authorization flow (requires the DeviceAuthorization plugin)
+awthaq login                      # device-authorization flow (BEH-EA-307; needs the DeviceAuthorization plugin)
 awthaq whoami
 awthaq logout
 ```
@@ -328,20 +328,21 @@ REQUIREMENT: `login`, `logout` and `whoami` MUST act only as outbound
              session-introspection endpoint and store it only when it is
              valid, and MUST be usable non-interactively (`--base-url` or
              `AWTHAQ_BASE_URL`). The interactive `login` MUST use the device
-             authorization grant: request a device code, print the user code
-             and verification URI, and poll on a schedule that starts at the
-             server's `interval`, widens on `slow_down` and ends with a
-             non-zero exit and "run `awthaq login` again" on `expired_token`;
-             until the `DeviceAuthorization` plugin exists it MUST fail with
-             a typed error naming that requirement. `logout` MUST clear the
+             authorization grant (BEH-EA-307): request a device code, print
+             the user code and verification URI, and poll on a schedule that
+             starts at the server's `interval`, widens on `slow_down` and ends
+             with a non-zero exit and "run `awthaq login` again" on
+             `expired_token`; against a server that does not serve the
+             `DeviceAuthorization` plugin it MUST fail with a typed error
+             naming that requirement. `logout` MUST clear the
              stored credential and revoke it server-side on a best-effort
              basis; `whoami` MUST print the resolved principal or fail with
              the authentication code of BEH-EA-225 when not logged in.
 ```
 
-CI usage needs a non-interactive path from day one (a service token in an environment variable, no browser, no prompt); an interactive terminal wants the device flow (RFC 8628) instead, because a CLI has no way to receive a redirect without binding a listener, which BEH-EA-208 forbids for every class. The token path needs nothing beyond the session endpoint every deployment already has; the device path is gated on the plugin that serves `/device/code` and `/device/token` ([13-device-authorization.md](../models/13-device-authorization.md), where the CLI is the first consumer). The transport reuses the generated client's typed HTTP calls rather than the React-facing package boundary: `@awthaq/client` is the isomorphic, UI-facing client library, and a terminal surface borrows its transport without inheriting its role.
+CI usage needs a non-interactive path from day one (a service token in an environment variable, no browser, no prompt); an interactive terminal wants the device flow (RFC 8628) instead, because a CLI has no way to receive a redirect without binding a listener, which BEH-EA-208 forbids for every class. The token path needs nothing beyond the session endpoint every deployment already has; the device path is gated on the plugin that serves `/device/code` and `/device/token` (`@awthaq/device-authorization`, [BEH-EA-299 to 306](37-device-authorization.md); the CLI is its first consumer). The transport reuses the generated client's typed HTTP calls rather than the React-facing package boundary: `@awthaq/client` is the isomorphic, UI-facing client library, and a terminal surface borrows its transport without inheriting its role.
 
-*Implementation* (`Session.ts`; `test/Session.test.ts`, against a real auth server on a real socket: core's session group, real handlers, real bearer authentication and CSRF). The token path is complete, including persisting a token the server rotates (BEH-EA-052: the replaced secret survives only `SessionConfig.rotationGrace`). The interactive device flow is **not built**: it needs the `DeviceAuthorization` plugin, which does not exist, so `awthaq login` without a token fails with `DeviceAuthorizationUnavailable` (exit 9) naming that requirement rather than guessing at endpoints that are not there. `whoami` prints the authorization subject when the server serves `/subject`, else the session.
+*Implementation* (`Session.ts`; `test/Session.test.ts`, against a real auth server on a real socket: core's session group, real handlers, real bearer authentication and CSRF). The token path is complete, including persisting a token the server rotates (BEH-EA-052: the replaced secret survives only `SessionConfig.rotationGrace`). The interactive device flow is `DeviceLogin.ts` (BEH-EA-307); `awthaq login` without a token against a server with no device endpoints fails with `DeviceAuthorizationUnavailable` (exit 9), naming the plugin. `whoami` prints the authorization subject when the server serves `/subject`, else the session.
 
 _Previous: [BEH-EA-226](26-cli.md#beh-ea-226-cli-arguments-decode-through-the-contracts-schemas) | Next: [BEH-EA-228](26-cli.md#beh-ea-228-cli-credentials-live-in-a-credentialstore-never-a-plaintext-dotfile-by-default)_
 
@@ -355,7 +356,7 @@ interface CredentialStore { get; set; clear }   // Effect-returning, Redacted in
 REQUIREMENT: Session-command credentials MUST be stored through a
              `CredentialStore` port (`get`/`set`/`clear`) whose default Layer
              resolves the OS-native store first (macOS Keychain, Linux Secret
-             Service, Windows Credential Manager). Only when none is
+             Service, Windows DPAPI through PowerShell). Only when none is
              reachable MAY it fall back to
              `$XDG_CONFIG_HOME/awthaq/credentials.json` created with mode
              0600 inside a 0700 directory, and the CLI MUST warn once when it
@@ -366,7 +367,7 @@ REQUIREMENT: Session-command credentials MUST be stored through a
 
 A CLI token is a bearer credential to a user's account, and the ecosystem's recurring failure is a plaintext dotfile in the home directory that any process of that user (or a backup tool) can read. Keychain-first with a 0600 file as the last resort (a headless Linux CI runner, a container) is the order that keeps the common desktop case safe and the constrained case working; the environment override exists precisely so CI never needs the store at all. This is the CLI-side counterpart of [BEH-EA-066](09-authentication-middleware.md#beh-ea-066-the-bearer-handler-is-tried-after-the-cookie-handler-fails-over-the-same-session-resolution-logic)'s note that a native client carries a bearer token from a keychain: mobile storage stays the application's job, the CLI's is specified here.
 
-*Implementation* (`CredentialStore.ts`; `test/CredentialStore.test.ts`, with a fake `security`/`secret-tool` behind an `Exec` port so no test touches a real keychain, and a real temporary directory for the file modes). The secret never travels on a command line: the Keychain backend drives `security -i` (commands on stdin) and `secret-tool store` reads the secret from stdin. **Not shipped:** a Windows Credential Manager backend. Windows uses the file fallback, with the warning; mode bits do not restrict a file on Windows, so this is the honest limit rather than an untested `cmdkey` call that would put the secret on argv.
+*Implementation* (`CredentialStore.ts`; `test/CredentialStore.test.ts`, with a fake `security`/`secret-tool`/`powershell.exe` behind an `Exec` port so no test touches a real keychain or needs Windows, and a real temporary directory for the file modes). The secret never travels on a command line: the Keychain backend drives `security -i` (commands on stdin), `secret-tool store` reads the secret from stdin, and the Windows backend pipes the secret to `powershell.exe` (else `pwsh`) on stdin, where `ConvertTo-SecureString -AsPlainText | ConvertFrom-SecureString` turns it into a DPAPI (CurrentUser) blob kept in `%APPDATA%\awthaq\credential.dpapi`; reading hands the blob back on stdin and prints only the secret. DPAPI protects against another user and offline disk theft, not against another process of the same user. `cmdkey` (secret on argv) and Credential Manager proper (needs a module or P/Invoke to read a secret back) were rejected (ADR-EA-027); a Windows with no PowerShell, or a refused write, uses the 0600 file with the warning.
 
 _Previous: [BEH-EA-227](26-cli.md#beh-ea-227-session-commands-login-logout-whoami-are-outbound-only-clients-of-a-running-auth-server) | Next: [BEH-EA-229](26-cli.md#beh-ea-229-plugins-declare-their-configuration-statically-and-config-list-prints-it-redacted)_
 
@@ -395,3 +396,42 @@ REQUIREMENT: A plugin MAY declare its configuration inputs as descriptors
 *Implementation* (`@awthaq/core` `ConfigDescriptor`, `EffectiveConfig`; the manifest's `config`; `@awthaq/cli` `ConfigList.ts`; `@awthaq/admin` `GET /admin/config`; tests `core/test/EffectiveConfig.test.ts`, `cli/test/Doctor.test.ts`, `admin/test/AdminConfig.test.ts`). Password, Passkey, Organization, Admin and Roles declare descriptors; core declares Sessions, the session cookie and mail dispatch; the server declares the body limit. A plain-string secret is listed under the descriptor's `sensitive` fields; a `Redacted` is always redacted; a connection string's password is scrubbed even from an undeclared field. `GET /admin/config` sits behind the same fail-closed `canManageUsers` gate as user administration and reads the configuration the plugin's layer was *built* under (`EffectiveConfig.layer(auth.manifest)` provides the composition's descriptors). Config that is a `Context.Service` rather than a `Reference` (the CSRF secret, `JwtConfig`) has no descriptor: `doctor --build` catches a weak or missing one as a build failure.
 
 _Previous: [BEH-EA-228](26-cli.md#beh-ea-228-cli-credentials-live-in-a-credentialstore-never-a-plaintext-dotfile-by-default) | Next: [BEH-EA-209](27-admin-impersonation.md#beh-ea-209-actingas-becomes-a-real-generic-field-on-session-issuance)_
+
+## BEH-EA-307: Interactive login is the device authorization grant, polled with backoff
+
+```bash
+awthaq login --base-url https://auth.acme.com                # prints a code and URL, opens a browser
+awthaq login --no-browser --client-id awthaq-cli              # only prints them
+```
+
+```text
+REQUIREMENT: `login` without a token MUST run the device authorization grant
+             (RFC 8628) as an outbound client of the server's
+             `@awthaq/device-authorization` plugin ([BEH-EA-299 to
+             317](37-device-authorization.md)), through the plugin's own
+             contract over `@awthaq/client`'s generated client: request a
+             code as the client `awthaq-cli` (`--client-id` overrides it),
+             print the verification URL and the user code on stderr (so
+             `--json` keeps stdout for the one result document), and open the
+             URL in a browser unless `--no-browser` is given or no opener is
+             available (only an `http(s)` URL is ever opened, as one argv
+             element). It MUST then poll `POST /device/token` starting at the
+             server's `interval`, MUST add 5 seconds to its interval on every
+             `slow_down` and never poll faster than the interval the server
+             last advised (RFC 8628 §3.5), MUST wait out a `429`, MUST give up
+             with the unavailable code after three consecutive transport
+             failures, and MUST end with the authentication code of
+             BEH-EA-225 (and a message saying to run `awthaq login` again) on
+             `expired_token`, `access_denied` or `invalid_grant`. The bearer
+             token the server issues MUST then be validated against the
+             session endpoint and stored exactly like a `--token` one. A
+             server that does not serve the device endpoints MUST be answered
+             with the unavailable code, naming the plugin and the `--token`
+             alternative. It MUST NOT print the device code or the token.
+```
+
+The flow never binds a listener (BEH-EA-208, class 3): the person completes the sign-in in a browser on this or another machine, so it works over SSH and in a container, where a loopback redirect cannot. The client id defaults to `awthaq-cli`, which the plugin registers out of the box, so installing the plugin is what turns `awthaq login` on; a deployment that renames it passes `--client-id`. The poll's clock is a `Context.Reference` (`DeviceLogin.Pacing`) so a test paces a whole login in milliseconds, and the browser opener is a port (`Browser`), so a test never launches one.
+
+*Implementation* (`DeviceLogin.ts`, `Browser.ts`, `Session.ts`; `test/DeviceLogin.test.ts`, against a real auth server on a real socket serving the real plugin, the second device played by the plugin's own service inside the pacing hook). A stock server without the plugin answers the device routes with a 404, which the client reports as `DeviceAuthorizationUnavailable`. The verification page is the application's to build: the plugin only serves `verify`, `approve` and `deny`.
+
+_Previous: [BEH-EA-306](37-device-authorization.md#beh-ea-306-grants-are-audited-erased-exported-and-retained-like-any-personal-data) | Next: none_

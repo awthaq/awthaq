@@ -181,4 +181,19 @@ describe("TMS-006: subaddressed aliases share one per-email bucket", () => {
       );
     }),
   );
+
+  // PV-241: `plugin list --rules` prints the static declaration, so it must not drift from the registry.
+  it.effect("the static rateLimits declaration matches what the layer registers", () =>
+    Effect.gen(function* () {
+      const registry = yield* RateLimits.RateLimitsRegistry;
+      assert.deepStrictEqual(
+        RateLimits.declarationDrift(Password.Password, yield* registry.registered),
+        {
+          undeclared: [],
+          unregistered: [],
+          mismatched: [],
+        },
+      );
+    }).pipe(Effect.provide(makeTestLayer({}))),
+  );
 });

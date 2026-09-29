@@ -52,7 +52,7 @@ The system is organized into seven strata plus client, tooling, and plugin packa
 | 7 Composition | (application code) | `Auth.make([...])` and the application's own `Layer.provide` stack. |
 | client | `@awthaq/client`, `@awthaq/react`, `@awthaq/web`, `@awthaq/next` | `HttpApiClient` bindings, reactive atoms, provider glue, framework adapters (`@awthaq/web` is the framework-neutral core; `@awthaq/next` is the Next adapter over it). Headless by design: no drop-in sign-in/sign-up/user-button/organization-switcher components, ever — apps build their own UI against typed contract errors and atoms. |
 | tools | `@awthaq/test`, `@awthaq/cli` | `TestAuth`, `runPluginContractTests`, the redaction guard; the `awthaq` command line (`doctor`, `config list`, `plugin list`, `routes`, `migration`, `openapi`, `seed admin`, `import`, `login`). |
-| plugins | `@awthaq/password`, `oauth`, `passkey`, `jwt`, `api-key`, `organization`, `roles`, `admin`, `scim` (shipped); `magic-link`, `two-factor` (placeholders); `saml` (specified only) | One `AuthPlugin.Service` class each. |
+| plugins | `@awthaq/password`, `oauth`, `passkey`, `jwt`, `api-key`, `organization`, `roles`, `admin`, `scim`, `device-authorization` (shipped); `magic-link`, `two-factor` (placeholders); `saml` (specified only) | One `AuthPlugin.Service` class each. |
 | migration | `@awthaq/migrate-auth0`, `@awthaq/migrate-firebase`, `@awthaq/migrate-better-auth` | Verify a foreign password hash on first sign-in, or bridge a still-live foreign session, so a cutover needs no mass reset. |
 
 ## Public API surface

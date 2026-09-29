@@ -6,14 +6,14 @@ The `awthaq` command line: inspect and operate an awthaq authentication runtime.
 awthaq [--config <path>] [--json]
   doctor [--build] [--production]                    link, configuration and insecure-default audit
   config list                                        every declared configuration input, default vs override
-  plugin list [--graph | --hooks] [--format text|json|dot]   installed plugins in the linker's order, or each hook point's declared taps
+  plugin list [--graph | --hooks | --rules] [--format text|json|dot]   installed plugins in the linker's order (with ports and taps), each hook point's declared taps, or the declared rate-limit rules
   routes                                             every endpoint, owning plugin, middleware
   openapi [--out <file>]                             the one aggregated OpenAPI document
   migration status | apply [--yes] [--dry-run] [--allow-empty]   (--database-url)
   seed admin --email <email> [--name] [--role] [--force] [--prompt-password]
   import --from better-auth|firebase|authjs|lucia --source <export> [--yes] [--dry-run]
          [--continue-on-error] [--batch-size 100] [--report <file>] [--issuer p=i] [--source-option k=v]
-  login [--token <t>] [--base-url <url>] | logout | whoami
+  login [--token <t>] [--base-url <url>] [--no-browser] [--client-id <id>] | logout | whoami
 ```
 
 Three classes of command, by what they may construct ([BEH-EA-208](../../spec/behaviors/26-cli.md)):
@@ -88,11 +88,11 @@ A federated account's issuer ([BEH-EA-125](../../spec/behaviors/16-oauth.md)) is
 
 `login --token` (or `AWTHAQ_TOKEN` + `AWTHAQ_BASE_URL`) validates the token against `GET /session` through `@awthaq/client`'s generated client and stores it only when the server accepts it. `whoami` prints who it resolves to (exit 8 when not logged in); `logout` clears it and revokes the session server-side (best effort). A token the server rotates is persisted.
 
-The credential goes to the OS store first — macOS Keychain (`security`), Linux Secret Service (`secret-tool`) — and only when none is reachable to `$XDG_CONFIG_HOME/awthaq/credentials.json` (mode 0600 in a 0700 directory) with a one-time warning; the secret never travels on a command line. `AWTHAQ_TOKEN` always wins and is never written anywhere. There is no Windows Credential Manager backend yet: Windows uses the file (whose mode bits do not restrict it there), with the warning.
+The credential goes to the OS store first — macOS Keychain (`security`), Linux Secret Service (`secret-tool`), Windows DPAPI through PowerShell (`%APPDATA%\awthaq\credential.dpapi`, an opaque blob only your Windows user can decrypt) — and only when none is reachable to `$XDG_CONFIG_HOME/awthaq/credentials.json` (mode 0600 in a 0700 directory) with a one-time warning; the secret never travels on a command line. `AWTHAQ_TOKEN` always wins and is never written anywhere. DPAPI protects against other users and offline disk theft, not against another process running as you; a Windows without PowerShell uses the file, with the warning.
 
-Interactive `awthaq login` is the device authorization grant (RFC 8628) and needs the `DeviceAuthorization` plugin ([`spec/models/13-device-authorization.md`](../../spec/models/13-device-authorization.md)), which does not exist yet: it fails with exit 9 naming that requirement.
+Interactive `awthaq login` (no token) is the device authorization grant ([RFC 8628](https://www.rfc-editor.org/rfc/rfc8628), [BEH-EA-307](../../spec/behaviors/26-cli.md)) against a server running [`@awthaq/device-authorization`](../device-authorization/README.md). It prints a verification URL and a short code on stderr (so `--json` keeps stdout for the one result document), opens the URL in your browser unless you pass `--no-browser` (only an `http(s)` URL is ever opened), and polls at the server's advised interval, **adding 5 seconds on every `slow_down`**, until you approve it on another device. It works over SSH and in a container: nothing listens locally. `--client-id` names the device-flow client the server registered for the CLI (default `awthaq-cli`, which the plugin registers out of the box). A denied or expired request exits 8 (run `awthaq login` again); a server without the plugin exits 9 and says so.
 
 ## Not done (and why)
 
-- `plugin list --graph` prints order, `dependsOn`, groups and tables. A plugin's *required ports* are its layer's requirements (a type-level fact), not derivable without evaluating layers, which manifest-only commands may not. `plugin list --hooks` prints each hook point's plugin-declared taps in the order the runtime chain runs them (`manifest.hooks`); application taps registered in the host run after those and are not listed.
+- `plugin list --graph` prints order, `dependsOn`, groups, tables, each plugin's required ports and where its declared taps sit in each hook chain. Ports are a *declaration* (`AuthPlugin.layer`'s `ports`, which the compiler checks is complete against what the layer requires): a layer's requirements have no runtime trace, and building layers is not manifest-only. `plugin list --hooks` prints each hook point's plugin-declared taps in the order the runtime chain runs them (`manifest.hooks`); application taps registered in the host run after those and are not listed. `plugin list --rules` prints each plugin's declared rate-limit rules (`AuthPlugin.Service`'s `rateLimits`, the default numbers: a plugin's configuration may tune them at build).
 - `doctor` reports what descriptors and the built application Layer expose; an override computed dynamically per request or per tenant cannot be validated before deploy ([ADR-EA-006](../../spec/decisions/006-runtime-config-separate-from-installation.md)).

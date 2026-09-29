@@ -17,7 +17,8 @@
       "@awthaq/ports": ["../ports/src/index.ts"],
       "@awthaq/roles": ["../roles/src/index.ts"],
       "@awthaq/server": ["../server/src/index.ts"],
-      "@awthaq/sql": ["../sql/src/index.ts"]
+      "@awthaq/sql": ["../sql/src/index.ts"],
+      "@awthaq/device-authorization": ["../device-authorization/src/index.ts"]
     }
   },
   "references": [
@@ -47,6 +48,9 @@
     },
     {
       "path": "../sql/tsconfig.src.json"
+    },
+    {
+      "path": "../device-authorization/tsconfig.src.json"
     }
   ]
 }

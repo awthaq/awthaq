@@ -14,7 +14,7 @@
 
 ---
 
-> **Status: implemented, pre-1.0, unpublished.** This tree is the normative source of *why* awthaq is built the way it is and of the behavior each package is meant to have, but it is no longer the only artifact: `packages/` holds a tested implementation of core, ports, persistence (SQLite, libSQL and Postgres), the HTTP contract and server, Password, OAuth, Passkey, Jwt, ApiKey (long-lived keys and `client_credentials` service tokens), Organization (teams, tenancy), Roles, the qadi bridge, Admin (impersonation, tenants), SCIM, the Effect client, React and Next.js bindings, the CLI, the test harness and three migration packages. `@awthaq/two-factor` and `@awthaq/magic-link` are still placeholder packages, and SAML, an OIDC provider and device authorization are specified here but not built. No package is published to npm (see the root [`README.md`](../README.md#publishing-status)). Where this tree and the code differ, the difference is either recorded in the affected behavior (an *Implementation* or *Deviation* note) or is a defect in one of the two; `spec/scripts/verify-traceability.sh --strict` (run by `pnpm check`) fails on the drift it can detect mechanically, and `traceability.md` says which claims rest on a passing test and which do not. Where this tree and `archive/` disagree, this tree governs.
+> **Status: implemented, pre-1.0, unpublished.** This tree is the normative source of *why* awthaq is built the way it is and of the behavior each package is meant to have, but it is no longer the only artifact: `packages/` holds a tested implementation of core, ports, persistence (SQLite, libSQL and Postgres), the HTTP contract and server, Password, OAuth, Passkey, Jwt, ApiKey (long-lived keys and `client_credentials` service tokens), Organization (teams, tenancy), Roles, the qadi bridge, Admin (impersonation, tenants), SCIM, the Effect client, React and Next.js bindings, the CLI, the test harness and three migration packages. `@awthaq/two-factor` and `@awthaq/magic-link` are still placeholder packages, and SAML and an OIDC provider are specified here but not built (device authorization, RFC 8628, ships as `@awthaq/device-authorization`). No package is published to npm (see the root [`README.md`](../README.md#publishing-status)). Where this tree and the code differ, the difference is either recorded in the affected behavior (an *Implementation* or *Deviation* note) or is a defect in one of the two; `spec/scripts/verify-traceability.sh --strict` (run by `pnpm check`) fails on the drift it can detect mechanically, and `traceability.md` says which claims rest on a passing test and which do not. Where this tree and `archive/` disagree, this tree governs.
 
 ## What this is
 
@@ -34,7 +34,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | [spec/roadmap.md](roadmap.md) | EFAUTH-RMP | The delivery roadmap (milestones M0–M8), derived from `archive/PRD.md` §23, restated against this tree's IDs, with what has shipped against each milestone. |
 | [spec/models/](models/) | `MOD-EA-001`–`015` | Sixteen files. `00-adoption-matrix.md` is an index with no `MOD` id of its own; `01`–`15` each specify one authentication-method or core-plugin domain model (see table below). |
 | [spec/decisions/](decisions/) | `ADR-EA-001`–`034` | Thirty-two architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
-| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`298` | Thirty-six files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
+| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`307` | Thirty-seven files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
 | [spec/process/](process/) | EFAUTH-PROC-01/02 | Two files: the requirement-ID scheme in full, and the definitions of done applied at each stage of work. |
 | [spec/appendices/](appendices/) | — | Five files of supporting reference material, authored alongside the rest of the tree and cross-referenced from it rather than summarized here. |
 
@@ -128,7 +128,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `23-react.md` | 177–184 | React Bindings |
 | `24-nextjs-ssr.md` | 185–192 | Next.js Server Rendering |
 | `25-testing-harness.md` | 193–200 | Testing Harness |
-| `26-cli.md` | 201–208, 225–229 | CLI |
+| `26-cli.md` | 201–208, 225–229, 307 | CLI |
 | `27-admin-impersonation.md` | 209–224 | Admin and Impersonation |
 | `28-tenancy.md` | 230–237 | Tenancy |
 | `29-saml-sp.md` | 238–245 | SAML Service Provider |
@@ -139,6 +139,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `34-webhooks.md` | 275–282 | Outbound Webhooks |
 | `35-organization.md` | 283–290 | Organization |
 | `36-jwt.md` | 291–298 | JWT |
+| `37-device-authorization.md` | 299–306 | Device Authorization |
 
 ### `spec/process/`
 
@@ -153,7 +154,7 @@ Every identifier in this tree carries the infix `EA` and a series prefix that sa
 
 ## `features/` is the acceptance suite
 
-The repository root also holds [`features/`](../features/), a Gherkin acceptance suite (`features/features/*.feature`) that restates the behavior catalog in `spec/behaviors/` as scenarios, one `Rule:` per `BEH-EA-NNN` and one `REQ-EA-NNN`-tagged `Scenario:`/`Scenario Outline:` per requirement clause and named edge case. It is normative in the same sense `behaviors/` is — every scenario traces to a `BEH-EA` id and does not invent requirements beyond what that id states — but a scenario is only runtime evidence if it is wired. The suite runs with `pnpm test:bdd` (`features/vitest.config.ts`, `@effect-cucumber/vitest`, step definitions in `features/step-definitions/`) inside `pnpm check`: every feature file is wired against the real plugins except the ones tagged `@skip @unwired` (a plugin that is not built yet, today only device authorization), and a scenario-level `@skip` always carries a `# @skip:` rationale — a passing wired scenario is evidence, an unwired one is a restated requirement only. `spec/traceability.md` §6 has the per-file wiring status. [`behaviors/25-testing-harness.md`](behaviors/25-testing-harness.md) (`BEH-EA-193`–`200`) specifies the `@awthaq/test` harness (`TestAuth`, `runPluginContractTests`, the redaction guard) that plugin packages' own suites use. See [`traceability.md` §6](traceability.md#6-acceptance-scenarios-req-ea) for the `REQ-EA` allocation and [`features/README.md`](../features/README.md) for the suite's own structure and conventions.
+The repository root also holds [`features/`](../features/), a Gherkin acceptance suite (`features/features/*.feature`) that restates the behavior catalog in `spec/behaviors/` as scenarios, one `Rule:` per `BEH-EA-NNN` and one `REQ-EA-NNN`-tagged `Scenario:`/`Scenario Outline:` per requirement clause and named edge case. It is normative in the same sense `behaviors/` is — every scenario traces to a `BEH-EA` id and does not invent requirements beyond what that id states — but a scenario is only runtime evidence if it is wired. The suite runs with `pnpm test:bdd` (`features/vitest.config.ts`, `@effect-cucumber/vitest`, step definitions in `features/step-definitions/`) inside `pnpm check`: every feature file is wired against the real plugins except the ones tagged `@skip @unwired` (a plugin that is not built yet; none today), and a scenario-level `@skip` always carries a `# @skip:` rationale — a passing wired scenario is evidence, an unwired one is a restated requirement only. `spec/traceability.md` §6 has the per-file wiring status. [`behaviors/25-testing-harness.md`](behaviors/25-testing-harness.md) (`BEH-EA-193`–`200`) specifies the `@awthaq/test` harness (`TestAuth`, `runPluginContractTests`, the redaction guard) that plugin packages' own suites use. See [`traceability.md` §6](traceability.md#6-acceptance-scenarios-req-ea) for the `REQ-EA` allocation and [`features/README.md`](../features/README.md) for the suite's own structure and conventions.
 
 ## `research/` and `better-auth/` are evidence, not specification
 

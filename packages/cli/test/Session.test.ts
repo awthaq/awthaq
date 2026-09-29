@@ -27,7 +27,7 @@ describe("login --token", () => {
   it.effect("validates the token against the server, stores it, and prints no secret", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const server = yield* serveAuth;
+        const server = yield* serveAuth();
         const { token, sessionId } = yield* server.issue("ada@example.com");
         const creds = yield* memoryCredentials();
         const result = yield* runCli(
@@ -50,7 +50,7 @@ describe("login --token", () => {
   it.effect("rejects an invalid token (exit 8) and stores nothing", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const server = yield* serveAuth;
+        const server = yield* serveAuth();
         const creds = yield* memoryCredentials();
         const result = yield* runCli(
           ["login", "--token", "not-a-real-token", "--base-url", server.baseUrl],
@@ -68,7 +68,7 @@ describe("login --token", () => {
   it.effect("AWTHAQ_TOKEN and AWTHAQ_BASE_URL make it fully non-interactive", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const server = yield* serveAuth;
+        const server = yield* serveAuth();
         const { token } = yield* server.issue("grace@example.com");
         const creds = yield* memoryCredentials();
         const result = yield* runCli(["login"], undefined, { credentials: creds.layer }).pipe(
@@ -78,18 +78,6 @@ describe("login --token", () => {
         assert.strictEqual(yield* Ref.get(creds.writes), 1);
       }),
     ).pipe(Effect.provide(NodeHttpServer.layerTest)),
-  );
-
-  it.effect("without a token it needs the DeviceAuthorization plugin and says so (exit 9)", () =>
-    Effect.gen(function* () {
-      const creds = yield* memoryCredentials();
-      const result = yield* runCli(["login", "--base-url", "http://127.0.0.1:1"], undefined, {
-        credentials: creds.layer,
-      });
-      assert.strictEqual(result.code, 9);
-      assert.include(everything(result), "DeviceAuthorization");
-      assert.strictEqual(yield* Ref.get(creds.writes), 0);
-    }),
   );
 
   it.effect("needs to know the server: no --base-url and none stored is a usage error", () =>
@@ -120,7 +108,7 @@ describe("whoami", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const server = yield* serveAuth;
+          const server = yield* serveAuth();
           const { token, sessionId } = yield* server.issue("ada@example.com");
           const creds = yield* memoryCredentials({
             baseUrl: server.baseUrl,
@@ -151,7 +139,7 @@ describe("whoami", () => {
   it.effect("exits 8 when the server has revoked the session", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const server = yield* serveAuth;
+        const server = yield* serveAuth();
         const { token, userId } = yield* server.issue("ada@example.com");
         yield* server.revokeAll(userId);
         const creds = yield* memoryCredentials({
@@ -168,7 +156,7 @@ describe("whoami", () => {
   it.effect("AWTHAQ_TOKEN wins over the stored credential and is never persisted", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const server = yield* serveAuth;
+        const server = yield* serveAuth();
         const stored = yield* server.issue("stored@example.com");
         const envUser = yield* server.issue("env@example.com");
         const creds = yield* memoryCredentials({
@@ -240,7 +228,7 @@ describe("logout", () => {
   it.effect("clears the credential and revokes the session on the server", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const server = yield* serveAuth;
+        const server = yield* serveAuth();
         const { token } = yield* server.issue("ada@example.com");
         const creds = yield* memoryCredentials({
           baseUrl: server.baseUrl,
@@ -289,7 +277,7 @@ describe("session commands never start a listener (BEH-EA-208)", () => {
   it.effect("login, whoami and logout call no Server.listen", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const server = yield* serveAuth;
+        const server = yield* serveAuth();
         const { token } = yield* server.issue("ada@example.com");
         const listen = vi.spyOn(net.Server.prototype, "listen");
         try {

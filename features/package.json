@@ -15,6 +15,7 @@
     "@awthaq/cli": "workspace:*",
     "@awthaq/client": "workspace:*",
     "@awthaq/core": "workspace:*",
+    "@awthaq/device-authorization": "workspace:*",
     "@awthaq/jwt": "workspace:*",
     "@awthaq/magic-link": "workspace:*",
     "@awthaq/next": "workspace:*",

@@ -110,3 +110,6 @@ entries:
   - id: "BEH-EA-291"
     file: "36-jwt.md"
     title: "JWT"
+  - id: "BEH-EA-299"
+    file: "37-device-authorization.md"
+    title: "Device Authorization"

@@ -60,3 +60,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `cli-session-login-carveout`. Duplicate of `CTA-002` — closed by that issue's fix. Evidence at HEAD ec065a7: `spec/behaviors/26-cli.md:156`. Full dossier: `.plan/slices/12-spec.md`. Status → resolved.
 
 **Resolved (2026-09-29):** Duplicate of `CTA-002-cli-tool-auth-specialist` — closed by its fix (see that issue's Resolved comment).
+
+**Resolved (2026-09-29):** The carve-out is implemented, not just written: login is an outbound client (BEH-EA-227/307), the feature scenario 'login polls the device endpoint as an outbound client and never opens a listener' (REQ-EA-670) is wired over a real server and asserts no listener starts.

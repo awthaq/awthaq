@@ -118,6 +118,13 @@ export interface OAuthConfigInput extends Partial<
   readonly rateLimits?: Partial<OAuthRateLimits>;
 }
 
+/** PV-241: the default throttles, which `OAuth`'s static `rateLimits` declaration reads. */
+export const defaultRateLimits = {
+  authorize: { limit: 30, window: Duration.minutes(1) },
+  callback: { limit: 20, window: Duration.minutes(1) },
+  token: { limit: 20, window: Duration.minutes(1) },
+} satisfies OAuthRateLimits;
+
 const defaults = {
   providers: [],
   linking: "explicit",
@@ -133,11 +140,7 @@ const defaults = {
     discovery: Duration.seconds(10),
   },
   retry: { times: 2, base: Duration.millis(50) },
-  rateLimits: {
-    authorize: { limit: 30, window: Duration.minutes(1) },
-    callback: { limit: 20, window: Duration.minutes(1) },
-    token: { limit: 20, window: Duration.minutes(1) },
-  },
+  rateLimits: defaultRateLimits,
   clockSkew: Duration.seconds(60),
   maxIdTokenAge: Option.none(),
 } satisfies Omit<OAuthConfigShape, "baseUrl">;
