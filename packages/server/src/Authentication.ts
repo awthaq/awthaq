@@ -80,12 +80,14 @@ export interface PostAuthResponseHookShape {
    * PDR-003: `context.scheme` names the credential that authenticated the
    * request, so a hook can treat a cookie-authenticated browser request
    * differently from a bearer-authenticated API client (e.g. `@awthaq/jwt`'s
-   * `mirrorResponses: "bearer"`).
+   * `mirrorResponses: "bearer"`). `"impersonation"` is a cookie-delivered
+   * episode (`__Host-impersonation`), so a hook keyed on `"bearer"` treats it
+   * like `"cookie"`.
    */
   readonly decorate: (
     principal: Api.Principal,
     response: HttpServerResponse.HttpServerResponse,
-    context: { readonly scheme: "cookie" | "bearer" },
+    context: { readonly scheme: "cookie" | "bearer" | "impersonation" },
   ) => Effect.Effect<HttpServerResponse.HttpServerResponse>;
 }
 
