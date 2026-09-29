@@ -3,7 +3,7 @@ ID: "AH-007"
 Title: "Catch-all Given(\"{string}\") step dispatches on substring content"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/step-definitions/PasswordSteps.ts:481"
 Auditor: "aslak-hellesoy"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `—` · reported by **Aslak Hellesøy — Creator of Cucumber** (`aslak-hellesoy`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Replace with explicitly escaped literal steps (escape (, ), {, } in the pattern)
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-step-definition-quality`. Evidence at HEAD ec065a7: `features/step-definitions/PasswordSteps.ts:492`. Fix: Replace the bare {string} Given with a dedicated custom parameter type that maps the exact literal config expressions to Password.config values (failing on an unknown literal), delete the fallback branch, and add a lint guard forbidding bare-{string} step patterns. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: bare Given({string}) replaced by the typed parameter types passwordConfig/breachFailure (PasswordParameterTypes.ts), oauthConfig and passkeyConfig; an unknown literal fails loudly at feature load. Guard test features/features/_guard/step-patterns.steps.test.ts fails on any exactly-{string} step pattern in step-definitions.

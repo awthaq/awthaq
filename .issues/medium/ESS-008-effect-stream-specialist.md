@@ -3,7 +3,7 @@ ID: "ESS-008"
 Title: "13-events.feature's stream-behavior scenarios have no step definitions — the tests that would catch ESS-001 are unwired"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/features/04-cross-cutting/13-events.feature:32"
 Auditor: "effect-stream-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `—` · reported by **Effect Stream Specialist** (`effect-stream-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Implement an EventsWorld with a controllably slow subscriber and a capacity prob
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-feature-wiring`. Evidence at HEAD ec065a7: `features/features/04-cross-cutting/13-events.feature:7`. Fix: Wire 13-events.feature fully (all 8 Rules, not just decision 36's Tier-3 happy path) with an EventsWorld that exposes a controllably slow subscriber, a capacity probe, AuditLog reads and a log capture. (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: 13-events.feature is wired in full, all 8 Rules and 19 scenarios, with an EventsWorld exposing a slow subscriber, a capacity probe, AuditLog reads and a log capture (features/step-definitions/EventsWorld.ts, EventsSteps.ts). Mutation check: reverting PubSub.dropping to PubSub.bounded fails three scenarios. The observer-error log now names the subscription (REQ-EA-275), with a package test.

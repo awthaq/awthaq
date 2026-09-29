@@ -45,3 +45,5 @@ Before adding any new bridge surface, generate step definitions for features 18-
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `bdd-feature-wiring`. Duplicate of `AH-003-aslak-hellesoy` — closed by that issue's fix. Evidence at HEAD ec065a7: `features/features/06-roles-and-authorization-bridge/19-qadi-bridge-path-a.feature:7`. Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `AH-003-aslak-hellesoy` — closed by its fix (see that issue's Resolved comment).

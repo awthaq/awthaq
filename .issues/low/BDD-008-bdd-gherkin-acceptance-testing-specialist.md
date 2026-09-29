@@ -3,7 +3,7 @@ ID: "BDD-008"
 Title: "SessionSteps Then-step hardcodes actor 'alice' inside a parameterized assertion"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/step-definitions/SessionSteps.ts:55"
 Auditor: "bdd-gherkin-acceptance-testing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `—` · reported by **BDD/Gherkin Acceptance Testing Specialist** (`bdd-gherkin-acceptance-testing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Parameterize the actor: 'she sees {int} sessions...' should resolve the acting a
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-step-definition-quality`. Evidence at HEAD ec065a7: `features/step-definitions/SessionSteps.ts:52`. Fix: Introduce a 'current actor' cell in the World set by every step that names an actor, and have pronoun/implicit-subject Thens read it instead of the literal 'alice'. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: no Then hardcodes getActor(alice) in the session and password steps; pronoun steps resolve through the registry current actor (the one remaining literal is a scenario that names alice).

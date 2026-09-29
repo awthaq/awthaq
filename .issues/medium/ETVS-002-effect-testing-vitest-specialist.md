@@ -3,7 +3,7 @@ ID: "ETVS-002"
 Title: "Property-based testing entirely absent despite STACK.md committing to it"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "STACK.md:35"
 Auditor: "effect-testing-vitest-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `—` · reported by **Effect Testing & @effect/vitest Specialist** (`effect-testing-vitest-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Add property tests via @effect/vitest's property support + Arbitrary.schema for:
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `property-based-testing`. Evidence at HEAD ec065a7: `STACK.md:35`. Fix: Introduce Schema-derived property tests with @effect/vitest `it.prop`/`it.effect.prop`, starting with pure codecs and wire schemas. (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: 33 Schema-derived properties with @effect/vitest it.prop/it.effect.prop (no fast-check needed in Effect v4): PermissionEngine.canGrant, session token parsing, PHC/scrypt hash parsing, SCIM filter parsing, wire codec round trips (packages/*/test/*.property.test.ts). Mutation-checked; found and fixed PV-310 (resource named like an Object.prototype member threw).

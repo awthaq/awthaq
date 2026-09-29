@@ -3,7 +3,7 @@ ID: "AH-005"
 Title: "Sessions feature is 75% @skip'd — harness cannot observe what the spec demands"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/features/02-domain/07-sessions.feature:20"
 Auditor: "aslak-hellesoy"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `—` · reported by **Aslak Hellesøy — Creator of Cucumber** (`aslak-hellesoy`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ Extend SessionWorld with a repository-read handle and a structured-log capture (
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-skip-debt`. Evidence at HEAD ec065a7: `features/features/02-domain/07-sessions.feature:20`. Fix: Extend SessionWorld with (a) a repository read handle, (b) a structured-log/span capture, (c) TestClock-driven time control, then un-skip every sessions scenario whose skip rationale is a World-capability gap; keep @skip only for timing side-channel (REQ-EA-157..159) and cookie-browser-behaviour (REQ-EA-156) prunes. (effort L). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: 07-sessions.feature runs 21 of 26 scenarios. SessionWorld now has real SQLite rows (readable session rows), a TestClock started at the real now, RedactionGuard log/span capture and an in-flight gate endpoint. The 5 remaining skips are email change (no changeEmail capability), the browser cookie jar (REQ-EA-156) and constant-time timing (157-159), each naming its covering test.

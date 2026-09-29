@@ -3,7 +3,7 @@ ID: "PHS-005"
 Title: "Rehash-on-login upgrade path has no positive test; @skip'd BDD scenarios claim coverage that does not exist"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/features/05-authentication-methods/15-password.feature:110"
 Auditor: "password-hashing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `—` · reported by **Password Hashing Specialist** (`password-hashing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Add a domain test: signUp under a layer configured with low params, rebuild the 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-skip-debt`. Evidence at HEAD ec065a7: `features/features/05-authentication-methods/15-password.feature:108`. Fix: Add a positive domain test for BEH-EA-116 rehash-on-login, then un-skip REQ-EA-313/314 via a PasswordWorld credential-hash read handle (or correct the skip text to cite the new test). (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: positive unit test for rehash-on-login added to packages/password/test/Password.test.ts and REQ-EA-313/314/315 un-skipped through a credential-hash read handle in PasswordWorld.

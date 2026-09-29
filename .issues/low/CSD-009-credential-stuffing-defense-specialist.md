@@ -3,7 +3,7 @@ ID: "CSD-009"
 Title: "5xx breach-check scenario passes coincidentally and cannot detect the CSD-001 defect"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/step-definitions/PasswordSteps.ts:532"
 Auditor: "credential-stuffing-defense-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `—` · reported by **Credential Stuffing Defense Specialist** (`credential-stuffing-defense-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Make the scenario observable: under `onUnavailable: "reject"`, assert sign-up is
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `bdd-step-definition-quality`. Evidence at HEAD ec065a7: `features/step-definitions/PasswordSteps.ts:541`. Fix: Move the per-case failure wiring into the Given and add an acceptance-level fail-closed counterpart: a Scenario Outline over timeout/5xx/malformed under onUnavailable: "reject" expecting 422, which distinguishes 'unavailable' from 'not breached'. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: the breach-provider failure Given now arranges the failing HttpClient in the World and the When issues the request; a Scenario Outline over timeout/5xx/malformed under onUnavailable reject expects 422. Mutation: removing filterStatusOk fails the 5xx row.

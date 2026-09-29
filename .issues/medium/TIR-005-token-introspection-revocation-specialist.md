@@ -3,7 +3,7 @@ ID: "TIR-005"
 Title: "BDD step asserting the reset transaction is an empty stub"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/step-definitions/PasswordSteps.ts:377"
 Auditor: "token-introspection-revocation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `—` · reported by **Token Introspection & Revocation Specialist** (`token-introspection-revocation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Implement the step for real - e.g. inject a failing SqlClient after updateCreden
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-step-definition-quality`. Evidence at HEAD ec065a7: `features/step-definitions/PasswordSteps.ts:384`. Fix: Make REQ-EA-317's transaction and token-consumed Thens observable: run this scenario against a SQLite-backed World (real transactions) with a fault-injection hook, and assert both the happy commit and rollback-on-failure; implement 'the token is consumed' by replaying the token and expecting 410. (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: REQ-EA-317 now runs against a SQLite-backed PasswordWorld with real SqlTransaction and a fault-injection hook; the token-consumed Then replays the token and expects 410; a companion rollback scenario asserts the token, password and session revocation roll back together. Mutation: bypassing withTransaction in confirmReset fails the rollback scenario.

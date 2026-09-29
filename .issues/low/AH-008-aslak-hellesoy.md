@@ -3,7 +3,7 @@ ID: "AH-008"
 Title: "Scenario text documents fiction: named sessions and emails are silently replaced in wiring"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/step-definitions/PasswordSteps.ts:322"
 Auditor: "aslak-hellesoy"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `—` · reported by **Aslak Hellesøy — Creator of Cucumber** (`aslak-hellesoy`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Either make the World track sessions under the names the Gherkin uses (a session
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-step-definition-quality`. Evidence at HEAD ec065a7: `features/step-definitions/PasswordSteps.ts:320`. Fix: Track sessions by the Gherkin name in the Password World (as SessionWorld's aliasActor/sessionIdOf already do) and use the emails the feature text names; per-scenario World isolation removes the need for suffixed emails. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: the password World tracks sessions and actors by the Gherkin names (makeNamedRegistry in shared/Harness.ts) and uses the emails the scenario text names; renaming alice/s1 in the feature still passes.

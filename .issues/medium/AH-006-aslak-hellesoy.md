@@ -3,7 +3,7 @@ ID: "AH-006"
 Title: "Suite self-description is stale: README and STYLE claim pre-implementation with no runner"
 Level: medium
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/README.md:5"
 Auditor: "aslak-hellesoy"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `—` · reported by **Aslak Hellesøy — Creator of Cucumber** (`aslak-hellesoy`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Rewrite README/STYLE for the current state: describe the wired/unwired split, th
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-suite-docs`. Evidence at HEAD ec065a7: `features/README.md:5`. Fix: Rewrite features/README.md and features/STYLE.md to the real operating model (wired/unwired split, @skip/@unwired conventions, allocator-owned REQ tags, run commands) and scope the pre-implementation banner to @unwired files only. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: features/README.md and STYLE.md describe the real operating model (run commands, wired/pruned/unwired states, allocator-owned REQ tags, the standard header, skip-rationale rule). Merged with P19's header replacement; the pre-implementation claims are gone.

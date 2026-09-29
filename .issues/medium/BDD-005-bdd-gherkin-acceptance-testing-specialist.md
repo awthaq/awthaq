@@ -3,7 +3,7 @@ ID: "BDD-005"
 Title: "Acceptance suite absent for 4 shipped plugins (magic-link, api-key, two-factor, jwt)"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/00-adoption-matrix.md:118"
 Auditor: "bdd-gherkin-acceptance-testing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `—` · reported by **BDD/Gherkin Acceptance Testing Specialist** (`bdd-gherkin-acceptance-testing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Before adding more Phase-2 plugin behavior, author the missing spec/behaviors en
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `bdd-plugin-coverage`. Evidence at HEAD ec065a7: `packages/two-factor/src/index.ts:8`. Fix: Close the real gap — jwt and organization ship without behaviors or acceptance scenarios — by writing their spec/behaviors files and .feature restatements; record magic-link/api-key/two-factor as 'behaviors-before-code' prerequisites of their builds. (effort L). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: jwt now has spec/behaviors/32-jwt.md (BEH-EA-266..273) and a wired 32-jwt.feature (44 scenarios, all run), organization the same (see MTI-011). magic-link, api-key and two-factor stay behaviors-before-code prerequisites of their builds (P15/P16); no feature files were invented for them.

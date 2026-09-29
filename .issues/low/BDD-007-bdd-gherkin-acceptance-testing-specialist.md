@@ -3,7 +3,7 @@ ID: "BDD-007"
 Title: "World harness helpers duplicated per plugin instead of shared"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/step-definitions/SessionWorld.ts:52"
 Auditor: "bdd-gherkin-acceptance-testing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `—` · reported by **BDD/Gherkin Acceptance Testing Specialist** (`bdd-gherkin-acceptance-testing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Extract cookieFrom, STRONG_PASSWORD, the capturing mailer, TestServices, and the
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-step-definition-quality`. Evidence at HEAD ec065a7: `features/step-definitions/SessionWorld.ts:71`. Fix: Extract the shared harness (cookieFrom, STRONG_PASSWORD, capturingMailer factory, TestServices, letForkedFibersRun, request helper, named-actor/session registry) into features/step-definitions/shared/ and import it from every World. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: features/step-definitions/shared/Harness.ts now owns cookieFrom, setCookieFrom, STRONG_PASSWORD, TestServices, letForkedFibersRun, makeCapturingMailer, makeNamedRegistry and the cheap argon2id/scrypt layers; the Worlds import them (grep for the duplicated definitions in *World.ts is empty). Scenario counts unchanged by the refactor.

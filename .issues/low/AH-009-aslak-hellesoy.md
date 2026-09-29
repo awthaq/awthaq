@@ -3,7 +3,7 @@ ID: "AH-009"
 Title: "Replay scenario asserts the same status twice and no-ops its non-repetition claim"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/step-definitions/PasswordSteps.ts:462"
 Auditor: "aslak-hellesoy"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `—` · reported by **Aslak Hellesøy — Creator of Cucumber** (`aslak-hellesoy`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Make the middle Then meaningful (e.g. assert publishedEvents contains no second 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `bdd-step-definition-quality`. Evidence at HEAD ec065a7: `features/step-definitions/PasswordSteps.ts:473`. Fix: Make 'the replayed action is not performed a second time' observable: snapshot the published-events log (and the user's verified state) before the replay and assert the replay added only `auth.token.replay` and changed no user state. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: the replayed action is not performed a second time now snapshots the published-events log and user state before the replay and asserts only auth.token.replay was added. Not mutation-tested.

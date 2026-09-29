@@ -48,3 +48,5 @@ Move the shipping-gap ledger into a committed file (or issue tracker ids) refere
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `bdd-skip-debt`. Duplicate of `AH-005-aslak-hellesoy` — closed by that issue's fix. Evidence at HEAD ec065a7: `features/features/02-domain/07-sessions.feature:97`. Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `AH-005-aslak-hellesoy` — closed by its fix (see that issue's Resolved comment).

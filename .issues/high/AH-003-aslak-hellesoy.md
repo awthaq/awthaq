@@ -3,7 +3,7 @@ ID: "AH-003"
 Title: "Only 6 of 28 feature files are executable; ~15% of the specification runs"
 Level: high
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/vitest.config.ts:19"
 Auditor: "aslak-hellesoy"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `testing` · `—` · reported by **Aslak Hellesøy — Creator of Cucumber** (`aslak-hellesoy`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ _Triage notes and discussion append here._
 **Decision (2026-09-19):** Resolved via [BDD feature-file wiring prioritization](../../.scratch/resolve-ready-for-human-findings/issues/36-bdd-feature-wiring-prioritization.md) — a 5-tier risk-based priority order (auth-middleware/CSRF/error-mapping/verification-tokens/users-accounts first, client/tooling last) with a tiered minimal-wiring-depth policy (happy-path + one failure-mode scenario per Rule for Tier 1-2, happy-path-only for Tiers 3-5). Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-feature-wiring`. Evidence at HEAD ec065a7: `features/vitest.config.ts:32`. Fix: Execute decision 36 (.scratch/resolve-ready-for-human-findings/issues/36-bdd-feature-wiring-prioritization.md): wire real step definitions into the 22 @skip @unwired feature files in its 5-tier risk order with the tiered depth policy, and add a per-file wiring-status table to spec/traceability.md §6. (effort XL). Full dossier: `.plan/slices/13-repo-features-tooling.md`.
+
+**Resolved (2026-09-29):** P20a: 32 of 33 feature files are now wired to real step definitions in decision 36's tier order (Tier 1 http-layer/verification/users, Tier 2 qadi bridge, Tier 3 hooks/events/rate-limiting, Tier 4 foundations and strata with type-gate modules for the compile-time Rules, Tier 5 client/react/next/testing-harness/cli), plus the new organization, jwt, multi-tenancy and SCIM features. 940 scenario nodes run and pass in `pnpm run test:bdd` (about 13 s), 185 are pruned or unwired, each with a concrete `# @skip:` rationale naming a covering test or a blocking issue. Only 28-device-authorization and the new 29-saml-sp remain `@skip @unwired` because their plugins are not built (DAG-005, AOMS-009/SFS-003). The per-file wiring-status table is in spec/traceability.md section 6. Real defects surfaced by wiring are filed as PV-220/221/230/240/241/250..253/260..263 (open) or fixed (PV-300, PV-310, RateLimits ordering, two SCIM defects). Gates: typecheck 0 errors, root tests, bdd, spec:verify:strict, check:readmes, circular, package:smoke, knip, oxlint on touched packages.

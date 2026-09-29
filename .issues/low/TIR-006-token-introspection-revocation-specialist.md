@@ -3,7 +3,7 @@ ID: "TIR-006"
 Title: "revokeAll missing from BEH-EA-031 spec and BDD endpoint table"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/features/01-contract-and-persistence/04-contract-stratum.feature:200"
 Auditor: "token-introspection-revocation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `—` · reported by **Token Introspection & Revocation Specialist** (`token-introspection-revocation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Amend BEH-EA-031 to six endpoints, add the revoke-all row to the feature table w
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-suite-docs`. Evidence at HEAD ec065a7: `spec/behaviors/04-contract-stratum.md:142`. Fix: Amend BEH-EA-031 to six endpoints, add revokeAll to the 04-contract-stratum endpoint table, and add a wired sessions scenario for revoke-all under BEH-EA-054. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: BEH-EA-031 lists six endpoints including revokeAll, the 04-contract-stratum table carries the revokeAll row, BEH-EA-054 has the revoke-all semantics sentence, and 07-sessions.feature has the wired revoke-all scenario.

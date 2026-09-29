@@ -47,3 +47,5 @@ Add an organization lifecycle feature file (28-organization.feature) encoding th
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `bdd-organization-feature`. Duplicate of `MTI-011` — closed by that issue's fix. Evidence at HEAD ec065a7: `features/traceability.md:474`. Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `MTI-011-multi-tenant-isolation-specialist` — closed by its fix (see that issue's Resolved comment).

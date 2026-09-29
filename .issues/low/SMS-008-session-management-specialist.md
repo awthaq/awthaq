@@ -3,7 +3,7 @@ ID: "SMS-008"
 Title: "The only wire-testable BEH-EA-053 scenario is @skip'd, leaving privilege-change rotation unguarded"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/features/02-domain/07-sessions.feature:167"
 Auditor: "session-management-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `—` · reported by **Session Management Specialist** (`session-management-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -50,3 +50,5 @@ Restructure the Outline into a single non-outline scenario for password change (
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-skip-debt`. Evidence at HEAD ec065a7: `features/features/02-domain/07-sessions.feature:167`. Fix: Split the Outline: a plain Scenario for password change (wired, runs now) and keep an @skip'd scenario (or Outline) for email change with an explicit 'no changeEmail capability' rationale. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: REQ-EA-148 is now the plain password-change scenario and runs; the email-change scenario is separate and skipped with the no-changeEmail rationale.

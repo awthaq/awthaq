@@ -3,7 +3,7 @@ ID: "OCM-004"
 Title: "M2M BDD acceptance (REQ-EA-199) has no step definitions — the machine path is unexecuted prose"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/features/03-http-layer/09-authentication-middleware.feature:136"
 Auditor: "oauth2-client-credentials-m2m-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `—` · reported by **OAuth2 Client Credentials / M2M Specialist** (`oauth2-client-credentials-m2m-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -45,3 +45,5 @@ When M7 lands, add AuthenticationSteps.ts covering REQ-EA-197 through REQ-EA-203
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `bdd-feature-wiring`. Evidence at HEAD ec065a7: `features/features/03-http-layer/09-authentication-middleware.feature:136`. Fix: Wire 09-authentication-middleware.feature as AH-003 Tier 1 now (all Rules except the ApiKey scenarios), keep REQ-EA-199/201 explicitly @skip'd as 'blocked by api-key plugin (OCM-001)', and wire them when packages/api-key ships ApiKeyAuthentication. (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: 09-authentication-middleware.feature is wired in full (19/19). packages/api-key now ships, so REQ-EA-199/201 are wired against MachineAuthentication rather than skipped (the scenario text said ApiKeyAuthentication, corrected to the shipped name).

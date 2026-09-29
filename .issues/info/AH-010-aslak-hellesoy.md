@@ -3,7 +3,7 @@ ID: "AH-010"
 Title: "Traceability manifest stale: 602/26 documented vs 627 tags in 27 spec files"
 Level: info
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/traceability.md:17"
 Auditor: "aslak-hellesoy"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `docs` · `—` · reported by **Aslak Hellesøy — Creator of Cucumber** (`aslak-hellesoy`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Same fix as AH-001 (re-run allocator, regenerate), plus a cheap CI assertion tha
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `bdd-suite-docs`. Already fixed by commit 6887fb5. Evidence at HEAD ec065a7: `features/traceability.md:17`. Fix: Harden spec/scripts/verify-traceability.sh check 4 into a bijection check between @REQ-EA tags in features/features and rows of features/traceability.md, and refresh its stale 602 comments. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: spec/scripts/verify-traceability.sh check 4a fails on a duplicated tag, a tag with no manifest row, a manifest row with no tag, a duplicated row or a wrong header count; the allocator now also refuses a duplicate inside one file. Doing so found five real duplicates (REQ-EA-333/339/640/641/642), fixed.

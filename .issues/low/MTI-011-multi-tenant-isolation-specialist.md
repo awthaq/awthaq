@@ -3,7 +3,7 @@ ID: "MTI-011"
 Title: "No adversarial cross-tenant test suite; the BDD suite has no organization feature at all"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/README.md:9"
 Auditor: "multi-tenant-isolation-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `—` · reported by **Multi-Tenant Isolation Specialist** (`multi-tenant-isolation-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -48,3 +48,5 @@ Add an organization BDD feature plus an adversarial isolation suite (tenant A pr
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-organization-feature`. Evidence at HEAD ec065a7: `features/README.md:9`. Fix: Author spec/behaviors/28-organization.md (BEH-EA-221..228) from spec/models/14-organization.md, a matching 10-organization/28-organization.feature covering lifecycle (owner invariant, invitation expire/re-invite/cancel, limits, DAC escalation guard, active context) plus an adversarial cross-tenant Rule, and wire it with OrganizationWorld/OrganizationSteps. (effort L). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: spec/behaviors/31-organization.md (BEH-EA-258..265) and features/features/10-organization/31-organization.feature (62 scenarios, 61 run) with an adversarial cross-tenant Rule. Wiring found and fixed a real existence oracle (PV-300): leave and the team endpoints answered a non-member differently for an existing organization than for an unknown id. The impersonating-admin scenario stays skipped: nothing composes admin with organization today.

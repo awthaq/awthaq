@@ -3,7 +3,7 @@ ID: "AH-004"
 Title: "Given/When inversion: Given performs the action while When is a stub"
 Level: medium
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "features/step-definitions/PasswordSteps.ts:164"
 Auditor: "aslak-hellesoy"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `testing` · `—` · reported by **Aslak Hellesøy — Creator of Cucumber** (`aslak-hellesoy`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -53,3 +53,5 @@ Move the request-issuing code from Givens into the matching Whens; make precondi
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `bdd-step-definition-quality`. Evidence at HEAD ec065a7: `features/step-definitions/PasswordSteps.ts:132`. Fix: Move every request-issuing body from a Given into its matching When; make precondition Givens arrange state (store the attempt parameters in the World) or assert it (query the store / call an endpoint and assert absence). (effort M). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** P20a: Given/When inversion removed in the password (REQ-EA-307/308, no user exists), session (has no existing session, a session is issued) and oauth steps; Givens now arrange or assert absence and Whens act. The remaining bodies that are only Effect.void are narrative Givens carrying a justification comment (checked with a script over all *Steps.ts).
