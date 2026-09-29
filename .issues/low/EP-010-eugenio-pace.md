@@ -3,7 +3,7 @@ ID: "EP-010"
 Title: "Invitations accepted from unverified emails by default"
 Level: low
 Category: "security"
-Status: ready-for-human
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:83"
 Auditor: "eugenio-pace"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `organization` · reported by **Co-founder/former CEO of Auth0** (`eugenio-pace`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -56,3 +56,5 @@ Flip the default to true (verification is already plumbed through @awthaq/core's
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-config-and-tenancy`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:83`. Fix: Flip requireEmailVerificationOnInvitation to true (pending decision) so membership is conferred only on a verified address. (effort S). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option (flip the default) per plan; user may revisit. requireEmailVerificationOnInvitation now defaults to true; fixtures that accept invitations verify the invitee first (test helper verifiedUser). Tests: default refuses an unverified invitee with EmailVerificationRequired, verifying unlocks acceptance, config({ requireEmailVerificationOnInvitation: false }) restores the old behaviour.

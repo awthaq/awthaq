@@ -28,6 +28,7 @@ import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Sessions from "../src/Sessions.ts";
+import * as Tenant from "../src/Tenant.ts";
 import * as Users from "../src/Users.ts";
 
 const MemoryLayer = Sessions.layerMemory.pipe(
@@ -73,7 +74,8 @@ const Migrated = Layer.effectDiscard(
         supersededBy TEXT,
         supersededAt TEXT,
         reusedAt TEXT,
-        amr TEXT NOT NULL DEFAULT '[]'
+        amr TEXT NOT NULL DEFAULT '[]',
+        tenantId TEXT
       )
     `;
   }),
@@ -120,6 +122,23 @@ const suite = (
         }).pipe(Effect.provide(layer)),
     );
 
+    // DRS-001 (ADR-EA-018): a session carries the tenant it was issued under,
+    // so a multi-tenant host can refuse a cookie minted for another tenant.
+    it.effect("DRS-001: issue stamps the ambient tenant and verify reports it", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const tenanted = yield* sessions.issue({ userId }).pipe(Tenant.withTenant("tenant-1"));
+        assert.deepStrictEqual(tenanted.session.tenantId, Option.some("tenant-1"));
+        const plain = yield* sessions.issue({ userId });
+        assert.isTrue(Option.isNone(plain.session.tenantId));
+        // Read under a different ambient tenant: the recorded one is what comes back.
+        const { session } = yield* sessions
+          .verify(tenanted.token)
+          .pipe(Tenant.withTenant("tenant-2"));
+        assert.deepStrictEqual(session.tenantId, Option.some("tenant-1"));
+      }).pipe(Effect.provide(layer)),
+    );
+
     // RSC-001: a `SessionView` must never carry the stored secret hash (or
     // any other internal row field) at runtime — its own doc comment
     // promises "never the secret, never the stored hash," and a careless
@@ -143,6 +162,7 @@ const suite = (
           "userAgent",
           "actingAs",
           "amr",
+          "tenantId",
         ].sort();
         assert.deepStrictEqual(Object.keys(session).sort(), expectedKeys);
         assert.notProperty(session, "secretHash");

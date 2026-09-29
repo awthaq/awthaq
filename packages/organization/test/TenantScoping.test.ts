@@ -40,6 +40,14 @@ const ALLOWLIST: ReadonlyArray<{ readonly match: RegExp; readonly why: string }>
     why: "listByIds: ids come from the caller's own memberships (MembershipRecords.listByUser)",
   },
   {
+    match: /^SELECT \* FROM organization_org (WHERE \(createdAt, id\) > .* )?ORDER BY createdAt, id LIMIT /,
+    why: "listPage (EP-003): the platform administrator's cross-tenant listing, reachable only through Admin.layerWithTenants' canAdministerTenants gate",
+  },
+  {
+    match: /^UPDATE organization_org SET suspendedAt = .* WHERE id = /,
+    why: "setSuspended (EP-003): tenant root state, written only by the platform administrator surface",
+  },
+  {
     match: /^UPDATE organization_org SET .* WHERE id = /,
     why: "tenant root update, after the membership-gated Organization.update",
   },

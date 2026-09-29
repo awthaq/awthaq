@@ -31,6 +31,7 @@ import * as Model from "effect/unstable/schema/Model";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
+import * as Tenant from "./Tenant.ts";
 import { UserId } from "./Users.ts";
 
 /**
@@ -194,6 +195,13 @@ export interface SessionView {
   readonly actingAs: Option.Option<ActingAs>;
   /** THS-003: the authentication methods recorded at issue (and unioned in by `reauthenticate`); empty when the issuing path recorded none. */
   readonly amr: ReadonlyArray<AuthMethod>;
+  /**
+   * DRS-001 (ADR-EA-018): the ambient tenant this session was issued under,
+   * `None` for a single-tenant deployment. A host that serves several tenants
+   * compares it with the request's own tenant to refuse a cookie minted for
+   * another one.
+   */
+  readonly tenantId: Option.Option<string>;
 }
 
 /** BEH-EA-054: one row of `Sessions.list`. */
@@ -546,6 +554,7 @@ interface SessionRow {
   readonly userAgent: Option.Option<string>;
   readonly actingAs: Option.Option<ActingAs>;
   readonly amr: ReadonlyArray<AuthMethod>;
+  readonly tenantId: Option.Option<string>;
   /**
    * RRS-003: this row's founding session id — its own `id` when it has no
    * ancestor, inherited from the superseded row's own `familyId`
@@ -580,6 +589,7 @@ const toView = (row: SessionRow): SessionView => ({
   userAgent: row.userAgent,
   actingAs: row.actingAs,
   amr: row.amr,
+  tenantId: row.tenantId,
 });
 
 /**
@@ -606,6 +616,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         const secret = toHex(yield* crypto.randomBytes(32));
         const secretHash = yield* hashSecret(crypto, secret);
         const now = yield* DateTime.now;
+        const tenantId = yield* Tenant.TenantContext;
         const absoluteExpiresAt = DateTime.addDuration(
           now,
           input.absoluteDuration ?? config.absolute,
@@ -654,6 +665,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
               userAgent: Option.fromNullishOr(cappedUserAgent(input.request?.userAgent)),
               actingAs: Option.fromNullishOr(input.actingAs),
               amr: input.amr ?? [],
+              tenantId,
               familyId: Option.match(ancestor, {
                 onNone: () => id,
                 onSome: (r) => r.familyId,
@@ -1051,6 +1063,7 @@ const toSessionView = (row: SqlModels.Session): SessionView => ({
       ? Option.none()
       : Option.some({ type: row.actingAsType, id: row.actingAsId }),
   amr: parseAmr(row.amr),
+  tenantId: Option.fromNullOr(row.tenantId),
 });
 
 export const layerSql: Layer.Layer<

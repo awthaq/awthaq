@@ -83,3 +83,6 @@ entries:
   - id: "BEH-EA-209"
     file: "27-admin-impersonation.md"
     title: "Admin and Impersonation"
+  - id: "BEH-EA-225"
+    file: "28-tenancy.md"
+    title: "Multi-Tenancy"

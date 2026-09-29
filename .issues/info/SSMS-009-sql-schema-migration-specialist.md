@@ -56,3 +56,5 @@ Record the isolation model (schema-per-tenant vs shared-schema) as an ADR before
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `tenancy-residency`. Duplicate of `DRS-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/sql/src/CoreMigrations.ts:59`. Full dossier: `.plan/slices/05-sql.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `DRS-001-data-residency-sharding-specialist` — closed by its fix (see that issue's Resolved comment).

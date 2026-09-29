@@ -1,0 +1,135 @@
+# Multi-Tenancy
+> **Document Control**
+>
+> | Property | Value |
+> |---|---|
+> | Document ID | EFAUTH-BEH-28 |
+> | Revision | 1.0 |
+> | Effective Date | 2026-09-29 |
+> | Status | Effective |
+> | Author | awthaq Engineering |
+> | Classification | Functional Specification |
+> | Change History | 1.0 (2026-09-29): Initial release (DRS-001, EP-001, EP-004, EP-007, DRS-005, EP-003; [ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)) |
+---
+
+> A tenant is an `Organization` row ([ADR-EA-018](../decisions/018-tenancy-is-an-organization.md)); everything below is opt-in and zero-cost for a single-tenant deployment.
+
+## BEH-EA-225: The tenant is an ambient reference that defaults to none
+
+```text
+REQUIREMENT: `TenantContext` MUST be a `Context.Reference<Option<string>>` whose
+             default is `Option.none()`, so a composition that never provides it
+             behaves exactly as one written before tenancy existed. It is provided
+             per request by `Organization.tenantMiddleware` (BEH-EA-229) or per
+             unit of work by `withTenant` / `TenantScope.withTenant`.
+```
+
+The reference is defined in `@awthaq/ports` (the persistence stratum reads it and sits below core) and re-exported by `@awthaq/core` as `Tenant`. Its value is an opaque string: core never interprets it and never resolves it to an organization.
+
+_Previous: [BEH-EA-224](27-admin-impersonation.md#beh-ea-224-admin-actions-are-audited-by-events) | Next: [BEH-EA-226](28-tenancy.md#beh-ea-226-every-core-insert-is-stamped-with-the-ambient-tenant)_
+
+## BEH-EA-226: Every core insert is stamped with the ambient tenant
+
+```text
+REQUIREMENT: Every repository insert into `users`, `accounts`, `sessions`,
+             `verification_tokens`, `verification_reservations` and
+             `auth_audit_log` MUST store `"tenantId"` as the input's explicit
+             value when non-null, otherwise the ambient `TenantContext`, otherwise
+             `NULL`. The column MUST have no JSON variant and no `update`
+             variant: a request body cannot name a tenant, and a row is stamped
+             once.
+```
+
+Stamping happens at the repository, the one place every insert passes through, so no service signature changes and a caller cannot forget it. `UserRecord.tenantId` and `SessionView.tenantId` expose the value; `layerMemory` twins stamp the same fields. Historic rows and single-tenant deployments read back `None`.
+
+_Previous: [BEH-EA-225](28-tenancy.md#beh-ea-225-the-tenant-is-an-ambient-reference-that-defaults-to-none) | Next: [BEH-EA-227](28-tenancy.md#beh-ea-227-the-identity-directory-is-global-across-tenants)_
+
+## BEH-EA-227: The identity directory is global across tenants
+
+```text
+REQUIREMENT: `users` and `accounts` MUST remain the global identity directory:
+             `lower(email)`, `phone` and `(providerId, subject, issuer)` are
+             unique across tenants, and `findByEmail`, `findByPhone` and
+             `findByProviderSubject` MUST NOT take a tenant predicate. Tenant
+             routing applies to sessions, verification tokens and reservations,
+             and the audit log.
+```
+
+One person may belong to many organizations, and sign-in resolves an identity before a tenant is known. Under sharding the directory stays unsharded (or replicated read-only); the tenant-stamped tables are what partition.
+
+_Previous: [BEH-EA-226](28-tenancy.md#beh-ea-226-every-core-insert-is-stamped-with-the-ambient-tenant) | Next: [BEH-EA-228](28-tenancy.md#beh-ea-228-postgres-row-level-security-is-an-opt-in-fail-closed-backstop-inside-a-tenant-scope)_
+
+## BEH-EA-228: Postgres row-level security is an opt-in, fail-closed backstop inside a tenant scope
+
+```text
+REQUIREMENT: `TenantScope.enableRls()` MUST enable and force a row-level-security
+             policy on the partitioned tables, idempotently and as a no-op off
+             Postgres. Inside `TenantScope.withTenant(id)`, a read MUST NOT see,
+             and a write MUST NOT touch or create, a row whose `"tenantId"`
+             differs from `id`. With no tenant set the policy MUST admit every
+             row (single-tenant deployments and maintenance keep working).
+```
+
+`withTenant` opens (or nests into) one transaction and sets the transaction-local `awthaq.tenant_id`, so a pooled connection never leaks a tenant to the next request. RLS covers `users`/`accounts` only through `enableRls({ includeDirectory: true })`. It is defence in depth ([ADR-EA-009](../decisions/009-authorization-delegated-to-qadi.md)), bypassed by superusers, `BYPASSRLS` roles and, absent `FORCE`, the table owner.
+
+_Previous: [BEH-EA-227](28-tenancy.md#beh-ea-227-the-identity-directory-is-global-across-tenants) | Next: [BEH-EA-229](28-tenancy.md#beh-ea-229-the-tenant-middleware-resolves-the-organization-once-per-request)_
+
+## BEH-EA-229: The tenant middleware resolves the organization once per request
+
+```text
+REQUIREMENT: `Organization.tenantMiddleware` MUST call the application-provided
+             `TenantResolver` once per request and, when it yields an
+             organization id, provide `TenantContext` for the rest of that
+             request's fiber; when it yields none, the request runs with no
+             tenant. A resolver id naming no organization MUST be refused, not
+             silently run untenanted.
+```
+
+The resolver is a port the application provides ([ADR-EA-010](../decisions/010-plugins-require-ports-never-provide.md)); awthaq ships no routing convention. An application that does not wire the middleware is unchanged.
+
+_Previous: [BEH-EA-228](28-tenancy.md#beh-ea-228-postgres-row-level-security-is-an-opt-in-fail-closed-backstop-inside-a-tenant-scope) | Next: [BEH-EA-230](28-tenancy.md#beh-ea-230-organization-oauth-connections-are-consulted-after-the-static-registry)_
+
+## BEH-EA-230: Organization OAuth connections are consulted after the static registry
+
+```text
+REQUIREMENT: `OAuth.authorize` and `OAuth.callback` MUST resolve a provider id
+             from the static registry first and only on a miss consult the
+             installed connection resolver; a connection's provider id is
+             namespaced `org:<organizationId>:<connectionId>` so it can never
+             shadow a static provider. A connection's client secret MUST be
+             ciphertext at rest.
+```
+
+The resolver is a port-shaped callback so `@awthaq/oauth` never imports the organization plugin. Home-realm discovery passes an `organization` id or the sign-in email's domain as the hint. Role mapping stays in qadi.
+
+_Previous: [BEH-EA-229](28-tenancy.md#beh-ea-229-the-tenant-middleware-resolves-the-organization-once-per-request) | Next: [BEH-EA-231](28-tenancy.md#beh-ea-231-per-tenant-configuration-applies-per-request-without-changing-the-plugin-tuple)_
+
+## BEH-EA-231: Per-tenant configuration applies per request without changing the plugin tuple
+
+```text
+REQUIREMENT: A plugin MUST read its configuration reference per operation, not
+             once at layer build, so that a per-request `provideService` (or the
+             tenant middleware's `TenantConfig` layers) changes its behavior. Two
+             tenants with different configuration MUST be servable by one
+             composition.
+```
+
+`TenantConfig` is a `LayerMap.Service` keyed by tenant id whose lookup the application supplies ([ADR-EA-005](../decisions/005-static-composition.md)'s reserved seam); with none installed the global configuration applies.
+
+_Previous: [BEH-EA-230](28-tenancy.md#beh-ea-230-organization-oauth-connections-are-consulted-after-the-static-registry) | Next: [BEH-EA-232](28-tenancy.md#beh-ea-232-a-suspended-organization-refuses-organization-scoped-access)_
+
+## BEH-EA-232: A suspended organization refuses organization-scoped access
+
+```text
+REQUIREMENT: An organization with `suspended = true` MUST refuse organization-
+             scoped operations for its members with a typed
+             `OrganizationSuspended`, and membership answers to qadi
+             (`hasRelationship`) MUST NOT confer access through it. Suspension
+             and reinstatement are performed only through the superadmin
+             tenant-administration surface, gated by `canAdministerTenants`
+             (fail-closed by default).
+```
+
+Suspension is reversible and never a deletion. Impersonation records are stamped with the ambient tenant, and `list`/`forceStop` are confined to it unless `canAdministerTenants` passes.
+
+_Previous: [BEH-EA-231](28-tenancy.md#beh-ea-231-per-tenant-configuration-applies-per-request-without-changing-the-plugin-tuple)_

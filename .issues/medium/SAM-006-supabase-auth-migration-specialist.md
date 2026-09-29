@@ -3,7 +3,7 @@ ID: "SAM-006"
 Title: "SQL stratum has no authorization hook: dropping RLS removes the database-level backstop"
 Level: medium
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:76"
 Auditor: "supabase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `sql` · reported by **Supabase Auth Migration Specialist** (`supabase-auth-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Document the cutover protocol: keep RLS active through the qadi rollout, drive b
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence medium); workstream `tenancy-residency`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:76`. Fix: The RLS backstop ships with DRS-001's opt-in RLS migrations. What remains here is documentation of the Supabase hybrid window and the recommended least-privilege database role. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Documentation half shipped with DRS-001 (the RLS mechanism is TenantScope.enableRls): packages/sql/README.md "Multi-tenancy" documents running as a non-owner role with only DML grants (migrations as owner) and the Supabase cutover protocol (keep app-table RLS through the qadi rollout from one policy catalog; exit criteria = qadi call-site coverage plus audit-log review; then disable app-table RLS, optionally keep awthaq RLS on the auth tables); ADR-EA-009 gains the note that DB-level isolation is defence in depth, not the primary control.

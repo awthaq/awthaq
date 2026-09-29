@@ -410,4 +410,4 @@ REQUIREMENT: `Admin` MUST publish `auth.admin.actionDenied { adminUserId,
 
 Denials, changes and revocations are exactly the events a security review reconstructs "who did what to whom" from; making them `AuthEvent`s (rather than logs) puts them on the durable audit path BEH-EA-100 already guarantees, with no per-plugin persistence.
 
-_Previous: [BEH-EA-223](27-admin-impersonation.md#beh-ea-223-an-admin-manages-a-users-own-sessions-never-an-impersonation-episodes)_
+_Previous: [BEH-EA-223](27-admin-impersonation.md#beh-ea-223-an-admin-manages-a-users-own-sessions-never-an-impersonation-episodes) | Next: [BEH-EA-225](28-tenancy.md#beh-ea-225-the-tenant-is-an-ambient-reference-that-defaults-to-none)_

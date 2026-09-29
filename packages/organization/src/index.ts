@@ -18,3 +18,5 @@ export * as OrganizationRecords from "./OrganizationRecords.ts";
 export * as OrgRoleRecords from "./OrgRoleRecords.ts";
 export * as PermissionEngine from "./PermissionEngine.ts";
 export * as TeamRecords from "./TeamRecords.ts";
+export * as TenantMiddleware from "./TenantMiddleware.ts";
+export * as TenantResolver from "./TenantResolver.ts";

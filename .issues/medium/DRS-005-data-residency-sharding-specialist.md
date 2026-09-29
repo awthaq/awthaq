@@ -3,7 +3,7 @@ ID: "DRS-005"
 Title: "Login-path lookups are global-semantics queries (lower(email), (providerId, subject, issuer)) that scatter under any sharding"
 Level: medium
 Category: "performance"
-Status: ready-for-human
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:90"
 Auditor: "data-residency-sharding-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `performance` · `sql` · reported by **Data Residency & Sharding Specialist** (`data-residency-sharding-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Make the global-identifier cost explicit: either accept a directory tier scoped 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `tenancy-residency`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:90`. Fix: After the uniqueness-scope decision: document the users and accounts tables as the global identity directory, and let tenant-scoped routing apply only to sessions/verification/audit (recommended option A). Under option B, prefix the unique indexes with the tenant column instead. (effort S). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option A per plan; user may revisit. ADR-EA-018 Decision 4 and BEH-EA-227 record users/accounts as the global identity directory (email, phone and (providerId, subject, issuer) unique across tenants, lookups take no tenant predicate); tenant routing applies to sessions/verification/audit. ("tenantId","userId") composite indexes are in migration 25. Tests: sql contract "the login lookups stay global" and core Users "another tenant request still resolves the same identity" (memory, SQL, Postgres).
