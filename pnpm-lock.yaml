@@ -274,6 +274,9 @@ importers:
       '@qadi/core':
         specifier: ^0.7.0
         version: 0.7.0
+      '@qadi/http':
+        specifier: ^0.7.0
+        version: 0.7.0
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.2
