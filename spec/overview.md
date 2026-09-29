@@ -106,6 +106,8 @@ Each table below is a planned surface, not a shipped one. "Source" is the intend
 | `AuthEvents` | `Context.Service` (bounded `PubSub`) | `AuthEvents.ts` |
 | `BeforeSignUp`, `BeforeSignIn`, `BeforeSessionIssue`, `AfterSignUp`, `AfterSignIn`, `BeforeUserDelete` | hook points (`HookPoint.Service`) | `Hooks.ts` |
 
+**Edge and origin.** Persistence depends only on `effect`'s `SqlClient`, so where code runs is decided by the client provided. Edge runtimes (Workers, Vercel Edge) do stateless work — verifying a signed JWT (`@awthaq/jwt`), presence checks — and need no database; origin (Node) owns everything backed by a `SqlClient` (sessions, users, credentials, migrations), unless an HTTP-capable sqlite-dialect driver (libSQL) is used. The driver matrix and its tested/untested status is in `packages/sql/README.md`, "Runtimes & drivers" (ERAS-006).
+
 ### Qadi bridge (stratum 6)
 
 | Export | Kind | Source |

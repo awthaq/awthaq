@@ -3,7 +3,7 @@ ID: "EOTS-008"
 Title: "Hand-written SQL queries bypass the spanPrefix spans that repository CRUD gets"
 Level: medium
 Category: "performance"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:87"
 Auditor: "effect-observability-tracing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `performance` · `sql` · reported by **Effect Observability & Tracing Specialist** (`effect-observability-tracing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -58,3 +58,5 @@ Wrap each custom statement in `Effect.withSpan("Users.findByEmail", ...)` (or ad
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `sql-repository-hygiene`. Evidence at HEAD ec065a7: `node_modules/.pnpm/effect@4.0.0-rc.116/node_modules/effect/src/unstable/sql/Statement.ts:1305`. Fix: Give every hand-written repository method a named span, matching SqlModel's `<spanPrefix>.<method>` convention, so a flame graph shows `Users.findByEmail > sql.execute` rather than an anonymous `sql.execute`. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Every hand-written repository method now has a <Prefix>.<method> span via a traced() helper (Users.findByEmail/verifyEmail, Accounts.findByProviderSubject/listByUser/deleteAllByUser/updatePasswordHash/updateProviderTokens/findTokensById, Sessions.listByUser/touch/deleteAllForUserExcept/deleteAllByUser/tombstone/markReused/revokeFamily/reauthenticate, VerificationTokens.findByIdentifier/upsertLive/tryConsume/deleteAllByUser, VerificationReservations.claim, AuditLog.insert/list); SqlModel-generated CRUD already spans. Attributes are ids only (providerId only for provider lookups). Tests in Repositories.test.ts: span names parent a sql.execute span; no email/identifier/hash/subject in any repository span attribute; both red when traced() is a no-op. BEH-EA-035 addendum.

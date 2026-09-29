@@ -3,7 +3,7 @@ ID: "MA-008"
 Title: "Identity brands are declared twice (core and sql); drift is silently bridged by string-typed re-wrap constructors"
 Level: low
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Models.ts:11"
 Auditor: "michael-arnaldi"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `architecture` · `sql` · reported by **Michael Arnaldi — Creator of Effect** (`michael-arnaldi`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Declare the branded id types once in the lowest stratum that both packages alrea
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-repository-hygiene`. Evidence at HEAD ec065a7: `packages/core/src/Users.ts:48`. Fix: Declare each id type once, in @awthaq/sql, the lower stratum core already imports. Core re-exports the type and keeps a nominal constructor over it, so a key rename on either side breaks every bridge at compile time. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Core UserId/AccountId/SessionId/VerificationTokenId are now type aliases of @awthaq/sql's brands (nominal constructors kept); packages/core/test/Brands.test.ts pins them with expectTypeOf. Models.ts header updated.

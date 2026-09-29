@@ -3,7 +3,7 @@ ID: "TS-001"
 Title: "Postgres row decode cannot succeed: BooleanFromBit and string-DateTime model variants contradict the pinned pg driver's binary codecs"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Models.ts:48"
 Auditor: "tim-smart"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `correctness` · `sql` · reported by **Effect Platform & Infrastructure Maintainer** (`tim-smart`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -61,3 +61,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — all three pinned facts check out against the installed rc.116 packages: `@effect/sql-pg`'s bool codec decodes OID 16 via `bytes[offset] !== 0` to a JS boolean (`PgTypes.ts` in the installed package), while `effect`'s `Schema.BooleanFromBit` is `Literals([0,1]).pipe(decodeTo(Boolean, ...))` — a literal-0-or-1-only decode that a real `boolean` input fails; `Model.DateTimeInsert.select` is `Schema.DateTimeUtcFromString` (exact match, installed `Model.ts:506`) while `timestamptz` decodes to a `Date`. `packages/sql/src/Models.ts:46-49` matches the evidence. Real correctness bug, but the fix requires choosing a dialect-neutral-model strategy (per-dialect model variants vs. overriding the pg client's codecs) — an architecture decision, not a mechanical patch. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-dialect-neutral-models`. Evidence at HEAD ec065a7: `packages/sql/src/Models.ts:47`. Fix: Follow ticket 29's decision: `Models.ts` becomes a `makeModels(dialect)` factory that selects Effect's own per-dialect Model field variants for the dialect-sensitive columns (boolean and DateTime). `Repositories.ts` resolves `sql.dialect` once at layer construction. The pg client's codecs are never overridden globally. (effort L). Full dossier: `.plan/slices/05-sql.md`.
+
+**Resolved (2026-09-29):** Models.ts is now a makeModels(dialect) factory (ticket 29 option adopted): pg -> Schema.Boolean/DateTimeUtcFromDate (+ Model.DateTimeInsertFromDate/UpdateFromDate), sqlite -> BooleanFromBit/DateTimeUtcFromString; JSON variants identical; per-dialect classes share one declaration of every dialect-independent field. Repositories resolve sql.dialect once per layer (Models.resolveDialect) and expose models; core builds insert/update inputs from repo.models. Models.dialectFields + mechanical row-schema moves in admin/jwt/organization/passkey/migrate-better-auth record stores (N10; each package gains an @awthaq/sql dependency). Tests: packages/sql/test/Models.test.ts (no-server pg/sqlite decode + encode + JSON identity; the pre-fix sqlite model rejects a pg row), and the real-Postgres 16 suite (pnpm run test:pg, docker postgres:16-alpine): 28/28 green incl. the shared contract cases. Deferred: plugin record stores' Postgres DDL/DML use unquoted mixed-case identifiers, so pg returns lower-cased column names and their row decode still cannot succeed end to end (separate defect, not a field-type problem); no pg-server test exists for them. Gates: typecheck (only the pre-existing packages/react TS2883 errors), full vitest 1017 passed, bdd, spec:verify:strict, oxlint.

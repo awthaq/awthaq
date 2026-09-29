@@ -3,7 +3,7 @@ ID: "PPS-009"
 Title: "jsonb is used nowhere: opaque JSON payloads are stored as TEXT in Postgres"
 Level: info
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/CoreMigrations.ts:155"
 Auditor: "postgres-performance-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `sql` · reported by **Postgres Performance Specialist** (`postgres-performance-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ If any payload ever needs server-side querying (e.g. two-factor metadata), add a
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-docs-operations`. Evidence at HEAD ec065a7: `packages/sql/src/CoreMigrations.ts:155`. Fix: Record 'opaque JSON is TEXT on every dialect' as a deliberate decision. Plan no jsonb migration until a server-side query need exists. (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ADR-EA-004 revision 1.1 Consequences record 'opaque JSON is TEXT on every dialect' (verification_tokens.payload, auth_audit_log.payload, users.metadata, organization metadata) with the JSONB-when-queried trigger; README Schema conventions links it. spec:verify:strict passes.

@@ -56,3 +56,5 @@ Document the single-primary assumption next to the no-grace-window claim; when r
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence medium); workstream `read-replica-routing`. Duplicate of `RRC-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:191`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `RRC-001-read-replica-consistency-specialist` — closed by its fix (see that issue's Resolved comment).
