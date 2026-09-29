@@ -13,12 +13,6 @@ import { Sessions, Users } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import { HandlerInvariantViolation } from "./Defects.ts";
 
-export interface CurrentUser {
-  readonly principal: Api.UserPrincipal;
-  readonly userId: Users.UserId;
-  readonly sessionId: Sessions.SessionId;
-}
-
 export const currentUser = Effect.gen(function* () {
   const principal = yield* Api.CurrentPrincipal;
   if (principal._tag !== "User") {
