@@ -3,7 +3,7 @@ ID: "NHS-009"
 Title: "OpenAPI/Scalar docs served unauthenticated in the canonical composition"
 Level: low
 Category: "security"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "README.md:134"
 Auditor: "node-http-server-integration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `security` · `—` · reported by **Node HTTP Server Integration Specialist** (`node-http-server-integration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -54,3 +54,5 @@ Gate docs behind a config flag or a separate admin-only layer in the quickstart,
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence medium); workstream `readme-docs-accuracy`. Evidence at HEAD ec065a7: `README.md:128`. Fix: Keep AuthHttp.docs as specified (BEH-EA-084) but make the quickstart/example gate it behind a Config flag defaulting off, and document that production compositions should omit it or put it behind their own auth. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** The README quickstart mounts AuthHttp.docs and the openapi route only when AWTHAQ_EXPOSE_DOCS=true (Config.Boolean with default false), verified against a running composition (404 and 404 with it unset, 200 and 200 with it set); a new README section 'OpenAPI and the docs UI' states the production posture and points at awthaq openapi. Deferred: the caution comment on AuthHttp.docs in packages/server (source file, outside this docs-only program) and the same gating in examples/sql-server (P20b).

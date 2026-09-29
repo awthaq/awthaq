@@ -3,7 +3,7 @@ ID: "DTWS-005"
 Title: "spec/roadmap.md contradicts itself: current-state paragraph says M4+ is implemented, gate-status section says no milestone has begun"
 Level: medium
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/roadmap.md:84"
 Auditor: "documentation-technical-writing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `—` · reported by **Documentation & Technical Writing Specialist** (`documentation-technical-writing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Finish the rev-1.2 pass: rewrite line 84 and the gate table to distinguish 'gate
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-roadmap-status-reconcile`. Evidence at HEAD ec065a7: `spec/roadmap.md:84`. Fix: Finish the rev-1.2 pass: rewrite roadmap line 84 and the gate table (lines 88-98) to separate 'implementation status' from 'gate status', deriving gate status from MM-005's gate→script mapping. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** spec/roadmap.md rev 1.3: current-state paragraph lists what shipped per milestone (M0-M6 implemented, M7 partial: TwoFactor, MagicLink, EmailOtp unbuilt, M8 not started) and what shipped beyond the plan (tenancy, SCIM, outbox, erasure, observability); each milestone carries a status line; the gate table splits Implementation from Gate status, copied from definitions-of-done.md's Wired-as column; the 'no milestone has begun' sentence is gone (check 9 forbids it).

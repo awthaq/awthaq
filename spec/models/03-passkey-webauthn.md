@@ -64,7 +64,7 @@ const view = yield* client.passkey.authenticateVerify({ payload: { assertion } }
 yield* client.passkey.list()
 yield* client.passkey.remove({ params: { id } })      // refuses to remove the last credential when no other method exists
 ```
-Reproduced from `archive/design/usage-examples-v4.md` §8, fence changed to `ts`. The source also says challenges are single-use verification rows with a two-minute TTL. As built, challenges are single-use rows in a dedicated `passkey_challenge` table (`ChallengeStore.ts`), not verification rows, with a fixed five-minute TTL that BEH-EA-132 fixes and nothing configures; attestation defaults to `none` (BEH-EA-135), matching `research/06-webauthn-passkeys.md`'s recommendation.
+Reproduced from `archive/design/usage-examples-v4.md` §8, fence changed to `ts`. The archive cookbook's sentence about challenge storage and lifetime is superseded: as built, challenges are single-use rows in a dedicated `passkey_challenge` table (`ChallengeStore.ts`), not verification rows, with a fixed five-minute TTL that BEH-EA-132 fixes and nothing configures; attestation defaults to `none` (BEH-EA-135), matching `research/06-webauthn-passkeys.md`'s recommendation.
 
 ## What is missing
 The plugin (`Passkey`, `PasskeyApi`, `ChallengeStore`, `PasskeyCredentials`, `PasskeyUserHandles`), the `WebAuthn` port with `layerSimpleWebAuthn`, the `passkey_credential`/`passkey_challenge`/`passkey_user_handle` migrations, challenge single-use/replay handling and the origin-validation pitfalls `research/06-webauthn-passkeys.md` names (CVE-2026-30964, YSA-2026-02) are implemented. What remains, and is documented in `packages/passkey/README.md` under "Limits":

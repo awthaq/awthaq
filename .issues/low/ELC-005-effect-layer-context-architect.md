@@ -3,7 +3,7 @@ ID: "ELC-005"
 Title: "Design doc claims AuthPlugin.layer merges taps; shipped implementation does two things, not three"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "archive/design/plugins-as-layers.md:142"
 Auditor: "effect-layer-context-architect"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `—` · reported by **Effect Layer/Context Architect** (`effect-layer-context-architect`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ Update plugins-as-layers.md §142 to the shipped two-step algebra and point to H
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `design-docs-archive`. Evidence at HEAD ec065a7: `archive/design/plugins-as-layers.md:142`. Fix: Fix the governing ADR-EA-008 text to the shipped two-step algebra and point to HookPoint `.tap` layers + per-plugin *HooksLive merges as the tap mechanism; leave archive/ as historical record but add a one-line correction note. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ADR-EA-008 now describes the shipped AuthPlugin.layer (Layer.effect, provideMerge of handlers, contributes registry layers, and taps declared in the taps option installed as the plugin, ADR-EA-033) instead of the archive's 'three things'. Note: the dossier's 'two steps, no tap merge' was itself out of date at HEAD because ADR-EA-033 added declared taps, so the ADR follows the code, not the dossier. archive/design/plugins-as-layers.md gets a bracketed correction note and stays otherwise unchanged.

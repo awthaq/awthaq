@@ -3,7 +3,7 @@ ID: "DTWS-001"
 Title: "spec/README.md's honesty banner asserts there is no source tree, no CI, no package.json — all false"
 Level: high
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/README.md:17"
 Auditor: "documentation-technical-writing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `docs` · `—` · reported by **Documentation & Technical Writing Specialist** (`documentation-technical-writing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — `spec/README.md:17` matches the quoted "no package.json, no source tree, no CI" banner verbatim, while `.github/workflows/check.yml` exists, `package.json` exists at repo root, and 21 packages under `packages/` ship real source. Replacing the four stale banners with an accurate status paragraph (or a shared include) is a well-scoped mechanical change. Status → ready-for-agent.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `spec-status-banner-sweep`. Evidence at HEAD ec065a7: `spec/README.md:17`. Fix: Replace the five tree-level 'planned system / pre-implementation' banners (README, overview, glossary, urs, invariants) with one accurate status paragraph modelled on roadmap.md:17, and add a verify-traceability check that fails on the stale phrases so the drift cannot recur. (effort M). Full dossier: `.plan/slices/12-spec.md`.
+
+**Resolved (2026-09-29):** Replaced the five tree-level banners (spec/README.md, overview.md, glossary.md, urs.md, invariants.md) plus every behavior, model, traceability, roadmap, DoD, requirement-id-scheme, docs/ and features/README status claim with the shipped state, verified against packages/ at HEAD (25 packages; two-factor and magic-link are placeholders; SAML specified only), not against the dossier. New check 9 in spec/scripts/check-drift.mjs (called from verify-traceability.sh) fails on present-tense 'nothing is built' phrases across spec/, docs/, README.md and features/README.md; it listed dozens of files (every behavior and model banner among them) before the sweep and none after. Revisions bumped with Change History rows (CCR-EA-006). Gates: pnpm run typecheck clean, pnpm run spec:verify:strict 28/28, pnpm run check:readmes green.

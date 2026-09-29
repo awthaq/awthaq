@@ -51,3 +51,5 @@ Add examples/sqlite-server alongside memory-server: same plugin composition, Sql
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `readme-docs-accuracy`. Evidence at HEAD ec065a7: `examples/memory-server/index.ts:5`. Fix: Make examples/sql-server (created for SMS-006) default to a SQLite file and switch to Postgres when DATABASE_URL is set — a living proof of README.md:200's one-layer-swap claim. (effort S). Full dossier: `.plan/slices/13-repo-features-tooling.md`. Status → ready-for-agent.
+
+**Plan note (2026-09-29):** Not done in P19: it needs examples/sql-server, which the plan creates under SMS-006 but which P19 delivered as a compiled README fixture (packages/sql/test/fixtures/readme-quickstart.ts) because examples/ belongs to P20b. The README now says the quickstart was run against SQLite and that only the SqlClient layer differs from Postgres; a runnable SQLite-by-default example is still open (P20b).

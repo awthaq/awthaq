@@ -3,7 +3,7 @@ ID: "BDD-003"
 Title: "features/traceability.md and spec/traceability.md §6 no longer describe the suite"
 Level: medium
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/traceability.md:213"
 Auditor: "bdd-gherkin-acceptance-testing-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `docs` · `—` · reported by **BDD/Gherkin Acceptance Testing Specialist** (`bdd-gherkin-acceptance-testing-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -43,3 +43,5 @@ After resolving BDD-001, re-run the allocator, add the 27-admin crosswalk row to
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `spec-bdd-traceability-refresh`. Already fixed by commit 6887fb5. Evidence at HEAD ec065a7: `spec/traceability.md:247`. Fix: The substantive drift (missing 27-admin row, 602 vs 627) was fixed by 6887fb5. Finish the job: bump the manifest's and spec/traceability.md's Document Control, fix every residual '602' range, and make manifest freshness a CI-checked property. (effort S). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** features/traceability.md header now comes from constants in features/scripts/allocate-req-ea.py (rev 1.1, 2026-09-29, Change History row) so regeneration keeps it; spec/traceability.md rev 1.5 matches its Change History; the hard-coded 602 ranges are gone from requirement-id-scheme.md and verify-traceability.sh (definitions-of-done.md's Change History keeps its historical 602); new check 4b runs allocate-req-ea.py --check, so a stale manifest or an untagged scenario fails pnpm check; the DoD per-change checklist names the regeneration step. Also fixed real collisions the parallel programs left behind: REQ-EA-333, 339, 640, 641 and 642 were each claimed twice (16-oauth, 04-contract-stratum, 02-plugin-composition, 28-device-authorization); the later scenarios are now REQ-EA-684, 685, 681, 682, 683, guarded by a duplicate-tag check. Touched outside the program: features/ (tags, header comments, README status, the allocator, the manifest). Gates: pnpm run typecheck clean, pnpm run spec:verify:strict 28/28, pnpm run check:readmes green.
