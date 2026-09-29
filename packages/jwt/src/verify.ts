@@ -64,7 +64,7 @@ export interface VerifierOptions {
   readonly algorithms: ReadonlyArray<JwtCodec.Algorithm>;
   /**
    * The header `typ` the tokens must carry (JJS-008/VB-005): `"at+jwt"` for the
-   * principal tokens `Jwt.sign`/`GET /jwt/token` mint (the default), `"JWT"` for
+   * principal tokens `Jwt.sign`/`POST /jwt/token` mint (the default), `"JWT"` for
    * general-purpose `signJWT` tokens. Compared case-insensitively.
    */
   readonly expectedTyp?: string | ReadonlyArray<string>;

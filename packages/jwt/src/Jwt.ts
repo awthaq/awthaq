@@ -254,7 +254,7 @@ export const JwtHandlers = Layer.mergeAll(
  * capture surface and silently converting a cookie session into a portable
  * bearer token is not something a deployment should get by accident.
  * `"bearer"` mirrors only for bearer-authenticated requests, `"always"` also
- * for cookie-authenticated ones; the explicit `GET /jwt/token` endpoint is
+ * for cookie-authenticated ones; the explicit `POST /jwt/token` endpoint is
  * the recommended delivery either way. Cross-origin JS needs
  * `Access-Control-Expose-Headers: x-jwt-token` to read the header at all.
  *
@@ -613,7 +613,7 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
         };
 
         // Principal tokens only (`typ: "at+jwt"`, a `sub` is mandatory):
-        // what `sign`, `GET /jwt/token` and response mirroring mint.
+        // what `sign`, `POST /jwt/token` and response mirroring mint.
         const verify: JwtShape["verify"] = (token) =>
           verifyWith(token, {
             typ: PRINCIPAL_TYP,

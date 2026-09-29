@@ -4,7 +4,7 @@ Short-lived, self-contained, cryptographically signed JWTs representing an alrea
 
 ## Token classes
 
-Principal tokens (`Jwt.sign`, `GET /jwt/token`, response mirroring) carry header `typ: "at+jwt"` (RFC 9068) and a mandatory `sub`; `Jwt.verify`, `verifyLive` and `introspectLive` accept only those. Tokens from `signJWT` carry `typ: "JWT"` (override with `options.typ`), may pick their audience per call (`options.audience`), and are checked by `verifyJWT`, which does not require a `sub`. A `signJWT` payload with a forged `sid` therefore cannot pass as a principal token. The header `alg` must be in the verifier's allowlist and equal the algorithm of the key its `kid` names (RFC 8725); `nbf`/`iat` are honoured.
+Principal tokens (`Jwt.sign`, `POST /jwt/token`, response mirroring) carry header `typ: "at+jwt"` (RFC 9068) and a mandatory `sub`; `Jwt.verify`, `verifyLive` and `introspectLive` accept only those. Tokens from `signJWT` carry `typ: "JWT"` (override with `options.typ`), may pick their audience per call (`options.audience`), and are checked by `verifyJWT`, which does not require a `sub`. A `signJWT` payload with a forged `sid` therefore cannot pass as a principal token. The header `alg` must be in the verifier's allowlist and equal the algorithm of the key its `kid` names (RFC 8725); `nbf`/`iat` are honoured.
 
 ## Signing keys at rest
 
@@ -30,4 +30,4 @@ Keys rotate automatically every `keyRotationInterval` (default 90 days) or as so
 
 `Verify.makeVerifier({ jwksUrl, issuer, audience, algorithms, expectedTyp?, requireSubject?, clockSkew?, cacheTtl?, minRefetchInterval? })` verifies tokens in a downstream service with no other awthaq footprint. The JWKS is cached for `cacheTtl` (default 10 minutes), fetched single-flight, and refetched at most once per `minRefetchInterval` (default 30 seconds) when a token names an unknown `kid`. It cannot check revocation.
 
-Firebase dual-run: Firebase ID tokens are RS256 with `iss` `https://securetoken.google.com/<projectId>` and `aud` `<projectId>`. `makeVerifier({ jwksUrl: <Firebase securetoken JWKS>, issuer, audience: <projectId>, algorithms: ["RS256"], expectedTyp: "JWT" })` verifies them; an app handler can then resolve or create the user and call `Sessions.issue`. `GET /jwt/token` is a self-decoration mint for an already-authenticated caller, not an RFC 8693 token exchange.
+Firebase dual-run: Firebase ID tokens are RS256 with `iss` `https://securetoken.google.com/<projectId>` and `aud` `<projectId>`. `makeVerifier({ jwksUrl: <Firebase securetoken JWKS>, issuer, audience: <projectId>, algorithms: ["RS256"], expectedTyp: "JWT" })` verifies them; an app handler can then resolve or create the user and call `Sessions.issue`. `POST /jwt/token` is a self-decoration mint for an already-authenticated caller, not an RFC 8693 token exchange.

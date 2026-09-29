@@ -13,8 +13,9 @@
 // `token` requires an authenticated caller. This codebase's own established
 // pattern for a plugin mixing public and authenticated endpoints is a
 // second, dotted-sub-id group carrying its own `.middleware(Api.Authentication)`
-// (see `PasskeyApi.ts`'s `passkey`/`passkey.authenticate` split), never a
-// per-endpoint middleware inside one shared group.
+// (see `PasskeyApi.ts`'s `passkey`/`passkey.authenticate` split and
+// `PasswordApi.ts`'s `password`/`password.account`), never a per-endpoint
+// middleware inside one shared group.
 
 import { Api } from "@awthaq/api";
 import * as Schema from "effect/Schema";
@@ -61,7 +62,8 @@ export const JwtGroup = HttpApiGroup.make("jwt").add(
 
 export const JwtTokenGroup = HttpApiGroup.make("jwt.token")
   .add(
-    HttpApiEndpoint.get("mint", "/jwt/token", {
+    // AVS-007: minting a credential is an action, so POST (no payload; claims derive from the caller alone).
+    HttpApiEndpoint.post("mint", "/jwt/token", {
       success: TokenResponse,
     }),
   )

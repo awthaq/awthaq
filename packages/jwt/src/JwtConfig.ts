@@ -64,7 +64,7 @@ export interface JwtConfigShape {
    * also converts cookie-authenticated browser requests, better-auth style.
    * Response headers are a log/proxy/APM capture surface and cross-origin
    * scripts additionally need `Access-Control-Expose-Headers`; the explicit
-   * `GET /jwt/token` endpoint is the recommended delivery.
+   * `POST /jwt/token` endpoint is the recommended delivery.
    */
   readonly mirrorResponses: "off" | "bearer" | "always";
   /**

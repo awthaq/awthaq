@@ -3,7 +3,7 @@ ID: "AVS-007"
 Title: "Token minting declared as GET with an action-verb id, breaking the POST-for-actions convention"
 Level: low
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "jwt"
 Source: "packages/jwt/src/JwtApi.ts:45"
 Auditor: "api-design-versioning-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `api` · `jwt` · reported by **API Design & Versioning Specialist** (`api-design-versioning-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -49,3 +49,5 @@ Either keep GET and rename the id/shape to a read (`getToken`, `currentToken`), 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `plugin-api-surface-conventions`. Evidence at HEAD ec065a7: `packages/jwt/src/JwtApi.ts:64`. Fix: Make token minting `POST /jwt/token`. (effort S). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** JwtApi.ts: mint is now HttpApiEndpoint.post('/jwt/token') (no payload). Tests (red first: 5 failing with the endpoint flipped back): POST requires auth, GET /jwt/token is 404, POST mints a token verifiable against /jwt/jwks, introspect flows now mint via POST. Docs: jwt README, Jwt.ts/JwtConfig.ts/verify.ts comments, spec/models/08-jwt-bearer.md. Decision: CsrfProtection deliberately NOT attached to the jwt.token group (mint signs a token and changes no state, response is unreadable cross-origin with no default CORS; introspect was already an unprotected POST) — the test-file comment records that; revisit with the wayfinder-24 CSRF attachment if the jwt group is ever given it. Bearer requests are CSRF-exempt anyway.
