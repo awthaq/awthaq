@@ -37,6 +37,7 @@ export * as Hooks from "./Hooks.ts";
 export * from "./HttpApiTypes.ts";
 export * as Migrations from "./Migrations.ts";
 export * as RateLimits from "./RateLimits.ts";
+export * as SessionCookie from "./SessionCookie.ts";
 export * as Sessions from "./Sessions.ts";
 export * as Slots from "./Slots.ts";
 export * as Users from "./Users.ts";

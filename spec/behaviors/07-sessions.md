@@ -119,14 +119,26 @@ REQUIREMENT: `Sessions` MUST expose a list of a user's own live sessions
 ## BEH-EA-055: The session cookie is `__Host-session`, `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, with no `Domain` attribute
 
 ```
-__Host-session=<id.secret>; Secure; HttpOnly; SameSite=Strict; Path=/
+__Host-session=<id.secret>; Max-Age=<remaining absolute lifetime>; Secure; HttpOnly; SameSite=Strict; Path=/
 ```
 
 ```text
-REQUIREMENT: The session cookie MUST be named with the `__Host-` prefix,
-             MUST carry `Secure`, `HttpOnly`, and `SameSite=Strict`, MUST
-             set `Path=/`, and MUST NOT set a `Domain` attribute.
+REQUIREMENT: By default the session cookie MUST be named with the `__Host-`
+             prefix, MUST carry `Secure`, `HttpOnly`, and `SameSite=Strict`,
+             MUST set `Path=/`, and MUST NOT set a `Domain` attribute. A
+             deployment MAY opt into one of a closed set of typed modes via
+             `SessionCookieConfig` (below); every site that issues or rotates
+             the cookie MUST render it through the one shared renderer, so no
+             site can drift from another.
 ```
+
+**Secure default, typed opt-in modes (IC-007, AGA-004, BO-005).** `SessionCookieConfig` is a `Context.Reference` whose default is exactly the attribute set above (plus `Max-Age`). Its `mode` is a closed union and illegal combinations are unrepresentable — only `SecureDomain` carries a `domain`, and it renders a different prefix:
+
+- `Host` (default): `__Host-session`, `SameSite=Strict`, no `Domain`.
+- `HostEmbedded` (AGA-004): for a third-party-iframe deployment. `__Host-` is kept (CHIPS recommends it for `Partitioned` cookies) but the cookie is `SameSite=None; Partitioned`, and the `__Host-csrf` double-submit cookie follows suit. This trades away `SameSite=Strict`, so the CSRF double-submit middleware ([BEH-EA-073](10-csrf.md#beh-ea-073-sec-fetch-site-is-the-primary-csrf-signal)–078) — already mandatory for cookie auth — is the only cross-site defence.
+- `SecureDomain({ domain, sameSite })` (IC-007): `__Secure-session` with a `Domain` for a multi-subdomain app (`__Host-` forbids `Domain`). `sameSite` is required, not defaulted. Readers (`Authentication`'s cookie handler, `SubjectExtractor`, the legacy-cookie alias middleware) resolve the configured name; the CSRF cookie stays host-only. `@awthaq/next` renders and reads under the default config only.
+
+`persistence` (BO-005) is `absolute` by default — `Max-Age` is the session's remaining absolute lifetime, recomputed at issuance and at every rotation (so it shrinks toward the absolute expiry and is never negative), so closing the browser does not log a user out of a 30-day session — or `browserSession`, which omits `Max-Age`.
 
 `archive/design/usage-examples-v4.md` §5.3 and `archive/PRD.md` §18 both fix this exact attribute set as a secure default requiring no configuration: the `__Host-` prefix is itself an enforcement mechanism (browsers refuse to accept such a cookie unless it also satisfies `Secure`, `Path=/`, and no `Domain`), so misconfiguring any of the other attributes away from their secure defaults is designed to make the cookie simply not set, rather than silently set it insecurely.
 

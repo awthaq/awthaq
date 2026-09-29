@@ -1,5 +1,5 @@
 // spec/behaviors/09-authentication-middleware.md, BEH-EA-065 through BEH-EA-072.
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLog, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -398,6 +398,96 @@ const serve = (path: string, headers: Record<string, string>) =>
 
 const cookieOf = (response: HttpServerResponse.HttpServerResponse) =>
   Cookies.getValue(response.cookies, Sessions.SESSION_COOKIE_NAME);
+
+// IC-007/BO-005/AGA-004: the rotated cookie is rendered through the shared
+// `SessionCookie` config — recomputed Max-Age, mode attributes, configured name.
+const rotationLayerWith = (cookieConfig: Layer.Layer<never>) =>
+  HttpApiBuilder.layer(RotationApi).pipe(
+    Layer.provide(RotationHandlers),
+    Layer.provideMerge(Authentication.AuthenticationLive),
+    Layer.provide(Authentication.PrincipalResolverLive),
+    Layer.provideMerge(Sessions.layerMemory),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layerMemory),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(cookieConfig),
+    Layer.provideMerge(TestServices),
+    Layer.provideMerge(HttpRouter.layer),
+  );
+
+describe("Session cookie policy on rotation (IC-007, BO-005, AGA-004)", () => {
+  it.effect("BO-005: a rotated cookie's Max-Age is recomputed from the remaining absolute lifetime", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(2));
+        const response = yield* serve("/ok", {
+          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+        });
+        const cookie = Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME);
+        assert.isTrue(Option.isSome(cookie));
+        if (Option.isNone(cookie)) return;
+        assert.deepStrictEqual(
+          cookie.value.options?.maxAge,
+          Duration.subtract(Duration.days(30), Duration.hours(2)),
+        );
+        assert.strictEqual(cookie.value.options?.sameSite, "strict");
+      }),
+    ).pipe(Effect.provide(RotationLayer)),
+  );
+
+  it.effect("AGA-004: HostEmbedded rotates __Host-session with SameSite=None; Partitioned", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        yield* TestClock.adjust(Duration.hours(2));
+        const response = yield* serve("/ok", {
+          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+        });
+        const cookie = Cookies.get(response.cookies, "__Host-session");
+        assert.isTrue(Option.isSome(cookie));
+        if (Option.isNone(cookie)) return;
+        assert.strictEqual(cookie.value.options?.sameSite, "none");
+        assert.isTrue(cookie.value.options?.partitioned);
+        assert.isTrue(cookie.value.options?.secure);
+      }),
+    ).pipe(Effect.provide(rotationLayerWith(SessionCookie.config({ mode: SessionCookie.HostEmbedded })))),
+  );
+
+  it.effect("IC-007: SecureDomain reads and rotates __Secure-session with the Domain", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const { token } = yield* sessions.issue({ userId });
+        // Presented under the configured name, the session resolves...
+        const ok = yield* serve("/ok", { cookie: `__Secure-session=${Redacted.value(token)}` });
+        assert.strictEqual(ok.status, 200);
+        // ...and the default name is no longer read.
+        const wrongName = yield* serve("/ok", {
+          cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+        });
+        assert.strictEqual(wrongName.status, 401);
+        yield* TestClock.adjust(Duration.hours(2));
+        const rotated = yield* serve("/ok", { cookie: `__Secure-session=${Redacted.value(token)}` });
+        const cookie = Cookies.get(rotated.cookies, "__Secure-session");
+        assert.isTrue(Option.isSome(cookie));
+        if (Option.isNone(cookie)) return;
+        assert.strictEqual(cookie.value.options?.domain, "example.com");
+        assert.strictEqual(cookie.value.options?.sameSite, "lax");
+      }),
+    ).pipe(
+      Effect.provide(
+        rotationLayerWith(
+          SessionCookie.config({
+            mode: SessionCookie.SecureDomain({ domain: "example.com", sameSite: "lax" }),
+          }),
+        ),
+      ),
+    ),
+  );
+});
 
 describe("Authentication rotation delivery (PIL-005)", () => {
   it.effect(

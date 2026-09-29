@@ -30,8 +30,10 @@
 // the `globalThis`-pinned pattern a Next.js app needs to build one safely.
 
 import { Api } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
+import { SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
@@ -162,9 +164,20 @@ export const getSession = <Extra = never>(
  */
 export const applyRotatedSession = (session: Session | undefined, jar: CookieJarLike): void => {
   if (session?.rotated === undefined) return;
-  jar.set(
-    Api.SessionCookie.key,
+  // IC-007: rendered by the shared `SessionCookie` renderer under the default
+  // config (this adapter has no Effect context to read a custom one from), so
+  // a rotation carries the same attributes as every other write, with a
+  // `Max-Age` recomputed from the session's remaining absolute lifetime.
+  const cookie = SessionCookie.renderAt(
+    SessionCookie.SessionCookieConfig.defaultValue(),
     Redacted.value(session.rotated),
-    Sessions.SESSION_COOKIE_ATTRIBUTES,
+    session.session.absoluteExpiresAt,
+    DateTime.nowUnsafe(),
   );
+  const { maxAge, partitioned, ...rest } = cookie.options;
+  jar.set(cookie.name, cookie.value, {
+    ...rest,
+    ...(maxAge === undefined ? {} : { maxAge: Math.floor(Duration.toSeconds(maxAge)) }),
+    ...(partitioned === undefined ? {} : { partitioned }),
+  });
 };

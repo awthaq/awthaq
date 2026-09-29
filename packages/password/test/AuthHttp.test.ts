@@ -266,6 +266,28 @@ describe("AuthHttp + Password (real HTTP)", () => {
     }),
   );
 
+  it.effect("IC-007/BO-005: the session Set-Cookie carries the default attributes and a 30-day Max-Age", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const response = yield* Effect.promise(() =>
+        post(handler, "/password/sign-up", { email: "cookie-attrs@example.com", password: strongPassword }),
+      );
+      assert.strictEqual(response.status, 200);
+      const setCookie = response.headers.get("set-cookie") ?? "";
+      assert.match(setCookie, /^__Host-session=/);
+      // Real clock here (a web handler, no TestClock): a hair under 30 days.
+      const maxAge = Number(/;\s*Max-Age=(\d+)/i.exec(setCookie)?.[1]);
+      assert.isAtMost(maxAge, 2_592_000);
+      assert.isAtLeast(maxAge, 2_591_990);
+      assert.match(setCookie, /;\s*Path=\/(;|$)/i);
+      assert.match(setCookie, /;\s*Secure/i);
+      assert.match(setCookie, /;\s*HttpOnly/i);
+      assert.match(setCookie, /;\s*SameSite=Strict/i);
+      assert.notMatch(setCookie, /;\s*Domain=/i);
+      assert.notMatch(setCookie, /;\s*Partitioned/i);
+    }),
+  );
+
   it.effect("BEH-EA-113/422: a too-short password answers WeakPassword", () =>
     Effect.gen(function* () {
       const { handler } = HttpRouter.toWebHandler(AppLayer);

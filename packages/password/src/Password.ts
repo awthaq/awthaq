@@ -15,6 +15,7 @@ import {
   Hooks,
   HookPoint,
   RateLimits,
+  SessionCookie,
   Sessions,
   Users,
   Verification,
@@ -406,11 +407,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
           ...requestUserAgent(request),
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return toSessionDto(issued.session);
       }),
 
@@ -431,11 +428,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
           ...requestUserAgent(request),
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return toSessionDto(issued.session);
       }),
 
@@ -511,11 +504,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
           ...requestUserAgent(request),
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return toSessionDto(issued.session);
       }),
 

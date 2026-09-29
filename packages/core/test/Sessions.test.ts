@@ -969,17 +969,11 @@ reuseSuite("Sessions reuse detection (layerMemory)", MemoryLayerWithEvents);
 reuseSuite("Sessions reuse detection (layerSql)", SqlLayerWithEvents);
 
 describe("Sessions", () => {
-  it("BEH-EA-055: the session cookie name and attributes are fixed", () => {
+  it("BEH-EA-055: the default session cookie name is fixed", () => {
     assert.strictEqual(Sessions.SESSION_COOKIE_NAME, "__Host-session");
     // CSS-007: one source — core derives from the contract stratum's constant.
     assert.strictEqual(Sessions.SESSION_COOKIE_NAME, Api.SessionCookie.key);
     assert.strictEqual(Sessions.SESSION_COOKIE_NAME, Api.SESSION_COOKIE_NAME);
-    assert.deepStrictEqual(Sessions.SESSION_COOKIE_ATTRIBUTES, {
-      secure: true,
-      httpOnly: true,
-      sameSite: "strict",
-      path: "/",
-    });
   });
 
   // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15

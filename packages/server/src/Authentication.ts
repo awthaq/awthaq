@@ -4,7 +4,7 @@
 // Implements the `Authentication`/`OptionalAuthentication` declarations from
 // `@awthaq/api`'s `Api.ts` against `@awthaq/core`'s `Sessions`.
 
-import { Sessions } from "@awthaq/core";
+import { SessionCookie, Sessions } from "@awthaq/core";
 import { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -171,6 +171,7 @@ const claimResolution = (request: HttpServerRequest.HttpServerRequest, raw: stri
 const rotationDelivery =
   (
     scheme: "cookie" | "bearer",
+    session: Sessions.SessionView,
     token: Redacted.Redacted<string>,
   ): HttpEffect.PreResponseHandler =>
   (_request, response) => {
@@ -180,15 +181,15 @@ const rotationDelivery =
         HttpServerResponse.setHeader(noStore, Api.ROTATED_TOKEN_HEADER, Redacted.value(token)),
       );
     }
-    if (Option.isSome(Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME))) {
-      return Effect.succeed(response);
-    }
-    return HttpServerResponse.setCookie(
-      noStore,
-      Sessions.SESSION_COOKIE_NAME,
-      Redacted.value(token),
-      Sessions.SESSION_COOKIE_ATTRIBUTES,
-    ).pipe(
+    // IC-007/BO-005: rendered through the shared `SessionCookie` config, so a
+    // rotation carries the configured attributes and a `Max-Age` recomputed
+    // from the session's remaining absolute lifetime.
+    return SessionCookie.render(session, token).pipe(
+      Effect.flatMap((cookie) =>
+        Option.isSome(Cookies.get(response.cookies, cookie.name))
+          ? Effect.succeed(response)
+          : HttpServerResponse.setCookie(noStore, cookie.name, cookie.value, cookie.options),
+      ),
       Effect.catch((error) =>
         Effect.logWarning("awthaq: could not deliver the rotated session cookie", error).pipe(
           Effect.as(response),
@@ -253,9 +254,9 @@ export const resolveSession = (
     const verified = sessions.verify(Redacted.make(raw)).pipe(
       Effect.catchTag("PlatformError", Effect.die),
       Effect.mapError(() => new Api.Unauthenticated()),
-      Effect.tap(({ rotated }) =>
+      Effect.tap(({ session, rotated }) =>
         Option.isSome(rotated)
-          ? HttpEffect.appendPreResponseHandler(rotationDelivery(scheme, rotated.value))
+          ? HttpEffect.appendPreResponseHandler(rotationDelivery(scheme, session, rotated.value))
           : Effect.void,
       ),
     );
@@ -283,6 +284,20 @@ export const resolvePrincipal = (
   resolveSession(sessions, credential, scheme).pipe(
     Effect.flatMap(({ session }) => resolver.resolve(session)),
   );
+
+/**
+ * IC-007: the `cookie` scheme's decoded credential is keyed on the *default*
+ * cookie name (the contract is static), so a deployment whose configured name
+ * differs (`SecureDomain`'s `__Secure-session`) is read off the request by the
+ * configured name instead. Identical to the scheme's own credential otherwise.
+ */
+const cookieCredential = (schemeCredential: Redacted.Redacted<string>) =>
+  Effect.gen(function* () {
+    const name = SessionCookie.cookieName(yield* SessionCookie.SessionCookieConfig);
+    if (name === Api.SESSION_COOKIE_NAME) return schemeCredential;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    return Redacted.make(request.cookies[name] ?? "");
+  });
 
 /** JR-007: the `realm` of every `WWW-Authenticate` challenge this middleware emits. */
 const CHALLENGE_REALM = "awthaq";
@@ -342,7 +357,10 @@ export const AuthenticationLive: Layer.Layer<
       Api.CurrentPrincipal,
       typeof Api.Unauthenticated,
       never
-    >["cookie"] = (httpEffect, { credential }) => authenticate("cookie", httpEffect, credential);
+    >["cookie"] = (httpEffect, { credential }) =>
+      cookieCredential(credential).pipe(
+        Effect.flatMap((resolved) => authenticate("cookie", httpEffect, resolved)),
+      );
     const bearer: typeof handle = (httpEffect, { credential }) =>
       authenticate("bearer", httpEffect, credential).pipe(
         // JR-007: `bearer` is the last declared scheme, so an `Unauthenticated`
@@ -434,7 +452,8 @@ export const OptionalAuthenticationLive: Layer.Layer<
       never,
       never
     >["cookie"] = (httpEffect, { credential }) =>
-      authenticate("cookie", httpEffect, credential).pipe(
+      cookieCredential(credential).pipe(
+        Effect.flatMap((resolved) => authenticate("cookie", httpEffect, resolved)),
         Effect.catchTag("Unauthenticated", () =>
           HttpApiBuilder.securityDecode(Api.BearerToken).pipe(
             Effect.flatMap((bearerCredential) =>

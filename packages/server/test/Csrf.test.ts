@@ -1,5 +1,6 @@
 // spec/behaviors/10-csrf.md, BEH-EA-073 through BEH-EA-080.
 import { Api } from "@awthaq/api";
+import { SessionCookie } from "@awthaq/core";
 import { Hmac } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -20,7 +21,12 @@ import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiTest from "effect/unstable/httpapi/HttpApiTest";
 import * as Etag from "effect/unstable/http/Etag";
+import * as Cookies from "effect/unstable/http/Cookies";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import type * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Csrf from "../src/Csrf.ts";
 
 // `HttpApiTest.groups` needs these platform services regardless of which
@@ -239,5 +245,65 @@ describe("Csrf.layerConfig", () => {
       if (!Exit.isFailure(exit)) return;
       assert.instanceOf(Cause.squash(exit.cause), Hmac.WeakSigningSecret);
     }),
+  );
+});
+
+// AGA-004: the double-submit cookie follows the session cookie's embedded mode.
+describe("Csrf cookie attributes follow the session cookie mode (AGA-004)", () => {
+  const appLayer = (cookieConfig: Layer.Layer<never>) =>
+    HttpApiBuilder.layer(TestApi).pipe(
+      Layer.provide(GroupLayer),
+      Layer.provideMerge(Csrf.CsrfProtectionLive),
+      Layer.provideMerge(CsrfClientPassthrough),
+      Layer.provide(
+        Layer.succeed(Csrf.CsrfConfig, {
+          secret: Redacted.make(secret),
+          allowedOrigins: ["https://example.com"],
+        }),
+      ),
+      Layer.provide(NodeCrypto.layer),
+      Layer.provideMerge(cookieConfig),
+      Layer.provideMerge(TestServices),
+      Layer.provideMerge(HttpRouter.layer),
+    );
+
+  const mintedCookie = Effect.scoped(
+    Effect.gen(function* () {
+      const router = yield* HttpRouter.HttpRouter;
+      let written: HttpServerResponse.HttpServerResponse | undefined;
+      yield* HttpEffect.toHandled(router.asHttpEffect(), (_request, response) =>
+        Effect.sync(() => {
+          written = response;
+        }),
+      ).pipe(
+        Effect.provideService(
+          HttpServerRequest.HttpServerRequest,
+          HttpServerRequest.fromWeb(new Request("http://localhost/thing")),
+        ),
+      );
+      return written === undefined ? undefined : Cookies.get(written.cookies, Api.CSRF_COOKIE_NAME);
+    }),
+  );
+
+  it.effect("the default mints __Host-csrf with SameSite=Strict and Secure", () =>
+    Effect.gen(function* () {
+      const cookie = yield* mintedCookie;
+      assert.isDefined(cookie);
+      if (cookie === undefined || cookie._tag === "None") return;
+      assert.strictEqual(cookie.value.options?.sameSite, "strict");
+      assert.isTrue(cookie.value.options?.secure);
+      assert.isUndefined(cookie.value.options?.partitioned);
+    }).pipe(Effect.provide(appLayer(SessionCookie.config({})))),
+  );
+
+  it.effect("HostEmbedded mints __Host-csrf with SameSite=None; Partitioned", () =>
+    Effect.gen(function* () {
+      const cookie = yield* mintedCookie;
+      assert.isDefined(cookie);
+      if (cookie === undefined || cookie._tag === "None") return;
+      assert.strictEqual(cookie.value.options?.sameSite, "none");
+      assert.isTrue(cookie.value.options?.partitioned);
+      assert.isTrue(cookie.value.options?.secure);
+    }).pipe(Effect.provide(appLayer(SessionCookie.config({ mode: SessionCookie.HostEmbedded })))),
   );
 });

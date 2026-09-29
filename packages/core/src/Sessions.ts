@@ -183,14 +183,12 @@ export class SessionExpired extends Data.TaggedError("SessionExpired")<{
   readonly id: SessionId;
 }> {}
 
-/** BEH-EA-055: the one session cookie's fixed, non-configurable attribute set. */
+/**
+ * BEH-EA-055: the default session cookie's name. IC-007: the cookie's
+ * attributes and (for `SecureDomain`) name are `SessionCookie`'s
+ * `SessionCookieConfig`; every writer renders through `SessionCookie.render`.
+ */
 export const SESSION_COOKIE_NAME = Api.SESSION_COOKIE_NAME;
-export const SESSION_COOKIE_ATTRIBUTES = {
-  secure: true,
-  httpOnly: true,
-  sameSite: "strict",
-  path: "/",
-} as const;
 
 export interface SessionsShape {
   /**

@@ -23,7 +23,16 @@
 // header comment for how it correlates its two anonymous calls instead.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Accounts, Hooks, Migrations, Sessions, Users } from "@awthaq/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  Accounts,
+  Hooks,
+  Migrations,
+  SessionCookie,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { ClientAddress, WebAuthn } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -374,11 +383,7 @@ export const PasskeyHandlers = Layer.mergeAll(
             ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
             ...(Option.isSome(userAgent) ? { userAgent: userAgent.value } : {}),
           });
-          yield* HttpApiBuilder.securitySetCookie(
-            Api.SessionCookie,
-            Redacted.value(issued.token),
-            Sessions.SESSION_COOKIE_ATTRIBUTES,
-          );
+          yield* SessionCookie.set(issued.session, issued.token);
           return toSessionDto(issued.session);
         }),
       });

@@ -15,6 +15,7 @@
 // would be 403'd on sign-out/revoke/delete-user.
 
 import { Api } from "@awthaq/api";
+import { SessionCookie } from "@awthaq/core";
 import { Hmac } from "@awthaq/ports";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -142,10 +143,13 @@ export const CsrfProtectionLive: Layer.Layer<
 
         if (!cookieIsValid) {
           const fresh = yield* mint(crypto, config.secret).pipe(Effect.orDie);
+          // AGA-004: an embedded (`SameSite=None; Partitioned`) session cookie
+          // needs its double-submit companion to travel in the same context.
+          const cookieMode = SessionCookie.csrfCookieOptions(yield* SessionCookie.SessionCookieConfig);
           yield* HttpApiBuilder.securitySetCookie(Api.CsrfCookie, fresh, {
             httpOnly: false,
-            sameSite: "strict",
             path: "/",
+            ...cookieMode,
           });
         }
 

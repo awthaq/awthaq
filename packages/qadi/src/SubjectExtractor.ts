@@ -15,7 +15,7 @@
 // `Authentication`'s own `resolvePrincipal` (the identical hash-comparison
 // and absolute/idle-expiry logic over `Sessions`, per BEH-EA-153's own text).
 import { Api } from "@awthaq/api";
-import { Sessions } from "@awthaq/core";
+import { SessionCookie, Sessions } from "@awthaq/core";
 import { Authentication } from "@awthaq/server";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -37,8 +37,9 @@ const BEARER_PREFIX = "bearer ";
  */
 const extractCredential = (
   request: HttpServerRequest.HttpServerRequest,
+  cookieName: string,
 ): { readonly scheme: "cookie" | "bearer"; readonly credential: Redacted.Redacted<string> } => {
-  const cookie = request.cookies[Sessions.SESSION_COOKIE_NAME];
+  const cookie = request.cookies[cookieName];
   if (cookie !== undefined && cookie.length > 0) {
     return { scheme: "cookie", credential: Redacted.make(cookie) };
   }
@@ -76,7 +77,9 @@ export const SubjectExtractorLive: Layer.Layer<
     return {
       extract: (request) =>
         Effect.gen(function* () {
-          const { scheme, credential } = extractCredential(request);
+          // IC-007: the configured session-cookie name (default `__Host-session`).
+          const cookieName = SessionCookie.cookieName(yield* SessionCookie.SessionCookieConfig);
+          const { scheme, credential } = extractCredential(request, cookieName);
           // PIL-005: `scheme` tells a rotating `verify` how to deliver the
           // new secret — `resolveSession` registers that delivery on the
           // request itself, so a Path-B-only route still rotates cleanly.

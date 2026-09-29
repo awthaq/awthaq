@@ -28,6 +28,7 @@ import {
   Accounts,
   Hooks,
   RateLimits,
+  SessionCookie,
   Sessions,
   Users,
   Verification,
@@ -459,11 +460,15 @@ export const OAuthHandlers = HttpApiBuilder.group(
         });
         if (outcome.session !== undefined) {
           const response = HttpServerResponse.redirect(outcome.callbackURL);
+          const cookie = yield* SessionCookie.render(
+            outcome.session.session,
+            outcome.session.token,
+          );
           return yield* HttpServerResponse.setCookie(
             response,
-            Sessions.SESSION_COOKIE_NAME,
-            Redacted.value(outcome.session.token),
-            Sessions.SESSION_COOKIE_ATTRIBUTES,
+            cookie.name,
+            cookie.value,
+            cookie.options,
           ).pipe(Effect.orDie);
         }
         return HttpServerResponse.redirect(outcome.callbackURL);

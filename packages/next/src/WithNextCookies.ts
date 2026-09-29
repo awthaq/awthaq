@@ -38,6 +38,8 @@ export interface CookieSetOptions {
   readonly expires?: Date;
   readonly secure?: boolean;
   readonly httpOnly?: boolean;
+  /** AGA-004: CHIPS `Partitioned` (the `HostEmbedded` session-cookie mode). */
+  readonly partitioned?: boolean;
   readonly sameSite?: "lax" | "strict" | "none";
 }
 

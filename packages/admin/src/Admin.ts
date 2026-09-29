@@ -21,7 +21,7 @@
 // violation above.
 
 import { Api, SessionContract } from "@awthaq/api";
-import { AuthEvents, AuthPlugin, Migrations, Sessions, Users } from "@awthaq/core";
+import { AuthEvents, AuthPlugin, Migrations, SessionCookie, Sessions, Users } from "@awthaq/core";
 import type { AuthSubject } from "@qadi/core";
 import { makeSubject } from "@qadi/core";
 import * as Context from "effect/Context";
@@ -161,11 +161,7 @@ export const AdminHandlers = HttpApiBuilder.group(
           targetUserId: Users.UserId(params.userId),
           reason: payload.reason,
         });
-        yield* HttpApiBuilder.securitySetCookie(
-          Api.SessionCookie,
-          Redacted.value(issued.token),
-          Sessions.SESSION_COOKIE_ATTRIBUTES,
-        );
+        yield* SessionCookie.set(issued.session, issued.token);
         return toSessionDto(issued.session);
       }),
       stopImpersonating: Effect.fnUntraced(function* () {
