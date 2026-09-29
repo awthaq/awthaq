@@ -150,7 +150,8 @@ export interface PasswordShape {
    */
   /**
    * PIL-002/RRS-001/SMS-001: BEH-EA-053 — every privilege-changing
-   * operation mints a fresh session and deletes the row it supersedes.
+   * operation mints a fresh session and tombstones the row it supersedes
+   * (atomically with the insert — ESR-002/RRS-004).
    * `currentSessionId` names the caller's own session so it can be
    * rotated (superseded, not merely kept) while every *other* session for
    * this user is revoked outright, closing the classic "attacker holds a

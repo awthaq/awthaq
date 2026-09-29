@@ -77,16 +77,21 @@ REQUIREMENT: A session's idle-refresh write MUST occur at most once per
 
 **Rotation delivery (PIL-005).** The throttled write also rotates the secret (there is no grace window: the old secret stops verifying immediately), so a `verify` that rotated MUST have the new secret delivered on the response to that same request — on every route style (Path A's `Authentication`, Path B's `SubjectExtractor`, see [BEH-EA-153](20-qadi-bridge-path-b.md#beh-ea-153-subjectextractor-runs-session-resolution-on-the-raw-request)) and every handler outcome, including a typed-error response. A cookie-authenticated request receives it as `Set-Cookie`; a bearer-authenticated request receives it in the `set-auth-token` header (`Api.ROTATED_TOKEN_HEADER`); both responses carry `Cache-Control: no-store`, and delivery is exactly once per rotation. A delivery failure (cookie encoding) is logged and the response returned undecorated — it never turns a response into a defect.
 
-## BEH-EA-053: A new session is issued — never reused — at sign-in and at privilege change; the superseded row is deleted
+## BEH-EA-053: A new session is issued — never reused — at sign-in and at privilege change; the superseded row is tombstoned atomically with the new row's insertion
 
 ```text
 REQUIREMENT: Every sign-in and every privilege-changing operation
              (password change, email change) MUST issue a newly minted
-             session and delete the row it supersedes, rather than
-             extending or re-validating an existing session row.
+             session and supersede the row it replaces, rather than
+             extending or re-validating an existing session row. The
+             superseded row MUST be tombstoned (RRS-003: `supersededBy`/
+             `supersededAt` set, never deleted) in the same atomic unit as
+             the successor's insertion — one SQL transaction in `layerSql`,
+             one `Ref.modify` in `layerMemory` — so no failure or interruption
+             can leave a tombstoned session without its successor.
 ```
 
-`archive/design/usage-examples-v4.md` §5.3 states this directly: "A new session is issued at every sign-in and after password or email change; the old row is deleted." `better-auth/01-core-domain/01-entities-and-invariants.md` §2.3 documents the same rule for a related case — promoting a previously-unverified user on proof of mailbox ownership strips every pre-existing session and account, and a fresh session is minted only afterward by the caller, never by reusing whatever session happened to exist before the proof resolved.
+`archive/design/usage-examples-v4.md` §5.3 states this directly: "A new session is issued at every sign-in and after password or email change; the old row is deleted." (Revised by RRS-003/ESR-002: the old row is now tombstoned, atomically with the new row's insertion, so a later presentation of the superseded token is detectable as reuse.) `better-auth/01-core-domain/01-entities-and-invariants.md` §2.3 documents the same rule for a related case — promoting a previously-unverified user on proof of mailbox ownership strips every pre-existing session and account, and a fresh session is minted only afterward by the caller, never by reusing whatever session happened to exist before the proof resolved.
 
 ## BEH-EA-054: Sessions expose a device list, per-device revocation, and revoke-others
 

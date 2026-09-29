@@ -11,9 +11,11 @@ import { Repositories } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -22,6 +24,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Sessions from "../src/Sessions.ts";
@@ -484,6 +487,23 @@ const suite = (
         }).pipe(Effect.provide(layer)),
     );
 
+    // IDS-008: the self-act-as invariant lives in the primitive, not only in
+    // the Admin plugin — a producer that skips its own guard dies loudly.
+    it.effect("BEH-EA-209: issue refuses actingAs naming the session's own userId", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const exit = yield* sessions
+          .issue({ userId, actingAs: { type: "user", id: userId } })
+          .pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(exit));
+        if (!Exit.isFailure(exit)) return;
+        assert.isTrue(Cause.hasDies(exit.cause));
+        assert.instanceOf(Cause.squash(exit.cause), Sessions.InvalidActingAs);
+        // A different actor is still fine.
+        yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-1" } });
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect(
       "an ordinary session's own idle-refresh is unaffected by the actingAs skip logic",
       () =>
@@ -631,6 +651,30 @@ const reuseSuite = (
       }).pipe(Effect.provide(layer)),
     );
 
+    // ESR-002: the supersede is one atomic step, and only a still-live row can
+    // be tombstoned — two concurrent supersedes of one row never fork its
+    // family (exactly one successor inherits it; the other founds its own).
+    it.effect("ESR-002: two concurrent issue(supersedes: same id) never fork the family", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const [x, y] = yield* Effect.all(
+          [
+            sessions.issue({ userId, supersedes: a.session.id }),
+            sessions.issue({ userId, supersedes: a.session.id }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        // Replaying A's token is reuse: it revokes A's family only.
+        yield* sessions.verify(a.token).pipe(Effect.flip);
+        const outcomes = yield* Effect.all([
+          Effect.exit(sessions.verify(x.token)),
+          Effect.exit(sessions.verify(y.token)),
+        ]);
+        assert.strictEqual(outcomes.filter(Exit.isSuccess).length, 1);
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("Sessions.list excludes a tombstoned (superseded) row", () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
@@ -680,4 +724,69 @@ describe("Sessions", () => {
       assert.isFalse(Sessions.isStale(authenticatedAt, 300, now));
     });
   });
+});
+
+// ESR-002/RRS-004: a failing successor insert must roll the tombstone back.
+const failNextInsert = Effect.runSync(Ref.make(false));
+
+const FlakyInsertRepository = Layer.effect(
+  Repositories.SessionsRepository,
+  Effect.gen(function* () {
+    const real = yield* Repositories.SessionsRepository;
+    return {
+      ...real,
+      insert: (input: Parameters<typeof real.insert>[0]) =>
+        Ref.get(failNextInsert).pipe(
+          Effect.flatMap((fail) =>
+            fail
+              ? Effect.fail(
+                  new SqlError({
+                    reason: new UnknownError({ cause: new Error("simulated insert failure") }),
+                  }),
+                )
+              : real.insert(input),
+          ),
+        ),
+    };
+  }),
+).pipe(Layer.provide(Repositories.SessionsRepositoryLive));
+
+const FlakySqlLayer = Sessions.layerSql.pipe(
+  Layer.provide(FlakyInsertRepository),
+  Layer.provide(NodeCrypto.layer),
+  Layer.provideMerge(AuthEvents.layer),
+  Layer.provideMerge(AuditLog.layerMemory),
+  Layer.provideMerge(SqlLive),
+  Layer.provideMerge(Migrated),
+);
+
+describe("Sessions atomic supersede (layerSql)", () => {
+  it.effect(
+    "BEH-EA-053: a failing insert during issue(supersedes) leaves the superseded session live and untombstoned",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const events = yield* AuthEvents.AuthEvents;
+        const reuse = yield* Ref.make(0);
+        yield* Effect.forkChild(
+          events.stream.pipe(
+            Stream.filter((event) => event._tag === "auth.session.reuse"),
+            Stream.runForEach(() => Ref.update(reuse, (n) => n + 1)),
+          ),
+          { startImmediately: true },
+        );
+
+        const a = yield* sessions.issue({ userId });
+        yield* Ref.set(failNextInsert, true);
+        const exit = yield* sessions.issue({ userId, supersedes: a.session.id }).pipe(Effect.exit);
+        yield* Ref.set(failNextInsert, false);
+        assert.isTrue(Exit.isFailure(exit));
+
+        // The old token still verifies: the tombstone rolled back with the insert.
+        const verified = yield* sessions.verify(a.token);
+        assert.strictEqual(verified.session.id, a.session.id);
+        for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+        assert.strictEqual(yield* Ref.get(reuse), 0);
+      }).pipe(Effect.provide(FlakySqlLayer)),
+  );
 });

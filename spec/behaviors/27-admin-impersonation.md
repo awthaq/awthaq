@@ -34,6 +34,8 @@ REQUIREMENT: `Sessions.issue` MUST accept an optional `actingAs` reference;
 
 `archive/PRD.md` §17's Phase-2 row and [MOD-EA-015](../models/15-admin-impersonation.md) both describe impersonation as producing "a new session row: `userId` = target, `actingAs` = admin" — a session-level fact set once at issuance, not a value recomputed on every request. Extending `Sessions.issue` itself, rather than having `Admin` write to the sessions table directly, keeps `Sessions` the one owner of session-row shape and lets any future plugin reuse the identical parameter; `Admin` is simply the first caller to ever pass it.
 
+**Self-act-as is refused in the primitive (IDS-008).** `Sessions.issue` (both layers) MUST die with `InvalidActingAs` when `actingAs` names the session's own user (`type: "user"`, `id === userId`) — a programming error in the producing plugin, so a defect, leaving `issue`'s public error channel unchanged. The nesting rule ([BEH-EA-214](27-admin-impersonation.md#beh-ea-214-self-impersonation-and-nested-impersonation-are-refused)) needs the *caller's* session, which `issue` never sees, so it stays with the producer; `Admin.impersonate` is the reference implementation.
+
 _Previous: [BEH-EA-208](26-cli.md#beh-ea-208-the-cli-reads-the-manifest-it-never-runs-the-application) | Next: [BEH-EA-210](27-admin-impersonation.md#beh-ea-210-a-session-carrying-actingas-never-idle-refreshes)_
 
 ## BEH-EA-210: A session carrying `actingAs` never idle-refreshes

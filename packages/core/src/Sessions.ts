@@ -24,6 +24,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Model from "effect/unstable/schema/Model";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
 import { UserId } from "./Users.ts";
 
@@ -151,6 +152,29 @@ export const isStale = (
 ): boolean =>
   Duration.isGreaterThan(DateTime.distance(authenticatedAt, now), Duration.seconds(maxAgeSeconds));
 
+/**
+ * IDS-008: a programming error in the producing plugin, not a request-level
+ * condition — a session may not name its own user as the acting party
+ * (BEH-EA-209). Raised as a defect from `issue` in both layers, so `issue`'s
+ * public error channel is unchanged. The nesting rule (a caller who is
+ * already acting-as may not mint a further acting-as session, BEH-EA-214)
+ * needs the caller's own session, which `issue` never sees — that stays with
+ * the producer (`@awthaq/admin`'s `impersonate` is the reference).
+ */
+export class InvalidActingAs extends Data.TaggedError("InvalidActingAs")<{
+  readonly reason: "self";
+}> {}
+
+const refuseSelfActingAs = (input: {
+  readonly userId: UserId;
+  readonly actingAs?: ActingAs;
+}): Effect.Effect<void> =>
+  input.actingAs !== undefined &&
+  input.actingAs.type === "user" &&
+  input.actingAs.id === input.userId
+    ? Effect.die(new InvalidActingAs({ reason: "self" }))
+    : Effect.void;
+
 export class SessionNotFound extends Data.TaggedError("SessionNotFound")<{
   readonly message: string;
 }> {}
@@ -177,12 +201,22 @@ export interface SessionsShape {
    * `supersededAt` set, never deleted) rather than leaving both live. The
    * new row inherits the old row's `familyId` — see `verify`'s own doc
    * comment for what presenting a tombstoned row again means.
+   *
+   * ESR-002/RRS-004: the tombstone and the successor's insert are one atomic
+   * unit in both layers (`layerSql`: one transaction; `layerMemory`: one
+   * `Ref.modify`), so a failed or interrupted issue never leaves a tombstoned
+   * session without its successor. Only a still-live row can be superseded:
+   * of two concurrent issues naming the same `supersedes`, one inherits its
+   * family and the other founds a fresh one.
    */
   readonly issue: (input: {
     readonly userId: UserId;
     readonly request?: { readonly ip?: string; readonly userAgent?: string };
     readonly supersedes?: SessionId;
-    /** BEH-EA-209/210: sets a hard expiry (`idleExpiresAt = absoluteExpiresAt`) and disables idle-refresh for this session's whole lifetime. */
+    /**
+     * BEH-EA-209/210: sets a hard expiry (`idleExpiresAt = absoluteExpiresAt`) and disables idle-refresh for this session's whole lifetime.
+     * IDS-008: naming the session's own `userId` dies with `InvalidActingAs`. A producer MUST also refuse a caller whose own session already carries `actingAs` (BEH-EA-214) — `issue` cannot see the caller's session; `Admin.impersonate` is the reference implementation.
+     */
     readonly actingAs?: ActingAs;
     /** BEH-EA-212: overrides `SessionConfig.absolute` for this one call — e.g. `@awthaq/admin`'s own `AdminConfig.maxDuration`, generally shorter than an ordinary session's absolute lifetime. */
     readonly absoluteDuration?: Duration.Duration;
@@ -338,31 +372,11 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
       const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
       const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
+        yield* refuseSelfActingAs(input);
         const id = SessionId(yield* crypto.randomUUIDv7);
         const secret = toHex(yield* crypto.randomBytes(32));
         const secretHash = yield* hashSecret(crypto, secret);
         const now = yield* DateTime.now;
-        // RRS-003: tombstoned, not deleted — the old row's own `familyId` is
-        // what this new row inherits; a row this new one has no `supersedes`
-        // ancestor for founds a fresh family, `familyId = id`.
-        let familyId = id;
-        if (input.supersedes !== undefined) {
-          const supersedes = input.supersedes;
-          const ancestor = yield* Ref.modify(
-            state,
-            (s): readonly [Option.Option<SessionRow>, HashMap.HashMap<SessionId, SessionRow>] => {
-              const current = HashMap.get(s, supersedes);
-              if (Option.isNone(current)) return [Option.none(), s] as const;
-              const tombstoned: SessionRow = {
-                ...current.value,
-                supersededBy: Option.some(id),
-                supersededAt: Option.some(now),
-              };
-              return [Option.some(tombstoned), HashMap.set(s, tombstoned.id, tombstoned)] as const;
-            },
-          );
-          if (Option.isSome(ancestor)) familyId = ancestor.value.familyId;
-        }
         const absoluteExpiresAt = DateTime.addDuration(
           now,
           input.absoluteDuration ?? config.absolute,
@@ -374,24 +388,54 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           input.actingAs === undefined
             ? DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt)
             : absoluteExpiresAt;
-        const row: SessionRow = {
-          id,
-          userId: input.userId,
-          secretHash,
-          createdAt: now,
-          authenticatedAt: now,
-          lastActiveAt: now,
-          absoluteExpiresAt,
-          idleExpiresAt,
-          ipAddress: Option.fromNullishOr(input.request?.ip),
-          userAgent: Option.fromNullishOr(input.request?.userAgent),
-          actingAs: Option.fromNullishOr(input.actingAs),
-          familyId,
-          supersededBy: Option.none(),
-          supersededAt: Option.none(),
-          reusedAt: Option.none(),
-        };
-        yield* Ref.update(state, (s) => HashMap.set(s, id, row));
+        // ESR-002/RRS-004: tombstoning the superseded row and inserting its
+        // successor are ONE `Ref.modify`, so no interruption or failure can
+        // leave a tombstoned session without its successor (whose next
+        // presentation would read as refresh-token reuse — a false theft
+        // alarm and a family revocation). RRS-003: tombstoned, not deleted —
+        // the ancestor's own `familyId` is what this row inherits; a row with
+        // no live `supersedes` ancestor founds a fresh family, `familyId = id`.
+        const row = yield* Ref.modify(
+          state,
+          (s): readonly [SessionRow, HashMap.HashMap<SessionId, SessionRow>] => {
+            const ancestor =
+              input.supersedes === undefined
+                ? Option.none()
+                : Option.filter(HashMap.get(s, input.supersedes), (r) =>
+                    Option.isNone(r.supersededAt),
+                  );
+            const created: SessionRow = {
+              id,
+              userId: input.userId,
+              secretHash,
+              createdAt: now,
+              authenticatedAt: now,
+              lastActiveAt: now,
+              absoluteExpiresAt,
+              idleExpiresAt,
+              ipAddress: Option.fromNullishOr(input.request?.ip),
+              userAgent: Option.fromNullishOr(input.request?.userAgent),
+              actingAs: Option.fromNullishOr(input.actingAs),
+              familyId: Option.match(ancestor, {
+                onNone: () => id,
+                onSome: (r) => r.familyId,
+              }),
+              supersededBy: Option.none(),
+              supersededAt: Option.none(),
+              reusedAt: Option.none(),
+            };
+            const withAncestor = Option.match(ancestor, {
+              onNone: () => s,
+              onSome: (r) =>
+                HashMap.set(s, r.id, {
+                  ...r,
+                  supersededBy: Option.some(id),
+                  supersededAt: Option.some(now),
+                }),
+            });
+            return [created, HashMap.set(withAncestor, id, created)] as const;
+          },
+        );
         return { session: toView(row), token: Redacted.make(`${id}.${secret}`) };
       });
 
@@ -659,17 +703,19 @@ const LIST_PAGE_SIZE = 200;
 export const layerSql: Layer.Layer<
   Sessions,
   never,
-  SqlRepositories.SessionsRepository | Crypto.Crypto | AuthEvents.AuthEvents
+  SqlRepositories.SessionsRepository | SqlClient.SqlClient | Crypto.Crypto | AuthEvents.AuthEvents
 > = Layer.effect(
   Sessions,
   Effect.gen(function* () {
     const repo = yield* SqlRepositories.SessionsRepository;
+    const sql = yield* SqlClient.SqlClient;
     const crypto = yield* Crypto.Crypto;
     const config = yield* SessionConfig;
     const events = yield* AuthEvents.AuthEvents;
     const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
     const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
+      yield* refuseSelfActingAs(input);
       // Generated here, not left to `Model.UuidV7Insert`'s own
       // constructor-default: `familyId` needs this row's own `id` before
       // insert (to self-reference when it founds a fresh family), so `id`
@@ -679,22 +725,6 @@ export const layerSql: Layer.Layer<
       const secret = toHex(yield* crypto.randomBytes(32));
       const secretHash = yield* hashSecret(crypto, secret);
       const now = yield* DateTime.now;
-      // RRS-003: tombstoned, not deleted — the old row's own `familyId` is
-      // what this new row inherits; no `supersedes` ancestor founds a
-      // fresh family, `familyId = id`.
-      let familyId = id;
-      if (input.supersedes !== undefined) {
-        const ancestor = yield* repo
-          .tombstone({ id: input.supersedes, supersededBy: id, supersededAt: now })
-          .pipe(
-            Effect.catchTags({
-              NoSuchElementError: () => Effect.succeed(undefined),
-              SchemaError: Effect.die,
-              SqlError: Effect.die,
-            }),
-          );
-        if (ancestor !== undefined) familyId = SessionId(ancestor.familyId);
-      }
       const absoluteExpiresAt = DateTime.addDuration(
         now,
         input.absoluteDuration ?? config.absolute,
@@ -705,24 +735,50 @@ export const layerSql: Layer.Layer<
         input.actingAs === undefined
           ? DateTime.min(DateTime.addDuration(now, config.idle), absoluteExpiresAt)
           : absoluteExpiresAt;
-      const insert = yield* SqlModels.Session.insert
-        .makeEffect({
-          id,
-          userId: input.userId,
-          secretHash,
-          ipAddress: input.request?.ip ?? null,
-          userAgent: input.request?.userAgent ?? null,
-          absoluteExpiresAt,
-          idleExpiresAt: Model.Override(idleExpiresAt),
-          actingAsType: input.actingAs?.type ?? null,
-          actingAsId: input.actingAs?.id ?? null,
-          familyId,
-          supersededBy: null,
-          supersededAt: null,
-          reusedAt: null,
-        })
-        .pipe(Effect.orDie);
-      const row = yield* repo.insert(insert).pipe(Effect.orDie);
+      // ESR-002/RRS-004: the tombstone and the successor's insert commit
+      // together or not at all — a crash between them would leave the client
+      // holding a tombstoned token whose next use reads as refresh-token
+      // reuse (family revocation and a false `auth.session.reuse`). The
+      // hash/id/clock work above stays outside the transaction.
+      const persist = Effect.gen(function* () {
+        // RRS-003: tombstoned, not deleted — the ancestor's own `familyId` is
+        // what this new row inherits; no live `supersedes` ancestor founds a
+        // fresh family, `familyId = id`.
+        let familyId = id;
+        if (input.supersedes !== undefined) {
+          const ancestor = yield* repo
+            .tombstone({ id: input.supersedes, supersededBy: id, supersededAt: now })
+            .pipe(
+              Effect.catchTags({
+                NoSuchElementError: () => Effect.succeed(undefined),
+                SchemaError: Effect.die,
+                SqlError: Effect.die,
+              }),
+            );
+          if (ancestor !== undefined) familyId = SessionId(ancestor.familyId);
+        }
+        const insert = yield* SqlModels.Session.insert
+          .makeEffect({
+            id,
+            userId: input.userId,
+            secretHash,
+            ipAddress: input.request?.ip ?? null,
+            userAgent: input.request?.userAgent ?? null,
+            absoluteExpiresAt,
+            idleExpiresAt: Model.Override(idleExpiresAt),
+            actingAsType: input.actingAs?.type ?? null,
+            actingAsId: input.actingAs?.id ?? null,
+            familyId,
+            supersededBy: null,
+            supersededAt: null,
+            reusedAt: null,
+          })
+          .pipe(Effect.orDie);
+        return yield* repo.insert(insert).pipe(Effect.orDie);
+      });
+      const row = yield* input.supersedes === undefined
+        ? persist
+        : sql.withTransaction(persist).pipe(Effect.catchTag("SqlError", Effect.die));
       return { session: toSessionView(row), token: Redacted.make(`${row.id}.${secret}`) };
     });
 

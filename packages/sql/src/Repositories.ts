@@ -378,6 +378,9 @@ export interface SessionsRepositoryShape {
    * RRS-003: tombstones the superseded row in a rotation — sets
    * `supersededBy`/`supersededAt`, never deletes it. Returns the
    * now-tombstoned row (its own `familyId` is what the new row inherits).
+   * ESR-002: applies only to a still-live row (`supersededAt IS NULL`), so two
+   * concurrent supersedes of one row cannot both tombstone it and fork its
+   * family — the loser gets `NoSuchElementError`.
    */
   readonly tombstone: (input: {
     readonly id: SessionId;
@@ -511,7 +514,7 @@ export const SessionsRepositoryLive: Layer.Layer<SessionsRepository, never, SqlC
         execute: (request) => sql`
           UPDATE sessions
           SET "supersededBy" = ${request.supersededBy}, "supersededAt" = ${request.supersededAt}
-          WHERE "id" = ${request.id}
+          WHERE "id" = ${request.id} AND "supersededAt" IS NULL
           RETURNING *
         `,
       });
