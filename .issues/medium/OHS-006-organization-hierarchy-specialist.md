@@ -3,7 +3,7 @@ ID: "OHS-006"
 Title: "Re-inviting an existing member and accepting creates duplicate/overwritten org membership"
 Level: medium
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "organization"
 Source: "packages/organization/src/Organization.ts:1522"
 Auditor: "organization-hierarchy-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `correctness` · `organization` · reported by **Organization Hierarchy Specialist** (`organization-hierarchy-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Make acceptInvitation a typed no-op or error when the accepting user already hol
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `org-write-atomicity-and-uniqueness`. Evidence at HEAD ec065a7: `packages/organization/src/Organization.ts:1772`. Fix: Refuse to invite or admit someone who is already a member, so an invitation can never overwrite or duplicate a membership. (effort S). Full dossier: `.plan/slices/08-authz-org-roles-qadi.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** invite: an existing member gets AlreadyMember (their pending invitation is canceled, none created); acceptInvitation: already-member -> invitation canceled + AlreadyMember, never members.create; MembershipRecordAlreadyExists race mapped. AlreadyMember added to the invite/acceptInvitation endpoint error arrays. Existing test 'inviting an existing member cancels...' updated to the new contract. Tests: Organization.test.ts 'inviting an existing member fails AlreadyMember...' and 'accepting an invitation while already a member ... roles unchanged'. Gates: tsc -b (only the pre-existing packages/react errors), tsconfig.test clean, pnpm test 853 pass, test:bdd green, spec:verify:strict PASS, oxlint clean.
