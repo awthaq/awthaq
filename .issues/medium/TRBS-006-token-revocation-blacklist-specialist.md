@@ -57,3 +57,7 @@ In layerMemory, delete the row on the expired branch of verify (it is already pa
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `data-retention-sweep`. Duplicate of `CSG-003` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/core/src/Sessions.ts:786`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `CSG-003-compliance-soc2-gdpr-specialist` — closed by its fix (see that issue's Resolved comment).
+
+**Resolved (2026-09-29):** Duplicate of CSG-003: expired and tombstoned session rows are removed by Sessions.purgeExpired via Retention.sweep (grace 7 days), in both layers.

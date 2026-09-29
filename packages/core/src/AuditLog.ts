@@ -58,6 +58,7 @@ import {
   encodeEvent,
   upcastPayload,
 } from "./AuthEventSchemas.ts";
+import { drainBatches } from "./internal/purgeBatches.ts";
 import { UserId } from "./Users.ts";
 
 /** ESA-007: a stored row that no longer decodes as an `AuthEvent` — a schema drift or a hand-edited row. */
@@ -135,6 +136,17 @@ export interface AuditLogShape {
    * Idempotent; resolves to how many rows were rewritten.
    */
   readonly pseudonymizeActor: (userId: UserId) => Effect.Effect<number>;
+  /**
+   * ALF-010: retention. Deletes every row that occurred before `before` — only rows
+   * whose tag is in `eventTags` when given, never rows whose tag is in `exceptTags` —
+   * and resolves to how many went. Nothing calls it unless an operator configures a
+   * window (`Retention`'s `auditLog`): the default keeps the trail forever.
+   */
+  readonly purge: (input: {
+    readonly before: DateTime.Utc;
+    readonly eventTags?: ReadonlyArray<AuthEventTag>;
+    readonly exceptTags?: ReadonlyArray<AuthEventTag>;
+  }) => Effect.Effect<number>;
 }
 
 export class AuditLog extends Context.Service<AuditLog, AuditLogShape>()("awthaq/core/AuditLog") {}
@@ -251,7 +263,10 @@ const toStoredRow = (published: Published): Effect.Effect<StoredRow> =>
       ...encoded,
       version: EVENT_VERSION,
       meta: {
-        ...Option.match(published.traceId, { onNone: () => ({}), onSome: (traceId) => ({ traceId }) }),
+        ...Option.match(published.traceId, {
+          onNone: () => ({}),
+          onSome: (traceId) => ({ traceId }),
+        }),
         ...Option.match(published.spanId, { onNone: () => ({}), onSome: (spanId) => ({ spanId }) }),
         ...Option.match(published.ip, { onNone: () => ({}), onSome: (ip) => ({ ip }) }),
         ...Option.match(published.userAgent, {
@@ -311,10 +326,7 @@ const blankFields = (value: unknown, fields: ReadonlyArray<string>): unknown =>
 const scrubRow = (row: StoredRow, userId: string, alias: string): StoredRow => ({
   ...row,
   actorUserId: row.actorUserId === null ? null : row.actorUserId.replaceAll(userId, alias),
-  payload: blankFields(
-    replaceDeep(row.payload, userId, alias),
-    PII_FIELDS[row.eventTag] ?? [],
-  ),
+  payload: blankFields(replaceDeep(row.payload, userId, alias), PII_FIELDS[row.eventTag] ?? []),
 });
 
 const newestFirst = (records: ReadonlyArray<AuditLogRecord>): ReadonlyArray<AuditLogRecord> =>
@@ -357,9 +369,7 @@ export const layerMemory = Layer.effect(
     const state = yield* Ref.make<ReadonlyArray<StoredRow>>([]);
 
     const record: AuditLogShape["record"] = (event) =>
-      toStoredRow(event).pipe(
-        Effect.flatMap((row) => Ref.update(state, (rows) => [...rows, row])),
-      );
+      toStoredRow(event).pipe(Effect.flatMap((row) => Ref.update(state, (rows) => [...rows, row])));
 
     const decodeAll = (rows: ReadonlyArray<StoredRow>) => Effect.forEach(rows, decodeRow);
 
@@ -407,7 +417,18 @@ export const layerMemory = Layer.effect(
         });
       });
 
-    return AuditLog.of({ record, list, replay, pseudonymizeActor });
+    const purge: AuditLogShape["purge"] = (input) =>
+      Ref.modify(state, (rows) => {
+        const cutoff = DateTime.toEpochMillis(input.before);
+        const doomed = (row: StoredRow): boolean =>
+          DateTime.toEpochMillis(row.occurredAt) < cutoff &&
+          (input.eventTags === undefined || input.eventTags.some((tag) => tag === row.eventTag)) &&
+          !(input.exceptTags ?? []).some((tag) => tag === row.eventTag);
+        const kept = rows.filter((row) => !doomed(row));
+        return [rows.length - kept.length, kept] as const;
+      });
+
+    return AuditLog.of({ record, list, replay, pseudonymizeActor, purge });
   }),
 );
 
@@ -477,6 +498,18 @@ export const layerSql = Layer.effect(
         return rewritten;
       });
 
-    return AuditLog.of({ record, list, replay, pseudonymizeActor });
+    const purge: AuditLogShape["purge"] = (input) =>
+      drainBatches((limit) =>
+        repo
+          .deleteOccurredBefore({
+            cutoff: input.before,
+            eventTags: input.eventTags ?? null,
+            exceptTags: input.exceptTags ?? [],
+            limit,
+          })
+          .pipe(Effect.orDie),
+      );
+
+    return AuditLog.of({ record, list, replay, pseudonymizeActor, purge });
   }),
 );

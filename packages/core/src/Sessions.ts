@@ -32,6 +32,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as AuthEvents from "./AuthEvents.ts";
 import * as Observability from "./Observability.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
+import { drainBatches } from "./internal/purgeBatches.ts";
 import { UserId } from "./Users.ts";
 
 /**
@@ -399,6 +400,14 @@ export interface SessionsShape {
     userId: UserId,
     reason: AuthEvents.SessionRevocationReason,
   ) => Effect.Effect<void>;
+  /**
+   * CSG-003: retention. Physically deletes every session — tombstoned rows
+   * included — whose absolute or idle expiry is before `before`, and resolves to
+   * how many went. Expiry is otherwise a read-time rejection (the row stays), so
+   * this is what bounds the table; `Retention.sweep` calls it with `now - sessionGrace`.
+   * Publishes nothing: an expired session was already dead.
+   */
+  readonly purgeExpired: (before: DateTime.Utc) => Effect.Effect<number>;
   /**
    * BEH-EA-054: exactly the user's *live* sessions — not tombstoned, past
    * neither `absoluteExpiresAt` nor `idleExpiresAt` — newest activity first
@@ -1022,6 +1031,18 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
           ),
         );
 
+      const purgeExpired: SessionsShape["purgeExpired"] = (before) =>
+        Ref.modify(state, (s) => {
+          const cutoff = DateTime.toEpochMillis(before);
+          const kept = HashMap.filter(
+            s,
+            (row) =>
+              DateTime.toEpochMillis(row.absoluteExpiresAt) >= cutoff &&
+              DateTime.toEpochMillis(row.idleExpiresAt) >= cutoff,
+          );
+          return [HashMap.size(s) - HashMap.size(kept), kept] as const;
+        });
+
       const toItem = (row: SessionRow, current: SessionId | undefined): SessionListItem => ({
         id: row.id,
         createdAt: row.createdAt,
@@ -1092,6 +1113,7 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         revokeOwned,
         revokeOthers,
         revokeAll,
+        purgeExpired,
         list,
         findOwned,
         isLive,
@@ -1480,6 +1502,9 @@ export const layerSql: Layer.Layer<
         ),
       );
 
+    const purgeExpired: SessionsShape["purgeExpired"] = (before) =>
+      drainBatches((limit) => repo.deleteExpiredBefore(before, limit).pipe(Effect.orDie));
+
     const toItem = (row: SqlModels.Session, current: SessionId | undefined): SessionListItem => ({
       id: SessionId(row.id),
       createdAt: row.createdAt,
@@ -1586,6 +1611,7 @@ export const layerSql: Layer.Layer<
       revokeOwned,
       revokeOthers,
       revokeAll,
+      purgeExpired,
       list,
       findOwned,
       isLive,

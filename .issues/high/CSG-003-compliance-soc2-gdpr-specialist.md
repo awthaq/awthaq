@@ -3,7 +3,7 @@ ID: "CSG-003"
 Title: "No retention sweep: expired sessions and consumed/expired verification rows persist forever"
 Level: high
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "core"
 Source: "packages/core/src/Verification.ts:287"
 Auditor: "compliance-soc2-gdpr-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `compliance` · `core` · reported by **Compliance (SOC2/GDPR) Specialist** (`compliance-soc2-gdpr-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Validation (2026-09-19):** CONFIRMED — Evidence quote matches `packages/core/src/Verification.ts:287` verbatim. `Sessions.ts:483-491` confirms expired rows are rejected at verify with no delete path, and a repo-wide grep for purge/sweep/cleanup/retention in `packages/*/src` returns only one unrelated comment (`packages/server/src/Authentication.ts:121`). No sweep mechanism exists anywhere. Deciding the forensic/retention window length is a compliance-policy judgment call, not a mechanical fix. Status → ready-for-human.
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `data-retention-sweep`. Evidence at HEAD ec065a7: `packages/core/src/Verification.ts:300`. Fix: Implement ticket 30's Retention service: cutoff-based purge primitives on both Sessions and Verification (both layers), a RetentionConfig reference, Retention.sweep, and an opt-in Retention.layerScheduled. (effort L). Full dossier: `.plan/slices/01-core-sessions-users.md`.
+
+**Resolved (2026-09-29):** Implemented ticket 30's Retention (ADR-EA-031). Purge primitives on both layers: Sessions.purgeExpired(before) (absolute or idle expiry before the cutoff, tombstoned rows included) and Verification.purgeExpired(before) (tokens consumed or expired before it plus expired reservations); the memory layers filter their maps with one Ref.modify, the SQL layers loop bounded `DELETE ... WHERE id IN (SELECT ... LIMIT n) RETURNING` statements via new repository ops deleteExpiredBefore on SessionsRepository, VerificationRepository and VerificationReservationsRepository (packages/sql/src/Repositories.ts), so a big backlog is a run of short transactions, not one long lock. New packages/core/src/Retention.ts: RetentionConfig Reference (sessionGrace 7d, verificationForensicWindow 90d, sweepInterval 1d, auditLog), Retention.config(partial), Retention.sweep returning {sessionsDeleted, verificationRowsDeleted, auditRowsDeleted}, opt-in Retention.layerScheduled (sweeps at start-up then every interval; a failed sweep is logged, never fatal; NOT included by Auth.make/TestAuth). Tests: packages/core/test/Retention.test.ts runs the same suite over memory and SQLite (TestClock; grace/forensic windows, live rows kept, idempotence, scheduled layer inert until provided) plus SQL-only proof that the rows are physically gone; packages/sql/test/contract.ts has the repository cases (bounded batches, counts) on every dialect. examples/memory-server opts in with Retention.layerScheduled. Spec: As-shipped paragraphs on BEH-EA-051 (07-sessions), BEH-EA-061 (08-verification-tokens), BEH-EA-100 (13-events), ADR-EA-031, README 'Retention'. Deviation from the dossier: no new BEH ids, the behaviors are documented as As-shipped paragraphs on the existing ones (keeps ids contiguous across concurrent programs); the 08-verification-tokens.feature scenario 'row has not been physically deleted' stays true as written (it is about the moment before any sweep). The default windows are a compliance policy the operator confirms, as the dossier flags.

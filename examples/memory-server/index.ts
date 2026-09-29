@@ -26,7 +26,7 @@ import {
   TeamRecords,
 } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
-import { Auth } from "@awthaq/core";
+import { Auth, Retention } from "@awthaq/core";
 import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
 import { AuthHttp, Authentication, BodyLimit, Csrf, RequestContext } from "@awthaq/server";
@@ -156,8 +156,13 @@ const audited = AuthorizationAudit.auditAuthorizationAnnotations(built.api);
 //    the client address and the user agent on every audit row a request causes, and
 //    `AuthHttp.layerRedactedHeaders` keeps the session cookie and rotated token out of any
 //    header a logger or tracer prints.
+//    CSG-003: `Retention.layerScheduled` is the opt-in retention sweep (expired sessions,
+//    old verification rows; the audit trail is kept for ever unless `Retention.config`
+//    sets a window). It shares the app's own stores, so it lives in the same layer graph.
 const ServerLive = HttpRouter.serve(
-  Layer.mergeAll(BodyLimit.layer, RequestContext.layer).pipe(Layer.provideMerge(AppLayer)),
+  Layer.mergeAll(BodyLimit.layer, RequestContext.layer, Retention.layerScheduled).pipe(
+    Layer.provideMerge(AppLayer),
+  ),
 ).pipe(
   Layer.provide(AuthHttp.layerRedactedHeaders),
   Layer.provide(NodeHttpServer.layer(createServer, { port: 3001 })),

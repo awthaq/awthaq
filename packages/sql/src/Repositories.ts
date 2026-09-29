@@ -947,6 +947,16 @@ export interface SessionsRepositoryShape {
   /** RRS-003: bulk hard-deletes every still-live (non-tombstoned) row sharing `familyId` — a confirmed-compromised family has no further lineage worth preserving. */
   readonly revokeFamily: (familyId: SessionId) => Effect.Effect<void, SqlError>;
   /**
+   * CSG-003: retention. Deletes up to `limit` rows whose absolute or idle expiry
+   * is before `cutoff` — tombstoned rows included (they keep their original
+   * expiry) — and resolves to how many went. One bounded statement, so a sweep
+   * over a large backlog is a loop of short transactions, not one long lock.
+   */
+  readonly deleteExpiredBefore: (
+    cutoff: DateTime.Utc,
+    limit: number,
+  ) => Effect.Effect<number, RepositoryError>;
+  /**
    * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
    * (AAPS-001/BPAS-001): the one column `Sessions.reauthenticate` writes —
    * a targeted `UPDATE`, mirroring `tombstone`'s own shape, not the
@@ -1192,6 +1202,26 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
         traced("Sessions.deleteAllByUser", { userId }),
       );
 
+    const deleteExpiredQuery = SqlSchema.findAll({
+      Request: Schema.Struct({ cutoff: models.wire.dateTime, limit: Schema.Number }),
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (r) => sql`
+          DELETE FROM sessions
+          WHERE id IN (
+            SELECT id FROM sessions
+            WHERE "absoluteExpiresAt" < ${r.cutoff} OR "idleExpiresAt" < ${r.cutoff}
+            LIMIT ${r.limit}
+          )
+          RETURNING id
+        `,
+    });
+
+    const deleteExpiredBefore: SessionsRepositoryShape["deleteExpiredBefore"] = (cutoff, limit) =>
+      deleteExpiredQuery({ cutoff, limit }).pipe(
+        Effect.map((rows) => rows.length),
+        traced("Sessions.deleteExpiredBefore"),
+      );
+
     const liveIdsQuery = SqlSchema.findAll({
       Request: Schema.Struct({ userId: UserId, now: models.wire.dateTime }),
       Result: Schema.Struct({ id: Schema.String, lastActiveAt: models.wire.dateTime }),
@@ -1293,6 +1323,7 @@ const makeSessionsRepository = (pii: Option.Option<PiiCodec>) =>
       markReused,
       revokeFamily,
       reauthenticate,
+      deleteExpiredBefore,
     };
   });
 
@@ -1375,6 +1406,15 @@ export interface VerificationRepositoryShape {
   }) => Effect.Effect<Option.Option<VerificationToken>, RepositoryError>;
   /** BCR-003: sweeps every token (live or already-consumed) naming this user — the cascade `Account.ts`'s `deleteUser` needs. */
   readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void, SqlError>;
+  /**
+   * CSG-003: retention. Deletes up to `limit` tokens that were consumed, or
+   * expired, before `cutoff` — a live token, and a recent consumed one (the
+   * forensic window), stay. Resolves to how many went.
+   */
+  readonly deleteExpiredBefore: (
+    cutoff: DateTime.Utc,
+    limit: number,
+  ) => Effect.Effect<number, RepositoryError>;
 }
 
 export class VerificationRepository extends Context.Service<
@@ -1451,6 +1491,29 @@ export const VerificationRepositoryLive: Layer.Layer<
         traced("VerificationTokens.deleteAllByUser", { userId }),
       );
 
+    const deleteExpiredQuery = SqlSchema.findAll({
+      Request: Schema.Struct({ cutoff: models.wire.dateTime, limit: Schema.Number }),
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (r) => sql`
+        DELETE FROM verification_tokens
+        WHERE id IN (
+          SELECT id FROM verification_tokens
+          WHERE ("consumedAt" IS NOT NULL AND "consumedAt" < ${r.cutoff}) OR "expiresAt" < ${r.cutoff}
+          LIMIT ${r.limit}
+        )
+        RETURNING id
+      `,
+    });
+
+    const deleteExpiredBefore: VerificationRepositoryShape["deleteExpiredBefore"] = (
+      cutoff,
+      limit,
+    ) =>
+      deleteExpiredQuery({ cutoff, limit }).pipe(
+        Effect.map((rows) => rows.length),
+        traced("VerificationTokens.deleteExpiredBefore"),
+      );
+
     const tryConsumeQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         identifier: Schema.String,
@@ -1482,6 +1545,7 @@ export const VerificationRepositoryLive: Layer.Layer<
       upsertLive,
       tryConsume,
       deleteAllByUser,
+      deleteExpiredBefore,
     };
   }),
 );
@@ -1508,6 +1572,11 @@ export interface VerificationReservationsRepositoryShape {
     readonly expiresAt: DateTime.Utc;
     readonly now: DateTime.Utc;
   }) => Effect.Effect<boolean, RepositoryError>;
+  /** CSG-003: retention. Deletes up to `limit` reservations that expired before `cutoff`; resolves to how many went. */
+  readonly deleteExpiredBefore: (
+    cutoff: DateTime.Utc,
+    limit: number,
+  ) => Effect.Effect<number, RepositoryError>;
 }
 
 export class VerificationReservationsRepository extends Context.Service<
@@ -1550,7 +1619,30 @@ export const VerificationReservationsRepositoryLive = Layer.effect(
     const claim: VerificationReservationsRepositoryShape["claim"] = (input) =>
       attempt(input).pipe(Effect.map(Option.isSome), traced("VerificationReservations.claim"));
 
-    return { claim };
+    const deleteExpiredQuery = SqlSchema.findAll({
+      Request: Schema.Struct({ cutoff: models.wire.dateTime, limit: Schema.Number }),
+      Result: Schema.Struct({ identifier: Schema.String }),
+      execute: (r) => sql`
+        DELETE FROM verification_reservations
+        WHERE identifier IN (
+          SELECT identifier FROM verification_reservations
+          WHERE "expiresAt" < ${r.cutoff}
+          LIMIT ${r.limit}
+        )
+        RETURNING identifier
+      `,
+    });
+
+    const deleteExpiredBefore: VerificationReservationsRepositoryShape["deleteExpiredBefore"] = (
+      cutoff,
+      limit,
+    ) =>
+      deleteExpiredQuery({ cutoff, limit }).pipe(
+        Effect.map((rows) => rows.length),
+        traced("VerificationReservations.deleteExpiredBefore"),
+      );
+
+    return { claim, deleteExpiredBefore };
   }),
 );
 
@@ -1620,6 +1712,18 @@ export interface AuditLogRepositoryShape {
     readonly actorUserId: string | null;
     readonly payload: unknown;
   }) => Effect.Effect<void, RepositoryError>;
+  /**
+   * ALF-010: retention. Deletes up to `limit` rows that occurred before `cutoff`
+   * — only those whose tag is in `eventTags` when it is given, and never those in
+   * `exceptTags` — and resolves to how many went. The `occurredAt` index
+   * (core migration 21) serves the range.
+   */
+  readonly deleteOccurredBefore: (input: {
+    readonly cutoff: DateTime.Utc;
+    readonly eventTags: ReadonlyArray<string> | null;
+    readonly exceptTags: ReadonlyArray<string>;
+    readonly limit: number;
+  }) => Effect.Effect<number, RepositoryError>;
 }
 
 export class AuditLogRepository extends Context.Service<
@@ -1713,6 +1817,36 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
           sql`UPDATE auth_audit_log SET "actorUserId" = ${r.actorUserId}, payload = ${r.payload} WHERE id = ${r.id}`,
       });
 
+      const deleteOccurredBeforeQuery = SqlSchema.findAll({
+        Request: Schema.Struct({
+          cutoff: models.wire.dateTime,
+          eventTags: Schema.NullOr(Schema.Array(Schema.String)),
+          exceptTags: Schema.Array(Schema.String),
+          limit: Schema.Number,
+        }),
+        Result: Schema.Struct({ id: Schema.String }),
+        execute: (r) => {
+          const conditions = [
+            sql`"occurredAt" < ${r.cutoff}`,
+            ...(r.eventTags === null ? [] : [sql`"eventTag" IN ${sql.in(r.eventTags)}`]),
+            ...(r.exceptTags.length === 0 ? [] : [sql`"eventTag" NOT IN ${sql.in(r.exceptTags)}`]),
+          ];
+          return sql`
+            DELETE FROM auth_audit_log
+            WHERE id IN (
+              SELECT id FROM auth_audit_log WHERE ${sql.and(conditions)} LIMIT ${r.limit}
+            )
+            RETURNING id
+          `;
+        },
+      });
+
+      const deleteOccurredBefore: AuditLogRepositoryShape["deleteOccurredBefore"] = (input) =>
+        deleteOccurredBeforeQuery(input).pipe(
+          Effect.map((rows) => rows.length),
+          traced("AuditLog.deleteOccurredBefore"),
+        );
+
       const insert: AuditLogRepositoryShape["insert"] = (input) =>
         insertQuery(input).pipe(
           traced("AuditLog.insert", { id: input.id, eventTag: input.eventTag }),
@@ -1741,6 +1875,6 @@ export const AuditLogRepositoryLive: Layer.Layer<AuditLogRepository, never, SqlC
       const rewrite: AuditLogRepositoryShape["rewrite"] = (input) =>
         rewriteQuery(input).pipe(traced("AuditLog.rewrite", { id: input.id }));
 
-      return { insert, list, page, listReferencing, rewrite };
+      return { insert, list, page, listReferencing, rewrite, deleteOccurredBefore };
     }),
   );

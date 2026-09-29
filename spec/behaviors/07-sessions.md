@@ -67,6 +67,8 @@ REQUIREMENT: A session's absolute expiry MUST be fixed at issuance and MUST
 
 `archive/PRD.md` §13 names both deadlines as reading from `SessionConfig` together: "absolute plus idle expiry." Without the absolute ceiling, a session touched frequently enough — by a legitimate but forgotten background tab, or by an attacker automating activity — could remain valid indefinitely, which is precisely what an absolute expiry exists to rule out regardless of how the idle window behaves.
 
+**As shipped (CSG-003, ADR-EA-031):** expiry is a read-time rejection; the row stays until `Retention.sweep` (opt-in) physically deletes it. `Sessions.purgeExpired(before)` removes every session whose absolute or idle expiry is before the cutoff, tombstoned refresh-rotation rows included, in bounded batches in both layers; the sweep passes `now - sessionGrace` (default 7 days), so reuse detection (BEH-EA-053) outlives the session's own life by the grace. `packages/core/test/Retention.test.ts` proves a live session and one still inside the grace survive.
+
 ## BEH-EA-052: Idle-window refresh is throttled to at most one write per `touchEvery`
 
 ```text

@@ -299,6 +299,10 @@ awthaq reuses Effect's HTTP middleware and adds spans, a field vocabulary and me
 
 `DELETE /user` calls core's `Erasure.AccountErasure.eraseAccount(userId)`, which an admin console or a job can call directly. It runs the `BeforeUserDelete` veto first (a legal hold), then, in **one transaction**, every plugin's registered erasure (`Organization`, `Passkey`, `Roles` and `UserClaims` ship one), the core rows (accounts, sessions, verification tokens, the user) and the pseudonymization of every audit row that names the user, and only after the commit publishes `auth.user.deleted`. A plugin that stores personal data contributes with `AuthPlugin.layer(Self, { contributes: Erasure.contribute({ id, make }) })`; the layer requires `Erasure.ErasureRegistry` (part of `Hooks.HooksLive`), so leaving it out does not compile. Set `Erasure.config({ auditLog: "retain" })` to keep audit rows verbatim under a legal-obligation basis. The schema has no foreign keys by design, so no database cascade does this for you; the admin impersonation ledger is retained on purpose (`spec/decisions/031-erasure-registry-and-retention.md`).
 
+### Retention
+
+Expiry is a read-time rejection, so expired rows stay until something deletes them. `Retention.sweep` (`@awthaq/core`) does, in bounded batches, in both the memory and SQL layers: sessions more than `sessionGrace` (default 7 days) past their expiry, verification tokens and reservations more than `verificationForensicWindow` (default 90 days) past theirs, and audit rows only if you configure a window (`Retention.config({ auditLog: { default: Option.some(Duration.days(365)), rules: [{ tags: ["auth.user.signInFailed"], keepFor: Duration.days(90) }] } })`; the default keeps the trail for ever). Nothing runs it unless you do: call `sweep` from your own job, or provide `Retention.layerScheduled` (sweeps at start-up, then every `sweepInterval`, default 1 day). The defaults are a policy to confirm for your jurisdiction. The impersonation ledger is never purged (`spec/decisions/031-erasure-registry-and-retention.md`).
+
 ## Plugins
 
 | Plugin | Package | What it adds |

@@ -74,6 +74,8 @@ REQUIREMENT: The audit trail of security-relevant operations MUST be
 
 `archive/PRD.md` §13's own phrasing draws the line precisely: "publishers never await subscribers; the audit table is the record of record." `AuthEvents` is designed for observation — analytics, alerting, cross-cutting reactions — while the audit table is the durable ground truth a security review or an incident investigation is meant to consult; the two are deliberately not the same mechanism, so that disabling or misconfiguring event subscribers can never cause an audit gap.
 
+**As shipped (ALF-010, ADR-EA-031):** the audit trail is kept for ever by default. `Retention.config({ auditLog: { default, rules } })` opts in to purge windows — `rules` are per-event-class (`{ tags, keepFor }`), `default` covers every tag no rule names — and only `Retention.sweep` (`AuditLog.purge`) deletes, in bounded batches over the `occurredAt` index (core migration 21). `admin_impersonation` and its hash chain are never purged (ADR-EA-031). `packages/core/test/Retention.test.ts`, `packages/sql/test/contract.ts` ("AuditLog.deleteOccurredBefore ...").
+
 ## BEH-EA-101: Events are typed, tagged values forming a registry contract
 
 ```ts

@@ -48,6 +48,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as AuthEvents from "./AuthEvents.ts";
 import { pruneExpiredAbove } from "./internal/pruneExpired.ts";
+import { drainBatches } from "./internal/purgeBatches.ts";
 import { UserId } from "./Users.ts";
 
 // MA-008: the brand is declared once, in `@awthaq/sql`; this keeps only a nominal constructor.
@@ -127,6 +128,14 @@ export interface VerificationShape {
   }) => Effect.Effect<boolean>;
   /** BCR-003: sweeps every token (live or already-consumed) naming `userId` — the cascade an account deletion needs. */
   readonly deleteAllByUser: (userId: UserId) => Effect.Effect<void>;
+  /**
+   * CSG-003: retention. Physically deletes tokens consumed or expired before
+   * `before`, and reservations that expired before it, resolving to how many rows
+   * went in all. A live token, and a recently consumed one (`layerSql` keeps the
+   * row as replay evidence), stay; `Retention.sweep` calls it with
+   * `now - verificationForensicWindow`.
+   */
+  readonly purgeExpired: (before: DateTime.Utc) => Effect.Effect<number>;
 }
 
 export class Verification extends Context.Service<Verification, VerificationShape>()(
@@ -287,7 +296,27 @@ export const layerMemory: Layer.Layer<Verification, never, Crypto.Crypto | AuthE
           HashMap.filter(s, (row) => !(Option.isSome(row.userId) && row.userId.value === userId)),
         );
 
-      return { issue, consume, reserve, deleteAllByUser };
+      const purgeExpired: VerificationShape["purgeExpired"] = (before) =>
+        Effect.gen(function* () {
+          const cutoff = DateTime.toEpochMillis(before);
+          const tokens = yield* Ref.modify(state, (s) => {
+            const kept = HashMap.filter(
+              s,
+              (row) => DateTime.toEpochMillis(row.expiresAt) >= cutoff,
+            );
+            return [HashMap.size(s) - HashMap.size(kept), kept] as const;
+          });
+          const reserved = yield* Ref.modify(reservations, (s) => {
+            const kept = HashMap.filter(
+              s,
+              (expiresAt) => DateTime.toEpochMillis(expiresAt) >= cutoff,
+            );
+            return [HashMap.size(s) - HashMap.size(kept), kept] as const;
+          });
+          return tokens + reserved;
+        });
+
+      return { issue, consume, reserve, deleteAllByUser, purgeExpired };
     }),
   );
 
@@ -330,7 +359,8 @@ export const layerSql = Layer.effect(
       // `issue`s for the same `identifier`, since the DB engine's own
       // conflict resolution (not a separate delete-then-insert racing
       // itself) decides "fresh row" vs. "replace the current live row" in
-      // a single statement. Already-consumed history is never touched.
+      // a single statement. Already-consumed history is never touched by `issue`
+      // (only `purgeExpired`, past the forensic window, removes it).
       const row = yield* repo.upsertLive(insert).pipe(Effect.orDie);
       return { token: toTokenView(row), value: Redacted.make(value) };
     });
@@ -376,6 +406,16 @@ export const layerSql = Layer.effect(
     const deleteAllByUser: VerificationShape["deleteAllByUser"] = (userId) =>
       repo.deleteAllByUser(userId).pipe(Effect.orDie);
 
-    return { issue, consume, reserve, deleteAllByUser };
+    // CSG-003: consumed rows are kept as replay evidence (BEH-EA-058) until the retention
+    // sweep's forensic window passes; a bounded loop of short deletes, tokens then reservations.
+    const purgeExpired: VerificationShape["purgeExpired"] = (before) =>
+      Effect.all([
+        drainBatches((limit) => repo.deleteExpiredBefore(before, limit).pipe(Effect.orDie)),
+        drainBatches((limit) =>
+          reservationsRepo.deleteExpiredBefore(before, limit).pipe(Effect.orDie),
+        ),
+      ]).pipe(Effect.map(([tokens, reserved]) => tokens + reserved));
+
+    return { issue, consume, reserve, deleteAllByUser, purgeExpired };
   }),
 );

@@ -28,10 +28,16 @@ describe("CoreMigrations", () => {
         // The operator builds it out of band, with the same name and definition.
         yield* sql`CREATE INDEX sessions_user_id ON sessions(userId)`;
         const applied = yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+        // Every migration after the release the database was one behind — derived, not
+        // hard-coded, so a new migration does not touch this test.
+        const expected = (yield* CoreMigrations.coreMigrations)
+          .map(([id]) => id)
+          .filter((id) => id >= 9);
         assert.deepStrictEqual(
           applied.map(([id]) => id),
-          [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+          expected,
         );
+        assert.isAbove(expected.length, 11);
       }).pipe(Effect.provide(SqlLive)),
   );
 

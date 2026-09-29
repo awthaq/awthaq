@@ -455,4 +455,17 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
     }),
   ),
+  // ALF-010: `AuditLog.list`'s `occurredAfter`/`occurredBefore` range and the
+  // retention sweep's `occurredAt < cutoff` delete both filter on the timestamp,
+  // which had no index (only the tag and actor columns did). `IF NOT EXISTS`
+  // keeps an out-of-band `CREATE INDEX CONCURRENTLY` (a large table) possible.
+  migration(21, "create_auth_audit_log_occurred_at_index", (sql) =>
+    sql.onDialectOrElse({
+      pg: () =>
+        sql`CREATE INDEX IF NOT EXISTS auth_audit_log_occurred_at ON auth_audit_log ("occurredAt")`,
+      sqlite: () =>
+        sql`CREATE INDEX IF NOT EXISTS auth_audit_log_occurred_at ON auth_audit_log ("occurredAt")`,
+      orElse: () => Effect.die(new Error("awthaq: unsupported SQL dialect for migrations")),
+    }),
+  ),
 ]);
