@@ -102,6 +102,13 @@ export interface OAuthProviderConfig {
   readonly tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
   /** NAM-004: only meaningful with a `discoveryUrl`. */
   readonly discovery?: OAuthDiscoveryPolicy;
+  /**
+   * AOMS-005: the `id_token` signature algorithms this provider may use — an allowlist the token
+   * header can select within but never widen. Unset: the discovery document's
+   * `id_token_signing_alg_values_supported` intersected with what `Jwt.SIGNING_ALGS` verifies, or
+   * `["RS256"]` when discovery does not advertise any. An empty effective list dies at boot.
+   */
+  readonly idTokenSigningAlgs?: ReadonlyArray<Jwt.SigningAlg>;
   readonly mapProfile: (claims: Record<string, unknown>) => OAuthProfile;
 }
 
@@ -143,6 +150,8 @@ export interface ResolvedProvider {
   readonly scopes: ReadonlyArray<string>;
   readonly skipPkce: boolean;
   readonly tokenEndpointAuthMethod: TokenEndpointAuthMethod;
+  /** AOMS-005: the effective `id_token` algorithm allowlist (never empty for an `oidc` provider). */
+  readonly idTokenSigningAlgs: ReadonlyArray<Jwt.SigningAlg>;
   readonly mapProfile: (claims: Record<string, unknown>) => OAuthProfile;
 }
 
@@ -164,6 +173,7 @@ const DiscoveryDocumentSchema = Schema.Struct({
   jwks_uri: Schema.optional(AbsoluteUrl),
   userinfo_endpoint: Schema.optional(AbsoluteUrl),
   token_endpoint_auth_methods_supported: Schema.optional(Schema.Array(Schema.String)),
+  id_token_signing_alg_values_supported: Schema.optional(Schema.Array(Schema.String)),
 });
 
 /**
@@ -240,6 +250,7 @@ export const resolve = (
     let jwksUri = config.endpoints?.jwksUri;
     let userinfoEndpoint = config.endpoints?.userinfoEndpoint;
     let advertisedAuthMethods: ReadonlyArray<string> | undefined;
+    let advertisedIdTokenAlgs: ReadonlyArray<string> | undefined;
 
     if (config.discoveryUrl !== undefined) {
       const discoveryUrl = yield* liftConfig(config.discoveryUrl).pipe(Effect.orDie);
@@ -275,6 +286,7 @@ export const resolve = (
       jwksUri ??= document.jwks_uri;
       userinfoEndpoint ??= document.userinfo_endpoint;
       advertisedAuthMethods = document.token_endpoint_auth_methods_supported;
+      advertisedIdTokenAlgs = document.id_token_signing_alg_values_supported;
     }
 
     if (authorizationEndpoint === undefined || tokenEndpoint === undefined) {
@@ -349,6 +361,24 @@ export const resolve = (
       );
     }
 
+    // AOMS-005: explicit list, else what discovery advertises (only the algorithms this plugin can
+    // verify), else the RS256 every provider supports. Nothing verifiable is a boot defect, not a
+    // first-sign-in surprise.
+    const idTokenSigningAlgs =
+      config.idTokenSigningAlgs ??
+      (advertisedIdTokenAlgs === undefined
+        ? Jwt.SIGNING_ALGS.filter((alg) => alg === "RS256")
+        : Jwt.SIGNING_ALGS.filter((alg) => advertisedIdTokenAlgs.includes(alg)));
+    if (config.kind === "oidc" && idTokenSigningAlgs.length === 0) {
+      return yield* Effect.die(
+        new Error(
+          `awthaq/oauth: provider "${config.id}" advertises id_token signing algorithms ` +
+            `[${(advertisedIdTokenAlgs ?? []).join(", ")}], none of which this plugin verifies ` +
+            `(${Jwt.SIGNING_ALGS.join(", ")}); set idTokenSigningAlgs explicitly or use another provider`,
+        ),
+      );
+    }
+
     return {
       id: config.id,
       kind: config.kind,
@@ -363,6 +393,7 @@ export const resolve = (
       scopes: config.scopes,
       skipPkce,
       tokenEndpointAuthMethod,
+      idTokenSigningAlgs,
       mapProfile: config.mapProfile,
     };
   });

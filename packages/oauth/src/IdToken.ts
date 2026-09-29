@@ -184,8 +184,10 @@ export const verify = (
         CallbackFailure.callbackFailed("jwt-malformed", error.reason),
       ),
     );
-    if (decoded.header.alg !== "RS256") {
-      return yield* CallbackFailure.callbackFailed("alg", decoded.header.alg ?? "absent");
+    // AOMS-005: the header `alg` selects within the provider's allowlist; it never widens it.
+    const alg = decoded.header.alg;
+    if (!Jwt.isSigningAlg(alg) || !provider.idTokenSigningAlgs.includes(alg)) {
+      return yield* CallbackFailure.callbackFailed("alg", alg ?? "absent");
     }
 
     // ESS-001/GC-001/SFS-002/TTE-001: the JWKS document is untrusted,
@@ -204,18 +206,20 @@ export const verify = (
     const cache = yield* jwksCaches.forProvider(provider, jwksUri, fetchJwks);
     const jwks = yield* cache.get;
 
-    const jwk = yield* Jwt.findKey(jwks, decoded.header.kid).pipe(
+    const jwk = yield* Jwt.findKey(jwks, decoded.header.kid, alg).pipe(
       // A `kid` cache miss earns a refetch — the provider may have rotated keys since this
       // process last cached them — but at most one per `JWKS_MIN_REFETCH_INTERVAL` (ECF-002),
       // so tokens naming garbage kids cannot turn the callback into a request amplifier.
       Effect.catch(() =>
-        cache.refreshOnMiss.pipe(Effect.flatMap((fresh) => Jwt.findKey(fresh, decoded.header.kid))),
+        cache.refreshOnMiss.pipe(
+          Effect.flatMap((fresh) => Jwt.findKey(fresh, decoded.header.kid, alg)),
+        ),
       ),
       Effect.catchTag("JwtVerificationError", (error) =>
         CallbackFailure.callbackFailed("kid", error.reason),
       ),
     );
-    const verified = yield* Jwt.verifyRs256(jwk, decoded.signingInput, decoded.signature).pipe(
+    const verified = yield* Jwt.verifySignature(alg, jwk, decoded.signingInput, decoded.signature).pipe(
       Effect.catchTag("JwtVerificationError", (error) =>
         CallbackFailure.callbackFailed("signature", error.reason),
       ),

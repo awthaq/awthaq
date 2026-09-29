@@ -3,7 +3,7 @@ ID: "AOMS-005"
 Title: "Upstream id_token verification is RS256-only"
 Level: medium
 Category: "api"
-Status: ready-for-agent
+Status: resolved
 Package: "oauth"
 Source: "packages/oauth/src/Jwt.ts:242"
 Auditor: "auth0-okta-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `oauth` · reported by **Auth0/Okta Migration Specialist** (`auth0-okta-migration-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -59,3 +59,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `jose-algorithm-coverage`. Evidence at HEAD ec065a7: `packages/oauth/src/OAuth.ts:313`. Fix: Generalize OAuth id_token verification to RS256/PS256/ES256/ES384/EdDSA under a per-provider allowlist seeded from discovery, checked at boot. (effort M). Full dossier: `.plan/slices/04-oauth-provider-jwt.md`. Status → ready-for-agent.
 
 **Plan note (2026-09-29):** Not done in P03: packages/oauth is owned by the P02 agent and this is blocked by ESS-002-effect-schema-specialist (discovery decoding). The jwt package now has the reusable pieces: JwtCodec's single AlgorithmSpec table (EdDSA/ES256/ES384/RS256/PS256: import/sign params + kty per alg) and JwtCodec.isAlgorithm; packages/oauth cannot import @awthaq/jwt (it would add a plugin-to-plugin dependency), so the OAuth side should mirror the table in packages/oauth/src/Jwt.ts per the dossier steps, or the table could be lifted into @awthaq/ports if the P02 agent prefers one copy.
+
+**Resolved (2026-09-29):** packages/oauth/src/Jwt.ts: verifyRs256 replaced by verifySignature(alg, jwk, ...) over a five-entry WebCrypto table (RS256, PS256, ES256, ES384, EdDSA; SIGNING_ALGS/isSigningAlg, no HS256/none); JwkSchema is the RSA|EC|OKP union and findKey(jwks, kid, alg) only returns a key of the type/curve the algorithm can use whose advertised alg (if any) matches; header comment rewritten; the residual parts-cast was already gone. OAuthProviderConfig.idTokenSigningAlgs + ResolvedProvider.idTokenSigningAlgs: explicit list, else discovery id_token_signing_alg_values_supported intersected with SIGNING_ALGS, else [RS256]; empty for an oidc provider dies at boot naming the provider. IdToken.verify checks the header alg against the allowlist (never widens) and threads alg through findKey/refreshOnMiss/verifySignature. Tests: Jwt.test.ts real-keypair signature round trips per algorithm + type/curve/alg mismatch (red first: verifySignature missing), OAuth.test.ts ES256 callback succeeds, RS256 token rejected for allowlist [ES256], discovery-advertised default excludes unsupported, boot dies when only unsupported are advertised. Optional HS256-with-client-secret not done (dossier marks it optional). README and BEH-EA-127 text updated.

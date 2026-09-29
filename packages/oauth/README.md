@@ -53,7 +53,7 @@ Every preset accepts `id`, `scopes` and `mapProfile` overrides. **Apple is not s
 
 | Checked on every `id_token` | |
 |---|---|
-| Signature | RS256 only, against the provider's JWKS (`kty: RSA` with `n`/`e`; `use` absent or `sig`; `alg` absent or `RS256`), refetched once on an unknown `kid` and after a 15-minute TTL |
+| Signature | RS256, PS256, ES256, ES384 or EdDSA, whichever the provider's allowlist names (`idTokenSigningAlgs`; default: what discovery advertises that this plugin verifies, else `["RS256"]`; empty dies at boot), against the provider's JWKS (`use` absent or `sig`; `alg` absent or the token's; a key of the right type and curve), one single-flight cache per provider with a 15-minute TTL and at most one forced refetch per 30 seconds on an unknown `kid`. HS256 and `none` are never accepted |
 | `iss` | exact match with the configured issuer |
 | `aud` / `azp` | string or array containing the client id; `azp` required (and equal) when several audiences are present |
 | `exp` / `nbf` / `iat` | with a configurable clock-skew leeway |

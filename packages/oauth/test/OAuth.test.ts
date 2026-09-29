@@ -82,6 +82,26 @@ const signJwt = (
   return `${signingInput}.${toBase64Url(signature)}`;
 };
 
+// AOMS-005: an ES256 signer/JWKS beside the RS256 one — same claims, a different algorithm.
+const ecKeyPair = generateKeyPairSync("ec", { namedCurve: "P-256" });
+const EC_KID = "test-ec-key-1";
+const ecJwk = {
+  ...(ecKeyPair.publicKey.export({ format: "jwk" }) as Record<string, unknown>),
+  kid: EC_KID,
+  alg: "ES256",
+};
+const signEs256 = (payload: Record<string, unknown>, kid: string = EC_KID): string => {
+  const header = { alg: "ES256", typ: "JWT", kid };
+  const headerSegment = toBase64Url(Buffer.from(JSON.stringify(header)));
+  const payloadSegment = toBase64Url(Buffer.from(JSON.stringify(payload)));
+  const signingInput = `${headerSegment}.${payloadSegment}`;
+  const signature = nodeSign("sha256", Buffer.from(signingInput), {
+    key: ecKeyPair.privateKey,
+    dsaEncoding: "ieee-p1363",
+  });
+  return `${signingInput}.${toBase64Url(signature)}`;
+};
+
 /**
  * `OAuthProfile`'s optional fields are real `?:` optionals under
  * `exactOptionalPropertyTypes` — a `mapProfile` that always assigns
@@ -1044,6 +1064,23 @@ describe("OAuth", () => {
         assert.isDefined(message);
         assert.include(message, "okta");
         assert.include(message, "token_endpoint");
+      }),
+    );
+
+    it.effect("AOMS-005: discovery advertising only unsupported id_token algorithms dies at boot", () =>
+      Effect.gen(function* () {
+        const message = yield* bootDefect({
+          providers: [okta()],
+          httpRoutes: {
+            ".well-known/openid-configuration": {
+              ...oktaDiscovery,
+              id_token_signing_alg_values_supported: ["HS256", "none"],
+            },
+          },
+        });
+        assert.isDefined(message);
+        assert.include(message, "okta");
+        assert.include(message, "id_token");
       }),
     );
 
@@ -2132,6 +2169,112 @@ describe("OAuth", () => {
             }),
           ),
         ),
+    );
+
+    // AOMS-005: the id_token algorithm is the provider's allowlist, not RS256-only.
+    const es256Routes = (): FakeRoutes => ({
+      ".well-known/openid-configuration": oktaDiscovery,
+      "/jwks": { keys: [ecJwk] },
+      "/token": () => ({ access_token: "at-1", id_token: signEs256(currentClaims) }),
+    });
+
+    it.effect("AOMS-005: an ES256-signed id_token verifies for a provider allowing ES256", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        currentClaims = {
+          iss: "https://okta.example.com/oauth2/default",
+          aud: "okta-client-id",
+          sub: "okta-ec-user",
+          email: "ec-user@example.com",
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          nonce: nonceFrom(location),
+        };
+        const outcome = yield* oauth.callback("okta", {
+          code: "c1",
+          state,
+          iss: undefined,
+          cookieState: state,
+        });
+        assert.isDefined(outcome.session);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [okta({ idTokenSigningAlgs: ["ES256"] })],
+            httpRoutes: es256Routes(),
+          }),
+        ),
+      ),
+    );
+
+    it.effect("AOMS-005: an RS256 id_token is rejected for a provider whose allowlist is [ES256]", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        currentClaims = {
+          iss: "https://okta.example.com/oauth2/default",
+          aud: "okta-client-id",
+          sub: "okta-rs-user",
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          nonce: nonceFrom(location),
+        };
+        const failure = yield* oauth
+          .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "OAuthCallbackFailed");
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [okta({ idTokenSigningAlgs: ["ES256"] })],
+            // The token is a perfectly valid RS256 one against the RS256 key the JWKS serves.
+            httpRoutes: idTokenRoutes(),
+          }),
+        ),
+      ),
+    );
+
+    it.effect("AOMS-005: the allowlist defaults to what discovery advertises, intersected with what is verifiable", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state, location } = yield* oauth.authorize("okta", {
+          callbackURL: undefined,
+          link: undefined,
+        });
+        currentClaims = {
+          iss: "https://okta.example.com/oauth2/default",
+          aud: "okta-client-id",
+          sub: "okta-adv-user",
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          nonce: nonceFrom(location),
+        };
+        // `HS256` is advertised too but is not verifiable here, so it never enters the allowlist.
+        const outcome = yield* oauth.callback("okta", {
+          code: "c1",
+          state,
+          iss: undefined,
+          cookieState: state,
+        });
+        assert.isDefined(outcome.session);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [okta()],
+            httpRoutes: {
+              ...es256Routes(),
+              ".well-known/openid-configuration": {
+                ...oktaDiscovery,
+                id_token_signing_alg_values_supported: ["HS256", "ES256"],
+              },
+            },
+          }),
+        ),
+      ),
     );
 
     it.effect(
