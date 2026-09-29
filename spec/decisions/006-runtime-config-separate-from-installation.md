@@ -36,4 +36,4 @@ Installation (which plugins exist — ADR-EA-005) and configuration (how an inst
 
 **Trade-off accepted**: awthaq keeps configuration overrides expressed through exactly the same primitive (`Layer.provide`) as every other kind of composition, with no "options merging" subsystem, and pays for the operability gap with a small declarative descriptor per configuration reference instead of a second, separately maintained configuration manifest. A descriptor cannot drift from the reference it wraps (it holds the reference itself), so the listing is what the application reads, not a description of it. What remains uncovered is the dynamic-override case above.
 
-Not yet implemented — see spec/roadmap.md for milestone.
+Implemented for the configuration *listing*: `ConfigDescriptor`/`EffectiveConfig` and `manifest.config` in `@awthaq/core`, `awthaq config list` and `doctor` in `@awthaq/cli`, `GET /admin/config` in `@awthaq/admin` (BEH-EA-229). The separation itself (installation versus configuration as `Context.Reference` overrides) was already in place.

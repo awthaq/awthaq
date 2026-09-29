@@ -5,7 +5,7 @@
 // the `sql` Layer the configuration module exports. Two forms:
 //
 //   sqlite:./auth.db            sqlite::memory:      (`@effect/sql-sqlite-node`)
-//   postgres://…  postgresql://…                     (`@effect/sql-pg`)
+//   postgres://…  postgresql://…                     (`@effect/sql-pg`; `?search_path=auth` picks the schema)
 //
 // The URL is a Schema (BEH-EA-226) and is never printed: a connection string
 // carries a password, so an error names the scheme, not the value (BEH-EA-201).
@@ -64,6 +64,17 @@ const regclassTypes = () => {
   return registry;
 };
 
+/** Splits a `search_path` query parameter off a Postgres URL: the rest is the connection string as given. */
+const splitSearchPath = (url: string) => {
+  const parsed = URL.parse(url);
+  const searchPath = parsed?.searchParams.get("search_path") ?? undefined;
+  if (parsed === null || searchPath === undefined) {
+    return { connectionUrl: url, searchPath: undefined };
+  }
+  parsed.searchParams.delete("search_path");
+  return { connectionUrl: parsed.toString(), searchPath };
+};
+
 /** Which driver a URL selects, for messages that must not print the URL itself. */
 export const describeUrl = (url: string) => (isSqlite(url) ? "sqlite" : "postgres");
 
@@ -86,9 +97,14 @@ export const layerFor = (
       Layer.catchCause(() => unavailable(message)),
     );
   }
-  return PgClient.layer({ url: Redacted.make(url), types: regclassTypes() }).pipe(
-    Layer.catchCause(() => unavailable(message)),
-  );
+  const { connectionUrl, searchPath } = splitSearchPath(url);
+  return PgClient.layer({
+    url: Redacted.make(connectionUrl),
+    types: regclassTypes(),
+    // `?search_path=auth` is honored as a startup parameter (the driver would otherwise ignore it), so
+    // the migrations and their ledgers live in the schema the operator names, not silently in `public`.
+    ...(searchPath === undefined ? {} : { startupParameters: { search_path: searchPath } }),
+  }).pipe(Layer.catchCause(() => unavailable(message)));
 };
 
 /** Builds the client for `url` once, to prove the database answers before a command relies on it. */

@@ -18,8 +18,8 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { role } from "@qadi/core";
 import { passwordAndRoles } from "./TestApp.ts";
 
-export const adminRole = role({ name: "admin", permissions: [] });
-export const editorRole = role({ name: "editor", permissions: [] });
+const adminRole = role({ name: "admin", permissions: [] });
+const editorRole = role({ name: "editor", permissions: [] });
 
 // `AccountsRepositoryLive` encrypts provider tokens at rest, so it needs `Encryption`; a fixed test
 // key read through `ConfigProvider.fromEnv`, isolated from the real process environment.

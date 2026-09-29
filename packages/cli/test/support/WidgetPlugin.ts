@@ -35,7 +35,7 @@ const WidgetApi = HttpApi.make("auth").add(
     .add(HttpApiEndpoint.get("read", "/widget", { success: Schema.String })),
 );
 
-export class Widget extends AuthPlugin.Service<Widget, { readonly ok: true }>()("widget", {
+class Widget extends AuthPlugin.Service<Widget, { readonly ok: true }>()("widget", {
   apiVersion: 1,
   contract: WidgetApi,
   config: [

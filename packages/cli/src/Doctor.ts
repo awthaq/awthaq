@@ -39,6 +39,7 @@ import {
   DoctorFindings,
   type LinkProblem,
 } from "./CliErrors.ts";
+import { nameOf } from "./Application.ts";
 import type { CliConfig } from "./Config.ts";
 import * as Output from "./Output.ts";
 import * as Routes from "./Routes.ts";
@@ -145,14 +146,6 @@ export const configContext = Effect.fnUntraced(function* (config: CliConfig) {
     ),
   );
 });
-
-/** A failure named, never quoted: a `Config` error can carry the value it rejected. */
-const nameOf = (error: unknown) =>
-  typeof error === "object" && error !== null && "_tag" in error && typeof error._tag === "string"
-    ? error._tag
-    : error instanceof Error
-      ? error.name
-      : "an unknown failure";
 
 /** `--build`: builds the application Layer once, in a scope that closes straight away. */
 const buildFindings = (config: CliConfig, options: Options) =>

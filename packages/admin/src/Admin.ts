@@ -26,6 +26,7 @@ import {
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
+  EffectiveConfig,
   Migrations,
   SessionCookie,
   Sessions,
@@ -189,6 +190,17 @@ export interface AdminShape {
    * `AdminSessionNotFound` (`revokeUserSession`: not one of that user's revocable
    * sessions — unknown, another user's, or an impersonation session, which `forceStop` owns).
    */
+  /**
+   * EP-009/BEH-EA-229: the effective configuration this application was *built* with — every
+   * descriptor in `EffectiveConfig.Catalog` (the application provides
+   * `EffectiveConfig.layer(auth.manifest)`; unprovided, core's own) read against the
+   * `Context` this plugin's layer was built in, so an override provided to the composed layer
+   * shows up as `override`. Sensitive values are `<redacted>`, never unwrapped. Same gate as
+   * `listUsers` (collection-level `canManageUsers`).
+   */
+  readonly effectiveConfig: (
+    caller: Api.UserPrincipal,
+  ) => Effect.Effect<ReadonlyArray<EffectiveConfig.Item>, AdminApi.AdminActionDenied>;
   readonly listUsers: (
     caller: Api.UserPrincipal,
     input?: {
@@ -320,6 +332,19 @@ export const AdminHandlers = HttpApiBuilder.group(
         yield* admin.forceStop(caller, params.sessionId);
         // APS-006: ending one's own current episode must hand the browser back.
         if (params.sessionId === caller.sessionId) yield* clearImpersonationCookie;
+      }),
+      effectiveConfig: Effect.fnUntraced(function* () {
+        const caller = yield* currentUserPrincipal;
+        const items = yield* admin.effectiveConfig(caller);
+        return items.map(
+          (item) =>
+            new AdminApi.ConfigItemDto({
+              owner: item.owner,
+              key: item.key,
+              source: item.source,
+              entries: item.entries.map((entry) => new AdminApi.ConfigEntryDto(entry)),
+            }),
+        );
       }),
       listUsers: Effect.fnUntraced(function* ({ query }: { query: AdminApi.ListUsersQuery }) {
         const caller = yield* currentUserPrincipal;
@@ -607,6 +632,10 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       const records = yield* ImpersonationRecords.ImpersonationRecords;
       const users = yield* Users.Users;
       const adminConfig = yield* AdminConfig;
+      // EP-009: captured at build, like every other configuration read — a request-time read would
+      // see only the router's own context, not the overrides the composed layer was built under.
+      const builtIn = yield* Effect.context<never>();
+      const catalog = Context.getOrElse(builtIn, EffectiveConfig.Catalog, () => EffectiveConfig.core);
 
       const deny = Effect.fnUntraced(function* (caller: Api.UserPrincipal) {
         yield* events.publish({
@@ -660,6 +689,11 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         return yield* Effect.filter(listed, (session) =>
           Effect.map(isImpersonationSession(session.id), (impersonation) => !impersonation),
         );
+      });
+
+      const effectiveConfig: AdminShape["effectiveConfig"] = Effect.fnUntraced(function* (caller) {
+        yield* authorizeUsers(caller, "effectiveConfig", Option.none());
+        return EffectiveConfig.read(builtIn, catalog);
       });
 
       const listUsers: AdminShape["listUsers"] = Effect.fnUntraced(function* (caller, input) {
@@ -896,6 +930,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         forceStop,
         list,
         sweepExpired,
+        effectiveConfig,
         listUsers,
         getUser,
         updateUser,

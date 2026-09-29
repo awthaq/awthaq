@@ -20,13 +20,6 @@ import type { CliConfig } from "../../src/Config.ts";
 import * as ConfigModule from "../../src/Config.ts";
 import * as CredentialStore from "../../src/CredentialStore.ts";
 
-export interface CliRun {
-  readonly code: number;
-  readonly stdout: ReadonlyArray<string>;
-  readonly stderr: ReadonlyArray<string>;
-  readonly exit: Exit.Exit<void, unknown>;
-}
-
 /** A credential store that lives in a `Ref` the test owns, so it can seed and inspect it. */
 export const memoryCredentials = (initial?: CredentialStore.Credential) =>
   Effect.gen(function* () {

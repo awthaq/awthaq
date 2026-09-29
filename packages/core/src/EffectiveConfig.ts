@@ -18,6 +18,7 @@
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as ConfigDescriptor from "./ConfigDescriptor.ts";
 import * as MailDispatch from "./MailDispatch.ts";
 import * as SessionCookie from "./SessionCookie.ts";
@@ -116,3 +117,25 @@ export const audit = (
  */
 export const snapshot = (descriptors: ReadonlyArray<Owned>) =>
   Effect.context<never>().pipe(Effect.map((context) => read(context, descriptors)));
+
+/**
+ * EP-009: the descriptors a *running* application reports on. A plugin that serves an effective-config
+ * view (`@awthaq/admin`'s `GET /admin/config`) reads this reference; the application provides
+ * `EffectiveConfig.layer(auth.manifest)` next to its composition so the view lists every installed
+ * plugin's descriptors, not only core's. Unprovided, it lists core's own.
+ */
+export const Catalog = Context.Reference<ReadonlyArray<Owned>>("awthaq/core/EffectiveConfigCatalog", {
+  defaultValue: () => core,
+});
+
+/** Provides the composition's own descriptors (`auth.manifest.config`) plus core's to `Catalog`. */
+export const layer = (manifest: {
+  readonly config: ReadonlyArray<{
+    readonly pluginId: string;
+    readonly descriptor: ConfigDescriptor.ConfigDescriptor;
+  }>;
+}) =>
+  Layer.succeed(Catalog, [
+    ...core,
+    ...manifest.config.map(({ pluginId, descriptor }): Owned => ({ owner: pluginId, descriptor })),
+  ]);

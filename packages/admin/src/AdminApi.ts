@@ -196,6 +196,24 @@ export class UserDto extends Schema.Class<UserDto>("AdminUserDto")({
   updatedAt: Schema.String,
 }) {}
 
+/**
+ * EP-009/BEH-EA-229: one leaf of an effective configuration value. `value` is `<redacted>` for a
+ * secret — declared sensitive, or held in a `Redacted` — and never the secret itself.
+ */
+export class ConfigEntryDto extends Schema.Class<ConfigEntryDto>("AdminConfigEntryDto")({
+  path: Schema.String,
+  value: Schema.String,
+  sensitive: Schema.Boolean,
+}) {}
+
+/** EP-009: one configuration descriptor's effective value: who owns it, whether it is the default or an override. */
+export class ConfigItemDto extends Schema.Class<ConfigItemDto>("AdminConfigItemDto")({
+  owner: Schema.String,
+  key: Schema.String,
+  source: Schema.Literals(["default", "override"]),
+  entries: Schema.Array(ConfigEntryDto),
+}) {}
+
 /** BAM-005: one page of `listUsers`; `nextCursor` is null on the last page. */
 export class UserPageDto extends Schema.Class<UserPageDto>("AdminUserPageDto")({
   items: Schema.Array(UserDto),
@@ -250,6 +268,14 @@ export const AdminGroup = HttpApiGroup.make("admin")
     HttpApiEndpoint.get("listUsers", "/admin/users", {
       query: ListUsersQuery,
       success: UserPageDto,
+      error: AdminActionDenied,
+    }),
+  )
+  // EP-009/ECS-008 (BEH-EA-229): the running application's effective configuration, secrets
+  // redacted, behind the same fail-closed `canManageUsers` gate (collection-level: no target).
+  .add(
+    HttpApiEndpoint.get("effectiveConfig", "/admin/config", {
+      success: Schema.Array(ConfigItemDto),
       error: AdminActionDenied,
     }),
   )
