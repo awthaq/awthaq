@@ -1,10 +1,21 @@
-// @awthaq/two-factor — Plugin (M7)
+// @awthaq/two-factor — TOTP two-factor authentication (M7)
 //
-// TOTP-based two-factor authentication with a divert hook and hashed recovery codes.
+// TOTP (RFC 6238) with hashed single-use recovery codes, attached to the sign-in divert point
+// (`Hooks.BeforeSessionIssue`) and the credential-reset veto (`Hooks.BeforeCredentialReset`).
+// See `README.md` for the composition recipe, `spec/behaviors/28-two-factor.md` for the behaviors
+// and `spec/decisions/020-two-factor-state.md` for the state decisions.
 //
-// Planned first module: not yet specified — see spec/roadmap.md M7
-// See spec/overview.md for the full package map.
-//
-// Empty placeholder — awthaq is pre-implementation. No exported symbols yet.
+//   import { TwoFactor } from "@awthaq/two-factor";
+//   TwoFactor.TwoFactor            // the plugin class (`Auth.make([Password, TwoFactor.TwoFactor])`)
+//   TwoFactor.sessionGate          // taps BeforeSessionIssue — required
+//   TwoFactor.credentialResetGate  // taps BeforeCredentialReset — required (or `noCredentialReset`)
+//   SecondFactor.layer             // the domain service both build on
 
-export {};
+export * as Challenge from "./Challenge.ts";
+export * as RecoveryCodes from "./RecoveryCodes.ts";
+export * as SecondFactor from "./SecondFactor.ts";
+export * as Totp from "./Totp.ts";
+export * as TwoFactor from "./TwoFactor.ts";
+export * as TwoFactorApi from "./TwoFactorApi.ts";
+export * as TwoFactorConfig from "./TwoFactorConfig.ts";
+export * as TwoFactorStore from "./TwoFactorStore.ts";

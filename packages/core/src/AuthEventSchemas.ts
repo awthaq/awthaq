@@ -684,7 +684,13 @@ export type ApiKeyClientSecretRotatedEvent = typeof ApiKeyClientSecretRotatedEve
 export const TwoFactorMethod = Schema.Literals(["totp", "recovery"]);
 export type TwoFactorMethod = typeof TwoFactorMethod.Type;
 
-export const TwoFactorPurpose = Schema.Literals(["signIn", "credentialReset", "disable", "regenerate"]);
+export const TwoFactorPurpose = Schema.Literals([
+  "enroll",
+  "signIn",
+  "credentialReset",
+  "disable",
+  "regenerate",
+]);
 export type TwoFactorPurpose = typeof TwoFactorPurpose.Type;
 
 /** Published when a pending secret is confirmed with a first valid code — the factor is now active. */

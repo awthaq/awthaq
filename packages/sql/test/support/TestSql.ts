@@ -74,7 +74,7 @@ const postgres = (url: string, suite: string) => {
 export const injectFailure = (options: {
   readonly name: string;
   readonly table: string;
-  readonly event: "DELETE" | "UPDATE";
+  readonly event: "DELETE" | "INSERT" | "UPDATE";
 }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
