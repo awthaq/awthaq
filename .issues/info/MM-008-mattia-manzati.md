@@ -3,7 +3,7 @@ ID: "MM-008"
 Title: "no-unused-internal lint rule dark under TS7 (honestly documented)"
 Level: info
 Category: "dx"
-Status: needs-triage
+Status: wontfix
 Package: "—"
 Source: "tools/oxc/index.ts:12"
 Auditor: "mattia-manzati"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `dx` · `—` · reported by **Mattia Manzati — Effect Developer Tooling** (`mattia-manzati`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -45,3 +45,5 @@ Track it as a follow-up issue with the unblock condition, and consider a TS7-com
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `None`. Evidence at HEAD ec065a7: `tools/oxc/index.ts:11`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/13-repo-features-tooling.md`.
+
+**Wontfix (2026-09-29):** Checked whether a working alternative exists. `no-unused-internal` is vendored verbatim from ../effect and drives the classic `ts.*` compiler API, which typescript 7.0.2 no longer exports at the root (only ./unstable/* async/sync APIs); upstream still uses the classic API at its HEAD, so enabling it would crash oxlint. The rule polices only `@internal`-tagged exports and packages/*/src has zero of them, so it would enforce nothing today. Unused exports are already covered by `pnpm knip` (knip.json, wired into the check gate). The constraint and unblock condition are documented at the registration site in tools/oxc/index.ts. Revisit if the vendored rule is re-copied from a TS7-compatible upstream.

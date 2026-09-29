@@ -1,9 +1,19 @@
-// @awthaq/next — CookieHeader (internal)
+// @awthaq/web — CookieHeader
 //
 // The one place a raw `Cookie` request header — `"a=1; b=2"` — gets scanned
-// for a single name's value, shared by `GetSession.ts` (which also
-// percent-decodes the result) and `HasSessionCookie.ts` (which only cares
-// whether a match exists at all). Not exported from `index.ts`.
+// for a single name's value, shared by `Session.ts` (which also
+// percent-decodes the result), `HasSessionCookie.ts` (which only cares
+// whether a match exists at all) and an adapter's edge tier. Edge-safe: no
+// import at all (`@awthaq/web/cookies`).
+
+/**
+ * BO-004: the minimal shape every framework's request headers already
+ * satisfy — Next's `ReadonlyHeaders`, a Route Handler's/Astro's/SvelteKit's
+ * Web `Headers`. No adapter's own module is imported to describe it.
+ */
+export interface HeadersLike {
+  readonly get: (name: string) => string | null;
+}
 
 /**
  * The still percent-encoded value of one cookie in a `Cookie` header, or

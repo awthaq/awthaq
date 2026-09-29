@@ -3,7 +3,7 @@ ID: "PPS-008"
 Title: "SELECT * on every hand-written lookup pulls full wide rows including ciphertext and audit columns"
 Level: low
 Category: "performance"
-Status: needs-triage
+Status: wontfix
 Package: "sql"
 Source: "packages/sql/src/Repositories.ts:280"
 Auditor: "postgres-performance-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `performance` · `sql` · reported by **Postgres Performance Specialist** (`postgres-performance-specialist`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Keep SELECT * only where the full row is genuinely consumed (insert/update RETUR
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence medium); workstream `sql-repository-hygiene`. Evidence at HEAD ec065a7: `packages/sql/src/Repositories.ts:296`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/05-sql.md`.
+
+**Wontfix (2026-09-29):** Measured against the code, not speculated: every hand-written lookup decodes into a full `Model.Class` select variant that requires all columns, so projecting means a parallel partial schema per query (doubling the drift surface the dialect-neutral `makeModels` factory exists to remove). The rows are narrow (at most 17 scalar columns, no blobs), callers consume nearly all of them (`decryptRow` needs both token columns), and the hot session-verify path is the model layer's own `findById`, so a contained projection is not available there. The model layer makes it invasive; not done. A deployment that measures egress on a specific list endpoint (audit log, sessions-by-user) adds a purpose-built repository method with its own narrow Result schema next to it.

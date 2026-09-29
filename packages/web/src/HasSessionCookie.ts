@@ -1,4 +1,4 @@
-// @awthaq/next — HasSessionCookie
+// @awthaq/web — HasSessionCookie
 //
 // spec/behaviors/24-nextjs-ssr.md, BEH-EA-188.
 //
@@ -14,14 +14,14 @@
 // principal resolution — it returns `true` for a forged or expired cookie
 // just as readily as a valid one. It exists only so `proxy.ts` can redirect
 // an obviously-anonymous visitor away from an app shell before a page even
-// renders; the real boundary is `GetSession.ts`'s `getSession`, which every
+// renders; the real boundary is `Session.ts`'s `getSession`, which every
 // page and server action reached past `proxy.ts` must still call itself.
 // Treating a passing `hasSessionCookie` check as authentication is exactly
 // the mistake this module's own existence is meant to make hard to make.
 
 import { Api } from "@awthaq/api";
 import { hasCookie } from "./CookieHeader.ts";
-import type { HeadersLike } from "./GetSession.ts";
+import type { HeadersLike } from "./CookieHeader.ts";
 
 /**
  * BEH-EA-188: does the request carry a session cookie at all? Not whether

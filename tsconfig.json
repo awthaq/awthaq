@@ -93,6 +93,9 @@
     },
     {
       "path": "examples/sql-server"
+    },
+    {
+      "path": "packages/web"
     }
   ]
 }

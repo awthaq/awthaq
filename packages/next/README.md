@@ -11,6 +11,13 @@ HTTP router into Next's own cookie jar) and `toInitialSession` /
 [`.scratch/next-package/spec.md`](../../.scratch/next-package/spec.md) for
 the full design decisions.
 
+The framework-neutral core — `getSession`, `applyRotatedSession`,
+`hasSessionCookie`, the `Set-Cookie` -> jar bridge and the CSRF-echoing
+in-process client — lives in [`@awthaq/web`](../web/README.md) (BO-004), which
+an Astro or SvelteKit adapter reuses; this package adds only what is
+Next-specific: the `React.cache` per-render dedup on `getSession`, the
+`withNextCookies`/`serverActionClient` names, the RSC seeds and the `edge` tier.
+
 This package deliberately ships no `ManagedRuntime` construction of its
 own — every function below takes an explicit runtime (or, for
 `withNextCookies`, an already-produced `Response`) as an argument. The

@@ -3,7 +3,7 @@ ID: "TS-007"
 Title: "No streaming HTTP responses anywhere on the server surface — every response is a buffered DTO"
 Level: info
 Category: "architecture"
-Status: needs-triage
+Status: wontfix
 Package: "server"
 Source: "packages/server/src/Session.ts:15"
 Auditor: "tim-smart"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `INFO` · `architecture` · `server` · reported by **Effect Platform & Infrastructure Maintainer** (`tim-smart`)
 
-Status: **needs-triage**
+Status: **wontfix**
 
 ## Summary
 
@@ -56,3 +56,5 @@ If the bare-router CSV/export route class (BEH-EA-152's addGuardedRoute surface)
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** WONTFIX-CANDIDATE (confidence high); workstream `none`. Evidence at HEAD ec065a7: `packages/server/src/Session.ts:15`. Recommended `wontfix` — pending confirmation (`.plan/README.md` §7); Status left unchanged. Full dossier: `.plan/slices/06-server-api.md`.
+
+**Wontfix (2026-09-29):** By design: every server response is a buffered Schema-decoded DTO and no route needs a stream today (auth-sized payloads). Adding a streaming surface would be speculative. If an export route (spec/behaviors/19 CSV sketch) ever lands, it returns an `HttpServerResponse.stream` from its own handler; nothing in the plugin contract prevents that.

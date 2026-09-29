@@ -733,18 +733,15 @@ importers:
       '@awthaq/api':
         specifier: workspace:*
         version: link:../api
-      '@awthaq/client':
-        specifier: workspace:*
-        version: link:../client
-      '@awthaq/core':
-        specifier: workspace:*
-        version: link:../core
       '@awthaq/jwt':
         specifier: workspace:*
         version: link:../jwt
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
+      '@awthaq/web':
+        specifier: workspace:*
+        version: link:../web
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -752,6 +749,9 @@ importers:
         specifier: '>=15.0.0'
         version: 16.3.6(@types/node@22.20.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
     devDependencies:
+      '@awthaq/core':
+        specifier: workspace:*
+        version: link:../core
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
@@ -1276,6 +1276,37 @@ importers:
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(vitest@5.0.0)
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.0(@types/node@22.20.2)(@vitest/coverage-v8@5.0.0)(happy-dom@20.14.5)(vite@8.3.0(@types/node@22.20.2)(jiti@2.7.0)(yaml@2.9.0))
+
+  packages/web:
+    dependencies:
+      '@awthaq/api':
+        specifier: workspace:*
+        version: link:../api
+      '@awthaq/client':
+        specifier: workspace:*
+        version: link:../client
+      '@awthaq/core':
+        specifier: workspace:*
+        version: link:../core
+      '@awthaq/server':
+        specifier: workspace:*
+        version: link:../server
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-rc.116
+    devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1)
