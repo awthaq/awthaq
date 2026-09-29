@@ -3,7 +3,7 @@ ID: "BCR-010"
 Title: "No BDD or behavior-spec coverage for backup codes despite the suite's own hook for it"
 Level: low
 Category: "testing"
-Status: ready-for-agent
+Status: resolved
 Package: "—"
 Source: "spec/models/06-two-factor-totp.md:112"
 Auditor: "backup-codes-recovery-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `testing` · `—` · reported by **Backup Codes & Account Recovery Specialist** (`backup-codes-recovery-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `mfa-two-factor-hardening`. Evidence at HEAD ec065a7: `spec/models/06-two-factor-totp.md:112`. Fix: Write the two-factor behaviors + feature (including recovery codes) as the first artifact of the TwoFactor build decided in ticket 05, mirroring BEH-EA-057/058's reset-token scenarios. (effort M). Full dossier: `.plan/slices/12-spec.md`. Status → ready-for-agent.
 
 **Progress note (2026-09-29, P15):** left open. The behaviors half is done: spec/behaviors/31-two-factor.md (BEH-EA-260..239) covers enable/confirm/verify, recovery codes, the challenge, the divert, the BeforeCredentialReset veto and the failure budget, backed by packages/two-factor/test. The Gherkin feature file and its REQ-EA id allocation were deliberately not written here: features/, features/traceability.md and allocate-req-ea.py are being edited by the concurrent BDD wiring agents and REQ ids are permanent, so allocating them from this branch would collide. Do it after those land (add features 29-31 to ORDER, then run allocate-req-ea.py).
+
+**Resolved (2026-09-29):** P20a: features for the MFA/passwordless plugins now exist and are wired over the real packages: 14-mfa-passwordless/31-two-factor.feature (BEH-EA-260..266: TOTP vectors, divert with no session, single-use challenge, fresh-session enrol and sealed secret, recovery codes single-use and atomically replaced, TOTP step replay guard incl. concurrent, failure-budget lock and audit), 32-magic-link.feature (POST-only and fragment token, 202 for every address, resend window, MFA divert), 33-email-otp.feature (attempt budget, resend window, one InvalidEmailOtp), plus BEH-EA-258 (assurance attributes) in 07-sessions.feature and BEH-EA-259 (BeforeCredentialReset gate) in 15-password.feature. Skips carry rationales naming covering tests.
