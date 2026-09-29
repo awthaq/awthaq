@@ -3,7 +3,7 @@ ID: "PV-003"
 Title: "Rotated session secret is lost when the handler fails with a typed error — silent logout"
 Level: high
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Authentication.ts:270"
 Auditor: "plan-validation"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-29
 
 `HIGH` · `correctness` · `server` · found during the 2026-09-29 plan validation (not in the original audit)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -31,3 +31,5 @@ Planned under: PIL-005 → session-rotation-delivery (P01).
 ## Comments
 
 _Triage notes and discussion append here._
+
+**Resolved (2026-09-29):** fixed under PIL-005 (P01: rotation delivered from a pre-response handler on every path); see that issue's Resolved comment for files, tests and gates.
