@@ -1,5 +1,24 @@
 # Resolution plan: all open audit issues
 
+> ## Execution outcome (2026-09-29)
+> **The plan has been executed** on branch `plan/resolve-audit-issues` (299 commits over `ec065a7`; nothing pushed).
+> Of 934 issue files (900 audited + 17 found during validation + 17 filed by implementing agents), **895 are `resolved`**.
+> Every one of the 497 plan-actionable issues is resolved except **MW-005** (needs a human: git remote, npm org, trusted publisher; the release
+> pipeline and a dormant canary workflow are prepared). Still open, by design:
+> - **32 wontfix candidates** (`needs-triage`, see §7): Status left untouched pending your confirmation.
+> - **PV-230** (qadi 0.8.0 already fixes the leak; awthaq still resolves `@qadi/*@0.7.0` — bump needs the registry), **PV-241**, **PV-260**,
+>   **PV-261** (each needs a maintainer design call, precisely described in the issue), **PV-380** (new: `packages/sql/lib/Models.d.ts` emits
+>   ~220 type errors for a consumer with `skipLibCheck: false`; in-repo builds never see it).
+> - Verified from a clean build on the final tree: `pnpm run check` exits 0 (workspace:check, typecheck incl. tests, package:smoke, lint 0/0, knip,
+>   format:check, circular, check:readmes, check:error-tags, coverage with enforced thresholds, test:bdd, spec:verify:strict with the drift guard),
+>   `pnpm run test:pg` (Docker Postgres 16) 502 tests. Unit tests ≈ 3,050; BDD 1,272 wired scenarios.
+> - Decisions adopted from `DECISIONS.md` are recorded as "adopted recommended option X per plan; user may revisit" in each issue comment.
+>   Behavior changes worth reviewing: audit-write failures are best-effort by default (`AuditWritePolicy`, `required` restores fail-closed);
+>   `client_secret_basic` is the OAuth token-endpoint default; passkeys registered before P08 must re-register (stored user handle);
+>   CSRF cookie wire format changed and secrets must be ≥ 32 bytes; `Sessions.revoke*` require a `reason`; SAML is SP-only, IdP-initiated not offered.
+> The sections below describe the plan as written *before* execution; per-issue outcomes are in each `.issues/*.md` **Resolved** comment.
+
+
 **Scope:** every issue in `.issues/` that was still open on 2026-09-29, i.e. 799 of the 900 from the 2026-09-19 audit. The other 101 were already `resolved`/`wontfix`.
 **Validated against:** HEAD `ec065a7` (effect-auth). qadi-side findings were also checked against `../qadi` HEAD `dd4d247` (v0.8.0; this repo installs `@qadi/*` 0.7.0).
 **Status of this plan:** validation is complete and every issue has a verdict. Nothing in `src/`, `spec/` or `.issues/` has been changed yet. This directory is the plan.
