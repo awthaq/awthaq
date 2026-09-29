@@ -54,6 +54,17 @@ const constantTimeEqual = (a: Uint8Array, b: Uint8Array): boolean => {
   return diff === 0;
 };
 
+/**
+ * PIL-007: the hash an unknown session id is compared against, so a miss does
+ * the same hash + constant-time compare work as a known id with a wrong
+ * secret. Never equals any real `hashSecret` output (SHA-256 of a secret
+ * whose digest is all zeros is not computable in practice).
+ */
+const UNKNOWN_SESSION_HASH = "0".repeat(64);
+
+const secretMatches = (presentedHash: string, storedHash: string): boolean =>
+  constantTimeEqual(new TextEncoder().encode(presentedHash), new TextEncoder().encode(storedHash));
+
 /** BEH-EA-051: `SessionConfig` — absolute/idle expiry and the idle-refresh throttle. */
 export interface SessionConfig {
   readonly absolute: Duration.Duration;
@@ -420,17 +431,29 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         }
         const id = SessionId(raw.slice(0, separator));
         const secret = raw.slice(separator + 1);
+        // PIL-007: the id is the public half of the token (cookies, JWT
+        // `sid`, error messages) — the secret is proven before ANY row-state
+        // branch (tombstone/reuse, expiry) so an id-only caller can neither
+        // trigger reuse-detection side effects nor learn a row's state.
+        const presentedHash = yield* hashSecret(crypto, secret);
         const row = yield* Ref.get(state).pipe(Effect.map((s) => HashMap.get(s, id)));
         if (Option.isNone(row)) {
+          secretMatches(presentedHash, UNKNOWN_SESSION_HASH);
           const bridged = yield* bridgeLegacySession(raw);
           if (Option.isSome(bridged)) return bridged.value;
           return yield* Effect.fail(
             new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
           );
         }
+        if (!secretMatches(presentedHash, row.value.secretHash)) {
+          return yield* Effect.fail(
+            new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+          );
+        }
         const now = yield* DateTime.now;
         // RRS-003: a tombstoned row is a presented-already-rotated token —
-        // reuse. Checked before expiry: a rotated-away row's own expiry
+        // reuse. Reached only with the correct (old) secret (PIL-007).
+        // Checked before expiry: a rotated-away row's own expiry
         // timestamps are stale and not the interesting signal here. The
         // external response stays the uniform `SessionNotFound` whether this
         // is the first reuse or a later presentation of an already-flagged
@@ -465,16 +488,6 @@ export const layerMemory: Layer.Layer<Sessions, never, Crypto.Crypto | AuthEvent
         if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.value.idleExpiresAt)) {
           return yield* Effect.fail(
             new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
-          );
-        }
-        const presentedHash = yield* hashSecret(crypto, secret);
-        const matches = constantTimeEqual(
-          new TextEncoder().encode(presentedHash),
-          new TextEncoder().encode(row.value.secretHash),
-        );
-        if (!matches) {
-          return yield* Effect.fail(
-            new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
           );
         }
         // BEH-EA-210: a session carrying `actingAs` never idle-refreshes — its
@@ -744,6 +757,9 @@ export const layerSql: Layer.Layer<
       }
       const id = SessionId(raw.slice(0, separator));
       const secret = raw.slice(separator + 1);
+      // PIL-007: prove the secret before any row-state branch — see
+      // `layerMemory.verify`'s identical comment.
+      const presentedHash = yield* hashSecret(crypto, secret);
       const found = yield* repo.findById(id).pipe(
         Effect.map(Option.some),
         Effect.catchTags({
@@ -753,6 +769,7 @@ export const layerSql: Layer.Layer<
         }),
       );
       if (Option.isNone(found)) {
+        secretMatches(presentedHash, UNKNOWN_SESSION_HASH);
         const bridged = yield* bridgeLegacySession(raw);
         if (Option.isSome(bridged)) return bridged.value;
         return yield* Effect.fail(
@@ -760,11 +777,16 @@ export const layerSql: Layer.Layer<
         );
       }
       const row = found.value;
+      if (!secretMatches(presentedHash, row.secretHash)) {
+        return yield* Effect.fail(
+          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
+        );
+      }
       const now = yield* DateTime.now;
       // RRS-003: a tombstoned row is a presented-already-rotated token —
-      // reuse. Checked before expiry, and before the secret comparison
-      // below: a rotated-away row's own expiry/secret are stale and not
-      // the interesting signal here. The external response stays the
+      // reuse. Reached only with the correct (old) secret (PIL-007), and
+      // checked before expiry: a rotated-away row's own expiry timestamps
+      // are stale and not the interesting signal here. The external response stays the
       // uniform `SessionNotFound` whether this is the first reuse or a
       // later presentation of an already-flagged row.
       if (row.supersededAt !== null) {
@@ -791,16 +813,6 @@ export const layerSql: Layer.Layer<
       if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
         return yield* Effect.fail(
           new SessionExpired({ message: `awthaq: session idle-expired: ${id}`, id }),
-        );
-      }
-      const presentedHash = yield* hashSecret(crypto, secret);
-      const matches = constantTimeEqual(
-        new TextEncoder().encode(presentedHash),
-        new TextEncoder().encode(row.secretHash),
-      );
-      if (!matches) {
-        return yield* Effect.fail(
-          new SessionNotFound({ message: `awthaq: no such session: ${id}` }),
         );
       }
       // BEH-EA-210: a session carrying `actingAs` never idle-refreshes.

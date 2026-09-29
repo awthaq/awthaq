@@ -17,6 +17,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -186,6 +187,21 @@ const suite = (
           yield* TestClock.adjust(Duration.millis(600));
           const failure = yield* sessions.verify(token).pipe(Effect.flip);
           assert.strictEqual(failure._tag, "SessionExpired");
+        }).pipe(Effect.provide(shortLivedLayer)),
+    );
+
+    // PIL-007: an id-only caller must learn nothing about expiry — the state
+    // branches run only after the presented secret is proven.
+    it.effect(
+      "PIL-007/BEH-EA-056: an expired row with a WRONG secret fails SessionNotFound, not SessionExpired",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { session } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.millis(600));
+          const forged = Redacted.make(`${session.id}.deadbeef`);
+          const failure = yield* sessions.verify(forged).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "SessionNotFound");
         }).pipe(Effect.provide(shortLivedLayer)),
     );
 
@@ -563,6 +579,55 @@ const reuseSuite = (
             assert.strictEqual(event.userId, userId);
           }
         }).pipe(Effect.provide(layer)),
+    );
+
+    // PIL-007: the session id is the public half of the token (cookies, JWT
+    // `sid`, error messages). Reuse detection must only fire for a caller who
+    // also holds the secret — otherwise anyone who knows a superseded id can
+    // force-log-out the user's live session.
+    it.effect(
+      "PIL-007/RRS-003: presenting a superseded id with a WRONG secret revokes nothing and publishes no reuse event",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const events = yield* AuthEvents.AuthEvents;
+
+          const seen = yield* Ref.make(0);
+          yield* Effect.forkChild(
+            events.stream.pipe(
+              Stream.filter((event) => event._tag === "auth.session.reuse"),
+              Stream.runForEach(() => Ref.update(seen, (n) => n + 1)),
+            ),
+            { startImmediately: true },
+          );
+
+          const a = yield* sessions.issue({ userId });
+          const b = yield* sessions.issue({ userId, supersedes: a.session.id });
+
+          const forged = Redacted.make(`${a.session.id}.deadbeef`);
+          const failure = yield* sessions.verify(forged).pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "SessionNotFound");
+
+          // The successor is untouched.
+          const successor = yield* sessions.verify(b.token);
+          assert.strictEqual(successor.session.id, b.session.id);
+
+          for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+          assert.strictEqual(yield* Ref.get(seen), 0);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("PIL-007: replaying the full pre-supersede token still triggers reuse detection", () =>
+      Effect.gen(function* () {
+        const sessions = yield* Sessions.Sessions;
+        const a = yield* sessions.issue({ userId });
+        const b = yield* sessions.issue({ userId, supersedes: a.session.id });
+
+        const replay = yield* sessions.verify(a.token).pipe(Effect.flip);
+        assert.strictEqual(replay._tag, "SessionNotFound");
+        const successor = yield* sessions.verify(b.token).pipe(Effect.flip);
+        assert.strictEqual(successor._tag, "SessionNotFound");
+      }).pipe(Effect.provide(layer)),
     );
 
     it.effect("Sessions.list excludes a tombstoned (superseded) row", () =>

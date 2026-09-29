@@ -131,5 +131,7 @@ REQUIREMENT: Verifying a presented session secret MUST compare
 
 `archive/PRD.md` §18 states this directly among the security-model guarantees: "constant-time comparison via `Crypto.digest` equality on fixed-length hashes." A variable-time comparison (an ordinary string or buffer equality that short-circuits on the first mismatched byte) leaks timing information an attacker can use to recover a secret byte-by-byte; fixing both operands to the same hash length and comparing them in constant time removes that channel regardless of what the underlying secret's actual length or content is.
 
+**Proof precedes state (PIL-007).** The `id` half is public — it appears in cookies, JWT `sid` claims and error messages — so `verify` MUST prove the presented secret (hash + constant-time compare, against a fixed dummy hash when the id is unknown) *before* evaluating any row state. Consequently: an id-only caller always receives the uniform `SessionNotFound` (never `SessionExpired`, so expiry state is not disclosed), and BEH-EA-053's reuse detection (family revocation and `auth.session.reuse`) fires only when the presented token carries the superseded row's correct secret — forging `<supersededId>.<anything>` revokes nothing.
+
 _Previous: [BEH-EA-048](06-domain-users-accounts.md#beh-ea-048-a-plugin-contributed-field-on-user-or-account-defaults-to-client-writable-unless-the-plugin-declares-otherwise)_
 _Next: [BEH-EA-057](08-verification-tokens.md#beh-ea-057-a-verification-token-is-scoped-to-one-purpose)_
