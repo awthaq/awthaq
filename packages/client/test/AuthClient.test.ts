@@ -3,6 +3,7 @@
 // `CsrfClientLive` (BEH-EA-170) and its cold-start bootstrap (CDS-007) are
 // tested in `Csrf.test.ts`; `readCookie`'s own logic (what `CsrfClientLive`
 // actually reads) is tested directly below.
+import * as DateTime from "effect/DateTime";
 import { Api, SessionContract } from "@awthaq/api";
 import { afterEach, assert, describe, it } from "@effect/vitest";
 import * as Data from "effect/Data";
@@ -57,9 +58,9 @@ describe("readCookie (BEH-EA-170)", () => {
 const session = (id: string): AuthClient.Session =>
   new SessionContract.SessionDto({
     id,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    lastActiveAt: "2026-01-01T00:00:00.000Z",
-    expiresAt: "2026-02-01T00:00:00.000Z",
+    createdAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+    lastActiveAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+    expiresAt: DateTime.makeUnsafe("2026-02-01T00:00:00.000Z"),
     userAgent: null,
     current: true,
   });

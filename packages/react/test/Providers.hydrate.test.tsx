@@ -1,6 +1,7 @@
 // EAR-005 (INVALID; pinned): seeded server HTML hydrates without a mismatch —
 // the seeded subtree is the same on the server and the client, so no
 // recoverable error fires (hydrateRoot's `onRecoverableError` is the signal).
+import * as DateTime from "effect/DateTime";
 import { SessionContract, SubjectContract } from "@awthaq/api";
 import { assert, describe, it } from "@effect/vitest";
 import { act } from "@testing-library/react";
@@ -17,9 +18,9 @@ afterEach(restoreFetch);
 const atoms = makeQadiAtoms(EvaluationServicesNone);
 const session = new SessionContract.SessionDto({
   id: "session-1",
-  createdAt: "2024-01-01T00:00:00.000Z",
-  lastActiveAt: "2024-01-01T00:00:00.000Z",
-  expiresAt: "2024-02-01T00:00:00.000Z",
+  createdAt: DateTime.makeUnsafe("2024-01-01T00:00:00.000Z"),
+  lastActiveAt: DateTime.makeUnsafe("2024-01-01T00:00:00.000Z"),
+  expiresAt: DateTime.makeUnsafe("2024-02-01T00:00:00.000Z"),
   userAgent: null,
   current: true,
 });

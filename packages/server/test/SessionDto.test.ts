@@ -26,9 +26,9 @@ describe("toSessionDto (RSC-005)", () => {
   it("maps the view onto the wire shape, expiresAt being the absolute expiry", () => {
     const dto = toSessionDto(view);
     assert.strictEqual(dto.id, "session-1");
-    assert.strictEqual(dto.createdAt, "2024-01-01T00:00:00.000Z");
-    assert.strictEqual(dto.lastActiveAt, "2024-01-02T00:00:00.000Z");
-    assert.strictEqual(dto.expiresAt, "2024-02-01T00:00:00.000Z");
+    assert.strictEqual(DateTime.formatIso(dto.createdAt), "2024-01-01T00:00:00.000Z");
+    assert.strictEqual(DateTime.formatIso(dto.lastActiveAt), "2024-01-02T00:00:00.000Z");
+    assert.strictEqual(DateTime.formatIso(dto.expiresAt), "2024-02-01T00:00:00.000Z");
     assert.strictEqual(dto.userAgent, "test-agent");
     assert.deepStrictEqual(dto.amr, ["pwd"]);
     assert.isTrue(dto.current);

@@ -145,6 +145,8 @@ REQUIREMENT: The core `session` group MUST mount at the root of the
              `revokeOthers` as its endpoints.
 ```
 
+MW-008: `SessionDto`'s `createdAt`, `lastActiveAt` and `expiresAt` are ISO-8601 date-time strings on the wire (`format: "date-time"` in the generated OpenAPI document) that decode to `DateTime.Utc`; a malformed timestamp neither decodes nor encodes, and constructing a `SessionDto` takes `DateTime.Utc` values, not strings.
+
 `archive/design/plugins-as-layers.md` §6 states core's one privilege plainly: "its groups sit at the root of `/auth` and its ids are reserved." `archive/design/usage-examples-v4.md` §5.1 is the worked example of every one of these five endpoints in use (listing devices, revoking one, revoking the rest, signing out) through the same client the plugin groups are reached through — core's session surface is designed to need no plugin to exist at all.
 
 ## BEH-EA-032: `Auth.api` merges contracts and refuses a duplicate group id

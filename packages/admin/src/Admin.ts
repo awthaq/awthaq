@@ -229,9 +229,9 @@ const sessionResponse = (view: Sessions.SessionView): SessionContract.SessionDto
 const toSessionListDto = (session: Sessions.SessionListItem): SessionContract.SessionDto =>
   new SessionContract.SessionDto({
     id: session.id,
-    createdAt: DateTime.formatIso(session.createdAt),
-    lastActiveAt: DateTime.formatIso(session.lastActiveAt),
-    expiresAt: DateTime.formatIso(session.expiresAt),
+    createdAt: session.createdAt,
+    lastActiveAt: session.lastActiveAt,
+    expiresAt: session.expiresAt,
     userAgent: Option.getOrNull(session.userAgent),
     // The admin is never "the current session" of the user they are looking at.
     current: false,

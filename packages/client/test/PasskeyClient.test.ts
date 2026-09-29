@@ -15,6 +15,7 @@ import { PasskeyApi } from "@awthaq/passkey";
 import { afterEach, assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -190,7 +191,7 @@ const sessionDtoJSON = {
 // plain objects — these are what `deepStrictEqual` compares a decoded
 // result against, built from the same JSON these fake routes serve.
 const credentialDto = new PasskeyApi.PasskeyCredentialDto(credentialDtoJSON);
-const sessionDto = new SessionContract.SessionDto(sessionDtoJSON);
+const sessionDto = Schema.decodeUnknownSync(SessionContract.SessionDto)(sessionDtoJSON);
 
 describe("PasskeyClient.passkeyClient — registerPasskey", () => {
   it.effect("happy path: converts the returned credential and calls registerVerify with it", () =>
