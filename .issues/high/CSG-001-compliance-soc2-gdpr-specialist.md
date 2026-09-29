@@ -3,7 +3,7 @@ ID: "CSG-001"
 Title: "Erasure cascade covers only core tables; plugin-owned PII survives account deletion"
 Level: high
 Category: "compliance"
-Status: ready-for-agent
+Status: ready-for-human
 Package: "server"
 Source: "packages/server/src/Account.ts:76"
 Auditor: "compliance-soc2-gdpr-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `compliance` · `server` · reported by **Compliance (SOC2/GDPR) Specialist** (`compliance-soc2-gdpr-specialist`)
 
-Status: **ready-for-agent**
+Status: **ready-for-human**
 
 ## Summary
 
@@ -63,3 +63,5 @@ _Triage notes and discussion append here._
 **Partial progress (2026-09-20):** The blocker named above no longer holds — CSG-002 has since shipped `Hooks.BeforeUserDelete`, a real, wired `HookPoint.veto` fired inside `Users.ts`'s `delete_` for both layers, and its own resolution comment found the frozen-registry concern is a testing-discipline issue (one dedicated tap-scenario test file per hook, same as `OrganizationHooks.test.ts` already does), not a production blocker — a single composition still only ever taps a point once. Used that mechanism to close two of this finding's own named gaps: `packages/passkey/src/PasskeyCredentials.ts` gained `deleteAllByUser`, and `Passkey.beforeUserDeleteErasure` (a new, separately-exported `Layer` — **not merged into `Passkey.layer` itself**, since `Hooks.BeforeUserDelete`'s tap registry freezes after its own first `run()` anywhere in the process, and `Passkey.layer` is rebuilt many times across a real test suite; a composition provides this layer once, application-wide, the same opt-in posture `RateLimits.layer`/`Slots.layer` already use) taps it to sweep `passkey_credential` rows. Identically, `packages/organization/src/MembershipRecords.ts` gained `deleteAllByUser` and `Organization.beforeUserDeleteErasure` taps it to sweep `organization_membership` rows. Both mutation-verified (`packages/passkey/test/PasskeyErasure.test.ts`, `packages/organization/test/OrganizationErasure.test.ts`): temporarily reverting each tap's handler to a no-op broke exactly its own "`Users.delete` sweeps..." test, reverted back.
 
 **Still open, deliberately scoped out of this pass:** `organization_team_membership` and `organization_invitation` (`@awthaq/organization`) — the same mechanism closes these too; invitations need matching by both `inviterId` and the deleted user's own email (`Hooks.BeforeUserDelete`'s input already carries both). `organization_active_context` has no `userId` column at all (keyed by `sessionId` only) — orphaned once sessions are revoked, but reaching it needs either a schema change or capturing the user's live session ids before `sessions.revokeAll` runs; not attempted here. `admin_impersonation` is deliberately left alone: it names an admin's own actions (an audit trail), and SOC2 audit-log retention expectations often *require* keeping exactly this kind of record regardless of subject deletion — bulk-deleting it on erasure is a real compliance-policy call this pass does not make unilaterally, not an oversight. Status unchanged: ready-for-agent (genuinely closer, not fully closed).
+
+**Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `gdpr-erasure-export`. Evidence at HEAD ec065a7: `packages/server/src/Account.ts:103`. Fix: Finish the erasure cascade per decision 30: move it into a core domain service, populate the remaining plugin taps, make the taps part of every default composition, and settle audit-record retention. (effort L). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-human.

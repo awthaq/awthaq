@@ -1,0 +1,3361 @@
+{
+  "slice": "06-server-api",
+  "validated_at_sha": "ec065a7",
+  "validated_on": "2026-09-29",
+  "issues": [
+    {
+      "id": "CSG-005",
+      "level": "medium",
+      "category": "compliance",
+      "package": "api",
+      "title": "No data-subject access or portability export path in the HTTP surface",
+      "issue_file": ".issues/medium/CSG-005-compliance-soc2-gdpr-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Account.ts",
+          "line": 27,
+          "snippet": "export const AccountGroup = HttpApiGroup.make(\"account\")\n  .add(\n    HttpApiEndpoint.patch(\"updateProfile\", \"/user\", {\n      payload: UpdateProfilePayload,\n      success: AccountDto,\n    }),\n  )\n  .add(HttpApiEndpoint.delete(\"deleteUser\", \"/user\"))",
+          "note": "Only updateProfile/deleteUser; no export/access endpoint anywhere (session/subject groups are read-only views of their own rows)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "gdpr-erasure-export",
+      "fix": {
+        "summary": "Add a GDPR Art. 15/20 self-service export: GET /auth/user/export under Authentication, aggregating core data plus plugin-contributed sections.",
+        "steps": [
+          "Declare `exportData` in packages/api/src/Account.ts: `HttpApiEndpoint.get(\"exportData\", \"/user/export\", { success: AccountExportDto })`. `AccountExportDto` is `{ generatedAt: DateTimeUtcFromString, user: AccountDto, accounts: Array<{providerId, subject?, createdAt}> (never tokens), sessions: Array<SessionDto>, sections: Record<string, Schema.Unknown> }`.",
+          "Per the decision below, add the plugin-contribution mechanism in @awthaq/core, e.g. `DataExport` as an ADR-EA-012 aggregating registry of `{ id, collect: (userId) => Effect<unknown> }` contributions, frozen at first read and ordered by dependency order.",
+          "Add `Users.exportAccount(userId)` in core (a sibling of eraseAccount), collecting the core sections plus every registered contribution. Have passkey (credential metadata, no public keys) and organization (memberships, teams, invitations) contribute.",
+          "Handler in packages/server/src/Account.ts: `exportData` calls `Users.exportAccount` and sets `Content-Disposition: attachment; filename=\"account-export.json\"` via HttpEffect.appendPreResponseHandler.",
+          "Rate-limit the endpoint (RateLimits) and publish an `auth.user.dataExported` AuthEvent so the AuditLog records it."
+        ],
+        "files": [
+          "packages/api/src/Account.ts",
+          "packages/server/src/Account.ts",
+          "packages/core/src/Users.ts (or AccountExport.ts)",
+          "packages/core/src/AuthEvents.ts",
+          "packages/passkey/src/Passkey.ts",
+          "packages/organization/src/Organization.ts",
+          "spec/behaviors (new BEH for data export)"
+        ],
+        "tests": [
+          "packages/server/test/AuthHttp.test.ts: 'GET /user/export returns the caller's user, accounts (without tokens), sessions, and plugin sections; requires authentication (401 without)'.",
+          "packages/core/test/AccountExport.test.ts: 'contributions appear under their id; a failing contribution fails the export (no partial export)'."
+        ],
+        "acceptance": [
+          "An authenticated user can download a single JSON document with every stored personal-data category.",
+          "No secrets (password hashes, OAuth tokens, session secret hashes, passkey public keys) are included.",
+          "An AuditLog row records the export."
+        ],
+        "spec_refs": [
+          "BEH-EA-031",
+          "new BEH-EA id (next free after BEH-EA-220)"
+        ],
+        "effort": "L"
+      },
+      "depends_on": [
+        "CSG-001"
+      ],
+      "needs_decision": true,
+      "decision_options": [
+        "(a) Core-only export now (user, accounts, sessions); plugin sections later.",
+        "(b) A `DataExport` aggregating registry (ADR-EA-012) that plugins contribute sections to, mirroring the erasure contract. Built-in core sections plus passkey/organization contributions.",
+        "(c) Reuse Hooks (a new observe/veto point). This is a poor fit, because hooks cannot return data."
+      ],
+      "recommendation": "(b). It is the richer, configurable option and gives every current and future PII-holding plugin one obvious place to declare its data. Decision 30 explicitly left export undecided ('noted as a natural next step').",
+      "recommended_status": "ready-for-human",
+      "notes": ""
+    },
+    {
+      "id": "CSS-007",
+      "level": "low",
+      "category": "api",
+      "package": "api",
+      "title": "Session cookie name exists as two independent literals — aligned 'by construction, not by convention'",
+      "issue_file": ".issues/low/CSS-007-cookie-security-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 97,
+          "snippet": "/**\n * BEH-EA-065: cookie name matches `@awthaq/core`'s `Sessions.SESSION_COOKIE_NAME`\n * exactly (`api` cannot import `core`, so the literal is repeated here rather\n * than shared — both are `\"__Host-session\"` by construction, not by convention).\n */\nexport const SessionCookie = HttpApiSecurity.apiKey({ key: \"__Host-session\", in: \"cookie\" });",
+          "note": "Independent literal in api; core has its own at packages/core/src/Sessions.ts:152."
+        },
+        {
+          "path": "packages/core/src/Sessions.ts",
+          "line": 151,
+          "snippet": "/** BEH-EA-055: the one session cookie's fixed, non-configurable attribute set. */\nexport const SESSION_COOKIE_NAME = \"__Host-session\";\nexport const SESSION_COOKIE_ATTRIBUTES = {\n  secure: true,\n  httpOnly: true,\n  sameSite: \"strict\",\n  path: \"/\",\n} as const;",
+          "note": "Second literal. core (stratum 4) MAY depend on api (stratum 1) per spec/overview.md:41, but packages/core/package.json has no @awthaq/api dependency today."
+        },
+        {
+          "path": "packages/server/test/Authentication.test.ts",
+          "line": 149,
+          "snippet": "        const result = yield* client.required.whoAmI({\n          headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },",
+          "note": "Implicit drift guard: this BEH-EA-065 test sends core's cookie name to Api.Authentication (keyed by api's literal) — a rename on either side fails CI. Plus packages/core/test/Sessions.test.ts:587 pins core's literal. So 'nothing fails' is overstated."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "EHA-008",
+        "MW-009",
+        "BE-009"
+      ],
+      "workstream": "wire-constant-single-source",
+      "fix": {
+        "summary": "Make the session cookie name (and the rotation header name) one constant owned by the contract stratum, with core deriving from it. core (stratum 4) may depend on api (stratum 1).",
+        "steps": [
+          "packages/api/src/Api.ts: `export const SESSION_COOKIE_NAME = \"__Host-session\";` (the literal type is inferred; no `as`), `SessionCookie = HttpApiSecurity.apiKey({ key: SESSION_COOKIE_NAME, in: \"cookie\" })`, and `export const ROTATED_TOKEN_HEADER = \"set-auth-token\";`. Delete the 'by construction' comment.",
+          "packages/core/package.json: add `\"@awthaq/api\": \"workspace:*\"`. packages/core/src/Sessions.ts: `export const SESSION_COOKIE_NAME = Api.SESSION_COOKIE_NAME;`. This matches MW-002/decision 26, which adds the same core -> api dependency for AuthCore. Coordinate with that workstream.",
+          "Replace the 26 hard-coded `__Host-session` literals in tests (packages/**/test, features/step-definitions) with the constant.",
+          "Run `pnpm knip` and the madge cycle guard (the new dependency is downward and acyclic)."
+        ],
+        "files": [
+          "packages/api/src/Api.ts",
+          "packages/core/src/Sessions.ts",
+          "packages/core/package.json",
+          "packages/core/tsconfig*.json (project reference to api)"
+        ],
+        "tests": [
+          "packages/core/test/Sessions.test.ts:587: change to `assert.strictEqual(Sessions.SESSION_COOKIE_NAME, Api.SessionCookie.key)` (write first, failing until core imports api)."
+        ],
+        "acceptance": [
+          "Exactly one `\"__Host-session\"` literal in packages/*/src.",
+          "Renaming it is a one-line change that every consumer follows."
+        ],
+        "spec_refs": [
+          "BEH-EA-055",
+          "BEH-EA-065"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "Overstated: drift would NOT be silent today. Authentication.test.ts:149-150 sends core's name to api's scheme, and core/test/Sessions.test.ts:587 pins the literal, so CI would fail. The duplication is still real and worth removing."
+    },
+    {
+      "id": "EHA-008",
+      "level": "low",
+      "category": "security",
+      "package": "api",
+      "title": "Security-critical cookie name duplicated as independent literals between api and core",
+      "issue_file": ".issues/low/EHA-008-effect-http-api-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 97,
+          "snippet": "/**\n * BEH-EA-065: cookie name matches `@awthaq/core`'s `Sessions.SESSION_COOKIE_NAME`\n * exactly (`api` cannot import `core`, so the literal is repeated here rather\n * than shared — both are `\"__Host-session\"` by construction, not by convention).\n */\nexport const SessionCookie = HttpApiSecurity.apiKey({ key: \"__Host-session\", in: \"cookie\" });",
+          "note": "Independent literal in api; core has its own at packages/core/src/Sessions.ts:152."
+        },
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 105,
+          "snippet": "/** BEH-EA-080: the CSRF cookie/header names are fixed, never per-plugin configurable. */\nexport const CSRF_COOKIE_NAME = \"__Host-csrf\";\nexport const CSRF_HEADER_NAME = \"x-csrf-token\";\nexport const CsrfCookie = HttpApiSecurity.apiKey({ key: CSRF_COOKIE_NAME, in: \"cookie\" });",
+          "note": "CSRF names have ONE source: server imports them (packages/server/src/Csrf.ts:148 `request.cookies[Api.CSRF_COOKIE_NAME]`, :173 `Api.CSRF_HEADER_NAME`). The CSRF half of the duplication claim is wrong."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "CSS-007",
+      "duplicates": [],
+      "workstream": "wire-constant-single-source",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The session-cookie half is the same as CSS-007. The CSRF half is invalid: CSRF names exist once, in api, and server imports them."
+    },
+    {
+      "id": "PDR-007",
+      "level": "info",
+      "category": "compliance",
+      "package": "api",
+      "title": "Spec mandates CSRF composition (BEH-EA-073..080 MUSTs) while shipped contracts cannot satisfy it",
+      "issue_file": ".issues/info/PDR-007-philippe-de-ryck.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Session.ts",
+          "line": 59,
+          "snippet": "  // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `CsrfProtection`\n  // declared last (outermost, runs first — see `AuthorizedSubject.ts`'s\n  // header on declaration order) so a forged request is rejected before\n  // `Authentication` does any credential work.\n  .middleware(Authentication)\n  .middleware(CsrfProtection);",
+          "note": "Commit 409334e attached CsrfProtection to SessionGroup (and AccountGroup, Admin, Organization, Passkey*, Password groups)."
+        }
+      ],
+      "fixed_by_commit": "409334e",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "csrf-hardening",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The docs-vs-code divergence is gone: BEH-EA-073..080 now run on real shipped contracts (session, account, admin, organization, passkey, password groups). The remaining Auth.make {csrf} work (BEH-EA-079) is tracked by PDR-002/APS-001, not here."
+    },
+    {
+      "id": "NHS-010",
+      "level": "low",
+      "category": "api",
+      "package": "api",
+      "title": "Auth strategy order is encoded as security-record key order in two synced places",
+      "issue_file": ".issues/low/NHS-010-node-http-server-integration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 110,
+          "snippet": "/**\n * BEH-EA-028/065/072: cookie is tried before bearer because it is declared\n * first — the record's own key order is the entire strategy chain.\n */\nexport class Authentication extends HttpApiMiddleware.Service<\n  Authentication,\n  { provides: CurrentPrincipal }\n>()(\"Authentication\", {\n  security: { cookie: SessionCookie, bearer: BearerToken },",
+          "note": "Closed two-key record; ordering from declaration key order (mandated by BEH-EA-072)."
+        },
+        {
+          "path": "../effect/packages/effect/src/unstable/httpapi/HttpApiBuilder.ts",
+          "line": 941,
+          "snippet": "  const entries = Object.entries(key.security).map(([securityKey, security]) => ({\n    decode: securityDecode(security),\n    middleware: service[securityKey]\n  }))",
+          "note": "Effect v4 (rc.116, same code in node_modules/.pnpm/effect@4.0.0-rc.116): chain order comes ONLY from the declaration's `security` record; the key order of the object returned by AuthenticationLive is irrelevant (looked up by key)."
+        },
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 362,
+          "snippet": "    const bearer: typeof cookie = (httpEffect, { credential }) =>\n      authenticate(\"bearer\", httpEffect, credential).pipe(",
+          "note": "OptionalAuthenticationLive: the anonymous fallback is attached to the `bearer` handler specifically (continues at :370-372 with `Effect.catchTag(\"Unauthenticated\", ...)` -> anonymousPrincipal)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "optional-auth-contract",
+      "fix": {
+        "summary": "Remove the one real positional coupling (OptionalAuthentication's fallback hard-wired to the last-declared `bearer` key) and pin the order with a wired test. Ordering stays the security record's declaration order, as BEH-EA-072 requires.",
+        "steps": [
+          "Covered by EHA-006's restructure: the anonymous fallback moves into a handler that tries both credentials itself, so it no longer depends on which key is last.",
+          "Correct the Api.ts:110-113 / Authentication.ts comments to say that only the DECLARATION's key order matters. Effect looks handlers up by key (HttpApiBuilder.ts:941-944), so the Live record's order is irrelevant.",
+          "Wire the existing BDD scenario 'The security record's declared key order is the only ordering mechanism' (features/features/01-contract-and-persistence/04-contract-stratum.feature:121, currently @skip @unwired), or add an equivalent unit test asserting `Object.keys(Api.Authentication.security)` equals [\"cookie\", \"bearer\"]."
+        ],
+        "files": [
+          "packages/api/src/Api.ts",
+          "packages/server/src/Authentication.ts",
+          "features/features/01-contract-and-persistence/04-contract-stratum.feature",
+          "features/step-definitions/*"
+        ],
+        "tests": [
+          "packages/api/test/Api.test.ts (ETVS-003): 'Authentication and OptionalAuthentication declare security keys in order cookie, bearer'."
+        ],
+        "acceptance": [
+          "Reordering keys fails a test.",
+          "No Live-side code depends on key position."
+        ],
+        "spec_refs": [
+          "BEH-EA-072",
+          "BEH-EA-065"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "EHA-006"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "Refuted parts: the order is not encoded in 'two synced places'. Effect iterates only the declaration's `security` record, and the Live record is looked up by key. An 'ordered tuple' is not expressible with HttpApiMiddleware's record API, and BEH-EA-072 mandates declaration order. The real coupling is that OptionalAuthenticationLive's fallback assumes bearer is last."
+    },
+    {
+      "id": "MAPS-004",
+      "level": "medium",
+      "category": "architecture",
+      "package": "api",
+      "title": "Auth scheme chain is a closed two-key record - no seam for new credentials",
+      "issue_file": ".issues/medium/MAPS-004-microservices-auth-propagation-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 110,
+          "snippet": "/**\n * BEH-EA-028/065/072: cookie is tried before bearer because it is declared\n * first — the record's own key order is the entire strategy chain.\n */\nexport class Authentication extends HttpApiMiddleware.Service<\n  Authentication,\n  { provides: CurrentPrincipal }\n>()(\"Authentication\", {\n  security: { cookie: SessionCookie, bearer: BearerToken },",
+          "note": "Closed two-key record; ordering from declaration key order (mandated by BEH-EA-072)."
+        },
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 299,
+          "snippet": "    const handle: HttpApiMiddleware.HttpApiMiddlewareSecurity<\n      { readonly cookie: typeof Api.SessionCookie; readonly bearer: typeof Api.BearerToken },\n      Api.CurrentPrincipal,\n      typeof Api.Unauthenticated,\n      never\n    >[\"cookie\"] = (httpEffect, { credential }) => authenticate(\"cookie\", httpEffect, credential);\n    const bearer: typeof handle = (httpEffect, { credential }) =>\n      authenticate(\"bearer\", httpEffect, credential);",
+          "note": "Both schemes funnel into authenticate -> resolveSession -> Sessions.verify (opaque id.secret only); no BearerCredentialResolver seam exists."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "bearer-credential-extensibility",
+      "fix": {
+        "summary": "Generalize decision 33's single BearerCredentialResolver into an ordered, plugin-contributed registry of bearer resolvers, so jwt and api-key (and later SCIM) can each claim bearer credentials without editing @awthaq/api or @awthaq/server.",
+        "steps": [
+          "packages/server/src/Authentication.ts: define `BearerResolverContribution { id: string; claims: (raw: string) => boolean; resolve: (credential) => Effect<Api.Principal, Api.Unauthenticated> }`, and `BearerCredentialResolvers` as an ADR-EA-012 aggregating registry (contributions appended by Layer, frozen at first read, ordered by dependency order then id).",
+          "The bearer handler asks each contribution in order via `claims`. The first match resolves; if none match, resolveSession runs. Resolution happens per request, as PostAuthResponseHook's does.",
+          "@awthaq/jwt contributes `{ id: \"jwt\", claims: three segments }` when acceptAsBearer is set; @awthaq/api-key (MAPS-003) contributes `{ id: \"api-key\", claims: startsWith(config.prefix) }`.",
+          "Keep Api.ts's `security` record closed (cookie and bearer). API keys ride `Authorization: Bearer`, so BEH-EA-072's 'declaration order is the entire chain' still holds. Update spec/models/07-api-keys.md:70-71 ('a third scheme') to say 'a bearer-credential resolver contribution'."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts",
+          "packages/jwt/src/Jwt.ts",
+          "spec/models/07-api-keys.md",
+          "spec/behaviors/09-authentication-middleware.md"
+        ],
+        "tests": [
+          "packages/server/test/Authentication.test.ts: 'two contributions: the first whose claims() matches resolves'; 'no contribution matches: falls through to Sessions.verify'; 'a claiming contribution that fails yields Unauthenticated without trying later ones'."
+        ],
+        "acceptance": [
+          "A plugin can add a bearer credential type with a Layer alone, with no fork of api/server.",
+          "Cookie-first ordering (BEH-EA-072) is unchanged."
+        ],
+        "spec_refs": [
+          "BEH-EA-066",
+          "BEH-EA-072"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "MAPS-001",
+        "MAPS-003"
+      ],
+      "needs_decision": true,
+      "decision_options": [
+        "(a) A registry of bearer resolvers keyed by a claims() predicate (recommended).",
+        "(b) Keep decision 33's single Context.Reference; later contributors must wrap the previous resolver by hand. This is fragile, and the last provider silently wins.",
+        "(c) Add a third HttpApiSecurity scheme (e.g. an x-api-key header) to Api.Authentication. This requires editing the contract for every new credential type, and spec/models/07 hints at it."
+      ],
+      "recommendation": "(a). Decision 33 fixed the JWT case but did not address multiple bearer contributors, and decision 10 (api-key) needs a second one. A registry is the flexible option and uses an extension-point kind the repo already has (ADR-EA-012).",
+      "recommended_status": "ready-for-human",
+      "notes": "Decision 33 introduces a seam for JWTs only. Nothing covers a second bearer credential type, which api-key (decision 10) will be."
+    },
+    {
+      "id": "VB-008",
+      "level": "info",
+      "category": "api",
+      "package": "api",
+      "title": "Bearer scheme consumes raw session secrets; minted JWTs have no in-repo consumer",
+      "issue_file": ".issues/info/VB-008-vittorio-bertocci.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 110,
+          "snippet": "/**\n * BEH-EA-028/065/072: cookie is tried before bearer because it is declared\n * first — the record's own key order is the entire strategy chain.\n */\nexport class Authentication extends HttpApiMiddleware.Service<\n  Authentication,\n  { provides: CurrentPrincipal }\n>()(\"Authentication\", {\n  security: { cookie: SessionCookie, bearer: BearerToken },",
+          "note": "Closed two-key record; ordering from declaration key order (mandated by BEH-EA-072)."
+        },
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 27,
+          "snippet": "export class ApiKeyPrincipal extends Schema.TaggedClass<ApiKeyPrincipal>()(\"ApiKey\", {\n  ref: PrincipalRef,\n}) {}\n\nexport class ServicePrincipal extends Schema.TaggedClass<ServicePrincipal>()(\"Service\", {\n  ref: PrincipalRef,\n}) {}",
+          "note": "No scopes field on either M2M principal."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "MAPS-001",
+      "duplicates": [],
+      "workstream": "bearer-credential-extensibility",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "Documentation ask ('this server never accepts its own JWTs') is covered by MAPS-001's README step. The 'api keys need real scopes' half is MAPS-003's decision 10 (slice 09)."
+    },
+    {
+      "id": "EHA-006",
+      "level": "low",
+      "category": "api",
+      "package": "api",
+      "title": "OptionalAuthentication advertises a 401 that its implementation can never produce",
+      "issue_file": ".issues/low/EHA-006-effect-http-api-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 133,
+          "snippet": "export class OptionalAuthentication extends HttpApiMiddleware.Service<\n  OptionalAuthentication,\n  { provides: CurrentPrincipal }\n>()(\"OptionalAuthentication\", {\n  security: { cookie: SessionCookie, bearer: BearerToken },\n  error: Unauthenticated,\n}) {}",
+          "note": "Declares Unauthenticated purely for the per-scheme handler shape."
+        },
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 370,
+          "snippet": "        Effect.catchTag(\"Unauthenticated\", () =>\n          Effect.provideService(httpEffect, Api.CurrentPrincipal, Api.anonymousPrincipal),\n        ),",
+          "note": "Unauthenticated can never escape OptionalAuthenticationLive; the fallback's correctness depends on bearer being the LAST declared scheme."
+        },
+        {
+          "path": "../effect/packages/effect/src/unstable/httpapi/HttpApiEndpoint.ts",
+          "line": 285,
+          "snippet": "export function getErrorSchemas(endpoint: Top): Array<Schema.Top> {\n  const schemas = new Set<Schema.Top>(endpoint.error)\n  const transform = endpoint.disableCodecs ? identity : transformResponseSchema\n  for (const middleware of endpoint.middlewares) {\n    const key = middleware as any as HttpApiMiddleware.AnyService\n    for (const schema of key.error) {\n      schemas.add(transform(schema))\n    }",
+          "note": "Middleware-declared errors are folded into every endpoint's documented error responses (used by HttpApi.reflect -> OpenAPI)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "optional-auth-contract",
+      "fix": {
+        "summary": "Give OptionalAuthentication no error type, so the OpenAPI document stops advertising an impossible 401. The cookie handler resolves cookie, then bearer, then anonymous itself.",
+        "steps": [
+          "packages/api/src/Api.ts: remove `error: Unauthenticated` from OptionalAuthentication (`error` is optional, HttpApiMiddleware.ts:335) and update its doc comment.",
+          "packages/server/src/Authentication.ts OptionalAuthenticationLive: the `cookie` handler (E = never) tries the cookie credential. On Unauthenticated it decodes the bearer itself via `HttpApiBuilder.securityDecode(Api.BearerToken)` (HttpApiBuilder.ts:528) and tries that. On Unauthenticated again it provides `Api.anonymousPrincipal`. The `bearer` entry is then never reached, but remains declared so OpenAPI still documents both schemes.",
+          "Rotation delivery and PostAuthResponseHook stay on the success paths only (as today)."
+        ],
+        "files": [
+          "packages/api/src/Api.ts",
+          "packages/server/src/Authentication.ts"
+        ],
+        "tests": [
+          "packages/server/test/AuthHttp.test.ts (write first): 'OpenAPI for GET /auth/subject (OptionalAuthentication) lists no 401 response; GET /auth/session (Authentication) still lists 401'.",
+          "packages/server/test/Authentication.test.ts: the existing BEH-EA-068 tests (anonymous, valid cookie, valid bearer, invalid cookie + valid bearer) stay green."
+        ],
+        "acceptance": [
+          "The generated OpenAPI never documents 401 for OptionalAuthentication endpoints.",
+          "BEH-EA-029/068 behavior is unchanged."
+        ],
+        "spec_refs": [
+          "BEH-EA-029",
+          "BEH-EA-068",
+          "BEH-EA-084"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "Verify during implementation that security handlers may require ParsedSearchParams (securityDecode's R). The handlers already require HttpServerRequest via resolveSession."
+    },
+    {
+      "id": "OCM-003",
+      "level": "medium",
+      "category": "architecture",
+      "package": "api",
+      "title": "M2M principals carry no scopes — the scopes-to-permissions binding is unimplementable",
+      "issue_file": ".issues/medium/OCM-003-oauth2-client-credentials-m2m-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 27,
+          "snippet": "export class ApiKeyPrincipal extends Schema.TaggedClass<ApiKeyPrincipal>()(\"ApiKey\", {\n  ref: PrincipalRef,\n}) {}\n\nexport class ServicePrincipal extends Schema.TaggedClass<ServicePrincipal>()(\"Service\", {\n  ref: PrincipalRef,\n}) {}",
+          "note": "No scopes field on either M2M principal."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "MAPS-003",
+      "duplicates": [],
+      "workstream": "m2m-identity",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The same root cause as MAPS-003 (dead ApiKey/Service principal cases; slice 09). Decision 10 (.scratch/resolve-ready-for-human-findings/issues/10-machine-service-identity-m2m.md) prescribes scopes on the M2M principals plus `ApiKey.subjectForPrincipal` mapping scopes to AuthSubject.permissions. The MAPS-003 implementer must add `scopes: Schema.Array(Schema.String)` to ApiKeyPrincipal/ServicePrincipal in packages/api/src/Api.ts:27-33 (and extend packages/api/test/Api.test.ts, ETVS-003). Related: AAPS-009."
+    },
+    {
+      "id": "JR-007",
+      "level": "low",
+      "category": "compliance",
+      "package": "api",
+      "title": "No RFC 6750/7235 challenge: 401s carry no WWW-Authenticate header and no insufficient_scope concept exists anywhere",
+      "issue_file": ".issues/low/JR-007-justin-richer.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 62,
+          "snippet": "/** BEH-EA-027/067: no scheme resolved a live session. */\nexport class Unauthenticated extends Schema.TaggedError<Unauthenticated>()(\n  \"Unauthenticated\",\n  {},\n  { httpApiStatus: 401 },\n) {}",
+          "note": "Plain typed 401; repo-wide grep for WWW-Authenticate / invalid_token / insufficient_scope under packages/ returns nothing."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "optional-auth-contract",
+      "fix": {
+        "summary": "Emit RFC 6750/7235 challenges on 401s from Authentication while keeping the typed JSON body.",
+        "steps": [
+          "In AuthenticationLive's `bearer` handler (the last scheme, whose failure is the middleware's final failure), on Unauthenticated register `HttpEffect.appendPreResponseHandler((_, res) => Effect.succeed(res.status === 401 ? HttpServerResponse.setHeader(res, \"www-authenticate\", value) : res))`. `value` is `Bearer error=\"invalid_token\"` when a non-empty bearer credential was presented, otherwise `Bearer realm=\"awthaq\"`. Then re-fail.",
+          "Leave insufficient_scope for when scope enforcement exists (MAPS-003/qadi). Note it in spec as a planned mapping."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts",
+          "spec/behaviors/09-authentication-middleware.md"
+        ],
+        "tests": [
+          "packages/server/test/AuthHttp.test.ts (write first): 'invalid bearer: 401 with WWW-Authenticate: Bearer error=\"invalid_token\"'; 'no credential: 401 with WWW-Authenticate: Bearer realm=\"awthaq\"'; 'invalid cookie only: 401 with the realm challenge'."
+        ],
+        "acceptance": [
+          "Every Authentication 401 carries a WWW-Authenticate header.",
+          "The typed JSON body is unchanged."
+        ],
+        "spec_refs": [
+          "BEH-EA-067",
+          "BEH-EA-088"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "MW-009",
+      "level": "low",
+      "category": "architecture",
+      "package": "api",
+      "title": "Cookie/CSRF names duplicated across strata by construction, not by convention",
+      "issue_file": ".issues/low/MW-009-matias-woloski.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 97,
+          "snippet": "/**\n * BEH-EA-065: cookie name matches `@awthaq/core`'s `Sessions.SESSION_COOKIE_NAME`\n * exactly (`api` cannot import `core`, so the literal is repeated here rather\n * than shared — both are `\"__Host-session\"` by construction, not by convention).\n */\nexport const SessionCookie = HttpApiSecurity.apiKey({ key: \"__Host-session\", in: \"cookie\" });",
+          "note": "Independent literal in api; core has its own at packages/core/src/Sessions.ts:152."
+        },
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 105,
+          "snippet": "/** BEH-EA-080: the CSRF cookie/header names are fixed, never per-plugin configurable. */\nexport const CSRF_COOKIE_NAME = \"__Host-csrf\";\nexport const CSRF_HEADER_NAME = \"x-csrf-token\";\nexport const CsrfCookie = HttpApiSecurity.apiKey({ key: CSRF_COOKIE_NAME, in: \"cookie\" });",
+          "note": "CSRF names have ONE source: server imports them (packages/server/src/Csrf.ts:148 `request.cookies[Api.CSRF_COOKIE_NAME]`, :173 `Api.CSRF_HEADER_NAME`). The CSRF half of the duplication claim is wrong."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "CSS-007",
+      "duplicates": [],
+      "workstream": "wire-constant-single-source",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The CSRF-name duplication claim is refuted (Csrf.ts:148/:173 import Api.CSRF_*). The session-cookie part is the same as CSS-007."
+    },
+    {
+      "id": "BE-009",
+      "level": "low",
+      "category": "dx",
+      "package": "api",
+      "title": "Session cookie name duplicated as literals across the api/core stratum boundary",
+      "issue_file": ".issues/low/BE-009-bereket-engida.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Api.ts",
+          "line": 97,
+          "snippet": "/**\n * BEH-EA-065: cookie name matches `@awthaq/core`'s `Sessions.SESSION_COOKIE_NAME`\n * exactly (`api` cannot import `core`, so the literal is repeated here rather\n * than shared — both are `\"__Host-session\"` by construction, not by convention).\n */\nexport const SessionCookie = HttpApiSecurity.apiKey({ key: \"__Host-session\", in: \"cookie\" });",
+          "note": "Independent literal in api; core has its own at packages/core/src/Sessions.ts:152."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "CSS-007",
+      "duplicates": [],
+      "workstream": "wire-constant-single-source",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "Same as CSS-007."
+    },
+    {
+      "id": "AVS-002",
+      "level": "medium",
+      "category": "architecture",
+      "package": "api",
+      "title": "Seven parallel standalone `HttpApi` values; core groups not yet folded into Auth.make's composed api",
+      "issue_file": ".issues/medium/AVS-002-api-design-versioning-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/core/src/Auth.ts",
+          "line": 390,
+          "snippet": "const composeApi = (\n  order: ReadonlyArray<AuthPlugin.Any>,\n): HttpApi.HttpApi<\"auth\", HttpApiGroup.Constraint> => {\n  const contributions = order.flatMap((plugin) =>\n    Object.values(plugin.contract.groups).map((group) => ({ plugin, group })),\n  );",
+          "note": "Only plugin groups are folded; core session/account groups are not (MW-002 / decision 26 unimplemented)."
+        },
+        {
+          "path": "packages/api/src/AuthCore.ts",
+          "line": 16,
+          "snippet": "export const AuthCoreApi = HttpApi.make(\"auth\").add(SessionGroup).add(AccountGroup);",
+          "note": "Standalone core HttpApi still served separately."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "MW-002",
+      "duplicates": [],
+      "workstream": "httpapi-surface-consolidation",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "Same gap as MW-002 (slice 01, high, ready-for-agent). Decision 26 (.scratch/resolve-ready-for-human-findings/issues/26-httpapi-surface-consolidation.md) prescribes the fix: composeApi seeds core session/account groups, Auth.make gets an `extraGroups` option for qadi's subject group, and there is a new `AuthHttp.coreHandlers`. Not implemented at HEAD. AVS-002's changeset/deprecation-policy ask belongs to AVS-009 (slice 13)."
+    },
+    {
+      "id": "BE-006",
+      "level": "medium",
+      "category": "dx",
+      "package": "api",
+      "title": "Core and plugin routes split across two HttpApi contracts",
+      "issue_file": ".issues/medium/BE-006-bereket-engida.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/core/src/Auth.ts",
+          "line": 390,
+          "snippet": "const composeApi = (\n  order: ReadonlyArray<AuthPlugin.Any>,\n): HttpApi.HttpApi<\"auth\", HttpApiGroup.Constraint> => {\n  const contributions = order.flatMap((plugin) =>\n    Object.values(plugin.contract.groups).map((group) => ({ plugin, group })),\n  );",
+          "note": "Only plugin groups are folded; core session/account groups are not (MW-002 / decision 26 unimplemented)."
+        },
+        {
+          "path": "packages/api/src/AuthCore.ts",
+          "line": 16,
+          "snippet": "export const AuthCoreApi = HttpApi.make(\"auth\").add(SessionGroup).add(AccountGroup);",
+          "note": "Standalone core HttpApi still served separately."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "MW-002",
+      "duplicates": [],
+      "workstream": "httpapi-surface-consolidation",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "Same gap as MW-002 (slice 01, high, ready-for-agent). Decision 26 (.scratch/resolve-ready-for-human-findings/issues/26-httpapi-surface-consolidation.md) prescribes the fix: composeApi seeds core session/account groups, Auth.make gets an `extraGroups` option for qadi's subject group, and there is a new `AuthHttp.coreHandlers`. Not implemented at HEAD."
+    },
+    {
+      "id": "MW-008",
+      "level": "low",
+      "category": "api",
+      "package": "api",
+      "title": "SessionDto date fields typed as unconstrained Schema.String — format is convention, not contract",
+      "issue_file": ".issues/low/MW-008-matias-woloski.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Session.ts",
+          "line": 18,
+          "snippet": "export class SessionDto extends Schema.Class<SessionDto>(\"SessionDto\")({\n  id: Schema.String,\n  createdAt: Schema.String,\n  lastActiveAt: Schema.String,\n  expiresAt: Schema.String,\n  userAgent: Schema.NullOr(Schema.String),\n  current: Schema.Boolean,\n}) {}",
+          "note": "Dates are unconstrained strings; Effect v4 ships Schema.DateTimeUtcFromString (../effect/packages/effect/src/Schema.ts:10972). No client/react/next code reads these fields today."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "api-contract-tests",
+      "fix": {
+        "summary": "Make SessionDto's timestamps a real contract: Schema.DateTimeUtcFromString on the wire (an ISO string) that decodes to DateTime.Utc.",
+        "steps": [
+          "packages/api/src/Session.ts: `createdAt`, `lastActiveAt` and `expiresAt` become `Schema.DateTimeUtcFromString`. If the generated JSON schema lacks `format: \"date-time\"`, annotate it (check Schema's jsonSchema annotation API in ../effect).",
+          "packages/server/src/Session.ts `toDto`: pass `item.createdAt` etc. directly (DateTime.Utc) and drop DateTime.formatIso.",
+          "Check consumers: none read these fields today (grep in client/react/next). Update any test asserting the string form."
+        ],
+        "files": [
+          "packages/api/src/Session.ts",
+          "packages/server/src/Session.ts"
+        ],
+        "tests": [
+          "packages/api/test/Contracts.test.ts (write first): 'SessionDto rejects a non-ISO createdAt'; 'encodes DateTime.Utc to an ISO-8601 string'; 'OpenAPI schema for SessionDto.createdAt is a string with format date-time'."
+        ],
+        "acceptance": [
+          "An invalid timestamp cannot type-check or encode.",
+          "OpenAPI clients see format: date-time."
+        ],
+        "spec_refs": [
+          "BEH-EA-031",
+          "BEH-EA-054"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "ETVS-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "CDS-004",
+      "level": "medium",
+      "category": "security",
+      "package": "api",
+      "title": "No-payload mutating POSTs bypass the JSON content-type gate — SameSite-only defense for logout and kill-switch endpoints",
+      "issue_file": ".issues/medium/CDS-004-csrf-defense-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Session.ts",
+          "line": 59,
+          "snippet": "  // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `CsrfProtection`\n  // declared last (outermost, runs first — see `AuthorizedSubject.ts`'s\n  // header on declaration order) so a forged request is rejected before\n  // `Authentication` does any credential work.\n  .middleware(Authentication)\n  .middleware(CsrfProtection);",
+          "note": "Commit 409334e attached CsrfProtection to SessionGroup (and AccountGroup, Admin, Organization, Passkey*, Password groups)."
+        }
+      ],
+      "fixed_by_commit": "409334e",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "csrf-hardening",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The session group now carries CsrfProtection, whose double-submit check runs regardless of payload or content-type, which is exactly the recommended fix. A suggested (non-blocking) regression test for the orchestrator: POST /auth/session/sign-out with a session cookie but no CSRF pair gets 403."
+    },
+    {
+      "id": "SMS-005",
+      "level": "low",
+      "category": "api",
+      "package": "api",
+      "title": "signOut/revokeAll never clear the session cookie from the browser",
+      "issue_file": ".issues/low/SMS-005-session-management-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/src/Session.ts",
+          "line": 53,
+          "snippet": "  // Upstream-hardening map, ticket 02: completes the `revoke`/\n  // `revokeOthers`/`revokeAll` naming symmetry — kills every session for\n  // the caller, no exceptions, including the caller's own current\n  // session. No payload, no response cookie-clearing, matching\n  // `signOut`'s existing precedent.\n  .add(HttpApiEndpoint.post(\"revokeAll\", \"/session/revoke-all\"))",
+          "note": "Deliberately no cookie clearing."
+        },
+        {
+          "path": "packages/server/src/Session.ts",
+          "line": 84,
+          "snippet": "      signOut: Effect.fnUntraced(function* () {\n        const principal = yield* currentUserPrincipal;\n        yield* sessions\n          .revoke(Sessions.SessionId(principal.sessionId))\n          .pipe(Effect.catchTag(\"SessionNotFound\", () => Effect.void));\n      }),",
+          "note": "No Set-Cookie emitted; repo-wide grep for maxAge: 0 / Max-Age=0 / expireCookie under packages/ returns nothing."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "CSS-002",
+      "duplicates": [],
+      "workstream": "session-cookie-expiry",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The same fix, including revoke-of-current (CSS-002 step 2)."
+    },
+    {
+      "id": "EHA-004",
+      "level": "medium",
+      "category": "architecture",
+      "package": "api",
+      "title": "Core session/account groups never composed: Auth.make's served api has no session endpoints",
+      "issue_file": ".issues/medium/EHA-004-effect-http-api-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/core/src/Auth.ts",
+          "line": 390,
+          "snippet": "const composeApi = (\n  order: ReadonlyArray<AuthPlugin.Any>,\n): HttpApi.HttpApi<\"auth\", HttpApiGroup.Constraint> => {\n  const contributions = order.flatMap((plugin) =>\n    Object.values(plugin.contract.groups).map((group) => ({ plugin, group })),\n  );",
+          "note": "Only plugin groups are folded; core session/account groups are not (MW-002 / decision 26 unimplemented)."
+        },
+        {
+          "path": "packages/api/src/AuthCore.ts",
+          "line": 16,
+          "snippet": "export const AuthCoreApi = HttpApi.make(\"auth\").add(SessionGroup).add(AccountGroup);",
+          "note": "Standalone core HttpApi still served separately."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "MW-002",
+      "duplicates": [],
+      "workstream": "httpapi-surface-consolidation",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "Same gap as MW-002 (slice 01, high, ready-for-agent). Decision 26 (.scratch/resolve-ready-for-human-findings/issues/26-httpapi-surface-consolidation.md) prescribes the fix: composeApi seeds core session/account groups, Auth.make gets an `extraGroups` option for qadi's subject group, and there is a new `AuthHttp.coreHandlers`. Not implemented at HEAD."
+    },
+    {
+      "id": "AAPS-003",
+      "level": "medium",
+      "category": "api",
+      "package": "api",
+      "title": "Attribute contract is stringly-typed end to end",
+      "issue_file": ".issues/medium/AAPS-003-abac-attribute-policy-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/api/src/Subject.ts",
+          "line": 47,
+          "snippet": "export class SubjectDto extends Schema.Class<SubjectDto>(\"SubjectDto\")({\n  id: Schema.String,\n  roles: Schema.Array(Schema.String),\n  permissions: Schema.Array(Schema.String),\n  attributes: Schema.Record(Schema.String, Schema.Unknown),\n}) {}",
+          "note": "Open record at the wire — correct for a composition-dependent attribute set; the typing gap is on the producer/evaluator side (qadi)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "qadi-attribute-typing",
+      "fix": {
+        "summary": "Add typing on the producer and evaluator side (in @awthaq/qadi and ../qadi). The isomorphic SubjectDto stays an open record, because its attribute set depends on the composition.",
+        "steps": [
+          "packages/qadi/src/Resolvers.ts: export a const-keyed `UserAttributes` registry (`{ email: Schema.String, emailVerified: Schema.Boolean, name: Schema.String }`), `type UserAttributeName = keyof typeof UserAttributes`, and a typed `userAttr<N extends UserAttributeName>(name: N)` helper for policy authors. Do the same in @awthaq/organization's OrganizationQadi.attributes (slice 08).",
+          "Build on decision 14's `attributeResolverRegistry` (AAPS-002): derive each contribution's declared `names` from its registry keys.",
+          "In ../qadi (the user's qadi repo): have the evaluator report a distinct 'unknown attribute name' diagnostic when a policy references a name that no registered resolver declares, so a typo is no longer indistinguishable from an absent value.",
+          "Keep `SubjectDto.attributes` as `Schema.Record(String, Unknown)`. AAPS-008 (slice 08) owns the question of which attributes the DTO exposes."
+        ],
+        "files": [
+          "packages/qadi/src/Resolvers.ts",
+          "packages/qadi/src/AttributeResolvers.ts",
+          "../qadi/packages/core/src/AttributeResolver.ts"
+        ],
+        "tests": [
+          "packages/qadi/test/Resolvers.test.ts: 'userAttr(\"emailVerifed\") is a type error' (@ts-expect-error); 'UserAttributes schemas decode the resolver output'.",
+          "../qadi: an evaluator test for the unknown-name diagnostic."
+        ],
+        "acceptance": [
+          "A policy typo against a known producer fails to compile, or at least produces a distinct diagnostic."
+        ],
+        "spec_refs": [
+          "BEH-EA-161",
+          "BEH-EA-142"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "AAPS-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "The claim is accurate about the evaluator and producer contract. Its SubjectDto evidence is the least actionable part: the wire DTO cannot be statically keyed, because attributes depend on which plugins are installed. The fix lives mostly in slice 08 and ../qadi."
+    },
+    {
+      "id": "ETVS-003",
+      "level": "medium",
+      "category": "testing",
+      "package": "api",
+      "title": "Five packages ship vitest configs with no tests; contract stratum @awthaq/api untested directly",
+      "issue_file": ".issues/medium/ETVS-003-effect-testing-vitest-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/api/vitest.config.ts",
+          "line": 3,
+          "snippet": "export default defineConfig({\n  test: {\n    name: \"api\",\n    include: [\"test/**/*.test.ts\"],\n  },\n});",
+          "note": "packages/api has no test/ directory (also api-key, cli, magic-link, two-factor); the contract-stratum BDD feature is `@skip @unwired` (features/features/01-contract-and-persistence/04-contract-stratum.feature:7)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "api-contract-tests",
+      "fix": {
+        "summary": "Give @awthaq/api a direct test suite for its security-relevant contract. The placeholder-package half goes to the tooling slice.",
+        "steps": [
+          "Create packages/api/test/Api.test.ts covering: Principal decode/encode for all four tags; rejection of an undeclared tag; `actingAs` optionality; Unauthenticated/CsrfRejected/InvalidCredentials/RateLimited statuses (via HttpApiSchema status annotations); CurrentPrincipal having no default (`Effect.serviceOption(Api.CurrentPrincipal)` is None); Authentication/OptionalAuthentication security key order (NHS-010); CsrfProtection requiredForClient.",
+          "Create packages/api/test/Contracts.test.ts covering: AuthCoreApi group/endpoint inventory (session: current/list/signOut/revoke/revokeOthers/revokeAll; account: updateProfile/deleteUser); middleware attached to SessionGroup/AccountGroup (CsrfProtection last); SessionDto/SubjectDto round-trip.",
+          "Where cheap, wire the matching BEH-EA-025..029 scenarios in features/features/01-contract-and-persistence/04-contract-stratum.feature (currently @skip @unwired; see AH-003).",
+          "Hand-off, not in this slice: vitest.config.ts in the placeholder packages (api-key, cli, magic-link, two-factor), and a CI guard for 'src without test'. These belong to the tooling slice (13)."
+        ],
+        "files": [
+          "packages/api/test/Api.test.ts (new)",
+          "packages/api/test/Contracts.test.ts (new)",
+          "features/step-definitions/*"
+        ],
+        "tests": [
+          "The files above are the tests. They must pass under `pnpm --filter @awthaq/api test`."
+        ],
+        "acceptance": [
+          "packages/api has a test directory that exercises every exported schema and middleware declaration.",
+          "`pnpm run test` includes it."
+        ],
+        "spec_refs": [
+          "BEH-EA-025",
+          "BEH-EA-027",
+          "BEH-EA-028",
+          "BEH-EA-029",
+          "BEH-EA-030",
+          "BEH-EA-031"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "CSG-001",
+      "level": "high",
+      "category": "compliance",
+      "package": "server",
+      "title": "Erasure cascade covers only core tables; plugin-owned PII survives account deletion",
+      "issue_file": ".issues/high/CSG-001-compliance-soc2-gdpr-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 103,
+          "snippet": "        yield* sqlTransaction\n          .withTransaction(\n            Effect.gen(function* () {\n              yield* accounts.deleteAllByUser(userId);",
+          "note": "Cascade is transactional since e940a12."
+        },
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 112,
+          "snippet": "              yield* sessions.revokeAll(userId);\n              yield* verification.deleteAllByUser(userId);",
+          "note": "Sentinel SessionId(\"\") replaced by revokeAll in ec065a7; verification tokens swept since 704cdd4 (BCR-003)."
+        },
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 95,
+          "snippet": "      // `organization_membership`) inside this same transaction. Still\n      // open, deliberately scoped out (see CSG-001's own resolution\n      // comment): `organization_team_membership`, `organization_invitation`,\n      // and `admin_impersonation` (the last a genuine audit-retention\n      // tension, not a mechanical gap).",
+          "note": "Remaining PII gaps self-documented at HEAD. Also: organization_active_context (no userId column) and AuditLog rows (actorUserId + full event payload, packages/core/src/AuditLog.ts:44-49)."
+        },
+        {
+          "path": "packages/organization/src/Organization.ts",
+          "line": 2393,
+          "snippet": " * `Organization.beforeUserDeleteErasure` once, application-wide — the",
+          "note": "Plugin erasure taps are separate opt-in layers; `grep -rln beforeUserDeleteErasure examples packages/test/src README.md` finds no wiring, so a default composition still leaves passkey/membership PII behind."
+        },
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 100,
+          "snippet": "      deleteUser: Effect.fnUntraced(function* () {\n        const principal = yield* currentUserPrincipal;\n        const userId = Users.UserId(principal.ref.id);",
+          "note": "Cascade still lives in the HTTP handler, not in a core domain service (decision 30 asks for Users.eraseAccount)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "DRS-002"
+      ],
+      "workstream": "gdpr-erasure-export",
+      "fix": {
+        "summary": "Finish the erasure cascade per decision 30: move it into a core domain service, populate the remaining plugin taps, make the taps part of every default composition, and settle audit-record retention.",
+        "steps": [
+          "Follow .scratch/resolve-ready-for-human-findings/issues/30-data-retention-gdpr-erasure.md: add `Users.eraseAccount(userId)` in packages/core (in `Users.ts`, or a sibling `packages/core/src/AccountErasure.ts` if adding Accounts/Sessions/Verification to the Users layer's requirements creates a layer cycle). It runs accounts.deleteAllByUser, verification.deleteAllByUser, users.delete (which fires Hooks.BeforeUserDelete), then sessions.revokeAll, all inside one `SqlTransaction.withTransaction`, piped through `Effect.orDie` for SqlError as today. Running users.delete before revokeAll is deliberate, so taps can still see the user's live session ids (needed for organization_active_context). The transaction keeps the order unobservable.",
+          "Keep `Hooks.BeforeUserDelete` (a veto point, so a failing tap aborts the transaction) as the contribution mechanism that decision 30 calls 'ErasureRegistry'. The landed code (ec065a7) already gives it the same abort-on-failure semantics, and spec/behaviors/12-hooks.md:133 prescribes it. Do not add a second registry.",
+          "Shrink packages/server/src/Account.ts `deleteUser` to `currentUser` extraction plus one `Users.eraseAccount(userId)` call, and drop its direct Accounts/Sessions/Verification/SqlTransaction requirements.",
+          "@awthaq/organization: add `TeamMembershipRecords.deleteAllByUser`, an `InvitationRecords` sweep (rows where inviterId = userId OR email = the deleted user's email; the BeforeUserDelete input already carries both), and an `organization_active_context` sweep keyed by the user's live session ids (read via Sessions.list before revokeAll runs). Extend `Organization.beforeUserDeleteErasure` to call all three. Coordinate with DRS-008 (slice 10), which may add a userId column instead.",
+          "Make erasure the default rather than opt-in: wire `Passkey.beforeUserDeleteErasure` and `Organization.beforeUserDeleteErasure` into examples/memory-server/index.ts, packages/test/src/TestAuth.ts, and the README quickstart now. Once ELC-001 (module-scoped tap registry, slice 02) is fixed, merge each into its plugin's own `.layer`.",
+          "admin_impersonation and AuditLog rows: implement whichever option the decision picks (the recommendation is pseudonymization, see decision_options).",
+          "Add an ADR (spec/decisions/017-retention-and-erasure.md, the next free number) recording eraseAccount + BeforeUserDelete as the erasure contract. Cross-reference it from spec/behaviors/12-hooks.md."
+        ],
+        "files": [
+          "packages/core/src/Users.ts (or new packages/core/src/AccountErasure.ts)",
+          "packages/server/src/Account.ts",
+          "packages/organization/src/Organization.ts",
+          "packages/organization/src/TeamMembershipRecords.ts (or the file holding team membership records)",
+          "packages/organization/src/InvitationRecords.ts",
+          "packages/admin/src/*.ts (impersonation record pseudonymization)",
+          "packages/core/src/AuditLog.ts",
+          "examples/memory-server/index.ts",
+          "packages/test/src/TestAuth.ts",
+          "README.md",
+          "spec/decisions/017-retention-and-erasure.md (new)"
+        ],
+        "tests": [
+          "packages/core/test/AccountErasure.test.ts (new, write first): 'eraseAccount removes user, accounts, sessions, verification rows and runs every BeforeUserDelete tap'; 'a failing tap rolls back every prior delete' against Sessions/Accounts layerSql on sqlite :memory: with SqlTransaction.layerSql.",
+          "packages/organization/test/OrganizationErasure.test.ts: add 'Users.delete sweeps team memberships', '...sweeps invitations sent by or addressed to the user', '...sweeps active context rows for the user's sessions'.",
+          "packages/server/test/AuthHttp.test.ts (Account describe, ~:336): DELETE /user through the composed router with passkey+organization erasure layers wired leaves zero rows in every PII table.",
+          "BDD: add a scenario to the account/erasure feature if one exists (features/features/**) or record the gap in spec/traceability.md."
+        ],
+        "acceptance": [
+          "After DELETE /user, no row referencing the userId or the user's email remains in users, accounts, sessions, verification_tokens, passkey_credential, organization_membership, organization_team_membership, organization_invitation, or organization_active_context.",
+          "admin_impersonation/audit rows follow the decided policy.",
+          "A tap failure leaves the database unchanged (the test proves rollback on SQL).",
+          "Account.ts no longer requires SqlTransaction/Accounts/Sessions/Verification directly.",
+          "pnpm check passes."
+        ],
+        "spec_refs": [
+          "BEH-EA-022",
+          "BEH-EA-024",
+          "BEH-EA-035"
+        ],
+        "effort": "L"
+      },
+      "depends_on": [
+        "ELC-001",
+        "DRS-008"
+      ],
+      "needs_decision": true,
+      "decision_options": [
+        "(a) Pseudonymize: keep admin_impersonation and AuditLog rows for SOC2 retention, but replace the erased userId/email with an irreversible tombstone (e.g. HMAC(userId, per-deployment salt)) inside the same transaction. This meets GDPR Art. 17 and keeps the audit trail's shape.",
+        "(b) Hard-delete the rows that name the user, which loses the audit trail.",
+        "(c) Retain unchanged under a documented Art. 17(3)(b)/(e) legal-obligation exemption, configurable per deployment."
+      ],
+      "recommendation": "(a) pseudonymization by default, with (c) available as an explicit ErasureConfig opt-in (the richer, configurable option). The mechanical steps 1-5 do not depend on this decision and can start now.",
+      "recommended_status": "ready-for-human",
+      "notes": "Much of the finding is fixed at HEAD: the transaction (e940a12), revokeAll (ec065a7), the verification sweep (704cdd4), and passkey + org-membership taps (ec065a7, opt-in). Still open: team membership, invitations (plaintext email), active context, impersonation/audit retention, taps not wired by default, and the cascade still living in the HTTP handler (decision 30)."
+    },
+    {
+      "id": "DRS-002",
+      "level": "high",
+      "category": "compliance",
+      "package": "server",
+      "title": "Account deletion (GDPR erasure) is non-transactional and leaves PII across plugin tables",
+      "issue_file": ".issues/high/DRS-002-data-residency-sharding-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 103,
+          "snippet": "        yield* sqlTransaction\n          .withTransaction(\n            Effect.gen(function* () {\n              yield* accounts.deleteAllByUser(userId);",
+          "note": "Cascade is transactional since e940a12."
+        },
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 95,
+          "snippet": "      // `organization_membership`) inside this same transaction. Still\n      // open, deliberately scoped out (see CSG-001's own resolution\n      // comment): `organization_team_membership`, `organization_invitation`,\n      // and `admin_impersonation` (the last a genuine audit-retention\n      // tension, not a mechanical gap).",
+          "note": "Remaining PII gaps self-documented at HEAD. Also: organization_active_context (no userId column) and AuditLog rows (actorUserId + full event payload, packages/core/src/AuditLog.ts:44-49)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "CSG-001",
+      "duplicates": [],
+      "workstream": "gdpr-erasure-export",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "Same source line and root cause as CSG-001. DRS-002's own 2026-09-20 comment calls itself 'Duplicate source/evidence of CSG-001'. The non-transactional half was fixed in e940a12. The remaining PII-table gaps and decision 30 (Users.eraseAccount) are carried by CSG-001's plan."
+    },
+    {
+      "id": "SEA-001",
+      "level": "medium",
+      "category": "correctness",
+      "package": "server",
+      "title": "Zero referential integrity: no FK constraints, no foreign_keys pragma, untransactional deleteUser cascade",
+      "issue_file": ".issues/medium/SEA-001-sqlite-embedded-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 103,
+          "snippet": "        yield* sqlTransaction\n          .withTransaction(\n            Effect.gen(function* () {\n              yield* accounts.deleteAllByUser(userId);",
+          "note": "Cascade is transactional since e940a12."
+        },
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 84,
+          "snippet": "          \"userId\" TEXT NOT NULL,",
+          "note": "accounts.userId (and sessions.userId at :117) carry no REFERENCES; grep for REFERENCES/FOREIGN KEY/foreign_keys under packages/*/src: 0 hits."
+        },
+        {
+          "path": "spec/behaviors/12-hooks.md",
+          "line": 133,
+          "snippet": "`archive/design/plugins-as-layers.md` §8 shows exactly this pattern: the `Invite` plugin purges its own `acme.invite_invitation` rows for a deleted user by tapping `BeforeUserDelete`, a point core defines, rather than by declaring a foreign key into `users` and relying on a database-level cascade the linker would have to know about.",
+          "note": "Spec explicitly prefers hook-driven erasure over DB-level cascades across plugins — so the FK half is a documentation gap, not a missing constraint."
+        }
+      ],
+      "fixed_by_commit": "e940a12",
+      "duplicate_of": null,
+      "duplicates": [
+        "SSMS-002"
+      ],
+      "workstream": "gdpr-erasure-export",
+      "fix": {
+        "summary": "The untransactional cascade is fixed (e940a12). What remains is making the FK-less design an explicit, tested invariant, not adding FKs, since spec/behaviors/12-hooks.md:133 deliberately prefers hook-driven erasure to DB-level cascades.",
+        "steps": [
+          "Document in spec/behaviors/05-persistence-stratum.md (next to BEH-EA-035) that child tables carry no FOREIGN KEY by design: every whole-user delete goes through the transactional `Users.eraseAccount` (CSG-001), and cross-plugin cleanup goes through Hooks.BeforeUserDelete. Because of this, `PRAGMA foreign_keys` is intentionally irrelevant.",
+          "Add the rollback regression test below. It proves the transaction works on SQL, which is the property the finding's crash scenarios need.",
+          "Optional defense in depth (recommended, S): make `Sessions.layerSql` `verify` refuse a session whose user row is missing, via a cheap `users.findById` only on the throttled-touch path. Otherwise document why it is unnecessary now that orphaned sessions cannot arise."
+        ],
+        "files": [
+          "spec/behaviors/05-persistence-stratum.md",
+          "packages/core/test/AccountErasure.test.ts"
+        ],
+        "tests": [
+          "packages/core/test/AccountErasure.test.ts: 'a BeforeUserDelete tap failing after accounts were deleted rolls back — accounts, sessions, and the user row are all still present' (sqlite :memory: + SqlTransaction.layerSql)."
+        ],
+        "acceptance": [
+          "The rollback test passes on SQL and fails if withTransaction is removed (mutation-check).",
+          "The spec states the FK-less invariant explicitly."
+        ],
+        "spec_refs": [
+          "BEH-EA-035",
+          "BEH-EA-040"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "CSG-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "The transaction half is ALREADY-FIXED (e940a12). The FK/pragma half is real but is spec-sanctioned design, so the fix documents and tests it rather than adding constraints."
+    },
+    {
+      "id": "SSMS-002",
+      "level": "medium",
+      "category": "correctness",
+      "package": "server",
+      "title": "Zero FK constraints and the shipped whole-user cascade runs without a transaction",
+      "issue_file": ".issues/medium/SSMS-002-sql-schema-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 103,
+          "snippet": "        yield* sqlTransaction\n          .withTransaction(\n            Effect.gen(function* () {\n              yield* accounts.deleteAllByUser(userId);",
+          "note": "Cascade is transactional since e940a12."
+        },
+        {
+          "path": "packages/sql/src/CoreMigrations.ts",
+          "line": 84,
+          "snippet": "          \"userId\" TEXT NOT NULL,",
+          "note": "accounts.userId (and sessions.userId at :117) carry no REFERENCES; grep for REFERENCES/FOREIGN KEY/foreign_keys under packages/*/src: 0 hits."
+        }
+      ],
+      "fixed_by_commit": "e940a12",
+      "duplicate_of": "SEA-001",
+      "duplicates": [],
+      "workstream": "gdpr-erasure-export",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "Same two claims as SEA-001 (zero FKs + untransactional cascade). The cascade was wrapped in SqlTransaction by e940a12. The FK-less invariant documentation and test are planned under SEA-001."
+    },
+    {
+      "id": "TS-004",
+      "level": "medium",
+      "category": "architecture",
+      "package": "server",
+      "title": "deleteUser performs three cross-repository writes with no transaction boundary despite the repo's own SqlTransaction port",
+      "issue_file": ".issues/medium/TS-004-tim-smart.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 103,
+          "snippet": "        yield* sqlTransaction\n          .withTransaction(\n            Effect.gen(function* () {\n              yield* accounts.deleteAllByUser(userId);",
+          "note": "Cascade is transactional since e940a12."
+        }
+      ],
+      "fixed_by_commit": "e940a12",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "gdpr-erasure-export",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "AccountHandlers now requires SqlTransaction.SqlTransaction (Account.ts:46) and wraps the cascade in withTransaction (e940a12), exactly as the recommended fix asked."
+    },
+    {
+      "id": "CSG-007",
+      "level": "low",
+      "category": "correctness",
+      "package": "server",
+      "title": "deleteUser revokes sessions via sentinel empty SessionId instead of revokeAll",
+      "issue_file": ".issues/low/CSG-007-compliance-soc2-gdpr-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 112,
+          "snippet": "              yield* sessions.revokeAll(userId);\n              yield* verification.deleteAllByUser(userId);",
+          "note": "Sentinel SessionId(\"\") replaced by revokeAll in ec065a7; verification tokens swept since 704cdd4 (BCR-003)."
+        }
+      ],
+      "fixed_by_commit": "ec065a7",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "gdpr-erasure-export",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The sentinel `revokeOthers(userId, SessionId(\"\"))` was replaced by `sessions.revokeAll(userId)` in ec065a7."
+    },
+    {
+      "id": "TRBS-008",
+      "level": "low",
+      "category": "api",
+      "package": "server",
+      "title": "deleteUser still uses the retired SessionId(\\\"\\\") revokeOthers trick instead of revokeAll",
+      "issue_file": ".issues/low/TRBS-008-token-revocation-blacklist-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 112,
+          "snippet": "              yield* sessions.revokeAll(userId);\n              yield* verification.deleteAllByUser(userId);",
+          "note": "Sentinel SessionId(\"\") replaced by revokeAll in ec065a7; verification tokens swept since 704cdd4 (BCR-003)."
+        }
+      ],
+      "fixed_by_commit": "ec065a7",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "gdpr-erasure-export",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "Same fix as CSG-007 (ec065a7)."
+    },
+    {
+      "id": "AGA-002",
+      "level": "medium",
+      "category": "architecture",
+      "package": "server",
+      "title": "No CORS or preflight handling exists and the safe default-deny posture is undocumented",
+      "issue_file": ".issues/medium/AGA-002-api-gateway-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/AuthHttp.ts",
+          "line": 25,
+          "snippet": "export const routes: typeof HttpApiBuilder.layer = HttpApiBuilder.layer;",
+          "note": "No CORS preset; grep for HttpMiddleware.cors / CORS / preflight across packages, spec, docs: 0 hits. Effect ships HttpRouter.cors (../effect/packages/effect/src/unstable/http/HttpRouter.ts:1165)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "CDS-008"
+      ],
+      "workstream": "cors-posture",
+      "fix": {
+        "summary": "Document the default-deny CORS posture, and ship a blessed CORS preset whose origin allowlist is the same value as CsrfConfig.allowedOrigins.",
+        "steps": [
+          "packages/server/src/AuthHttp.ts: add `cors`, a Layer built with `Layer.unwrap` over `CsrfConfig` that returns `HttpRouter.cors({ allowedOrigins: config.allowedOrigins, credentials: true, allowedMethods: [\"GET\",\"POST\",\"PATCH\",\"DELETE\"], allowedHeaders: [\"content-type\", Api.CSRF_HEADER_NAME, \"authorization\"], exposedHeaders: [Api.ROTATED_TOKEN_HEADER] })` (HttpRouter.ts:1165). With one source for origins, the edge policy and the CSRF site check cannot drift.",
+          "spec/behaviors/10-csrf.md: add a BEH (next free id) stating that the library ships no CORS by default (same-origin, default-deny), that AuthHttp.cors is the only supported way to open cross-origin access, and that opening CORS never relaxes CsrfProtection.",
+          "README: a cross-origin SPA recipe using AuthHttp.cors."
+        ],
+        "files": [
+          "packages/server/src/AuthHttp.ts",
+          "spec/behaviors/10-csrf.md",
+          "README.md"
+        ],
+        "tests": [
+          "packages/server/test/AuthHttp.test.ts (write first): 'preflight OPTIONS from an allowed origin: 204 with Access-Control-Allow-Origin = origin, Allow-Credentials true, Allow-Headers including x-csrf-token'; 'from a disallowed origin: no ACAO'; 'Access-Control-Expose-Headers includes set-auth-token'; 'with AuthHttp.cors installed, a cross-site POST without the CSRF pair is still 403'."
+        ],
+        "acceptance": [
+          "A cross-origin deployment works with one layer and the same origin list as CSRF.",
+          "The posture is documented in spec."
+        ],
+        "spec_refs": [
+          "BEH-EA-073",
+          "BEH-EA-074",
+          "BEH-EA-083"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "CSS-007",
+        "MNA-008"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "CDS-008",
+      "level": "info",
+      "category": "architecture",
+      "package": "server",
+      "title": "No CORS configuration or documented posture exists anywhere in the library",
+      "issue_file": ".issues/info/CDS-008-csrf-defense-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/AuthHttp.ts",
+          "line": 25,
+          "snippet": "export const routes: typeof HttpApiBuilder.layer = HttpApiBuilder.layer;",
+          "note": "No CORS preset; grep for HttpMiddleware.cors / CORS / preflight across packages, spec, docs: 0 hits. Effect ships HttpRouter.cors (../effect/packages/effect/src/unstable/http/HttpRouter.ts:1165)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "AGA-002",
+      "duplicates": [],
+      "workstream": "cors-posture",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "Same finding at info level. Its extra ask ('adopt CORS and CsrfProtection together') is AGA-002's last test."
+    },
+    {
+      "id": "ELC-007",
+      "level": "low",
+      "category": "architecture",
+      "package": "server",
+      "title": "Per-request session-resolution memoization lives in a module-level WeakMap with an ambient HttpServerRequest requirement",
+      "issue_file": ".issues/low/ELC-007-effect-layer-context-architect.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 123,
+          "snippet": "const sessionResolutionCache = new WeakMap<\n  HttpServerRequest.HttpServerRequest,\n  Ref.Ref<HashMap.HashMap<string, Effect.Effect<ResolvedSession, Api.Unauthenticated>>>\n>();",
+          "note": "Per-request cache keyed on the HttpServerRequest *wrapper* object, not request.source."
+        },
+        {
+          "path": "../effect/packages/effect/src/unstable/http/internal/preResponseHandler.ts",
+          "line": 6,
+          "snippet": "export const requestPreResponseHandlers = new WeakMap<object, PreResponseHandler>()\n\n/** @internal */\nexport const appendPreResponseHandlerUnsafe = (request: HttpServerRequest, handler: PreResponseHandler): void => {\n  const prev = requestPreResponseHandlers.get(request.source)",
+          "note": "Effect's own per-request state uses the same module-level WeakMap idiom, but keyed on `request.source` (stable across modify())."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "per-request-session-cache",
+      "fix": {
+        "summary": "Documentation only. The module-level WeakMap is Effect v4's own idiom (there is no FiberRef in v4), and the ambient HttpServerRequest requirement is already visible in resolveSession's R type.",
+        "steps": [
+          "In resolveSession's and resolvePrincipal's doc comments, state that `HttpServerRequest` is a hard requirement in R (a caller that does not provide it fails to type-check; nothing degrades silently), and that lifetime is tied to the underlying request object, as Effect's own pre-response handlers are.",
+          "Keying on `request.source` is done under TS-003/NHS-006."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts"
+        ],
+        "tests": [
+          "No new behavior test (doc change); TS-003/NHS-006 tests cover the cache."
+        ],
+        "acceptance": [
+          "The doc comments state the requirement and the lifetime model."
+        ],
+        "spec_refs": [
+          "BEH-EA-153"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "TS-003-tim-smart"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "Refuted parts: 'silently degrades to per-call' is wrong, because resolveSession's R includes HttpServerRequest, so omitting it is a type error. The FiberRef recommendation is impossible in Effect v4. The valid part (lifetime is GC-coupled to object identity) is addressed by keying on request.source."
+    },
+    {
+      "id": "NHS-006",
+      "level": "low",
+      "category": "architecture",
+      "package": "server",
+      "title": "Per-request session cache relies on framework-internal request object identity",
+      "issue_file": ".issues/low/NHS-006-node-http-server-integration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 123,
+          "snippet": "const sessionResolutionCache = new WeakMap<\n  HttpServerRequest.HttpServerRequest,\n  Ref.Ref<HashMap.HashMap<string, Effect.Effect<ResolvedSession, Api.Unauthenticated>>>\n>();",
+          "note": "Per-request cache keyed on the HttpServerRequest *wrapper* object, not request.source."
+        },
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 116,
+          "snippet": " * request by the router (confirmed via `effect`'s own `HttpRouter.ts`/\n * `HttpApiBuilder.ts`), and is mutated in place rather than replaced\n * (`@qadi/http`'s own `RequirePermission.ts` writes `request.payload`\n * directly) — so its identity is stable for a request's whole lifetime",
+          "note": "The stated invariant ('mutated in place rather than replaced') does not hold for prefixed routes — see HttpRouter.ts:249-252."
+        },
+        {
+          "path": "../effect/packages/effect/src/unstable/http/HttpRouter.ts",
+          "line": 249,
+          "snippet": "function sliceRequestUrl(request: HttpServerRequest.HttpServerRequest, prefix: string) {\n  const prefexLen = prefix.length\n  return request.modify({ url: request.url.length <= prefexLen ? \"/\" : request.url.slice(prefexLen) })\n}",
+          "note": "Prefixed routes get a NEW HttpServerRequest wrapper (modify keeps `this.source`, HttpServerRequest.ts:503-504) — code outside vs inside the route sees different identities."
+        },
+        {
+          "path": "../effect/packages/effect/src/unstable/http/internal/preResponseHandler.ts",
+          "line": 6,
+          "snippet": "export const requestPreResponseHandlers = new WeakMap<object, PreResponseHandler>()\n\n/** @internal */\nexport const appendPreResponseHandlerUnsafe = (request: HttpServerRequest, handler: PreResponseHandler): void => {\n  const prev = requestPreResponseHandlers.get(request.source)",
+          "note": "Effect's own per-request state uses the same module-level WeakMap idiom, but keyed on `request.source` (stable across modify())."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "per-request-session-cache",
+      "fix": {
+        "summary": "Key the per-request cache on `request.source`, not the HttpServerRequest wrapper, so re-wrapping (HttpRouter prefix mounts) cannot fork it. Fix the doc comment's false 'mutated in place, never replaced' invariant.",
+        "steps": [
+          "Covered by TS-003's step 1 (key on `request.source`). Rewrite the doc comment at Authentication.ts:96-122 to cite Effect's own `requestPreResponseHandlers` WeakMap (internal/preResponseHandler.ts:6), which uses the same pattern, and HttpRouter's `sliceRequestUrl` re-wrap as the reason for keying on `.source`."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts"
+        ],
+        "tests": [
+          "packages/server/test/Authentication.test.ts: 'resolveSession called with request and with request.modify({ url }) shares one verify' (counting Sessions double)."
+        ],
+        "acceptance": [
+          "The cache hits across wrapper re-creation for the same underlying request.",
+          "The doc comment matches the real invariant."
+        ],
+        "spec_refs": [
+          "BEH-EA-153"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "TS-003-tim-smart"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "Confidence is medium on real-world impact: a miss only happens when Path B and Path A see different wrappers, e.g. a global router middleware versus a prefixed route. On a miss, the second verify presents the pre-rotation secret and fails (SessionNotFound), which is a silent logout."
+    },
+    {
+      "id": "TS-003",
+      "level": "medium",
+      "category": "correctness",
+      "package": "server",
+      "title": "Per-request verify cache uses an unguarded module-level WeakMap get-or-create, so concurrent first access can orphan memoized verifications (and re-trigger secret rotation)",
+      "issue_file": ".issues/medium/TS-003-tim-smart.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 129,
+          "snippet": "const perRequestCache = (request: HttpServerRequest.HttpServerRequest) =>\n  Option.fromNullishOr(sessionResolutionCache.get(request)).pipe(\n    Option.match({\n      onSome: Effect.succeed,\n      onNone: () =>\n        Ref.make(HashMap.empty<string, Effect.Effect<ResolvedSession, Api.Unauthenticated>>()).pipe(\n          Effect.tap((ref) => Effect.sync(() => sessionResolutionCache.set(request, ref))),\n        ),",
+          "note": "get -> (yield) Ref.make -> (yield) set: not atomic; two fibers can each create and register a Ref, the second set wins."
+        },
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 166,
+          "snippet": "    const existing = HashMap.get(yield* Ref.get(cache), raw);\n    if (Option.isSome(existing)) {\n      return yield* existing.value;\n    }",
+          "note": "Read of the per-credential entry; the insert happens later at :194 (`yield* Ref.update(cache, HashMap.set(raw, memoized))`) after a yield — check-then-set gap."
+        },
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 184,
+          "snippet": "    const memoized = yield* Effect.cached(\n      raw === \"\"\n        ? Effect.fail(new Api.Unauthenticated())\n        : sessions\n            .verify(Redacted.make(raw))\n            .pipe(\n              Effect.catchTag(\"PlatformError\", Effect.die),\n              Effect.mapError(() => new Api.Unauthenticated()),",
+          "note": "PlatformError now dies (NHS-002 fixed), but SessionNotFound/SessionExpired are mapped to Unauthenticated with no log, span annotation, metric or event."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "ECF-005"
+      ],
+      "workstream": "per-request-session-cache",
+      "fix": {
+        "summary": "Make per-request memoization single-flight by construction and key it on `request.source`, as Effect's own per-request state is keyed.",
+        "steps": [
+          "Replace `sessionResolutionCache` with `WeakMap<object, Map<string, Deferred.Deferred<ResolvedSession, Api.Unauthenticated>>>`, keyed on `request.source` (typed `object`, HttpServerRequest.ts:77).",
+          "Do get-or-create for both the per-request Map and the per-credential Deferred in ONE `Effect.sync` block (JS is single-threaded, so this is atomic). Create the Deferred with `Deferred.makeUnsafe()` and return `{ deferred, owner }`.",
+          "The owner runs `sessions.verify(...)` with the existing catchTag(PlatformError, die) + mapError, and completes the Deferred via `Deferred.into` (../effect/packages/effect/src/Deferred.ts:909) inside `Effect.uninterruptibleMask`/`onExit`. If the owner is interrupted before completing, delete the entry so later callers retry instead of hanging. Non-owners `Deferred.await`.",
+          "Remove the Ref/HashMap/Effect.cached machinery. No module-level mutable state remains beyond the WeakMap."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts"
+        ],
+        "tests": [
+          "packages/server/test/Authentication.test.ts (write first): 'two concurrent resolveSession calls for one request+credential call Sessions.verify exactly once' (counting Sessions double, `Effect.all([...], { concurrency: \"unbounded\" })`).",
+          "'an interrupted first resolver does not wedge a second caller' (TestClock + Fiber.interrupt)."
+        ],
+        "acceptance": [
+          "Sessions.verify runs at most once per (request.source, credential) under any interleaving.",
+          "No hang on interruption.",
+          "Existing Authentication/SubjectExtractor tests pass unchanged."
+        ],
+        "spec_refs": [
+          "BEH-EA-052",
+          "BEH-EA-153"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "Low practical exposure today, because Path A and Path B run sequentially, but the race re-triggers exactly the rotation bug ticket 03 exists to prevent."
+    },
+    {
+      "id": "ECF-005",
+      "level": "low",
+      "category": "correctness",
+      "package": "server",
+      "title": "Per-request verify memoization has a check-then-set gap; single-flight holds only per constructed wrapper",
+      "issue_file": ".issues/low/ECF-005-effect-concurrency-fiber-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 166,
+          "snippet": "    const existing = HashMap.get(yield* Ref.get(cache), raw);\n    if (Option.isSome(existing)) {\n      return yield* existing.value;\n    }",
+          "note": "Read of the per-credential entry; the insert happens later at :194 (`yield* Ref.update(cache, HashMap.set(raw, memoized))`) after a yield — check-then-set gap."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "TS-003-tim-smart",
+      "duplicates": [],
+      "workstream": "per-request-session-cache",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The same non-atomic get-or-create, one level down (the per-credential Effect.cached wrapper). TS-003's single Effect.sync get-or-create of a Deferred fixes both levels."
+    },
+    {
+      "id": "PCS-006",
+      "level": "low",
+      "category": "correctness",
+      "package": "server",
+      "title": "Per-request session memoization extends a verify outcome across the request's lifetime",
+      "issue_file": ".issues/low/PCS-006-permission-caching-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 184,
+          "snippet": "    const memoized = yield* Effect.cached(\n      raw === \"\"\n        ? Effect.fail(new Api.Unauthenticated())\n        : sessions\n            .verify(Redacted.make(raw))\n            .pipe(\n              Effect.catchTag(\"PlatformError\", Effect.die),\n              Effect.mapError(() => new Api.Unauthenticated()),",
+          "note": "PlatformError now dies (NHS-002 fixed), but SessionNotFound/SessionExpired are mapped to Unauthenticated with no log, span annotation, metric or event."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "per-request-session-cache",
+      "fix": {
+        "summary": "Document the bounded mid-request revocation window as a deliberate staleness budget.",
+        "steps": [
+          "Add to resolveSession's doc comment that a session revoked mid-request keeps resolving for the remainder of that request (bounded by request lifetime); streaming or long uploads inherit this window. Invalidation on revoke-of-current is deliberately not done.",
+          "Add a sentence to spec/behaviors/09-authentication-middleware.md under BEH-EA-070."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts",
+          "spec/behaviors/09-authentication-middleware.md"
+        ],
+        "tests": [
+          "None (documentation)."
+        ],
+        "acceptance": [
+          "The staleness budget is stated at the call site and in the spec."
+        ],
+        "spec_refs": [
+          "BEH-EA-070"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "JR-004",
+      "level": "medium",
+      "category": "architecture",
+      "package": "server",
+      "title": "Role-separation seam: the server mints aud-scoped JWTs it will never itself accept; bearer transport is opaque session tokens only",
+      "issue_file": ".issues/medium/JR-004-justin-richer.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 184,
+          "snippet": "    const memoized = yield* Effect.cached(\n      raw === \"\"\n        ? Effect.fail(new Api.Unauthenticated())\n        : sessions\n            .verify(Redacted.make(raw))\n            .pipe(\n              Effect.catchTag(\"PlatformError\", Effect.die),\n              Effect.mapError(() => new Api.Unauthenticated()),",
+          "note": "PlatformError now dies (NHS-002 fixed), but SessionNotFound/SessionExpired are mapped to Unauthenticated with no log, span annotation, metric or event."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "MAPS-001",
+      "duplicates": [],
+      "workstream": "bearer-credential-extensibility",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The same one-way trust gap (the server mints JWTs it never accepts). Decision 33 covers both the opt-in validation scheme and the audience contract documentation that JR-004 asks for."
+    },
+    {
+      "id": "EOTS-003",
+      "level": "high",
+      "category": "security",
+      "package": "server",
+      "title": "Failed authentication attempts are completely unobservable",
+      "issue_file": ".issues/high/EOTS-003-effect-observability-tracing-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 184,
+          "snippet": "    const memoized = yield* Effect.cached(\n      raw === \"\"\n        ? Effect.fail(new Api.Unauthenticated())\n        : sessions\n            .verify(Redacted.make(raw))\n            .pipe(\n              Effect.catchTag(\"PlatformError\", Effect.die),\n              Effect.mapError(() => new Api.Unauthenticated()),",
+          "note": "PlatformError now dies (NHS-002 fixed), but SessionNotFound/SessionExpired are mapped to Unauthenticated with no log, span annotation, metric or event."
+        },
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 56,
+          "snippet": "export interface UserSignInFailedEvent {\n  readonly _tag: \"auth.user.signInFailed\";\n  readonly strategy: string;\n  readonly reason: \"invalidCredentials\" | \"emailNotVerified\";\n}",
+          "note": "Password half fixed by f5eb570 (ALF-003): published at packages/password/src/Password.ts:828 and :843."
+        }
+      ],
+      "fixed_by_commit": "f5eb570",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "authn-failure-observability",
+      "fix": {
+        "summary": "The password half is fixed (f5eb570). Make session-verify failures observable in resolveSession without leaking credentials or session ids.",
+        "steps": [
+          "In resolveSession's owner branch, before `mapError`, add `Effect.tapError((e) => Effect.logDebug(\"awthaq: session verification failed\").pipe(Effect.annotateLogs({ \"auth.event\": \"session.verify.failed\", \"auth.outcome\": \"failure\", \"auth.failure.reason\": e._tag, \"auth.scheme\": scheme })))`. Never log the credential or the session id: EOTS-004 (slice 01) treats the id as the public half of the bearer credential.",
+          "Skip logging for the empty-credential case (raw === \"\"), which is ordinary anonymous traffic.",
+          "When MW-001's `packages/core/src/Observability.ts` lands, increment `awthaq_session_verify_failed_total` tagged by reason (expired / idle-expired / not-found), using the decision 27 field vocabulary, and annotate the current span with `auth.outcome=failure`.",
+          "Do not add a per-request AuthEvent for verify failures (too noisy). Reuse is already evented as auth.session.reuse."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts"
+        ],
+        "tests": [
+          "packages/server/test/Authentication.test.ts (write first): 'an unknown session cookie logs session.verify.failed with reason SessionNotFound and no credential material' (a test Logger capturing entries; assert that neither the raw token nor the id appears).",
+          "'no credential at all logs nothing'."
+        ],
+        "acceptance": [
+          "Every failed non-empty verify produces one structured debug log (and, once MW-001 lands, a metric).",
+          "No Redacted value or session id reaches logs (the BEH-EA-199 interceptor, EOTS-002)."
+        ],
+        "spec_refs": [
+          "BEH-EA-067",
+          "BEH-EA-199"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "MW-001",
+        "TS-003-tim-smart"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "The auth.user.signInFailed event (f5eb570, ALF-003) closed the password half. The session-verify half at Authentication.ts:184-192 is still silent."
+    },
+    {
+      "id": "PIL-005",
+      "level": "medium",
+      "category": "dx",
+      "package": "server",
+      "title": "Path-B-only routes discard secret rotation, forcing hourly re-logins",
+      "issue_file": ".issues/medium/PIL-005-pilcrow.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 202,
+          "snippet": " * BEH-EA-153 requires exactly that reuse. Discards `rotated`: a caller with\n * no response to deliver a rotated token through has nowhere to put it.",
+          "note": "resolvePrincipal (Path B entry point) drops the rotated secret."
+        },
+        {
+          "path": "packages/qadi/src/SubjectExtractor.ts",
+          "line": 80,
+          "snippet": "          const principal = yield* Authentication.resolvePrincipal(\n            sessions,\n            principalResolver,\n            credential,\n          ).pipe(",
+          "note": "Path B calls resolvePrincipal, which discards `rotated`; nothing on this path writes Set-Cookie/set-auth-token."
+        },
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 273,
+          "snippet": "              Effect.provideService(httpEffect, Api.CurrentPrincipal, principal).pipe(\n                Effect.flatMap((response) =>",
+          "note": "deliverRotation (:286) runs only inside flatMap on a *successful* handler response — a handler that fails with a typed error (HttpApiBuilder wraps it as HandlerError) skips delivery, so the rotated secret is lost and the client is logged out."
+        },
+        {
+          "path": "../effect/packages/effect/src/unstable/httpapi/HttpApiBuilder.ts",
+          "line": 953,
+          "snippet": "    handler = Effect.mapError(handler, (error) => new HandlerError(error))",
+          "note": "Handler failures are wrapped and re-failed (:963-966) — the security middleware's post-success flatMap never sees them."
+        },
+        {
+          "path": "packages/core/src/Sessions.ts",
+          "line": 192,
+          "snippet": "   * secret's hash is overwritten in the same atomic write, so it stops\n   * verifying immediately — no grace window. A concurrent second `verify`",
+          "note": "No grace window — a settled decision (.scratch/upstream-hardening/issues/01-session-token-rotation.md:79 'Old secret — immediate invalidation, no grace window.'). Grace-window fix options are ruled out."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "session-rotation-delivery",
+      "fix": {
+        "summary": "Deliver rotated secrets from inside the memoized verify via `HttpEffect.appendPreResponseHandler`, so every path delivers: Path A, Path B, and responses whose handler failed with a typed error.",
+        "steps": [
+          "Give resolveSession/resolvePrincipal a `scheme: \"cookie\" | \"bearer\"` argument. qadi's `extractCredential` (packages/qadi/src/SubjectExtractor.ts:37-50) returns `{ scheme, credential }`.",
+          "In the owner branch of the memoized verify (TS-003), when `rotated` is Some, register exactly one `HttpEffect.appendPreResponseHandler`. For cookie: `HttpServerResponse.setCookie(res, Api.SessionCookie.key, token, SESSION_COOKIE_ATTRIBUTES)`. For bearer: `setHeader(res, Api.ROTATED_TOKEN_HEADER, token)` plus `Cache-Control: no-store` (MAPS-008). Recover a cookie-encoding failure by logging a warning and returning the undecorated response (never orDie, which closes NHS-007).",
+          "Delete `deliverRotation` and its calls from AuthenticationLive/OptionalAuthenticationLive (Authentication.ts:224-241, :286, :343). PostAuthResponseHook.decorate stays on the success path.",
+          "Do NOT add a grace window or a verify-without-rotation mode. Ticket 01 ('no grace window') and decision 16 ('Sessions.verify itself is not touched — no rotation skip-mode') already settled this.",
+          "spec: add a rotation-delivery requirement under BEH-EA-052 (delivery happens on every response to a request whose verify rotated, including error responses and Path B routes). Cross-reference it from BEH-EA-153."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts",
+          "packages/qadi/src/SubjectExtractor.ts",
+          "packages/api/src/Api.ts (ROTATED_TOKEN_HEADER)",
+          "spec/behaviors/07-sessions.md",
+          "spec/behaviors/20-qadi-bridge-path-b.md"
+        ],
+        "tests": [
+          "packages/qadi/test/SubjectExtractor.test.ts (write first): 'Path-B-only route: a verify that rotates (TestClock past touchEvery) sets __Host-session to the rotated token on the response'.",
+          "packages/server/test/Authentication.test.ts: 'a handler failing with a typed error after a rotating verify still carries Set-Cookie with the rotated token' (this currently fails: the rotation is lost via Authentication.ts:273-286).",
+          "'Path A + Path B on one request emit exactly one Set-Cookie for the rotation'.",
+          "'bearer rotation sets set-auth-token and Cache-Control: no-store'."
+        ],
+        "acceptance": [
+          "No request whose verify rotated ever returns without delivering the new secret, whatever the route style or handler outcome.",
+          "Exactly one delivery per rotation."
+        ],
+        "spec_refs": [
+          "BEH-EA-052",
+          "BEH-EA-153",
+          "BEH-EA-066"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "TS-003-tim-smart",
+        "CSS-007"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "Validation also found a second, unreported loss path. Because deliverRotation is chained with flatMap on the handler's success (Authentication.ts:273-286), and HttpApiBuilder wraps handler failures as HandlerError (HttpApiBuilder.ts:953, :963-966), a typed-error response at a touch boundary (e.g. POST /session/revoke answering 404) drops the rotated cookie and silently logs the user out."
+    },
+    {
+      "id": "CTA-006",
+      "level": "medium",
+      "category": "correctness",
+      "package": "server",
+      "title": "Token rotation reaches native clients only as a response header no client captures",
+      "issue_file": ".issues/medium/CTA-006-cli-tool-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 233,
+          "snippet": "  return scheme === \"cookie\"\n    ? HttpServerResponse.setCookie(\n        response,\n        Sessions.SESSION_COOKIE_NAME,\n        token,\n        Sessions.SESSION_COOKIE_ATTRIBUTES,\n      ).pipe(Effect.orDie)\n    : Effect.succeed(HttpServerResponse.setHeader(response, \"set-auth-token\", token));",
+          "note": "Rotation delivery: cookie via Set-Cookie (orDie), bearer via custom set-auth-token header; no Cache-Control, no shared constant for the header name."
+        },
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 150,
+          "snippet": "  /** Always overwrites — the result of a real sign-in/sign-out/refresh. */\n  readonly set: (session: Session | null) => Effect.Effect<void>;",
+          "note": "Client has no bearer-token store and no response hook; `set-auth-token` appears only in packages/server/src/Authentication.ts (grep across packages/features/spec/docs)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "MNA-005",
+      "duplicates": [],
+      "workstream": "session-rotation-delivery",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "Same gap (no client captures set-auth-token). The CLI-specific re-auth UX and exit-code asks belong with CTA-001/CTA-003 (slice 09 / spec). The CLI package is still a placeholder."
+    },
+    {
+      "id": "NHS-007",
+      "level": "low",
+      "category": "correctness",
+      "package": "server",
+      "title": "Rotation delivery can defect an otherwise-successful authenticated response",
+      "issue_file": ".issues/low/NHS-007-node-http-server-integration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 233,
+          "snippet": "  return scheme === \"cookie\"\n    ? HttpServerResponse.setCookie(\n        response,\n        Sessions.SESSION_COOKIE_NAME,\n        token,\n        Sessions.SESSION_COOKIE_ATTRIBUTES,\n      ).pipe(Effect.orDie)\n    : Effect.succeed(HttpServerResponse.setHeader(response, \"set-auth-token\", token));",
+          "note": "Rotation delivery: cookie via Set-Cookie (orDie), bearer via custom set-auth-token header; no Cache-Control, no shared constant for the header name."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "session-rotation-delivery",
+      "fix": {
+        "summary": "Folded into PIL-005: rotation delivery moves into a pre-response handler that recovers encoding failures (log and continue) instead of orDie. Header-stripping guidance ships with MNA-005's docs.",
+        "steps": [
+          "No separate change beyond PIL-005 step 2 (non-fatal recovery) and MNA-005 step 5 (proxy guidance)."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts"
+        ],
+        "tests": [
+          "Covered by PIL-005's tests; add 'a failing cookie encode on rotation still returns the handler's response (warning logged)' by injecting an invalid attribute in a unit test of the pre-response handler."
+        ],
+        "acceptance": [
+          "Rotation delivery can never turn a successful response into a 500."
+        ],
+        "spec_refs": [
+          "BEH-EA-052"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "PIL-005"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "Overstated: the orDie is practically unreachable, because the name and attributes are fixed constants and the token is `${uuid}.${hex}`, so Cookies validation cannot fail. The proxy-stripping concern is valid and documented under MNA-005."
+    },
+    {
+      "id": "MNA-005",
+      "level": "medium",
+      "category": "api",
+      "package": "server",
+      "title": "Bearer rotation rides an unread set-auth-token header; native sessions silently expire within an hour",
+      "issue_file": ".issues/medium/MNA-005-mobile-native-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 233,
+          "snippet": "  return scheme === \"cookie\"\n    ? HttpServerResponse.setCookie(\n        response,\n        Sessions.SESSION_COOKIE_NAME,\n        token,\n        Sessions.SESSION_COOKIE_ATTRIBUTES,\n      ).pipe(Effect.orDie)\n    : Effect.succeed(HttpServerResponse.setHeader(response, \"set-auth-token\", token));",
+          "note": "Rotation delivery: cookie via Set-Cookie (orDie), bearer via custom set-auth-token header; no Cache-Control, no shared constant for the header name."
+        },
+        {
+          "path": "packages/client/src/AuthClient.ts",
+          "line": 150,
+          "snippet": "  /** Always overwrites — the result of a real sign-in/sign-out/refresh. */\n  readonly set: (session: Session | null) => Effect.Effect<void>;",
+          "note": "Client has no bearer-token store and no response hook; `set-auth-token` appears only in packages/server/src/Authentication.ts (grep across packages/features/spec/docs)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "CTA-006",
+        "PIL-009"
+      ],
+      "workstream": "session-rotation-delivery",
+      "fix": {
+        "summary": "Ship a first-class bearer-client contract: a shared header constant, a client-side token store, and a transform that attaches the bearer and captures rotations on every response.",
+        "steps": [
+          "packages/api/src/Api.ts: `export const ROTATED_TOKEN_HEADER = \"set-auth-token\";` (the server uses it; see PIL-005).",
+          "packages/client/src/AuthClient.ts: add a `BearerTokenStore` service `{ get: Effect<Option<Redacted<string>>>; set: (token: Redacted<string>) => Effect<void>; clear: Effect<void> }`, with a `BearerTokenStoreMemory` layer. Platform storage (Keychain/Keystore) remains the app's responsibility and must be documented.",
+          "Add `bearerTransformClient`, applied via `HttpApiClient.make(api, { transformClient })`: `HttpClient.mapRequestEffect` adds `Authorization: Bearer <token>` from the store, and `HttpClient.tap` on every response persists `ROTATED_TOKEN_HEADER` when present.",
+          "Make an idle-expired or revoked bearer surface as typed `Unauthenticated` (it already does), and document 're-authenticate on Unauthenticated' as the client contract. The CLI-specific UX lives in CTA-001 (slice 09).",
+          "Document in packages/client/README.md and the native recipe (MNA-009 docs, spec slice): set-auth-token must be preserved by proxies, and cross-origin deployments must expose it (AGA-002's CORS preset does this)."
+        ],
+        "files": [
+          "packages/api/src/Api.ts",
+          "packages/client/src/AuthClient.ts",
+          "packages/client/src/index.ts",
+          "packages/client/README.md"
+        ],
+        "tests": [
+          "packages/client/test/AuthClient.test.ts (write first): 'bearerTransformClient persists set-auth-token from a response and sends it on the next request' (fake HttpClient layer).",
+          "'a response without the header leaves the stored token unchanged'."
+        ],
+        "acceptance": [
+          "A bearer client that uses the shipped transform survives unlimited touchEvery rotations with no code of its own.",
+          "The header name has one source of truth."
+        ],
+        "spec_refs": [
+          "BEH-EA-066",
+          "BEH-EA-052",
+          "BEH-EA-174"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "PIL-005",
+        "CSS-007"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "MAPS-008",
+      "level": "low",
+      "category": "security",
+      "package": "server",
+      "title": "Bearer rotation delivers the raw long-lived session secret via a response header",
+      "issue_file": ".issues/low/MAPS-008-microservices-auth-propagation-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 233,
+          "snippet": "  return scheme === \"cookie\"\n    ? HttpServerResponse.setCookie(\n        response,\n        Sessions.SESSION_COOKIE_NAME,\n        token,\n        Sessions.SESSION_COOKIE_ATTRIBUTES,\n      ).pipe(Effect.orDie)\n    : Effect.succeed(HttpServerResponse.setHeader(response, \"set-auth-token\", token));",
+          "note": "Rotation delivery: cookie via Set-Cookie (orDie), bearer via custom set-auth-token header; no Cache-Control, no shared constant for the header name."
+        },
+        {
+          "path": "../effect/packages/effect/src/unstable/http/Headers.ts",
+          "line": 416,
+          "snippet": "  defaultValue: () => [\n    \"authorization\",\n    \"cookie\",\n    \"set-cookie\",\n    \"x-api-key\"\n  ]",
+          "note": "Effect's default redacted header names (used by HttpMiddleware.logger/tracer) do not include set-auth-token — the rotated long-lived secret would be logged verbatim by any request logger."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "session-rotation-delivery",
+      "fix": {
+        "summary": "Reduce the exposure of the rotated long-lived secret in transit and in logs. Header delivery itself stays, as ticket 01 decided.",
+        "steps": [
+          "Every response carrying a rotation (Set-Cookie or set-auth-token) also carries `Cache-Control: no-store` (PIL-005 step 2).",
+          "When MW-001's `AuthHttp.requestLogger`/`AuthHttp.tracer` re-exports land, provide `Headers.CurrentRedactedNames` with the Effect defaults plus `set-auth-token` and `x-jwt-token`, and document that a host-supplied logger must do the same.",
+          "Document the header-logging hazard in packages/server/README.md and the native recipe."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts",
+          "packages/server/src/AuthHttp.ts",
+          "packages/server/README.md"
+        ],
+        "tests": [
+          "packages/server/test/Authentication.test.ts: 'bearer rotation response has Cache-Control: no-store'.",
+          "packages/server/test/AuthHttp.test.ts: 'AuthHttp.requestLogger redacts set-auth-token' (capture Logger)."
+        ],
+        "acceptance": [
+          "No shipped logger or trace path emits the rotated secret.",
+          "Rotated responses are non-cacheable."
+        ],
+        "spec_refs": [
+          "BEH-EA-052",
+          "BEH-EA-199"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "PIL-005",
+        "MW-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "PIL-009",
+      "level": "info",
+      "category": "api",
+      "package": "server",
+      "title": "Bearer rotation has no catch-up path for clients that miss the header",
+      "issue_file": ".issues/info/PIL-009-pilcrow.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 233,
+          "snippet": "  return scheme === \"cookie\"\n    ? HttpServerResponse.setCookie(\n        response,\n        Sessions.SESSION_COOKIE_NAME,\n        token,\n        Sessions.SESSION_COOKIE_ATTRIBUTES,\n      ).pipe(Effect.orDie)\n    : Effect.succeed(HttpServerResponse.setHeader(response, \"set-auth-token\", token));",
+          "note": "Rotation delivery: cookie via Set-Cookie (orDie), bearer via custom set-auth-token header; no Cache-Control, no shared constant for the header name."
+        },
+        {
+          "path": "packages/core/src/Sessions.ts",
+          "line": 192,
+          "snippet": "   * secret's hash is overwritten in the same atomic write, so it stops\n   * verifying immediately — no grace window. A concurrent second `verify`",
+          "note": "No grace window — a settled decision (.scratch/upstream-hardening/issues/01-session-token-rotation.md:79 'Old secret — immediate invalidation, no grace window.'). Grace-window fix options are ruled out."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "MNA-005",
+      "duplicates": [],
+      "workstream": "session-rotation-delivery",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "Its documentation option is covered by MNA-005's docs step. Its grace-window option is ruled out by upstream-hardening ticket 01 ('no grace window'), which must not be re-litigated."
+    },
+    {
+      "id": "AGA-006",
+      "level": "info",
+      "category": "architecture",
+      "package": "server",
+      "title": "No trusted-header identity seam exists — correctly so for this architecture",
+      "issue_file": ".issues/info/AGA-006-api-gateway-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "WONTFIX-CANDIDATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 299,
+          "snippet": "    const handle: HttpApiMiddleware.HttpApiMiddlewareSecurity<\n      { readonly cookie: typeof Api.SessionCookie; readonly bearer: typeof Api.BearerToken },\n      Api.CurrentPrincipal,\n      typeof Api.Unauthenticated,\n      never\n    >[\"cookie\"] = (httpEffect, { credential }) => authenticate(\"cookie\", httpEffect, credential);\n    const bearer: typeof handle = (httpEffect, { credential }) =>\n      authenticate(\"bearer\", httpEffect, credential);",
+          "note": "Both schemes funnel into authenticate -> resolveSession -> Sessions.verify (opaque id.secret only); no BearerCredentialResolver seam exists."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "none",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "wontfix",
+      "notes": "The finding endorses the current posture: no trusted-header identity seam. Its recommended fix is 'Keep the seam closed'. Nothing to action. Any future gateway forwarding must use the signed-token route (MAPS-001/MAPS-004)."
+    },
+    {
+      "id": "MAPS-001",
+      "level": "high",
+      "category": "architecture",
+      "package": "server",
+      "title": "Propagated JWTs cannot re-enter the awthaq boundary - bearer resolves only opaque session tokens",
+      "issue_file": ".issues/high/MAPS-001-microservices-auth-propagation-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 299,
+          "snippet": "    const handle: HttpApiMiddleware.HttpApiMiddlewareSecurity<\n      { readonly cookie: typeof Api.SessionCookie; readonly bearer: typeof Api.BearerToken },\n      Api.CurrentPrincipal,\n      typeof Api.Unauthenticated,\n      never\n    >[\"cookie\"] = (httpEffect, { credential }) => authenticate(\"cookie\", httpEffect, credential);\n    const bearer: typeof handle = (httpEffect, { credential }) =>\n      authenticate(\"bearer\", httpEffect, credential);",
+          "note": "Both schemes funnel into authenticate -> resolveSession -> Sessions.verify (opaque id.secret only); no BearerCredentialResolver seam exists."
+        },
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 184,
+          "snippet": "    const memoized = yield* Effect.cached(\n      raw === \"\"\n        ? Effect.fail(new Api.Unauthenticated())\n        : sessions\n            .verify(Redacted.make(raw))\n            .pipe(\n              Effect.catchTag(\"PlatformError\", Effect.die),\n              Effect.mapError(() => new Api.Unauthenticated()),",
+          "note": "PlatformError now dies (NHS-002 fixed), but SessionNotFound/SessionExpired are mapped to Unauthenticated with no log, span annotation, metric or event."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "JR-004",
+        "AGA-003",
+        "VB-008"
+      ],
+      "workstream": "bearer-credential-extensibility",
+      "fix": {
+        "summary": "Implement decision 33 (stateless JWT-as-bearer): an optional `BearerCredentialResolver` seam in Authentication, opted into by @awthaq/jwt via JwtConfig.acceptAsBearer, with audience scoping for downstream-only tokens.",
+        "steps": [
+          "packages/server/src/Authentication.ts: add `BearerCredentialResolverShape { resolve: (credential) => Effect<Api.Principal, Api.Unauthenticated> }` and `BearerCredentialResolver = Context.Reference(... { defaultValue: () => ({ resolve: () => Effect.fail(new Api.Unauthenticated()) }) })`, as a sibling of PostAuthResponseHook. Because it is a Reference, AuthenticationLive's R is unchanged.",
+          "In both AuthenticationLive and OptionalAuthenticationLive, the `bearer` handler routes on shape: `Redacted.value(credential).split(\".\").length === 3` goes to `BearerCredentialResolver.resolve` (resolved per request, like PostAuthResponseHook), anything else to resolveSession. The JWT branch skips rotation delivery but still runs `PostAuthResponseHook.decorate`. The cookie scheme is unchanged. (If MAPS-004's registry is decided, implement this seam as that registry, with JWT as the first contributor.)",
+          "packages/jwt/src/Jwt.ts: add `acceptAsBearer: boolean` (default false) to JwtConfig. Add `BearerCredentialResolverLive` (jwt.verify, then claimsToPrincipal, the inverse of principalClaims: sub -> PrincipalRef, sid -> sessionId, act -> actingAs), wired only when acceptAsBearer is set. Use bare `jwt.verify`, not verifyLive (the revocation lag is documented).",
+          "Add an optional `audience?: string` to `signJWT` options, so downstream-only propagation tokens are rejected at the origin by the existing aud check.",
+          "packages/jwt/README.md: document acceptAsBearer and its revocation-lag bound, the `Sessions.layerMemory + acceptAsBearer` stateless recipe (NAM-001), `signJWT({ audience })` for non-reentrant propagation tokens, and the rule that by default minted tokens are never accepted by the issuing API. This closes the documentation asks of JR-004, VB-008 and AGA-003.",
+          "Flag spec/models/08-jwt-bearer.md drift for the spec slice (MAPS-009/VB-007); do not silently rewrite it."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts",
+          "packages/jwt/src/Jwt.ts",
+          "packages/jwt/README.md",
+          "spec/behaviors/09-authentication-middleware.md"
+        ],
+        "tests": [
+          "packages/server/test/Authentication.test.ts (write first): 'BEH-EA-066: a 3-segment bearer is routed to BearerCredentialResolver; the default resolver fails Unauthenticated'; 'an overriding resolver's Principal becomes CurrentPrincipal'; 'an opaque id.secret bearer still goes through Sessions.verify'.",
+          "packages/jwt/test/AuthHttp.test.ts: 'acceptAsBearer=true: a minted JWT authenticates GET /auth/session'; 'acceptAsBearer=false (default): the same JWT answers 401'; 'a token minted with signJWT({ audience: \"other\" }) answers 401 even with acceptAsBearer'."
+        ],
+        "acceptance": [
+          "With acceptAsBearer on, a JWT minted by /jwt/token authenticates against the issuing API without a session-store round trip.",
+          "Default behavior is unchanged (a JWT bearer answers 401).",
+          "Downstream-audience tokens never re-enter.",
+          "AuthenticationLive's R type is unchanged."
+        ],
+        "spec_refs": [
+          "BEH-EA-066",
+          "BEH-EA-065",
+          "BEH-EA-072"
+        ],
+        "effort": "L"
+      },
+      "depends_on": [
+        "TS-003-tim-smart",
+        "PIL-005"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "The decision is already made (.scratch/resolve-ready-for-human-findings/issues/33-stateless-jwt-session-strategy.md); nothing is implemented at HEAD (no BearerCredentialResolver in packages/). The depends_on entries are for sequencing only: TS-003/PIL-005 restructure the same resolveSession/authenticate code."
+    },
+    {
+      "id": "AGA-003",
+      "level": "medium",
+      "category": "architecture",
+      "package": "server",
+      "title": "Authentication cannot actually be offloaded: the origin rejects the only edge-verifiable credential it mints",
+      "issue_file": ".issues/medium/AGA-003-api-gateway-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 299,
+          "snippet": "    const handle: HttpApiMiddleware.HttpApiMiddlewareSecurity<\n      { readonly cookie: typeof Api.SessionCookie; readonly bearer: typeof Api.BearerToken },\n      Api.CurrentPrincipal,\n      typeof Api.Unauthenticated,\n      never\n    >[\"cookie\"] = (httpEffect, { credential }) => authenticate(\"cookie\", httpEffect, credential);\n    const bearer: typeof handle = (httpEffect, { credential }) =>\n      authenticate(\"bearer\", httpEffect, credential);",
+          "note": "Both schemes funnel into authenticate -> resolveSession -> Sessions.verify (opaque id.secret only); no BearerCredentialResolver seam exists."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "MAPS-001",
+      "duplicates": [],
+      "workstream": "bearer-credential-extensibility",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The same root cause as MAPS-001. Decision 33 picked the 'opt-in JWT-validation scheme with its own audience' branch of AGA-003's recommendation, so an RFC 7662 introspection endpoint is not planned."
+    },
+    {
+      "id": "CDS-005",
+      "level": "medium",
+      "category": "security",
+      "package": "server",
+      "title": "siteCheck passes same-site and header-less requests — safe only while the double-submit leg actually runs",
+      "issue_file": ".issues/medium/CDS-005-csrf-defense-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Csrf.ts",
+          "line": 122,
+          "snippet": "    const secFetchSite = Headers.get(headers, \"sec-fetch-site\");\n    if (Option.isSome(secFetchSite)) {\n      return secFetchSite.value !== \"cross-site\";\n    }",
+          "note": "Unchanged, but the double-submit leg now runs on every mutating core/plugin group (409334e), which is the gating fix the finding names."
+        },
+        {
+          "path": "packages/api/src/Session.ts",
+          "line": 59,
+          "snippet": "  // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `CsrfProtection`\n  // declared last (outermost, runs first — see `AuthorizedSubject.ts`'s\n  // header on declaration order) so a forged request is rejected before\n  // `Authentication` does any credential work.\n  .middleware(Authentication)\n  .middleware(CsrfProtection);",
+          "note": "Commit 409334e attached CsrfProtection to SessionGroup (and AccountGroup, Admin, Organization, Passkey*, Password groups)."
+        }
+      ],
+      "fixed_by_commit": "409334e",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "csrf-hardening",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The finding's own recommended fix: 'Treat CDS-001 as the gating fix; once attached, the same-site acceptance is defensible'. CDS-001 was resolved by 409334e, which attached CsrfProtection to every mutating group, so the double-submit leg now backs siteCheck. The optional subdomain-trust documentation note can ride MNA-008's Csrf.ts header update."
+    },
+    {
+      "id": "MNA-008",
+      "level": "low",
+      "category": "security",
+      "package": "server",
+      "title": "__Host-csrf cookie set without Secure - same prefix violation class, currently latent",
+      "issue_file": ".issues/low/MNA-008-mobile-native-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Csrf.ts",
+          "line": 153,
+          "snippet": "        if (!cookieIsValid) {\n          const fresh = yield* mint(crypto, config.secret).pipe(Effect.orDie);\n          yield* HttpApiBuilder.securitySetCookie(Api.CsrfCookie, fresh, {\n            httpOnly: false,\n            sameSite: \"strict\",\n            path: \"/\",\n          });\n        }",
+          "note": "No `secure` key passed — securitySetCookie's default `secure: true` applies."
+        },
+        {
+          "path": "../effect/packages/effect/src/unstable/httpapi/HttpApiBuilder.ts",
+          "line": 599,
+          "snippet": "  HttpEffect.appendPreResponseHandler((_req, response) =>\n    Effect.orDie(\n      Response.setCookie(response, self.key, stringOrRedacted(value), {\n        secure: true,\n        httpOnly: true,\n        ...options\n      })",
+          "note": "securitySetCookie defaults secure: true; Csrf.ts passes no `secure` key, so __Host-csrf IS emitted with Secure."
+        },
+        {
+          "path": "packages/server/src/Csrf.ts",
+          "line": 162,
+          "snippet": "        if (!UNSAFE_METHODS.has(request.method)) {\n          return yield* httpEffect;\n        }\n\n        const siteOk = yield* siteCheck(request.headers, config.allowedOrigins);\n        if (!siteOk) {\n          return yield* Effect.fail(new Api.CsrfRejected());\n        }",
+          "note": "No `authorization`-header exemption: decision 24 §2 (bearer exemption) was never implemented, so a cookie-less bearer client POSTing /auth/session/sign-out etc. fails the double-submit check (:174-181) with 403."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "csrf-hardening",
+      "fix": {
+        "summary": "The Secure-attribute claim is invalid, but the consequence it predicts for bearer clients is live: implement decision 24 §2's bearer exemption in CsrfProtectionLive.",
+        "steps": [
+          "packages/server/src/Csrf.ts: at the top of the middleware, if the request carries a non-empty `authorization` header, skip both minting and enforcement and run `httpEffect`, per .scratch/resolve-ready-for-human-findings/issues/24-client-csrf-middleware-attachment.md §2. A cross-site page cannot set Authorization without a CORS preflight, so this is outside the CSRF threat model. Document it in Csrf.ts's header.",
+          "spec/behaviors/10-csrf.md: add the bearer exemption as a sub-requirement of BEH-EA-077. Note that `Auth.make(..., { csrf })` (decision 24 §1) is still unimplemented and tracked with APS-001/PDR-002.",
+          "Optionally assert `Secure` on __Host-csrf in a wire test, to lock in the default that makes this finding's first half moot."
+        ],
+        "files": [
+          "packages/server/src/Csrf.ts",
+          "spec/behaviors/10-csrf.md"
+        ],
+        "tests": [
+          "packages/server/test/Csrf.test.ts (write first): 'an unsafe request with Authorization: Bearer and no CSRF cookie/header passes'; 'a cookie-only unsafe request without the pair is still rejected 403'.",
+          "packages/server/test/AuthHttp.test.ts: 'POST /auth/session/sign-out with only a bearer token answers 204' (currently 403); 'the minted __Host-csrf Set-Cookie includes Secure'."
+        ],
+        "acceptance": [
+          "Native and bearer clients can call every mutating core endpoint without CSRF plumbing.",
+          "Browser cookie flows are still fully protected."
+        ],
+        "spec_refs": [
+          "BEH-EA-077",
+          "BEH-EA-075",
+          "BEH-EA-066"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "Refuted half: HttpApiBuilder.securitySetCookie defaults `secure: true`, and Csrf.ts passes no `secure` key, so __Host-csrf is emitted with Secure. The live half: since 409334e attached CsrfProtection everywhere, without the decided bearer exemption, a cookie-less bearer client gets 403 on sign-out/revoke/delete-user, which breaks native flows today."
+    },
+    {
+      "id": "SMS-004",
+      "level": "medium",
+      "category": "security",
+      "package": "server",
+      "title": "CSRF and challenge-cookie HMAC secrets ship without any Config/env loading layer",
+      "issue_file": ".issues/medium/SMS-004-secrets-management-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Csrf.ts",
+          "line": 24,
+          "snippet": "export interface CsrfConfigShape {\n  /** BEH-EA-075: signs the double-submit cookie; never a default in production. */\n  readonly secret: Redacted.Redacted<string>;\n  /** BEH-EA-074: compared against `Origin` when `Sec-Fetch-Site` is absent. */\n  readonly allowedOrigins: ReadonlyArray<string>;\n}",
+          "note": "No Config-backed layer and no length floor; contrast packages/ports/src/KeyProvider.ts:74-80 (`layerEnv` reading `Config.Redacted(\"AWTHAQ_ENCRYPTION_KEY\")`, dies unless 32 bytes)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "hmac-secret-hygiene",
+      "fix": {
+        "summary": "Ship Config-backed layers for the CSRF secret and origins (mirroring KeyProvider.layerEnv), so the obvious path never puts a literal secret in source.",
+        "steps": [
+          "packages/server/src/Csrf.ts: `export const layerConfig = Layer.effect(CsrfConfig, Effect.gen(function* () { const secret = yield* Config.Redacted(\"AWTHAQ_CSRF_SECRET\"); const allowedOrigins = yield* Config.Array(Config.String(\"AWTHAQ_CSRF_ALLOWED_ORIGINS\")) /* check exact v4 Config combinator names in ../effect */; yield* requireMinSecretBytes(secret); return { secret, allowedOrigins }; }))`. Do not annotate the type.",
+          "Use it in examples/memory-server and the README quickstart. Mirror it with `ChallengeStore.layerConfig` (AWTHAQ_CHALLENGE_COOKIE_SECRET) in slice 10.",
+          "Document the env vars next to AWTHAQ_ENCRYPTION_KEY."
+        ],
+        "files": [
+          "packages/server/src/Csrf.ts",
+          "examples/memory-server/index.ts",
+          "README.md"
+        ],
+        "tests": [
+          "packages/server/test/Csrf.test.ts (write first): 'layerConfig reads AWTHAQ_CSRF_SECRET via ConfigProvider.fromMap'; 'missing secret fails with ConfigError'; 'short secret dies WeakSigningSecret'."
+        ],
+        "acceptance": [
+          "An app can wire CSRF with zero secret literals in source.",
+          "Misconfiguration fails at boot."
+        ],
+        "spec_refs": [
+          "BEH-EA-075",
+          "BEH-EA-126"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "ACS-007"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "ACS-007",
+      "level": "low",
+      "category": "security",
+      "package": "server",
+      "title": "No minimum length enforced on HMAC signing secrets",
+      "issue_file": ".issues/low/ACS-007-applied-cryptography-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Csrf.ts",
+          "line": 24,
+          "snippet": "export interface CsrfConfigShape {\n  /** BEH-EA-075: signs the double-submit cookie; never a default in production. */\n  readonly secret: Redacted.Redacted<string>;\n  /** BEH-EA-074: compared against `Origin` when `Sec-Fetch-Site` is absent. */\n  readonly allowedOrigins: ReadonlyArray<string>;\n}",
+          "note": "No Config-backed layer and no length floor; contrast packages/ports/src/KeyProvider.ts:74-80 (`layerEnv` reading `Config.Redacted(\"AWTHAQ_ENCRYPTION_KEY\")`, dies unless 32 bytes)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "hmac-secret-hygiene",
+      "fix": {
+        "summary": "Enforce a 32-byte minimum on HMAC signing secrets at layer construction, dying loudly like KeyProvider.layerEnv.",
+        "steps": [
+          "packages/ports/src/Hmac.ts: add `requireMinSecretBytes(secret: Redacted<string>, min = 32)`, returning `Effect<void, never>` that dies with a tagged `WeakSigningSecret` defect when UTF-8 length < 32.",
+          "Call it at the start of CsrfProtectionLive's Layer.effect (and in ChallengeStore's layer, slice 10).",
+          "Update test fixtures that use short secrets (e.g. packages/server/test/Csrf.test.ts:73 `\"test-csrf-secret\"`) to 32+ byte values."
+        ],
+        "files": [
+          "packages/server/src/Csrf.ts",
+          "packages/ports/src/Hmac.ts",
+          "packages/passkey/src/ChallengeStore.ts"
+        ],
+        "tests": [
+          "packages/server/test/Csrf.test.ts (write first): 'building CsrfProtectionLive with a 16-byte secret dies with WeakSigningSecret'; 'a 32-byte secret builds'."
+        ],
+        "acceptance": [
+          "No composition can run CSRF/challenge signing with a key under 32 bytes."
+        ],
+        "spec_refs": [
+          "BEH-EA-075"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "ACS-005"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "ACS-005",
+      "level": "low",
+      "category": "correctness",
+      "package": "server",
+      "title": "RFC 2104 HMAC-SHA256 hand-rolled and duplicated across plugins",
+      "issue_file": ".issues/low/ACS-005-applied-cryptography-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Csrf.ts",
+          "line": 59,
+          "snippet": "const hmacSha256: (\n  crypto: Crypto.Crypto,\n  key: Uint8Array,\n  message: Uint8Array,\n) => Effect.Effect<Uint8Array, PlatformError.PlatformError> = Effect.fnUntraced(\n  function* (crypto, key, message) {\n    let blockKey = key.length > SHA256_BLOCK_SIZE ? yield* crypto.digest(\"SHA-256\", key) : key;",
+          "note": "Second copy at packages/passkey/src/ChallengeStore.ts:207; constantTimeEqual also in Csrf.ts:38 (string/codePointAt), ChallengeStore.ts:230 and core Sessions.ts:50 (bytes); toHex in Csrf.ts:35, Sessions.ts:33, Verification.ts:54, Password.ts:184. Effect's Crypto has no HMAC primitive."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "hmac-secret-hygiene",
+      "fix": {
+        "summary": "Hoist HMAC-SHA256, constant-time equality and hex encoding into one tested module in @awthaq/ports, and use it from server, passkey and core.",
+        "steps": [
+          "Add packages/ports/src/Hmac.ts with `hmacSha256(crypto, key, message)`, `constantTimeEqualBytes(a, b)`, `constantTimeEqualString(a, b)` (encode, then compare bytes; replaces Csrf's codePointAt variant) and `toHex(bytes)`. Export it from packages/ports/src/index.ts.",
+          "Replace the copies in packages/server/src/Csrf.ts:35-81, packages/passkey/src/ChallengeStore.ts:207-235, packages/core/src/Sessions.ts:33-57, packages/core/src/Verification.ts:54 and packages/password/src/Password.ts:184."
+        ],
+        "files": [
+          "packages/ports/src/Hmac.ts (new)",
+          "packages/ports/src/index.ts",
+          "packages/server/src/Csrf.ts",
+          "packages/passkey/src/ChallengeStore.ts",
+          "packages/core/src/Sessions.ts",
+          "packages/core/src/Verification.ts",
+          "packages/password/src/Password.ts"
+        ],
+        "tests": [
+          "packages/ports/test/Hmac.test.ts (write first): RFC 4231 test cases 1-7 for HMAC-SHA256; property test (fast-check) against node:crypto createHmac as an oracle; constantTimeEqual agrees with timingSafeEqual on equal-length inputs and returns false on length mismatch."
+        ],
+        "acceptance": [
+          "One HMAC implementation in the repo.",
+          "RFC 4231 vectors pass.",
+          "All existing CSRF/passkey/session tests stay green."
+        ],
+        "spec_refs": [
+          "BEH-EA-075",
+          "BEH-EA-056"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "CDS-006",
+      "level": "low",
+      "category": "security",
+      "package": "server",
+      "title": "CSRF token is not bound to the session and never expires",
+      "issue_file": ".issues/low/CDS-006-csrf-defense-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Csrf.ts",
+          "line": 91,
+          "snippet": "const mint = Effect.fnUntraced(function* (\n  crypto: Crypto.Crypto,\n  secret: Redacted.Redacted<string>,\n) {\n  const token = toHex(yield* crypto.randomBytes(32));\n  const signature = yield* sign(crypto, secret, token);\n  return `${token}.${signature}`;\n});",
+          "note": "No issued-at, no expiry, no binding."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "csrf-hardening",
+      "fix": {
+        "summary": "Time-bound the double-submit token: sign `<iat>.<random>`, reject tokens older than a configurable max age, and re-mint proactively so the window never bites mid-session.",
+        "steps": [
+          "packages/server/src/Csrf.ts: change the token format to `<iatSeconds>.<randomHex>.<hmac>`, with the HMAC over `${iat}.${random}`. `isValid` checks the signature (constant time) and `now - iat <= maxAge` (plus 60s skew for future iat).",
+          "CsrfConfigShape gains `maxAge?: Duration.Input` (default 24h, per the auditor). Re-mint on ANY request (safe or unsafe) once age exceeds maxAge/2, so active users always hold a fresh token. A token past maxAge is invalid (403 on unsafe requests), and the fresh cookie rides that response.",
+          "Do NOT bind the token to the session: the session secret rotates every touchEvery, so binding would cause hourly 403 storms. Document this rejection in the Csrf.ts header."
+        ],
+        "files": [
+          "packages/server/src/Csrf.ts",
+          "spec/behaviors/10-csrf.md"
+        ],
+        "tests": [
+          "packages/server/test/Csrf.test.ts (write first, TestClock): 'a token older than maxAge is rejected on POST'; 'a token older than maxAge/2 is re-minted on a GET'; 'a token with a tampered iat fails signature'."
+        ],
+        "acceptance": [
+          "No CSRF token is accepted beyond maxAge.",
+          "Active users never hit a 403 from expiry."
+        ],
+        "spec_refs": [
+          "BEH-EA-075"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "ACS-005"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "GC-005",
+      "level": "medium",
+      "category": "api",
+      "package": "server",
+      "title": "Sessions.revoke shape forces a check-then-act composition in the shell",
+      "issue_file": ".issues/medium/GC-005-giulio-canti.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Session.ts",
+          "line": 99,
+          "snippet": "        const principal = yield* currentUserPrincipal;\n        const userId = Users.UserId(principal.ref.id);\n        const targetId = Sessions.SessionId(payload.id);\n        const owned = yield* sessions.list(userId);\n        if (!owned.some((row) => row.id === targetId)) {\n          return yield* Effect.fail(new SessionContract.SessionNotFound());\n        }",
+          "note": "Ownership enforced by list-then-check in the shell; `list` is capped (Sessions.ts:642 `const LIST_PAGE_SIZE = 200;`, :873), so an owned session beyond the first page is wrongly reported SessionNotFound."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "session-handler-hardening",
+      "fix": {
+        "summary": "Add an owning revoke to the Sessions algebra, so ownership and enumeration-safety are enforced in the domain operation. This also fixes the 200-row list cap that wrongly 404s owned sessions.",
+        "steps": [
+          "packages/sql/src/Repositories.ts: add `deleteOwned(id: SessionId, userId: UserId): Effect<boolean, SqlError>` to SessionsRepositoryShape (`DELETE FROM sessions WHERE id = ? AND \"userId\" = ?`, returning whether a row was affected), for both dialects.",
+          "packages/core/src/Sessions.ts: add `revokeOwned(userId, id): Effect<void, SessionNotFound>` to SessionsShape. It fails SessionNotFound for both unknown and foreign ids. Implement it in layerMemory (one Ref.modify checking row.userId) and layerSql (deleteOwned), and publish `auth.session.revoked` exactly as `revoke` does.",
+          "packages/server/src/Session.ts `revoke` handler: a single `sessions.revokeOwned(userId, targetId).pipe(Effect.catchTag(\"SessionNotFound\", () => Effect.fail(new SessionContract.SessionNotFound())))`, dropping the list/some check.",
+          "Keep bare `revoke` for already-authorized contexts (admin, signOut)."
+        ],
+        "files": [
+          "packages/sql/src/Repositories.ts",
+          "packages/core/src/Sessions.ts",
+          "packages/server/src/Session.ts"
+        ],
+        "tests": [
+          "packages/core/test/Sessions.test.ts (write first, both layers): 'revokeOwned revokes an owned session'; 'revokeOwned on another user's session fails SessionNotFound and leaves it live'; 'revokeOwned on an unknown id fails SessionNotFound'.",
+          "packages/server/test/AuthHttp.test.ts: 'revoke succeeds for an owned session older than the first 200 list rows' (issue 201 sessions)."
+        ],
+        "acceptance": [
+          "Ownership is enforced atomically in core.",
+          "The handler is a single call.",
+          "BEH-EA-086 enumeration-safety is preserved.",
+          "No 200-row cap on revoke."
+        ],
+        "spec_refs": [
+          "BEH-EA-054",
+          "BEH-EA-086",
+          "BEH-EA-031"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "Validation adds a concrete bug to this 'shape' finding: `sessions.list(userId)` is capped at LIST_PAGE_SIZE = 200 in the SQL layer (Sessions.ts:642, :873), so revoking an owned session outside the first page answers 404. This relates to PIL-003 (slice 01)."
+    },
+    {
+      "id": "TS-007",
+      "level": "info",
+      "category": "architecture",
+      "package": "server",
+      "title": "No streaming HTTP responses anywhere on the server surface — every response is a buffered DTO",
+      "issue_file": ".issues/info/TS-007-tim-smart.md",
+      "current_status": "needs-triage",
+      "verdict": "WONTFIX-CANDIDATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Session.ts",
+          "line": 15,
+          "snippet": "const toDto = (item: Sessions.SessionListItem): SessionContract.SessionDto =>\n  new SessionContract.SessionDto({\n    id: item.id,",
+          "note": "Buffered DTO responses; no streaming anywhere, and no route that would need it (no export route exists)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "none",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "wontfix",
+      "notes": "The auditor says so: 'Honest absence, not a defect'. No route ships a payload that needs streaming. If CSG-005's export or a CSV route lands, it should use HttpServerResponse.stream then. No standing work."
+    },
+    {
+      "id": "GC-003",
+      "level": "medium",
+      "category": "architecture",
+      "package": "server",
+      "title": "Brand re-entry into the domain is by unchecked nominal casts in the imperative shell",
+      "issue_file": ".issues/medium/GC-003-giulio-canti.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Session.ts",
+          "line": 33,
+          "snippet": "const currentUserPrincipal: Effect.Effect<Api.UserPrincipal, never, Api.CurrentPrincipal> =\n  Effect.gen(function* () {\n    const principal = yield* Api.CurrentPrincipal;\n    if (principal._tag !== \"User\") {\n      return yield* Effect.die(\n        new Error(`awthaq: session group reached with a non-User principal: ${principal._tag}`),\n      );\n    }",
+          "note": "Duplicated verbatim in packages/server/src/Account.ts:19-28; every handler then re-brands with Users.UserId(...)/Sessions.SessionId(...) (12 call sites in packages/server/src). The `as SessionId` in Sessions.ts cited by GC-003 no longer exists (grep: 0 hits)."
+        },
+        {
+          "path": "packages/core/src/Users.ts",
+          "line": 48,
+          "snippet": "export type UserId = string & Brand.Brand<\"UserId\">;\nexport const UserId = Brand.nominal<UserId>();",
+          "note": "Brand.nominal: no runtime check."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "session-handler-hardening",
+      "fix": {
+        "summary": "Re-establish brands once per request in one shared helper, not at 12 call sites, and delete the duplicated currentUserPrincipal.",
+        "steps": [
+          "Add packages/server/src/internal/CurrentUser.ts: `currentUser` is an Effect<{ principal: Api.UserPrincipal; userId: Users.UserId; sessionId: Sessions.SessionId }, never, Api.CurrentPrincipal>. It is the single place where `Users.UserId(...)`/`Sessions.SessionId(...)` are applied to a principal that came from a verified session, and it dies with the tagged defect from GC-008 for a non-User principal.",
+          "Replace both `currentUserPrincipal` copies (Session.ts:33-42, Account.ts:19-28) and every handler-local cast with `currentUser`. `payload.id` in `revoke` stays the one wire-to-domain cast (or decode it with a branded schema, see the next step).",
+          "Optional, recommended: in packages/api, declare `RevokePayload.id` as `Schema.String.pipe(Schema.brand(\"SessionId\"))`. Effect's Brand<\"SessionId\"> is the same nominal brand core uses, so the decoded value is already a SessionId and no cast is needed."
+        ],
+        "files": [
+          "packages/server/src/internal/CurrentUser.ts (new)",
+          "packages/server/src/Session.ts",
+          "packages/server/src/Account.ts",
+          "packages/api/src/Session.ts"
+        ],
+        "tests": [
+          "Existing packages/server/test/AuthHttp.test.ts session/account suites must stay green (refactor).",
+          "Type-level: add a `// @ts-expect-error` check in a test showing a plain string is not accepted where UserId is required (guards against regression)."
+        ],
+        "acceptance": [
+          "`grep -c 'UserId(\\|SessionId(' packages/server/src/*.ts` is 0 outside internal/CurrentUser.ts.",
+          "No duplicated currentUserPrincipal remains."
+        ],
+        "spec_refs": [
+          "BEH-EA-031"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "The nominal casts are confirmed (12 sites in packages/server/src). The cited redundant `input.supersedes as SessionId` no longer exists at HEAD. Branding the whole PrincipalRef.id at the contract is not recommended, because PrincipalRef is polymorphic (user/apikey/service ids)."
+    },
+    {
+      "id": "EHA-009",
+      "level": "low",
+      "category": "correctness",
+      "package": "server",
+      "title": "Session 'current' handler defects to a 500 on a concurrent-revoke race",
+      "issue_file": ".issues/low/EHA-009-effect-http-api-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Session.ts",
+          "line": 60,
+          "snippet": "      current: Effect.fnUntraced(function* () {\n        const principal = yield* currentUserPrincipal;\n        const userId = Users.UserId(principal.ref.id);\n        const sessionId = Sessions.SessionId(principal.sessionId);\n        const items = yield* sessions.list(userId, sessionId);\n        const item = items.find((row) => row.current);\n        if (item === undefined) {\n          return yield* Effect.die(new Error(\"awthaq: current session missing from its own list\"));",
+          "note": "Concurrent revoke between middleware verify and list -> plain-Error defect -> 500. Also nominal brand casts at :62-63."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "session-handler-hardening",
+      "fix": {
+        "summary": "Answer a concurrently-revoked current session with a typed 401 and an expired cookie, not a 500 defect.",
+        "steps": [
+          "packages/api/src/Session.ts: declare `error: Api.Unauthenticated` on the `current` endpoint (it is already in the group's documented errors through the middleware, and getErrorSchemas dedupes).",
+          "packages/server/src/Session.ts `current`: when the current row is missing, run `expireSessionCookie` (CSS-002) and `Effect.fail(new Api.Unauthenticated())`."
+        ],
+        "files": [
+          "packages/api/src/Session.ts",
+          "packages/server/src/Session.ts"
+        ],
+        "tests": [
+          "packages/server/test/AuthHttp.test.ts or a unit test with a Sessions double whose `list` omits the current row (simulating the race): 'GET /session answers 401 Unauthenticated and expires the cookie'."
+        ],
+        "acceptance": [
+          "The race yields a 401 with a typed body; the client session atom clears (BEH-EA-174/23-react)."
+        ],
+        "spec_refs": [
+          "BEH-EA-031",
+          "BEH-EA-067"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "CSS-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "GC-008",
+      "level": "low",
+      "category": "dx",
+      "package": "server",
+      "title": "Untagged plain Error defect in the session handler breaks the catchable-error convention",
+      "issue_file": ".issues/low/GC-008-giulio-canti.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Session.ts",
+          "line": 60,
+          "snippet": "      current: Effect.fnUntraced(function* () {\n        const principal = yield* currentUserPrincipal;\n        const userId = Users.UserId(principal.ref.id);\n        const sessionId = Sessions.SessionId(principal.sessionId);\n        const items = yield* sessions.list(userId, sessionId);\n        const item = items.find((row) => row.current);\n        if (item === undefined) {\n          return yield* Effect.die(new Error(\"awthaq: current session missing from its own list\"));",
+          "note": "Concurrent revoke between middleware verify and list -> plain-Error defect -> 500. Also nominal brand casts at :62-63."
+        },
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 62,
+          "snippet": "            Effect.catchTag(\"UserNotFound\", () =>\n              Effect.die(new Error(`awthaq: authenticated user missing: ${userId}`)),\n            ),",
+          "note": "Plain-Error defects in server: Session.ts:38, :67; Account.ts:24, :63, :118 (5 sites) — and ~70 more across packages (grep `die(new Error`). The Session.ts:67 site is not 'the one'."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "session-handler-hardening",
+      "fix": {
+        "summary": "Replace plain-Error defects in @awthaq/server with one tagged defect class. The repo-wide sweep is out of scope for this slice.",
+        "steps": [
+          "Add `HandlerInvariantViolation extends Data.TaggedError(\"HandlerInvariantViolation\")<{ readonly invariant: \"NonUserPrincipal\" | \"AuthenticatedUserMissing\"; readonly message: string }>` in packages/server/src/internal/Defects.ts.",
+          "Use it for Session.ts:38 (via CurrentUser), Account.ts:24 and :63, and :118 (moving to core with CSG-001's eraseAccount). Session.ts:67 disappears with EHA-009.",
+          "Record the other ~70 `die(new Error(...))` sites across packages as a follow-up for the orchestrator. Do not sweep them here."
+        ],
+        "files": [
+          "packages/server/src/internal/Defects.ts (new)",
+          "packages/server/src/Session.ts",
+          "packages/server/src/Account.ts"
+        ],
+        "tests": [
+          "packages/server/test: 'a non-User principal reaching the session group dies with HandlerInvariantViolation' (provide a CurrentPrincipal of ApiKey via a test middleware; assert Cause.dieOption is the tagged error)."
+        ],
+        "acceptance": [
+          "packages/server/src contains no `new Error(`."
+        ],
+        "spec_refs": [
+          "BEH-EA-027"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "GC-003",
+        "EHA-009"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": "Overstated: the flagged site is not 'the one plain Error in the request path'. There are 5 in packages/server/src alone and about 70 across packages (e.g. organization 22, password 5, passkey 5)."
+    },
+    {
+      "id": "CSS-002",
+      "level": "medium",
+      "category": "security",
+      "package": "server",
+      "title": "No cookie expiry anywhere: sign-out, revoke-all, and account deletion leave the dead __Host-session in the browser jar",
+      "issue_file": ".issues/medium/CSS-002-cookie-security-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Session.ts",
+          "line": 84,
+          "snippet": "      signOut: Effect.fnUntraced(function* () {\n        const principal = yield* currentUserPrincipal;\n        yield* sessions\n          .revoke(Sessions.SessionId(principal.sessionId))\n          .pipe(Effect.catchTag(\"SessionNotFound\", () => Effect.void));\n      }),",
+          "note": "No Set-Cookie emitted; repo-wide grep for maxAge: 0 / Max-Age=0 / expireCookie under packages/ returns nothing."
+        },
+        {
+          "path": "packages/server/src/Session.ts",
+          "line": 120,
+          "snippet": "      revokeAll: Effect.fnUntraced(function* () {\n        const principal = yield* currentUserPrincipal;\n        const userId = Users.UserId(principal.ref.id);\n        yield* sessions.revokeAll(userId);\n      }),",
+          "note": "Same for revokeAll."
+        },
+        {
+          "path": "packages/api/src/Session.ts",
+          "line": 53,
+          "snippet": "  // Upstream-hardening map, ticket 02: completes the `revoke`/\n  // `revokeOthers`/`revokeAll` naming symmetry — kills every session for\n  // the caller, no exceptions, including the caller's own current\n  // session. No payload, no response cookie-clearing, matching\n  // `signOut`'s existing precedent.\n  .add(HttpApiEndpoint.post(\"revokeAll\", \"/session/revoke-all\"))",
+          "note": "Deliberately no cookie clearing."
+        },
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 103,
+          "snippet": "        yield* sqlTransaction\n          .withTransaction(\n            Effect.gen(function* () {\n              yield* accounts.deleteAllByUser(userId);",
+          "note": "Cascade is transactional since e940a12."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "IC-002",
+        "NSA-004",
+        "SMS-005-session-management-specialist"
+      ],
+      "workstream": "session-cookie-expiry",
+      "fix": {
+        "summary": "Expire __Host-session on every response that ends the caller's own session: signOut, revokeAll, revoke when the target is the current session, deleteUser, and the EHA-009 'current row missing' path.",
+        "steps": [
+          "Add an internal helper in packages/server (e.g. `src/internal/SessionCookie.ts`): `expireSessionCookie = HttpEffect.appendPreResponseHandler((_req, res) => HttpServerResponse.expireCookie(res, Api.SessionCookie.key, { path: \"/\", secure: true, httpOnly: true, sameSite: \"strict\" }).pipe(Effect.catch(() => Effect.succeed(res))))`. Effect's expireCookie (HttpServerResponse.ts:657) emits an empty value, Max-Age=0 and an epoch Expires. __Host- requires Secure and Path=/ on the expiring write too.",
+          "Call it in Session.ts `signOut`, `revokeAll`, `revoke` (only when `targetId === principal.sessionId`), and Account.ts `deleteUser`.",
+          "Update the stale comment at packages/api/src/Session.ts:53-58 ('no response cookie-clearing').",
+          "spec: add under BEH-EA-055 that sign-out, revoke-all and account deletion MUST expire the session cookie.",
+          "Next adapter (slice 11): once this lands, withNextCookies' 'cleared one after sign-out' promise holds. Add the WithNextCookies test and README sign-out recipe that NSA-004/IC-002 ask for there (BO-002)."
+        ],
+        "files": [
+          "packages/server/src/Session.ts",
+          "packages/server/src/Account.ts",
+          "packages/server/src/internal/SessionCookie.ts (new)",
+          "packages/api/src/Session.ts",
+          "spec/behaviors/07-sessions.md"
+        ],
+        "tests": [
+          "packages/server/test/AuthHttp.test.ts (write first): 'POST /session/sign-out responds with Set-Cookie __Host-session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Strict'; same for POST /session/revoke-all, for POST /session/revoke with the caller's own id, and for DELETE /user; 'revoking another session does NOT expire the caller's cookie'.",
+          "BDD: extend the sessions feature's sign-out scenario if it is wired (features/features/**/07-sessions*.feature)."
+        ],
+        "acceptance": [
+          "Every self-ending endpoint expires the cookie with attributes a browser accepts for a __Host- cookie.",
+          "Revoking a different session leaves the cookie intact."
+        ],
+        "spec_refs": [
+          "BEH-EA-031",
+          "BEH-EA-055",
+          "BEH-EA-054"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent",
+      "notes": ""
+    },
+    {
+      "id": "IC-002",
+      "level": "medium",
+      "category": "dx",
+      "package": "server",
+      "title": "signOut revokes the session but never clears the cookie; no cookie-clearing exists anywhere",
+      "issue_file": ".issues/medium/IC-002-iain-collins.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Session.ts",
+          "line": 84,
+          "snippet": "      signOut: Effect.fnUntraced(function* () {\n        const principal = yield* currentUserPrincipal;\n        yield* sessions\n          .revoke(Sessions.SessionId(principal.sessionId))\n          .pipe(Effect.catchTag(\"SessionNotFound\", () => Effect.void));\n      }),",
+          "note": "No Set-Cookie emitted; repo-wide grep for maxAge: 0 / Max-Age=0 / expireCookie under packages/ returns nothing."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "CSS-002",
+      "duplicates": [],
+      "workstream": "session-cookie-expiry",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The same missing cookie expiry. The withNextCookies test it asks for is listed in CSS-002 step 5, which hands off to slice 11."
+    },
+    {
+      "id": "NSA-004",
+      "level": "medium",
+      "category": "correctness",
+      "package": "server",
+      "title": "Sign-out never clears the session cookie, so the promised post-sign-out cookie bridge has nothing to bridge",
+      "issue_file": ".issues/medium/NSA-004-nextjs-server-actions-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/Session.ts",
+          "line": 84,
+          "snippet": "      signOut: Effect.fnUntraced(function* () {\n        const principal = yield* currentUserPrincipal;\n        yield* sessions\n          .revoke(Sessions.SessionId(principal.sessionId))\n          .pipe(Effect.catchTag(\"SessionNotFound\", () => Effect.void));\n      }),",
+          "note": "No Set-Cookie emitted; repo-wide grep for maxAge: 0 / Max-Age=0 / expireCookie under packages/ returns nothing."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "CSS-002",
+      "duplicates": [],
+      "workstream": "session-cookie-expiry",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "The same root cause. The README sign-out recipe belongs to the next-adapter work (slice 11, BO-002/IC-004)."
+    },
+    {
+      "id": "NHS-008",
+      "level": "low",
+      "category": "dx",
+      "package": "server",
+      "title": "No request-id/correlation middleware or access logging at the serving stratum",
+      "issue_file": ".issues/low/NHS-008-node-http-server-integration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "packages/server/src/index.ts",
+          "line": 10,
+          "snippet": "export * as Account from \"./Account.ts\";\nexport * as Authentication from \"./Authentication.ts\";\nexport * as AuthHttp from \"./AuthHttp.ts\";\nexport * as Csrf from \"./Csrf.ts\";\nexport * as Session from \"./Session.ts\";",
+          "note": "No logging/tracing/request-id surface."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "MW-001",
+      "duplicates": [],
+      "workstream": "observability-substrate",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved",
+      "notes": "MW-001's decision (.scratch/resolve-ready-for-human-findings/issues/27-observability-substrate.md) adds `AuthHttp.tracer`/`AuthHttp.requestLogger` as re-exports of HttpMiddleware.tracer/logger: W3C traceparent correlation plus a structured access log. That is exactly the serving-stratum hook NHS-008 asks for. Also overlaps EOTS-006 and MAPS-007. If X-Request-Id echo is still wanted after MW-001, it should be a follow-up there."
+    }
+  ],
+  "workstreams": [
+    {
+      "slug": "gdpr-erasure-export",
+      "title": "GDPR erasure completeness + data-subject export",
+      "ids": [
+        "CSG-001",
+        "DRS-002",
+        "SEA-001",
+        "SSMS-002",
+        "TS-004-tim-smart",
+        "CSG-007",
+        "TRBS-008",
+        "CSG-005"
+      ],
+      "rationale": "One root cause: there is no complete, domain-level account lifecycle for personal data. The transactional cascade exists (e940a12) and passkey/membership taps exist (ec065a7), but the cascade lives in the HTTP handler, several plugin tables are unswept, the taps are opt-in, audit retention is undecided, and there is no Art. 15/20 export.",
+      "order_hint": 1,
+      "effort": "XL",
+      "depends_on_workstreams": [
+        "hook-registry-scoping (ELC-001, slice 02)"
+      ],
+      "steps": [
+        "CSG-001 steps 1-3: Users.eraseAccount in core (decision 30) plus a one-call handler.",
+        "CSG-001 step 4: organization team membership/invitation/active-context taps (coordinate with DRS-008).",
+        "CSG-001 step 5: wire erasure layers by default (examples, TestAuth, README).",
+        "SEA-001: the FK-less invariant in spec plus a SQL rollback test.",
+        "After the decision: audit/impersonation pseudonymization (CSG-001 step 6).",
+        "After the decision: CSG-005 export endpoint over a DataExport registry."
+      ],
+      "test_plan": "packages/core/test/AccountErasure.test.ts (cascade + rollback on sqlite), OrganizationErasure additions, the AuthHttp DELETE /user and GET /user/export wire tests.",
+      "acceptance": "No PII row survives DELETE /user in a default composition; the cascade is atomic on SQL; the user can export all their data as JSON."
+    },
+    {
+      "slug": "per-request-session-cache",
+      "title": "Per-request session-resolution cache: atomic, keyed on request.source",
+      "ids": [
+        "TS-003-tim-smart",
+        "ECF-005",
+        "NHS-006",
+        "ELC-007",
+        "PCS-006"
+      ],
+      "rationale": "Four findings describe one small module-level cache: non-atomic get-or-create (TS-003/ECF-005), wrapper-identity keying (NHS-006), and documentation of its requirement and staleness (ELC-007/PCS-006). It must land before the rotation-delivery rework, which lives in the same owner branch.",
+      "order_hint": 2,
+      "effort": "M",
+      "depends_on_workstreams": [],
+      "steps": [
+        "TS-003: Deferred-based single-flight get-or-create in one Effect.sync, keyed on request.source.",
+        "NHS-006: rewrite the invariant comment and add the re-wrap test.",
+        "ELC-007 + PCS-006: doc comments and the BEH-EA-070 staleness note."
+      ],
+      "test_plan": "Concurrent single-flight, modify()-re-wrap hit, interruption no-hang (packages/server/test/Authentication.test.ts).",
+      "acceptance": "Sessions.verify runs at most once per underlying request and credential under any interleaving or wrapper re-creation."
+    },
+    {
+      "slug": "session-rotation-delivery",
+      "title": "Rotated-secret delivery on every path + bearer client capture",
+      "ids": [
+        "PIL-005",
+        "MNA-005",
+        "CTA-006",
+        "PIL-009",
+        "NHS-007",
+        "MAPS-008"
+      ],
+      "rationale": "Rotation (ticket 01, no grace window) is only safe if the new secret always reaches the client. Today it is lost on Path B (PIL-005), on typed-error responses (new, found during validation), and on bearer clients that do not read set-auth-token (MNA-005). The exposure hygiene (MAPS-008) and the orDie concern (NHS-007) touch the same code.",
+      "order_hint": 3,
+      "effort": "L",
+      "depends_on_workstreams": [
+        "per-request-session-cache",
+        "wire-constant-single-source",
+        "observability-substrate (MW-001, slice 02) for the redaction step only"
+      ],
+      "steps": [
+        "PIL-005: move delivery into an appendPreResponseHandler inside the memoized verify; pass scheme from Path A/B; delete deliverRotation.",
+        "NHS-007: non-fatal recovery in the pre-response handler.",
+        "MAPS-008: Cache-Control: no-store; redact set-auth-token in AuthHttp logger/tracer presets.",
+        "MNA-005: Api.ROTATED_TOKEN_HEADER, client BearerTokenStore + bearerTransformClient, docs."
+      ],
+      "test_plan": "The Path-B rotation Set-Cookie test (qadi), the rotation-on-error-response test, exactly-once delivery, client capture (packages/client/test).",
+      "acceptance": "A client never loses a rotated secret, whatever the route style or handler outcome; the shipped bearer client survives rotations with zero app code."
+    },
+    {
+      "slug": "bearer-credential-extensibility",
+      "title": "Bearer credential seam: JWT re-entry (decision 33) + multi-contributor registry",
+      "ids": [
+        "MAPS-001",
+        "JR-004",
+        "AGA-003",
+        "VB-008",
+        "MAPS-004"
+      ],
+      "rationale": "Several findings share one root: Authentication resolves only opaque session secrets, so minted JWTs cannot re-enter (MAPS-001, JR-004, AGA-003, VB-008), and no seam exists for new credential types (MAPS-004).",
+      "order_hint": 4,
+      "effort": "L",
+      "depends_on_workstreams": [
+        "per-request-session-cache",
+        "session-rotation-delivery",
+        "m2m-identity (MAPS-003, slice 09) for the api-key contributor"
+      ],
+      "steps": [
+        "MAPS-001 per decision 33: BearerCredentialResolver, shape routing, jwt acceptAsBearer, signJWT audience, README.",
+        "MAPS-004 (after decision): generalize to a claims()-keyed registry; jwt is the first contributor, api-key the second."
+      ],
+      "test_plan": "Authentication.test.ts routing tests; jwt AuthHttp acceptAsBearer on/off/foreign-audience tests.",
+      "acceptance": "A JWT is accepted as bearer only when opted in; any plugin can add a bearer credential type with a Layer."
+    },
+    {
+      "slug": "csrf-hardening",
+      "title": "CSRF: bearer exemption (decision 24 §2) + time-bound tokens",
+      "ids": [
+        "MNA-008",
+        "CDS-006",
+        "CDS-005",
+        "CDS-004",
+        "PDR-007"
+      ],
+      "rationale": "CSRF is now attached everywhere (409334e), which closed CDS-004/CDS-005/PDR-007. The decided bearer exemption was skipped, so native clients get 403 today (MNA-008), and tokens never expire (CDS-006).",
+      "order_hint": 5,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "hmac-secret-hygiene"
+      ],
+      "steps": [
+        "MNA-008: authorization-header exemption plus a spec sub-requirement (ship first; it is a live break).",
+        "CDS-006: iat-signed tokens, maxAge, proactive re-mint."
+      ],
+      "test_plan": "Csrf.test.ts bearer-pass / cookie-still-rejected; the AuthHttp bearer sign-out 204 test; TestClock expiry tests.",
+      "acceptance": "Bearer clients are unaffected by CSRF; cookie flows are protected; no token is valid past maxAge."
+    },
+    {
+      "slug": "session-cookie-expiry",
+      "title": "Expire __Host-session when the caller's own session ends",
+      "ids": [
+        "CSS-002",
+        "IC-002",
+        "NSA-004",
+        "SMS-005-session-management-specialist"
+      ],
+      "rationale": "Four findings describe the same missing Set-Cookie expiry on signOut/revokeAll/revoke-self/deleteUser.",
+      "order_hint": 6,
+      "effort": "M",
+      "depends_on_workstreams": [],
+      "steps": [
+        "CSS-002: an expireSessionCookie helper (appendPreResponseHandler + HttpServerResponse.expireCookie) called from the four handlers.",
+        "Update the api comment and spec BEH-EA-055; hand the Next test and recipe to slice 11."
+      ],
+      "test_plan": "AuthHttp.test.ts Set-Cookie Max-Age=0 assertions on each endpoint, plus the negative case.",
+      "acceptance": "Every self-ending endpoint expires the cookie with valid __Host- attributes."
+    },
+    {
+      "slug": "session-handler-hardening",
+      "title": "Session/account handler correctness and typing",
+      "ids": [
+        "GC-005",
+        "GC-003",
+        "EHA-009",
+        "GC-008"
+      ],
+      "rationale": "The same two handler modules: ownership in the algebra (GC-005, which also fixes the 200-row revoke cap), a single brand re-entry point (GC-003), the race returning 500 (EHA-009), and untagged defects (GC-008).",
+      "order_hint": 7,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "session-cookie-expiry"
+      ],
+      "steps": [
+        "GC-005: Sessions.revokeOwned (+ repo deleteOwned), single-call revoke handler.",
+        "GC-003: internal/CurrentUser.ts replaces both currentUserPrincipal copies and 12 casts.",
+        "GC-008: HandlerInvariantViolation tagged defect.",
+        "EHA-009: typed 401 + cookie expiry on the missing-current-row race."
+      ],
+      "test_plan": "Sessions revokeOwned tests (both layers), AuthHttp 201-sessions revoke, the race-to-401 test, the tagged-defect test.",
+      "acceptance": "No list-then-act, no plain Error, no casts outside CurrentUser; the race answers 401."
+    },
+    {
+      "slug": "optional-auth-contract",
+      "title": "Authentication middleware wire contract (OpenAPI, ordering, challenges)",
+      "ids": [
+        "EHA-006",
+        "NHS-010",
+        "JR-007"
+      ],
+      "rationale": "The declared contract is dishonest or incomplete in three ways: an impossible 401 on OptionalAuthentication (EHA-006), a positional coupling of the anonymous fallback (NHS-010), and no WWW-Authenticate challenge (JR-007).",
+      "order_hint": 8,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "bearer-credential-extensibility (sequence only: both edit the bearer handler)"
+      ],
+      "steps": [
+        "EHA-006: error-free OptionalAuthentication with in-handler cookie, then bearer, then anonymous fallback.",
+        "NHS-010: comment fixes plus the key-order test.",
+        "JR-007: WWW-Authenticate via a pre-response handler on the final 401."
+      ],
+      "test_plan": "OpenAPI 401-absence test, the BEH-EA-068 regression suite, WWW-Authenticate header tests.",
+      "acceptance": "OpenAPI matches behavior; reordering keys fails a test; 401s carry RFC-compliant challenges."
+    },
+    {
+      "slug": "authn-failure-observability",
+      "title": "Observable session-verification failures",
+      "ids": [
+        "EOTS-003"
+      ],
+      "rationale": "EOTS-003's remaining half is silent verify failures in resolveSession. It should use MW-001's field vocabulary and metrics once they exist.",
+      "order_hint": 9,
+      "effort": "S",
+      "depends_on_workstreams": [
+        "per-request-session-cache",
+        "observability-substrate (MW-001, slice 02)"
+      ],
+      "steps": [
+        "EOTS-003: debug log with reason/scheme (no credential or id); metric when Observability.ts lands."
+      ],
+      "test_plan": "Captured-Logger tests: logged with reason; no credential material; nothing for empty credentials.",
+      "acceptance": "Credential-stuffing against sessions is visible in logs and metrics without leaking secrets."
+    },
+    {
+      "slug": "wire-constant-single-source",
+      "title": "Single source for session cookie name and rotation header",
+      "ids": [
+        "CSS-007",
+        "EHA-008",
+        "MW-009",
+        "BE-009"
+      ],
+      "rationale": "Four findings about the same duplicated literal. The CSRF-name half is refuted. It is a prerequisite for rotation delivery (ROTATED_TOKEN_HEADER) and the CORS preset.",
+      "order_hint": 2,
+      "effort": "S",
+      "depends_on_workstreams": [
+        "httpapi-surface-consolidation (MW-002, slice 01) adds the same core->api dependency; coordinate"
+      ],
+      "steps": [
+        "CSS-007: api owns SESSION_COOKIE_NAME + ROTATED_TOKEN_HEADER; core derives from them; tests use the constants."
+      ],
+      "test_plan": "core/test/Sessions.test.ts equality assertion; knip + madge clean.",
+      "acceptance": "One literal in src; the rename is one line."
+    },
+    {
+      "slug": "hmac-secret-hygiene",
+      "title": "Shared HMAC primitive + signing-secret policy",
+      "ids": [
+        "ACS-005",
+        "ACS-007",
+        "SMS-004-secrets-management-specialist"
+      ],
+      "rationale": "The HMAC code is hand-rolled and duplicated (ACS-005), there is no key-length floor (ACS-007), and there is no Config-backed loading (SMS-004). All three concern the same secrets.",
+      "order_hint": 5,
+      "effort": "M",
+      "depends_on_workstreams": [],
+      "steps": [
+        "ACS-005: packages/ports/src/Hmac.ts with RFC 4231 + oracle property tests; replace all copies.",
+        "ACS-007: requireMinSecretBytes at CSRF (and passkey, slice 10) layer build.",
+        "SMS-004: Csrf.layerConfig reading AWTHAQ_CSRF_SECRET/ORIGINS."
+      ],
+      "test_plan": "ports Hmac tests; Csrf weak-secret and layerConfig tests.",
+      "acceptance": "One HMAC implementation; no weak or literal secrets on the default path."
+    },
+    {
+      "slug": "cors-posture",
+      "title": "Documented default-deny CORS + blessed preset sharing CSRF origins",
+      "ids": [
+        "AGA-002",
+        "CDS-008"
+      ],
+      "rationale": "AGA-002 and CDS-008 describe the same gap.",
+      "order_hint": 10,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "wire-constant-single-source",
+        "csrf-hardening"
+      ],
+      "steps": [
+        "AGA-002: AuthHttp.cors built from CsrfConfig.allowedOrigins, exposing set-auth-token and allowing x-csrf-token; a spec BEH; a README recipe."
+      ],
+      "test_plan": "Preflight allowed/denied, expose-headers, CSRF-still-enforced tests.",
+      "acceptance": "Cross-origin works with one layer; the CORS and CSRF allowlists cannot diverge."
+    },
+    {
+      "slug": "api-contract-tests",
+      "title": "Direct tests + precise schemas for the contract stratum",
+      "ids": [
+        "ETVS-003",
+        "MW-008"
+      ],
+      "rationale": "@awthaq/api has no tests (ETVS-003), and SessionDto dates are untyped strings (MW-008).",
+      "order_hint": 11,
+      "effort": "M",
+      "depends_on_workstreams": [],
+      "steps": [
+        "ETVS-003: packages/api/test/{Api,Contracts}.test.ts; wire BEH-EA-025..029 BDD where cheap.",
+        "MW-008: DateTimeUtcFromString for SessionDto timestamps."
+      ],
+      "test_plan": "The new api test files.",
+      "acceptance": "The api package has direct tests; the date contract is enforced and documented."
+    },
+    {
+      "slug": "qadi-attribute-typing",
+      "title": "Typed attribute names for qadi policies",
+      "ids": [
+        "AAPS-003"
+      ],
+      "rationale": "AAPS-003's actionable part lives in @awthaq/qadi and ../qadi, on top of decision 14.",
+      "order_hint": 12,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "attributeresolver-registry (AAPS-002, slice 08)"
+      ],
+      "steps": [
+        "AAPS-003: UserAttributes registry + typed helper; unknown-name diagnostic in ../qadi."
+      ],
+      "test_plan": "Type-level typo test; qadi evaluator diagnostic test.",
+      "acceptance": "Attribute-name typos are caught at compile time or produce a distinct diagnostic."
+    },
+    {
+      "slug": "httpapi-surface-consolidation",
+      "title": "(cross-slice) Fold core groups into Auth.make — canonical MW-002, slice 01",
+      "ids": [
+        "AVS-002",
+        "BE-006",
+        "EHA-004"
+      ],
+      "rationale": "AVS-002, BE-006 and EHA-004 duplicate MW-002; decision 26 is the plan. No work in this slice.",
+      "order_hint": 99,
+      "effort": "n/a (see MW-002)",
+      "depends_on_workstreams": [],
+      "steps": [
+        "See MW-002 in slice 01."
+      ],
+      "test_plan": "See MW-002.",
+      "acceptance": "See MW-002."
+    },
+    {
+      "slug": "m2m-identity",
+      "title": "(cross-slice) M2M principals + api-key — canonical MAPS-003, slice 09",
+      "ids": [
+        "OCM-003"
+      ],
+      "rationale": "OCM-003 duplicates MAPS-003; decision 10 is the plan. The Api.ts scopes field is noted there.",
+      "order_hint": 99,
+      "effort": "n/a (see MAPS-003)",
+      "depends_on_workstreams": [],
+      "steps": [
+        "See MAPS-003 in slice 09."
+      ],
+      "test_plan": "See MAPS-003.",
+      "acceptance": "See MAPS-003."
+    },
+    {
+      "slug": "observability-substrate",
+      "title": "(cross-slice) Observability substrate — canonical MW-001, slice 02",
+      "ids": [
+        "NHS-008"
+      ],
+      "rationale": "NHS-008 duplicates MW-001; decision 27 is the plan.",
+      "order_hint": 99,
+      "effort": "n/a (see MW-001)",
+      "depends_on_workstreams": [],
+      "steps": [
+        "See MW-001 in slice 02."
+      ],
+      "test_plan": "See MW-001.",
+      "acceptance": "See MW-001."
+    },
+    {
+      "slug": "none",
+      "title": "Closed without work (wontfix)",
+      "ids": [
+        "TS-007-tim-smart",
+        "AGA-006"
+      ],
+      "rationale": "Informational findings the auditors themselves call correct or honest absences.",
+      "order_hint": 100,
+      "effort": "n/a",
+      "depends_on_workstreams": [],
+      "steps": [],
+      "test_plan": "",
+      "acceptance": ""
+    }
+  ]
+}

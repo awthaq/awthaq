@@ -1,0 +1,2721 @@
+{
+ "slice": "04-oauth-provider-jwt",
+ "validated_at_sha": "ec065a7",
+ "validated_on": "2026-09-29",
+ "issues": [
+  {
+   "id": "OCM-006",
+   "level": "info",
+   "category": "api",
+   "package": "jwt",
+   "title": "JWT mint is exclusively session-bound — no path issues a token to a machine credential",
+   "issue_file": ".issues/info/OCM-006-oauth2-client-credentials-m2m-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 167,
+     "snippet": "        mint: Effect.fnUntraced(function* () {\n          const principal = yield* Api.CurrentPrincipal;\n          const token = yield* jwt.sign(principal).pipe(Effect.orDie);",
+     "note": "Still session/principal-bound; wayfinder ticket 10 (decision on OCM-001) places machine-token issuance in `packages/api-key`'s `POST auth/apiKey/token`, minting via this plugin's signer with `sub: \"service:<clientId>\"` and `scope` — exactly OCM-006's ask."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "OCM-001",
+   "duplicates": [],
+   "workstream": "m2m-machine-credentials",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "TIR-007",
+   "level": "medium",
+   "category": "security",
+   "package": "jwt",
+   "title": "Every authenticated response mints a JWT that survives session revocation",
+   "issue_file": ".issues/medium/TIR-007-token-introspection-revocation-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "PARTIAL",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 361,
+     "snippet": "            // TRBS-001/TIR-001: every minted token gets a UUIDv7 `jti`,",
+     "note": "FIXED part: tokens now carry a jti and a RevocationStore/introspect path exists (commit 2ebd195); verifyLive/introspectLive use the keyed, idle-aware Sessions.isLive (6629fd2)."
+    },
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 181,
+     "snippet": "        introspect: Effect.fnUntraced(function* ({ payload }) {\n          const result = yield* jwt.introspect(payload.token);",
+     "note": "HOLDS: the HTTP /jwt/introspect path never consults session liveness, so a revoked session's mirrored JWT still introspects active:true — contrary to wayfinder ticket 11 item 4 ('wired to introspectLive when the composing app has Sessions installed')."
+    },
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 215,
+     "snippet": "    const decorate: Authentication.PostAuthResponseHookShape[\"decorate\"] = (principal, response) =>\n      jwt.sign(principal).pipe(",
+     "note": "HOLDS: every authenticated response still mints a token that plain `verify` honours until `exp` (mirroring half is tracked under PDR-003)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "SCP-007"
+   ],
+   "workstream": "jwt-revocation-propagation",
+   "fix": {
+    "summary": "Finish ticket 11's intent: let `/jwt/introspect` apply the session-liveness check whenever `Sessions` is composed (captured via `Effect.serviceOption`, keeping R = never), and document the bare-`verify` revocation-lag bound.",
+    "steps": [
+     "packages/jwt/src/Jwt.ts `make`: `const sessions = yield* Effect.serviceOption(Sessions.Sessions)` (Effect v4 `serviceOption: (key) => Effect<Option<S>>` adds no requirement — ../effect/packages/effect/src/Effect.ts:6103).",
+     "Add an internal `introspectForHandler(token)`: `introspect(token)`, then when `Option.isSome(sessions)` and the claims carry `sid`/`sub`, apply `sessions.value.isLive` exactly as `introspectLive` does; wire the `/jwt/introspect` handler to it. Keep public `verifyLive`/`introspectLive` signatures (per-call `Sessions` R) for explicit callers; refactor `sidStillLive` to accept the Sessions shape so both share one implementation.",
+     "Document in the Jwt.ts header and README: session revocation cascades immediately to verifyLive/introspectLive/`/jwt/introspect`; bare `verify` (and ticket-33 bearer re-entry) lags by at most `JwtConfig.ttl` (default 15m) — the documented, bounded tradeoff.",
+     "Note for SCIM (SCP-007): the future deactivation contract should call `Sessions.revokeAll` and require `verifyLive`/`introspect*` on security-sensitive JWT consumers; record this in spec/models/12-scim.md's open question when SCIM is specified (wayfinder ticket 08)."
+    ],
+    "files": [
+     "packages/jwt/src/Jwt.ts",
+     "packages/jwt/README.md",
+     "packages/jwt/test/AuthHttp.test.ts",
+     "packages/jwt/test/Jwt.test.ts"
+    ],
+    "tests": [
+     "packages/jwt/test/AuthHttp.test.ts (first): 'POST /jwt/introspect reports active:false once the minting session is revoked (Sessions composed)'.",
+     "Same file: 'POST /jwt/introspect still works (denylist only) in a composition without Sessions'."
+    ],
+    "acceptance": [
+     "Revoking a session makes every JWT minted from it introspect `active:false` over HTTP immediately when Sessions is composed.",
+     "`Jwt.dependsOn` stays `[]`; handler R stays dischargeable.",
+     "README states the bare-verify lag bound."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "MAPS-005",
+   "level": "medium",
+   "category": "security",
+   "package": "jwt",
+   "title": "x-jwt-token mirrored onto every authenticated response hands out a portable credential silently",
+   "issue_file": ".issues/medium/MAPS-005-microservices-auth-propagation-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 217,
+     "snippet": "        Effect.map((token) => HttpServerResponse.setHeader(response, \"x-jwt-token\", token)),",
+     "note": "Same unconditional mirroring construct and same opt-in recommendation as PDR-003."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "PDR-003",
+   "duplicates": [],
+   "workstream": "jwt-response-mirroring-opt-in",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "PDR-003",
+   "level": "medium",
+   "category": "security",
+   "package": "jwt",
+   "title": "JWT plugin mirrors a bearer token onto every authenticated response via x-jwt-token with no opt-out",
+   "issue_file": ".issues/medium/PDR-003-philippe-de-ryck.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 215,
+     "snippet": "    const decorate: Authentication.PostAuthResponseHookShape[\"decorate\"] = (principal, response) =>\n      jwt.sign(principal).pipe(\n        Effect.map((token) => HttpServerResponse.setHeader(response, \"x-jwt-token\", token)),\n        Effect.catch(() => Effect.succeed(response)),\n      );",
+     "note": "Unconditional: every authenticated response (cookie or bearer, any plugin) gets a fresh bearer JWT; failures swallowed silently."
+    },
+    {
+     "path": "packages/jwt/src/JwtConfig.ts",
+     "line": 25,
+     "snippet": "export interface JwtConfigShape {\n  readonly issuer: string;\n  readonly audience: string;",
+     "note": "No config knob to disable/scope mirroring."
+    },
+    {
+     "path": "packages/server/src/Authentication.ts",
+     "line": 288,
+     "snippet": "                      Effect.flatMap(PostAuthResponseHook, (hook) =>\n                        hook.decorate(principal, withRotation),",
+     "note": "`decorate` receives no scheme, so a bearer-only mode is not even expressible today."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "MAPS-005",
+    "VB-009"
+   ],
+   "workstream": "jwt-response-mirroring-opt-in",
+   "fix": {
+    "summary": "Make response mirroring a `JwtConfig` choice (`\"off\" | \"bearer\" | \"always\"`), pass the auth scheme to `PostAuthResponseHook.decorate`, and log rather than silently swallow sign failures.",
+    "steps": [
+     "packages/jwt/src/JwtConfig.ts: add `mirrorResponses: \"off\" | \"bearer\" | \"always\"` to `JwtConfigShape`/`config()`; default per the decision below (recommended `\"off\"`).",
+     "packages/server/src/Authentication.ts: extend `PostAuthResponseHookShape.decorate` to `(principal, response, context: { readonly scheme: \"cookie\" | \"bearer\" })`; pass the scheme at both call sites (~lines 288 and 345); keep the default no-op.",
+     "packages/jwt/src/Jwt.ts `PostAuthResponseHookLive`: read `JwtConfig`; `\"off\"` returns the response unchanged, `\"bearer\"` decorates only when `context.scheme === \"bearer\"`, `\"always\"` keeps today's behavior. Replace `Effect.catch(() => Effect.succeed(response))` with `Effect.catch((error) => Effect.logWarning(\"awthaq/jwt: response mirroring failed\", error).pipe(Effect.as(response)))`.",
+     "Rewrite the Jwt.ts block comment (lines 192-210) and packages/jwt/README.md: response headers are log/proxy/APM capture surface; cross-origin JS needs `Access-Control-Expose-Headers`; the explicit mint endpoint is the recommended delivery. Update .scratch/jwt/spec.md 'Automatic response mirroring' to record the opt-in decision.",
+     "When VB-005 lands, mirrored tokens carry the principal-token `typ` like any `sign(principal)` output (no extra work)."
+    ],
+    "files": [
+     "packages/jwt/src/JwtConfig.ts",
+     "packages/jwt/src/Jwt.ts",
+     "packages/server/src/Authentication.ts",
+     "packages/jwt/test/AuthHttp.test.ts",
+     "packages/jwt/README.md"
+    ],
+    "tests": [
+     "packages/jwt/test/AuthHttp.test.ts (first): 'default config: GET /session carries no x-jwt-token header'.",
+     "Same file: update the existing cross-plugin mirroring test (line 298) to opt into `mirrorResponses: \"always\"`.",
+     "Same file: 'mirrorResponses: \"bearer\" — a cookie-authenticated request gets no header, a bearer-authenticated one does'.",
+     "packages/server/test: 'PostAuthResponseHook.decorate receives the authenticating scheme'."
+    ],
+    "acceptance": [
+     "With the default config no authenticated response carries x-jwt-token.",
+     "Each of the three modes behaves as specified; sign failures are logged.",
+     "`pnpm run test`, `pnpm run typecheck` pass."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead",
+     "BEH-EA-065/066 (hook runs after scheme resolution; wording unchanged)"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [],
+   "needs_decision": true,
+   "decision_options": [
+    "A. Keep always-on mirroring (better-auth `set-auth-jwt` parity, today's behavior).",
+    "B. Config knob `mirrorResponses: \"off\" | \"bearer\" | \"always\"`, default `\"off\"`.",
+    "C. Same knob, default `\"bearer\"` (only clients that already hold a bearer credential receive the header; cookie sessions never leak a portable token)."
+   ],
+   "recommendation": "B — the knob gives every deployment the richer choice (flexibility), and default-off removes the silent cookie→portable-bearer conversion four independent auditors flagged; apps wanting better-auth parity opt into \"always\" with one line.",
+   "recommended_status": "ready-for-human"
+  },
+  {
+   "id": "VB-009",
+   "level": "low",
+   "category": "security",
+   "package": "jwt",
+   "title": "A fresh bearer JWT is mirrored onto every authenticated response",
+   "issue_file": ".issues/low/VB-009-vittorio-bertocci.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 217,
+     "snippet": "        Effect.map((token) => HttpServerResponse.setHeader(response, \"x-jwt-token\", token)),",
+     "note": "Same unconditional mirroring construct and same opt-in recommendation as PDR-003."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "PDR-003",
+   "duplicates": [],
+   "workstream": "jwt-response-mirroring-opt-in",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "JH-008",
+   "level": "low",
+   "category": "architecture",
+   "package": "jwt",
+   "title": "Ports-never-provided sandboxing rule is convention, not an enforced boundary",
+   "issue_file": ".issues/low/JH-008-jared-hanson.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "medium",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 313,
+     "snippet": "  static readonly layer = Layer.provideMerge(\n    PostAuthResponseHookLive,\n    AuthPlugin.layer(Jwt, {\n      handlers: JwtHandlers,",
+     "note": "A plugin's static layer can merge any service into its ROut."
+    },
+    {
+     "path": "spec/decisions/010-plugins-require-ports-never-provide.md",
+     "line": 10,
+     "snippet": "| Status | Accepted — design; implementation deferred |",
+     "note": "ADR-EA-010 / BEH-EA-020 are unenforced; Auth.make's `Validate<P>` checks DuplicateId/MissingDep/SlotConflict only."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "plugin-port-boundary-enforcement",
+   "fix": {
+    "summary": "Enforce BEH-EA-020 at the type level: `Auth.make`'s `Validate<P>` rejects any plugin whose layer's ROut contains a port tag.",
+    "steps": [
+     "packages/ports/src/index.ts: export a type-only `ReservedPort` union of the port service identifiers (PasswordHasher, Mailer, RateLimiter, WebAuthn, KeyProvider, Encryption, SqlTransaction, ClientAddress, LegacySessionBridge) plus `SqlClient.SqlClient` and `Crypto.Crypto` (BEH-EA-020's list).",
+     "packages/core/src/Auth.ts `Validate<P>`: add a `PortsProvidedByPlugin` check — for each plugin, `Extract<Layer.Success<P[i][\"layer\"]>, ReservedPort>` must be `never`, else the tuple position resolves to a branded error type naming the plugin id and port, mirroring the existing DuplicateId/MissingDep/SlotConflict encodings (BEH-EA-010..012).",
+     "Seams (`PostAuthResponseHook`, future `BearerCredentialResolver`) and slots (`SubjectResolver`, already SlotConflict-checked) are Context.References/slots, not ports — unaffected.",
+     "Flip ADR-EA-010's status to implemented and extend BEH-EA-020 with the compile-time enforcement sentence."
+    ],
+    "files": [
+     "packages/ports/src/index.ts",
+     "packages/core/src/Auth.ts",
+     "packages/core/test/ (type test)",
+     "spec/decisions/010-plugins-require-ports-never-provide.md",
+     "spec/behaviors/03-ports-slots-hooks-registries.md"
+    ],
+    "tests": [
+     "packages/core/test (type-level, first): '`Auth.make([Evil])` where Evil.layer provides PasswordHasher is a compile error (`// @ts-expect-error`) naming PortsProvidedByPlugin'; Jwt/Roles compositions still typecheck."
+    ],
+    "acceptance": [
+     "A plugin smuggling a port implementation cannot be composed; `pnpm run typecheck` + `pnpm run spec:verify:strict` green."
+    ],
+    "spec_refs": [
+     "BEH-EA-020",
+     "BEH-EA-010",
+     "BEH-EA-012"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "TRBS-002",
+   "level": "medium",
+   "category": "security",
+   "package": "jwt",
+   "title": "No jti is ever minted, so a per-token denylist is not even expressible today",
+   "issue_file": ".issues/medium/TRBS-002-token-revocation-blacklist-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 366,
+     "snippet": "            const jti = yield* crypto.randomUUIDv7.pipe(Effect.orDie);",
+     "note": "Every minted token carries a UUIDv7 jti (line 391 puts it in the claims); RevocationStore keys the denylist on it; Jwt.test.ts:259 'every minted token carries a jti claim'."
+    }
+   ],
+   "fixed_by_commit": "2ebd195",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": null,
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "TRBS-004",
+   "level": "medium",
+   "category": "correctness",
+   "package": "jwt",
+   "title": "verifyLive liveness check scans a 200-row oldest-first page and can reject live tokens",
+   "issue_file": ".issues/medium/TRBS-004-token-revocation-blacklist-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 443,
+     "snippet": "        const sidStillLive = (sub: string, sid: string) =>\n          Effect.gen(function* () {\n            const sessions = yield* Sessions.Sessions;\n            return yield* sessions.isLive(Users.UserId(sub), Sessions.SessionId(sid));\n          });",
+     "note": "verifyLive no longer lists-and-scans; keyed lookup."
+    },
+    {
+     "path": "packages/core/src/Sessions.ts",
+     "line": 888,
+     "snippet": "    const isLive: SessionsShape[\"isLive\"] = (userId, id) =>\n      Effect.gen(function* () {\n        const row = yield* repo.findById(id).pipe(",
+     "note": "SQL isLive: findById, then userId/supersededAt/absolute/idle checks (lines 895-905); memory twin at Sessions.ts:586-599."
+    },
+    {
+     "path": "packages/jwt/test/Jwt.test.ts",
+     "line": 193,
+     "snippet": "  it.effect(\n    \"verifyLive fails for an idle-expired session even though absolute expiry is far off\",",
+     "note": "The 200-row oldest-first page cliff is gone — no `sessions.list` call remains in Jwt.ts."
+    }
+   ],
+   "fixed_by_commit": "6629fd2",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": null,
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "VB-002",
+   "level": "medium",
+   "category": "correctness",
+   "package": "jwt",
+   "title": "verifyLive scans only the first page of sessions (200 rows)",
+   "issue_file": ".issues/medium/VB-002-vittorio-bertocci.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 443,
+     "snippet": "        const sidStillLive = (sub: string, sid: string) =>\n          Effect.gen(function* () {\n            const sessions = yield* Sessions.Sessions;\n            return yield* sessions.isLive(Users.UserId(sub), Sessions.SessionId(sid));\n          });",
+     "note": "verifyLive no longer lists-and-scans; keyed lookup."
+    },
+    {
+     "path": "packages/core/src/Sessions.ts",
+     "line": 888,
+     "snippet": "    const isLive: SessionsShape[\"isLive\"] = (userId, id) =>\n      Effect.gen(function* () {\n        const row = yield* repo.findById(id).pipe(",
+     "note": "SQL isLive: findById, then userId/supersededAt/absolute/idle checks (lines 895-905); memory twin at Sessions.ts:586-599."
+    },
+    {
+     "path": "packages/jwt/test/Jwt.test.ts",
+     "line": 193,
+     "snippet": "  it.effect(\n    \"verifyLive fails for an idle-expired session even though absolute expiry is far off\",",
+     "note": "Same: O(1) id lookup replaces the first-page scan."
+    }
+   ],
+   "fixed_by_commit": "6629fd2",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": null,
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "TRBS-007",
+   "level": "medium",
+   "category": "security",
+   "package": "jwt",
+   "title": "verifyLive checks absolute expiry only and accepts idle-expired sessions",
+   "issue_file": ".issues/medium/TRBS-007-token-revocation-blacklist-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 443,
+     "snippet": "        const sidStillLive = (sub: string, sid: string) =>\n          Effect.gen(function* () {\n            const sessions = yield* Sessions.Sessions;\n            return yield* sessions.isLive(Users.UserId(sub), Sessions.SessionId(sid));\n          });",
+     "note": "verifyLive no longer lists-and-scans; keyed lookup."
+    },
+    {
+     "path": "packages/core/src/Sessions.ts",
+     "line": 888,
+     "snippet": "    const isLive: SessionsShape[\"isLive\"] = (userId, id) =>\n      Effect.gen(function* () {\n        const row = yield* repo.findById(id).pipe(",
+     "note": "SQL isLive: findById, then userId/supersededAt/absolute/idle checks (lines 895-905); memory twin at Sessions.ts:586-599."
+    },
+    {
+     "path": "packages/jwt/test/Jwt.test.ts",
+     "line": 193,
+     "snippet": "  it.effect(\n    \"verifyLive fails for an idle-expired session even though absolute expiry is far off\",",
+     "note": "isLive checks `idleExpiresAt` as well as `absoluteExpiresAt`; pinned by Jwt.test.ts:193 'verifyLive fails for an idle-expired session even though absolute expiry is far off'."
+    }
+   ],
+   "fixed_by_commit": "6629fd2",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": null,
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "NAM-001",
+   "level": "high",
+   "category": "architecture",
+   "package": "jwt",
+   "title": "No stateless JWT session strategy: Jwt plugin still requires the live Sessions store",
+   "issue_file": ".issues/high/NAM-001-nextauth-authjs-migration-specialist.md",
+   "current_status": "ready-for-agent",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/JwtConfig.ts",
+     "line": 25,
+     "snippet": "export interface JwtConfigShape {\n  readonly issuer: string;\n  readonly audience: string;\n  readonly algorithm: Algorithm;\n  readonly ttl: Duration.Duration;",
+     "note": "No `acceptAsBearer` flag (grep for `acceptAsBearer`/`BearerCredentialResolver` across packages/*/src is empty) — the ticket-33 decision is not implemented."
+    },
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 81,
+     "snippet": "  /** Ticket 12: `verify` plus a live check that the token's `sid` still names an unrevoked, unexpired session. The documented, deliberate weakening `verify` alone carries (a revoked session's JWT keeps verifying until its own `exp`) does not apply here. */\n  readonly verifyLive: (\n    token: string,\n  ) => Effect.Effect<Record<string, unknown>, JwtCodec.JwtInvalidError, Sessions.Sessions>;",
+     "note": "Only delegation semantics exist; a JWT can never authenticate a request."
+    },
+    {
+     "path": "packages/jwt/README.md",
+     "line": 3,
+     "snippet": "> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet.",
+     "note": "The README recipe the decision requires does not exist; README is a stale stub."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "IC-008"
+   ],
+   "workstream": "jwt-stateless-bearer-reentry",
+   "fix": {
+    "summary": "Implement .scratch/resolve-ready-for-human-findings/issues/33-stateless-jwt-session-strategy.md verbatim: a `BearerCredentialResolver` slot on `Authentication`, a default-off `JwtConfig.acceptAsBearer`, `signJWT({ audience })`, and a README stateless recipe.",
+    "steps": [
+     "packages/server/src/Authentication.ts: add `BearerCredentialResolverShape { resolve: (credential: Redacted<string>) => Effect<Api.Principal, Api.Unauthenticated> }` and `BearerCredentialResolver = Context.Reference(\"awthaq/server/BearerCredentialResolver\", { defaultValue: () => ({ resolve: () => Effect.fail(new Api.Unauthenticated()) }) })`, sibling to `PostAuthResponseHook` (lines 78-88).",
+     "Same file, both `AuthenticationLive` and `OptionalAuthenticationLive` `bearer` closures: if `Redacted.value(credential).split(\".\").length === 3` route to `BearerCredentialResolver.resolve`, skip `deliverRotation`, still run `PostAuthResponseHook.decorate`; otherwise the existing `resolveSession` path (opaque `id.secret`). `cookie` untouched.",
+     "packages/jwt/src/JwtConfig.ts: add `acceptAsBearer: boolean` (default `false`) to `JwtConfigShape` and `config()`.",
+     "packages/jwt/src/Jwt.ts: add `claimsToPrincipal` — the Schema-decoded inverse of `principalClaims` (sub → `PrincipalRef({ type: \"user\", id })`, sid → `sessionId`, act → `actingAs`; decode failure → `Unauthenticated`; no casts) — and `BearerCredentialResolverLive = Layer.effect(Authentication.BearerCredentialResolver, ...)` calling bare `jwt.verify` (not verifyLive), failing closed unless `config.acceptAsBearer`. Merge it into `Jwt.layer` with the existing `Layer.provideMerge` chain.",
+     "`signJWT` options gain `audience?: string` (implemented in VB-005's step; a propagation token minted with a downstream audience is rejected at the origin by the existing aud check).",
+     "Replace packages/jwt/README.md with real docs: acceptAsBearer + its revocation-lag bound (= `JwtConfig.ttl`), the stateless recipe `Sessions.layerMemory` + `acceptAsBearer: true` (no SQL, no migrations), and `signJWT(payload, { audience })` for downstream-only tokens.",
+     "Spec: amend BEH-EA-066 (bearer handler now routes 3-segment credentials to `BearerCredentialResolver`; opaque tokens unchanged) and note the spec/models/08-jwt-bearer.md drift the decision flags."
+    ],
+    "files": [
+     "packages/server/src/Authentication.ts",
+     "packages/jwt/src/JwtConfig.ts",
+     "packages/jwt/src/Jwt.ts",
+     "packages/jwt/README.md",
+     "spec/behaviors/09-authentication-middleware.md",
+     "packages/jwt/test/AuthHttp.test.ts",
+     "packages/server/test/AuthHttp.test.ts"
+    ],
+    "tests": [
+     "packages/jwt/test/AuthHttp.test.ts (first): 'with acceptAsBearer: true, a minted JWT sent as Authorization: Bearer authenticates GET /session'.",
+     "Same file: 'with the default acceptAsBearer: false the same JWT is 401'; 'a signJWT token minted with audience \"inventory\" is 401 at the origin'.",
+     "Same file: 'stateless recipe: Auth.make([Jwt]) over Sessions.layerMemory with no SqlClient serves a JWT-bearer request'.",
+     "packages/server/test/AuthHttp.test.ts: 'an opaque id.secret bearer still resolves via Sessions (BEH-EA-066 regression)'."
+    ],
+    "acceptance": [
+     "A JWT presented as a bearer credential authenticates iff `acceptAsBearer` is on and `jwt.verify` passes; opaque session bearers behave exactly as before.",
+     "`AuthenticationLive`'s R is unchanged (the resolver is a Context.Reference).",
+     "README documents the stateless profile and revocation-lag bound.",
+     "`pnpm run test`, `pnpm run test:bdd`, `pnpm run spec:verify:strict` pass."
+    ],
+    "spec_refs": [
+     "BEH-EA-066",
+     "BEH-EA-069"
+    ],
+    "effort": "L"
+   },
+   "depends_on": [
+    "VB-005"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "SCP-007",
+   "level": "medium",
+   "category": "security",
+   "package": "jwt",
+   "title": "Deprovisioning propagation depends on opt-in verifyLive: plain verify keeps accepting revoked-session JWTs until exp",
+   "issue_file": ".issues/medium/SCP-007-scim-provisioning-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "medium",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 443,
+     "snippet": "        const sidStillLive = (sub: string, sid: string) =>\n          Effect.gen(function* () {\n            const sessions = yield* Sessions.Sessions;\n            return yield* sessions.isLive(Users.UserId(sub), Sessions.SessionId(sid));\n          });",
+     "note": "Same root cause as TIR-007 (bare `verify` lags revocation; the live path is opt-in). The primitives SCP-007 praises are now also idle-correct. The SCIM-contract half has no code to change until SCIM is specified (wayfinder 08) — captured as a doc step in TIR-007's plan."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "TIR-007",
+   "duplicates": [],
+   "workstream": "jwt-revocation-propagation",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "OCM-007",
+   "level": "low",
+   "category": "security",
+   "package": "jwt",
+   "title": "No immediate revocation story exists for machine credentials; the only revocation-aware verify is session-scoped",
+   "issue_file": ".issues/low/OCM-007-oauth2-client-credentials-m2m-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 472,
+     "snippet": "        const introspect: JwtShape[\"introspect\"] = (token) =>\n          Effect.gen(function* () {\n            const outcome = yield* Effect.result(verify(token));\n            if (Result.isFailure(outcome)) return { active: false };\n            const claims = outcome.success;\n            const jti = claims[\"jti\"];",
+     "note": "The 'only revocation-aware verify is session-scoped' claim is now false: jti-denylist introspection (2ebd195) works for any token, machine ones included."
+    },
+    {
+     "path": "packages/api-key/src/index.ts",
+     "line": 8,
+     "snippet": "// Empty placeholder — awthaq is pre-implementation. No exported symbols yet.",
+     "note": "The API-key half (immediate store-write revoke) is OCM-002's ready-for-agent plan under wayfinder ticket 10, which also explicitly accepts TTL lag for client_credentials JWTs."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "OCM-002",
+   "duplicates": [],
+   "workstream": "m2m-machine-credentials",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "AOMS-012",
+   "level": "low",
+   "category": "api",
+   "package": "jwt",
+   "title": "Sessions and JWTs carry no authentication-method record (no amr/acr equivalent)",
+   "issue_file": ".issues/low/AOMS-012-auth0-okta-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 133,
+     "snippet": "const principalClaims = (principal: Api.Principal): Record<string, unknown> =>\n  principal._tag === \"User\"\n    ? {\n        sub: principal.ref.id,\n        sid: principal.sessionId,",
+     "note": "Only sub/sid/act; no amr/acr/auth_time."
+    },
+    {
+     "path": "packages/sql/src/Models.ts",
+     "line": 153,
+     "snippet": "  authenticatedAt: Model.DateTimeUpdate,",
+     "note": "Sessions record *when* a credential was proven (ticket 15) but not *how*; no amr-like column exists."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "session-authentication-methods",
+   "fix": {
+    "summary": "Record RFC 8176-style authentication methods on the session, carry them on the UserPrincipal, and emit `amr` + `auth_time` in principal JWTs.",
+    "steps": [
+     "packages/sql/src/Models.ts `Session`: add `authMethods` (JSON text array, `update` variant for reauthenticate) + a CoreMigrations migration; mirror in `Sessions.layerMemory`'s row.",
+     "packages/core/src/Sessions.ts `issue` input: `authMethods: ReadonlyArray<string>`; `reauthenticate` appends; expose on `SessionView`.",
+     "Callers: password signIn → [\"pwd\"]; OAuth callback → [\"fed\"] plus `idp` = providerId; passkey → [\"hwk\", \"user\"]; MFA (wayfinder 05) appends \"otp\"/\"mfa\".",
+     "packages/api `UserPrincipal` gains `authMethods` and `authenticatedAt`; `PrincipalResolverLive` maps them (BEH-EA-069).",
+     "packages/jwt/src/Jwt.ts `principalClaims`: emit `amr` and `auth_time` (epoch seconds of authenticatedAt) for User principals."
+    ],
+    "files": [
+     "packages/sql/src/Models.ts",
+     "packages/sql/src/CoreMigrations.ts",
+     "packages/core/src/Sessions.ts",
+     "packages/api/src/Api.ts",
+     "packages/server/src/Authentication.ts",
+     "packages/password/src/Password.ts",
+     "packages/oauth/src/OAuth.ts",
+     "packages/passkey/src/Passkey.ts",
+     "packages/jwt/src/Jwt.ts"
+    ],
+    "tests": [
+     "packages/jwt/test/Jwt.test.ts (first): 'a JWT for a password-issued session carries amr [\"pwd\"] and auth_time'.",
+     "packages/oauth/test/OAuth.test.ts: 'an OAuth sign-in session carries amr [\"fed\"]'; packages/core/test/Sessions.test.ts: 'reauthenticate appends the method'."
+    ],
+    "acceptance": [
+     "Downstream verifiers can distinguish password vs federated vs passkey logins from the token alone."
+    ],
+    "spec_refs": [
+     "BEH-EA-069",
+     "BEH-EA-053"
+    ],
+    "effort": "L"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "AVS-005",
+   "level": "medium",
+   "category": "api",
+   "package": "jwt",
+   "title": "jwt package states a middleware convention that password's own contract violates",
+   "issue_file": ".issues/medium/AVS-005-api-design-versioning-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/JwtApi.ts",
+     "line": 12,
+     "snippet": "// Two groups, not one — `jwks` is public (JWKS is public by definition),\n// `token` requires an authenticated caller. This codebase's own established\n// pattern for a plugin mixing public and authenticated endpoints is a\n// second, dotted-sub-id group carrying its own `.middleware(Api.Authentication)`\n// (see `PasskeyApi.ts`'s `passkey`/`passkey.authenticate` split), never a\n// per-endpoint middleware inside one shared group.",
+     "note": ""
+    },
+    {
+     "path": "packages/password/src/PasswordApi.ts",
+     "line": 230,
+     "snippet": "    HttpApiEndpoint.post(\"changePassword\", \"/change-password\", {\n      payload: ChangePasswordPayload,",
+     "note": "…and at line 239 `}).middleware(Api.Authentication),` (also `reauthenticate` at 252) — per-endpoint middleware inside the public `password` group."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "plugin-api-surface-conventions",
+   "fix": {
+    "summary": "Make password follow the stated convention: move its two authenticated endpoints into a dotted `password.account` sub-group with group-level Authentication; keep paths.",
+    "steps": [
+     "packages/password/src/PasswordApi.ts: create `PasswordAccountGroup = HttpApiGroup.make(\"password.account\")` holding `changePassword` and `reauthenticate` (paths unchanged), `.middleware(Api.Authentication)` plus the same group-level CSRF middleware the `password` group carries; add it to `PasswordApi`.",
+     "packages/password/src/Password.ts: split handlers into `HttpApiBuilder.group(PasswordApi, \"password.account\", …)` and merge into `PasswordHandlers`.",
+     "Update the JwtApi.ts header (lines 12-17) to cite passkey and password as examples; mention the convention in the plugin-authoring docs if present."
+    ],
+    "files": [
+     "packages/password/src/PasswordApi.ts",
+     "packages/password/src/Password.ts",
+     "packages/jwt/src/JwtApi.ts",
+     "packages/client (regenerate if it enumerates groups)"
+    ],
+    "tests": [
+     "packages/password AuthHttp tests stay green unchanged (same paths/status codes); add 'POST /change-password without a session is 401 via the password.account group middleware'."
+    ],
+    "acceptance": [
+     "No shipped plugin contract uses per-endpoint `.middleware(Api.Authentication)` inside a mixed public group; `pnpm run test` + `pnpm run test:bdd` green."
+    ],
+    "spec_refs": [
+     "BEH-EA-053 (behavior unchanged; contract shape only)"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "AVS-007",
+   "level": "low",
+   "category": "api",
+   "package": "jwt",
+   "title": "Token minting declared as GET with an action-verb id, breaking the POST-for-actions convention",
+   "issue_file": ".issues/low/AVS-007-api-design-versioning-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/JwtApi.ts",
+     "line": 64,
+     "snippet": "    HttpApiEndpoint.get(\"mint\", \"/jwt/token\", {\n      success: TokenResponse,\n    }),",
+     "note": "Credential-issuing action exposed as GET; every other action endpoint is POST."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "plugin-api-surface-conventions",
+   "fix": {
+    "summary": "Make token minting `POST /jwt/token`.",
+    "steps": [
+     "JwtApi.ts:64 → `HttpApiEndpoint.post(\"mint\", \"/jwt/token\", { success: TokenResponse })`; update the header comment.",
+     "Once wayfinder-24's CSRF attachment lands, the unsafe method is covered by CsrfProtection (bearer requests exempt per that decision)."
+    ],
+    "files": [
+     "packages/jwt/src/JwtApi.ts",
+     "packages/jwt/test/AuthHttp.test.ts"
+    ],
+    "tests": [
+     "AuthHttp.test.ts (first): convert the three `GET /jwt/token` tests (lines 182-196, 221) to POST and add 'GET /jwt/token is 404/405'."
+    ],
+    "acceptance": [
+     "Minting is POST-only; tests green."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "GC-002",
+   "level": "medium",
+   "category": "architecture",
+   "package": "jwt",
+   "title": "JWT claims have no schema on either side of the codec",
+   "issue_file": ".issues/medium/GC-002-giulio-canti.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/JwtCodec.ts",
+     "line": 53,
+     "snippet": "const PayloadSchema = Schema.Record(Schema.String, Schema.Unknown);",
+     "note": "Decode side validates only 'object of unknowns'."
+    },
+    {
+     "path": "packages/jwt/src/JwtCodec.ts",
+     "line": 129,
+     "snippet": "export const sign = (params: {\n  readonly kid: string;\n  readonly alg: Algorithm;\n  readonly signer: Signer;\n  readonly claims: Record<string, unknown>;\n}) =>",
+     "note": "Encode side is an untyped bag, JSON.stringify'd (line 78)."
+    },
+    {
+     "path": "packages/jwt/src/JwtCodec.ts",
+     "line": 242,
+     "snippet": "    if (payload[\"iss\"] !== params.issuer || payload[\"aud\"] !== params.audience) {\n      return yield* Effect.fail(new JwtInvalidError({ reason: \"iss/aud mismatch\" }));\n    }\n    const exp = payload[\"exp\"];\n    if (typeof exp !== \"number\") {",
+     "note": "Hand-rolled claim checks; an RFC 7519 §4.1.3 array `aud` is rejected."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "jwt-claims-codec-hardening",
+   "fix": {
+    "summary": "One `RegisteredClaims` Schema used by both `JwtCodec.sign` (encode) and `parse` (decode); `verify` keeps only relational/temporal checks; `aud` accepts string or array.",
+    "steps": [
+     "packages/jwt/src/JwtCodec.ts: define `RegisteredClaims = Schema.StructWithRest(Schema.Struct({ iss: Schema.String, aud: Schema.Union([Schema.String, Schema.NonEmptyArray(Schema.String)]), exp: Schema.Int, iat: Schema.optional(Schema.Int), nbf: Schema.optional(Schema.Int), jti: Schema.optional(Schema.String), sub: Schema.optional(Schema.NonEmptyString) }), [Schema.Record(Schema.String, Schema.Unknown)])` (Effect v4: `StructWithRest` Schema.ts:4031, `NonEmptyArray` :4528, `Int` :7581 — confirm the exact rest-argument shape there).",
+     "`sign`: take `claims: typeof RegisteredClaims.Type`, encode via `Schema.encodeEffect(Schema.fromJsonString(RegisteredClaims))` → base64url, replacing `encodeJson`'s raw `JSON.stringify` for the payload.",
+     "`parse`/`decodePayload`: decode with `Schema.fromJsonString(RegisteredClaims)` (decode failure → `JwtInvalidError('malformed token')`).",
+     "`verify`: keep `iss === issuer`; `aud` passes when equal to, or an array containing, `params.audience`; `exp`/`nbf` against `DateTime.now` with an optional `clockSkew` param (default 0). Return the decoded claims (typed) — callers that want `Record<string, unknown>` still get a supertype.",
+     "packages/jwt/src/Jwt.ts `signClaims`: build a value typed against `RegisteredClaims.Type` (registered claims still win over extras); no casts."
+    ],
+    "files": [
+     "packages/jwt/src/JwtCodec.ts",
+     "packages/jwt/src/Jwt.ts",
+     "packages/jwt/src/verify.ts",
+     "packages/jwt/test/JwtCodec.test.ts (new)"
+    ],
+    "tests": [
+     "packages/jwt/test/JwtCodec.test.ts (new, first): 'an aud array containing the expected audience verifies'; 'an aud array without it fails'; 'a non-integer/absent exp fails as malformed'.",
+     "Existing Jwt.test.ts/verify.test.ts round-trips stay green."
+    ],
+    "acceptance": [
+     "The claims contract exists once, as a Schema, on both sides of the codec.",
+     "Array `aud` is accepted per RFC 7519 §4.1.3.",
+     "No `as` introduced; `pnpm run typecheck` + `pnpm run test` green."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "JJS-008",
+   "level": "low",
+   "category": "security",
+   "package": "jwt",
+   "title": "typ header minted but never validated; spec's RFC 8725 strict alg/typ/iss/aud posture only partially implemented",
+   "issue_file": ".issues/low/JJS-008-jwt-jwk-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/JwtCodec.ts",
+     "line": 48,
+     "snippet": "const HeaderSchema = Schema.Struct({\n  alg: Schema.optional(Schema.String),\n  kid: Schema.optional(Schema.String),\n});",
+     "note": "`typ` never decoded or checked."
+    },
+    {
+     "path": "packages/jwt/src/JwtCodec.ts",
+     "line": 136,
+     "snippet": "    const header = { alg: params.alg, kid: params.kid, typ: \"JWT\" };",
+     "note": "Minted but unverified; `nbf` likewise never checked anywhere in `verify`."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "jwt-claims-codec-hardening",
+   "fix": {
+    "summary": "Decode and enforce `typ` (RFC 8725 §3.11) and honour `nbf`/`iat` in `JwtCodec.verify` and the lite verifier.",
+    "steps": [
+     "JwtCodec.ts `HeaderSchema`: add `typ: Schema.optional(Schema.String)`.",
+     "`verify` params gain `expectedTyp: string`; reject when `header.typ !== expectedTyp` (case-insensitive per RFC 7515 §4.1.9 media-type rules) with the undifferentiated `JwtInvalidError`.",
+     "Reject `nbf` in the future and `iat` further in the future than `clockSkew` (uses GC-002's decoded claims).",
+     "packages/jwt/src/verify.ts `VerifierOptions`: `expectedTyp?: string` (default matches the principal-token typ chosen in VB-005)."
+    ],
+    "files": [
+     "packages/jwt/src/JwtCodec.ts",
+     "packages/jwt/src/verify.ts",
+     "packages/jwt/src/Jwt.ts",
+     "packages/jwt/test/JwtCodec.test.ts (new)"
+    ],
+    "tests": [
+     "JwtCodec.test.ts: 'a token whose header typ differs from expectedTyp fails'; 'a token with nbf in the future fails'; 'a token with iat far in the future fails'."
+    ],
+    "acceptance": [
+     "typ/nbf/iat enforced by both in-process verify and the lite verifier; tests green."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [
+    "GC-002"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "JJS-003",
+   "level": "medium",
+   "category": "correctness",
+   "package": "jwt",
+   "title": "Changing JwtConfig.algorithm desynchronizes sign and verify until the next time-based rotation",
+   "issue_file": ".issues/medium/JJS-003-jwt-jwk-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 387,
+     "snippet": "            return yield* JwtCodec.sign({\n              kid: key.kid,\n              alg: key.alg,",
+     "note": "Sign uses the stored key's alg…"
+    },
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 422,
+     "snippet": "              algorithm: config.algorithm,",
+     "note": "…verify pins the configured alg."
+    },
+    {
+     "path": "packages/jwt/src/KeyRing.ts",
+     "line": 160,
+     "snippet": "      : isStale(existing.value.createdAt, now, config.keyRotationInterval)",
+     "note": "Rotation is age-only; an alg change never triggers it, so every new token fails 'algorithm not allowed' until the interval elapses."
+    },
+    {
+     "path": "packages/jwt/src/JwtConfig.ts",
+     "line": 23,
+     "snippet": "export type Algorithm = \"EdDSA\" | \"ES256\";",
+     "note": "`Algorithm` is also declared a second time at JwtCodec.ts:36."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "jwt-key-rotation-integrity",
+   "fix": {
+    "summary": "Rotate immediately when the current key's alg differs from config, and verify against each key's own alg under an allowlist so grace-period keys of the old alg keep verifying.",
+    "steps": [
+     "KeyRing.ts `layerFromStore` and `rotateIfDue`: treat `current.alg !== config.algorithm` as due (rotate now).",
+     "JwtCodec.ts `verify`: replace `algorithm: Algorithm` with `algorithms: ReadonlyArray<Algorithm>`; require `header.alg === key.alg && algorithms.includes(key.alg)`; import/verify with `key.alg`.",
+     "Jwt.ts `verify`: pass `algorithms` = distinct algs of the verifiable key set (trusted server-side data).",
+     "verify.ts: `VerifierOptions.algorithm` → `algorithms: ReadonlyArray<Algorithm>` (pre-release breaking change is fine).",
+     "Single `Algorithm` type exported from JwtCodec.ts; JwtConfig.ts imports it (drop the duplicate at JwtConfig.ts:23)."
+    ],
+    "files": [
+     "packages/jwt/src/KeyRing.ts",
+     "packages/jwt/src/JwtCodec.ts",
+     "packages/jwt/src/Jwt.ts",
+     "packages/jwt/src/verify.ts",
+     "packages/jwt/src/JwtConfig.ts",
+     "packages/jwt/test/KeyRing.test.ts",
+     "packages/jwt/test/Jwt.test.ts",
+     "packages/jwt/test/verify.test.ts"
+    ],
+    "tests": [
+     "KeyRing.test.ts (first): 'switching JwtConfig.algorithm EdDSA→ES256 rotates on next access'.",
+     "Jwt.test.ts: 'a token minted before an algorithm switch keeps verifying during grace; tokens minted after use ES256 and verify'."
+    ],
+    "acceptance": [
+     "Changing `algorithm` never breaks sign/verify; header alg must equal the matched key's alg."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "JJS-009",
+   "level": "low",
+   "category": "testing",
+   "package": "jwt",
+   "title": "No negative tests for algorithm confusion or core unknown-kid fail-closed",
+   "issue_file": ".issues/low/JJS-009-jwt-jwk-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/JwtCodec.ts",
+     "line": 225,
+     "snippet": "    if (parsed.header.alg !== params.algorithm) {\n      return yield* Effect.fail(new JwtInvalidError({ reason: \"algorithm not allowed\" }));\n    }\n    const key = params.keys.find((candidate) => candidate.kid === kid);\n    if (key === undefined) {\n      return yield* Effect.fail(new JwtInvalidError({ reason: \"unknown kid\" }));\n    }",
+     "note": "Pins exist in code…"
+    },
+    {
+     "path": "packages/jwt/test/verify.test.ts",
+     "line": 170,
+     "snippet": "  it.effect(\"refetches once on an unknown kid, then succeeds\", () =>",
+     "note": "…but the only kid test is the lite verifier's happy refetch; no test in packages/jwt/test/*.ts exercises alg none/HS256/cross-alg or core unknown-kid fail-closed (grep for `none`/`HS256`/`algorithm not allowed` is empty)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "jwt-claims-codec-hardening",
+   "fix": {
+    "summary": "Add pinning tests for algorithm confusion and unknown-kid fail-closed.",
+    "steps": [
+     "Create packages/jwt/test/JwtCodec.test.ts with hand-assembled tokens (base64url header/payload + a real signature from a generated key) exercising `JwtCodec.verify` directly.",
+     "These are characterization tests: they should pass on HEAD; confirm red by temporarily loosening the alg comparison / adding a first-key fallback locally before committing.",
+     "The 'retired key stops verifying after cache refresh' case is delivered by ECF-002's TTL test."
+    ],
+    "files": [
+     "packages/jwt/test/JwtCodec.test.ts (new)"
+    ],
+    "tests": [
+     "'header alg \"none\" fails'; 'header alg missing fails'; 'header alg \"HS256\" signed with the public key bytes as HMAC secret fails'; 'ES256 header against an EdDSA configuration fails'.",
+     "'a kid matching no key fails closed even when other keys exist (no first-key fallback)'."
+    ],
+    "acceptance": [
+     "Loosening either pin in JwtCodec.verify turns the suite red."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "JJS-007",
+   "level": "low",
+   "category": "api",
+   "package": "jwt",
+   "title": "signJWT/verifyJWT asymmetry: the general-purpose verifier mandates sub, rejecting tokens signJWT can mint",
+   "issue_file": ".issues/low/JJS-007-jwt-jwk-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/JwtCodec.ts",
+     "line": 253,
+     "snippet": "    if (typeof payload[\"sub\"] !== \"string\" || payload[\"sub\"].length === 0) {\n      return yield* Effect.fail(new JwtInvalidError({ reason: \"missing sub\" }));\n    }",
+     "note": "Codec-level sub requirement."
+    },
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 431,
+     "snippet": "        const verifyJWT: JwtShape[\"verifyJWT\"] = verify;",
+     "note": "verifyJWT is literally `verify`, so `signJWT({ machine: \"etl\" })` mints a token its own verifyJWT rejects."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "jwt-claims-codec-hardening",
+   "fix": {
+    "summary": "Move the `sub` requirement out of `JwtCodec.verify` into the principal-scoped verifiers; give `verifyJWT` its own implementation.",
+    "steps": [
+     "JwtCodec.ts: delete the `sub` check from `verify`; add `requireSubject: boolean` to its params (principal callers pass true).",
+     "Jwt.ts: `verify` (principal) passes `requireSubject: true`; `verifyJWT` becomes a distinct function (`requireSubject: false`, `expectedTyp` per VB-005). Fix the JwtShape doc comments at lines 90-93 and 428-431.",
+     "verify.ts `VerifierOptions.requireSubject?: boolean` (default true)."
+    ],
+    "files": [
+     "packages/jwt/src/JwtCodec.ts",
+     "packages/jwt/src/Jwt.ts",
+     "packages/jwt/src/verify.ts",
+     "packages/jwt/test/Jwt.test.ts"
+    ],
+    "tests": [
+     "Jwt.test.ts (first): 'signJWT({ machine: \"etl-job\" }) verifies via verifyJWT'; 'Jwt.verify still rejects a principal token without sub'."
+    ],
+    "acceptance": [
+     "Every token signJWT can mint, verifyJWT can verify; principal verification unchanged."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [
+    "VB-005"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "BAM-010",
+   "level": "low",
+   "category": "api",
+   "package": "jwt",
+   "title": "JWT algorithm vocabulary is EdDSA/ES256 only",
+   "issue_file": ".issues/low/BAM-010-better-auth-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/JwtCodec.ts",
+     "line": 36,
+     "snippet": "export type Algorithm = \"EdDSA\" | \"ES256\";",
+     "note": ""
+    },
+    {
+     "path": "packages/jwt/src/JwtCodec.ts",
+     "line": 55,
+     "snippet": "const importParams = (algorithm: Algorithm) =>\n  algorithm === \"EdDSA\"\n    ? ({ name: \"Ed25519\" } as const)\n    : ({ name: \"ECDSA\", namedCurve: \"P-256\" } as const);",
+     "note": "Two-way ternaries hard-code the vocabulary; .scratch/jwt/spec.md only rules out symmetric (HS*) algorithms, not RSA/other asymmetric ones."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "jose-algorithm-coverage",
+   "fix": {
+    "summary": "Widen the jwt plugin to the common asymmetric JOSE set (EdDSA, ES256, ES384, RS256, PS256) via one algorithm table; still no HS*.",
+    "steps": [
+     "JwtCodec.ts: `Algorithm = \"EdDSA\" | \"ES256\" | \"ES384\" | \"RS256\" | \"PS256\"`; replace `importParams`/`signParams` ternaries with one `AlgorithmSpec` record (import, sign, generateKey params per alg; PS256 saltLength 32).",
+     "KeyRing.ts `generateKeyPair`: use the table (RSA modulusLength 2048 default, `JwtConfig.rsaModulusLength?` for 3072/4096).",
+     "SigningKeyRecords.ts: widen `Schema.Literals([...])` at lines 141 and 169 (derive from one exported `Algorithms` tuple).",
+     "verify.ts `toVerificationKeys`: accept any `Algorithm` via a type guard over the tuple (no cast).",
+     "Add `KeyRing.importKey({ kid, alg, publicKeyJwk, privateKeyJwk })` so migrators can import better-auth signing keys and keep outstanding tokens verifiable; document in README (migration section)."
+    ],
+    "files": [
+     "packages/jwt/src/JwtCodec.ts",
+     "packages/jwt/src/KeyRing.ts",
+     "packages/jwt/src/SigningKeyRecords.ts",
+     "packages/jwt/src/verify.ts",
+     "packages/jwt/src/JwtConfig.ts",
+     "packages/jwt/README.md",
+     "packages/jwt/test/JwtCodec.test.ts (new)"
+    ],
+    "tests": [
+     "JwtCodec.test.ts (first): parameterized 'sign/verify round-trip' for each algorithm.",
+     "'an RS256 header against an ES256-only key fails' (cross-alg confusion).",
+     "KeyRing.test.ts: 'imports a foreign RS256 key and verifies a token signed by it'."
+    ],
+    "acceptance": [
+     "All five algorithms sign/verify via WebCrypto; HS* remains unrepresentable; imported keys verify."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [
+    "JJS-003"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "FAMS-005",
+   "level": "medium",
+   "category": "api",
+   "package": "jwt",
+   "title": "JWT plugin cannot interop with Firebase tokens in either direction",
+   "issue_file": ".issues/medium/FAMS-005-firebase-auth-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/JwtConfig.ts",
+     "line": 23,
+     "snippet": "export type Algorithm = \"EdDSA\" | \"ES256\";",
+     "note": "Firebase tokens are RS256 — unverifiable by either the plugin or the lite verifier."
+    },
+    {
+     "path": "packages/jwt/src/JwtApi.ts",
+     "line": 62,
+     "snippet": "export const JwtTokenGroup = HttpApiGroup.make(\"jwt.token\")\n  .add(\n    HttpApiEndpoint.get(\"mint\", \"/jwt/token\", {\n      success: TokenResponse,\n    }),\n  )",
+     "note": "Mint is authenticated self-decoration (group `.middleware(Api.Authentication)` line 76); no inbound token-exchange."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "jose-algorithm-coverage",
+   "fix": {
+    "summary": "With BAM-010's RS256 support, document and test a Firebase dual-run recipe using `makeVerifier`; state that `/jwt/token` is not an RFC 8693 exchange. Whether to ship an inbound exchange endpoint is open (see decision).",
+    "steps": [
+     "After BAM-010: verify.ts already takes an arbitrary `jwksUrl`/`issuer`/`audience`; with `algorithms: [\"RS256\"]` it can verify Firebase ID tokens (Firebase's published securetoken JWKS; `iss` = `https://securetoken.google.com/<projectId>`, `aud` = `<projectId>`).",
+     "README migration section: dual-run recipe — an app handler verifies the Firebase ID token with `makeVerifier`, resolves/creates the user, then calls `Sessions.issue`; explicitly state `/jwt/token` is a self-decoration mint, not a token-exchange bootstrap.",
+     "If the decision picks option B: add `POST /jwt/exchange` accepting a foreign JWT from a configured `trustedIssuers` list (per-issuer jwksUrl/audience/algorithms), mapping claims to a user via an app-supplied `resolveUser` and issuing a session."
+    ],
+    "files": [
+     "packages/jwt/src/verify.ts",
+     "packages/jwt/README.md",
+     "packages/jwt/test/verify.test.ts"
+    ],
+    "tests": [
+     "verify.test.ts (first, after BAM-010): 'an RS256 token with Firebase-shaped iss/aud verifies via makeVerifier against a fake JWKS'."
+    ],
+    "acceptance": [
+     "Firebase-issued ID tokens can be verified during a dual-run with shipped code; README documents the recipe and the mint endpoint's scope."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [
+    "BAM-010"
+   ],
+   "needs_decision": true,
+   "decision_options": [
+    "A. Verification-only interop: RS256 in the lite verifier + a documented app-level recipe (verify Firebase token → Sessions.issue). No new endpoint.",
+    "B. Ship an inbound `POST /jwt/exchange` (RFC 8693-style) with a configurable trusted-issuer list."
+   ],
+   "recommendation": "A now — it unblocks dual-running with no new trust surface; revisit B only if a concrete migrator needs signInWithCustomToken parity (avoid speculative infra).",
+   "recommended_status": "ready-for-human"
+  },
+  {
+   "id": "VB-005",
+   "level": "medium",
+   "category": "architecture",
+   "package": "jwt",
+   "title": "Single shared audience and no token-type separation across all minted JWTs",
+   "issue_file": ".issues/medium/VB-005-vittorio-bertocci.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/JwtConfig.ts",
+     "line": 44,
+     "snippet": "    audience: options.audience ?? options.issuer,",
+     "note": "One audience for every token class."
+    },
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 391,
+     "snippet": "              claims: { ...claims, iat, exp, jti, iss: config.issuer, aud: config.audience },",
+     "note": "`signClaims` overwrites any per-call aud; signJWT has no audience option."
+    },
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 409,
+     "snippet": "        const signJWT: JwtShape[\"signJWT\"] = (payload, options) =>\n          signClaims({ ...payload }, options?.ttl);",
+     "note": "An arbitrary signJWT payload may carry `sub`/`sid` and is indistinguishable from a principal token (same typ \"JWT\"), so it passes verifyLive."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "jwt-claims-codec-hardening",
+   "fix": {
+    "summary": "Separate token classes by header `typ` (principal/delegation tokens vs general signJWT tokens) and allow per-call audience on signJWT, per wayfinder ticket 33's `signJWT({ audience })` decision.",
+    "steps": [
+     "`JwtCodec.sign` takes `typ: string`. `Jwt.sign(principal)` (mint endpoint, mirroring, ticket-33 re-entry) stamps `typ: \"at+jwt\"` (RFC 9068); `signJWT` stamps `typ: \"JWT\"` by default with an `options.typ?: string` override.",
+     "`signJWT` options gain `audience?: string | ReadonlyArray<string>` (ticket 33); `signClaims` uses `options.audience ?? config.audience` (registered claims still set only here).",
+     "`Jwt.verify`, `verifyLive`, `introspectLive`, and NAM-001's `BearerCredentialResolverLive` require `expectedTyp: \"at+jwt\"`; `verifyJWT` becomes its own function requiring `\"JWT\"` (or a caller-supplied typ) — a signJWT token with a forged `sid` can no longer pass verifyLive.",
+     "Lite verifier: `expectedTyp` default `\"at+jwt\"`; document per-consumer audience pinning (each downstream service constructs `makeVerifier({ audience: \"svc-a\" })`).",
+     "Update .scratch/jwt/spec.md 'Claims' and README."
+    ],
+    "files": [
+     "packages/jwt/src/JwtCodec.ts",
+     "packages/jwt/src/Jwt.ts",
+     "packages/jwt/src/verify.ts",
+     "packages/jwt/src/JwtConfig.ts",
+     "packages/jwt/test/Jwt.test.ts",
+     "packages/jwt/test/verify.test.ts"
+    ],
+    "tests": [
+     "packages/jwt/test/Jwt.test.ts (first): 'signJWT({ sub, sid }) is rejected by verifyLive (typ mismatch)'.",
+     "Jwt.test.ts: 'signJWT(payload, { audience: \"svc-a\" }) fails Jwt.verify at the origin'; verify.test.ts: 'the same token verifies via makeVerifier({ audience: \"svc-a\", expectedTyp: \"JWT\" })'.",
+     "Jwt.test.ts: 'sign(principal) produces header typ at+jwt'."
+    ],
+    "acceptance": [
+     "Principal and general-purpose tokens are not interchangeable at any verifier; per-call audiences work; tests green."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [
+    "GC-002",
+    "JJS-008"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "KRS-006",
+   "level": "medium",
+   "category": "architecture",
+   "package": "jwt",
+   "title": "KeyRing only notices rotations visible to its own process; external rotateNow is invisible to busy servers",
+   "issue_file": ".issues/medium/KRS-006-key-rotation-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/KeyRing.ts",
+     "line": 186,
+     "snippet": "const rotateIfDue = Effect.gen(function* () {\n  const ref = yield* KeyRing;\n  const config = yield* JwtConfig;\n  const cache = yield* Effect.provide(SigningKeysCache, ref.get);\n  const now = yield* DateTime.now;\n  if (isStale(cache.current.createdAt, now, config.keyRotationInterval)) {\n    yield* ref.refresh;\n  }",
+     "note": "Only the local snapshot's key age triggers a refresh."
+    },
+    {
+     "path": "packages/jwt/src/KeyRing.ts",
+     "line": 175,
+     "snippet": "export class KeyRing extends LayerRef.Service<KeyRing>()(\"awthaq/jwt/KeyRing\", {\n  layer: layerFromStore,\n  idleTimeToLive: \"1 hour\",\n}) {}",
+     "note": "idleTimeToLive never fires on a busy server; external rotateNow / peer rotations are invisible."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "jwt-key-rotation-integrity",
+   "fix": {
+    "summary": "Bound snapshot staleness with a max-age refresh and refresh once (rate-limited) on an unknown kid so peer/external rotations converge.",
+    "steps": [
+     "KeyRing.ts: add `loadedAt: DateTime.Utc` to `SigningKeysShape`, set in `layerFromStore`.",
+     "JwtConfig.ts: add `keyCacheMaxAge: Duration` (default 5 minutes).",
+     "`rotateIfDue`: also `ref.refresh` when `now - loadedAt >= keyCacheMaxAge` (still one in-memory comparison per call).",
+     "Jwt.ts `verify`: on `JwtInvalidError` with reason `unknown kid`, perform one `ref.refresh` (single-flighted via a Semaphore and rate-limited like ECF-002's minRefetchInterval) and retry once — peer-minted keys verify immediately instead of after maxAge."
+    ],
+    "files": [
+     "packages/jwt/src/KeyRing.ts",
+     "packages/jwt/src/JwtConfig.ts",
+     "packages/jwt/src/Jwt.ts",
+     "packages/jwt/test/KeyRing.test.ts",
+     "packages/jwt/test/Jwt.test.ts"
+    ],
+    "tests": [
+     "KeyRing.test.ts (first): 'an out-of-band rotateNow on the shared store is picked up by a busy KeyRing within keyCacheMaxAge' (two KeyRings over one store + TestClock.adjust).",
+     "Jwt.test.ts: 'a token signed by a peer's freshly rotated key verifies via the unknown-kid refresh'."
+    ],
+    "acceptance": [
+     "Signers converge on externally-triggered rotations within keyCacheMaxAge; verifiers accept peer keys immediately."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [
+    "JJS-004"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "KRS-009",
+   "level": "low",
+   "category": "correctness",
+   "package": "jwt",
+   "title": "Rotation mutation (markRotated + mint) is not atomic and has no single-current-key guard",
+   "issue_file": ".issues/low/KRS-009-key-rotation-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/KeyRing.ts",
+     "line": 227,
+     "snippet": "  const existing = yield* records.findCurrent();\n  if (Option.isSome(existing)) {\n    yield* markRotated(existing.value, now, config.keyGracePeriod);\n  }\n  yield* mint(config.algorithm);",
+     "note": "Same non-atomic, unguarded mark+mint as JJS-004; JJS-004's plan adds the transaction (KRS-009's atomicity point) and the unique partial index (its single-current guard)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "JJS-004",
+   "duplicates": [],
+   "workstream": "jwt-key-rotation-integrity",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "JJS-004",
+   "level": "medium",
+   "category": "correctness",
+   "package": "jwt",
+   "title": "Key rotation has no concurrency guard: multi-instance rotation mints duplicate current keys and re-extends grace periods",
+   "issue_file": ".issues/medium/JJS-004-jwt-jwk-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/SigningKeyRecords.ts",
+     "line": 209,
+     "snippet": "      execute: (r) => sql`\n          UPDATE jwt_signing_key SET rotatedAt = ${r.rotatedAt}, retiresAt = ${r.retiresAt}\n          WHERE kid = ${r.kid}\n          RETURNING *\n        `,",
+     "note": "No `rotatedAt IS NULL` guard: a second rotator re-extends retiresAt."
+    },
+    {
+     "path": "packages/jwt/src/KeyRing.ts",
+     "line": 157,
+     "snippet": "    const existing = yield* records.findCurrent();\n    const current = yield* Option.isNone(existing)\n      ? mint(config.algorithm)\n      : isStale(existing.value.createdAt, now, config.keyRotationInterval)\n        ? markRotated(existing.value, now, config.keyGracePeriod).pipe(\n            Effect.andThen(mint(config.algorithm)),\n          )",
+     "note": "Find → mark → mint, untransactioned and unlocked."
+    },
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 300,
+     "snippet": "      yield* sql`\n        CREATE INDEX jwt_signing_key_active_idx ON jwt_signing_key (createdAt)\n        WHERE rotatedAt IS NULL`;",
+     "note": "The partial index added by 402d7f5 (SSMS-001) is non-unique — nothing enforces a single current key."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "KRS-009"
+   ],
+   "workstream": "jwt-key-rotation-integrity",
+   "fix": {
+    "summary": "Enforce one current signing key at the store (unique partial index + conditional markRotated), and run mark+mint atomically in `SqlTransaction`, with losers re-reading the winner.",
+    "steps": [
+     "packages/jwt/src/Jwt.ts `jwtMigrations`: append `create_jwt_signing_key_single_current_index`: `CREATE UNIQUE INDEX jwt_signing_key_single_current ON jwt_signing_key ((rotatedAt IS NULL)) WHERE rotatedAt IS NULL` (expression + partial unique index; valid on pg and sqlite >= 3.9 — verify both in the migration test).",
+     "packages/jwt/src/SigningKeyRecords.ts: `markRotated` becomes `UPDATE … WHERE kid = ? AND rotatedAt IS NULL RETURNING *` via `SqlSchema.findOneOption` and returns `Effect<boolean>` (won/lost); `layerMemory` mirrors it (only modifies a row whose rotatedAt is None). `create` maps a unique-constraint `SqlError` to a typed `CurrentKeyConflict` (Data.TaggedError) instead of `orDie`.",
+     "packages/jwt/src/KeyRing.ts: wrap `markRotated + mint` in `SqlTransaction.withTransaction` (packages/ports/src/SqlTransaction.ts; `layerNoop` for memory) in both `layerFromStore` and `rotateNow`; on a lost `markRotated` or `CurrentKeyConflict`, re-read `findCurrent` and adopt the winner (covers the concurrent lazy first-mint race too). `KeyRing` then requires `SqlTransaction` — document in README.",
+     "`registerRemoteKey`: in the same transaction, mark the existing current key rotated so the remote key becomes the single current key (otherwise it violates the new index).",
+     "With the guard, a repeated rotation can no longer rewrite `retiresAt` (grace window no longer re-extended)."
+    ],
+    "files": [
+     "packages/jwt/src/SigningKeyRecords.ts",
+     "packages/jwt/src/KeyRing.ts",
+     "packages/jwt/src/Jwt.ts",
+     "packages/jwt/test/KeyRing.test.ts",
+     "packages/jwt/test/RevocationStore.test.ts"
+    ],
+    "tests": [
+     "packages/jwt/test/KeyRing.test.ts, both memory and sql suites (first): 'two concurrent rotations of a stale key leave exactly one current key' (Effect.all two `rotateNow`/two KeyRing instances over one store).",
+     "Same file: 'concurrent lazy first-mint yields exactly one current key'; 'markRotated on an already-rotated kid leaves retiresAt unchanged'; 'a failing mint after markRotated rolls back (layerSql + SqlTransaction.layerSql)'.",
+     "packages/jwt/test/RevocationStore.test.ts migrations block: 'creates the single-current unique index'."
+    ],
+    "acceptance": [
+     "`SELECT count(*) FROM jwt_signing_key WHERE rotatedAt IS NULL` is ≤ 1 under any interleaving.",
+     "A crash between mark and mint leaves the previous key current (transaction rolled back).",
+     "`pnpm run test` green on memory and sqlite suites."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead"
+    ],
+    "effort": "L"
+   },
+   "depends_on": [
+    "KRS-001"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "KRS-001",
+   "level": "high",
+   "category": "security",
+   "package": "jwt",
+   "title": "JWT private signing keys stored as plaintext JSON in the database",
+   "issue_file": ".issues/high/KRS-001-key-rotation-specialist.md",
+   "current_status": "ready-for-agent",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/SigningKeyRecords.ts",
+     "line": 221,
+     "snippet": "        publicKeyJwk: JSON.stringify(input.publicKeyJwk),\n        privateKeyJwk: Option.match(input.privateKeyJwk, {\n          onNone: () => null,\n          onSome: (redacted) => JSON.stringify(Redacted.value(redacted)),\n        }),",
+     "note": "Redacted is unwrapped and the private JWK (incl. `d`) is written as plaintext JSON."
+    },
+    {
+     "path": "packages/jwt/src/SigningKeyRecords.ts",
+     "line": 143,
+     "snippet": "  privateKeyJwk: Schema.NullOr(Schema.String),",
+     "note": "Column is a plain string; no Encryption envelope anywhere in the package."
+    },
+    {
+     "path": "packages/ports/src/Encryption.ts",
+     "line": 101,
+     "snippet": "  readonly encrypt: (plaintext: Redacted.Redacted<string>, aad: string) => Effect.Effect<string>;\n  readonly decrypt: (\n    envelope: string,\n    aad: string,\n  ) => Effect.Effect<Redacted.Redacted<string>, DecryptionFailed | UnknownKeyId>;",
+     "note": "The reusable, kid-versioned AES-GCM port already used by packages/sql/src/Repositories.ts:200 for provider tokens."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "SMS-001-secrets-management-specialist"
+   ],
+   "workstream": "jwt-signing-key-at-rest-encryption",
+   "fix": {
+    "summary": "Encrypt `privateKeyJwk` at rest through the existing `@awthaq/ports` Encryption port (AAD bound to the row's kid) and decode both JWK columns with Schema instead of `JSON.parse`.",
+    "steps": [
+     "packages/jwt/src/SigningKeyRecords.ts `layerSql`: `const encryption = yield* Encryption.Encryption` (import from `@awthaq/ports`; add the workspace dependency to packages/jwt/package.json if missing). Add `const privateKeyAad = (kid: string) => `jwt_signing_key:${kid}:privateKeyJwk``.",
+     "In `create`, replace `JSON.stringify(Redacted.value(redacted))` with `encryption.encrypt(Redacted.make(JSON.stringify(Redacted.value(redacted))), privateKeyAad(input.kid))` (the envelope string is what goes into the column).",
+     "Replace the synchronous `toRecord` (lines 149-159, which also launders `JSON.parse`'s `any` into `Jwk`) with an effectful `decodeRow`: decode `publicKeyJwk` via `Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))`; for a non-null `privateKeyJwk`, `encryption.decrypt(envelope, privateKeyAad(row.kid))`, then schema-decode the plaintext JSON and wrap in `Redacted.make`. Map `DecryptionFailed`/`UnknownKeyId`/SchemaError to `Effect.die(new Error(`awthaq/jwt: signing key \"${kid}\" could not be decrypted`))` — an undecryptable signing key is a deployment fault. Use it in create/findCurrent/listVerifiable/markRotated.",
+     "Let `layerSql`'s type be inferred (no annotation); it becomes `Layer<SigningKeyRecords, never, SqlClient | Encryption>`. Keep `layerMemory` plaintext (in-process only) and say so in the header comment (rewrite lines 10-17, which currently justify the plaintext JSON convention).",
+     "Rewrite packages/jwt/README.md (currently a 'planned package' stub): document at-rest encryption, the Encryption/KeyProvider requirement for `layerSql`, and recommend `KeyRing.registerRemoteKey` + `JwtCodec.RemoteSigner` (KMS/HSM) for production so private material never lands in the DB at all.",
+     "No legacy-plaintext shim: the library is pre-release and unpublished."
+    ],
+    "files": [
+     "packages/jwt/src/SigningKeyRecords.ts",
+     "packages/jwt/package.json",
+     "packages/jwt/README.md",
+     "packages/jwt/test/KeyRing.test.ts",
+     "packages/jwt/test/RevocationStore.test.ts"
+    ],
+    "tests": [
+     "packages/jwt/test/KeyRing.test.ts (sql suite, write first): 'layerSql never stores the private JWK in plaintext' — after first `KeyRing.current`, `SELECT privateKeyJwk FROM jwt_signing_key` must not contain `\"d\"` and must decode as an Encryption envelope (`v`/`kid`/`iv`/`ciphertext`). Provide `Encryption.layer` + `KeyProvider.layerEnv` exactly like packages/core/test/Accounts.test.ts:37-40.",
+     "Same file: 'a privateKeyJwk ciphertext copied onto another kid's row fails to decrypt (AAD binding)' — UPDATE one row's column with another's, then `findCurrent` dies.",
+     "Existing sign/verify round-trips over layerSql stay green."
+    ],
+    "acceptance": [
+     "`jwt_signing_key.privateKeyJwk` holds an Encryption envelope, never JWK JSON.",
+     "Swapping ciphertext between rows is detected (die), not silently accepted.",
+     "No `JSON.parse` result flows into a typed `Jwk` without a Schema decode; no `as` in SigningKeyRecords.ts.",
+     "`pnpm run typecheck`, `pnpm run test`, `pnpm lint`, `pnpm knip` pass."
+    ],
+    "spec_refs": [],
+    "effort": "M"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "SMS-001",
+   "level": "high",
+   "category": "security",
+   "package": "jwt",
+   "title": "JWT private signing keys persisted as plaintext JWK JSON in the database",
+   "issue_file": ".issues/high/SMS-001-secrets-management-specialist.md",
+   "current_status": "ready-for-agent",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/SigningKeyRecords.ts",
+     "line": 224,
+     "snippet": "          onSome: (redacted) => JSON.stringify(Redacted.value(redacted)),",
+     "note": "Identical construct and root cause as KRS-001 (same file/line, same recommended Encryption-port fix)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "KRS-001",
+   "duplicates": [],
+   "workstream": "jwt-signing-key-at-rest-encryption",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "IC-008",
+   "level": "info",
+   "category": "architecture",
+   "package": "jwt",
+   "title": "Single session strategy: no JWT-session option for edge/serverless render paths",
+   "issue_file": ".issues/info/IC-008-iain-collins.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/index.ts",
+     "line": 3,
+     "snippet": "// Short-lived, self-contained, cryptographically signed JWTs representing\n// an already-authenticated caller — EdDSA/ES256, JWKS with grace-period",
+     "note": "Same gap (no JWT-session/stateless option for edge) that wayfinder ticket 33 resolved for NAM-001/MAPS-001; the decision's `Sessions.layerMemory` + `acceptAsBearer` recipe is the edge answer IC-008 asks to document."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "NAM-001",
+   "duplicates": [],
+   "workstream": "jwt-stateless-bearer-reentry",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "ECF-002",
+   "level": "high",
+   "category": "security",
+   "package": "jwt",
+   "title": "Unknown-kid JWKS refetch runs once per request with no single-flight, TTL, or negative caching",
+   "issue_file": ".issues/high/ECF-002-effect-concurrency-fiber-specialist.md",
+   "current_status": "ready-for-agent",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/verify.ts",
+     "line": 83,
+     "snippet": "    const fetchKeys = httpClient.get(options.jwksUrl).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(JwksDocumentSchema)),\n      Effect.map(toVerificationKeys),\n      Effect.tap((keys) => Ref.set(cache, Option.some(keys))),",
+     "note": "No TTL, no in-flight coalescing: cache fill is check-then-Ref.set."
+    },
+    {
+     "path": "packages/jwt/src/verify.ts",
+     "line": 105,
+     "snippet": "        const keys = yield* currentKeys;\n        return yield* verifyAgainst(token, keys).pipe(\n          Effect.catchIf(\n            (error) => error.reason === \"unknown kid\",\n            () => Effect.flatMap(fetchKeys, (refetched) => verifyAgainst(token, refetched)),",
+     "note": "Every request with a garbage kid triggers one outbound JWKS fetch; no negative cache."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 335,
+     "snippet": "    const cachedEntry = HashMap.get(yield* Ref.get(jwksCache), provider.id);\n    const jwks =\n      Option.isSome(cachedEntry) &&\n      Date.now() - cachedEntry.value.fetchedAt < Duration.toMillis(JWKS_CACHE_TTL)\n        ? cachedEntry.value.jwks\n        : yield* fetchAndCacheJwks;",
+     "note": "OAuth side: fd8e5e9 added a 15-min TTL, but still no single-flight, and `findKey` failure (line 342-346) refetches once per request with no negative cache."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "JJS-002",
+    "KRS-010"
+   ],
+   "workstream": "jwt-lite-verifier-jwks-cache",
+   "fix": {
+    "summary": "Single-flight, TTL'd JWKS caches with a rate-limited unknown-kid refetch in both the lite verifier and OAuth's id_token verifier; publish Cache-Control on /jwt/jwks.",
+    "steps": [
+     "packages/jwt/src/verify.ts: build the key source with `Effect.cachedInvalidateWithTTL(fetchKeys, options.cacheTtl ?? \"10 minutes\")` (Effect v4 Effect.ts:7279 returns `[get, invalidate]`); `currentKeys = get` — concurrent cold starts share one in-flight fetch and entries expire (closes JJS-002/KRS-010's 'never expires').",
+     "Unknown-kid path: guard the forced refetch with `Effect.Semaphore` (1 permit) + a `Ref<number>` of the last forced refetch time read from `Clock`; inside the permit, if the last forced refetch is younger than `options.minRefetchInterval ?? \"30 seconds\"`, fail `unknown kid` immediately (negative cache); otherwise `invalidate` then `get` and retry verification once.",
+     "Extend `VerifierOptions` with optional `cacheTtl?: Duration.Input` and `minRefetchInterval?: Duration.Input`; document defaults relative to the issuer's `keyGracePeriod` in the module header.",
+     "packages/jwt/src/Jwt.ts `JwtHandlers` `jwks` handler: return an `HttpServerResponse` (HttpApiBuilder passes a returned response through untouched — ../effect/packages/effect/src/unstable/httpapi/HttpApiBuilder.ts:855) with `cache-control: public, max-age=<JwtConfig.jwksMaxAge seconds>`; add `jwksMaxAge: Duration` to `JwtConfig` (default 10 minutes).",
+     "packages/oauth/src/OAuth.ts `verifyIdToken`: replace the `Ref<HashMap<providerId, JwksCacheEntry>>` + `Date.now()` logic (lines 325-347) with one `Effect.cachedInvalidateWithTTL` per resolved provider, created once in the plugin `make` (providers are resolved at boot), plus the same min-refetch-interval guard around the kid-miss refetch; use `Clock` instead of `Date.now()` so TestClock drives it."
+    ],
+    "files": [
+     "packages/jwt/src/verify.ts",
+     "packages/jwt/src/Jwt.ts",
+     "packages/jwt/src/JwtConfig.ts",
+     "packages/oauth/src/OAuth.ts",
+     "packages/jwt/test/verify.test.ts",
+     "packages/jwt/test/AuthHttp.test.ts",
+     "packages/oauth/test/OAuth.test.ts"
+    ],
+    "tests": [
+     "packages/jwt/test/verify.test.ts: 'N concurrent first verifications perform exactly one JWKS fetch' (count requests in the fake HttpClient, `Effect.all(..., { concurrency: 'unbounded' })`).",
+     "verify.test.ts: 'a burst of tokens with garbage kids within minRefetchInterval performs at most one refetch'.",
+     "verify.test.ts: 'a key removed from the JWKS stops verifying once cacheTtl elapses' (TestClock.adjust past the TTL) — also JJS-009's third requested test.",
+     "packages/jwt/test/AuthHttp.test.ts: 'GET /jwt/jwks carries Cache-Control max-age'.",
+     "packages/oauth/test/OAuth.test.ts: 'concurrent callbacks presenting an unknown kid cause one JWKS refetch, not one per request'."
+    ],
+    "acceptance": [
+     "Outbound JWKS fetches are bounded by 1 per cacheTtl plus 1 per minRefetchInterval, regardless of request rate or kid values.",
+     "Keys dropped from the JWKS stop verifying within cacheTtl without a restart.",
+     "/jwt/jwks responses carry Cache-Control.",
+     "Full gate `pnpm check` passes."
+    ],
+    "spec_refs": [
+     "no BEH-EA id covers @awthaq/jwt yet (M7); update .scratch/jwt/spec.md and spec/models/08-jwt-bearer.md instead",
+     "BEH-EA-127 (OAuth id_token verification path, unchanged semantics)"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "JJS-002",
+   "level": "medium",
+   "category": "security",
+   "package": "jwt",
+   "title": "Lite-verifier JWKS cache never expires: keys removed from the JWKS stay trusted indefinitely",
+   "issue_file": ".issues/medium/JJS-002-jwt-jwk-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/verify.ts",
+     "line": 92,
+     "snippet": "    const currentKeys = Ref.get(cache).pipe(\n      Effect.flatMap(Option.match({ onSome: Effect.succeed, onNone: () => fetchKeys })),\n    );",
+     "note": "Still no expiry; ECF-002's `cachedInvalidateWithTTL` plan (validated earlier as ready-for-agent) adds the TTL and single-flight this finding asks for."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "ECF-002",
+   "duplicates": [],
+   "workstream": "jwt-lite-verifier-jwks-cache",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "KRS-010",
+   "level": "low",
+   "category": "security",
+   "package": "jwt",
+   "title": "Lite verifier's JWKS cache never expires keys and the served JWKS sets no caching guidance",
+   "issue_file": ".issues/low/KRS-010-key-rotation-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/verify.ts",
+     "line": 92,
+     "snippet": "    const currentKeys = Ref.get(cache).pipe(\n      Effect.flatMap(Option.match({ onSome: Effect.succeed, onNone: () => fetchKeys })),",
+     "note": "Same never-expiring cache as ECF-002/JJS-002."
+    },
+    {
+     "path": "packages/jwt/src/JwtApi.ts",
+     "line": 56,
+     "snippet": "export const JwtGroup = HttpApiGroup.make(\"jwt\").add(\n  HttpApiEndpoint.get(\"jwks\", \"/jwt/jwks\", {\n    success: JwksResponse,\n  }),\n);",
+     "note": "No Cache-Control on the served JWKS — folded into ECF-002's plan as an explicit step."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "ECF-002",
+   "duplicates": [],
+   "workstream": "jwt-lite-verifier-jwks-cache",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "KRS-007",
+   "level": "medium",
+   "category": "correctness",
+   "package": "jwt",
+   "title": "No production migration creates jwt_signing_key",
+   "issue_file": ".issues/medium/KRS-007-key-rotation-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/jwt/src/Jwt.ts",
+     "line": 241,
+     "snippet": "const jwtMigrations: Migrations.Migrations = [\n  {\n    name: \"create_jwt_signing_key\",",
+     "note": "Plugin now declares dialect-branched production migrations (and `migrations: jwtMigrations` at line 311)."
+    },
+    {
+     "path": "packages/jwt/test/KeyRing.test.ts",
+     "line": 33,
+     "snippet": "const Migrated = Layer.effectDiscard(Migrations.run(Jwt.Jwt.migrations)).pipe(\n  Layer.provide(SqlLive),\n);",
+     "note": "The test's hand-rolled CREATE TABLE was replaced by the real migrations (994412d)."
+    }
+   ],
+   "fixed_by_commit": "2ebd195",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": null,
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "AP-002",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Jwt.findKey falls back to the first RSA key on kid mismatch, making the rotation refetch unreachable",
+   "issue_file": ".issues/medium/AP-002-aaron-parecki.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 148,
+     "snippet": "export const findKey = (\n  jwks: Jwks,\n  kid: string | undefined,\n): Effect.Effect<Jwk, JwtVerificationError> => {\n  const candidates = jwks.keys.filter((key) => key.kty === \"RSA\" || key.kty === undefined);\n  const matched = kid === undefined ? candidates[0] : candidates.find((key) => key.kid === kid);",
+     "note": "A present-but-unmatched kid now fails, making OAuth.ts's kid-miss refetch reachable; regression tests OAuth.test.ts:1048/1057."
+    }
+   ],
+   "fixed_by_commit": "fd8e5e9",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": null,
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "VB-003",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "OAuth id_token key selection falls back to the first JWKS key on kid mismatch",
+   "issue_file": ".issues/medium/VB-003-vittorio-bertocci.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 148,
+     "snippet": "export const findKey = (\n  jwks: Jwks,\n  kid: string | undefined,\n): Effect.Effect<Jwk, JwtVerificationError> => {\n  const candidates = jwks.keys.filter((key) => key.kty === \"RSA\" || key.kty === undefined);\n  const matched = kid === undefined ? candidates[0] : candidates.find((key) => key.kid === kid);",
+     "note": "A present-but-unmatched kid now fails, making OAuth.ts's kid-miss refetch reachable; regression tests OAuth.test.ts:1048/1057. Residual (by design): a kid-less token still uses the first RSA candidate; the optional 'try all keys when kid absent' suggestion is not required by RFC 8725 and can ride along with AOMS-005's findKey rewrite."
+    }
+   ],
+   "fixed_by_commit": "fd8e5e9",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": null,
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "ESS-007",
+   "level": "low",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "kid-mismatch falls back to first JWKS key, contradicting the repo's own key-selection rule",
+   "issue_file": ".issues/low/ESS-007-effect-schema-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 148,
+     "snippet": "export const findKey = (\n  jwks: Jwks,\n  kid: string | undefined,\n): Effect.Effect<Jwk, JwtVerificationError> => {\n  const candidates = jwks.keys.filter((key) => key.kty === \"RSA\" || key.kty === undefined);\n  const matched = kid === undefined ? candidates[0] : candidates.find((key) => key.kid === kid);",
+     "note": "A present-but-unmatched kid now fails, making OAuth.ts's kid-miss refetch reachable; regression tests OAuth.test.ts:1048/1057."
+    }
+   ],
+   "fixed_by_commit": "fd8e5e9",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": null,
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "ERAS-007",
+   "level": "info",
+   "category": "api",
+   "package": "oauth",
+   "title": "The single node: reference in shipped src is a type-only import (edge-safe, but worth pinning)",
+   "issue_file": ".issues/info/ERAS-007-edge-runtime-auth-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 16,
+     "snippet": "import * as Data from \"effect/Data\";\nimport * as Effect from \"effect/Effect\";\nimport * as Option from \"effect/Option\";\nimport * as Schema from \"effect/Schema\";",
+     "note": "The `import type { webcrypto } from \"node:crypto\"` line is gone; `grep -rn \"node:\" packages/oauth/src` finds no node: imports."
+    }
+   ],
+   "fixed_by_commit": "e364411",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": null,
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "AOMS-005",
+   "level": "medium",
+   "category": "api",
+   "package": "oauth",
+   "title": "Upstream id_token verification is RS256-only",
+   "issue_file": ".issues/medium/AOMS-005-auth0-okta-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 313,
+     "snippet": "    if (decoded.header.alg !== \"RS256\") {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());\n    }",
+     "note": ""
+    },
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 152,
+     "snippet": "  const candidates = jwks.keys.filter((key) => key.kty === \"RSA\" || key.kty === undefined);",
+     "note": "Key selection is RSA-only too; header (lines 3-14) documents ES256/EdDSA as not implemented."
+    },
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 90,
+     "snippet": "        const [headerSegment, payloadSegment, signatureSegment] = parts as [string, string, string];",
+     "note": "Residual type assertion in the same file (left by TTE-002's fix) — remove while here, per the no-assertions rule."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "jose-algorithm-coverage",
+   "fix": {
+    "summary": "Generalize OAuth id_token verification to RS256/PS256/ES256/ES384/EdDSA under a per-provider allowlist seeded from discovery, checked at boot.",
+    "steps": [
+     "packages/oauth/src/Jwt.ts: replace `verifyRs256` with `verifySignature(alg, jwk, signingInput, signature)` over an alg table; `findKey(jwks, kid, alg)` filters candidates by the kty the alg requires (RSA / EC+crv / OKP) instead of `kty === \"RSA\"`; rewrite the header comment (lines 3-14).",
+     "Remove `parts as [string, string, string]` (line 90): destructure then guard each segment `=== undefined`, exactly like packages/jwt/src/JwtCodec.ts:164-175.",
+     "packages/oauth/src/OAuthProvider.ts: `OAuthProviderConfig.idTokenSigningAlgs?: ReadonlyArray<IdTokenAlg>`; `resolve()` computes the effective allowlist = explicit list ?? (discovery `id_token_signing_alg_values_supported` ∩ supported) ?? `[\"RS256\"]` and dies at boot when it is empty (needs ESS-002's schema field). Store on `ResolvedProvider`.",
+     "packages/oauth/src/OAuth.ts:313: replace the RS256 literal check with `provider.idTokenSigningAlgs.includes(decoded.header.alg)`.",
+     "Optional (only if a provider explicitly lists it and a clientSecret exists): HS256 via HMAC with the client secret (OIDC Core §10.1) for legacy Auth0 connections — keep behind the explicit allowlist."
+    ],
+    "files": [
+     "packages/oauth/src/Jwt.ts",
+     "packages/oauth/src/OAuthProvider.ts",
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/test/OAuth.test.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts (first): 'an ES256-signed id_token verifies for a provider advertising ES256'.",
+     "'an RS256 id_token is rejected for a provider whose allowlist is [ES256]'; 'resolve dies at boot when discovery advertises only unsupported algs'."
+    ],
+    "acceptance": [
+     "ES256/EdDSA/PS256 providers federate; allowlist enforced per provider; no `as` left in packages/oauth/src/Jwt.ts."
+    ],
+    "spec_refs": [
+     "BEH-EA-127"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [
+    "ESS-002-effect-schema-specialist"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "TTE-002",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Decoded JWT header/payload claimed by assertion after JSON.parse",
+   "issue_file": ".issues/medium/TTE-002-typescript-type-level-engineer.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 100,
+     "snippet": "    const header = Schema.decodeUnknownOption(JwtHeaderSchema)(decoded.header);\n    const payload = Schema.decodeUnknownOption(JwtPayloadSchema)(decoded.payload);\n    if (Option.isNone(header) || Option.isNone(payload)) {\n      return yield* Effect.fail(new JwtVerificationError({ reason: \"malformed JWT\" }));\n    }",
+     "note": "Header/payload are Schema-decoded. The finding explicitly exempted the length-guarded `parts as [string, string, string]` (still at line 90); it nevertheless violates the repo's no-assertion rule, so its removal is scheduled as a step of AOMS-005."
+    }
+   ],
+   "fixed_by_commit": "e3059f2",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": null,
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "ACS-003",
+   "level": "low",
+   "category": "security",
+   "package": "oauth",
+   "title": "OIDC key selection falls back to the first RSA key on kid mismatch",
+   "issue_file": ".issues/low/ACS-003-applied-cryptography-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 148,
+     "snippet": "export const findKey = (\n  jwks: Jwks,\n  kid: string | undefined,\n): Effect.Effect<Jwk, JwtVerificationError> => {\n  const candidates = jwks.keys.filter((key) => key.kty === \"RSA\" || key.kty === undefined);\n  const matched = kid === undefined ? candidates[0] : candidates.find((key) => key.kid === kid);",
+     "note": "A present-but-unmatched kid now fails, making OAuth.ts's kid-miss refetch reachable; regression tests OAuth.test.ts:1048/1057. Same residual note as VB-003 for kid-less tokens."
+    }
+   ],
+   "fixed_by_commit": "fd8e5e9",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": null,
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "ESS-002",
+   "level": "high",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "OIDC discovery document cast, not decoded, at plugin boot",
+   "issue_file": ".issues/high/ESS-002-effect-schema-specialist.md",
+   "current_status": "ready-for-agent",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 140,
+     "snippet": "      const document = yield* httpClient.get(discoveryUrl).pipe(\n        Effect.flatMap((response) => response.json),\n        Effect.map((body) => body as DiscoveryDocument),\n        Effect.orDie,\n      );",
+     "note": "Untrusted wire data asserted, not decoded; only `issuer` is checked (line 145)."
+    },
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 153,
+     "snippet": "      authorizationEndpoint ??= document.authorization_endpoint;\n      tokenEndpoint ??= document.token_endpoint;",
+     "note": "Non-string endpoints flow straight into URL construction."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "TTE-003",
+    "AH-003-anders-hejlsberg"
+   ],
+   "workstream": "oauth-provider-boot-validation",
+   "fix": {
+    "summary": "Decode the discovery document with a Schema at boot; a shape error dies with a message naming provider and field.",
+    "steps": [
+     "packages/oauth/src/OAuthProvider.ts: replace `interface DiscoveryDocument` (lines 100-106) with `DiscoveryDocumentSchema = Schema.Struct({ issuer: Schema.String, authorization_endpoint: Schema.optional(Schema.String), token_endpoint: Schema.optional(Schema.String), jwks_uri: Schema.optional(Schema.String), userinfo_endpoint: Schema.optional(Schema.String), id_token_signing_alg_values_supported: Schema.optional(Schema.Array(Schema.String)), code_challenge_methods_supported: Schema.optional(Schema.Array(Schema.String)) })` (extra members ignored).",
+     "Fetch via `Effect.flatMap(HttpIncomingMessage.schemaBodyJson(DiscoveryDocumentSchema))`; map failures to `Effect.die(new Error(`awthaq/oauth: provider \"${config.id}\" discovery document is invalid: ${issue}`))` keeping BEH-EA-127's die-at-boot semantics.",
+     "Optionally validate endpoints parse as absolute URLs (Schema check with `URL.canParse`)."
+    ],
+    "files": [
+     "packages/oauth/src/OAuthProvider.ts",
+     "packages/oauth/test/OAuth.test.ts"
+    ],
+    "tests": [
+     "OAuth.test.ts (first): 'a discovery document whose token_endpoint is not a string dies at boot naming the field'; 'a JSON array discovery body dies at boot'."
+    ],
+    "acceptance": [
+     "No `as` in OAuthProvider.ts; malformed discovery fails boot with a diagnostic message; BEH-EA-127 scenarios stay green."
+    ],
+    "spec_refs": [
+     "BEH-EA-127"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "TTE-003",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "OIDC discovery document asserted to DiscoveryDocument, only issuer checked",
+   "issue_file": ".issues/medium/TTE-003-typescript-type-level-engineer.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 142,
+     "snippet": "        Effect.map((body) => body as DiscoveryDocument),",
+     "note": "Same cast, same Schema-decode fix as ESS-002 (the high-severity canonical)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "ESS-002-effect-schema-specialist",
+   "duplicates": [],
+   "workstream": "oauth-provider-boot-validation",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "AH-003",
+   "level": "low",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Discovery document asserted without validation at provider boot",
+   "issue_file": ".issues/low/AH-003-anders-hejlsberg.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 142,
+     "snippet": "        Effect.map((body) => body as DiscoveryDocument),",
+     "note": "Same cast, same Schema-decode fix as ESS-002 (the high-severity canonical)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "ESS-002-effect-schema-specialist",
+   "duplicates": [],
+   "workstream": "oauth-provider-boot-validation",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "JR-009",
+   "level": "low",
+   "category": "dx",
+   "package": "oauth",
+   "title": "oidc() factory does not require the openid scope; a mis-scoped provider surfaces only as an undifferentiated runtime 400",
+   "issue_file": ".issues/low/JR-009-justin-richer.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 127,
+     "snippet": "    if (config.kind === \"oidc\" && Option.isNone(configuredIssuer)) {\n      return yield* Effect.die(\n        new Error(`awthaq/oauth: provider \"${config.id}\" is oidc but declares no issuer`),\n      );\n    }",
+     "note": "The sibling boot check exists…"
+    },
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 179,
+     "snippet": "      scopes: config.scopes,",
+     "note": "…but scopes pass through verbatim; nothing requires `openid` for kind oidc."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-provider-boot-validation",
+   "fix": {
+    "summary": "Die at boot when an `oidc` provider's scopes omit `openid`.",
+    "steps": [
+     "OAuthProvider.ts `resolve()`: next to the issuer check, `if (config.kind === \"oidc\" && !config.scopes.includes(\"openid\")) return yield* Effect.die(new Error(`awthaq/oauth: provider \"${config.id}\" is oidc but its scopes omit \"openid\"`))`."
+    ],
+    "files": [
+     "packages/oauth/src/OAuthProvider.ts",
+     "packages/oauth/test/OAuth.test.ts"
+    ],
+    "tests": [
+     "OAuth.test.ts (first): 'an oidc provider configured without openid scope dies at boot'."
+    ],
+    "acceptance": [
+     "Mis-scoped OIDC providers fail at registration, not as an opaque callback 400."
+    ],
+    "spec_refs": [
+     "BEH-EA-127 (boot-time registration failure pattern)"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "OAP-005",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "No boot-time guard against quirks.skipPkce on a public client (no clientSecret): bare authorization code exchange",
+   "issue_file": ".issues/medium/OAP-005-oauth2-authorization-code-pkce-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 28,
+     "snippet": "/** BEH-EA-121: a provider that rejects PKCE outright (documented per-provider, never a general escape hatch). */\nexport interface OAuthProviderQuirks {\n  readonly skipPkce?: boolean;\n}",
+     "note": ""
+    },
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 180,
+     "snippet": "      skipPkce: config.quirks?.skipPkce ?? false,",
+     "note": "Accepted regardless of whether `clientSecret` is configured — a public client can run a bare code exchange."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "AP-007"
+   ],
+   "workstream": "oauth-provider-boot-validation",
+   "fix": {
+    "summary": "Gate `quirks.skipPkce` to confidential clients at boot and log whenever it is used.",
+    "steps": [
+     "OAuthProvider.ts `resolve()`: `if (config.quirks?.skipPkce === true && Option.isNone(clientSecret)) die(`awthaq/oauth: provider \"${config.id}\" sets quirks.skipPkce but has no clientSecret — a public client must use PKCE (RFC 9700 §2.1.1)`)`.",
+     "When skipPkce is set (and allowed), `Effect.logWarning` naming the provider id once at boot.",
+     "Amend BEH-EA-121's requirement text: the skipPkce quirk is permitted only for confidential clients."
+    ],
+    "files": [
+     "packages/oauth/src/OAuthProvider.ts",
+     "spec/behaviors/16-oauth.md",
+     "packages/oauth/test/OAuth.test.ts"
+    ],
+    "tests": [
+     "OAuth.test.ts (first): 'skipPkce without clientSecret dies at boot'; existing 'apple' skipPkce scenario (with clientSecret) stays green."
+    ],
+    "acceptance": [
+     "No configuration can produce a PKCE-less public-client code flow."
+    ],
+    "spec_refs": [
+     "BEH-EA-121"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "AP-007",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "quirks.skipPkce is not gated to confidential clients, so a public client can run code flow without PKCE",
+   "issue_file": ".issues/medium/AP-007-aaron-parecki.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 29,
+     "snippet": "export interface OAuthProviderQuirks {\n  readonly skipPkce?: boolean;\n}",
+     "note": "Same missing public-client guard and same boot-time fix as OAP-005."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "OAP-005",
+   "duplicates": [],
+   "workstream": "oauth-provider-boot-validation",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "NAM-009",
+   "level": "low",
+   "category": "dx",
+   "package": "oauth",
+   "title": "User.image / OAuth picture dropped: avatar data has no destination",
+   "issue_file": ".issues/low/NAM-009-nextauth-authjs-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 33,
+     "snippet": "export interface OAuthProfile {\n  readonly subject: string;\n  readonly email?: string;\n  readonly emailVerified?: boolean;\n  readonly name?: string;\n}",
+     "note": "No image/picture field; grep for image|picture|avatar in Models.ts/Users.ts/oauth src is empty."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "user-profile-image",
+   "fix": {
+    "summary": "Add an optional `image` to OAuthProfile and the User model so mapProfile can carry avatars (Auth.js/better-auth parity).",
+    "steps": [
+     "packages/oauth/src/OAuthProvider.ts `OAuthProfile`: `readonly image?: string`.",
+     "packages/sql/src/Models.ts `User`: nullable `image` column + migration; packages/core/src/Users.ts `UserRecord.image?`; `create` accepts it. Ship in the same migration wave as wayfinder-09's UserRecord identity revision to avoid two schema churns.",
+     "packages/oauth/src/OAuth.ts callback: pass `profile.image` on user creation (never overwrite on link).",
+     "Expose on the session/user DTO the client reads; document in the Auth.js migration table."
+    ],
+    "files": [
+     "packages/oauth/src/OAuthProvider.ts",
+     "packages/sql/src/Models.ts",
+     "packages/sql/src/CoreMigrations.ts",
+     "packages/core/src/Users.ts",
+     "packages/oauth/src/OAuth.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts (first): 'mapProfile image lands on the newly created user'."
+    ],
+    "acceptance": [
+     "Avatars survive OAuth sign-up; field optional everywhere."
+    ],
+    "spec_refs": [
+     "BEH-EA-041 (User record shape; additive)"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [
+    "FAMS-002"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "IC-003",
+   "level": "medium",
+   "category": "dx",
+   "package": "oauth",
+   "title": "Zero OAuth provider presets — every app hand-assembles issuer/endpoints/mapProfile",
+   "issue_file": ".issues/medium/IC-003-iain-collins.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 5,
+     "snippet": "// runnable. Two factories only — `oidc`/`oauth2` — not per-vendor presets\n// (`google()`/`github()`/`apple()`): nothing in BEH-EA-121 through 128\n// requires a shipped Google/GitHub/Apple integration, only the mechanism",
+     "note": "Deliberate at implementation time, but no ADR/wayfinder decision covers it — a genuine product call."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "NAM-003",
+    "MW-010"
+   ],
+   "workstream": "oauth-provider-presets",
+   "fix": {
+    "summary": "Ship data-only vendor presets built on `oidc`/`oauth2` (zero new mechanism) in an `@awthaq/oauth/presets` subpath, plus an Auth.js provider-id → preset mapping table.",
+    "steps": [
+     "New packages/oauth/src/presets/*.ts (index re-export) and a `./presets` entry in packages/oauth/package.json `exports`: `google`, `github`, `apple`, `microsoft` (Entra; `tenant` param), `gitlab`, `discord` to start (Auth.js top usage). Each: `(input: { clientId, clientSecret, scopes?, mapProfile? }) => OAuthProviderConfig` pre-filling id/issuer/discoveryUrl or endpoints/scopes/mapProfile/quirks.",
+     "Discovery-based presets rely on BEH-EA-127's exact-issuer match, so a stale preset fails loudly at boot.",
+     "mapProfile per vendor maps picture/avatar_url into `image` once NAM-009 lands.",
+     "Rewrite OAuthProvider.ts header (lines 4-11). Add a migration table (Auth.js provider id → preset, and quirks) to packages/oauth/README.md."
+    ],
+    "files": [
+     "packages/oauth/src/presets/ (new)",
+     "packages/oauth/package.json",
+     "packages/oauth/src/OAuthProvider.ts",
+     "packages/oauth/README.md",
+     "packages/oauth/test/OAuthPresets.test.ts (new)"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuthPresets.test.ts (first): each preset resolves against a fake discovery/endpoints and its mapProfile maps a recorded vendor claim sample (e.g. GitHub numeric `id` → string subject)."
+    ],
+    "acceptance": [
+     "`OAuthPresets.github({ clientId, clientSecret })` is a complete provider; all BEH-EA-121..128 guarantees still apply; factories remain the escape hatch."
+    ],
+    "spec_refs": [
+     "BEH-EA-121",
+     "BEH-EA-126",
+     "BEH-EA-127"
+    ],
+    "effort": "L"
+   },
+   "depends_on": [
+    "ESS-002-effect-schema-specialist",
+    "OAP-005"
+   ],
+   "needs_decision": true,
+   "decision_options": [
+    "A. Keep mechanism-only; publish a docs table of per-vendor config.",
+    "B. Ship data presets in an `@awthaq/oauth/presets` subpath (same package, same version).",
+    "C. Ship presets as a separate, independently-versioned package (`@awthaq/oauth-presets`)."
+   ],
+   "recommendation": "B — highest product value for the smallest surface; exact-issuer discovery makes stale presets fail loudly, and a subpath keeps the core import graph unchanged. C only if vendor churn later demands a separate release cadence.",
+   "recommended_status": "ready-for-human"
+  },
+  {
+   "id": "NAM-003",
+   "level": "medium",
+   "category": "dx",
+   "package": "oauth",
+   "title": "Zero vendor provider presets — every Auth.js provider must be hand-translated",
+   "issue_file": ".issues/medium/NAM-003-nextauth-authjs-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 5,
+     "snippet": "// runnable. Two factories only — `oidc`/`oauth2` — not per-vendor presets",
+     "note": "Same gap; its Auth.js mapping-table ask is folded into IC-003's plan."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "IC-003",
+   "duplicates": [],
+   "workstream": "oauth-provider-presets",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "MW-010",
+   "level": "info",
+   "category": "dx",
+   "package": "oauth",
+   "title": "OAuth providers are mechanism-only: no shipped preset catalog raises per-customer integration cost",
+   "issue_file": ".issues/info/MW-010-matias-woloski.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 5,
+     "snippet": "// runnable. Two factories only — `oidc`/`oauth2` — not per-vendor presets",
+     "note": "Same gap (integration-cost framing); its 'separately-versioned module' variant is option C in IC-003's decision."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "IC-003",
+   "duplicates": [],
+   "workstream": "oauth-provider-presets",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "BO-009",
+   "level": "low",
+   "category": "dx",
+   "package": "oauth",
+   "title": "OAuth provider config: no vendor presets and Effect Config descriptions leak into user-facing typing",
+   "issue_file": ".issues/low/BO-009-balazs-orban.md",
+   "current_status": "needs-triage",
+   "verdict": "PARTIAL",
+   "confidence": "high",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 55,
+     "snippet": "  readonly issuer?: Config.Config<string>;\n  /** BEH-EA-127: when given, `discoveryUrl`'s fetched `issuer` MUST exact-match `issuer` above. */\n  readonly discoveryUrl?: Config.Config<string>;\n  /** Required when `discoveryUrl` is absent. */\n  readonly endpoints?: OAuthEndpoints;\n  readonly clientId: Config.Config<string>;",
+     "note": "HOLDS: non-secret fields force the Config DSL; presets half duplicates IC-003."
+    },
+    {
+     "path": "spec/behaviors/16-oauth.md",
+     "line": 111,
+     "snippet": "REQUIREMENT: A provider's client secret MUST be read via `Config.Redacted`\n             inside the provider's own Layer construction; it MUST NOT appear\n             as a plaintext option, a plugin argument, or in application\n             source alongside plugin wiring.",
+     "note": "INVALID part: accepting a plain-string clientSecret would violate BEH-EA-126."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-provider-presets",
+   "fix": {
+    "summary": "Accept `string | Config.Config<string>` for non-secret provider fields (issuer, discoveryUrl, clientId); keep clientSecret Config.Redacted-only per BEH-EA-126; presets tracked by IC-003.",
+    "steps": [
+     "OAuthProvider.ts: type `issuer`, `discoveryUrl`, `clientId` as `string | Config.Config<string>`; normalize in `resolve()` with a helper `const lift = (v) => typeof v === \"string\" ? Config.succeed(v) : v` (Effect v4 Config.succeed, Config.ts:966) — type narrowing, no casts.",
+     "Leave `clientSecret?: Config.Config<Redacted.Redacted<string>>` unchanged (BEH-EA-126).",
+     "Update the BEH-EA-127 example in docs to show both forms."
+    ],
+    "files": [
+     "packages/oauth/src/OAuthProvider.ts",
+     "packages/oauth/test/OAuth.test.ts"
+    ],
+    "tests": [
+     "OAuth.test.ts (first): 'oidc({ issuer: \"https://…\", clientId: \"abc\", … }) with plain strings resolves'; a type-level test that a plain-string clientSecret is rejected (`// @ts-expect-error`)."
+    ],
+    "acceptance": [
+     "Non-secret fields accept plain strings; secrets still require Config.Redacted."
+    ],
+    "spec_refs": [
+     "BEH-EA-126",
+     "BEH-EA-127"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  }
+ ],
+ "workstreams": [
+  {
+   "slug": "jwt-signing-key-at-rest-encryption",
+   "title": "Encrypt JWT private signing keys at rest",
+   "ids": [
+    "KRS-001",
+    "SMS-001-secrets-management-specialist"
+   ],
+   "order_hint": 1,
+   "effort": "M",
+   "depends_on_workstreams": [],
+   "rationale": "Both highs name the same plaintext `privateKeyJwk` column; one change to SigningKeyRecords.layerSql closes both. First because JJS-004 edits the same file."
+  },
+  {
+   "slug": "jwt-lite-verifier-jwks-cache",
+   "title": "Single-flight, TTL'd JWKS caching (lite verifier + OAuth id_token)",
+   "ids": [
+    "ECF-002",
+    "JJS-002",
+    "KRS-010"
+   ],
+   "order_hint": 2,
+   "effort": "M",
+   "depends_on_workstreams": [],
+   "rationale": "Three findings on the same never-expiring, non-coalesced cache in verify.ts; KRS-010's Cache-Control ask rides along. OAuth.ts's twin cache is fixed in the same pass."
+  },
+  {
+   "slug": "oauth-provider-boot-validation",
+   "title": "Validate OAuth provider configuration at boot",
+   "ids": [
+    "ESS-002-effect-schema-specialist",
+    "TTE-003",
+    "AH-003-anders-hejlsberg",
+    "JR-009",
+    "OAP-005",
+    "AP-007"
+   ],
+   "order_hint": 3,
+   "effort": "S",
+   "depends_on_workstreams": [],
+   "rationale": "All are missing checks inside `OAuthProvider.resolve()` (discovery decode, openid scope, skipPkce-on-public-client); one small PR, one test file."
+  },
+  {
+   "slug": "jwt-claims-codec-hardening",
+   "title": "Schema-driven JWT claims, typ/nbf enforcement, token-class separation",
+   "ids": [
+    "JJS-009",
+    "GC-002",
+    "JJS-008",
+    "VB-005",
+    "JJS-007"
+   ],
+   "order_hint": 4,
+   "effort": "L",
+   "depends_on_workstreams": [],
+   "rationale": "All reshape JwtCodec.sign/verify's contract; VB-005 also delivers ticket 33's `signJWT({ audience })`, which the stateless-bearer workstream consumes. JJS-009's pinning tests go first."
+  },
+  {
+   "slug": "jwt-key-rotation-integrity",
+   "title": "Multi-instance-safe key rotation",
+   "ids": [
+    "JJS-004",
+    "KRS-009",
+    "JJS-003",
+    "KRS-006"
+   ],
+   "order_hint": 5,
+   "effort": "L",
+   "depends_on_workstreams": [
+    "jwt-signing-key-at-rest-encryption"
+   ],
+   "rationale": "All concern KeyRing/SigningKeyRecords rotation correctness (atomicity, uniqueness, cross-process convergence, alg changes)."
+  },
+  {
+   "slug": "jose-algorithm-coverage",
+   "title": "Broaden asymmetric JOSE algorithm support",
+   "ids": [
+    "BAM-010",
+    "FAMS-005",
+    "AOMS-005"
+   ],
+   "order_hint": 6,
+   "effort": "L",
+   "depends_on_workstreams": [
+    "jwt-key-rotation-integrity",
+    "oauth-provider-boot-validation"
+   ],
+   "rationale": "Same limitation (EdDSA/ES256-only in jwt, RS256-only in oauth) seen from three migration angles. Each package keeps its own algorithm table (per .scratch/jwt/spec.md's independence decision) but the vocabulary is aligned."
+  },
+  {
+   "slug": "jwt-response-mirroring-opt-in",
+   "title": "Make x-jwt-token response mirroring opt-in",
+   "ids": [
+    "PDR-003",
+    "MAPS-005",
+    "VB-009"
+   ],
+   "order_hint": 7,
+   "effort": "M",
+   "depends_on_workstreams": [],
+   "rationale": "Three auditors flag the same unconditional PostAuthResponseHook; one config knob plus a scheme parameter closes all three. Default value needs a decision."
+  },
+  {
+   "slug": "jwt-revocation-propagation",
+   "title": "Session revocation reaches HTTP introspection",
+   "ids": [
+    "TIR-007",
+    "SCP-007"
+   ],
+   "order_hint": 8,
+   "effort": "M",
+   "depends_on_workstreams": [],
+   "rationale": "Both are the bare-verify revocation lag; the remaining concrete gap is /jwt/introspect ignoring session liveness, contrary to wayfinder ticket 11."
+  },
+  {
+   "slug": "jwt-stateless-bearer-reentry",
+   "title": "Stateless JWT-as-bearer strategy (wayfinder 33)",
+   "ids": [
+    "NAM-001",
+    "IC-008"
+   ],
+   "order_hint": 9,
+   "effort": "L",
+   "depends_on_workstreams": [
+    "jwt-claims-codec-hardening"
+   ],
+   "rationale": "Decided in wayfinder ticket 33 (shared with cross-slice MAPS-001); needs VB-005's typ/audience separation first so only principal tokens can re-enter."
+  },
+  {
+   "slug": "plugin-api-surface-conventions",
+   "title": "Consistent HTTP contract conventions",
+   "ids": [
+    "AVS-005",
+    "AVS-007"
+   ],
+   "order_hint": 10,
+   "effort": "S",
+   "depends_on_workstreams": [],
+   "rationale": "Two small contract-shape fixes (group-level auth middleware, POST for credential issuance) best reviewed together before first publish."
+  },
+  {
+   "slug": "oauth-provider-presets",
+   "title": "OAuth vendor presets and friendlier provider config",
+   "ids": [
+    "IC-003",
+    "NAM-003",
+    "MW-010",
+    "BO-009"
+   ],
+   "order_hint": 11,
+   "effort": "L",
+   "depends_on_workstreams": [
+    "oauth-provider-boot-validation"
+   ],
+   "rationale": "Four findings on the absence of vendor presets; BO-009's plain-string ergonomics half is independent and can ship first."
+  },
+  {
+   "slug": "session-authentication-methods",
+   "title": "amr/auth_time on sessions and JWTs",
+   "ids": [
+    "AOMS-012"
+   ],
+   "order_hint": 12,
+   "effort": "L",
+   "depends_on_workstreams": [],
+   "rationale": "Cross-package (sql, core, api, server, password, oauth, passkey, jwt) session-schema change."
+  },
+  {
+   "slug": "user-profile-image",
+   "title": "User.image / OAuthProfile.image",
+   "ids": [
+    "NAM-009"
+   ],
+   "order_hint": 13,
+   "effort": "M",
+   "depends_on_workstreams": [],
+   "rationale": "Schema addition best batched with wayfinder-09's UserRecord revision (cross-slice FAMS-002)."
+  },
+  {
+   "slug": "plugin-port-boundary-enforcement",
+   "title": "Compile-time enforcement of 'plugins never provide ports'",
+   "ids": [
+    "JH-008"
+   ],
+   "order_hint": 14,
+   "effort": "M",
+   "depends_on_workstreams": [],
+   "rationale": "Core `Validate<P>` change implementing ADR-EA-010/BEH-EA-020; independent of the jwt work."
+  },
+  {
+   "slug": "m2m-machine-credentials",
+   "title": "Machine credentials (owned cross-slice by OCM-001/OCM-002)",
+   "ids": [
+    "OCM-006",
+    "OCM-007"
+   ],
+   "order_hint": 15,
+   "effort": "S",
+   "depends_on_workstreams": [],
+   "rationale": "No in-slice work: both close as duplicates of the api-key/client_credentials plan decided in wayfinder ticket 10."
+  }
+ ]
+}

@@ -3,7 +3,7 @@ ID: "DRS-002"
 Title: "Account deletion (GDPR erasure) is non-transactional and leaves PII across plugin tables"
 Level: high
 Category: "compliance"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/Account.ts:76"
 Auditor: "data-residency-sharding-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `HIGH` · `compliance` · `server` · reported by **Data Residency & Sharding Specialist** (`data-residency-sharding-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -63,3 +63,5 @@ _Triage notes and discussion append here._
 **Still open, not resolved:** actual erasure of plugin-owned PII (passkey credentials, organization membership/invitations, admin impersonation records, verification tokens) does not happen — `@awthaq/server`'s `Account.ts` cannot reach into an optional plugin's own tables without a real dependency-inversion mechanism, and this repo's existing `HookPoint.ts` module (the natural mechanism, per this finding's own recommended fix) turns out to be architecturally unsuited for that job as currently built: `HookPoint.veto<Self>()(id, schema)` backs its registry with per-class-instance closures that freeze permanently after the first `.run()` call (BEH-EA-024), meaning a concrete hook point declared once in library source (as `BeforeUserDelete` would need to be, to be tappable by an independently-composed plugin like `@awthaq/passkey`) cannot support different compositions wanting different tap sets — every composition in one process would collide on the same frozen registry. `HookPoint.ts`'s own header already documents that no concrete hook point has been wired into a real flow yet for exactly this class of reason, and `Auth.ts`'s header separately documents that `AuthCore` (the fixed session/account/etc. tuple a hook point's per-composition instantiation would naturally hang off) does not exist yet (MW-002). Closing this finding's full GDPR-completeness ask needs that groundwork first, not a mechanical per-plugin `deleteAllByUser` addition — flagging for whoever picks up MW-002/CSG-002 next rather than working around it here. Status unchanged: ready-for-agent.
 
 **Partial progress (2026-09-20):** Duplicate source/evidence of [`CSG-001`](CSG-001-compliance-soc2-gdpr-specialist.md), which carries the full resolution detail. Summary: the blocker named above no longer holds (CSG-002 shipped `Hooks.BeforeUserDelete`, a real wired veto point); `@awthaq/passkey`'s new `Passkey.beforeUserDeleteErasure` and `@awthaq/organization`'s new `Organization.beforeUserDeleteErasure` (both separately-exported opt-in `Layer`s, not merged into each plugin's own `.layer` — the tap registry's freeze-after-first-run constraint makes that unsafe across a repeatedly-rebuilt test suite) now sweep `passkey_credential`/`organization_membership` respectively, mutation-verified. `Account.ts`'s own `sessions.revokeOthers(userId, SessionId(""))` sentinel also replaced with `sessions.revokeAll(userId)` (CSG-007/TRBS-008, bundled since the line was already being touched). Still open, deliberately scoped out: `organization_team_membership`/`organization_invitation` (same mechanism, not yet populated), `organization_active_context` (no `userId` column), `admin_impersonation` (audit-retention tension, a policy call not made here) — see CSG-001's own comment for the full reasoning on each. Status unchanged: ready-for-agent.
+
+**Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `gdpr-erasure-export`. Duplicate of `CSG-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/server/src/Account.ts:103`. Full dossier: `.plan/slices/06-server-api.md`. Status → resolved.

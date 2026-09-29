@@ -1,0 +1,3467 @@
+{
+ "slice": "03-oauth-flow",
+ "validated_at_sha": "ec065a7",
+ "validated_on": "2026-09-29",
+ "issues": [
+  {
+   "id": "NAM-008",
+   "level": "medium",
+   "category": "dx",
+   "package": "oauth",
+   "title": "No OAuth token refresh: refresh tokens persisted but never used",
+   "issue_file": ".issues/medium/NAM-008-nextauth-authjs-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "verdict_note": "Commit e773cf1 (BE-002) persists the full token set, adds accessTokenExpiresAt/scope/tokenType, and ships OAuthTokenAccess.withAccessToken, which refreshes via grant_type=refresh_token. Both halves of the finding (refresh operation plus expiry/scope columns) are closed.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 16,
+     "snippet": "// BE-002 (.issues/high): the exchanged access/refresh token pair is now\n// persisted (`@awthaq/core`'s `Accounts.ProviderTokenSet`, via `link`/\n// `updateProviderTokens` in this file's own `callback` handler) rather\n// than discarded after the transient userinfo/id-token use, and\n// `OAuthTokenAccess.ts` exposes a scoped refresh port so application code\n// calling the provider's API on the user's behalf never handles a raw\n// token directly.",
+     "note": "The quoted 'no token refresh operation' header text is gone; BE-002 replaced it."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 731,
+     "snippet": "          onSome: (account) =>\n            accounts\n              .updateProviderTokens(account.id, toProviderTokenSet(tokens, exchangedAt))\n              .pipe(Effect.as(account.userId), Effect.orDie),",
+     "note": "Fresh tokens are persisted on every re-auth, not only at link time."
+    },
+    {
+     "path": "packages/core/src/Accounts.ts",
+     "line": 85,
+     "snippet": "export interface ProviderTokenSet {\n  readonly accessToken: Redacted.Redacted<string>;\n  readonly refreshToken: Option.Option<Redacted.Redacted<string>>;\n  readonly accessTokenExpiresAt: Option.Option<DateTime.Utc>;\n  readonly refreshTokenExpiresAt: Option.Option<DateTime.Utc>;\n  readonly scope: Option.Option<string>;\n  readonly tokenType: Option.Option<string>;\n}",
+     "note": "expiry/scope/tokenType columns now exist (migration 17)."
+    }
+   ],
+   "fixed_by_commit": "e773cf1",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "provider-token-storage",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "BAM-008",
+   "level": "medium",
+   "category": "api",
+   "package": "oauth",
+   "title": "OAuth token lifecycle is thinner: no refresh, no idToken/expiry/scope columns",
+   "issue_file": ".issues/medium/BAM-008-better-auth-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "PARTIAL",
+   "confidence": "high",
+   "verdict_note": "e773cf1 (BE-002) fixed the refresh operation and the expiry/scope columns. The idToken column is still missing, and so is the better-auth importer mapping for it: better-auth's Account carries idToken, and BEH-EA-207 says a source field must not be silently dropped.",
+   "evidence": [
+    {
+     "path": "packages/core/src/Accounts.ts",
+     "line": 85,
+     "snippet": "export interface ProviderTokenSet {\n  readonly accessToken: Redacted.Redacted<string>;\n  readonly refreshToken: Option.Option<Redacted.Redacted<string>>;\n  readonly accessTokenExpiresAt: Option.Option<DateTime.Utc>;\n  readonly refreshTokenExpiresAt: Option.Option<DateTime.Utc>;\n  readonly scope: Option.Option<string>;\n  readonly tokenType: Option.Option<string>;\n}",
+     "note": "Refresh, expiry and scope are fixed by e773cf1. There is still no idToken field, so the id_token is used transiently and then dropped."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 272,
+     "snippet": "const toProviderTokenSet = (tokens: TokenSet, now: DateTime.Utc): Accounts.ProviderTokenSet => ({\n  accessToken: Redacted.make(tokens.accessToken),\n  refreshToken:\n    tokens.refreshToken === undefined\n      ? Option.none()\n      : Option.some(Redacted.make(tokens.refreshToken)),",
+     "note": "tokens.idToken is never mapped onto the persisted set."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "provider-token-storage",
+   "fix": {
+    "summary": "Persist the provider's id_token (encrypted at rest, like access/refresh tokens) as part of ProviderTokenSet so better-auth account imports have a destination and a future RP-initiated logout can send id_token_hint.",
+    "steps": [
+     "packages/core/src/Accounts.ts: add `readonly idToken: Option.Option<Redacted.Redacted<string>>` to `ProviderTokenSet`; thread it through `layerMemory` and `layerSql` (`link`, `findProviderTokens`, `updateProviderTokens`).",
+     "packages/sql/src/Models.ts: add a nullable `idToken` column to the `Account` model. Encrypt it in `AccountsRepositoryLive` exactly like `accessToken`/`refreshToken` (same kid envelope, row+column AAD).",
+     "packages/sql/src/CoreMigrations.ts: add a new forward-only migration (next number after 17) that adds a nullable `idToken` TEXT column, dialect-branched like migration 17.",
+     "packages/oauth/src/OAuth.ts `toProviderTokenSet`: map `tokens.idToken` to `Option.some(Redacted.make(...))`.",
+     "packages/oauth/src/OAuthTokenAccess.ts `refresh`: preserve the stored idToken when the refresh response has no id_token; replace it when one is present.",
+     "The GDPR erasure cascade already deletes account rows. Confirm that no separate PII store is introduced."
+    ],
+    "files": [
+     "packages/core/src/Accounts.ts",
+     "packages/sql/src/Models.ts",
+     "packages/sql/src/CoreMigrations.ts",
+     "packages/sql/src/Repositories.ts",
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/src/OAuthTokenAccess.ts"
+    ],
+    "tests": [
+     "packages/core/test/Accounts.test.ts: 'link persists and findProviderTokens returns the idToken' (dual layer, red first)",
+     "packages/oauth/test/OAuth.test.ts (BE-002 block): 'an oidc sign-up persists the id_token alongside the access token'",
+     "packages/sql/test/Repositories.test.ts: 'idToken is ciphertext at rest'"
+    ],
+    "acceptance": [
+     "An oidc callback persists the id_token, readable only through Accounts.findProviderTokens.",
+     "The raw DB column holds ciphertext, not the JWT.",
+     "A refresh response without id_token keeps the previously stored one."
+    ],
+    "spec_refs": [
+     "BEH-EA-125",
+     "BEH-EA-207"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "APS-002",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "Protocol-relative callbackURL bypasses the trustedOrigins allowlist",
+   "issue_file": ".issues/medium/APS-002-auth-pentest-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "verdict_note": "Fixed by 9b3e42c (OAP-001/AP-001/PDR-001): the protocol-relative and backslash variants no longer count as relative paths.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 180,
+     "snippet": "  if (raw.startsWith(\"/\") && !raw.startsWith(\"//\") && !raw.startsWith(\"/\\\\\")) return raw;\n  const parsed = Option.fromNullOr(URL.parse(raw));\n  return parsed.pipe(\n    Option.filter((url) => trustedOrigins.includes(url.origin)),\n    Option.match({ onNone: () => fallback, onSome: () => raw }),\n  );",
+     "note": "The `//` and `/\\` prefixes now fall through to the origin allowlist."
+    },
+    {
+     "path": "packages/oauth/test/OAuth.test.ts",
+     "line": 802,
+     "snippet": "    it.effect(\"OAP-001/AP-001: a scheme-relative //host callbackURL is never redirected to\", () =>\n      Effect.gen(function* () {\n        const oauth = yield* OAuth.OAuth;\n        const { state } = yield* oauth.authorize(\"acme\", {\n          callbackURL: \"//evil.example.com/phish\",",
+     "note": "Regression test added by 9b3e42c."
+    }
+   ],
+   "fixed_by_commit": "9b3e42c",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-callback-url-policy",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "TMS-003",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "Open redirect: resolveCallbackURL accepts any '/'-prefixed value before the origin allowlist, including protocol-relative URLs",
+   "issue_file": ".issues/medium/TMS-003-threat-modeling-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "verdict_note": "Same root cause and same fix as APS-002, closed by 9b3e42c.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 180,
+     "snippet": "  if (raw.startsWith(\"/\") && !raw.startsWith(\"//\") && !raw.startsWith(\"/\\\\\")) return raw;\n  const parsed = Option.fromNullOr(URL.parse(raw));\n  return parsed.pipe(\n    Option.filter((url) => trustedOrigins.includes(url.origin)),\n    Option.match({ onNone: () => fallback, onSome: () => raw }),\n  );",
+     "note": "Same fix as APS-002."
+    },
+    {
+     "path": "packages/oauth/test/OAuth.test.ts",
+     "line": 834,
+     "snippet": "    it.effect(\n      \"OAP-001/AP-001: a backslash-variant /\\\\host callbackURL is never redirected to\",\n      () =>\n        Effect.gen(function* () {\n          const oauth = yield* OAuth.OAuth;\n          const { state } = yield* oauth.authorize(\"acme\", {\n            callbackURL: \"/\\\\evil.example.com/phish\",",
+     "note": "The backslash variant is covered too."
+    }
+   ],
+   "fixed_by_commit": "9b3e42c",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-callback-url-policy",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "MNA-004",
+   "level": "high",
+   "category": "dx",
+   "package": "oauth",
+   "title": "Callback URL allowlist cannot admit custom-scheme deep links and fails silently",
+   "issue_file": ".issues/high/MNA-004-mobile-native-auth-specialist.md",
+   "current_status": "ready-for-agent",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed at HEAD: the only acceptance paths are a same-origin relative path or a WHATWG origin match. Also note that even an admitted deep link would receive only a Set-Cookie on a 302, so this fix is only useful together with MNA-003's native return leg (decision ticket 17).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 180,
+     "snippet": "  if (raw.startsWith(\"/\") && !raw.startsWith(\"//\") && !raw.startsWith(\"/\\\\\")) return raw;\n  const parsed = Option.fromNullOr(URL.parse(raw));\n  return parsed.pipe(\n    Option.filter((url) => trustedOrigins.includes(url.origin)),\n    Option.match({ onNone: () => fallback, onSome: () => raw }),\n  );",
+     "note": "A custom-scheme URL (myapp://cb) parses with origin 'null', so it can never match an https allowlist entry and silently falls back, with no log."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "native-session-bootstrap",
+   "fix": {
+    "summary": "Add an explicit native-redirect allowlist matched on the full serialized scheme+authority(+path prefix) for non-http(s) URLs, and log when a requested callbackURL is discarded.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts `OAuthConfigShape`: add `readonly nativeRedirectURLs: ReadonlyArray<string>` (default `[]`), with entries like `myapp://oauth/callback` or `com.example.app:/cb` (RFC 8252 §7.1 private-use schemes).",
+     "`resolveCallbackURL`: after the relative-path branch, if `url.protocol` is not `http:`/`https:`, accept only when `raw` equals, or starts with, an entry of `nativeRedirectURLs`, compared on the `URL.parse`-normalized `href`. Never compare `.origin` for non-special schemes.",
+     "Turn `resolveCallbackURL` into an Effect (or return a tagged result) so the authorize handler can `Effect.logWarning` with an annotation `{ requested, reason: 'untrusted-origin' | 'untrusted-native-scheme' | 'unparseable' }` whenever it falls back. REQ-EA-353's no-error posture is kept.",
+     "Deep-link callbackURLs are honored only when the flow is in native mode (MNA-003). In browser mode a custom-scheme callbackURL falls back, because a Set-Cookie on a 302 to myapp:// is useless.",
+     "Document the RFC 8252 guidance in packages/oauth/README.md: prefer claimed https universal/app links, and use private-use schemes only with the exchange-code leg."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/README.md",
+     "spec/behaviors/16-oauth.md"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts BEH-EA-128 block: 'a native-mode flow honors an allowlisted myapp:// callbackURL' (red first)",
+     "same block: 'a non-allowlisted custom scheme falls back to defaultCallbackURL and logs a warning' (capture with a test Logger)",
+     "same block: 'javascript:alert(1) falls back' (the class pin PDR-006 suggested)"
+    ],
+    "acceptance": [
+     "An allowlisted `myapp://oauth/callback` survives authorize → callback in native mode.",
+     "A non-allowlisted scheme falls back to defaultCallbackURL, and exactly one warning log is emitted.",
+     "Browser-mode behavior for http(s) callbackURLs is unchanged."
+    ],
+    "spec_refs": [
+     "BEH-EA-128"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [
+    "MNA-003"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "OIT-007",
+   "level": "info",
+   "category": "compliance",
+   "package": "oauth",
+   "title": "at_hash unimplemented; auth_time/max_age absent — acceptable for the code-only flow but undocumented",
+   "issue_file": ".issues/info/OIT-007-oidc-id-token-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Compliant today, as the finding says. The documentation gap is real.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 198,
+     "snippet": "  url.searchParams.set(\"response_type\", \"code\");",
+     "note": "response_type is always 'code', so at_hash is OPTIONAL per OIDC Core 3.1.3.7."
+    },
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 7,
+     "snippet": "// deliberately: RS256 only (the OIDC-mandated, near-universal default —\n// Google, Okta, Auth0, Entra ID all sign with RS256 by default), signature\n// verification via the platform `crypto.subtle` (Node's WebCrypto, no\n// dependency), and no JWKS-rotation refresh policy beyond \"refetch once on\n// a `kid` cache miss.\" ES256/EdDSA and a real rotation policy are not\n// implemented — a real gap, documented here rather than silently assumed",
+     "note": "The header documents the RS256/rotation deferrals but not at_hash, auth_time or max_age. `grep -rn 'at_hash\\|auth_time\\|max_age' packages/oauth` returns 0 hits."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": {
+    "summary": "Document the at_hash/auth_time/max_age deferral next to the existing RS256 deferral, and pin response_type=code structurally.",
+    "steps": [
+     "packages/oauth/src/Jwt.ts header: add a paragraph saying at_hash is not validated because only response_type=code exists (OIDC Core 3.1.3.7 optional), that at_hash becomes REQUIRED if a hybrid/implicit response_type is ever added, and that auth_time/max_age (freshness, step-up) are unsupported and belong to wayfinder ticket 15 (step-up).",
+     "packages/oauth/src/OAuth.ts `buildAuthorizeUrl`: extract the literal to `const RESPONSE_TYPE = \"code\" as const` with a comment pointing at the Jwt.ts note. The `as const` is a literal-widening annotation, not a type assertion.",
+     "packages/oauth/README.md: an 'OIDC validation scope' table listing what is and is not validated (see the oauth-docs step in this workstream)."
+    ],
+    "files": [
+     "packages/oauth/src/Jwt.ts",
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/README.md"
+    ],
+    "tests": [
+     "None (docs only)."
+    ],
+    "acceptance": [
+     "The Jwt.ts header and README both name at_hash, auth_time and max_age as deliberately unsupported, with the trigger condition for at_hash."
+    ],
+    "spec_refs": [
+     "BEH-EA-127"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "OCM-001",
+   "level": "high",
+   "category": "architecture",
+   "package": "oauth",
+   "title": "No client-credentials grant or token-issuing authorization server exists for machine callers",
+   "issue_file": ".issues/high/OCM-001-oauth2-client-credentials-m2m-specialist.md",
+   "current_status": "ready-for-agent",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed. Decision ticket 10: client_credentials ships in packages/api-key as `POST auth/apiKey/token`, minting short-lived JWTs via packages/jwt's signer, and packages/oauth stays a pure client. So no code change lands in packages/oauth. The work is owned by the api-key slice (09); related slice 04 findings OCM-006/OCM-007.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 238,
+     "snippet": "      grant_type: \"authorization_code\",",
+     "note": "The only grant type in the repo. `grep -rn client_credentials packages/*/src` returns 0 hits."
+    },
+    {
+     "path": "packages/api-key/src/index.ts",
+     "line": 1,
+     "snippet": "// @awthaq/api-key — Plugin (M7)\n//\n// Long-lived API keys resolving to service principals.\n//\n// Planned first module: not yet specified — see spec/roadmap.md M7\n// See spec/overview.md for the full package map.\n//\n// Empty placeholder — awthaq is pre-implementation. No exported symbols yet.",
+     "note": "The decided owner package is still an empty placeholder."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "m2m-client-credentials",
+   "fix": {
+    "summary": "Implement ticket 10's M2M half in packages/api-key. Nothing changes in packages/oauth.",
+    "steps": [
+     "packages/api-key: `registerClient(name, scopes)` returns `{ clientId, clientSecret: Redacted }` (SHA-256 at rest, constant-time compare via the shared helper from TSS-003's workstream), plus `revokeClient`.",
+     "ApiKeyApi: `POST /apiKey/token` accepting `grant_type=client_credentials` (client_secret_post and client_secret_basic, reusing AP-006's credential parsing rules), with scope = requested ∩ registered.",
+     "Mint via packages/jwt's signer with `sub: 'service:<clientId>'`, `scope`, and `exp` from `ApiKeyConfig.tokenTtl` (default 15m). Resolve to `ServicePrincipal` via the Bearer strategy.",
+     "Spec: spec/models/07-api-keys.md plus new BEH entries. Record in roadmap.md that this pulls a Phase-3 slice into M7 (the ticket's own flag)."
+    ],
+    "files": [
+     "packages/api-key/src/*",
+     "packages/jwt/src/*",
+     "spec/models/07-api-keys.md",
+     "spec/roadmap.md"
+    ],
+    "tests": [
+     "packages/api-key/test/ClientCredentials.test.ts: 'a registered client obtains a scoped JWT'; 'requested scopes beyond the registered set are dropped'; 'a revoked client cannot mint'"
+    ],
+    "acceptance": [
+     "A service can obtain a short-lived scoped token over RFC 6749 §4.4.",
+     "packages/oauth is unchanged."
+    ],
+    "spec_refs": [],
+    "effort": "XL"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "AP-006",
+   "level": "medium",
+   "category": "api",
+   "package": "oauth",
+   "title": "Token endpoint auth hardwired to client_secret_post; basic unsupported and discovery metadata ignored",
+   "issue_file": ".issues/medium/AP-006-aaron-parecki.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 244,
+     "snippet": "    if (Option.isSome(provider.clientSecret)) {\n      form[\"client_secret\"] = Redacted.value(provider.clientSecret.value);\n    }\n    const response = yield* httpClient.post(provider.tokenEndpoint, {\n      body: HttpBody.urlParams(form),\n    });",
+     "note": "client_secret_post only."
+    },
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 100,
+     "snippet": "interface DiscoveryDocument {\n  readonly issuer?: string;\n  readonly authorization_endpoint?: string;\n  readonly token_endpoint?: string;\n  readonly jwks_uri?: string;\n  readonly userinfo_endpoint?: string;\n}",
+     "note": "token_endpoint_auth_methods_supported is never read."
+    },
+    {
+     "path": "packages/oauth/src/OAuthTokenAccess.ts",
+     "line": 87,
+     "snippet": "    if (Option.isSome(provider.clientSecret)) {\n      form[\"client_secret\"] = Redacted.value(provider.clientSecret.value);\n    }\n    const response = yield* httpClient.post(provider.tokenEndpoint, {\n      body: HttpBody.urlParams(form),\n    });",
+     "note": "The refresh path (added after the audit) is also post-only."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-token-endpoint-client-auth",
+   "fix": {
+    "summary": "Support client_secret_basic (the RFC 6749 §2.3.1 default) and client_secret_post, selected from config or discovery, validated at boot.",
+    "steps": [
+     "packages/oauth/src/OAuthProvider.ts: add `OAuthProviderConfig.tokenEndpointAuthMethod?: 'client_secret_basic' | 'client_secret_post' | 'none'` and `ResolvedProvider.tokenEndpointAuthMethod`. Read `token_endpoint_auth_methods_supported` from the (schema-decoded, ESS-002) discovery document. Resolution order: explicit config, else 'client_secret_basic' if advertised or if the list is absent, else 'client_secret_post' if advertised, else die at boot with a clear message. 'none' when no clientSecret.",
+     "Die at boot if an explicitly configured method is not in an advertised list.",
+     "New helper `authenticateTokenRequest(provider, form)` in packages/oauth/src/ProviderResponses.ts (or a TokenEndpoint.ts), returning the request. For basic, set `Authorization: Basic base64(formUrlEncode(clientId) + ':' + formUrlEncode(secret))` per RFC 6749 §2.3.1 (the credentials MUST be form-urlencoded first, so do not use HttpClientRequest.basicAuth blindly) and omit client_secret from the body. For post, keep today's form fields.",
+     "Use the helper in both OAuth.ts exchangeCode and OAuthTokenAccess.ts refresh."
+    ],
+    "files": [
+     "packages/oauth/src/OAuthProvider.ts",
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/src/OAuthTokenAccess.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'a provider advertising only client_secret_basic receives an Authorization: Basic header and no client_secret in the body' (red first; the fake client records request headers)",
+     "'a configured method the discovery document does not advertise fails at boot'",
+     "'client ids containing reserved characters are form-urlencoded before base64'"
+    ],
+    "acceptance": [
+     "Both methods work for the exchange and refresh paths.",
+     "A mismatch surfaces at boot, not at the first sign-in."
+    ],
+    "spec_refs": [
+     "BEH-EA-126",
+     "BEH-EA-127"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [
+    "ESS-002"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "ECF-001",
+   "level": "high",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "No deadline on any outbound HTTP call: five third-party calls can pin auth request fibers",
+   "issue_file": ".issues/high/ECF-001-effect-concurrency-fiber-specialist.md",
+   "current_status": "ready-for-agent",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed and wider than reported. `grep -rn 'Effect.timeout' packages/*/src` returns 0 hits, and the outbound sites are now OAuth.ts:247 (token), :323 (JWKS), :706 (userinfo), OAuthProvider.ts:140 (discovery), OAuthTokenAccess.ts:90 (refresh, new since the audit), jwt/src/verify.ts:83 (JWKS) and password/src/Password.ts:317 (HIBP).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 244,
+     "snippet": "    if (Option.isSome(provider.clientSecret)) {\n      form[\"client_secret\"] = Redacted.value(provider.clientSecret.value);\n    }\n    const response = yield* httpClient.post(provider.tokenEndpoint, {\n      body: HttpBody.urlParams(form),\n    });",
+     "note": "Token exchange, no deadline."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "JWKS fetch, no deadline."
+    },
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 140,
+     "snippet": "      const document = yield* httpClient.get(discoveryUrl).pipe(\n        Effect.flatMap((response) => response.json),\n        Effect.map((body) => body as DiscoveryDocument),\n        Effect.orDie,\n      );",
+     "note": "Discovery at boot, no deadline."
+    },
+    {
+     "path": "packages/password/src/Password.ts",
+     "line": 317,
+     "snippet": "      .get(`https://api.pwnedpasswords.com/range/${prefix}`)\n      .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));",
+     "note": "HIBP, no deadline (slice 07's file, same root cause)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-outbound-resilience",
+   "fix": {
+    "summary": "Give every outbound provider call a policy deadline, configurable per call class, and map a timeout into the typed failure channel.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts `OAuthConfigShape`: add `readonly httpTimeouts: { readonly tokenExchange: Duration.Duration; readonly jwks: Duration.Duration; readonly userinfo: Duration.Duration; readonly discovery: Duration.Duration }` (defaults 10s/5s/5s/10s). Per-call-class values follow the flexibility-over-complexity preference.",
+     "Wrap the whole call in `Effect.timeout(config_.httpTimeouts.X)`, covering request plus body decode, not just the request. Sites: exchangeCode, fetchAndCacheJwks, userinfo, and OAuthTokenAccess.refresh (tokenExchange budget).",
+     "OAuthProvider.resolve: accept a `timeout` argument from the caller and apply it to the discovery GET. A timeout still dies at boot (BEH-EA-127) unless NAM-004's decision changes that.",
+     "Map `TimeoutError` to `ProviderUnavailable` (EEM-004) rather than OAuthCallbackFailed.",
+     "Cross-slice, same root cause, owned by those slices' plans: jwt/src/verify.ts:83 (slice 04) and Password.ts:317 HIBP (slice 07; breach check fails open on timeout). Name ECF-001 in their commits."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/src/OAuthProvider.ts",
+     "packages/oauth/src/OAuthTokenAccess.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'a token endpoint that never answers fails within the configured deadline' (fake HttpClient returning Effect.never, run under TestClock.adjust; red first)",
+     "same for JWKS and userinfo",
+     "packages/oauth/test/OAuthTokenAccess.test.ts: 'a hung refresh call fails OAuthRefreshFailed after the deadline'"
+    ],
+    "acceptance": [
+     "No outbound call in packages/oauth/src can outlive its configured deadline.",
+     "The hung-endpoint tests complete under TestClock with no real waiting."
+    ],
+    "spec_refs": [
+     "BEH-EA-122",
+     "BEH-EA-127"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "ESS-003",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Token-exchange response cast; id_token type never validated",
+   "issue_file": ".issues/medium/ESS-003-effect-schema-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed and widened. The token-response cast now exists twice (OAuth.ts:250 and OAuthTokenAccess.ts:93), and userinfo is cast at 712. Canonical for the remaining 'provider JSON cast' reports whose JWKS half was fixed by e364411 (JJS-005, OAP-004, OIT-005). The discovery-document half of those reports belongs to ESS-002 (slice 04).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 250,
+     "snippet": "    const body = (yield* response.json) as {\n      readonly access_token?: string;\n      readonly id_token?: string;\n      readonly refresh_token?: string;\n      readonly expires_in?: number;\n      readonly scope?: string;\n      readonly token_type?: string;\n    };",
+     "note": "The token-endpoint body is still a type assertion (it grew to 6 fields with BE-002)."
+    },
+    {
+     "path": "packages/oauth/src/OAuthTokenAccess.ts",
+     "line": 93,
+     "snippet": "    const body = (yield* response.json) as {\n      readonly access_token?: string;\n      readonly refresh_token?: string;\n      readonly expires_in?: number;\n      readonly scope?: string;\n      readonly token_type?: string;\n    };",
+     "note": "e773cf1 copied the same cast into the refresh path after the audit."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 706,
+     "snippet": "          ? yield* httpClient\n              .get(provider.userinfoEndpoint.value, {\n                headers: { authorization: `Bearer ${tokens.accessToken}` },\n              })\n              .pipe(\n                Effect.flatMap((response) => response.json),\n                Effect.map((body) => body as Record<string, unknown>),\n                Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "The userinfo body is also asserted."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "JJS-005",
+    "OAP-004",
+    "OIT-005"
+   ],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": {
+    "summary": "Decode token-endpoint and userinfo responses with Schema at the boundary, shared by OAuth.ts and OAuthTokenAccess.ts, and delete the casts.",
+    "steps": [
+     "New module packages/oauth/src/ProviderResponses.ts: `TokenResponseSchema = Schema.Struct({ access_token: Schema.String, id_token: Schema.optional(Schema.String), refresh_token: Schema.optional(Schema.String), expires_in: Schema.optional(Schema.Union([Schema.Number, Schema.NumberFromString])), scope: Schema.optional(Schema.String), token_type: Schema.optional(Schema.String) })` (NumberFromString tolerates providers that send \"3600\"), plus `UserinfoSchema = Schema.Record(Schema.String, Schema.Unknown)`.",
+     "OAuth.ts exchangeCode: `response` → `HttpIncomingMessage.schemaBodyJson(TokenResponseSchema)`. Drop the manual `typeof body.access_token` check and the `as {...}` cast. A decode failure maps to OAuthCallbackFailed (reason 'token-exchange').",
+     "OAuthTokenAccess.ts refresh: the same schema, with a decode failure mapped to OAuthRefreshFailed.",
+     "OAuth.ts userinfo: `schemaBodyJson(UserinfoSchema)`, removing `body as Record<string, unknown>`.",
+     "Do not touch OAuthProvider.ts:142 here. The discovery cast is ESS-002 (slice 04), and implementers should land both in the same PR if convenient."
+    ],
+    "files": [
+     "packages/oauth/src/ProviderResponses.ts",
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/src/OAuthTokenAccess.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'a token response whose id_token is a number fails typed as OAuthCallbackFailed' (red: today it reaches Jwt.decode)",
+     "'a token response with expires_in as a numeric string persists the right expiry'",
+     "'a userinfo body that is a JSON array fails typed, not as a defect'",
+     "packages/oauth/test/OAuthTokenAccess.test.ts: 'a refresh response with a non-string access_token fails OAuthRefreshFailed'"
+    ],
+    "acceptance": [
+     "`grep -nE ' as [{A-Z]' packages/oauth/src/OAuth.ts packages/oauth/src/OAuthTokenAccess.ts` finds no response casts.",
+     "Every malformed-provider-response test fails with a typed error. None die."
+    ],
+    "spec_refs": [
+     "BEH-EA-122",
+     "BEH-EA-127"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "RRS-007",
+   "level": "medium",
+   "category": "architecture",
+   "package": "oauth",
+   "title": "OAuth refresh tokens never captured, never stored, never refreshed — encrypted columns are dead plumbing",
+   "issue_file": ".issues/medium/RRS-007-refresh-token-rotation-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "verdict_note": "Refresh tokens are captured, persisted in the already-encrypted columns, and refreshed by OAuthTokenAccess.withAccessToken, which keeps the old refresh token when the response omits a new one (RFC 6749 §6). The 'dead plumbing' claim no longer holds. The remaining cast on the token response belongs to ESS-003.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 250,
+     "snippet": "    const body = (yield* response.json) as {\n      readonly access_token?: string;\n      readonly id_token?: string;\n      readonly refresh_token?: string;\n      readonly expires_in?: number;\n      readonly scope?: string;\n      readonly token_type?: string;\n    };",
+     "note": "refresh_token/expires_in/scope/token_type are now read from the token response. The cast itself is still open under ESS-003."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 731,
+     "snippet": "          onSome: (account) =>\n            accounts\n              .updateProviderTokens(account.id, toProviderTokenSet(tokens, exchangedAt))\n              .pipe(Effect.as(account.userId), Effect.orDie),",
+     "note": "Tokens are persisted via updateProviderTokens; link() receives `tokens` at all three call sites."
+    }
+   ],
+   "fixed_by_commit": "e773cf1",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "provider-token-storage",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "EEM-004",
+   "level": "medium",
+   "category": "api",
+   "package": "oauth",
+   "title": "OAuth provider transport failures collapse into the same 400 OAuthCallbackFailed as caller errors",
+   "issue_file": ".issues/medium/EEM-004-effect-error-management-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed. Distinguishing a transport failure leaks nothing to an attacker: it can only be reached after state+cookie+PKCE validation of a flow the caller initiated.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 269,
+     "snippet": "  }).pipe(Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())));",
+     "note": "Every exchange failure, transport included, becomes a 400."
+    },
+    {
+     "path": "packages/oauth/src/OAuthApi.ts",
+     "line": 103,
+     "snippet": "      error: [\n        ProviderNotFound,\n        OAuthCallbackFailed,\n        AccountExists,\n        Api.RateLimited,\n        Hooks.TwoFactorRequired,\n      ],",
+     "note": "No 503-class member in the callback contract."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-outbound-resilience",
+   "fix": {
+    "summary": "Add ProviderUnavailable (503) for transport, timeout and 5xx failures of the token/JWKS/userinfo endpoints. Keep OAuthCallbackFailed (400) for protocol rejections.",
+    "steps": [
+     "packages/oauth/src/OAuthApi.ts: `export class ProviderUnavailable extends Schema.TaggedError<ProviderUnavailable>()('ProviderUnavailable', {}, { httpApiStatus: 503 }) {}`. Add it to the callback endpoint's error list. Update the OAuthCallbackFailed doc comment, which lists 'a token-exchange failure': transport failures are now split out.",
+     "packages/oauth/src/OAuth.ts: in exchangeCode, fetchAndCacheJwks and userinfo, replace the blanket `Effect.catch` with a classifier: `HttpClientError` with reason Transport/Timeout, `Cause.TimeoutError` (ECF-001), or response status >= 500 becomes ProviderUnavailable. Status 4xx, a schema decode error (ESS-003) or a missing access_token becomes OAuthCallbackFailed. Read the status explicitly, because HttpClient resolves for any status.",
+     "OAuthShape.callback's error union: add ProviderUnavailable.",
+     "OAuthTokenAccess: optionally split OAuthRefreshFailed the same way (`OAuthProviderUnavailable`), for symmetry."
+    ],
+    "files": [
+     "packages/oauth/src/OAuthApi.ts",
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/src/OAuthTokenAccess.ts",
+     "spec/behaviors/16-oauth.md"
+    ],
+    "tests": [
+     "packages/oauth/test/AuthHttp.test.ts: 'a token endpoint answering 503 yields HTTP 503 ProviderUnavailable' (red first)",
+     "'a token endpoint answering 400 invalid_grant still yields 400 OAuthCallbackFailed'"
+    ],
+    "acceptance": [
+     "Transport/5xx/timeout failures give a 503. Protocol failures give a 400. The body of each stays field-less."
+    ],
+    "spec_refs": [
+     "BEH-EA-122",
+     "BEH-EA-086",
+     "BEH-EA-088"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [
+    "ECF-001"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "SFS-005",
+   "level": "low",
+   "category": "security",
+   "package": "oauth",
+   "title": "Single-algorithm RS256 equality gate is the only algorithm-policy precedent",
+   "issue_file": ".issues/low/SFS-005-saml-federation-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "WONTFIX-CANDIDATE",
+   "confidence": "high",
+   "verdict_note": "Forward-looking design guidance for a SamlSigner port that does not exist (SAML is Planned-Phase3, wayfinder ticket 08). Nothing is actionable in packages/oauth today. The 'algorithm allow-list as data' shape should be applied when slice 04's AOMS-005 (RS256-only id_token verification) adds ES256/EdDSA. Cross-reference it there rather than keep this open.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 313,
+     "snippet": "    if (decoded.header.alg !== \"RS256\") {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());\n    }",
+     "note": "The single-value RS256 gate, as described."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "wontfix"
+  },
+  {
+   "id": "ERS-003",
+   "level": "medium",
+   "category": "architecture",
+   "package": "oauth",
+   "title": "Zero retry/backoff Schedules: one transient provider error fails OAuth callback permanently",
+   "issue_file": ".issues/medium/ERS-003-effect-runtime-scheduler-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "A single attempt. Any failure becomes OAuthCallbackFailed. `grep -rn 'Effect.retry\\|Schedule\\.' packages/*/src` returns 0 hits."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-outbound-resilience",
+   "fix": {
+    "summary": "Retry only idempotent GETs (JWKS, discovery, userinfo) with jittered exponential backoff inside the deadline. Never retry the single-use code exchange.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts make: derive `const idempotentClient = httpClient.pipe(HttpClient.retryTransient({ retryOn: 'errors-and-responses', times: 2, schedule: Schedule.exponential('50 millis').pipe(Schedule.jittered) }))` (Effect v4 `HttpClient.retryTransient`, verified at ../effect/packages/effect/src/unstable/http/HttpClient.ts:912). Use it for fetchAndCacheJwks and userinfo. Keep `httpClient` for exchangeCode and add a comment there explaining why (the authorization code is single-use, RFC 6749 §4.1.2).",
+     "OAuthProvider.resolve: use the same retrying client for the discovery GET (boot).",
+     "Make `retry: { times, base }` part of OAuthConfigShape with the defaults above.",
+     "The total time budget still comes from ECF-001's Effect.timeout wrapping the retried call."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/src/OAuthProvider.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'a JWKS endpoint that 503s once then succeeds still verifies the id_token' (red first)",
+     "'a token endpoint that 503s is NOT retried' (count calls on the fake client == 1)"
+    ],
+    "acceptance": [
+     "One transient JWKS/userinfo/discovery failure no longer fails the flow.",
+     "The token exchange is called exactly once per callback."
+    ],
+    "spec_refs": [
+     "BEH-EA-127"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [
+    "ECF-001"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "MA-006",
+   "level": "medium",
+   "category": "api",
+   "package": "oauth",
+   "title": "Type assertions cross trust boundaries: unvalidated JWKS cast contradicts the repo's own no-as rule",
+   "issue_file": ".issues/medium/MA-006-michael-arnaldi.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Two-part finding. The JWKS cast is ALREADY-FIXED (e364411). The Password.ts `(input as { readonly email: string }).email` casts are exactly ESS-005 in slice 07. Nothing remains in this slice.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "The JWKS half was fixed by e364411."
+    },
+    {
+     "path": "packages/password/src/Password.ts",
+     "line": 571,
+     "snippet": "              key: (input) => `password:signup:${(input as { readonly email: string }).email}`,",
+     "note": "The Password.ts rate-limit casts half still exists (also at 583 and 599). It is owned by ESS-005 (slice 07)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "ESS-005-effect-schema-specialist",
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "ACS-004",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "JWKS response cast unvalidated before becoming key material",
+   "issue_file": ".issues/medium/ACS-004-applied-cryptography-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "PARTIAL",
+   "confidence": "high",
+   "verdict_note": "The cast half was fixed by e364411. The other half of the recommended fix is still open: require kty === 'RSA' and validate RSA JWK members before key import.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "The cast is gone (e364411)."
+    },
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 152,
+     "snippet": "  const candidates = jwks.keys.filter((key) => key.kty === \"RSA\" || key.kty === undefined);\n  const matched = kid === undefined ? candidates[0] : candidates.find((key) => key.kid === kid);",
+     "note": "Still true: a `kty`-less entry is an RSA candidate, and entries are untyped Record<string, unknown> (n/e never validated)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": {
+    "summary": "Tighten key selection. Decode RSA JWKs structurally and stop admitting kty-less entries.",
+    "steps": [
+     "packages/oauth/src/Jwt.ts: add `RsaJwkSchema = Schema.Struct({ kty: Schema.Literal('RSA'), n: Schema.String, e: Schema.String, kid: Schema.optional(Schema.String), alg: Schema.optional(Schema.String), use: Schema.optional(Schema.String) })`. In `findKey`, filter `jwks.keys` through `Schema.decodeUnknownOption(RsaJwkSchema)` (drop non-conforming entries) instead of `kty === 'RSA' || kty === undefined`.",
+     "Skip entries whose `use` is present and not 'sig', or whose `alg` is present and not 'RS256'.",
+     "`verifyRs256` then receives a typed RSA JWK. Keep passing it to `importKey` unchanged.",
+     "Coordinate with slice 04's AOMS-005 (multi-alg) so the schema becomes a per-alg union there."
+    ],
+    "files": [
+     "packages/oauth/src/Jwt.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/Jwt.test.ts: 'findKey ignores a kty-less entry' (red first), 'findKey ignores use=enc keys', 'findKey ignores an RSA entry missing n'"
+    ],
+    "acceptance": [
+     "A kty-less or malformed JWKS entry is never selected."
+    ],
+    "spec_refs": [
+     "BEH-EA-127"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "AH-002",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "JWKS response cast wholesale with as unknown as and cached unvalidated",
+   "issue_file": ".issues/medium/AH-002-anders-hejlsberg.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "verdict_note": "The `as unknown as Jwt.Jwks` cast was replaced by a Schema decode in e364411 (ESS-001/GC-001/SFS-002/TTE-001), with the regression test 'a malformed JWKS document fails typed' at OAuth.test.ts:973.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "JWKS decoded via HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema); a decode failure yields OAuthCallbackFailed."
+    },
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 31,
+     "snippet": "export const JwksDocumentSchema = Schema.Struct({\n  keys: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),\n});",
+     "note": "Schema added by e364411."
+    }
+   ],
+   "fixed_by_commit": "e364411",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "JJS-005",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "Untrusted JWKS, discovery, and token-exchange JSON flows through unvalidated type casts",
+   "issue_file": ".issues/medium/JJS-005-jwt-jwk-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Its four casts: JWKS fixed by e364411, id_token header/payload fixed by e3059f2 (AH-001/ESS-004), token-exchange body is ESS-003, discovery is ESS-002 (slice 04).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "The JWKS cast is gone (e364411)."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 250,
+     "snippet": "    const body = (yield* response.json) as {\n      readonly access_token?: string;\n      readonly id_token?: string;\n      readonly refresh_token?: string;\n      readonly expires_in?: number;\n      readonly scope?: string;\n      readonly token_type?: string;\n    };",
+     "note": "The remaining cast is ESS-003."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "ESS-003-effect-schema-specialist",
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "KRS-005",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "Provider JWKS response type-cast without any schema validation",
+   "issue_file": ".issues/medium/KRS-005-key-rotation-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "verdict_note": "The `as unknown as Jwt.Jwks` cast was replaced by a Schema decode in e364411 (ESS-001/GC-001/SFS-002/TTE-001), with the regression test 'a malformed JWKS document fails typed' at OAuth.test.ts:973.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "JWKS decoded via HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema); a decode failure yields OAuthCallbackFailed."
+    },
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 31,
+     "snippet": "export const JwksDocumentSchema = Schema.Struct({\n  keys: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),\n});",
+     "note": "Schema added by e364411."
+    }
+   ],
+   "fixed_by_commit": "e364411",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "OAP-004",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "JWKS/token/userinfo responses consumed via unchecked casts; malformed JWKS crashes callback as a defect",
+   "issue_file": ".issues/medium/OAP-004-oauth2-authorization-code-pkce-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "JWKS half fixed by e364411 (a malformed keys field now fails typed). Token and userinfo casts remain, which is ESS-003.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "The JWKS cast is gone (e364411)."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 250,
+     "snippet": "    const body = (yield* response.json) as {\n      readonly access_token?: string;\n      readonly id_token?: string;\n      readonly refresh_token?: string;\n      readonly expires_in?: number;\n      readonly scope?: string;\n      readonly token_type?: string;\n    };",
+     "note": "The remaining cast is ESS-003."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "ESS-003-effect-schema-specialist",
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "OIT-005",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Provider-controlled JSON cast without validation turns malformed responses into defects",
+   "issue_file": ".issues/medium/OIT-005-oidc-id-token-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "JWKS half fixed by e364411. Token and userinfo casts are ESS-003. The discovery cast and the resulting request-time `new URL()` throw in buildAuthorizeUrl are ESS-002 (slice 04).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "The JWKS cast is gone (e364411)."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 250,
+     "snippet": "    const body = (yield* response.json) as {\n      readonly access_token?: string;\n      readonly id_token?: string;\n      readonly refresh_token?: string;\n      readonly expires_in?: number;\n      readonly scope?: string;\n      readonly token_type?: string;\n    };",
+     "note": "The remaining cast is ESS-003."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "ESS-003-effect-schema-specialist",
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "VB-004",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "Provider JWKS response trusted via unvalidated cast",
+   "issue_file": ".issues/medium/VB-004-vittorio-bertocci.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "verdict_note": "The `as unknown as Jwt.Jwks` cast was replaced by a Schema decode in e364411 (ESS-001/GC-001/SFS-002/TTE-001), with the regression test 'a malformed JWKS document fails typed' at OAuth.test.ts:973.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "JWKS decoded via HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema); a decode failure yields OAuthCallbackFailed."
+    },
+    {
+     "path": "packages/oauth/src/Jwt.ts",
+     "line": 31,
+     "snippet": "export const JwksDocumentSchema = Schema.Struct({\n  keys: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),\n});",
+     "note": "Schema added by e364411."
+    }
+   ],
+   "fixed_by_commit": "e364411",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "AP-008",
+   "level": "low",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Provider-controlled discovery and JWKS documents consumed via unchecked casts; JWKS cache never expires",
+   "issue_file": ".issues/low/AP-008-aaron-parecki.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "The JWKS cast was fixed by e364411 and the missing JWKS TTL by fd8e5e9 (15 min). The discovery cast remains, which is ESS-002 (slice 04).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "The JWKS is schema-decoded (e364411)."
+    },
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 140,
+     "snippet": "      const document = yield* httpClient.get(discoveryUrl).pipe(\n        Effect.flatMap((response) => response.json),\n        Effect.map((body) => body as DiscoveryDocument),\n        Effect.orDie,\n      );",
+     "note": "The discovery cast is still present. It is owned by ESS-002 in slice 04."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "ESS-002",
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "JR-010",
+   "level": "low",
+   "category": "security",
+   "package": "oauth",
+   "title": "Discovery and JWKS wire documents consumed via unvalidated type assertions",
+   "issue_file": ".issues/low/JR-010-justin-richer.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "The JWKS half was fixed by e364411. The discovery half (OAuthProvider.ts:142) is ESS-002 (slice 04, high).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 323,
+     "snippet": "    const fetchAndCacheJwks = httpClient.get(jwksUri).pipe(\n      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jwt.JwksDocumentSchema)),\n      Effect.tap((jwks) =>\n        Ref.update(jwksCache, (cache) =>\n          HashMap.set(cache, provider.id, { jwks, fetchedAt: Date.now() }),\n        ),\n      ),\n      Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "The JWKS is schema-decoded (e364411)."
+    },
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 140,
+     "snippet": "      const document = yield* httpClient.get(discoveryUrl).pipe(\n        Effect.flatMap((response) => response.json),\n        Effect.map((body) => body as DiscoveryDocument),\n        Effect.orDie,\n      );",
+     "note": "The discovery cast is still present. It is owned by ESS-002 in slice 04."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "ESS-002",
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "AOMS-010",
+   "level": "low",
+   "category": "security",
+   "package": "oauth",
+   "title": "JWKS cache never expires: stale keys trusted for process lifetime",
+   "issue_file": ".issues/low/AOMS-010-auth0-okta-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "verdict_note": "fd8e5e9 (JJS-001/KRS-004/OIT-002) added a 15-minute JWKS cache TTL and made the kid-miss refetch reachable. Revoked or removed keys now converge within 15 minutes, not at restart. (OAP-007's optional 'manual invalidation' knob was not added. It is not needed now that a TTL exists. The Date.now() reads here are tracked by MA-002.)",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 95,
+     "snippet": "const JWKS_CACHE_TTL = Duration.minutes(15);",
+     "note": "TTL constant added by fd8e5e9."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 335,
+     "snippet": "    const cachedEntry = HashMap.get(yield* Ref.get(jwksCache), provider.id);\n    const jwks =\n      Option.isSome(cachedEntry) &&\n      Date.now() - cachedEntry.value.fetchedAt < Duration.toMillis(JWKS_CACHE_TTL)\n        ? cachedEntry.value.jwks\n        : yield* fetchAndCacheJwks;",
+     "note": "A TTL'd-out entry is treated as a cache miss and refetched."
+    }
+   ],
+   "fixed_by_commit": "fd8e5e9",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "OAP-007",
+   "level": "low",
+   "category": "security",
+   "package": "oauth",
+   "title": "JWKS cache is a process-lifetime Ref with no TTL; revoked provider keys stay accepted until restart or kid change",
+   "issue_file": ".issues/low/OAP-007-oauth2-authorization-code-pkce-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "verdict_note": "fd8e5e9 (JJS-001/KRS-004/OIT-002) added a 15-minute JWKS cache TTL and made the kid-miss refetch reachable. Revoked or removed keys now converge within 15 minutes, not at restart. (OAP-007's optional 'manual invalidation' knob was not added. It is not needed now that a TTL exists. The Date.now() reads here are tracked by MA-002.)",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 95,
+     "snippet": "const JWKS_CACHE_TTL = Duration.minutes(15);",
+     "note": "TTL constant added by fd8e5e9."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 335,
+     "snippet": "    const cachedEntry = HashMap.get(yield* Ref.get(jwksCache), provider.id);\n    const jwks =\n      Option.isSome(cachedEntry) &&\n      Date.now() - cachedEntry.value.fetchedAt < Duration.toMillis(JWKS_CACHE_TTL)\n        ? cachedEntry.value.jwks\n        : yield* fetchAndCacheJwks;",
+     "note": "A TTL'd-out entry is treated as a cache miss and refetched."
+    }
+   ],
+   "fixed_by_commit": "fd8e5e9",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-provider-response-decoding",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "OIT-008",
+   "level": "low",
+   "category": "dx",
+   "package": "oauth",
+   "title": "All id_token failure reasons collapse into one reason-free error, discarding JwtVerificationError's typed reason",
+   "issue_file": ".issues/low/OIT-008-oidc-id-token-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 348,
+     "snippet": "      Effect.flatMap((jwk) => Jwt.verifyRs256(jwk, decoded.signingInput, decoded.signature)),\n      Effect.mapError(() => new OAuthApi.OAuthCallbackFailed()),",
+     "note": "JwtVerificationError's reason is erased."
+    },
+    {
+     "path": "packages/oauth/src/OAuthApi.ts",
+     "line": 41,
+     "snippet": "export class OAuthCallbackFailed extends Schema.TaggedError<OAuthCallbackFailed>()(\n  \"OAuthCallbackFailed\",\n  {},\n  { httpApiStatus: 400 },\n) {}",
+     "note": "Field-less on the wire. That is intentional (anti-oracle) and stays."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": {
+    "summary": "Keep the wire error opaque, and carry a discriminated internal reason for logs and spans.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts: define `type CallbackFailureReason = 'state-malformed' | 'state-cookie-mismatch' | 'flow-consumed' | 'flow-provider-mismatch' | 'decrypt' | 'iss-mismatch' | 'token-exchange' | 'id-token-missing' | 'jwt-malformed' | 'alg' | 'jwks' | 'kid' | 'signature' | 'iss' | 'aud' | 'azp' | 'exp' | 'nbf' | 'iat' | 'nonce' | 'missing-nonce' | 'userinfo' | 'userinfo-sub-mismatch'`.",
+     "Add `const callbackFailed = (reason: CallbackFailureReason, cause?: unknown) => Effect.logWarning('oauth callback failed').pipe(Effect.annotateLogs({ reason }), Effect.andThen(Effect.annotateCurrentSpan('oauth.failure_reason', reason)), Effect.andThen(Effect.fail(new OAuthApi.OAuthCallbackFailed())))`. Replace every `Effect.fail(new OAuthApi.OAuthCallbackFailed())` and `mapError(() => new OAuthCallbackFailed())` with it, passing the Jwt.ts `reason` through where one exists.",
+     "Do NOT add fields to OAuthCallbackFailed. The wire stays uniform (BEH-EA-086/122)."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'a wrong-nonce failure logs reason=nonce while the error stays field-less' (capture logs with a test Logger layer; red first)"
+    ],
+    "acceptance": [
+     "Every OAuthCallbackFailed site emits a reason-tagged log and span annotation.",
+     "The HTTP response body is unchanged."
+    ],
+    "spec_refs": [
+     "BEH-EA-122",
+     "BEH-EA-086"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "AOMS-004",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "aud claim compared by string equality: multi-audience id_tokens always fail federation",
+   "issue_file": ".issues/medium/AOMS-004-auth0-okta-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Array aud plus missing azp, same line.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 356,
+     "snippet": "    if (\n      claims[\"iss\"] !== expectedIssuer ||\n      claims[\"aud\"] !== provider.clientId ||\n      exp === undefined ||\n      Date.now() >= exp * 1000 ||\n      (nonce !== undefined && claims[\"nonce\"] !== nonce)\n    ) {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());",
+     "note": "`claims[\"aud\"] !== provider.clientId`: an array aud always fails, and `azp` is never read (0 grep hits for azp in packages/oauth)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "OIT-003",
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "AP-003",
+   "level": "medium",
+   "category": "compliance",
+   "package": "oauth",
+   "title": "id_token aud accepted only as an exact string; array-form audiences rejected",
+   "issue_file": ".issues/medium/AP-003-aaron-parecki.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Array aud plus azp for multi-audience, same line.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 356,
+     "snippet": "    if (\n      claims[\"iss\"] !== expectedIssuer ||\n      claims[\"aud\"] !== provider.clientId ||\n      exp === undefined ||\n      Date.now() >= exp * 1000 ||\n      (nonce !== undefined && claims[\"nonce\"] !== nonce)\n    ) {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());",
+     "note": "`claims[\"aud\"] !== provider.clientId`: an array aud always fails, and `azp` is never read (0 grep hits for azp in packages/oauth)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "OIT-003",
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "OIT-003",
+   "level": "medium",
+   "category": "compliance",
+   "package": "oauth",
+   "title": "azp never validated and array-valued aud rejected outright",
+   "issue_file": ".issues/medium/OIT-003-oidc-id-token-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Canonical for the aud/azp cluster (7 reports). Chosen over the equally-medium AOMS-004/AP-003 because it is the only report that also covers the 'azp present but different' case (OIDC Core 3.1.3.7 SHOULD). Fails closed, so this is an interop issue, not a forgery vector.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 356,
+     "snippet": "    if (\n      claims[\"iss\"] !== expectedIssuer ||\n      claims[\"aud\"] !== provider.clientId ||\n      exp === undefined ||\n      Date.now() >= exp * 1000 ||\n      (nonce !== undefined && claims[\"nonce\"] !== nonce)\n    ) {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());",
+     "note": "`claims[\"aud\"] !== provider.clientId`: an array aud always fails, and `azp` is never read (0 grep hits for azp in packages/oauth)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "AOMS-004",
+    "AP-003",
+    "JJS-006",
+    "JR-008",
+    "OAP-006",
+    "VB-006"
+   ],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": {
+    "summary": "Accept aud as a string or an array containing clientId. Require azp === clientId when aud has more than one value, and whenever azp is present.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts: add `const audienceAccepted = (claims: Record<string, unknown>, clientId: string): boolean`. `aud` must be a string equal to clientId, or an array of strings (narrow with `Array.isArray` and `every(isString)`, no casts) that includes clientId. If the array length is > 1, `azp` must be a string equal to clientId. If `azp` is present at all, it must equal clientId.",
+     "Replace `claims[\"aud\"] !== provider.clientId` in verifyIdToken with `!audienceAccepted(claims, provider.clientId)`. Tag the failure reason 'aud' or 'azp' (OIT-008).",
+     "Out of scope here: packages/jwt/src/JwtCodec.ts:242 (JR-008's second site) verifies first-party tokens whose aud is always the configured string. Leave it to slice 04's VB-005/JJS-008 audience work."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts OIDC block: 'an array aud containing the client id is accepted' (red first)",
+     "'a multi-value aud without azp is rejected'",
+     "'an azp naming another client is rejected even when aud matches'",
+     "'a single-element array aud is accepted'"
+    ],
+    "acceptance": [
+     "All four cases behave as specified. The existing string-aud tests stay green."
+    ],
+    "spec_refs": [
+     "BEH-EA-127"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "JJS-006",
+   "level": "low",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "id_token aud validated as exact string only; azp never checked and array aud fails login",
+   "issue_file": ".issues/low/JJS-006-jwt-jwk-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Same aud/azp gap.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 356,
+     "snippet": "    if (\n      claims[\"iss\"] !== expectedIssuer ||\n      claims[\"aud\"] !== provider.clientId ||\n      exp === undefined ||\n      Date.now() >= exp * 1000 ||\n      (nonce !== undefined && claims[\"nonce\"] !== nonce)\n    ) {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());",
+     "note": "`claims[\"aud\"] !== provider.clientId`: an array aud always fails, and `azp` is never read (0 grep hits for azp in packages/oauth)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "OIT-003",
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "JR-008",
+   "level": "low",
+   "category": "compliance",
+   "package": "oauth",
+   "title": "aud claim validated by strict string equality in both verifiers; array audiences rejected, azp never checked",
+   "issue_file": ".issues/low/JR-008-justin-richer.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Same gap. Its JwtCodec.ts:242 second site verifies first-party single-string aud tokens and is tracked by slice 04's audience work (VB-005).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 356,
+     "snippet": "    if (\n      claims[\"iss\"] !== expectedIssuer ||\n      claims[\"aud\"] !== provider.clientId ||\n      exp === undefined ||\n      Date.now() >= exp * 1000 ||\n      (nonce !== undefined && claims[\"nonce\"] !== nonce)\n    ) {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());",
+     "note": "`claims[\"aud\"] !== provider.clientId`: an array aud always fails, and `azp` is never read (0 grep hits for azp in packages/oauth)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "OIT-003",
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "OAP-006",
+   "level": "low",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "id_token aud compared as exact string; array-form aud (OIDC-legal) always fails validation",
+   "issue_file": ".issues/low/OAP-006-oauth2-authorization-code-pkce-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Same aud/azp gap.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 356,
+     "snippet": "    if (\n      claims[\"iss\"] !== expectedIssuer ||\n      claims[\"aud\"] !== provider.clientId ||\n      exp === undefined ||\n      Date.now() >= exp * 1000 ||\n      (nonce !== undefined && claims[\"nonce\"] !== nonce)\n    ) {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());",
+     "note": "`claims[\"aud\"] !== provider.clientId`: an array aud always fails, and `azp` is never read (0 grep hits for azp in packages/oauth)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "OIT-003",
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "VB-006",
+   "level": "low",
+   "category": "security",
+   "package": "oauth",
+   "title": "id_token validation omits azp, at_hash, and iat/nbf bounds; array-form aud unsupported",
+   "issue_file": ".issues/low/VB-006-vittorio-bertocci.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "The aud/azp half is OIT-003. Its iat/nbf half is OIT-004 and its at_hash half is OIT-007, both in this workstream.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 356,
+     "snippet": "    if (\n      claims[\"iss\"] !== expectedIssuer ||\n      claims[\"aud\"] !== provider.clientId ||\n      exp === undefined ||\n      Date.now() >= exp * 1000 ||\n      (nonce !== undefined && claims[\"nonce\"] !== nonce)\n    ) {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());",
+     "note": "`claims[\"aud\"] !== provider.clientId`: an array aud always fails, and `azp` is never read (0 grep hits for azp in packages/oauth)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "OIT-003",
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "MA-002",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Ambient Date.now() inside an Effect bypasses the Clock, breaking TestClock determinism",
+   "issue_file": ".issues/medium/MA-002-michael-arnaldi.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed, and worse than reported: three Date.now() sites in verifyIdToken now (327, 338, 360). callback already uses `DateTime.now` at line 689, so the idiom is right next door.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 356,
+     "snippet": "    if (\n      claims[\"iss\"] !== expectedIssuer ||\n      claims[\"aud\"] !== provider.clientId ||\n      exp === undefined ||\n      Date.now() >= exp * 1000 ||\n      (nonce !== undefined && claims[\"nonce\"] !== nonce)\n    ) {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());",
+     "note": "exp is checked against ambient Date.now()."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 335,
+     "snippet": "    const cachedEntry = HashMap.get(yield* Ref.get(jwksCache), provider.id);\n    const jwks =\n      Option.isSome(cachedEntry) &&\n      Date.now() - cachedEntry.value.fetchedAt < Duration.toMillis(JWKS_CACHE_TTL)\n        ? cachedEntry.value.jwks\n        : yield* fetchAndCacheJwks;",
+     "note": "The JWKS TTL added by fd8e5e9 introduced two more ambient Date.now() reads (plus line 327's fetchedAt)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": {
+    "summary": "Read time once per verification from the Effect Clock and use it for exp/iat/nbf and the JWKS cache age.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts verifyIdToken: `const nowMs = yield* Clock.currentTimeMillis` (import `effect/Clock`) at the top, or `DateTime.now` plus `DateTime.toEpochMillis`.",
+     "Replace `Date.now()` at lines 327, 338 and 360 with `nowMs` (the fetchedAt write inside `fetchAndCacheJwks` must read the Clock inside its own Effect).",
+     "Pass `nowMs` into the claim checks introduced by OIT-004."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'an id_token becomes expired when TestClock advances past exp' (it.effect with TestClock.adjust; red first against Date.now)",
+     "'the JWKS cache refetches after TestClock advances past JWKS_CACHE_TTL'"
+    ],
+    "acceptance": [
+     "`grep -n 'Date.now' packages/oauth/src` returns nothing.",
+     "Both TestClock-driven tests pass."
+    ],
+    "spec_refs": [
+     "BEH-EA-127"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "OIT-004",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Expiry check has zero clock-skew leeway and iat/nbf are never validated",
+   "issue_file": ".issues/medium/OIT-004-oidc-id-token-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 356,
+     "snippet": "    if (\n      claims[\"iss\"] !== expectedIssuer ||\n      claims[\"aud\"] !== provider.clientId ||\n      exp === undefined ||\n      Date.now() >= exp * 1000 ||\n      (nonce !== undefined && claims[\"nonce\"] !== nonce)\n    ) {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());",
+     "note": "Zero leeway on exp. iat and nbf are never read (0 grep hits)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": {
+    "summary": "Add a configurable clock-skew leeway and validate iat/nbf.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts `OAuthConfigShape`: add `readonly clockSkew: Duration.Duration` (default 60 seconds) and `readonly maxIdTokenAge: Option<Duration>` (default none, for defense in depth).",
+     "verifyIdToken: fail when `nowMs >= exp*1000 + skew`; when `nbf` is present it must be a number with `nowMs + skew >= nbf*1000`; `iat` must be a number with `iat*1000 <= nowMs + skew`; if maxIdTokenAge is set, `nowMs - iat*1000 <= maxAge`.",
+     "Non-number iat/nbf present in the claims means reject."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'an id_token expired by less than the skew is accepted'; 'an id_token with iat in the future beyond skew is rejected'; 'an id_token with nbf in the future is rejected'; 'maxIdTokenAge rejects an old iat' (TestClock-driven)"
+    ],
+    "acceptance": [
+     "All four cases pass with the default 60s skew. The existing 'an expired id_token is rejected' test stays green."
+    ],
+    "spec_refs": [
+     "BEH-EA-127"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [
+    "MA-002"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "OIT-006",
+   "level": "low",
+   "category": "security",
+   "package": "oauth",
+   "title": "Nonce check is conditional on the flow having a nonce; verifier does not enforce presence for oidc",
+   "issue_file": ".issues/low/OIT-006-oidc-id-token-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Unreachable in the wired flow today (authorize always mints a nonce for oidc), exactly as reported. It is still a latent fail-open, and the guard beside it (isFlowPayload) is itself built on `as` casts.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 356,
+     "snippet": "    if (\n      claims[\"iss\"] !== expectedIssuer ||\n      claims[\"aud\"] !== provider.clientId ||\n      exp === undefined ||\n      Date.now() >= exp * 1000 ||\n      (nonce !== undefined && claims[\"nonce\"] !== nonce)\n    ) {\n      return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());",
+     "note": "The nonce is compared only when the flow carries one."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 663,
+     "snippet": "        const nonce =\n          flow.nonce === undefined\n            ? undefined\n            : yield* encryption.decrypt(flow.nonce, identifier).pipe(",
+     "note": "flow.nonce undefined leads to verifyIdToken(nonce=undefined)."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 141,
+     "snippet": "const isFlowPayload = (value: unknown): value is FlowPayload =>\n  typeof value === \"object\" &&\n  value !== null &&\n  typeof (value as Record<string, unknown>)[\"providerId\"] === \"string\" &&\n  typeof (value as Record<string, unknown>)[\"codeVerifier\"] === \"string\" &&\n  typeof (value as Record<string, unknown>)[\"callbackURL\"] === \"string\";",
+     "note": "isFlowPayload never validates `nonce`, and uses `as` casts (a no-type-assertion violation)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": {
+    "summary": "Make the nonce mandatory for oidc verification, and schema-decode the flow payload instead of the cast-based guard.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts: replace `isFlowPayload` with `const FlowPayloadSchema = Schema.Struct({ providerId: Schema.String, codeVerifier: Schema.String, nonce: Schema.optional(Schema.String), callbackURL: Schema.String, link: Schema.optional(Schema.Struct({ userId: Schema.String })) })`, decoded with `Schema.decodeUnknownOption`. Remove the three `as Record<string, unknown>` casts. This also carries the MNA-003 `native` flag later.",
+     "verifyIdToken: change the parameter to `nonce: string` (required).",
+     "callback: when `provider.kind === 'oidc'` and the decrypted nonce is undefined, fail `OAuthCallbackFailed` (reason 'missing-nonce') before calling verifyIdToken."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'an oidc flow whose persisted payload lacks a nonce fails closed' (issue a Verification entry by hand with no nonce; red first)",
+     "'an id_token without a nonce claim is rejected'"
+    ],
+    "acceptance": [
+     "verifyIdToken's type no longer admits an undefined nonce.",
+     "`grep -n ' as ' packages/oauth/src/OAuth.ts` no longer matches isFlowPayload."
+    ],
+    "spec_refs": [
+     "BEH-EA-122",
+     "BEH-EA-127",
+     "INV-EA-015"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "PDR-004",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "No security headers anywhere: no Referrer-Policy on auth redirects, no HSTS, no CSP, no X-Content-Type-Options",
+   "issue_file": ".issues/medium/PDR-004-philippe-de-ryck.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed. The OAuth redirect responses are the part the library owns end to end. The global security-headers middleware is an opt-in server concern (slice 06's package), planned here because no other manifest carries it.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 431,
+     "snippet": "        if (outcome.session !== undefined) {\n          const response = HttpServerResponse.redirect(outcome.callbackURL);\n          return yield* HttpServerResponse.setCookie(\n            response,\n            Sessions.SESSION_COOKIE_NAME,\n            Redacted.value(outcome.session.token),\n            Sessions.SESSION_COOKIE_ATTRIBUTES,\n          ).pipe(Effect.orDie);",
+     "note": "The post-auth 302 carries no Referrer-Policy. `grep -rni 'referrer-policy\\|strict-transport\\|content-security-policy\\|x-content-type' packages/*/src` returns 0 hits."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-callback-http-hardening",
+   "fix": {
+    "summary": "Set `Referrer-Policy: no-referrer` on the OAuth authorize and callback responses, and ship an opt-in security-headers middleware plus a deployment checklist.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts: in both handlers, add the header via the same `HttpEffect.appendPreResponseHandler` used by CSS-006 (`HttpServerResponse.setHeader(res, 'referrer-policy', 'no-referrer')`). This covers success and error bodies. `no-referrer` prevents the provider's code/state landing URL from leaking to subresources.",
+     "packages/server/src/SecurityHeaders.ts (new, opt-in): `SecurityHeaders.layer(options)`, an HttpRouter middleware setting `Strict-Transport-Security` (default max-age=31536000; includeSubDomains, opt-out), `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, and `X-Frame-Options: DENY`/CSP `frame-ancestors 'none'` for auth routes, each overridable. Export it from @awthaq/server.",
+     "Add a 'Deployment checklist' section to packages/server/README.md covering HSTS at the edge, and when to use SecurityHeaders.layer."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts",
+     "packages/server/src/SecurityHeaders.ts",
+     "packages/server/src/index.ts",
+     "packages/server/README.md"
+    ],
+    "tests": [
+     "packages/oauth/test/AuthHttp.test.ts: 'authorize and callback 302s carry Referrer-Policy: no-referrer' (red first)",
+     "packages/server/test/SecurityHeaders.test.ts: default and override cases"
+    ],
+    "acceptance": [
+     "Both OAuth endpoints always send Referrer-Policy.",
+     "The opt-in middleware exists and is documented."
+    ],
+    "spec_refs": [
+     "BEH-EA-128"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "CSS-006",
+   "level": "low",
+   "category": "security",
+   "package": "oauth",
+   "title": "Consumed __Host-oauth-state cookie is never expired at the callback",
+   "issue_file": ".issues/low/CSS-006-cookie-security-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 431,
+     "snippet": "        if (outcome.session !== undefined) {\n          const response = HttpServerResponse.redirect(outcome.callbackURL);\n          return yield* HttpServerResponse.setCookie(\n            response,\n            Sessions.SESSION_COOKIE_NAME,\n            Redacted.value(outcome.session.token),\n            Sessions.SESSION_COOKIE_ATTRIBUTES,\n          ).pipe(Effect.orDie);",
+     "note": "The success path sets only the session cookie."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 440,
+     "snippet": "        return HttpServerResponse.redirect(outcome.callbackURL);",
+     "note": "The link path sets nothing. Typed failures are rendered by the framework with no Set-Cookie."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-callback-http-hardening",
+   "fix": {
+    "summary": "Expire __Host-oauth-state on every callback response: success, link, and typed failure.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts callback handler: before calling `oauth.callback`, register `HttpEffect.appendPreResponseHandler((_req, res) => HttpServerResponse.expireCookie(res, OAUTH_STATE_COOKIE, { path: '/', secure: true, httpOnly: true, sameSite: 'lax' }))` (both APIs exist in Effect v4: HttpEffect.ts:243, HttpServerResponse.ts:657). This covers the framework-encoded error responses too.",
+     "Make sure the expiry does not clobber the session Set-Cookie. Both are separate cookies, but assert the header list contains both."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/AuthHttp.test.ts: 'a successful callback expires __Host-oauth-state (Max-Age=0) alongside the session cookie' (use `response.headers.getSetCookie()`; red first)",
+     "'a failed callback (400) also expires __Host-oauth-state'"
+    ],
+    "acceptance": [
+     "Every callback response carries `__Host-oauth-state=; Max-Age=0; Path=/; Secure`."
+    ],
+    "spec_refs": [
+     "BEH-EA-122"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "MNA-003",
+   "level": "high",
+   "category": "architecture",
+   "package": "oauth",
+   "title": "OAuth callback hands the session to the client only via Set-Cookie on a 302 - unreachable from a native app",
+   "issue_file": ".issues/high/MNA-003-mobile-native-auth-specialist.md",
+   "current_status": "ready-for-agent",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed. Decision recorded in .scratch/resolve-ready-for-human-findings/issues/17-native-mobile-session-bootstrap.md: a one-time exchange code in the deep-link redirect, redeemed at a new token endpoint, with the same bearer-delivery shape as MNA-001 (slice 07). Implementation note (not a re-litigation): the ticket names 'the existing KeyValueStore port', but no such port exists in @awthaq/ports (only Effect's unstable/persistence/KeyValueStore, whose get-then-remove is not atomic). Core Verification already provides the atomic single-use, TTL-bound, hashed-at-rest semantics the decision requires, so use it (purpose `oauth.exchange`). If the implementer insists on KeyValueStore, they must add an atomic take.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 431,
+     "snippet": "        if (outcome.session !== undefined) {\n          const response = HttpServerResponse.redirect(outcome.callbackURL);\n          return yield* HttpServerResponse.setCookie(\n            response,\n            Sessions.SESSION_COOKIE_NAME,\n            Redacted.value(outcome.session.token),\n            Sessions.SESSION_COOKIE_ATTRIBUTES,\n          ).pipe(Effect.orDie);",
+     "note": "The only credential delivery is Set-Cookie on a 302. There is no native mode, exchange code or /oauth/token endpoint (grep: 0 hits)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "native-session-bootstrap",
+   "fix": {
+    "summary": "Implement decision ticket 17: native-mode authorize, an exchange code minted at callback, and a JSON redemption endpoint returning the session token.",
+    "steps": [
+     "OAuthApi.ts AuthorizeQuery: add `mode: Schema.optional(Schema.Literal('native'))`. FlowPayload (schema from OIT-006): add `native: Schema.optional(Schema.Boolean)`.",
+     "OAuth.ts authorize: persist `native: true` in the flow. Allow custom-scheme callbackURLs only in native mode (MNA-004).",
+     "OAuth.ts callback (native): after `sessions.issue`, do not set a cookie. Mint an exchange code: `verification.issue({ identifier: 'oauth.exchange:' + uuidv7, ttl: Duration.seconds(60), payload: { sessionToken: <encryption.encrypt(token, identifier)> } })`, then encode `identifier.value` like `encodeState`. Redirect to `flow.callbackURL` with `?code=<exchange>` appended via URL/searchParams. Never put the session token itself in the URL.",
+     "OAuthApi.ts: a new endpoint `HttpApiEndpoint.post('token', '/oauth/token', { payload: Schema.Struct({ code: Schema.String }), success: <shared bearer SessionTokenResponse from MNA-001>, error: [OAuthCallbackFailed, Api.RateLimited] })`. OAuth.ts handler: decode, `verification.consume` (atomic single-use), decrypt, return `{ token, session }`. Rate-limit per IP (reuse the ClientAddress pattern).",
+     "Share the response DTO with slice 07's MNA-001 bearer-delivery work (`X-Awthaq-Token-Delivery: bearer`) so password, passkey and OAuth return one token shape. Coordinate: whichever lands first defines it in @awthaq/api.",
+     "Browser mode stays byte-for-byte unchanged.",
+     "Spec: new BEH-EA-### under 16-oauth.md, 'Native clients receive a one-time exchange code, never a token in the URL'. Add a traceability.md row."
+    ],
+    "files": [
+     "packages/oauth/src/OAuthApi.ts",
+     "packages/oauth/src/OAuth.ts",
+     "packages/api/src/Session.ts",
+     "spec/behaviors/16-oauth.md",
+     "spec/traceability.md",
+     "features/features/05-authentication-methods/16-oauth.feature"
+    ],
+    "tests": [
+     "packages/oauth/test/AuthHttp.test.ts: 'a native-mode callback redirects with an exchange code and sets no session cookie' (red first)",
+     "'POST /oauth/token redeems the code once for a working bearer token'",
+     "'a second redemption of the same code fails'",
+     "'a code older than 60s fails' (TestClock)",
+     "BDD: a new scenario for the native return leg"
+    ],
+    "acceptance": [
+     "A native app can complete OAuth with ASWebAuthenticationSession/Custom Tabs and obtain a bearer token.",
+     "No live token ever appears in a URL.",
+     "Browser flows are unchanged."
+    ],
+    "spec_refs": [
+     "BEH-EA-122",
+     "BEH-EA-128",
+     "BEH-EA-055"
+    ],
+    "effort": "L"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "OAP-008",
+   "level": "low",
+   "category": "security",
+   "package": "oauth",
+   "title": "authorize endpoint is unthrottled while callback is rate-limited: unauthenticated Verification-row and crypto amplification",
+   "issue_file": ".issues/low/OAP-008-oauth2-authorization-code-pkce-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 537,
+     "snippet": "      const registerCallbackRule: Effect.Effect<void, RateLimits.RateLimitScopeViolation> =\n        rateLimitsRegistry.register(OAuth, {\n          group: \"oauth\",\n          endpoint: \"callback\",\n          key: \"ip\",\n          limit: CALLBACK_RATE_LIMIT.limit,\n          window: CALLBACK_RATE_LIMIT.window,\n        });",
+     "note": "Only a callback rule is registered."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 557,
+     "snippet": "      const authorize: OAuthShape[\"authorize\"] = Effect.fnUntraced(function* (providerId, input) {\n        const provider = registry.get(providerId);\n        if (provider === undefined) {\n          return yield* Effect.fail(new OAuthApi.ProviderNotFound({ providerId }));",
+     "note": "authorize consumes no limiter, yet mints PKCE material, two encryptions and a Verification row."
+    },
+    {
+     "path": "packages/oauth/src/OAuthApi.ts",
+     "line": 92,
+     "snippet": "      error: [ProviderNotFound, Api.Unauthenticated],",
+     "note": "No Api.RateLimited in the authorize contract."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-callback-http-hardening",
+   "fix": {
+    "summary": "Register and enforce a looser per-IP rule on authorize.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts: `AUTHORIZE_RATE_LIMIT = { limit: 30, window: Duration.minutes(1) }`, registered via `rateLimitsRegistry.register(OAuth, { group: 'oauth', endpoint: 'authorize', key: 'ip', ... })` next to the callback rule. The key is `oauth:authorize:${ip ?? 'unknown'}`.",
+     "OAuthShape.authorize input: add `ip?: string`. The handler resolves it via `clientAddress.resolve(request)` (it needs `request` in the handler signature, as callback has). Consume it at the top of `authorize`, mapping RateLimited to Api.RateLimited.",
+     "OAuthApi.ts authorize: add Api.RateLimited to the error list.",
+     "Make both rules' limits configurable via `OAuthConfigShape.rateLimits?: { authorize, callback }` (flexibility preference)."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/src/OAuthApi.ts",
+     "spec/behaviors/14-rate-limiting.md"
+    ],
+    "tests": [
+     "packages/oauth/test/AuthHttp.test.ts: 'authorize is throttled after its own rule's limit' (mirror the existing callback throttle test; red first)"
+    ],
+    "acceptance": [
+     "The 31st authorize from one IP within a minute answers 429.",
+     "The rule is visible in the RateLimits registry."
+    ],
+    "spec_refs": [
+     "BEH-EA-110",
+     "BEH-EA-107",
+     "BEH-EA-108"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "NAM-004",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Provider discovery resolved once at boot and dies the process on failure",
+   "issue_file": ".issues/medium/NAM-004-nextauth-authjs-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed. BEH-EA-127 mandates boot failure only for an issuer mismatch. Dying on 'temporarily unreachable' is an implementation choice, so how far to relax it is a real product call.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 547,
+     "snippet": "      // BEH-EA-127: resolved once, at boot — a mismatched or unfetchable\n      // discovery document dies here, before any request is ever served.\n      const resolved = yield* Effect.all(\n        config_.providers.map((provider) => OAuthProvider.resolve(httpClient, provider)),\n      );\n      const registry = new Map(resolved.map((provider) => [provider.id, provider] as const));",
+     "note": "Any unreachable discovery document dies the whole composition at boot."
+    },
+    {
+     "path": "packages/oauth/src/OAuthProvider.ts",
+     "line": 140,
+     "snippet": "      const document = yield* httpClient.get(discoveryUrl).pipe(\n        Effect.flatMap((response) => response.json),\n        Effect.map((body) => body as DiscoveryDocument),\n        Effect.orDie,\n      );",
+     "note": "`Effect.orDie` with no retry. OAuthTokenAccess.layer repeats the same boot resolution (a second discovery fetch per provider)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-outbound-resilience",
+   "fix": {
+    "summary": "Split 'misconfigured' (boot die) from 'unreachable' (retry, then optionally lazy), and share one provider registry.",
+    "steps": [
+     "Land ERS-003's retrying discovery client (option A).",
+     "Extract a `OAuthProviders` Context.Service (resolved registry) built once, consumed by OAuth.layer and OAuthTokenAccess.layer, removing the duplicate `Effect.all(config_.providers.map(resolve))` at OAuthTokenAccess.ts:158.",
+     "If B is chosen: `OAuthProviderConfig.discovery?: { mode: 'boot' | 'lazy'; refresh?: Duration }`. For lazy, the registry holds an `Effect.cachedWithTTL` resolver per provider. authorize/callback yield it and map failure to ProviderUnavailable (EEM-004). An issuer mismatch dies that provider's resolver, logs `Effect.logError`, and marks it permanently unavailable.",
+     "Spec: add a note to BEH-EA-127 that lazy mode moves the mismatch failure from boot to first use, still failing closed."
+    ],
+    "files": [
+     "packages/oauth/src/OAuthProvider.ts",
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/src/OAuthTokenAccess.ts",
+     "spec/behaviors/16-oauth.md"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'a discovery endpoint that fails once at boot still registers the provider' (red first)",
+     "(B) 'a lazy provider whose discovery is down answers 503 and recovers once discovery is reachable'",
+     "(B) 'a lazy provider whose fetched issuer mismatches never serves a request'"
+    ],
+    "acceptance": [
+     "A single transient discovery failure no longer prevents boot.",
+     "(B) An unreachable lazy provider does not block the rest of the auth runtime."
+    ],
+    "spec_refs": [
+     "BEH-EA-127"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [
+    "ERS-003"
+   ],
+   "needs_decision": true,
+   "decision_options": [
+    "A: keep fail-fast, but retry discovery with jittered backoff before dying (ERS-003). Minimal, spec-neutral.",
+    "B: A plus an opt-in per-provider `discovery: 'lazy'` mode. The provider resolves on first use, answers 503 ProviderUnavailable until resolved, is refreshed on a TTL, and is permanently disabled with a logged defect if the fetched issuer mismatches (BEH-EA-127 still holds per provider).",
+    "C: make all discovery lazy by default."
+   ],
+   "recommendation": "B. Default behavior stays fail-fast (with A's retries), so BEH-EA-127's boot guarantee is unchanged for everyone who does not opt in, and deployments that need Auth.js-style availability can opt in per provider. This is the richer option at a bounded cost. Also dedupe the second boot resolution in OAuthTokenAccess.layer by sharing one resolved-provider registry service (`OAuthProviders`) between OAuth.layer and OAuthTokenAccess.layer.",
+   "recommended_status": "ready-for-human"
+  },
+  {
+   "id": "EP-004",
+   "level": "high",
+   "category": "architecture",
+   "package": "oauth",
+   "title": "Connection model absent: OAuth providers are a static per-composition array",
+   "issue_file": ".issues/high/EP-004-eugenio-pace.md",
+   "current_status": "ready-for-agent",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed and not started. Decision ticket 18 (resolved): per-organization OAuth connections as data, in an `organization_oauth_connection` table owned by packages/organization, resolved through a `LayerMap.Service`-backed `OrganizationConnections` port, additive to the static Map. Canonical over CWM-001 (same decision, same evidence).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 56,
+     "snippet": "export interface OAuthConfigShape {\n  readonly providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>;",
+     "note": "Static compose-time provider array."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 547,
+     "snippet": "      // BEH-EA-127: resolved once, at boot — a mismatched or unfetchable\n      // discovery document dies here, before any request is ever served.\n      const resolved = yield* Effect.all(\n        config_.providers.map((provider) => OAuthProvider.resolve(httpClient, provider)),\n      );\n      const registry = new Map(resolved.map((provider) => [provider.id, provider] as const));",
+     "note": "Resolved once into an immutable Map. There is no organization_oauth_connection or OrganizationConnections anywhere (grep: 0 hits)."
+    },
+    {
+     "path": "spec/models/09-sso.md",
+     "line": 65,
+     "snippet": "No design beyond this row exists yet. There is no `SsoApi` contract, no connection model, no per-tenant resolution mechanism, and no decision on whether SSO wraps SAML and OIDC-based enterprise connections under one plugin or dispatches to the separate `Saml`/`OAuth` plugins underneath.",
+     "note": "The spec still records no connection model."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "CWM-001"
+   ],
+   "workstream": "multi-tenant-oauth-connections",
+   "fix": {
+    "summary": "Implement ticket 18's connection model: an org-owned connection table plus a LayerMap-backed resolver, consulted after the static registry.",
+    "steps": [
+     "packages/organization: new table `organization_oauth_connection` (id, organizationId, kind oidc|oauth2 with saml reserved, issuer, discoveryUrl/endpoints, clientId, clientSecret encrypted via the Encryption/KeyProvider ports, emailDomains[]) with a migration under the plugin's own prefix (BEH-EA-040), plus a records repository.",
+     "packages/organization: `OrganizationConnections` as a `LayerMap.Service` keyed by organizationId (Effect v4 ../effect/packages/effect/src/LayerMap.ts). `lookup(orgId)` builds `OAuthProvider.OAuthProviderConfig` values from the stored rows and resolves them with the same `OAuthProvider.resolve` (reused).",
+     "packages/oauth: an optional dependency. `OAuthConfigShape.connections?: { resolve: (hint: { providerId: string; organizationId?: string; emailDomain?: string }) => Effect<Option<ResolvedProvider>> }` (a port-shaped callback, so oauth does not import organization, per the stratum rules). authorize/callback try `registry.get(providerId)` first, then `connections.resolve`. The provider id for a connection is namespaced (`org:<orgId>:<connectionId>`) so flow payloads stay unambiguous.",
+     "Home-realm discovery: an `authorize` query param `organization` or `login_hint` email domain feeds the resolver hint (the WorkOS/CWM-001 email-domain routing).",
+     "Admin CRUD for connections belongs to ticket 19's admin surface. Stage it after the resolver.",
+     "Dependencies: DRS-001's tenant_id/TenantContext (slice 05) and EP-001 are siblings in ticket 18. Land TenantContext first if the resolver should read it ambiently.",
+     "Spec: update spec/models/09-sso.md (connection model now exists for OIDC/OAuth2). Add BEH-EA entries for connection resolution."
+    ],
+    "files": [
+     "packages/organization/src/*",
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/src/OAuthProvider.ts",
+     "spec/models/09-sso.md",
+     "spec/behaviors/16-oauth.md"
+    ],
+    "tests": [
+     "packages/organization/test/OrganizationConnections.test.ts: 'a stored connection resolves to a provider and is cached per org'",
+     "packages/oauth/test/OAuth.test.ts: 'an org connection id not in the static registry completes a full callback' (red first)",
+     "'a static provider id still wins over a connection with the same id'",
+     "'a connection's client secret is ciphertext at rest'"
+    ],
+    "acceptance": [
+     "An organization can add an OIDC connection at runtime, with no redeploy, and its users can sign in through it.",
+     "Static providers are unaffected."
+    ],
+    "spec_refs": [
+     "BEH-EA-121",
+     "BEH-EA-125",
+     "BEH-EA-126",
+     "BEH-EA-127",
+     "BEH-EA-040"
+    ],
+    "effort": "XL"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "CWM-001",
+   "level": "high",
+   "category": "architecture",
+   "package": "oauth",
+   "title": "OAuth providers are a static compose-time array — a WorkOS connection-per-organization model is unrepresentable without a redeploy",
+   "issue_file": ".issues/high/CWM-001-clerk-workos-migration-specialist.md",
+   "current_status": "ready-for-agent",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Same root cause and the same resolving decision (ticket 18) as EP-004 (canonical). Its email-domain routing and qadi-owned role mapping requirements are folded into EP-004's plan.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 56,
+     "snippet": "export interface OAuthConfigShape {\n  readonly providers: ReadonlyArray<OAuthProvider.OAuthProviderConfig>;",
+     "note": "The same static array as EP-004."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "EP-004",
+   "duplicates": [],
+   "workstream": "multi-tenant-oauth-connections",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "AGA-005",
+   "level": "low",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "redirect_uri is config-derived only: spoof-proof against gateway Host headers, but silently breaks when baseUrl lags the public URL",
+   "issue_file": ".issues/low/AGA-005-api-gateway-auth-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 600,
+     "snippet": "        const redirectUri = `${config_.baseUrl}/oauth/${providerId}/callback`;",
+     "note": "redirect_uri comes only from config (secure), and nothing documents the behind-gateway requirement."
+    },
+    {
+     "path": "packages/oauth/README.md",
+     "line": 1,
+     "snippet": "# @awthaq/oauth\n\n> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.",
+     "note": "No operational docs."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-config-safety",
+   "fix": {
+    "summary": "Document that baseUrl must be the public scheme+host. The boot validation arrives with PDR-005.",
+    "steps": [
+     "packages/oauth/README.md 'Deploying behind a proxy/gateway': baseUrl MUST equal the public origin the provider redirects to (TLS terminates at the proxy). redirect_uri is `${baseUrl}/oauth/<id>/callback` and must be registered verbatim at the provider. Host/X-Forwarded-Host are never consulted, by design (BEH-EA-128). ClientAddress.layerTrustedProxy is the separate knob for client IPs.",
+     "examples/memory-server README (if present): a note that the example binds plain http on :3001 and why baseUrl must be set.",
+     "Boot warning: covered by PDR-005's http-non-localhost warning. Also log once at boot, at info level, the effective redirect_uri per provider, so operators can diff it against the provider console."
+    ],
+    "files": [
+     "packages/oauth/README.md",
+     "packages/oauth/src/OAuth.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'boot logs the effective redirect_uri for each provider' (test Logger)"
+    ],
+    "acceptance": [
+     "The README documents the requirement.",
+     "The boot log shows each redirect_uri."
+    ],
+    "spec_refs": [
+     "BEH-EA-128"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [
+    "PDR-005"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "BAM-011",
+   "level": "info",
+   "category": "architecture",
+   "package": "oauth",
+   "title": "Account linking is at parity and the identity anchor is stricter than better-auth's",
+   "issue_file": ".issues/info/BAM-011-better-auth-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "WONTFIX-CANDIDATE",
+   "confidence": "high",
+   "verdict_note": "Informational parity note ('strongest parity area found') with no defect and 'No action for parity' as its own recommendation. Still accurate at HEAD. Its template suggestion belongs to the CLI import work (BEH-EA-207), not to this package.",
+   "evidence": [
+    {
+     "path": "packages/sql/src/CoreMigrations.ts",
+     "line": 93,
+     "snippet": "          UNIQUE (\"providerId\", subject, issuer)",
+     "note": "The DB-level identity-anchor uniqueness the finding praises is present."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 59,
+     "snippet": "  readonly linking: \"explicit\" | { readonly trustedProviders: ReadonlyArray<string> };",
+     "note": "Explicit linking by default, trusted list opt-in."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-account-linking-policy",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "wontfix"
+  },
+  {
+   "id": "RBS-008",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "OAuth callback IP keying uses the raw socket address with no trusted-proxy handling — shared bucket behind any reverse proxy",
+   "issue_file": ".issues/medium/RBS-008-rate-limiting-brute-force-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "verdict_note": "Fixed by a3b7255 (AGA-001/NHS-003), which added @awthaq/ports/ClientAddress (layerDirect default plus opt-in layerTrustedProxy). The OAuth callback no longer reads request.remoteAddress. The 'per-provider cap' idea was not adopted. It is not needed to close the finding.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 423,
+     "snippet": "        const resolvedAddress = yield* clientAddress.resolve(request);\n        const outcome = yield* oauth.callback(params.provider, {\n          code: query.code,\n          state: query.state,\n          iss: query.iss,\n          cookieState,\n          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),\n        });",
+     "note": "The IP now comes from the ClientAddress port (layerTrustedProxy walks X-Forwarded-For/Forwarded past configured hops or CIDRs)."
+    }
+   ],
+   "fixed_by_commit": "a3b7255",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-callback-http-hardening",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "TSS-003",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "OAuth callback compares state correlation secret with non-constant-time string !==",
+   "issue_file": ".issues/medium/TSS-003-timing-side-channel-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed. The practical exploitability is low (network jitter, plus the value must then still pass Verification.consume's hashed check), but it is inconsistent with BEH-EA-056 and Csrf.ts. Four private constant-time helpers exist (Sessions.ts:50, ChallengeStore.ts:230, Csrf.ts:38, PasswordHasher.ts:73), and none is shared.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 632,
+     "snippet": "        const decoded = decodeState(input.state);\n        if (Option.isNone(decoded) || input.cookieState !== input.state) {\n          return yield* Effect.fail(new OAuthApi.OAuthCallbackFailed());\n        }",
+     "note": "`!==` on the secret-bearing state value."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-callback-http-hardening",
+   "fix": {
+    "summary": "Compare cookieState and state in constant time over fixed-length digests, using a shared helper.",
+    "steps": [
+     "Cross-slice shared helper (workstream `shared-constant-time-compare`, also serving slice 01's ACS-002/MLO-004/TSS-005 and slice 10's BPAS-008/CB-007/WPS-008): export `constantTimeEqual(a: Uint8Array, b: Uint8Array)` and `constantTimeEqualString` from a new `packages/core/src/ConstantTime.ts` (re-exported from @awthaq/core), and delete the private copies.",
+     "OAuth.ts callback: `const matches = cookieState !== undefined && constantTimeEqual(sha256(cookieState), sha256(input.state))` via `crypto.digest('SHA-256', ...)`. Hashing first removes the length side channel. Keep `Option.isNone(decoded)` as a separate structural check."
+    ],
+    "files": [
+     "packages/core/src/ConstantTime.ts",
+     "packages/core/src/index.ts",
+     "packages/oauth/src/OAuth.ts"
+    ],
+    "tests": [
+     "packages/core/test/ConstantTime.test.ts: equal, different, and different-length inputs",
+     "packages/oauth/test/OAuth.test.ts: the existing mismatched-cookie test stays green (behavioral pin)"
+    ],
+    "acceptance": [
+     "No `!==` comparison on secret material remains in OAuth.ts.",
+     "One shared helper serves every package."
+    ],
+    "spec_refs": [
+     "BEH-EA-056",
+     "BEH-EA-122"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "OIT-001",
+   "level": "high",
+   "category": "security",
+   "package": "oauth",
+   "title": "Userinfo claims override the signed id_token with no sub cross-check",
+   "issue_file": ".issues/high/OIT-001-oidc-id-token-specialist.md",
+   "current_status": "ready-for-agent",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed verbatim at HEAD. OIDC Core 5.3.2 requires userinfo.sub === id_token.sub. Canonical for AP-004 (the same sub check) and APS-008 (email_verified for auto-link sourced from the weaker userinfo). The fix below covers both.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 717,
+     "snippet": "        const profile = provider.mapProfile({ ...idClaims, ...userinfoClaims });",
+     "note": "userinfo is spread last and wins every overlap, including `sub`, `email` and `email_verified`."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 706,
+     "snippet": "          ? yield* httpClient\n              .get(provider.userinfoEndpoint.value, {\n                headers: { authorization: `Bearer ${tokens.accessToken}` },\n              })\n              .pipe(\n                Effect.flatMap((response) => response.json),\n                Effect.map((body) => body as Record<string, unknown>),\n                Effect.catch(() => Effect.fail(new OAuthApi.OAuthCallbackFailed())),",
+     "note": "userinfo is cast, and its `sub` is never compared to the verified id_token's."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 719,
+     "snippet": "        const accountIfLinked = yield* accounts.findByProviderSubject(\n          providerId,\n          profile.subject,\n          Option.getOrUndefined(provider.issuer),\n        );",
+     "note": "profile.subject from the merged object keys the account lookup."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "AP-004",
+    "APS-008"
+   ],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": {
+    "summary": "For oidc providers, fail when userinfo.sub differs from the verified id_token sub, and let the signed id_token win for identity-bearing claims (sub, email, email_verified). userinfo only enriches the profile.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts callback: decode the userinfo body with a Schema (`UserinfoSchema = Schema.Record(Schema.String, Schema.Unknown)` via `HttpIncomingMessage.schemaBodyJson`, delivered by ESS-003), removing the `body as Record<string, unknown>` cast.",
+     "When `idClaims !== undefined && userinfoClaims !== undefined`: require `typeof userinfoClaims.sub === 'string' && userinfoClaims.sub === idClaims.sub`, else fail `OAuthCallbackFailed` (internal reason 'userinfo-sub-mismatch' via OIT-008's reason channel).",
+     "Replace the merge with `{ ...idClaims, ...userinfoClaims, ...pickPresent(idClaims, ['sub', 'email', 'email_verified']) }`. `pickPresent` is a small typed helper that copies only keys present in the verified id_token, with no casts. id_token then wins identity claims and userinfo still refreshes name/picture.",
+     "Plain `oauth2` providers (no id_token) keep today's behavior: userinfo is the only source.",
+     "Update the comment at OAuth.ts:698-702 to state the new precedence rule and cite OIDC Core 5.3.2."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts OIDC block: add `userinfo_endpoint` to a variant of `oktaDiscovery`. Then 'a userinfo response whose sub differs from the id_token sub is rejected' (red first).",
+     "same block: 'id_token email_verified wins over userinfo for the trusted auto-link decision' (userinfo says true, id_token says false: no auto-link, AccountExists).",
+     "same block: 'userinfo still enriches name when subs match'.",
+     "features/features/05-authentication-methods/16-oauth.feature: optional new BEH-EA-125 scenario 'A userinfo response for a different subject is never used'."
+    ],
+    "acceptance": [
+     "A mismatched userinfo sub yields OAuthCallbackFailed. No account is created or linked.",
+     "For oidc providers, profile.subject, email and emailVerified always come from the verified id_token when present there.",
+     "Existing oauth2 (GitHub-style) tests stay green."
+    ],
+    "spec_refs": [
+     "BEH-EA-125",
+     "BEH-EA-124",
+     "BEH-EA-127"
+    ],
+    "effort": "M"
+   },
+   "depends_on": [
+    "ESS-003"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "AP-004",
+   "level": "medium",
+   "category": "compliance",
+   "package": "oauth",
+   "title": "Userinfo claims merged over id_token claims without the required sub equality check",
+   "issue_file": ".issues/medium/AP-004-aaron-parecki.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Identical finding (the OIDC Core 5.3.2 sub check). Its 'merge userinfo only for non-identity claims' suggestion is folded into OIT-001's fix.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 717,
+     "snippet": "        const profile = provider.mapProfile({ ...idClaims, ...userinfoClaims });",
+     "note": "Same line and root cause as OIT-001."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "OIT-001",
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "APS-008",
+   "level": "low",
+   "category": "security",
+   "package": "oauth",
+   "title": "Userinfo claims override the signed id_token for the auto-link trust decision",
+   "issue_file": ".issues/low/APS-008-auth-pentest-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Same root cause as OIT-001 (spread order lets userinfo override the signed id_token). OIT-001's fix explicitly makes the id_token win `email`/`email_verified`, which closes this finding.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 717,
+     "snippet": "        const profile = provider.mapProfile({ ...idClaims, ...userinfoClaims });",
+     "note": "userinfo overrides the signed email_verified."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 762,
+     "snippet": "              if (Option.isSome(existing)) {\n                const autoLink =\n                  trustedProviders.includes(providerId) && profile.emailVerified === true;\n                if (!autoLink) {\n                  return yield* Effect.fail(\n                    new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),\n                  );\n                }",
+     "note": "The merged profile.emailVerified gates auto-link."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "OIT-001",
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "PDR-005",
+   "level": "low",
+   "category": "security",
+   "package": "oauth",
+   "title": "Insecure-by-default OAuth/passkey origins: localhost baseUrl and empty trustedOrigins ship as defaults",
+   "issue_file": ".issues/low/PDR-005-philippe-de-ryck.md",
+   "current_status": "needs-triage",
+   "verdict": "PARTIAL",
+   "confidence": "high",
+   "verdict_note": "The 'insecure-by-default' framing is overstated for OAuth. An empty trustedOrigins is the most restrictive allowlist (relative paths only), and a localhost redirect_uri fails closed at the provider. The real residual is silent misconfiguration, which is actionable. The passkey half (rpId/origins defaults) is slice 10's.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 67,
+     "snippet": "const defaultOAuthConfig: OAuthConfigShape = {\n  providers: [],\n  linking: \"explicit\",\n  trustedOrigins: [],\n  baseUrl: \"http://localhost:3000\",\n  defaultCallbackURL: \"/\",\n};",
+     "note": "The localhost baseUrl default ships."
+    },
+    {
+     "path": "packages/jwt/src/JwtConfig.ts",
+     "line": 10,
+     "snippet": "// every other `Context.Reference`-with-default config this codebase uses\n// elsewhere (`AdminConfig`, `RolesConfig`, `OAuthConfig`), `JwtConfig` is a\n// plain `Context.Service` with no default value at all, so an application\n// that installs `Jwt` without calling `config(...)` fails to compose at\n// all, rather than silently shipping an unconfigured `iss` claim — the\n// spec's own stricter-than-`OAuthConfig.baseUrl` decision.",
+     "note": "The repo already records a stricter precedent that names OAuthConfig.baseUrl."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-config-safety",
+   "fix": {
+    "summary": "Make baseUrl required (JwtConfig's precedent) and validate it at boot.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts: convert `OAuthConfig` from a Context.Reference-with-default to a `Context.Service`, as JwtConfig did. `config(options: { readonly baseUrl: string } & Partial<Omit<OAuthConfigShape, 'baseUrl'>>)`. Composing OAuth without `config({ baseUrl })` then fails to type-check or compose.",
+     "Boot validation in `make`: `URL.parse(baseUrl)` must succeed with no path/query/fragment beyond '/'. Die with a descriptive message otherwise. If the protocol is `http:` and the host is not localhost/127.0.0.1/[::1], emit `Effect.logWarning` (the redirect_uri will be refused by most providers).",
+     "Update every caller of OAuth.config and the implicit default: packages/test/src/TestAuth.ts, features/step-definitions/OAuthWorld.ts, examples/*, and OAuthTokenAccess.ts (reads OAuthConfig).",
+     "Spec: note in ADR-EA-011 or BEH-EA-128 that baseUrl is required config (the redirect_uri derivation input)."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts",
+     "packages/oauth/src/OAuthTokenAccess.ts",
+     "packages/test/src/TestAuth.ts",
+     "features/step-definitions/OAuthWorld.ts",
+     "spec/behaviors/16-oauth.md"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'a baseUrl with a path component fails at boot' (red first)",
+     "'a plain-http non-localhost baseUrl logs a warning'",
+     "type-level: a `// @ts-expect-error` on `OAuth.config({})` in a *.test-d.ts or vitest typecheck test"
+    ],
+    "acceptance": [
+     "OAuth cannot be composed without an explicit baseUrl.",
+     "A malformed baseUrl dies at boot with a clear message."
+    ],
+    "spec_refs": [
+     "BEH-EA-128",
+     "BEH-EA-127"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "NAM-005",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "Auto-linking is stricter than Auth.js — silent behavior change for migrated users",
+   "issue_file": ".issues/medium/NAM-005-nextauth-authjs-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "PARTIAL",
+   "confidence": "high",
+   "verdict_note": "The behavioral difference is real and intended by BEH-EA-123/124, so it will not change (TMS-007 makes it stricter still). Only the missing documentation of the Auth.js-to-trustedProviders mapping is actionable. The 'report the owning provider' half is NAM-006.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 762,
+     "snippet": "              if (Option.isSome(existing)) {\n                const autoLink =\n                  trustedProviders.includes(providerId) && profile.emailVerified === true;\n                if (!autoLink) {\n                  return yield* Effect.fail(\n                    new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),\n                  );\n                }",
+     "note": "The stricter-than-Auth.js gate is intentional (BEH-EA-123/124)."
+    },
+    {
+     "path": "packages/oauth/README.md",
+     "line": 1,
+     "snippet": "# @awthaq/oauth\n\n> **This describes a planned package.** awthaq is pre-implementation (see [`../../spec/README.md`](../../spec/README.md)); no line of source in this package has shipped yet. This README states intent, not shipped behavior.",
+     "note": "No migration mapping documented. The README is still a 'planned package' stub."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-account-linking-policy",
+   "fix": {
+    "summary": "Document the Auth.js to awthaq linking mapping.",
+    "steps": [
+     "packages/oauth/README.md (rewrite the stale 'planned package' stub, see oauth-docs in this workstream): a 'Migrating from Auth.js' section mapping `allowDangerousEmailAccountLinking: true` on provider X to `linking: { trustedProviders: ['x'] }`. It must state that awthaq additionally requires provider email_verified and (after TMS-007) a verified local email, and that affected users will see AccountExists and must sign in then link."
+    ],
+    "files": [
+     "packages/oauth/README.md"
+    ],
+    "tests": [
+     "None (docs)."
+    ],
+    "acceptance": [
+     "The README contains the mapping table and the behavior-change warning."
+    ],
+    "spec_refs": [
+     "BEH-EA-123",
+     "BEH-EA-124"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "TMS-007",
+   "level": "medium",
+   "category": "security",
+   "package": "oauth",
+   "title": "Trusted-provider auto-link ignores the local account's emailVerified — email-squatting account pre-takeover",
+   "issue_file": ".issues/medium/TMS-007-threat-modeling-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "PARTIAL",
+   "confidence": "high",
+   "verdict_note": "The core claim holds: a trusted-provider sign-in silently links into a local account whose email was never proven. The finding overstates one part: the attacker's password is not immediately usable, because Password.ts:841 gates sign-in on emailVerified. It becomes usable the moment anything verifies that address (the victim clicking the signup mail, or AOMS-007's fix if done naively). The fix is needed as specified.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 762,
+     "snippet": "              if (Option.isSome(existing)) {\n                const autoLink =\n                  trustedProviders.includes(providerId) && profile.emailVerified === true;\n                if (!autoLink) {\n                  return yield* Effect.fail(\n                    new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),\n                  );\n                }",
+     "note": "Only the provider-side email_verified is consulted. existing.value.emailVerified is ignored."
+    },
+    {
+     "path": "packages/password/src/Password.ts",
+     "line": 841,
+     "snippet": "        if (!user.emailVerified) {\n          yield* events.publish({\n            _tag: \"auth.user.signInFailed\",\n            strategy: \"password\",\n            reason: \"emailNotVerified\",\n          });\n          return yield* Effect.fail(new PasswordApi.EmailNotVerified());",
+     "note": "Mitigation: the squatter cannot sign in by password while the account is unverified."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-account-linking-policy",
+   "fix": {
+    "summary": "Auto-link only into a local account whose email is already verified. Otherwise answer AccountExists, as the explicit path does.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts: `const autoLink = trustedProviders.includes(providerId) && profile.emailVerified === true && existing.value.emailVerified`.",
+     "Update the BEH-EA-124 requirement text so a verified-email match requires BOTH sides verified, and add the rationale (pre-account-takeover via email squatting).",
+     "BDD: extend the 16-oauth.feature BEH-EA-124 rule with 'A trusted provider never auto-links into a local account whose email is unverified'."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts",
+     "spec/behaviors/16-oauth.md",
+     "features/features/05-authentication-methods/16-oauth.feature",
+     "features/step-definitions/OAuthSteps.ts"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts BEH-EA-123/124 block: 'a trusted provider does not auto-link into an unverified local account' (red first)",
+     "the existing auto-link test must first verify the local user (users.verifyEmail) to stay green"
+    ],
+    "acceptance": [
+     "An unverified local account yields AccountExists and no account row is linked.",
+     "A verified local account plus a trusted provider still auto-links."
+    ],
+    "spec_refs": [
+     "BEH-EA-124"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "NAM-006",
+   "level": "low",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "AccountExists always reports the conflicting provider as 'password'",
+   "issue_file": ".issues/low/NAM-006-nextauth-authjs-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed at both raise sites. Canonical over EEM-007 (the same two lines). The payload asserts a fact the code never checked (the user may be passkey-only or another-OAuth-only).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 762,
+     "snippet": "              if (Option.isSome(existing)) {\n                const autoLink =\n                  trustedProviders.includes(providerId) && profile.emailVerified === true;\n                if (!autoLink) {\n                  return yield* Effect.fail(\n                    new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),\n                  );\n                }",
+     "note": "Hardcoded PASSWORD_PROVIDER_ID on the auto-link rejection."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 798,
+     "snippet": "                    const user = yield* users\n                      .create({ email: profile.email ?? `${providerId}:${profile.subject}`, name })\n                      .pipe(\n                        Effect.catchTag(\n                          \"EmailAlreadyExists\",\n                          () =>\n                            new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),\n                        ),",
+     "note": "Hardcoded again on the EmailAlreadyExists translation."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "EEM-007"
+   ],
+   "workstream": "oauth-account-linking-policy",
+   "fix": {
+    "summary": "Report the actually-linked providers (or nothing), never a hardcoded 'password'.",
+    "steps": [
+     "packages/oauth/src/OAuthApi.ts AccountExists: replace `provider: Schema.String` with `providers: Schema.Array(Schema.String)` (per decision C, or remove it for A).",
+     "packages/oauth/src/OAuth.ts: in the auto-link rejection, `const linked = yield* accounts.listByUser(existing.value.id)` and fail `AccountExists({ providers: profile.emailVerified === true ? linked.map((a) => a.providerId) : [] })`.",
+     "EmailAlreadyExists translation in the create branch: look up `users.findByEmail(email)` then listByUser, applying the same gating. This path is a race (a concurrent create), so an empty array is acceptable if the lookup misses.",
+     "Update spec/behaviors/16-oauth.md BEH-EA-123's ts sketch, features/16-oauth.feature's 'fails with a typed outcome' scenario, and packages/client if it pattern-matches `provider`."
+    ],
+    "files": [
+     "packages/oauth/src/OAuthApi.ts",
+     "packages/oauth/src/OAuth.ts",
+     "spec/behaviors/16-oauth.md",
+     "features/features/05-authentication-methods/16-oauth.feature"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'AccountExists lists the passkey provider for a passkey-only user' (seed an account row with providerId 'passkey'; red first)",
+     "'AccountExists lists nothing when the provider email is unverified'"
+    ],
+    "acceptance": [
+     "The payload never names a provider the user has no account row for."
+    ],
+    "spec_refs": [
+     "BEH-EA-123",
+     "BEH-EA-086"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": true,
+   "decision_options": [
+    "A: drop the field (AccountExists becomes field-less, like the other uniform errors).",
+    "B: `providers: ReadonlyArray<string>`, the real providerIds from `accounts.listByUser(existing.id)`, always populated.",
+    "C: B, but populated only when the callback's own profile.emailVerified === true (the caller proved control of that mailbox at the provider). Otherwise an empty array."
+   ],
+   "recommendation": "C. BEH-EA-123's stated purpose for the typed error is to drive a 'sign in with X, then link' UI, which needs the real method list (a richer contract). Gating on the provider-verified email avoids handing a sign-in-method map to someone holding an unverified provider identity for the victim's address. Existence is already disclosed by BEH-EA-123 itself, so this adds only the method list. Update BEH-EA-123's sketch (`AccountExists { provider: \"password\" }`).",
+   "recommended_status": "ready-for-human"
+  },
+  {
+   "id": "DRS-006",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Cross-table transactions assume one logical database; the SqlTransaction default can silently mean no transaction",
+   "issue_file": ".issues/medium/DRS-006-data-residency-sharding-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "PARTIAL",
+   "confidence": "high",
+   "verdict_note": "The claim that 'the SqlTransaction default can silently mean no transaction' is overstated: there is no default, and a SQL composition must choose layerSql. The substantive part holds: the users+accounts colocation assumption the OAuth JIT path relies on is not written down anywhere in spec/ (grep for colocation/shard in spec/behaviors/05, decisions/014 and invariants returns nothing).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 795,
+     "snippet": "              const created = yield* sqlTransaction\n                .withTransaction(\n                  Effect.gen(function* () {",
+     "note": "users.create and accounts.link share one withTransaction."
+    },
+    {
+     "path": "packages/ports/src/SqlTransaction.ts",
+     "line": 36,
+     "snippet": "/** For an in-memory composition — every write already lands atomically in its own `Ref.modify`, so there is nothing this port needs to wrap. */\nexport const layerNoop: Layer.Layer<SqlTransaction> = Layer.succeed(\n  SqlTransaction,\n  SqlTransaction.of({ withTransaction: (effect) => effect }),\n);",
+     "note": "layerNoop is an explicit, documented choice, not a 'default'. SqlTransaction is a plain Context.Service with no default value, and only TestAuth wires layerNoop."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "persistence-colocation-invariant",
+   "fix": {
+    "summary": "Write the colocation invariant into the spec. No runtime assertion (that would be speculative infra).",
+    "steps": [
+     "spec/invariants.md: a new INV-EA-0xx, 'Core identity tables (users, accounts, sessions, verification_*) share one transaction domain; any partitioning scheme must co-shard a user with its accounts', citing OAuth's JIT create+link and Password.confirmReset (BEH-EA-058) as the transactions that depend on it.",
+     "spec/behaviors/05-persistence-stratum.md BEH-EA-035 rationale: one sentence pointing at the invariant.",
+     "packages/ports/src/SqlTransaction.ts: extend the layerNoop doc comment. Its atomicity holds per Ref only, so a memory composition can still orphan a user if accounts.link dies. Acceptable for dev/test only.",
+     "Cross-slice: link this invariant from DRS-001 (slice 05, tenant key) and DRS-004/DRS-005 so any shard-key design respects it."
+    ],
+    "files": [
+     "spec/invariants.md",
+     "spec/behaviors/05-persistence-stratum.md",
+     "packages/ports/src/SqlTransaction.ts",
+     "spec/traceability.md"
+    ],
+    "tests": [
+     "`pnpm run spec:verify:strict` passes with the new invariant id."
+    ],
+    "acceptance": [
+     "The invariant exists and is referenced from BEH-EA-035."
+    ],
+    "spec_refs": [
+     "BEH-EA-035",
+     "BEH-EA-058"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "AOMS-007",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Federated users are created with emailVerified=false even when the IdP verified the email",
+   "issue_file": ".issues/medium/AOMS-007-auth0-okta-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 798,
+     "snippet": "                    const user = yield* users\n                      .create({ email: profile.email ?? `${providerId}:${profile.subject}`, name })\n                      .pipe(\n                        Effect.catchTag(\n                          \"EmailAlreadyExists\",\n                          () =>\n                            new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),\n                        ),",
+     "note": "The JIT user is created with the default emailVerified=false. verifyEmail is never called."
+    },
+    {
+     "path": "packages/core/src/Users.ts",
+     "line": 81,
+     "snippet": " * BEH-EA-041/042: no operation below accepts `emailVerified` as input —\n * `create` always starts it `false` (supplier-authority default), and\n * `verifyEmail` is the only transition, one-directional and idempotent.",
+     "note": "verifyEmail is the sanctioned transition."
+    },
+    {
+     "path": "packages/migrate-auth0/src/ImportAuth0User.ts",
+     "line": 51,
+     "snippet": "    const user = input.emailVerified\n      ? yield* users.verifyEmail(created.id).pipe(Effect.orDie)\n      : created;",
+     "note": "Precedent: the Auth0 importer already calls verifyEmail when the source verified it."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-account-linking-policy",
+   "fix": {
+    "summary": "When a trusted provider asserts email_verified at first (JIT) creation, mark the new local user verified inside the same transaction.",
+    "steps": [
+     "packages/oauth/src/OAuth.ts create branch: inside the `sqlTransaction.withTransaction` block, after `users.create`, if `profile.email !== undefined && profile.emailVerified === true && trustedProviders.includes(providerId)`, call `users.verifyEmail(user.id)` (`Effect.orDie` on UserNotFound, which is impossible in the same transaction).",
+     "Gate it on trustedProviders, not any provider. An untrusted provider's claim must not flip local state that TMS-007's auto-link gate then relies on (otherwise a weak provider could mint a 'verified' squat account).",
+     "Do NOT call verifyEmail on the auto-link or explicit-link paths. The local account's verification state is its own (TMS-007).",
+     "Spec: add a note to BEH-EA-042 that the OAuth plugin, with a trusted provider asserting email_verified at JIT creation, is a sanctioned caller of verifyEmail. It is not a client-settable generic write."
+    ],
+    "files": [
+     "packages/oauth/src/OAuth.ts",
+     "spec/behaviors/06-domain-users-accounts.md",
+     "spec/behaviors/16-oauth.md"
+    ],
+    "tests": [
+     "packages/oauth/test/OAuth.test.ts: 'a trusted provider with email_verified=true creates a verified user' (red first)",
+     "'an untrusted provider with email_verified=true creates an unverified user'"
+    ],
+    "acceptance": [
+     "The stored emailVerified reflects a trusted provider's verification at creation.",
+     "Untrusted providers never flip it."
+    ],
+    "spec_refs": [
+     "BEH-EA-042",
+     "BEH-EA-124"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [
+    "TMS-007"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "FAMS-006",
+   "level": "medium",
+   "category": "correctness",
+   "package": "oauth",
+   "title": "Provider-subject mismatches in imported links silently JIT-duplicate accounts",
+   "issue_file": ".issues/medium/FAMS-006-firebase-auth-migration-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "PARTIAL",
+   "confidence": "high",
+   "verdict_note": "The runtime fall-through is by design (BEH-EA-125's identity anchor) and correct. What is missing is the import recipe and a dry-run tool. No Firebase importer exists (packages/migrate-* covers auth0 and better-auth sessions only), so the dry-run belongs with the planned `awthaq import` CLI (BEH-EA-207, slice 09).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 719,
+     "snippet": "        const accountIfLinked = yield* accounts.findByProviderSubject(\n          providerId,\n          profile.subject,\n          Option.getOrUndefined(provider.issuer),\n        );",
+     "note": "The lookup is keyed on (providerId, subject, issuer). A mismatched import falls through to auto-link or JIT, as described."
+    },
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 798,
+     "snippet": "                    const user = yield* users\n                      .create({ email: profile.email ?? `${providerId}:${profile.subject}`, name })\n                      .pipe(\n                        Effect.catchTag(\n                          \"EmailAlreadyExists\",\n                          () =>\n                            new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),\n                        ),",
+     "note": "JIT create with the synthetic `${providerId}:${subject}` email when the profile has no email."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-account-linking-policy",
+   "fix": {
+    "summary": "Document the exact federated-identity import recipe now. Defer the dry-run tool to the CLI import work.",
+    "steps": [
+     "packages/oauth/README.md: an 'Importing federated identities' section. providerId must equal the awthaq provider `id`, subject must be the IdP's `sub` (Firebase `providerUserInfo[].rawId`, NOT the Firebase uid), and issuer must equal the provider's configured issuer (`Option.getOrUndefined(provider.issuer)`, empty for oauth2). Include a table for Google/Apple/GitHub.",
+     "Export a small pure helper `OAuth.accountAnchorFor(providerConfig, subject)` returning `{ providerId, subject, issuer }` so importers cannot drift (optional, cheap).",
+     "File a follow-up with the CLI import workstream (slice 09): `awthaq import --dry-run` replays findByProviderSubject for every federated row and reports the rows that would fall through."
+    ],
+    "files": [
+     "packages/oauth/README.md",
+     "packages/oauth/src/OAuth.ts"
+    ],
+    "tests": [
+     "If the helper is added: packages/oauth/test/OAuth.test.ts 'accountAnchorFor matches what callback looks up'"
+    ],
+    "acceptance": [
+     "The recipe is documented. The dry-run is tracked in the CLI import plan."
+    ],
+    "spec_refs": [
+     "BEH-EA-125",
+     "BEH-EA-207"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "EEM-007",
+   "level": "low",
+   "category": "api",
+   "package": "oauth",
+   "title": "AccountExists wire error hardcodes provider 'password' regardless of the conflicting account's actual strategy",
+   "issue_file": ".issues/low/EEM-007-effect-error-management-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Same two raise sites and the same fix options as NAM-006 (canonical).",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuth.ts",
+     "line": 798,
+     "snippet": "                    const user = yield* users\n                      .create({ email: profile.email ?? `${providerId}:${profile.subject}`, name })\n                      .pipe(\n                        Effect.catchTag(\n                          \"EmailAlreadyExists\",\n                          () =>\n                            new OAuthApi.AccountExists({ provider: Accounts.PASSWORD_PROVIDER_ID }),\n                        ),",
+     "note": "The same hardcoded provider as NAM-006."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "NAM-006",
+   "duplicates": [],
+   "workstream": "oauth-account-linking-policy",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "AP-005",
+   "level": "medium",
+   "category": "compliance",
+   "package": "oauth",
+   "title": "RFC 6749 4.1.2.1 authorization error responses are unparseable by the callback contract",
+   "issue_file": ".issues/medium/AP-005-aaron-parecki.md",
+   "current_status": "needs-triage",
+   "verdict": "CONFIRMED",
+   "confidence": "high",
+   "verdict_note": "Confirmed. Canonical for JR-003 and OAP-003 (same schema, same fix shape). The three reports disagree on the outcome's shape (uniform OAuthCallbackFailed vs a typed provider-error outcome), so that choice is recorded as an open decision.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthApi.ts",
+     "line": 74,
+     "snippet": "export const CallbackQuery = Schema.Struct({\n  code: Schema.String,\n  state: Schema.String,\n  /** RFC 9207 mix-up countermeasure — validated when the provider sends it. */\n  iss: Schema.optional(Schema.String),\n});",
+     "note": "`code` is required and no `error` field exists, so an RFC 6749 §4.1.2.1 denial redirect fails query decoding before the handler runs."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [
+    "JR-003",
+    "OAP-003"
+   ],
+   "workstream": "oauth-callback-error-contract",
+   "fix": {
+    "summary": "Model RFC 6749 §4.1.2.1 error responses in the callback contract and fold them into the handler's own validated failure path.",
+    "steps": [
+     "packages/oauth/src/OAuthApi.ts CallbackQuery: `code: Schema.optional(Schema.String)`, plus `error: Schema.optional(Schema.String)`, `error_description: Schema.optional(Schema.String)` and `error_uri: Schema.optional(Schema.String)`.",
+     "packages/oauth/src/OAuth.ts OAuthShape.callback input: `code: string | undefined` and `error: string | undefined`.",
+     "callback: keep the rate limit, provider lookup, state/cookie check and `verification.consume` first (consuming the flow makes the denied flow single-use). Then, if `error !== undefined` or `code === undefined`, fail per the decision (B: OAuthAuthorizationDenied with the enumerated code, else OAuthCallbackFailed). Never call exchangeCode.",
+     "(B) OAuthApi.ts: add the OAuthAuthorizationDenied TaggedError (400) to the callback error list.",
+     "Handler: pass `query.error` through. Do not log error_description at more than debug level."
+    ],
+    "files": [
+     "packages/oauth/src/OAuthApi.ts",
+     "packages/oauth/src/OAuth.ts",
+     "features/features/05-authentication-methods/16-oauth.feature",
+     "spec/behaviors/16-oauth.md"
+    ],
+    "tests": [
+     "packages/oauth/test/AuthHttp.test.ts: 'a provider redirect with error=access_denied and a valid state answers the typed denial, not a decode error' (red first)",
+     "'error=access_denied with a mismatched state answers 400 OAuthCallbackFailed'",
+     "'the flow is consumed by a denial, so a replay with a code fails'",
+     "BDD: new BEH-EA-122 scenario 'A user denying consent at the provider gets the typed denial outcome'"
+    ],
+    "acceptance": [
+     "A denial redirect never yields a framework decode error.",
+     "State is validated on the error path too (RFC 6749 §4.1.2.1)."
+    ],
+    "spec_refs": [
+     "BEH-EA-122",
+     "BEH-EA-086"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": true,
+   "decision_options": [
+    "A: any `error` param (after state+cookie validation and flow consumption) becomes the same field-less OAuthCallbackFailed (400). Strictly uniform (JR-003/OAP-003).",
+    "B: a new typed `OAuthAuthorizationDenied { error: Literals(['access_denied','invalid_request','unauthorized_client','unsupported_response_type','invalid_scope','server_error','temporarily_unavailable']) }` (400), raised only after the state+cookie check passes. error_description and error_uri are never echoed (provider-controlled free text). An unknown error code maps to OAuthCallbackFailed.",
+    "C: B, plus redirect to flow.callbackURL with `?error=<code>` instead of JSON."
+   ],
+   "recommendation": "B. The `error` code is already visible to the user in the redirect URL, so echoing the enumerated code after state validation reveals nothing to an attacker (they cannot forge a valid state+cookie pair for the victim). It lets apps render 'you cancelled' vs 'something went wrong', the most common non-attack callback outcome. Keep JSON, not a redirect (C), consistent with OAuthApi.ts's documented typed-error convention.",
+   "recommended_status": "ready-for-human"
+  },
+  {
+   "id": "JR-003",
+   "level": "medium",
+   "category": "compliance",
+   "package": "oauth",
+   "title": "RFC 6749 §4.1.2.1 authorization-error responses are unmodelable: required code param means a user-denial redirect never reaches the uniform typed failure",
+   "issue_file": ".issues/medium/JR-003-justin-richer.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Same root cause and the same recommended schema change as AP-005 (the canonical ID). Its preference for a uniform OAuthCallbackFailed is option A in AP-005's decision.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthApi.ts",
+     "line": 74,
+     "snippet": "export const CallbackQuery = Schema.Struct({\n  code: Schema.String,\n  state: Schema.String,\n  /** RFC 9207 mix-up countermeasure — validated when the provider sends it. */\n  iss: Schema.optional(Schema.String),\n});",
+     "note": "Same schema, same gap."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "AP-005",
+   "duplicates": [],
+   "workstream": "oauth-callback-error-contract",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "OAP-003",
+   "level": "medium",
+   "category": "compliance",
+   "package": "oauth",
+   "title": "RFC 6749 error responses (error=access_denied, no code) are unmodeled and die as schema-decode failures",
+   "issue_file": ".issues/medium/OAP-003-oauth2-authorization-code-pkce-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Same root cause and the same recommended schema change as AP-005 (the canonical ID). Its preference for a uniform OAuthCallbackFailed is option A in AP-005's decision.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthApi.ts",
+     "line": 74,
+     "snippet": "export const CallbackQuery = Schema.Struct({\n  code: Schema.String,\n  state: Schema.String,\n  /** RFC 9207 mix-up countermeasure — validated when the provider sends it. */\n  iss: Schema.optional(Schema.String),\n});",
+     "note": "Same schema, same gap."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "AP-005",
+   "duplicates": [],
+   "workstream": "oauth-callback-error-contract",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "AVS-010",
+   "level": "info",
+   "category": "api",
+   "package": "oauth",
+   "title": "Path-parameter naming follows two competing conventions",
+   "issue_file": ".issues/info/AVS-010-api-design-versioning-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "DUPLICATE",
+   "confidence": "high",
+   "verdict_note": "Same root cause as AVS-006 (slice 10: no written path-parameter and id naming rule across contracts), and the finding itself says 'normalize in the same pre-publish sweep as AVS-006'. For oauth, the proposed rule (natural keys bare, surrogate keys `:singularId`) requires no change.",
+   "evidence": [
+    {
+     "path": "packages/oauth/src/OAuthApi.ts",
+     "line": 84,
+     "snippet": "    HttpApiEndpoint.get(\"authorize\", \"/oauth/:provider/authorize\", {",
+     "note": "`:provider` is a natural-key bare noun. Under the finding's own proposed rule it stays as is."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": "AVS-006",
+   "duplicates": [],
+   "workstream": "api-path-param-conventions",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "CSS-004",
+   "level": "medium",
+   "category": "testing",
+   "package": "oauth",
+   "title": "Wire tests assert cookie names only and discard attributes — the class of bug in CSS-001 is invisible to the suite",
+   "issue_file": ".issues/medium/CSS-004-cookie-security-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "PARTIAL",
+   "confidence": "high",
+   "verdict_note": "8c40afe (CSS-001) added attribute assertions for __Host-oauth-state. The session cookie emitted by the OAuth callback, plus HttpOnly/SameSite on the state cookie, are still unasserted at wire level. The same `split(';')[0]` helpers exist in password/admin/passkey tests (other slices).",
+   "evidence": [
+    {
+     "path": "packages/oauth/test/AuthHttp.test.ts",
+     "line": 183,
+     "snippet": "        const cookie = response.headers.get(\"set-cookie\");\n        assert.isString(cookie);\n        assert.match(cookie ?? \"\", /^__Host-oauth-state=/);\n        // CSS-001: the `__Host-` prefix requires Secure, no Domain, and\n        // Path=/ exactly — a narrower path silently voids the prefix and\n        // real browsers drop the cookie.\n        assert.match(cookie ?? \"\", /;\\s*Path=\\/(;|$)/i);\n        assert.match(cookie ?? \"\", /;\\s*Secure/i);",
+     "note": "Fixed in part by 8c40afe: Path=/, Secure and no Domain are now asserted for the state cookie (HttpOnly/SameSite are not)."
+    },
+    {
+     "path": "packages/oauth/test/AuthHttp.test.ts",
+     "line": 220,
+     "snippet": "        const sessionCookie = callbackResponse.headers.get(\"set-cookie\");\n        assert.isString(sessionCookie);\n        assert.match(sessionCookie ?? \"\", /^__Host-session=/);",
+     "note": "Still open: the session cookie set by the OAuth callback is asserted by name only."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-callback-http-hardening",
+   "fix": {
+    "summary": "Add a shared Set-Cookie attribute assertion helper and apply it to every OAuth-emitted cookie.",
+    "steps": [
+     "packages/test/src/CookieAssertions.ts (new, exported from @awthaq/test): `parseSetCookie(raw)` and `assertHostPrefixedCookie(raw, name, { httpOnly, sameSite })`, which assert `__Host-` rules (Secure, Path=/, no Domain) plus the requested HttpOnly and SameSite values.",
+     "packages/oauth/test/AuthHttp.test.ts: use it for the state cookie (HttpOnly, SameSite=Lax) and the callback's session cookie (HttpOnly, SameSite per BEH-EA-055). Iterate `headers.getSetCookie()` once CSS-006 adds a second cookie.",
+     "Cross-slice: password/admin/passkey/csrf wire suites should adopt the helper (note for slices 06, 07 and 10)."
+    ],
+    "files": [
+     "packages/test/src/CookieAssertions.ts",
+     "packages/oauth/test/AuthHttp.test.ts"
+    ],
+    "tests": [
+     "The new assertions themselves. Mutation-check by temporarily dropping `httpOnly` in OAuth.ts and confirming red."
+    ],
+    "acceptance": [
+     "A cookie-attribute regression on either OAuth cookie fails packages/oauth's wire suite."
+    ],
+    "spec_refs": [
+     "BEH-EA-055",
+     "BEH-EA-122"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  },
+  {
+   "id": "PDR-006",
+   "level": "low",
+   "category": "testing",
+   "package": "oauth",
+   "title": "CallbackURL validation tests never exercise protocol-relative or backslash variants",
+   "issue_file": ".issues/low/PDR-006-philippe-de-ryck.md",
+   "current_status": "needs-triage",
+   "verdict": "ALREADY-FIXED",
+   "confidence": "high",
+   "verdict_note": "9b3e42c added exactly the two regression cases this finding asks for. The optional `javascript:` case is not pinned. It is already rejected by the origin check (its origin is 'null'), so adding it is a nice-to-have in the MNA-004 test work, not a reopen.",
+   "evidence": [
+    {
+     "path": "packages/oauth/test/OAuth.test.ts",
+     "line": 802,
+     "snippet": "    it.effect(\"OAP-001/AP-001: a scheme-relative //host callbackURL is never redirected to\", () =>\n      Effect.gen(function* () {\n        const oauth = yield* OAuth.OAuth;\n        const { state } = yield* oauth.authorize(\"acme\", {\n          callbackURL: \"//evil.example.com/phish\",",
+     "note": "// case pinned."
+    },
+    {
+     "path": "packages/oauth/test/OAuth.test.ts",
+     "line": 834,
+     "snippet": "    it.effect(\n      \"OAP-001/AP-001: a backslash-variant /\\\\host callbackURL is never redirected to\",\n      () =>\n        Effect.gen(function* () {\n          const oauth = yield* OAuth.OAuth;\n          const { state } = yield* oauth.authorize(\"acme\", {\n            callbackURL: \"/\\\\evil.example.com/phish\",",
+     "note": "/\\ case pinned."
+    }
+   ],
+   "fixed_by_commit": "9b3e42c",
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-callback-url-policy",
+   "fix": null,
+   "depends_on": [],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "resolved"
+  },
+  {
+   "id": "OIT-009",
+   "level": "low",
+   "category": "testing",
+   "package": "oauth",
+   "title": "id_token test suite omits alg confusion, kid rotation, azp/array-aud, and userinfo sub mismatch",
+   "issue_file": ".issues/low/OIT-009-oidc-id-token-specialist.md",
+   "current_status": "needs-triage",
+   "verdict": "PARTIAL",
+   "confidence": "high",
+   "verdict_note": "The kid-rotation part is fixed (fd8e5e9 added the unregistered-kid and rotation-refetch tests). alg confusion (HS256/none), array aud/azp, and userinfo sub-mismatch are still untested.",
+   "evidence": [
+    {
+     "path": "packages/oauth/test/OAuth.test.ts",
+     "line": 1056,
+     "snippet": "    it.effect(\n      \"JJS-001/JR-002/KRS-004/OIT-002: a rotated signing key is picked up via the kid-miss refetch, not stuck on the stale cache\",",
+     "note": "kid rotation is now pinned (added by fd8e5e9)."
+    },
+    {
+     "path": "packages/oauth/test/OAuth.test.ts",
+     "line": 220,
+     "snippet": "const oktaDiscovery = {\n  issuer: \"https://okta.example.com/oauth2/default\",\n  authorization_endpoint: \"https://okta.example.com/authorize\",\n  token_endpoint: \"https://okta.example.com/token\",\n  jwks_uri: \"https://okta.example.com/jwks\",\n};",
+     "note": "oktaDiscovery still has no userinfo_endpoint. No array aud, azp or HS256/none tests exist (grep: 0 hits)."
+    }
+   ],
+   "fixed_by_commit": null,
+   "duplicate_of": null,
+   "duplicates": [],
+   "workstream": "oauth-oidc-claims-integrity",
+   "fix": {
+    "summary": "Add the remaining negative scenarios. Most arrive as the red-first tests of OIT-001 and OIT-003, and alg confusion is added standalone.",
+    "steps": [
+     "packages/oauth/test/OAuth.test.ts OIDC block: 'an id_token with alg HS256 (signed with the RSA modulus as HMAC key) is rejected' and 'an alg:none id_token is rejected'. Both fail at the RS256 equality gate today, so they are pins, not red tests.",
+     "Userinfo sub mismatch comes from OIT-001's test. Array aud and azp come from OIT-003's tests."
+    ],
+    "files": [
+     "packages/oauth/test/OAuth.test.ts"
+    ],
+    "tests": [
+     "as listed in steps"
+    ],
+    "acceptance": [
+     "The id_token describe block covers alg confusion, kid rotation, array aud, azp mismatch and userinfo sub mismatch."
+    ],
+    "spec_refs": [
+     "BEH-EA-127"
+    ],
+    "effort": "S"
+   },
+   "depends_on": [
+    "OIT-001",
+    "OIT-003"
+   ],
+   "needs_decision": false,
+   "decision_options": null,
+   "recommendation": null,
+   "recommended_status": "ready-for-agent"
+  }
+ ],
+ "workstreams": [
+  {
+   "slug": "oauth-provider-response-decoding",
+   "title": "Schema-decode every provider response in packages/oauth",
+   "ids": [
+    "ESS-003",
+    "ACS-004",
+    "JJS-005",
+    "OAP-004",
+    "OIT-005",
+    "JR-010",
+    "AP-008",
+    "MA-006",
+    "AH-002",
+    "KRS-005",
+    "VB-004",
+    "AOMS-010",
+    "OAP-007"
+   ],
+   "rationale": "All of these are 'provider JSON crosses the trust boundary by assertion'. The JWKS cast and TTL halves were already fixed (e364411, fd8e5e9). What remains is the token-endpoint body (OAuth.ts:250, copied into OAuthTokenAccess.ts:93), the userinfo body (OAuth.ts:712) and structural RSA-JWK selection (Jwt.ts:152). The discovery cast is ESS-002 in slice 04 and should land in the same PR.",
+   "order_hint": 1,
+   "effort": "S",
+   "depends_on_workstreams": []
+  },
+  {
+   "slug": "oauth-oidc-claims-integrity",
+   "title": "OIDC id_token and userinfo claim validation",
+   "ids": [
+    "OIT-001",
+    "AP-004",
+    "APS-008",
+    "OIT-003",
+    "AOMS-004",
+    "AP-003",
+    "JJS-006",
+    "JR-008",
+    "OAP-006",
+    "VB-006",
+    "MA-002",
+    "OIT-004",
+    "OIT-006",
+    "OIT-008",
+    "OIT-007",
+    "OIT-009",
+    "SFS-005"
+   ],
+   "rationale": "Every item edits verifyIdToken or the id_token/userinfo merge in callback: sub cross-check and identity-claim precedence, aud/azp, Clock-based exp with leeway and iat/nbf, mandatory nonce, reason-tagged failures, and the docs and tests for what stays unvalidated.",
+   "order_hint": 2,
+   "effort": "M",
+   "depends_on_workstreams": [
+    "oauth-provider-response-decoding"
+   ]
+  },
+  {
+   "slug": "oauth-outbound-resilience",
+   "title": "Deadlines, retries and a 503 channel for provider calls",
+   "ids": [
+    "ECF-001",
+    "ERS-003",
+    "EEM-004",
+    "NAM-004"
+   ],
+   "rationale": "All four are the same missing policy layer around outbound HTTP. Timeouts produce a new failure class that EEM-004 must type, retries must fit inside the timeout budget, and NAM-004's boot behavior depends on both.",
+   "order_hint": 3,
+   "effort": "M",
+   "depends_on_workstreams": [
+    "oauth-provider-response-decoding"
+   ]
+  },
+  {
+   "slug": "oauth-token-endpoint-client-auth",
+   "title": "client_secret_basic support and discovery-driven auth method",
+   "ids": [
+    "AP-006"
+   ],
+   "rationale": "A standalone interop fix touching the exchange and refresh paths. It needs the schema-decoded discovery document (ESS-002, slice 04).",
+   "order_hint": 4,
+   "effort": "M",
+   "depends_on_workstreams": [
+    "oauth-provider-response-decoding"
+   ]
+  },
+  {
+   "slug": "oauth-callback-error-contract",
+   "title": "RFC 6749 §4.1.2.1 error responses at the callback",
+   "ids": [
+    "AP-005",
+    "JR-003",
+    "OAP-003"
+   ],
+   "rationale": "Three reports of the same CallbackQuery schema gap.",
+   "order_hint": 5,
+   "effort": "S",
+   "depends_on_workstreams": [
+    "oauth-oidc-claims-integrity"
+   ]
+  },
+  {
+   "slug": "oauth-callback-http-hardening",
+   "title": "Callback/authorize HTTP-level hardening",
+   "ids": [
+    "TSS-003",
+    "CSS-006",
+    "PDR-004",
+    "OAP-008",
+    "CSS-004",
+    "RBS-008"
+   ],
+   "rationale": "All are HTTP-surface properties of the two OAuth handlers: constant-time state compare, state-cookie expiry, Referrer-Policy, an authorize rate limit, and cookie-attribute wire tests. RBS-008 is already fixed and listed for completeness. CSS-006 and PDR-004 share one appendPreResponseHandler.",
+   "order_hint": 6,
+   "effort": "M",
+   "depends_on_workstreams": [
+    "shared-constant-time-compare"
+   ]
+  },
+  {
+   "slug": "oauth-account-linking-policy",
+   "title": "Account-linking trust decisions and AccountExists accuracy",
+   "ids": [
+    "TMS-007",
+    "AOMS-007",
+    "NAM-006",
+    "EEM-007",
+    "NAM-005",
+    "FAMS-006",
+    "BAM-011"
+   ],
+   "rationale": "All concern what the callback does when an email already exists or a new user is JIT-created. TMS-007 must land before AOMS-007: marking OAuth-created users verified is only safe once auto-link also requires a verified local account.",
+   "order_hint": 7,
+   "effort": "S",
+   "depends_on_workstreams": [
+    "oauth-oidc-claims-integrity"
+   ]
+  },
+  {
+   "slug": "oauth-config-safety",
+   "title": "Required baseUrl and operational docs",
+   "ids": [
+    "PDR-005",
+    "AGA-005"
+   ],
+   "rationale": "Both are about baseUrl being defaulted silently and undocumented.",
+   "order_hint": 8,
+   "effort": "S",
+   "depends_on_workstreams": []
+  },
+  {
+   "slug": "provider-token-storage",
+   "title": "Remaining provider-token persistence gap (id_token)",
+   "ids": [
+    "BAM-008",
+    "NAM-008",
+    "RRS-007"
+   ],
+   "rationale": "BE-002 (e773cf1) closed refresh and expiry. Only the id_token column is left.",
+   "order_hint": 9,
+   "effort": "M",
+   "depends_on_workstreams": []
+  },
+  {
+   "slug": "native-session-bootstrap",
+   "title": "Native/mobile OAuth return leg (decision ticket 17)",
+   "ids": [
+    "MNA-003",
+    "MNA-004"
+   ],
+   "rationale": "The native return leg (exchange code plus token endpoint) and the deep-link callback allowlist are only useful together. Shares ticket 17 and the bearer-delivery DTO with MNA-001 (slice 07).",
+   "order_hint": 10,
+   "effort": "L",
+   "depends_on_workstreams": [
+    "oauth-oidc-claims-integrity",
+    "oauth-callback-http-hardening"
+   ]
+  },
+  {
+   "slug": "multi-tenant-oauth-connections",
+   "title": "Per-organization OAuth connections (decision ticket 18)",
+   "ids": [
+    "EP-004",
+    "CWM-001"
+   ],
+   "rationale": "One decision covers both. Cross-slice with EP-001 and DRS-001 (slice 05, tenant key) and packages/organization (slice 08).",
+   "order_hint": 11,
+   "effort": "XL",
+   "depends_on_workstreams": [
+    "oauth-outbound-resilience"
+   ]
+  },
+  {
+   "slug": "m2m-client-credentials",
+   "title": "client_credentials in packages/api-key (decision ticket 10)",
+   "ids": [
+    "OCM-001"
+   ],
+   "rationale": "Owned by the api-key slice (09). Recorded here only because the audit anchored it to OAuth.ts. packages/oauth does not change.",
+   "order_hint": 12,
+   "effort": "XL",
+   "depends_on_workstreams": [
+    "shared-constant-time-compare"
+   ]
+  },
+  {
+   "slug": "persistence-colocation-invariant",
+   "title": "Document the users/accounts transaction-domain invariant",
+   "ids": [
+    "DRS-006"
+   ],
+   "rationale": "A spec-only fix, linked to the residency findings in slice 05.",
+   "order_hint": 13,
+   "effort": "S",
+   "depends_on_workstreams": []
+  },
+  {
+   "slug": "oauth-callback-url-policy",
+   "title": "callbackURL open-redirect (closed)",
+   "ids": [
+    "APS-002",
+    "TMS-003",
+    "PDR-006"
+   ],
+   "rationale": "All closed by 9b3e42c. The remaining deep-link work lives in native-session-bootstrap.",
+   "order_hint": 99,
+   "effort": "S",
+   "depends_on_workstreams": []
+  },
+  {
+   "slug": "api-path-param-conventions",
+   "title": "Path-parameter naming rule (cross-slice, AVS-006 canonical)",
+   "ids": [
+    "AVS-010"
+   ],
+   "rationale": "A duplicate of slice 10's AVS-006. No oauth change is needed under the proposed rule.",
+   "order_hint": 99,
+   "effort": "S",
+   "depends_on_workstreams": []
+  }
+ ],
+ "external_workstream_refs": {
+  "shared-constant-time-compare": "Cross-slice: one exported constantTimeEqual in @awthaq/core, replacing the private copies (slices 01, 03, 06, 10)."
+ }
+}

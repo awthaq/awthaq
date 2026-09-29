@@ -1,0 +1,3073 @@
+{
+  "slice": "02-core-events-hooks",
+  "validated_at_sha": "ec065a7",
+  "validated_on": "2026-09-29",
+  "issues": [
+    {
+      "id": "CSD-004",
+      "level": "medium",
+      "category": "security",
+      "package": "core",
+      "title": "No failed-authentication event is published — stuffing detection has no signal to subscribe to",
+      "issue_file": ".issues/medium/CSD-004-credential-stuffing-defense-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "rationale": "Headline claim fixed by f5eb570 (ALF-003): `auth.user.signInFailed` is published on both password signIn failure paths. Still open: the event has no dimension a stuffing detector can key velocity on — no ip (in scope at Password.ts:799) and no identifier digest (ALF-003 deliberately omitted userId/email to avoid an existence oracle; a keyed digest of the *attempted* identifier has no such oracle since it is computed identically for existing and non-existing accounts). OAuth/passkey failures publish nothing.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 56,
+          "snippet": "export interface UserSignInFailedEvent {\n  readonly _tag: \"auth.user.signInFailed\";\n  readonly strategy: string;\n  readonly reason: \"invalidCredentials\" | \"emailNotVerified\";\n}",
+          "note": "Failure event now exists (commit f5eb570, ALF-003) but carries no keying dimension: no ip, no identifier digest."
+        },
+        {
+          "path": "packages/password/src/Password.ts",
+          "line": 827,
+          "snippet": "          yield* events.publish({\n            _tag: \"auth.user.signInFailed\",\n            strategy: \"password\",\n            reason: \"invalidCredentials\",\n          });",
+          "note": "Published on both signIn failure paths (827, 842). `input.ip` is in scope (used at Password.ts:799 for the per-IP limiter) but not carried."
+        }
+      ],
+      "fixed_by_commit": "f5eb570",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-event-taxonomy",
+      "fix": {
+        "summary": "Enrich the failure event with `ip` and a keyed, non-reversible `identifierDigest`, and publish it from every strategy's failure path.",
+        "steps": [
+          "packages/core/src/AuthEvents.ts UserSignInFailedEvent: add `ip?: string` and `identifierDigest?: string` (+ `digestKeyId?: string` for rotation).",
+          "packages/core: small helper `IdentifierDigest.of(normalizedEmail)` = HMAC-SHA256 over `KeyProvider.currentKey` (packages/ports/src/KeyProvider.ts) using the HMAC-from-Crypto.digest construction already in server/src/Csrf.ts:55-60 (lift it into core/ports to stop the copy in passkey/ChallengeStore.ts:193). Computed for every attempt, existing account or not.",
+          "packages/password/src/Password.ts:827/842: pass `ip: input.ip`, `identifierDigest`.",
+          "packages/passkey/src/Passkey.ts authenticate failure paths and packages/oauth/src/OAuth.ts callback failures (state/nonce/token-exchange rejection): publish `auth.user.signInFailed` with strategy and a reason enum extended accordingly (e.g. `\"assertionInvalid\" | \"callbackRejected\"`).",
+          "Update the AuthEvents.ts header (:5-13), which still lists only three real publishers."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/password/src/Password.ts",
+          "packages/passkey/src/Passkey.ts",
+          "packages/oauth/src/OAuth.ts",
+          "packages/server/src/Csrf.ts",
+          "packages/password/test/Password.test.ts"
+        ],
+        "tests": [
+          "packages/password/test/Password.test.ts — extend the existing ALF-003 tests: failure event carries `ip` equal to the request ip and an `identifierDigest` that is identical for a nonexistent and an existing email attempt of the same string, and differs across emails; still no userId/email property.",
+          "packages/passkey/test/Passkey.test.ts — a failed assertion publishes signInFailed(strategy: \"passkey\")."
+        ],
+        "acceptance": [
+          "A subscriber can count failures per ip and per targeted identifier without learning account existence; all strategies publish failures."
+        ],
+        "spec_refs": [
+          "BEH-EA-101",
+          "BEH-EA-114"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ESA-005",
+      "level": "medium",
+      "category": "compliance",
+      "package": "core",
+      "title": "Event payloads embed PII (email, login identifier, free-text reason) with no redaction or retention design for a durable sink",
+      "issue_file": ".issues/medium/ESA-005-event-sourcing-audit-trail-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "rationale": "Confirmed and now worse: the durable auth_audit_log (6bd3f1d) persists the full payload, so the raw invitee email (invitationCreated) and up-to-1000-char free-text impersonation reason are written into rows that no erasure path touches (the BeforeUserDelete erasure taps cover memberships/passkeys only; wayfinder ticket 01 explicitly deferred audit retention/erasure). Overstated part: `auth.token.replay.identifier` is `<prefix><userId>` / `oauth.flow:<uuid>`, not the email.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 192,
+          "snippet": "export interface OrganizationInvitationCreatedEvent {\n  readonly _tag: \"auth.organization.invitationCreated\";\n  readonly invitationId: string;\n  readonly organizationId: string;\n  readonly email: string;\n}",
+          "note": "Raw invitee email on the bus."
+        },
+        {
+          "path": "packages/core/src/AuditLog.ts",
+          "line": 195,
+          "snippet": "        yield* repo\n          .insert({\n            id,\n            eventTag: event._tag,\n            actorUserId: Option.getOrNull(actor),\n            occurredAt: now,\n            correlationId: null,\n            payload: event,",
+          "note": "The durable auth_audit_log row now stores the full event payload (incl. raw email / free-text reason) with no redaction, retention or erasure path."
+        },
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 122,
+          "snippet": "export interface AdminImpersonationStartedEvent {\n  readonly _tag: \"auth.admin.impersonationStarted\";\n  readonly adminUserId: UserId;\n  readonly targetUserId: UserId;\n  readonly reason: string;\n  readonly sessionId: string;\n}",
+          "note": "Free-text reason on the bus and in the audit row; no occurredAt/eventId on the event itself; sessionId is plain string."
+        },
+        {
+          "path": "packages/password/src/Password.ts",
+          "line": 907,
+          "snippet": "              const identifier = `${RESET_PREFIX}${user.id}`;",
+          "note": "Refutes ESA-005's 'identifier is typically the email': verification identifiers are `<prefix><userId>` (also VERIFY_PREFIX at :777, `oauth.flow:<uuid>` at OAuth.ts:86)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "ALF-009"
+      ],
+      "workstream": "auth-event-pii-posture",
+      "fix": {
+        "summary": "Adopt a PII posture for events + audit rows (see decision D1), then implement: identifiers-only payloads, redacted observer-error logs, audit-row pseudonymization on erasure, and documented stream privilege.",
+        "steps": [
+          "(per D1 recommendation) packages/core/src/AuthEvents.ts: drop `email` from OrganizationInvitationCreatedEvent (subscribers resolve via InvitationRecords, which the erasure cascade owns); keep `reason` on impersonationStarted (it is the BEH-EA-218 justification) but treat it as PII for erasure.",
+          "packages/organization/src/Organization.ts: stop passing email into the publish.",
+          "packages/core/src/AuditLog.ts: add `pseudonymizeActor(userId)` to AuditLogShape — rewrites rows whose actorUserId or payload.userId/targetUserId = userId: replaces those ids with a stable per-user pseudonym (HMAC via KeyProvider) and blanks declared-PII payload fields (`reason`), keeping id/eventTag/occurredAt. Implement for layerMemory and layerSql (+ repository `updatePayloadByActor`).",
+          "Register it as a core BeforeUserDelete contribution (or ErasureRegistry entry if ticket 30's registry is built) so it runs inside the deletion transaction.",
+          "AuthEventsShape doc: stream/subscribe access is audit-table-equivalent privilege.",
+          "Log redaction of observer-error causes is EOTS-005's plan."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/src/AuditLog.ts",
+          "packages/sql/src/Repositories.ts",
+          "packages/organization/src/Organization.ts",
+          "packages/server/src/Account.ts",
+          "packages/core/test/AuditLog.test.ts"
+        ],
+        "tests": [
+          "packages/core/test/AuditLog.test.ts — `pseudonymizeActor removes the user id and reason text from every matching row but keeps eventTag/occurredAt/id` (memory + SQLite).",
+          "packages/organization/test/Organization.test.ts — invitationCreated event has no `email` property.",
+          "packages/server/test/AuthHttp.test.ts — after DELETE /account, `auditLog.list({ actorUserId })` returns nothing for the deleted id."
+        ],
+        "acceptance": [
+          "No raw email on the bus; user erasure pseudonymizes that user's audit rows transactionally; retention/erasure rule documented in spec (new ADR per ticket 30's flagged gap)."
+        ],
+        "spec_refs": [
+          "BEH-EA-100",
+          "BEH-EA-101",
+          "BEH-EA-218"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "ESA-007"
+      ],
+      "needs_decision": true,
+      "decision_options": [
+        "A. Identifiers-only payloads (drop invitation email; subscribers join via records) + pseudonymize audit rows on user erasure + document stream privilege.",
+        "B. Keep contact fields but store an HMAC digest instead of the raw value (email → digest) in both bus and audit row; no erasure hook needed for those fields.",
+        "C. Keep payloads as-is; rely on a retention sweep (ticket 30's Retention service extended to auth_audit_log) to age rows out."
+      ],
+      "recommendation": "A, plus C's retention sweep as an operator-configurable add-on (flexibility): identifiers-only is the standard event-sourcing answer and the erasure cascade already owns the records that hold the email; pseudonymizing audit rows keeps the forensic timeline (tag/time/order) intact under GDPR Art. 17. B loses utility for legitimate notification subscribers without buying much over A.",
+      "recommended_status": "ready-for-human"
+    },
+    {
+      "id": "ALF-009",
+      "level": "low",
+      "category": "security",
+      "package": "core",
+      "title": "PII rides the bus with no subscription access control or redaction",
+      "issue_file": ".issues/low/ALF-009-audit-logging-forensics-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Same root cause (PII in event payloads with no redaction); its 'document stream access as audit-level privilege' is folded into ESA-005's plan and its verbatim-Cause-logging point is EOTS-005.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 192,
+          "snippet": "export interface OrganizationInvitationCreatedEvent {\n  readonly _tag: \"auth.organization.invitationCreated\";\n  readonly invitationId: string;\n  readonly organizationId: string;\n  readonly email: string;\n}",
+          "note": "Raw invitee email on the bus."
+        },
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 405,
+          "snippet": "        Stream.runForEach((event) =>\n          handler(event).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.event.observer.error\", { tag, cause }),\n            ),\n          ),\n        ),\n        Effect.forkScoped,",
+          "note": "on() forks with plain forkScoped (no startImmediately, no pre-registered subscription); the full Cause is logged verbatim."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "ESA-005",
+      "duplicates": [],
+      "workstream": "auth-event-pii-posture",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "SCP-006",
+      "level": "medium",
+      "category": "architecture",
+      "package": "core",
+      "title": "Closed AuthEvent union has zero deactivation/deletion events, blocking offboarding propagation and audit",
+      "issue_file": ".issues/medium/SCP-006-scim-provisioning-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "Still no `auth.user.deleted` or deactivation tag; account deletion (server/src/Account.ts) and Users.delete publish nothing, so GDPR erasure itself leaves no audit row. Deactivation cannot be evented yet because no deactivation state exists (wayfinder ticket 09 unimplemented).",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 279,
+          "snippet": "/** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */\nexport type AuthEvent =\n  | TokenReplayEvent\n  | UserCreatedEvent\n  | UserSignedInEvent",
+          "note": "31-member closed union of plain TS interfaces; no user.deleted/deactivated tag, no version, no Schema codec."
+        },
+        {
+          "path": "packages/server/src/Account.ts",
+          "line": 112,
+          "snippet": "              yield* sessions.revokeAll(userId);\n              yield* verification.deleteAllByUser(userId);\n              yield* users\n                .delete(userId)",
+          "note": "Account deletion path publishes no event (`grep -c publish packages/core/src/Users.ts` = 0)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-event-taxonomy",
+      "fix": {
+        "summary": "Add `auth.user.deleted` now (published after the deletion transaction commits); add `auth.user.deactivated`/`reactivated` together with ticket 09's deactivation state.",
+        "steps": [
+          "packages/core/src/AuthEvents.ts: `UserDeletedEvent { _tag: \"auth.user.deleted\"; userId; deletedBy: \"self\" | \"admin\"; }` — deliberately no email (the row is being erased; ESA-005 posture).",
+          "packages/server/src/Account.ts: publish after the `SqlTransaction.withTransaction(...)` block commits (never inside, mirroring Password.confirmReset's placement). If DRS-002/ticket 30's `Users.eraseAccount` lands, publish there instead.",
+          "AuditLog.actorOf: `auth.user.deleted` → Option.some(userId) (the audit row outlives the user by design; pseudonymization per D1).",
+          "Ticket-09 follow-up (not now): `auth.user.deactivated` / `auth.user.reactivated` + SCP-008's hook points."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/src/AuditLog.ts",
+          "packages/server/src/Account.ts",
+          "packages/server/test/AuthHttp.test.ts"
+        ],
+        "tests": [
+          "packages/server/test/AuthHttp.test.ts — `DELETE /account publishes auth.user.deleted after commit and writes an audit row; a rolled-back deletion publishes nothing`. Fails today."
+        ],
+        "acceptance": [
+          "Account deletion produces exactly one auth.user.deleted event/audit row, only on commit."
+        ],
+        "spec_refs": [
+          "BEH-EA-100",
+          "BEH-EA-101",
+          "BEH-EA-095"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ESA-007",
+      "level": "low",
+      "category": "architecture",
+      "package": "core",
+      "title": "Events are plain TypeScript interfaces: no version field, no runtime codec, no evolution path toward durability",
+      "issue_file": ".issues/low/ESA-007-event-sourcing-audit-trail-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "Events are still plain TS interfaces; the new durable table stores them as opaque JSON and reads them back as `unknown` — exactly the 'first durable consumer must invent upcasting' situation the finding predicted, now real.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 279,
+          "snippet": "/** BEH-EA-101: the closed, statically-known set of event types `AuthEvents` carries today. */\nexport type AuthEvent =\n  | TokenReplayEvent\n  | UserCreatedEvent\n  | UserSignedInEvent",
+          "note": "31-member closed union of plain TS interfaces; no user.deleted/deactivated tag, no version, no Schema codec."
+        },
+        {
+          "path": "packages/core/src/AuditLog.ts",
+          "line": 48,
+          "snippet": "  /** The full original event, opaque — interpret using `eventTag`. */\n  readonly payload: unknown;",
+          "note": "Durable rows read back as `unknown` — no codec exists to decode a stored event, and no version discriminant to upcast old rows."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-event-schema",
+      "fix": {
+        "summary": "Define every AuthEvent as an Effect Schema (TaggedStruct) with a `version` literal, derive the TS types from the schemas, and decode AuditLog payloads through the union codec.",
+        "steps": [
+          "packages/core/src/AuthEvents.ts: replace each `interface XEvent` with `export const XEvent = Schema.TaggedStruct(\"auth.x\", { ...fields })` (plus `v: Schema.Literal(1)` or envelope-level `version`, see ESA-002); `export type XEvent = typeof XEvent.Type`; `export const AuthEventSchema = Schema.Union([...])`; `export type AuthEvent = typeof AuthEventSchema.Type`. Keep `_tag` literals unchanged.",
+          "Id fields use branded schemas (`UserId` schema via `Schema.String.pipe(Schema.brand(\"UserId\"))` compatible with Users.ts's Brand.nominal — or migrate Users.UserId to a schema brand), enabling GC-007.",
+          "packages/core/src/AuditLog.ts: `AuditLogRecord.payload` becomes `AuthEvent` decoded via `Schema.decodeUnknownEffect(AuthEventSchema)` in `toRecord`; a row that fails to decode surfaces as a typed `AuditLogDecodeError` (or `Option.none` payload + raw text) — never `unknown`. `eventTag` can then be the narrow union.",
+          "packages/sql/src/Repositories.ts AuditLogRepository: store payload via `Schema.encode(AuthEventSchema)` + JSON; keep TEXT column.",
+          "Document the evolution rule in spec/behaviors/13-events.md BEH-EA-101: a breaking payload change bumps the version and adds a decode-time upcaster; old rows remain decodable.",
+          "Design note (not a blocker): plugin-owned event schemas (organization's 18 tags) still live in core; a future plugin-contributed registry can build on these schemas."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/src/AuditLog.ts",
+          "packages/sql/src/Repositories.ts",
+          "packages/core/test/AuditLog.test.ts",
+          "spec/behaviors/13-events.md"
+        ],
+        "tests": [
+          "packages/core/test/AuditLog.test.ts — `it.effect(\"layerSql round-trips every AuthEvent variant through the schema codec\")` (property-style over one sample per tag, in-memory SQLite): `list()` returns payloads that `===`-structurally equal the published events and are typed `AuthEvent`. Fails today (payload is unknown/JSON).",
+          "Same file — a hand-inserted row with a malformed payload yields the typed decode error, not a defect."
+        ],
+        "acceptance": [
+          "`AuditLogRecord.payload` is `AuthEvent`, decoded; every event type is derived from a Schema; a version field exists."
+        ],
+        "spec_refs": [
+          "BEH-EA-100",
+          "BEH-EA-101"
+        ],
+        "effort": "L"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ARF-006",
+      "level": "medium",
+      "category": "architecture",
+      "package": "core",
+      "title": "Recovery is invisible to the event system: no resetRequested/resetCompleted/passwordChanged events, no owner-notification hook",
+      "issue_file": ".issues/medium/ARF-006-account-recovery-flow-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "rationale": "Fixed by 45325bb (ALF-004): `auth.password.changed` and `auth.password.resetCompleted` exist and are published. Still open: no `resetRequested` (the earliest takeover signal, needed for out-of-band owner notification) and no `emailVerified` event.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 96,
+          "snippet": "/** ALF-004: published by `@awthaq/password`'s `changePassword`, after the new hash is persisted. */\nexport interface PasswordChangedEvent {\n  readonly _tag: \"auth.password.changed\";\n  readonly userId: UserId;\n}",
+          "note": "passwordChanged / resetCompleted now exist (commit 45325bb, ALF-004)."
+        },
+        {
+          "path": "packages/password/src/Password.ts",
+          "line": 1031,
+          "snippet": "        yield* events.publish({ _tag: \"auth.password.resetCompleted\", userId });",
+          "note": "resetCompleted published after the confirmReset transaction commits. No `resetRequested` / `emailVerified` tag exists or is published (grep of AuthEvents.ts/Password.ts)."
+        }
+      ],
+      "fixed_by_commit": "45325bb",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-event-taxonomy",
+      "fix": {
+        "summary": "Add and publish `auth.password.resetRequested` and `auth.user.emailVerified`.",
+        "steps": [
+          "packages/core/src/AuthEvents.ts: `PasswordResetRequestedEvent { _tag: \"auth.password.resetRequested\"; userId }` and `UserEmailVerifiedEvent { _tag: \"auth.user.emailVerified\"; userId }`; AuditLog.ts actorOf → userId for both (exhaustiveness forces it).",
+          "packages/password/src/Password.ts requestReset: publish resetRequested inside the forked mail branch only when a real account exists (the branch that computes `${RESET_PREFIX}${user.id}` at :907) — publishing is internal, so it does not reintroduce the enumeration side channel ARF-003 closed (response path unchanged; keep it inside the detached fiber so latency is unaffected).",
+          "verifyEmail: publish emailVerified after the flag flips.",
+          "Doc comment on both: 'the hook for owner notification / SIEM export'."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/src/AuditLog.ts",
+          "packages/password/src/Password.ts",
+          "packages/password/test/Password.test.ts"
+        ],
+        "tests": [
+          "packages/password/test/Password.test.ts — `requestReset for an existing account publishes auth.password.resetRequested; for a nonexistent email publishes nothing and response timing/shape is unchanged`; `verifyEmail publishes auth.user.emailVerified`. Fail today."
+        ],
+        "acceptance": [
+          "Recovery start and email verification are observable events and durable audit rows."
+        ],
+        "spec_refs": [
+          "BEH-EA-101",
+          "BEH-EA-064",
+          "BEH-EA-117",
+          "BEH-EA-118"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "RRS-008",
+      "level": "low",
+      "category": "architecture",
+      "package": "core",
+      "title": "No session-lifecycle events: rotation, supersession, and reuse are unobservable",
+      "issue_file": ".issues/low/RRS-008-refresh-token-rotation-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "rationale": "Fixed by 9017a8a (RRS-003): `auth.session.reuse` is published on tombstoned-token replay. Still open: rotation (verify's in-place secret rotation) and supersession (`issue({ supersedes })`) publish nothing; `auth.session.issued` is published only by @awthaq/password, not by Sessions itself (oauth/passkey/admin issuance is silent).",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 68,
+          "snippet": "export interface SessionReuseEvent {\n  readonly _tag: \"auth.session.reuse\";\n  readonly sessionId: string;\n  readonly familyId: string;\n  readonly userId: UserId;\n}",
+          "note": "auth.session.reuse exists (commit 9017a8a, RRS-003); published at Sessions.ts:450/776."
+        },
+        {
+          "path": "packages/core/src/Sessions.ts",
+          "line": 188,
+          "snippet": "   * rotates the session's secret (the standard session-fixation defense) —\n   * `rotated` carries the freshly-minted full token exactly when this call\n   * performed that rotation, `Option.none()` otherwise (including every",
+          "note": "verify's in-place secret rotation and issue({ supersedes }) supersession publish nothing; the only Sessions.ts publishes are auth.session.reuse. auth.session.issued is published only by @awthaq/password."
+        }
+      ],
+      "fixed_by_commit": "9017a8a",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-event-taxonomy",
+      "fix": {
+        "summary": "Publish session lifecycle events from Sessions itself (both layers), not per plugin.",
+        "steps": [
+          "packages/core/src/AuthEvents.ts: add `SessionRotatedEvent { _tag: \"auth.session.rotated\"; sessionId; familyId; userId }` (in-place secret rotation in verify) and `SessionSupersededEvent { _tag: \"auth.session.superseded\"; sessionId; supersededBy; familyId; userId }`.",
+          "packages/core/src/Sessions.ts (layerMemory and layerSql): publish rotated on the winning CAS rotation write only (the loser reports `rotated: none` and must not publish); publish superseded when `issue` tombstones `supersedes`.",
+          "Move `auth.session.issued` publication into `Sessions.issue` (both layers) and delete the per-plugin publishes in Password.ts, so oauth/passkey/admin issuance is covered; same consideration for `revoke`/`revokeAll`/`revokeOthers` → `auth.session.revoked` with a `reason` enum widened (`\"signOut\" | \"admin\" | \"userDeleted\" | ...`). Keep reason passed by caller."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/src/Sessions.ts",
+          "packages/core/src/AuditLog.ts",
+          "packages/password/src/Password.ts",
+          "packages/core/test/Sessions.test.ts"
+        ],
+        "tests": [
+          "packages/core/test/Sessions.test.ts — `rotation publishes exactly one auth.session.rotated even under a concurrent verify race`; `issue({ supersedes }) publishes auth.session.superseded`; `oauth/passkey issuance publishes auth.session.issued` (via Sessions). Fail today."
+        ],
+        "acceptance": [
+          "Every session create/rotate/supersede/revoke is an event + audit row regardless of which plugin triggered it; exactly one rotated event per rotation."
+        ],
+        "spec_refs": [
+          "BEH-EA-101",
+          "BEH-EA-053"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ECF-003",
+      "level": "medium",
+      "category": "correctness",
+      "package": "core",
+      "title": "Bounded AuthEvents PubSub suspends publishers — sign-in can block behind a slow subscriber",
+      "issue_file": ".issues/medium/ECF-003-effect-concurrency-fiber-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "rationale": "Bus switched from PubSub.bounded to PubSub.dropping; publish never suspends; drops are counted and logged; regression test proves the stuck-subscriber case no longer hangs.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 363,
+          "snippet": "    const pubsub = yield* PubSub.dropping<AuthEvent>(CAPACITY);\n    const dropped = yield* Ref.make(0);\n    const publish: AuthEventsShape[\"publish\"] = (event) =>\n      Effect.gen(function* () {\n        yield* auditLog.record(event);\n        const accepted = yield* PubSub.publish(pubsub, event);\n        if (!accepted) {\n          yield* Ref.update(dropped, (n) => n + 1);",
+          "note": "Bus is now PubSub.dropping (never suspends) and AuditLog.record runs inline before enqueue."
+        },
+        {
+          "path": "packages/core/test/AuthEvents.test.ts",
+          "line": 67,
+          "snippet": "        assert.strictEqual(yield* events.droppedCount, overflow - 1);",
+          "note": "Capacity-stress regression test proving publish no longer hangs past CAPACITY."
+        }
+      ],
+      "fixed_by_commit": "4b48cb2",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": null,
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "MA-009",
+      "level": "medium",
+      "category": "correctness",
+      "package": "core",
+      "title": "Bounded AuthEvents PubSub converts event saturation into stalled authentication requests",
+      "issue_file": ".issues/medium/MA-009-michael-arnaldi.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "rationale": "Core defect fixed by 4b48cb2 (PubSub.bounded → PubSub.dropping + droppedCount + warning log): saturation no longer stalls requests. Remaining piece of the recommended fix: 'correct the BEH-EA-098 wording to state the saturation behavior' — spec text unchanged (wayfinder ticket 02 flagged the exact rewording).",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 363,
+          "snippet": "    const pubsub = yield* PubSub.dropping<AuthEvent>(CAPACITY);\n    const dropped = yield* Ref.make(0);\n    const publish: AuthEventsShape[\"publish\"] = (event) =>\n      Effect.gen(function* () {\n        yield* auditLog.record(event);\n        const accepted = yield* PubSub.publish(pubsub, event);\n        if (!accepted) {\n          yield* Ref.update(dropped, (n) => n + 1);",
+          "note": "Bus is now PubSub.dropping (never suspends) and AuditLog.record runs inline before enqueue."
+        },
+        {
+          "path": "packages/core/test/AuthEvents.test.ts",
+          "line": 67,
+          "snippet": "        assert.strictEqual(yield* events.droppedCount, overflow - 1);",
+          "note": "Capacity-stress regression test proving publish no longer hangs past CAPACITY."
+        },
+        {
+          "path": "spec/behaviors/13-events.md",
+          "line": 39,
+          "snippet": "REQUIREMENT: Publishing an event to `AuthEvents` MUST NOT suspend the\n             publishing fiber on any subscriber's handling of that event;\n             `publish` MUST return once the event is enqueued, regardless\n             of how many subscribers exist or how long they take to run.",
+          "note": "Spec text still assumes enqueue-always; the dropping/droppedCount saturation behavior is undocumented (wayfinder ticket 02 flagged this rewording, never applied)."
+        }
+      ],
+      "fixed_by_commit": "4b48cb2",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-events-subscription",
+      "fix": {
+        "summary": "Apply wayfinder ticket 02's BEH-EA-098 rewording and document the dropping/droppedCount semantics in BEH-EA-097.",
+        "steps": [
+          "spec/behaviors/13-events.md BEH-EA-098 REQUIREMENT → 'Publishing an event to `AuthEvents` MUST NOT suspend the publishing fiber on any subscriber's handling of that event, or on the PubSub's own capacity; `publish` MUST return immediately whether or not the event was accepted into the bounded buffer.'",
+          "BEH-EA-097 prose: state that at capacity new events are dropped from the bus (never from AuditLog, BEH-EA-100), counted by `droppedCount`, and logged.",
+          "Update features/features/**/13-events.feature REQ-EA-261/262 wording if it still says 'enqueued'; run `pnpm run spec:verify:strict`."
+        ],
+        "files": [
+          "spec/behaviors/13-events.md",
+          "features/features/04-cross-cutting/13-events.feature"
+        ],
+        "tests": [
+          "No new code test (behavior already covered by AuthEvents.test.ts:39-69); spec:verify:strict must pass."
+        ],
+        "acceptance": [
+          "BEH-EA-097/098 text matches the shipped dropping semantics."
+        ],
+        "spec_refs": [
+          "BEH-EA-097",
+          "BEH-EA-098"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "MAPS-010",
+      "level": "info",
+      "category": "architecture",
+      "package": "core",
+      "title": "No cross-process event channel - revocation can never be pushed to other services",
+      "issue_file": ".issues/info/MAPS-010-microservices-auth-propagation-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Same root cause (events are in-process only; no transport seam). The outbox relay + EventTransport port in CWM-004's plan (decision D2) is exactly the 'application-provided transport Layer' MAPS-010 asks for; the docs step covers its 'state the single-process assumption' alternative.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 376,
+          "snippet": "    return AuthEvents.of({\n      publish,\n      stream: Stream.fromPubSub(pubsub),\n      droppedCount: Ref.get(dropped),\n    });",
+          "note": "stream is a lazy Stream.fromPubSub: the subscription only registers when a consuming fiber first pulls. Also: the only delivery channel is this in-process PubSub."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "CWM-004",
+      "duplicates": [],
+      "workstream": "auth-event-external-delivery",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ESA-004",
+      "level": "medium",
+      "category": "correctness",
+      "package": "core",
+      "title": "Bounded PubSub means publish can suspend the auth operation; with zero subscribers the shipped example wedges on the 1025th event",
+      "issue_file": ".issues/medium/ESA-004-event-sourcing-audit-trail-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "rationale": "Same fix (PubSub.dropping, 4b48cb2). Its 'ship one default durable sink so zero-subscriber config cannot occur' is also satisfied: AuditLog.record runs inline in publish (commit 6bd3f1d), independent of subscribers.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 363,
+          "snippet": "    const pubsub = yield* PubSub.dropping<AuthEvent>(CAPACITY);\n    const dropped = yield* Ref.make(0);\n    const publish: AuthEventsShape[\"publish\"] = (event) =>\n      Effect.gen(function* () {\n        yield* auditLog.record(event);\n        const accepted = yield* PubSub.publish(pubsub, event);\n        if (!accepted) {\n          yield* Ref.update(dropped, (n) => n + 1);",
+          "note": "Bus is now PubSub.dropping (never suspends) and AuditLog.record runs inline before enqueue."
+        },
+        {
+          "path": "packages/core/test/AuthEvents.test.ts",
+          "line": 67,
+          "snippet": "        assert.strictEqual(yield* events.droppedCount, overflow - 1);",
+          "note": "Capacity-stress regression test proving publish no longer hangs past CAPACITY."
+        }
+      ],
+      "fixed_by_commit": "4b48cb2",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": null,
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ESS-007",
+      "level": "low",
+      "category": "architecture",
+      "package": "core",
+      "title": "Every subscriber filters all 25 event types itself; no per-tag channel for the one-tag-one-handler case",
+      "issue_file": ".issues/low/ESS-007-effect-stream-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "medium",
+      "rationale": "Each `on(tag)` Layer is a separate full PubSub subscriber that pulls and discards every non-matching event (now 31 tags). Correct, and cheap per event, but the only way to handle N tags is N subscriptions.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 398,
+          "snippet": "      yield* events.stream.pipe(\n        Stream.filter((event): event is Extract<AuthEvent, { readonly _tag: Tag }> =>\n          Object.is(event._tag, tag),\n        ),",
+          "note": "Every on() Layer is its own full subscriber of the shared PubSub and filters all 31 tags itself."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-events-subscription",
+      "fix": {
+        "summary": "Let `on`/`onBatch` accept a tag array (one subscription, narrowed union type) and document the fan-out characteristic on `stream`; do not build per-tag PubSubs (speculative).",
+        "steps": [
+          "packages/core/src/AuthEvents.ts: overload `on` to accept `ReadonlyArray<Tag>`; filter with a `Set` membership check; handler typed `Extract<AuthEvent, { _tag: Tags[number] }>` (type guard, no assertion).",
+          "Doc comment on `AuthEventsShape.stream`/`on`: each call is a full subscriber; prefer one multi-tag subscription over many single-tag ones."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/test/AuthEvents.test.ts"
+        ],
+        "tests": [
+          "packages/core/test/AuthEvents.test.ts — `it.effect(\"on([a, b], h) delivers both tags through one subscription and nothing else\")`."
+        ],
+        "acceptance": [
+          "Multi-tag subscription exists and is type-narrowed."
+        ],
+        "spec_refs": [
+          "BEH-EA-102",
+          "BEH-EA-103"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "ALF-007"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ESS-004",
+      "level": "medium",
+      "category": "performance",
+      "package": "core",
+      "title": "No batching or buffering stage anywhere — the designed heavy sinks write one event per round trip",
+      "issue_file": ".issues/medium/ESS-004-effect-stream-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "medium",
+      "rationale": "Overtaken in part: the heavy durable sink the finding had in mind (the audit table) now exists and is written inline per event *by design* (wayfinder ticket 01 explicitly rejected a batched subscriber as the record of record). Still true: the only consumer sugar is per-event `runForEach`; there is no batching helper or documented batched-consumer pattern for secondary sinks (SIEM/export), which ticket 01 itself names as the right place for `Stream.groupedWithin`.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 363,
+          "snippet": "    const pubsub = yield* PubSub.dropping<AuthEvent>(CAPACITY);\n    const dropped = yield* Ref.make(0);\n    const publish: AuthEventsShape[\"publish\"] = (event) =>\n      Effect.gen(function* () {\n        yield* auditLog.record(event);\n        const accepted = yield* PubSub.publish(pubsub, event);\n        if (!accepted) {\n          yield* Ref.update(dropped, (n) => n + 1);",
+          "note": "Bus is now PubSub.dropping (never suspends) and AuditLog.record runs inline before enqueue."
+        },
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 405,
+          "snippet": "        Stream.runForEach((event) =>\n          handler(event).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.event.observer.error\", { tag, cause }),\n            ),\n          ),\n        ),\n        Effect.forkScoped,",
+          "note": "on() forks with plain forkScoped (no startImmediately, no pre-registered subscription); the full Cause is logged verbatim."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-events-subscription",
+      "fix": {
+        "summary": "Add a batched-subscription sugar next to `on()` and document it as the pattern for secondary sinks.",
+        "steps": [
+          "packages/core/src/AuthEvents.ts: add `onBatch(select, { size, within }, handler)` where `select` is a tag or tag array, built on the ALF-007 `subscribe` + `Stream.groupedWithin(size, within)` (Stream.ts:8376) + `Stream.runForEach(handler(chunk))`, with the same catchCause → `auth.event.observer.error` isolation.",
+          "spec/behaviors/13-events.md BEH-EA-102/103 usage text: add the batched-consumer example (SIEM export)."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/test/AuthEvents.test.ts",
+          "spec/behaviors/13-events.md"
+        ],
+        "tests": [
+          "packages/core/test/AuthEvents.test.ts — `it.effect(\"onBatch groups up to `size` events or flushes after `within` (TestClock)\")`."
+        ],
+        "acceptance": [
+          "A consumer can subscribe to batches without hand-writing Stream plumbing; handler failures stay isolated."
+        ],
+        "spec_refs": [
+          "BEH-EA-102",
+          "BEH-EA-103"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "ALF-007"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "CWM-004",
+      "level": "medium",
+      "category": "architecture",
+      "package": "core",
+      "title": "No outbound webhook delivery — Clerk webhook consumers have only in-process PubSub to migrate onto",
+      "issue_file": ".issues/medium/CWM-004-clerk-workos-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "Still no outbound delivery: no webhook code anywhere in packages/*/src, and the only event channel is the in-process PubSub. New since the audit: auth_audit_log (uuidv7-ordered, durable) is a natural transactional-outbox source a relay could tail.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 376,
+          "snippet": "    return AuthEvents.of({\n      publish,\n      stream: Stream.fromPubSub(pubsub),\n      droppedCount: Ref.get(dropped),\n    });",
+          "note": "stream is a lazy Stream.fromPubSub: the subscription only registers when a consuming fiber first pulls. Also: the only delivery channel is this in-process PubSub."
+        },
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 405,
+          "snippet": "        Stream.runForEach((event) =>\n          handler(event).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.event.observer.error\", { tag, cause }),\n            ),\n          ),\n        ),\n        Effect.forkScoped,",
+          "note": "on() forks with plain forkScoped (no startImmediately, no pre-registered subscription); the full Cause is logged verbatim."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "MAPS-010"
+      ],
+      "workstream": "auth-event-external-delivery",
+      "fix": {
+        "summary": "Per decision D2: build an outbox relay over auth_audit_log and an opt-in webhooks plugin on top of it; document the in-process recipe meanwhile.",
+        "steps": [
+          "Immediately (S): document in README/spec the supported in-process recipe (`AuthEvents.on`/`subscribe` in the host composition) and the single-process nature of the bus in spec/overview.md.",
+          "packages/core: `AuditLog.listAfter(cursorId, limit)` (id > cursor ORDER BY id) + an `EventRelay` layer that polls/tails from a persisted cursor and hands decoded `Published<AuthEvent>` (ESA-007/ESA-002) to an app-provided `EventTransport` port (Redis/Kafka/HTTP) — at-least-once, idempotent on eventId.",
+          "packages/webhooks (new plugin, M7 Phase-2): endpoints table (url, secret, tag filter), Standard-Webhooks/svix-compatible HMAC signing headers (`webhook-id`=eventId, `webhook-timestamp`, `webhook-signature`), exponential retry, dead-letter table, admin API group to manage endpoints; implemented as an EventTransport over the relay."
+        ],
+        "files": [
+          "README.md",
+          "spec/overview.md",
+          "packages/core/src/AuditLog.ts",
+          "packages/core/src/EventRelay.ts",
+          "packages/sql/src/Repositories.ts",
+          "packages/webhooks/src/*"
+        ],
+        "tests": [
+          "packages/core/test/EventRelay.test.ts — relay delivers every audit row exactly once per cursor advance, resumes from the persisted cursor after restart, and redelivers on transport failure (idempotent eventId).",
+          "packages/webhooks/test/Webhooks.test.ts — signature verifies with the endpoint secret; retries with backoff; dead-letters after max attempts."
+        ],
+        "acceptance": [
+          "A second process/service can consume auth events reliably; a Clerk-webhook consumer can be pointed at signed awthaq webhooks."
+        ],
+        "spec_refs": [
+          "BEH-EA-100",
+          "BEH-EA-102"
+        ],
+        "effort": "XL"
+      },
+      "depends_on": [
+        "ESA-007",
+        "ESA-002"
+      ],
+      "needs_decision": true,
+      "decision_options": [
+        "A. Docs only: state the single-process assumption and the in-process subscription recipe; no transport.",
+        "B. Outbox relay over auth_audit_log + app-provided EventTransport port (cross-process fan-out), no webhooks plugin yet.",
+        "C. B plus a first-party opt-in @awthaq/webhooks plugin (signed, retried, dead-lettered) scheduled as an M7 Phase-2 plugin."
+      ],
+      "recommendation": "C, staged: ship A's docs immediately, B right after the event schema/envelope workstreams (it needs eventId + a codec), and the webhooks plugin as an M7 Phase-2 plugin. Tailing the durable audit table (not the lossy dropping PubSub) is what makes delivery reliable, and it reuses what ticket 01 already built.",
+      "recommended_status": "ready-for-human"
+    },
+    {
+      "id": "EOTS-005",
+      "level": "medium",
+      "category": "correctness",
+      "package": "core",
+      "title": "The only two log sites serialize raw Cause payloads with no redaction pass",
+      "issue_file": ".issues/medium/EOTS-005-effect-observability-tracing-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "Both observer-error sites still log the entire Cause object (AuthEvents.ts:408, HookPoint.ts:284).",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 405,
+          "snippet": "        Stream.runForEach((event) =>\n          handler(event).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.event.observer.error\", { tag, cause }),\n            ),\n          ),\n        ),\n        Effect.forkScoped,",
+          "note": "on() forks with plain forkScoped (no startImmediately, no pre-registered subscription); the full Cause is logged verbatim."
+        },
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 278,
+          "snippet": "    const run: ObserveShape<Input>[\"run\"] = (value) =>\n      Effect.forEach(\n        resolveTaps(),\n        (handler) =>\n          handler(value).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.hook.observer.error\", { hook: key, cause }),\n            ),\n          ),\n        { concurrency: \"unbounded\", discard: true },",
+          "note": "Sorted order is discarded by unbounded concurrent execution; failures only logged (no metric); full Cause logged."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "observability-substrate",
+      "fix": {
+        "summary": "Log a sanitized summary at error level and the full cause only at debug level, via one shared helper.",
+        "steps": [
+          "packages/core/src/Observability.ts (or a small core helper): `logObserverFailure(name, context, cause)` → `Effect.logError(name, { ...context, errorTag, message })` where errorTag/message come from `Cause.squash`/`Cause.findError` of a tagged error (message truncated, never the error's data fields), then `Effect.logDebug(name, { ...context, cause })`.",
+          "Use it at AuthEvents.ts:408 and HookPoint.ts:284 (keep the stable names auth.event.observer.error / auth.hook.observer.error — BEH-EA-104).",
+          "Covered by EOTS-002's guard in tests."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/src/HookPoint.ts",
+          "packages/core/src/Observability.ts",
+          "packages/core/test/AuthEvents.test.ts"
+        ],
+        "tests": [
+          "packages/core/test/AuthEvents.test.ts — a subscriber failing with an error whose data holds a token string: the error-level log record (captured by a test Logger) has errorTag/message but not the token; the debug-level record has the cause."
+        ],
+        "acceptance": [
+          "No error-level log line carries a raw Cause payload."
+        ],
+        "spec_refs": [
+          "BEH-EA-104",
+          "BEH-EA-092",
+          "BEH-EA-199"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "MW-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ALF-007",
+      "level": "medium",
+      "category": "correctness",
+      "package": "core",
+      "title": "on() subscriptions attach asynchronously — events published during startup are silently lost",
+      "issue_file": ".issues/medium/ALF-007-audit-logging-forensics-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "`on()` still forks a lazy `Stream.fromPubSub` consumer with plain `forkScoped`; the PubSub subscription registers only when that fiber first runs, so events published between Layer build and first scheduling are lost. The repo's own tests work around it (20ms sleep; `startImmediately` in 10+ test sites and AdminWorld.ts:73).",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 405,
+          "snippet": "        Stream.runForEach((event) =>\n          handler(event).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.event.observer.error\", { tag, cause }),\n            ),\n          ),\n        ),\n        Effect.forkScoped,",
+          "note": "on() forks with plain forkScoped (no startImmediately, no pre-registered subscription); the full Cause is logged verbatim."
+        },
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 376,
+          "snippet": "    return AuthEvents.of({\n      publish,\n      stream: Stream.fromPubSub(pubsub),\n      droppedCount: Ref.get(dropped),\n    });",
+          "note": "stream is a lazy Stream.fromPubSub: the subscription only registers when a consuming fiber first pulls. Also: the only delivery channel is this in-process PubSub."
+        },
+        {
+          "path": "packages/core/test/AuthEvents.test.ts",
+          "line": 112,
+          "snippet": "      // Real wall-clock time (`it.live`, not `it.effect`'s `TestClock`): a\n      // small real sleep gives the subscription Layer's own internally\n      // forked fiber (built without `startImmediately`, since `on`'s public\n      // signature has no such knob) a chance to actually subscribe.\n      yield* Effect.sleep(\"20 millis\");",
+          "note": "The repo's own test documents the attach race and papers over it with a 20ms real sleep (twice: lines 116 and 119)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "ESS-003"
+      ],
+      "workstream": "auth-events-subscription",
+      "fix": {
+        "summary": "Register the PubSub subscription synchronously during the subscription Layer's build, then fork the drain loop over that already-registered subscription.",
+        "steps": [
+          "packages/core/src/AuthEvents.ts: add `subscribe: Effect.Effect<Stream.Stream<AuthEvent>, never, Scope.Scope>` to AuthEventsShape, implemented as `PubSub.subscribe(pubsub).pipe(Effect.map(Stream.fromSubscription))` (both verified in ../effect/packages/effect/src/PubSub.ts:1083 and Stream.ts:1351).",
+          "`on(tag, handler)`: `const stream = yield* events.subscribe` (registers now, scoped to the Layer) then `yield* stream.pipe(Stream.filter(...), Stream.runForEach(...), Effect.forkScoped)`.",
+          "Keep `stream` for BEH-EA-102 raw access but document that it is lazy (registers on first pull) and point consumers needing no-loss-from-now semantics at `subscribe`.",
+          "Remove the `startImmediately` workarounds that exist only because of this race where they use `on()` (AdminWorld.ts:66-75 uses raw stream — switch it to `events.subscribe`)."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/test/AuthEvents.test.ts",
+          "features/step-definitions/AdminWorld.ts"
+        ],
+        "tests": [
+          "packages/core/test/AuthEvents.test.ts — `it.effect(\"on(): an event published immediately after the subscription Layer is built is delivered\")`: build `on(...)` layer, publish with no sleep/yield, then await a Deferred completed by the handler (TestClock, no it.live). Fails/flakes today."
+        ],
+        "acceptance": [
+          "`on()` has no startup window where published events are lost.",
+          "No test needs a real-time sleep to observe an `on()` subscription."
+        ],
+        "spec_refs": [
+          "BEH-EA-099",
+          "BEH-EA-102",
+          "BEH-EA-103"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ESS-003",
+      "level": "medium",
+      "category": "correctness",
+      "package": "core",
+      "title": "Subscription-attach race in AuthEvents.on: events published before the forked subscriber registers are silently lost",
+      "issue_file": ".issues/medium/ESS-003-effect-stream-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Same subscription-attach race in `on()` and same fix (subscribe synchronously before forking). A replay buffer (`PubSub.dropping({ capacity, replay })`) is not needed once registration is synchronous.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 405,
+          "snippet": "        Stream.runForEach((event) =>\n          handler(event).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.event.observer.error\", { tag, cause }),\n            ),\n          ),\n        ),\n        Effect.forkScoped,",
+          "note": "on() forks with plain forkScoped (no startImmediately, no pre-registered subscription); the full Cause is logged verbatim."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "ALF-007",
+      "duplicates": [],
+      "workstream": "auth-events-subscription",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ECF-010",
+      "level": "low",
+      "category": "architecture",
+      "package": "core",
+      "title": "Event subscription fibers have no restart policy",
+      "issue_file": ".issues/low/ECF-010-effect-concurrency-fiber-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "medium",
+      "rationale": "The forked drain fiber has no supervision: per-event handler failures are caught, but if the fiber itself ends for any other reason (a defect outside the handler, interruption from inside the handler escaping catchCause) delivery silently stops for the process lifetime with no log or health signal. Low likelihood, real gap.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 405,
+          "snippet": "        Stream.runForEach((event) =>\n          handler(event).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.event.observer.error\", { tag, cause }),\n            ),\n          ),\n        ),\n        Effect.forkScoped,",
+          "note": "on() forks with plain forkScoped (no startImmediately, no pre-registered subscription); the full Cause is logged verbatim."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-events-subscription",
+      "fix": {
+        "summary": "Supervise each `on()` subscription: log when the drain fiber ends for any reason other than scope close, and resubscribe with bounded backoff.",
+        "steps": [
+          "packages/core/src/AuthEvents.ts `on`: wrap the subscribe+drain in `Effect.gen` that re-subscribes inside `Effect.retry(Schedule.exponential(\"100 millis\").pipe(Schedule.either(Schedule.spaced(\"30 seconds\"))))` over `Effect.sandbox`/`catchCause` of the whole drain, logging `auth.event.subscription.died` with `{ tag }` on each restart (never logging on scope interruption).",
+          "Expose liveness cheaply: a `Metric.gauge(\"awthaq_event_subscriptions_active\")` incremented on subscribe / decremented on exit (optional; align with MW-001 metrics module)."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/test/AuthEvents.test.ts"
+        ],
+        "tests": [
+          "packages/core/test/AuthEvents.test.ts — `it.effect(\"on(): a drain fiber killed by a defect outside the handler resubscribes and keeps delivering\")` using a handler that interrupts itself / a test hook; assert a later event is still handled and `auth.event.subscription.died` was logged (capture via a test Logger)."
+        ],
+        "acceptance": [
+          "A subscription survives a non-handler defect; the death is logged under a stable name."
+        ],
+        "spec_refs": [
+          "BEH-EA-099",
+          "BEH-EA-104"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "ALF-007"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "EOTS-009",
+      "level": "low",
+      "category": "correctness",
+      "package": "core",
+      "title": "Event subscribers fork without trace linkage or annotations, detaching security events from the request that caused them",
+      "issue_file": ".issues/low/EOTS-009-effect-observability-tracing-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Same missing correlation between an event and the request that produced it; ALF-006's plan stamps correlationId/trace ids at publish and runs handlers under a linked span with annotated logs.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 405,
+          "snippet": "        Stream.runForEach((event) =>\n          handler(event).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.event.observer.error\", { tag, cause }),\n            ),\n          ),\n        ),\n        Effect.forkScoped,",
+          "note": "on() forks with plain forkScoped (no startImmediately, no pre-registered subscription); the full Cause is logged verbatim."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "ALF-006",
+      "duplicates": [],
+      "workstream": "auth-event-envelope",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ALF-006",
+      "level": "medium",
+      "category": "correctness",
+      "package": "core",
+      "title": "Event payloads carry no timestamp, correlation id, or source context",
+      "issue_file": ".issues/medium/ALF-006-audit-logging-forensics-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "rationale": "Timestamp part is covered for the durable row (occurredAt, 6bd3f1d) and for the bus by ESA-002's plan. Still open: no correlation/request id (column reserved, always null — AuditLog.ts:46 literally says 'Reserved for ALF-006'), no source context (ip/userAgent) on any event, no trace linkage from event → request span.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuditLog.ts",
+          "line": 45,
+          "snippet": "  readonly occurredAt: DateTime.Utc;\n  /** Reserved for ALF-006 — no `AuthEvent` payload carries one yet. */\n  readonly correlationId: Option.Option<string>;",
+          "note": "Durable row has a server-stamped occurredAt; correlationId column exists but is always Option.none()/null (AuditLog.ts:158, :201)."
+        },
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 122,
+          "snippet": "export interface AdminImpersonationStartedEvent {\n  readonly _tag: \"auth.admin.impersonationStarted\";\n  readonly adminUserId: UserId;\n  readonly targetUserId: UserId;\n  readonly reason: string;\n  readonly sessionId: string;\n}",
+          "note": "Free-text reason on the bus and in the audit row; no occurredAt/eventId on the event itself; sessionId is plain string."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "EOTS-009"
+      ],
+      "workstream": "auth-event-envelope",
+      "fix": {
+        "summary": "Introduce a request-scoped `AuthRequestContext` reference populated by the server layer and read by `publish`, and link subscriber handling to the originating span.",
+        "steps": [
+          "packages/core: new `AuthRequestContext` = `Context.Reference<{ correlationId: Option<string>; ip: Option<string>; userAgent: Option<string> }>` with an all-none default (Reference → no RIn change for any caller).",
+          "packages/server: in the HttpApi middleware/handler wrapper that already derives `ClientAddress` (AGA-001/NHS-003) set the reference per request via `Effect.provideService` — correlationId from an incoming `x-request-id`/W3C `traceparent` trace-id, else a fresh uuidv7; ip from ClientAddress; userAgent from headers.",
+          "AuthEvents.publish (after ESA-002): read the reference and fill `EventMetadata.correlationId` (+ `source: { ip, userAgent }` optional fields); also capture `Effect.currentSpan` (Option) → `traceId`/`spanId` in metadata.",
+          "AuditLog.record: persist `correlationId` into the existing column; put ip/userAgent into payload metadata (no new column needed; optional indexed column later).",
+          "AuthEvents.on: run each handler under `Effect.withSpan(\"awthaq.event.handle\", { attributes: { \"auth.event\": tag, \"auth.correlation_id\": ... }, links: traceId/spanId present ? [link] : [] })` and `Effect.annotateLogs({ correlationId })` so observer-error logs carry it (closes EOTS-009)."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/src/AuditLog.ts",
+          "packages/core/src/index.ts",
+          "packages/server/src/Authentication.ts",
+          "packages/server/src/AuthHttp.ts",
+          "packages/core/test/AuthEvents.test.ts",
+          "packages/server/test/AuthHttp.test.ts"
+        ],
+        "tests": [
+          "packages/core/test/AuthEvents.test.ts — `it.effect(\"publish stamps correlationId/ip from AuthRequestContext\")` (provideService the reference; assert delivered event + audit row). Fails today.",
+          "packages/server/test/AuthHttp.test.ts — a sign-in request with `x-request-id: r-1` produces audit rows whose correlationId is `r-1`, and two events from one request share it."
+        ],
+        "acceptance": [
+          "Events from one HTTP request share a correlationId persisted in auth_audit_log.correlationId; subscriber logs/spans carry it."
+        ],
+        "spec_refs": [
+          "BEH-EA-100",
+          "BEH-EA-104"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "ESA-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "CSG-008",
+      "level": "medium",
+      "category": "security",
+      "package": "core",
+      "title": "Breach-detection signals are published but never consumed by any pipeline",
+      "issue_file": ".issues/medium/CSG-008-compliance-soc2-gdpr-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "rationale": "Partly addressed: every signal (counterAnomaly, token.replay, impersonationDenied, signInFailed, session.reuse) is now durably persisted and queryable via `AuditLog.list({ eventTag })` (6bd3f1d). Still absent: any threshold rule, incident record, or operator alert — detection signals without a detection pipeline.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 108,
+          "snippet": "/**\n * Published by `@awthaq/passkey`'s authentication ceremony (BEH-EA-131,\n * ticket 08): a verified assertion's reported counter did not exceed the\n * stored one — \"log + step-up, not an instant kill\" per that ticket's own\n * language, so the session still issues and this event is the whole\n * response to the anomaly, not a request-level failure.\n */",
+          "note": "Signal is now durably recorded by AuditLog (commit 6bd3f1d), but no code thresholds, alerts, or creates incidents: grep for counterAnomaly/auth.token.replay in packages/*/src finds only publishers, AuditLog.actorOf, and comments."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "security-signal-pipeline",
+      "fix": {
+        "summary": "Ship an opt-in `SecuritySignals` subscriber layer that applies configurable threshold rules over the security tags and emits incidents (log + metric + optional incident sink port).",
+        "steps": [
+          "packages/core/src/SecuritySignals.ts (new): `SecuritySignalsConfig` Context.Reference with default rules, e.g. `auth.passkey.counterAnomaly` ≥1 per credential → incident; `auth.token.replay` ≥ N per identifier per window; `auth.user.signInFailed` ≥ N per ip/identifierDigest per window (after CSD-004); `auth.session.reuse` ≥1 → incident; `auth.admin.impersonationDenied` ≥ N per admin.",
+          "`SecuritySignals.layer`: one multi-tag subscription (ESS-007) over `subscribe` (ALF-007), sliding-window counters in a Ref/HashMap with TestClock-friendly DateTime, emitting `Effect.logWarning(\"auth.security.incident\", {...})`, `Metric.counter(\"awthaq_security_incident_total\")`, and calling an optional `IncidentSink` port (default no-op) the app can back with a table/pager.",
+          "Document in spec (new BEH under 13-events or a new behavior file) and README; opt-in like Retention.layerScheduled."
+        ],
+        "files": [
+          "packages/core/src/SecuritySignals.ts",
+          "packages/core/src/index.ts",
+          "packages/core/test/SecuritySignals.test.ts",
+          "spec/behaviors/13-events.md"
+        ],
+        "tests": [
+          "packages/core/test/SecuritySignals.test.ts — `a single counterAnomaly raises an incident`; `N token.replay events for one identifier within the window raise one incident; N-1 do not` (TestClock)."
+        ],
+        "acceptance": [
+          "With SecuritySignals.layer composed, the documented signals produce incidents through log, metric, and the IncidentSink port."
+        ],
+        "spec_refs": [
+          "BEH-EA-059",
+          "BEH-EA-131",
+          "BEH-EA-102"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "ALF-007",
+        "ESS-007",
+        "CSD-004"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ESA-002",
+      "level": "high",
+      "category": "correctness",
+      "package": "core",
+      "title": "No event carries a timestamp or sequence number — post-hoc ordering and point-in-time reconstruction are impossible",
+      "issue_file": ".issues/high/ESA-002-event-sourcing-audit-trail-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "rationale": "Fixed part (6bd3f1d): the durable record of record now stamps `occurredAt` server-side and a uuidv7 `id` (layerSql), so point-in-time reconstruction from auth_audit_log is possible. Still open: the event values themselves (what every subscriber receives) carry no occurredAt/eventId, so a subscriber must stamp receive time and cannot join its event to the audit row; the SQL list orders by occurredAt only with no id tiebreak (same-ms rows unordered), and layerMemory's `newestFirst` keeps insertion order among ties (oldest-first).",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 122,
+          "snippet": "export interface AdminImpersonationStartedEvent {\n  readonly _tag: \"auth.admin.impersonationStarted\";\n  readonly adminUserId: UserId;\n  readonly targetUserId: UserId;\n  readonly reason: string;\n  readonly sessionId: string;\n}",
+          "note": "Free-text reason on the bus and in the audit row; no occurredAt/eventId on the event itself; sessionId is plain string."
+        },
+        {
+          "path": "packages/core/src/AuditLog.ts",
+          "line": 151,
+          "snippet": "        const id = yield* Ref.updateAndGet(nextId, (n) => n + 1);\n        const now = yield* DateTime.now;\n        const entry: AuditLogRecord = {\n          id: `mem-${id}`,",
+          "note": "Time + identity are stamped only inside AuditLog, never on the event the bus delivers — a subscriber cannot join its event to the durable row."
+        },
+        {
+          "path": "packages/core/src/AuditLog.ts",
+          "line": 45,
+          "snippet": "  readonly occurredAt: DateTime.Utc;\n  /** Reserved for ALF-006 — no `AuthEvent` payload carries one yet. */\n  readonly correlationId: Option.Option<string>;",
+          "note": "Durable row has a server-stamped occurredAt; correlationId column exists but is always Option.none()/null (AuditLog.ts:158, :201)."
+        },
+        {
+          "path": "packages/sql/src/Repositories.ts",
+          "line": 863,
+          "snippet": "          return sql`SELECT * FROM auth_audit_log WHERE ${sql.and(conditions)} ORDER BY \"occurredAt\" DESC`;",
+          "note": "No id tiebreak: same-millisecond rows come back in unspecified order."
+        }
+      ],
+      "fixed_by_commit": "6bd3f1d",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-event-envelope",
+      "fix": {
+        "summary": "Stamp one envelope (eventId uuidv7 + occurredAt) in `publish`, use it for both the AuditLog row and the bus, and deliver it to subscribers.",
+        "steps": [
+          "packages/core/src/AuthEvents.ts: `export interface EventMetadata { readonly eventId: string; readonly occurredAt: DateTime.Utc; readonly correlationId: Option<string> }` (correlationId populated by ALF-006); `export type Published<E extends AuthEvent = AuthEvent> = E & EventMetadata` (distributes over the union, so `_tag` narrowing still works).",
+          "`publish(event)` stays `(event: AuthEvent) => Effect<void>` for publishers; internally `const meta = { eventId: yield* crypto.randomUUIDv7, occurredAt: yield* DateTime.now, ... }`, `const published = { ...event, ...meta }`, then `auditLog.record(published)` and `PubSub.publish(pubsub, published)`. AuthEvents.layer gains `Crypto.Crypto` in RIn (or AuditLog exposes the id generator) — AuditLog.layerMemory's counter id can stay for memory, but prefer one id source.",
+          "`stream: Stream<Published>`, `on(tag, handler: (e: Published<Extract<...>>) => ...)`.",
+          "packages/core/src/AuditLog.ts: `record(published)` uses `published.eventId`/`occurredAt` instead of generating its own; strip metadata keys from `payload` (or keep — decide in ESA-007's codec).",
+          "packages/sql/src/Repositories.ts:863: `ORDER BY \"occurredAt\" DESC, id DESC`; AuditLog.ts `newestFirst`: tiebreak on id desc (memory ids must then be zero-padded or numeric-compared)."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/src/AuditLog.ts",
+          "packages/sql/src/Repositories.ts",
+          "packages/core/test/AuthEvents.test.ts",
+          "packages/core/test/AuditLog.test.ts"
+        ],
+        "tests": [
+          "packages/core/test/AuthEvents.test.ts — `it.effect(\"every delivered event carries eventId and occurredAt equal to its AuditLog row\")`: publish, take from `subscribe`, `auditLog.list()`, assert `delivered.eventId === row.id` and same occurredAt (TestClock). Fails today (fields absent).",
+          "packages/core/test/AuditLog.test.ts — two events in the same millisecond list newest-first deterministically (by id)."
+        ],
+        "acceptance": [
+          "Every delivered event has eventId + occurredAt; audit rows and bus events share the id; list order is total."
+        ],
+        "spec_refs": [
+          "BEH-EA-100",
+          "BEH-EA-101",
+          "BEH-EA-102"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "ESA-007"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "GC-007",
+      "level": "low",
+      "category": "dx",
+      "package": "core",
+      "title": "AuthEvent union mixes branded and unbranded id fields",
+      "issue_file": ".issues/low/GC-007-giulio-canti.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "`userId` fields are branded `UserId`, while every `sessionId` (reuse, issued, impersonationStarted/Stopped) and `familyId` is plain `string` although `Sessions.SessionId` exists. organizationId/teamId/invitationId are also unbranded (no brands exist for them yet).",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 68,
+          "snippet": "export interface SessionReuseEvent {\n  readonly _tag: \"auth.session.reuse\";\n  readonly sessionId: string;\n  readonly familyId: string;\n  readonly userId: UserId;\n}",
+          "note": "auth.session.reuse exists (commit 9017a8a, RRS-003); published at Sessions.ts:450/776."
+        },
+        {
+          "path": "packages/core/src/Sessions.ts",
+          "line": 30,
+          "snippet": "export type SessionId = string & Brand.Brand<\"SessionId\">;\nexport const SessionId = Brand.nominal<SessionId>();",
+          "note": "Brand exists; events use plain `sessionId: string` (AuthEvents.ts:70, 78, 127, 133)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-event-schema",
+      "fix": {
+        "summary": "Brand session ids in the event union (type-only import to avoid a runtime cycle), as part of the ESA-007 schema migration.",
+        "steps": [
+          "packages/core/src/AuthEvents.ts: `import type { SessionId } from \"./Sessions.ts\"` (Sessions.ts imports AuthEvents at runtime, so keep this type-only) — or, with ESA-007, a `SessionIdSchema` defined in a leaf module both can import.",
+          "sessionId: SessionId on SessionReuse/SessionIssued/AdminImpersonationStarted/Stopped; familyId: SessionFamilyId if a brand is introduced (optional).",
+          "Update publishers: Sessions.ts:450/776 (already hold SessionId), Password.ts session.issued publishes (issued.session.id), Admin.ts:302/325/350 (wrap `Sessions.SessionId(caller.sessionId)` where it is a string)."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/core/src/Sessions.ts",
+          "packages/password/src/Password.ts",
+          "packages/admin/src/Admin.ts"
+        ],
+        "tests": [
+          "Type-level: a `// @ts-expect-error` test in packages/core/test/AuthEvents.test.ts that publishing `{ _tag: \"auth.session.issued\", sessionId: \"raw\", userId }` fails to typecheck."
+        ],
+        "acceptance": [
+          "All session-id fields in AuthEvent are `SessionId`; `pnpm run typecheck` green."
+        ],
+        "spec_refs": [
+          "BEH-EA-101"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "ESA-007"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "IDS-006",
+      "level": "low",
+      "category": "security",
+      "package": "core",
+      "title": "Lifecycle events under-attribute: denied event omits the target, stopped event omits the admin",
+      "issue_file": ".issues/low/IDS-006-impersonation-delegation-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "Denied still carries only adminUserId (target known at Admin.ts:266 in impersonate); Stopped carries only sessionId/endedBy although `records.endEpisode` returns the full record.",
+      "evidence": [
+        {
+          "path": "packages/core/src/AuthEvents.ts",
+          "line": 130,
+          "snippet": "/** Published by `@awthaq/admin`'s `stopImpersonating`/`forceStop` (BEH-EA-218). */\nexport interface AdminImpersonationStoppedEvent {\n  readonly _tag: \"auth.admin.impersonationStopped\";\n  readonly sessionId: string;\n  readonly endedBy: \"self\" | \"forcedByAdmin\" | \"expired\";\n}",
+          "note": "Stopped carries no admin/target; Denied (AuthEvents.ts:144-147) carries only adminUserId."
+        },
+        {
+          "path": "packages/admin/src/Admin.ts",
+          "line": 278,
+          "snippet": "        const allowed = yield* adminConfig.canImpersonate(subjectOf(caller));\n        if (!allowed) {\n          yield* events.publish({\n            _tag: \"auth.admin.impersonationDenied\",\n            adminUserId: Users.UserId(caller.ref.id),\n          });",
+          "note": "targetUserId is in scope here (impersonate's own input); endEpisode (ImpersonationRecords.ts:77-80) returns the full record with adminUserId/targetUserId for the stopped event."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-event-schema",
+      "fix": {
+        "summary": "Add attribution fields to the impersonation lifecycle events.",
+        "steps": [
+          "packages/core/src/AuthEvents.ts: `AdminImpersonationDeniedEvent` gains `targetUserId: Option<UserId>`-equivalent (optional field `targetUserId?: UserId` and `sessionId?: SessionId`) plus `operation: \"impersonate\" | \"forceStop\" | \"list\"`; `AdminImpersonationStoppedEvent` gains `adminUserId: UserId`, `targetUserId: UserId`.",
+          "packages/admin/src/Admin.ts: impersonate denied → include targetUserId; forceStop denied → include sessionId; list denied → operation only; stopImpersonating/forceStop → take `const record = yield* records.endEpisode(...)` and publish `adminUserId: record.adminUserId, targetUserId: record.targetUserId`.",
+          "packages/core/src/AuditLog.ts actorOf: stopped → `Option.some(event.adminUserId)` (exhaustive switch will force this)."
+        ],
+        "files": [
+          "packages/core/src/AuthEvents.ts",
+          "packages/admin/src/Admin.ts",
+          "packages/core/src/AuditLog.ts",
+          "packages/admin/test/Admin.test.ts",
+          "features/features/**/27-admin-impersonation.feature"
+        ],
+        "tests": [
+          "packages/admin/test/Admin.test.ts — `it.effect(\"impersonationDenied carries the attempted target; impersonationStopped carries admin and target\")`. Fails today."
+        ],
+        "acceptance": [
+          "SIEM consumers can attribute denied/stopped events without joining ImpersonationRecords."
+        ],
+        "spec_refs": [
+          "BEH-EA-218",
+          "BEH-EA-101"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "GC-006",
+      "level": "low",
+      "category": "correctness",
+      "package": "core",
+      "title": "Module-level mutable tap-sequence counter contradicts the scoped-registry convention",
+      "issue_file": ".issues/low/GC-006-giulio-canti.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Same root cause as ELC-001 (module-scoped registry state); ELC-001's plan deletes `nextSequence` and scopes sequence to each point's own per-composition registry.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 178,
+          "snippet": "let nextSequence = 0;",
+          "note": "Module-global mutable counter shared by every point in the process (incremented at :217, :273, :334)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "ELC-001",
+      "duplicates": [],
+      "workstream": "hook-registry-per-composition",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "TS-006",
+      "level": "low",
+      "category": "correctness",
+      "package": "core",
+      "title": "Hook tap ordering implements 2 of 3 specified keys; veto chains are composition-order sensitive",
+      "issue_file": ".issues/low/TS-006-torin-sandall.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Identical claim (2 of 3 ordering keys; veto chains composition-order sensitive) and identical fix (thread plugin identity through tap()).",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 180,
+          "snippet": "/** BEH-EA-091/096: stable ordering by declared `order`, then registration sequence — see this module's own header comment for what full BEH-EA-111 ordering still needs. */\nconst sortEntries = <F>(entries: ReadonlyArray<Registration<F>>): ReadonlyArray<F> =>\n  entries\n    .toSorted((a, b) => a.order - b.order || a.sequence - b.sequence)\n    .map((entry) => entry.handler);",
+          "note": "Two of three spec'd keys; no plugin identity, no dependency order."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "JH-003",
+      "duplicates": [],
+      "workstream": "hook-registry-per-composition",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "PERS-003",
+      "level": "medium",
+      "category": "correctness",
+      "package": "core",
+      "title": "Hook tap ordering implements 2 of the 3 spec'd ordering keys and has no introspection",
+      "issue_file": ".issues/medium/PERS-003-policy-engine-rego-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "Ordering half duplicates JH-003; the introspection half is distinct and unaddressed: point services expose only kind/run, and Auth.make's manifest (Auth.ts:370-377) carries no hook information, so BEH-EA-096 ('resolved order derivable from the plugin tuple alone, printable by tooling, without executing any tap') is unimplemented.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 180,
+          "snippet": "/** BEH-EA-091/096: stable ordering by declared `order`, then registration sequence — see this module's own header comment for what full BEH-EA-111 ordering still needs. */\nconst sortEntries = <F>(entries: ReadonlyArray<Registration<F>>): ReadonlyArray<F> =>\n  entries\n    .toSorted((a, b) => a.order - b.order || a.sequence - b.sequence)\n    .map((entry) => entry.handler);",
+          "note": "Two of three spec'd keys; no plugin identity, no dependency order."
+        },
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 127,
+          "snippet": "export interface VetoShape<Input> {\n  readonly kind: \"veto\";\n  readonly run: (input: Input) => Effect.Effect<Input, HookAbort>;\n}",
+          "note": "No introspection surface (BEH-EA-096); Auth.ts buildManifest (:370-377) lists only id/apiVersion/tables/dependsOn."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "hook-registry-per-composition",
+      "fix": {
+        "summary": "Make taps statically declarable on a plugin (the BEH-EA-024 illustration's `AuthPlugin.layer(Self, { make, taps: [...] })` shape) so Auth.make can print the resolved per-point order into its manifest without running anything; also expose the frozen order at runtime.",
+        "steps": [
+          "packages/core/src/AuthPlugin.ts: add an optional `taps` option to `AuthPlugin.layer(...)` accepting tap declarations; each declaration is a value `{ point: Key<Id>, order, install: (owner) => Layer }` produced by a new `Point.declareTap(handlerOrEffect, { order })` (an Effect-producing variant covers taps that resolve services at build, like the erasure taps). AuthPlugin.layer installs them with `owner = Self` and records `{ point, order }` metadata on the plugin class.",
+          "packages/core/src/Auth.ts: `buildManifest` gains `hooks: Record<pointKey, ReadonlyArray<{ plugin, order }>>`, sorted with the same comparator JH-003 introduces (share one exported `compareTaps` function so manifest order and runtime order cannot drift).",
+          "HookPoint shapes: add `resolved: Effect<ReadonlyArray<{ owner: string; order: number }>>` (reads the frozen/sorted registrations without executing taps).",
+          "packages/cli: if a `plugin list` command exists, add `--hooks` printing `manifest.hooks`; otherwise leave a TODO in the CLI slice (cross-slice)."
+        ],
+        "files": [
+          "packages/core/src/AuthPlugin.ts",
+          "packages/core/src/Auth.ts",
+          "packages/core/src/HookPoint.ts",
+          "packages/core/test/Auth.test.ts",
+          "packages/core/test/HookPoint.test.ts"
+        ],
+        "tests": [
+          "packages/core/test/Auth.test.ts — `it(\"manifest.hooks lists every declared tap per point in resolved order\")` with two plugins tapping one point.",
+          "packages/core/test/HookPoint.test.ts — `resolved` returns the same order the chain executes in, without invoking any handler (handler that dies must not be called)."
+        ],
+        "acceptance": [
+          "Auth.make(...).manifest.hooks prints resolved order per point without building any Layer.",
+          "Runtime `resolved` and manifest order agree (shared comparator)."
+        ],
+        "spec_refs": [
+          "BEH-EA-096",
+          "BEH-EA-024",
+          "BEH-EA-091"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "JH-003"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "GC-009",
+      "level": "info",
+      "category": "architecture",
+      "package": "core",
+      "title": "Hook point input schemas are phantom witnesses, never decoded",
+      "issue_file": ".issues/info/GC-009-giulio-canti.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Same observation (schemas are phantom). GC-009's own trigger condition — 'if hook points ever guard an externally-originated operation, decode at run using the already-passed schema' — is now met (BeforeSignUp guards HTTP sign-up), so it resolves via JH-004's plan.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 197,
+          "snippet": "    void input; // type carrier only — see this module's own header comment",
+          "note": "Schema accepted, never used (same at :253, :313-314)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "JH-004",
+      "duplicates": [],
+      "workstream": "hook-run-semantics",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ELC-001",
+      "level": "medium",
+      "category": "architecture",
+      "package": "core",
+      "title": "HookPoint tap registry is module-scoped mutable state, contradicting the codebase's own per-composition service convention",
+      "issue_file": ".issues/medium/ELC-001-effect-layer-context-architect.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "Every factory still closes over a module-lifetime `entries`/`frozen` pair; the first `run()` anywhere freezes the point process-wide. This has already bitten production code: the GDPR erasure taps in Organization.ts/Passkey.ts had to be shipped as opt-in side exports instead of being part of each plugin's layer. Additionally discovered while validating: `tap()` returns `Layer.Layer<never>` with an empty RIn, so BEH-EA-094/INV-EA-005 ('tapping a point nobody provides refuses to compile') is not enforced either — traceability.md:112 claims the compiler enforces it.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 200,
+          "snippet": "    const entries: Array<Registration<VetoTap<Input>>> = [];\n    let frozen: ReadonlyArray<VetoTap<Input>> | undefined;\n    const resolveTaps = (): ReadonlyArray<VetoTap<Input>> => {\n      if (frozen === undefined) frozen = sortEntries(entries);\n      return frozen;\n    };\n    const tap = (handler: VetoTap<Input>, options?: TapOptions): Layer.Layer<never> =>\n      Layer.effectDiscard(",
+          "note": "Registry lives in the factory closure (module lifetime). tap() returns Layer<never> with NO RIn — so tapping a point nobody provides compiles (BEH-EA-094/INV-EA-005 also violated)."
+        },
+        {
+          "path": "packages/organization/src/Organization.ts",
+          "line": 2385,
+          "snippet": " * **A separate export, not merged into `Organization.layer` itself** —\n * see `@awthaq/passkey`'s own `beforeUserDeleteErasure` for why:\n * `Hooks.BeforeUserDelete`'s tap registry is a module-level singleton\n * that freezes permanently after its first `run()` (BEH-EA-024,\n * empirically confirmed per CSG-002's own resolution comment), so\n * merging a tap into a `Layer` rebuilt repeatedly across a test suite\n * would die with `HookPointFrozen` once the point has run anywhere in",
+          "note": "Real production consequence at HEAD: GDPR erasure taps (Organization, Passkey.ts:1017-1025) had to become opt-in side exports because of the module singleton."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "GC-006"
+      ],
+      "workstream": "hook-registry-per-composition",
+      "fix": {
+        "summary": "Move each point's tap registry out of the module closure into the point's own per-composition service: the point's `.layer` owns a `Ref` of registrations; `tap()` returns a Layer that *requires* the point (RIn = Self) and registers through it. Freezing becomes per-built-layer.",
+        "steps": [
+          "packages/core/src/HookPoint.ts: extend VetoShape/ObserveShape/DivertShape with an internal `register: (reg: Registration<Tap>) => Effect<void, never>` (keep `run`/`kind`). Keep per-kind factories so each shape stays precisely generic in Input/Diverted (no erased registry, no type assertions).",
+          "Change each factory's `layer` from `Layer.succeed(serviceKey, ...)` to `Layer.effect(serviceKey, Effect.gen(...))` that allocates `const state = yield* Ref.make<{ entries: ReadonlyArray<Registration<Tap>>; frozen: Option<ReadonlyArray<Tap>> }>(...)` and builds `register`/`run` over it (freeze on first `run` via `Ref.modify`).",
+          "Change `tap(handler, options)` to `Layer.effectDiscard(Effect.flatMap(serviceKey, (point) => point.register({ handler, order, owner })))` — its RIn becomes `Self`, restoring BEH-EA-094/BEH-EA-024 compile-time enforcement. Registering after the point froze still dies with `HookPointFrozen`, but only within that one built composition.",
+          "Delete the module-level `let nextSequence = 0` (HookPoint.ts:178); sequence = index within the point's own `entries` (fixes GC-006).",
+          "Callers: `Organization.beforeUserDeleteErasure`, `Passkey.beforeUserDeleteErasure` and `OrganizationHooks.ts` taps now carry `Hooks.BeforeUserDelete`/their point in RIn — satisfied by `Hooks.HooksLive`/`OrganizationHooksLive` exactly as today. Fold the erasure taps back into `Organization.layer`/`Passkey.layer` (the reason they were split out disappears) so erasure is no longer opt-in.",
+          "Update comments that describe the singleton: HookPoint.ts header, Hooks.ts:90-92, Organization.ts:2385-2394, Passkey.ts:1017-1025, RateLimits.ts:18-21 (which already, wrongly, claims hook registries are scoped).",
+          "Update spec/traceability.md:112 (INV-EA-005) to point at a real type-level test instead of 'no test file'."
+        ],
+        "files": [
+          "packages/core/src/HookPoint.ts",
+          "packages/core/src/Hooks.ts",
+          "packages/core/src/RateLimits.ts",
+          "packages/organization/src/Organization.ts",
+          "packages/organization/src/OrganizationHooks.ts",
+          "packages/passkey/src/Passkey.ts",
+          "packages/core/test/HookPoint.test.ts",
+          "spec/traceability.md"
+        ],
+        "tests": [
+          "packages/core/test/HookPoint.test.ts — new `it.effect(\"two independently built compositions do not share taps or freeze state\")`: build `Point.layer` + tap A in composition 1, run it; build `Point.layer` + tap B in composition 2 (same module load) → composition 2 must see only B and must NOT die with HookPointFrozen. Fails today.",
+          "packages/core/test/HookPoint.types.test.ts (or a `// @ts-expect-error` block in HookPoint.test.ts) — `Layer.launch(SomePoint.tap(h))` without `SomePoint.layer` must be a type error (BEH-EA-094/INV-EA-005). Fails today (tap is Layer<never>).",
+          "Merge OrganizationErasure.test.ts / PasskeyErasure.test.ts expectations into the plugin-layer compositions once taps move into `Organization.layer`/`Passkey.layer`."
+        ],
+        "acceptance": [
+          "No module-level mutable state remains in HookPoint.ts (`grep -n '^let ' packages/core/src/HookPoint.ts` is empty).",
+          "Two compositions in one process each see only their own taps; freezing one never affects the other.",
+          "A tap Layer's RIn includes its point; omitting the point's layer fails `pnpm run typecheck`.",
+          "Erasure taps are part of Organization.layer / Passkey.layer; the side exports are removed or deprecated.",
+          "pnpm check green."
+        ],
+        "spec_refs": [
+          "BEH-EA-024",
+          "BEH-EA-094",
+          "INV-EA-005",
+          "BEH-EA-091"
+        ],
+        "effort": "L"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ECF-006",
+      "level": "low",
+      "category": "correctness",
+      "package": "core",
+      "title": "HookPoint.observe runs taps with concurrency \"unbounded\", making declared tap order advisory only",
+      "issue_file": ".issues/low/ECF-006-effect-concurrency-fiber-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Same unbounded observe fan-out as JH-002.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 278,
+          "snippet": "    const run: ObserveShape<Input>[\"run\"] = (value) =>\n      Effect.forEach(\n        resolveTaps(),\n        (handler) =>\n          handler(value).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.hook.observer.error\", { hook: key, cause }),\n            ),\n          ),\n        { concurrency: \"unbounded\", discard: true },",
+          "note": "Sorted order is discarded by unbounded concurrent execution; failures only logged (no metric); full Cause logged."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "JH-002",
+      "duplicates": [],
+      "workstream": "hook-run-semantics",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "JH-002",
+      "level": "medium",
+      "category": "correctness",
+      "package": "core",
+      "title": "observe taps are sorted by declared order then run unbounded-concurrent",
+      "issue_file": ".issues/medium/JH-002-jared-hanson.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "observe `run` still fans out with `concurrency: \"unbounded\"`, so the sorted order is cosmetic. Now live on the sign-in hot path (AfterSignIn in password/oauth/passkey). Observer failures are only logged, never counted.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 278,
+          "snippet": "    const run: ObserveShape<Input>[\"run\"] = (value) =>\n      Effect.forEach(\n        resolveTaps(),\n        (handler) =>\n          handler(value).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.hook.observer.error\", { hook: key, cause }),\n            ),\n          ),\n        { concurrency: \"unbounded\", discard: true },",
+          "note": "Sorted order is discarded by unbounded concurrent execution; failures only logged (no metric); full Cause logged."
+        },
+        {
+          "path": "packages/password/src/Password.ts",
+          "line": 877,
+          "snippet": "        yield* afterSignIn.run({ userId: user.id, strategy: \"password\" });",
+          "note": "AfterSignIn observe taps now run inline on the sign-in path (also OAuth.ts:859, Passkey.ts:838), so the unordered/unbounded fan-out is live."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "ECF-006",
+        "ERS-005",
+        "PERS-004"
+      ],
+      "workstream": "hook-run-semantics",
+      "fix": {
+        "summary": "Run observe taps sequentially in resolved order (like veto/divert), and add an observer-failure metric next to the existing log line.",
+        "steps": [
+          "packages/core/src/HookPoint.ts observe `run`: drop `concurrency: \"unbounded\"` (keep `discard: true`) so taps execute one after another in resolved order; per-tap `catchCause` stays, so one failure never stops later taps (BEH-EA-092).",
+          "Add `Metric.counter(\"awthaq_hook_observer_error_total\")` tagged `{ hook: key }` incremented in the catchCause branch (define it in the Observability module MW-001's plan introduces, or locally in HookPoint.ts if that lands later).",
+          "Document on `ObserveTap`/`TapOptions.order` that observe taps run inline and sequentially, so a slow tap adds latency to the observed operation; recommend heavy work be forked or moved to an AuthEvents subscriber."
+        ],
+        "files": [
+          "packages/core/src/HookPoint.ts",
+          "packages/core/test/HookPoint.test.ts",
+          "spec/behaviors/12-hooks.md"
+        ],
+        "tests": [
+          "packages/core/test/HookPoint.test.ts — `it.effect(\"observe taps run sequentially in declared order\")`: tap order:1 sleeps (TestClock) then appends \"a\"; tap order:2 appends \"b\" immediately; after `TestClock.adjust`, the log is [\"a\",\"b\"]. Fails today ([\"b\",\"a\"]).",
+          "Same file — failing observer increments `awthaq_hook_observer_error_total` (read via `Metric.value`)."
+        ],
+        "acceptance": [
+          "Observe taps execute in resolved order; a later tap starts only after the earlier one completes.",
+          "Observer failures are countable via a metric."
+        ],
+        "spec_refs": [
+          "BEH-EA-092",
+          "BEH-EA-023",
+          "BEH-EA-091"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ERS-005",
+      "level": "low",
+      "category": "correctness",
+      "package": "core",
+      "title": "Hook-point taps run with unbounded concurrency, making tap order cosmetic",
+      "issue_file": ".issues/low/ERS-005-effect-runtime-scheduler-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Same unbounded observe fan-out as JH-002; its 'bounded-concurrency knob' suggestion is subsumed by sequential execution.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 278,
+          "snippet": "    const run: ObserveShape<Input>[\"run\"] = (value) =>\n      Effect.forEach(\n        resolveTaps(),\n        (handler) =>\n          handler(value).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.hook.observer.error\", { hook: key, cause }),\n            ),\n          ),\n        { concurrency: \"unbounded\", discard: true },",
+          "note": "Sorted order is discarded by unbounded concurrent execution; failures only logged (no metric); full Cause logged."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "JH-002",
+      "duplicates": [],
+      "workstream": "hook-run-semantics",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "PERS-004",
+      "level": "low",
+      "category": "correctness",
+      "package": "core",
+      "title": "Observe taps run unbounded-concurrency with swallowed failures — observer side effects are unordered and silent",
+      "issue_file": ".issues/low/PERS-004-policy-engine-rego-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Same unbounded observe fan-out as JH-002; its extra ask (an observer-error metric) is folded into JH-002's plan.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 278,
+          "snippet": "    const run: ObserveShape<Input>[\"run\"] = (value) =>\n      Effect.forEach(\n        resolveTaps(),\n        (handler) =>\n          handler(value).pipe(\n            Effect.catchCause((cause) =>\n              Effect.logError(\"auth.hook.observer.error\", { hook: key, cause }),\n            ),\n          ),\n        { concurrency: \"unbounded\", discard: true },",
+          "note": "Sorted order is discarded by unbounded concurrent execution; failures only logged (no metric); full Cause logged."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "JH-002",
+      "duplicates": [],
+      "workstream": "hook-run-semantics",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "JH-004",
+      "level": "medium",
+      "category": "security",
+      "package": "core",
+      "title": "Hook input schemas are required but never decoded — no runtime check at the tap boundary",
+      "issue_file": ".issues/medium/JH-004-jared-hanson.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "Point schemas are still discarded. Since commit 3e298c8 a veto tap's amended value flows straight into `users.create` (Password.ts:730/746) — the 'never external data' premise in the header no longer holds for the sign-up path (the amended value originates from third-party tap code guarding an externally-originated request).",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 29,
+          "snippet": "// `input` (and `divert`'s `diverted`) are accepted as `Schema.Schema`\n// values purely as type carriers, matching BEH-EA-089's own\n// `{ input: SignUpInput }` — never decoded here. A hook point's input is\n// always an already-typed value handed down from application/plugin code\n// (the operation the point guards), never unknown external data crossing a\n// boundary, so there is nothing for this module itself to decode.",
+          "note": ""
+        },
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 197,
+          "snippet": "    void input; // type carrier only — see this module's own header comment",
+          "note": "Schema accepted, never used (same at :253, :313-314)."
+        },
+        {
+          "path": "packages/password/src/Password.ts",
+          "line": 730,
+          "snippet": "        const vetoedSignUp = yield* vetoBeforeSignUp(\n          beforeSignUp.run({ email: input.email, name }),\n        );",
+          "note": "A tap's amended value now flows straight into users.create({ email: vetoedSignUp.email, ... }) at :746 with no check against the point's own schema (same pattern Organization.ts:1401-1407)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "GC-009"
+      ],
+      "workstream": "hook-run-semantics",
+      "fix": {
+        "summary": "Validate every veto tap's returned value (and every divert tap's diverted value) against the point's own schema inside `run`, using `Schema.is` (a type guard over the already-passed schema — no decoding services, no type assertions).",
+        "steps": [
+          "packages/core/src/HookPoint.ts veto: keep `input` (remove `void input`); `const isInput = Schema.is(input)`; in the veto loop, after `current = yield* handler(current)`, if `!isInput(current)` → `Effect.die(new HookTapOutputInvalid({ point: key, owner }))` (new `Data.TaggedError`, names the offending tap's owner once JH-003 lands, else its index).",
+          "divert: `const isDiverted = Schema.is(diverted)`; validate `outcome.value` the same way before `divertTo`.",
+          "observe: no output to validate — leave as is.",
+          "Rewrite the header paragraph at HookPoint.ts:29-34 to state that tap outputs are validated against the point schema.",
+          "Optionally tighten Hooks.ts `SignUpInput.email` to an email-shaped schema so the check is meaningful for BeforeSignUp."
+        ],
+        "files": [
+          "packages/core/src/HookPoint.ts",
+          "packages/core/src/Hooks.ts",
+          "packages/core/test/HookPoint.test.ts"
+        ],
+        "tests": [
+          "packages/core/test/HookPoint.test.ts — `it.effect(\"a veto tap returning a value that fails the point schema is a defect naming the point\")`: point with `Schema.Struct({ n: Schema.Number })`, tap built from an untyped JS function object returning `{ n: \"x\" }` via a `Schema.decodeUnknownSync`-free path (e.g. a handler typed through `unknown` narrowing in the test, not `as`) → `Effect.exit` is a Die with HookTapOutputInvalid. Fails today (value passes through).",
+          "Same for divert."
+        ],
+        "acceptance": [
+          "No `void input` / `void diverted` remain.",
+          "An invalid tap output never reaches the guarded operation."
+        ],
+        "spec_refs": [
+          "BEH-EA-089",
+          "BEH-EA-090",
+          "BEH-EA-091",
+          "BEH-EA-093"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "JH-003",
+      "level": "medium",
+      "category": "api",
+      "package": "core",
+      "title": "Tap ordering implements 2 of 3 spec keys via a module-global counter",
+      "issue_file": ".issues/medium/JH-003-jared-hanson.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "Tap order is still `order` then a process-global registration sequence; plugin identity is never captured, so neither dependency order nor plugin-id tiebreak can be applied. Equal-order veto taps from different plugins run in Layer-build order.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 180,
+          "snippet": "/** BEH-EA-091/096: stable ordering by declared `order`, then registration sequence — see this module's own header comment for what full BEH-EA-111 ordering still needs. */\nconst sortEntries = <F>(entries: ReadonlyArray<Registration<F>>): ReadonlyArray<F> =>\n  entries\n    .toSorted((a, b) => a.order - b.order || a.sequence - b.sequence)\n    .map((entry) => entry.handler);",
+          "note": "Two of three spec'd keys; no plugin identity, no dependency order."
+        },
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 44,
+          "snippet": "// This module implements the piece that doesn't depend on it: declared\n// `order` (a plain number, default 0), then registration sequence, frozen\n// the first time a point runs (BEH-EA-024's \"must freeze at first read\").\n// Threading dependency order through is a follow-up once a plugin's own\n// identity is available at `.tap()`'s call site.",
+          "note": "Still documented as a follow-up at HEAD."
+        },
+        {
+          "path": "spec/behaviors/12-hooks.md",
+          "line": 60,
+          "snippet": "REQUIREMENT: A tap on a `kind: \"veto\"` hook point MUST be able to return a\n             transformed value that subsequent taps and the operation\n             itself observe in place of the original input; when more than\n             one tap is registered on the same point, they MUST run in\n             dependency order, then declared `order`, then plugin id.",
+          "note": ""
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "TS-006",
+        "MW-004"
+      ],
+      "workstream": "hook-registry-per-composition",
+      "fix": {
+        "summary": "Capture tap ownership and sort by the spec'd three keys (dependency order, declared order, plugin id) at freeze time, using the composition's topological order that Auth.make already computes.",
+        "steps": [
+          "packages/core/src/HookPoint.ts: `TapOptions` gains `owner?: { readonly id: string }` (the same narrow `PluginOwner`-style shape Slots.ts uses; do not require the full AuthPlugin.Any to avoid the static-initializer circularity documented in OAuth.ts:529-535). Registrations store `ownerId` (application-level taps default to a reserved id, e.g. `\"app\"`, sorted after every plugin).",
+          "packages/core/src/Auth.ts: expose the resolved plugin order to the runtime — add a `PluginOrder` `Context.Reference<ReadonlyArray<string>>` (default `[]`) in core and have `composeLayer` provide it (`Layer.succeed(PluginOrder, order.map((p) => p.id))`) into the composed layer.",
+          "At freeze time (first `run`) each point reads `PluginOrder` and sorts by (index of ownerId in PluginOrder, unknown/app last) → `order` → ownerId (lexicographic) → within-point sequence as final stable tiebreak.",
+          "Pass `owner` at every existing in-repo tap site: OrganizationHooks consumers, Organization/Passkey erasure taps, tests.",
+          "Rewrite HookPoint.ts:36-48 header to describe the implemented rule; remove 'follow-up'."
+        ],
+        "files": [
+          "packages/core/src/HookPoint.ts",
+          "packages/core/src/Auth.ts",
+          "packages/organization/src/Organization.ts",
+          "packages/passkey/src/Passkey.ts",
+          "packages/core/test/HookPoint.test.ts",
+          "features/features/04-cross-cutting/12-hooks.feature"
+        ],
+        "tests": [
+          "packages/core/test/HookPoint.test.ts — `it.effect(\"equal-order taps run in dependency order, then plugin id, regardless of registration order\")`: plugin `b` depends on `a`; register b's tap before a's with equal order; expect a's amendment observed first. Fails today (registration order wins).",
+          "Same file — `it.effect(\"equal dependency depth and order → plugin id breaks the tie\")`.",
+          "If features/features/04-cross-cutting/12-hooks.feature has a BEH-EA-091 ordering scenario, wire its step definitions to the new rule."
+        ],
+        "acceptance": [
+          "Resolved tap order is a pure function of (installed plugin tuple, declared orders, owner ids) — independent of Layer build/registration order.",
+          "BEH-EA-091's normalize-before-allow-list example holds across plugins without manual `order` tuning."
+        ],
+        "spec_refs": [
+          "BEH-EA-091",
+          "BEH-EA-022",
+          "BEH-EA-024",
+          "BEH-EA-111"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "ELC-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "MW-004",
+      "level": "medium",
+      "category": "architecture",
+      "package": "core",
+      "title": "Cross-plugin tap ordering is registration-sequence dependent; spec's dependency-order rule unimplemented",
+      "issue_file": ".issues/medium/MW-004-matias-woloski.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Same missing dependency-order key as JH-003. Its secondary note (observe taps run unbounded-concurrent) is covered by JH-002.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 44,
+          "snippet": "// This module implements the piece that doesn't depend on it: declared\n// `order` (a plain number, default 0), then registration sequence, frozen\n// the first time a point runs (BEH-EA-024's \"must freeze at first read\").\n// Threading dependency order through is a follow-up once a plugin's own\n// identity is available at `.tap()`'s call site.",
+          "note": "Still documented as a follow-up at HEAD."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "JH-003",
+      "duplicates": [],
+      "workstream": "hook-registry-per-composition",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "BE-005",
+      "level": "medium",
+      "category": "architecture",
+      "package": "core",
+      "title": "Core lifecycle hook points are declared but never fired by signUp/signIn",
+      "issue_file": ".issues/medium/BE-005-bereket-engida.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "rationale": "BeforeSignUp/AfterSignIn are declared (Hooks.ts) and fired by password signUp/signIn, oauth callback and passkey authenticate; the AuthCore prerequisite was dropped by wayfinder ticket 03, which names BE-005 as closed by this wiring.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 50,
+          "snippet": "// AOMS-006/BCR-004/CSG-002/THS-002 (.issues/high) — wayfinder ticket 03:\n// the concrete hook points this module's mechanism supports are now\n// declared and wired into real flows, in `./Hooks.ts`\n// (`BeforeSignUp`/`AfterSignIn`/`BeforeSessionIssue`/`BeforeUserDelete`),",
+          "note": "The header the audit quoted ('not yet wiring any concrete hook point') has been replaced."
+        },
+        {
+          "path": "packages/password/src/Password.ts",
+          "line": 550,
+          "snippet": "      const beforeSignUp = yield* Hooks.BeforeSignUp;\n      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;\n      const afterSignIn = yield* Hooks.AfterSignIn;",
+          "note": "Consumed in real flows: Password signUp (:730) / signIn (:862, :877); OAuth.ts:517-518/846/859; Passkey.ts:555-556/825/838; Users.ts:244/351 (BeforeUserDelete)."
+        }
+      ],
+      "fixed_by_commit": "3e298c8",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": null,
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "SFS-004",
+      "level": "medium",
+      "category": "architecture",
+      "package": "core",
+      "title": "Hook-point mechanism not wired into core signUp/signIn — no JIT-provisioning seam",
+      "issue_file": ".issues/medium/SFS-004-saml-federation-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "rationale": "Core signUp/signIn now run hook points (BeforeSignUp veto, BeforeSessionIssue divert, AfterSignIn observe) — a SAML plugin has the JIT/divert seams. Its 'dependency-ordered tap resolution included' aside is tracked by JH-003.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 50,
+          "snippet": "// AOMS-006/BCR-004/CSG-002/THS-002 (.issues/high) — wayfinder ticket 03:\n// the concrete hook points this module's mechanism supports are now\n// declared and wired into real flows, in `./Hooks.ts`\n// (`BeforeSignUp`/`AfterSignIn`/`BeforeSessionIssue`/`BeforeUserDelete`),",
+          "note": "The header the audit quoted ('not yet wiring any concrete hook point') has been replaced."
+        },
+        {
+          "path": "packages/core/src/Hooks.ts",
+          "line": 69,
+          "snippet": "export class BeforeSessionIssue extends HookPoint.divert<BeforeSessionIssue>()(\n  \"auth.session.beforeIssue\",\n  SessionIssueContext,\n  SessionIssueDiverted,\n) {}",
+          "note": "A production divert point, consulted by password/oauth/passkey sign-in."
+        }
+      ],
+      "fixed_by_commit": "3e298c8",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": null,
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "JH-010",
+      "level": "low",
+      "category": "api",
+      "package": "core",
+      "title": "divert kind has zero production usage — the spec's step-up flow cannot be built today",
+      "issue_file": ".issues/low/JH-010-jared-hanson.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "rationale": "A production divert point (BeforeSessionIssue → TwoFactorRequired) now exists and is consulted by password/oauth/passkey sign-in, so the BEH-EA-093 step-up flow is buildable by installing a tap. The empty two-factor package is wayfinder ticket 05's work, not this finding's.",
+      "evidence": [
+        {
+          "path": "packages/core/src/Hooks.ts",
+          "line": 69,
+          "snippet": "export class BeforeSessionIssue extends HookPoint.divert<BeforeSessionIssue>()(\n  \"auth.session.beforeIssue\",\n  SessionIssueContext,\n  SessionIssueDiverted,\n) {}",
+          "note": "A production divert point, consulted by password/oauth/passkey sign-in."
+        },
+        {
+          "path": "packages/two-factor/src/index.ts",
+          "line": 10,
+          "snippet": "export {};",
+          "note": "The first real divert tap (TOTP plugin) is still a placeholder — tracked by wayfinder ticket 05 (MFA subsystem), not by this finding."
+        }
+      ],
+      "fixed_by_commit": "3e298c8",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": null,
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "SCP-008",
+      "level": "low",
+      "category": "architecture",
+      "package": "core",
+      "title": "HookPoint machinery shipped but no concrete point is wired into real user flows for SCIM integration",
+      "issue_file": ".issues/low/SCP-008-scim-provisioning-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "medium",
+      "rationale": "Fixed: core points now exist and are wired (3e298c8), so a plugin has something to tap. Still open: no creation-path-agnostic user-creation veto (BeforeSignUp only guards password sign-up; OAuth JIT creation at OAuth.ts:832 bypasses it), and `AfterUserDeactivated` cannot exist until a deactivation state does (wayfinder ticket 09, unimplemented at HEAD — Users.ts has no active/deactivated field). SCIM itself is Phase-3 scope (ticket 08).",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 50,
+          "snippet": "// AOMS-006/BCR-004/CSG-002/THS-002 (.issues/high) — wayfinder ticket 03:\n// the concrete hook points this module's mechanism supports are now\n// declared and wired into real flows, in `./Hooks.ts`\n// (`BeforeSignUp`/`AfterSignIn`/`BeforeSessionIssue`/`BeforeUserDelete`),",
+          "note": "The header the audit quoted ('not yet wiring any concrete hook point') has been replaced."
+        },
+        {
+          "path": "packages/oauth/src/OAuth.ts",
+          "line": 832,
+          "snippet": "              yield* events.publish({ _tag: \"auth.user.created\", userId: created.id });\n              return created.id;",
+          "note": "OAuth first-login user creation consults no BeforeSignUp veto (grep: OAuth.ts only reads BeforeSessionIssue/AfterSignIn)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "core-hook-point-coverage",
+      "fix": {
+        "summary": "Close the non-SCIM part now via NAM-002's plan (BeforeSignUp on every creation path); add deactivation hook/event points in the same change that implements ticket 09's deactivation state.",
+        "steps": [
+          "Covered by NAM-002 step 3 (BeforeSignUp consulted on OAuth JIT creation) — no separate code.",
+          "When ticket 09 (`09-userrecord-model-extension.md`) lands: declare `BeforeUserDeactivate` (veto) and `AfterUserDeactivated` (observe) in Hooks.ts next to BeforeUserDelete, and publish the `auth.user.deactivated` event from SCP-006's plan in the same flow."
+        ],
+        "files": [
+          "packages/core/src/Hooks.ts",
+          "packages/core/src/Users.ts"
+        ],
+        "tests": [
+          "Covered by NAM-002's OAuthHooksSignIn BeforeSignUp test; deactivation hook tests belong to the ticket-09 implementation."
+        ],
+        "acceptance": [
+          "A SCIM (or any) plugin can veto any user creation and observe deactivation via taps, without wrapping services."
+        ],
+        "spec_refs": [
+          "BEH-EA-090",
+          "BEH-EA-095"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "NAM-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "TS-007",
+      "level": "low",
+      "category": "architecture",
+      "package": "core",
+      "title": "External-policy PEP seam (HookPoint) ships as mechanism with zero real flows",
+      "issue_file": ".issues/low/TS-007-torin-sandall.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "rationale": "Fixed: BeforeSignUp is a veto wired into the core signUp flow (Password.ts:730). Still open: no in-repo example composes Auth + qadi Path A + a RequirePermission endpoint end-to-end (examples/ has only memory-server with no qadi wiring).",
+      "evidence": [
+        {
+          "path": "packages/password/src/Password.ts",
+          "line": 550,
+          "snippet": "      const beforeSignUp = yield* Hooks.BeforeSignUp;\n      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;\n      const afterSignIn = yield* Hooks.AfterSignIn;",
+          "note": "Consumed in real flows: Password signUp (:730) / signIn (:862, :877); OAuth.ts:517-518/846/859; Passkey.ts:555-556/825/838; Users.ts:244/351 (BeforeUserDelete)."
+        },
+        {
+          "path": "examples/memory-server/index.ts",
+          "line": 94,
+          "snippet": "const AppLayer = TestAuth.layer(",
+          "note": "`examples/` contains only memory-server; grep for RequirePermission/AuthorizedSubject/SubjectExtractor under examples/ finds nothing."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "core-hook-point-coverage",
+      "fix": {
+        "summary": "Extend examples/memory-server (or add examples/qadi-path-a) to compose Auth + AuthorizedSubject/SubjectExtractor (Path A) + one RequirePermission-protected endpoint + one BeforeSignUp domain-allow-list tap, and smoke-test it.",
+        "steps": [
+          "Add an organization- or roles-backed permission check endpoint using @awthaq/qadi's RequirePermission to the example composition.",
+          "Add a BeforeSignUp tap (email-domain allow-list) in the example to exercise the hook PEP seam.",
+          "Add a smoke test (e.g. examples/memory-server/test/smoke.test.ts or a packages/test integration test) that boots the composed layer via HttpRouter.toWebHandler and asserts 403 without permission / 200 with it, and HookAborted for a disallowed domain."
+        ],
+        "files": [
+          "examples/memory-server/index.ts",
+          "examples/memory-server/test/smoke.test.ts"
+        ],
+        "tests": [
+          "examples smoke test: 'Path A denies without permission, allows with it; BeforeSignUp tap rejects a disallowed domain'."
+        ],
+        "acceptance": [
+          "The example typechecks and its smoke test passes in `pnpm run test`."
+        ],
+        "spec_refs": [
+          "BEH-EA-090",
+          "BEH-EA-145",
+          "BEH-EA-151"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "NAM-002"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "PERS-008",
+      "level": "info",
+      "category": "architecture",
+      "package": "core",
+      "title": "Core signUp/signIn flows expose no hook points — no policy seam on the authentication hot path",
+      "issue_file": ".issues/info/PERS-008-policy-engine-rego-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "rationale": "BeforeSignUp/AfterSignIn/BeforeSessionIssue are wired into the auth hot path (commit 3e298c8). Remaining sign-in *veto* gap is tracked under NAM-002.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 50,
+          "snippet": "// AOMS-006/BCR-004/CSG-002/THS-002 (.issues/high) — wayfinder ticket 03:\n// the concrete hook points this module's mechanism supports are now\n// declared and wired into real flows, in `./Hooks.ts`\n// (`BeforeSignUp`/`AfterSignIn`/`BeforeSessionIssue`/`BeforeUserDelete`),",
+          "note": "The header the audit quoted ('not yet wiring any concrete hook point') has been replaced."
+        },
+        {
+          "path": "packages/password/src/Password.ts",
+          "line": 550,
+          "snippet": "      const beforeSignUp = yield* Hooks.BeforeSignUp;\n      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;\n      const afterSignIn = yield* Hooks.AfterSignIn;",
+          "note": "Consumed in real flows: Password signUp (:730) / signIn (:862, :877); OAuth.ts:517-518/846/859; Passkey.ts:555-556/825/838; Users.ts:244/351 (BeforeUserDelete)."
+        }
+      ],
+      "fixed_by_commit": "3e298c8",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": null,
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "NAM-002",
+      "level": "high",
+      "category": "architecture",
+      "package": "core",
+      "title": "Auth.js signIn-callback logic has no wired landing spot: hook points are mechanism-only",
+      "issue_file": ".issues/high/NAM-002-nextauth-authjs-migration-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "rationale": "Fixed part (commit 3e298c8): hook points are no longer mechanism-only — BeforeSignUp/AfterSignIn/BeforeSessionIssue/BeforeUserDelete are declared in Hooks.ts and consumed by password/oauth/passkey/users. Still open: there is no *veto* point on sign-in (BeforeSessionIssue is a divert whose only outcome is TwoFactorRequired — it cannot deny), so an Auth.js `signIn` callback returning `false` (domain allow-list, banned user) still has no landing spot; OAuth first-login user creation (OAuth.ts:832) bypasses BeforeSignUp; the spec'd BeforeSignIn/AfterSignUp (spec/overview.md:107) are not declared; no migration note maps Auth.js callback returns to HookAbort codes.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 50,
+          "snippet": "// AOMS-006/BCR-004/CSG-002/THS-002 (.issues/high) — wayfinder ticket 03:\n// the concrete hook points this module's mechanism supports are now\n// declared and wired into real flows, in `./Hooks.ts`\n// (`BeforeSignUp`/`AfterSignIn`/`BeforeSessionIssue`/`BeforeUserDelete`),",
+          "note": "The header the audit quoted ('not yet wiring any concrete hook point') has been replaced."
+        },
+        {
+          "path": "packages/password/src/Password.ts",
+          "line": 550,
+          "snippet": "      const beforeSignUp = yield* Hooks.BeforeSignUp;\n      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;\n      const afterSignIn = yield* Hooks.AfterSignIn;",
+          "note": "Consumed in real flows: Password signUp (:730) / signIn (:862, :877); OAuth.ts:517-518/846/859; Passkey.ts:555-556/825/838; Users.ts:244/351 (BeforeUserDelete)."
+        },
+        {
+          "path": "spec/overview.md",
+          "line": 107,
+          "snippet": "| `BeforeSignUp`, `BeforeSignIn`, `BeforeSessionIssue`, `AfterSignUp`, `AfterSignIn`, `BeforeUserDelete` | hook points (`HookPoint.Service`) | `Hooks.ts` |",
+          "note": "Spec'd BeforeSignIn (veto) and AfterSignUp (observe) are still not declared in Hooks.ts."
+        },
+        {
+          "path": "packages/oauth/src/OAuth.ts",
+          "line": 832,
+          "snippet": "              yield* events.publish({ _tag: \"auth.user.created\", userId: created.id });\n              return created.id;",
+          "note": "OAuth first-login user creation consults no BeforeSignUp veto (grep: OAuth.ts only reads BeforeSessionIssue/AfterSignIn)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "core-hook-point-coverage",
+      "fix": {
+        "summary": "Complete the core hook-point set the spec lists: add a `BeforeSignIn` veto consulted by every sign-in-completing flow, consult `BeforeSignUp` on OAuth (and any other) first-login user creation, add `AfterSignUp`, and document the Auth.js mapping.",
+        "steps": [
+          "packages/core/src/Hooks.ts: declare `BeforeSignIn = HookPoint.veto(\"auth.user.signIn\", Schema.Struct({ userId: Schema.String, email: Schema.String, strategy: Schema.String }))` and `AfterSignUp = HookPoint.observe(\"auth.user.signedUp\", Schema.Struct({ userId, email, strategy }))`; add both to `HooksLive`.",
+          "packages/password/src/Password.ts signIn: after credential + emailVerified checks and before `beforeSessionIssue.run` (:862), run `BeforeSignIn` and translate `HookAbort` → `HookPoint.HookAborted` (reuse the `vetoBeforeSignUp` helper pattern, generalised as `vetoPoint(pointId)`). Add `HookPoint.HookAborted` to PasswordApi signIn's error union.",
+          "packages/oauth/src/OAuth.ts callback: run `BeforeSignIn` on the targetUserId sign-in path before `beforeSessionIssue.run` (:846); in the new-user branch run `BeforeSignUp` (strategy = providerId) before the create transaction and `AfterSignUp` after (:832). Add HookAborted to OAuthApi callback errors.",
+          "packages/passkey/src/Passkey.ts authenticate: run `BeforeSignIn` before `beforeSessionIssue.run` (:825); PasskeyApi error union gains HookAborted.",
+          "packages/password/src/Password.ts signUp: run `AfterSignUp` after the transaction commits (next to the `auth.user.created` publish).",
+          "Consider extending `SignUpInput` with `strategy` so one BeforeSignUp tap can distinguish password vs OAuth JIT creation (breaking, acceptable pre-release).",
+          "Docs: add a migration note (e.g. docs/migrations/authjs.md or the migrate-* package README) mapping Auth.js `signIn` callback `true`/`false`/`string redirect`/throw to BeforeSignIn pass/HookAbort code/HookAbort with message; and `jwt`/`session` callbacks to AttributeResolver/claims (pointer only).",
+          "Delete the stale TestAuth.ts:23-28 header note ('no hook point is wired into a real signUp/signIn flow yet')."
+        ],
+        "files": [
+          "packages/core/src/Hooks.ts",
+          "packages/password/src/Password.ts",
+          "packages/password/src/PasswordApi.ts",
+          "packages/oauth/src/OAuth.ts",
+          "packages/oauth/src/OAuthApi.ts",
+          "packages/passkey/src/Passkey.ts",
+          "packages/passkey/src/PasskeyApi.ts",
+          "packages/test/src/TestAuth.ts",
+          "features/features/04-cross-cutting/12-hooks.feature"
+        ],
+        "tests": [
+          "packages/password/test/PasswordHooksSignIn.test.ts (new, one file per tap scenario until ELC-001 lands) — `it.effect(\"a BeforeSignIn veto tap denies a correct-password sign-in with HookAborted naming its code; no session is issued and no auth.session.issued is published\")`. Fails today (no such point).",
+          "packages/oauth/test/OAuthHooksSignIn.test.ts — add \"BeforeSignUp veto blocks OAuth first-login user creation\" and \"BeforeSignIn veto blocks a returning OAuth user\".",
+          "packages/passkey/test/PasskeyHooksSignIn.test.ts — add the BeforeSignIn deny case.",
+          "features/features/04-cross-cutting/12-hooks.feature — add/enable a BEH-EA-090 scenario for sign-in veto if absent."
+        ],
+        "acceptance": [
+          "Every sign-in-completing flow (password, oauth, passkey) consults BeforeSignIn before BeforeSessionIssue, and a HookAbort surfaces as typed HookAborted (403).",
+          "Every user-creating sign-up path (password, oauth JIT) consults BeforeSignUp.",
+          "Hooks.ts declares all six points listed in spec/overview.md:107."
+        ],
+        "spec_refs": [
+          "BEH-EA-089",
+          "BEH-EA-090",
+          "BEH-EA-092",
+          "BEH-EA-095",
+          "BEH-EA-113"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "MW-003",
+      "level": "medium",
+      "category": "architecture",
+      "package": "core",
+      "title": "Hook points are mechanism-only: zero taps reachable from real signUp/signIn flows",
+      "issue_file": ".issues/medium/MW-003-matias-woloski.md",
+      "current_status": "needs-triage",
+      "verdict": "ALREADY-FIXED",
+      "confidence": "high",
+      "rationale": "Points are declared and reachable from real signUp/signIn flows, and the password plugin consumes them (commit 3e298c8). BeforePasswordVerify was only an example in the recommendation; sign-in veto coverage tracked under NAM-002.",
+      "evidence": [
+        {
+          "path": "packages/core/src/Hooks.ts",
+          "line": 36,
+          "snippet": "const SignUpInput = Schema.Struct({ email: Schema.String, name: Schema.String });\nexport class BeforeSignUp extends HookPoint.veto<BeforeSignUp>()(\"auth.user.signUp\", SignUpInput) {}\n\n// BEH-EA-092: observe — fired once a session-backed sign-in completes,\n// regardless of which strategy (password/oauth/passkey) produced it.\nconst SignedIn = Schema.Struct({ userId: Schema.String, strategy: Schema.String });\nexport class AfterSignIn extends HookPoint.observe<AfterSignIn>()(\"auth.signIn\", SignedIn) {}",
+          "note": "Concrete core points declared (commit 3e298c8)."
+        },
+        {
+          "path": "packages/password/src/Password.ts",
+          "line": 550,
+          "snippet": "      const beforeSignUp = yield* Hooks.BeforeSignUp;\n      const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;\n      const afterSignIn = yield* Hooks.AfterSignIn;",
+          "note": "Consumed in real flows: Password signUp (:730) / signIn (:862, :877); OAuth.ts:517-518/846/859; Passkey.ts:555-556/825/838; Users.ts:244/351 (BeforeUserDelete)."
+        }
+      ],
+      "fixed_by_commit": "3e298c8",
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": null,
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "ETVS-001",
+      "level": "medium",
+      "category": "testing",
+      "package": "core",
+      "title": "Real wall-clock sleeps in the AuthEvents subscription test",
+      "issue_file": ".issues/medium/ETVS-001-effect-testing-vitest-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "The BEH-EA-103 test is still `it.live` with two real 20ms sleeps (AuthEvents.test.ts:108-121).",
+      "evidence": [
+        {
+          "path": "packages/core/test/AuthEvents.test.ts",
+          "line": 112,
+          "snippet": "      // Real wall-clock time (`it.live`, not `it.effect`'s `TestClock`): a\n      // small real sleep gives the subscription Layer's own internally\n      // forked fiber (built without `startImmediately`, since `on`'s public\n      // signature has no such knob) a chance to actually subscribe.\n      yield* Effect.sleep(\"20 millis\");",
+          "note": "The repo's own test documents the attach race and papers over it with a 20ms real sleep (twice: lines 116 and 119)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "auth-events-subscription",
+      "fix": {
+        "summary": "Once ALF-007 makes `on()` register synchronously, rewrite the test as `it.effect` with a handler-completed Deferred/Queue instead of sleeps.",
+        "steps": [
+          "packages/core/test/AuthEvents.test.ts: replace the module-level `Effect.runSync(Ref.make(...))` + `it.live` + sleeps with an `it.effect` that builds a `Queue.unbounded<string>()`, installs `on(\"auth.token.replay\", (e) => Queue.offer(q, e.identifier))` via `Layer.build` in the test scope, publishes a signedIn then a replay, and `Queue.take`s exactly one value; assert the queue is then empty (`Queue.size` 0) after a `TestClock`/`Effect.yieldNow` step."
+        ],
+        "files": [
+          "packages/core/test/AuthEvents.test.ts"
+        ],
+        "tests": [
+          "The rewritten BEH-EA-103 test itself (fails without ALF-007's fix because the publish races the subscription)."
+        ],
+        "acceptance": [
+          "`grep -n 'it.live\\|sleep(\"20 millis\")' packages/core/test/AuthEvents.test.ts` is empty; test is deterministic."
+        ],
+        "spec_refs": [
+          "BEH-EA-103"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "ALF-007"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "SSMS-004",
+      "level": "medium",
+      "category": "testing",
+      "package": "test",
+      "title": "REQ-EA-563's 'migrations apply deterministically' check never applies a migration",
+      "issue_file": ".issues/medium/SSMS-004-sql-schema-migration-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "The contract check still JSON-compares two builds' migration arrays; `up` Effects are dropped by JSON.stringify and nothing touches a store, so REQ-EA-563's 'applies the migrations twice, independently' is not implemented.",
+      "evidence": [
+        {
+          "path": "packages/test/src/TestAuth.ts",
+          "line": 310,
+          "snippet": "          const builtA = Auth.make([first, ...rest]);\n          const builtB = Auth.make([first, ...rest]);\n          if (JSON.stringify(builtA.migrations) !== JSON.stringify(builtB.migrations)) {\n            framework.fail(",
+          "note": "Inside the 'migrations apply deterministically' check (TestAuth.ts:302-318): a static JSON comparison — `up` Effects are dropped by JSON.stringify and nothing is ever applied to a store."
+        },
+        {
+          "path": "features/features/08-tooling/25-testing-harness.feature",
+          "line": 160,
+          "snippet": "    Scenario: runPluginContractTests asserts the plugin's migrations apply deterministically\n      Given a plugin \"invite\" run through \"runPluginContractTests\"\n      When the contract test suite applies \"invite\"'s migrations twice, independently\n      Then it asserts both runs apply the migrations identically",
+          "note": ""
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [
+        "ETVS-005"
+      ],
+      "workstream": "test-harness-completeness",
+      "fix": {
+        "summary": "Run the built migrations twice against two fresh in-memory SQLite databases and compare resulting schemas; keep the cheap declaration check under an honest name.",
+        "steps": [
+          "packages/test/src/TestAuth.ts: rename the static check to `${label}: migration declarations are deterministic across builds` (compare ids/names).",
+          "Add `${label}: migrations apply identically on two fresh databases`: for each of builtA/builtB, build `SqliteClient.layer({ filename: \":memory:\" })` (@effect/sql-sqlite-node, the pattern packages/sql/test uses) and run the migrations via the same Migrator the repo uses (packages/sql's Migrations runner), then read `SELECT type, name, sql FROM sqlite_master ORDER BY name` and compare. Execute via `Effect.runPromise` inside the injected `framework.it` (runner-agnostic); make TestFramework.it accept `() => void | Promise<void>`.",
+          "Also apply each build's migrations twice to the *same* DB to assert idempotent re-run (migrator skips applied ids).",
+          "Update spec/traceability.md:200 wording."
+        ],
+        "files": [
+          "packages/test/src/TestAuth.ts",
+          "packages/test/test/runPluginContractTests.test.ts",
+          "packages/test/package.json",
+          "spec/traceability.md"
+        ],
+        "tests": [
+          "packages/test/test/runPluginContractTests.test.ts — a fixture plugin whose migration `up` creates a table with a name derived from a module-level counter (differs per build) now FAILS the contract suite; @awthaq/password passes. Fails today (JSON compare passes it)."
+        ],
+        "acceptance": [
+          "REQ-EA-563's scenario is backed by an actual double application of migrations; a nondeterministic `up` is caught."
+        ],
+        "spec_refs": [
+          "BEH-EA-198"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ETVS-005",
+      "level": "low",
+      "category": "testing",
+      "package": "test",
+      "title": "Contract suite's 'migrations apply deterministically' never applies a migration",
+      "issue_file": ".issues/low/ETVS-005-effect-testing-vitest-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "DUPLICATE",
+      "confidence": "high",
+      "rationale": "Identical finding (static JSON compare never applies a migration); same fix.",
+      "evidence": [
+        {
+          "path": "packages/test/src/TestAuth.ts",
+          "line": 310,
+          "snippet": "          const builtA = Auth.make([first, ...rest]);\n          const builtB = Auth.make([first, ...rest]);\n          if (JSON.stringify(builtA.migrations) !== JSON.stringify(builtB.migrations)) {\n            framework.fail(",
+          "note": "Inside the 'migrations apply deterministically' check (TestAuth.ts:302-318): a static JSON comparison — `up` Effects are dropped by JSON.stringify and nothing is ever applied to a store."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": "SSMS-004",
+      "duplicates": [],
+      "workstream": "test-harness-completeness",
+      "fix": null,
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "resolved"
+    },
+    {
+      "id": "EOTS-002",
+      "level": "high",
+      "category": "compliance",
+      "package": "test",
+      "title": "BEH-EA-199 'no Redacted reaches span or event' has no mechanical enforcement; contract test implements only half",
+      "issue_file": ".issues/high/EOTS-002-effect-observability-tracing-specialist.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "runPluginContractTests still implements only the contract-hash half of BEH-EA-199; no interceptor exists (the TestAuth header and spec/behaviors/25-testing-harness.md:142-146 both still say so).",
+      "evidence": [
+        {
+          "path": "packages/test/src/TestAuth.ts",
+          "line": 29,
+          "snippet": "// - BEH-EA-199's \"no `Redacted` value reaches a span or event\" check is\n//   already, honestly, documented by that behavior file itself as \"not\n//   mechanically verifiable today\" (no tracer/logger interceptor exists) —\n//   `runPluginContractTests` below implements only its other half\n//   (contract-hash stability).",
+          "note": ""
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "observability-substrate",
+      "fix": {
+        "summary": "Build a redaction-asserting Tracer + Logger in @awthaq/test, install it in TestAuth.layer, and run it inside runPluginContractTests (ticket 27 §5).",
+        "steps": [
+          "packages/test/src/RedactionGuard.ts (new): `layer` providing a Tracer (wrapping the default, recording every span's attributes/events) and a Logger (recording every message/annotation/cause) into a Ref; `assertNoLeaks: Effect<void, RedactionLeak>` deep-walks recorded values and fails on any `Redacted.isRedacted(value)` instance and on any string equal to a registered secret (`RedactionGuard.watch(secret)` so plaintext copies are caught too).",
+          "packages/test/src/TestAuth.ts: include `RedactionGuard.layer` in `TestAuth.layer`.",
+          "runPluginContractTests: add an `it` that composes host + plugin via TestAuth.layer, drives a minimal smoke (build layer; if the plugin declares a sign-in style endpoint, optional `exercise` callback in ContractTestOptions) and then `assertNoLeaks`. Because TestFramework is runner-agnostic, run the Effect with `Effect.runPromise` inside the injected `it`.",
+          "Remove the 'not mechanically verifiable today' text from TestAuth.ts:29-33 and spec/behaviors/25-testing-harness.md:142-146; update traceability.md:200."
+        ],
+        "files": [
+          "packages/test/src/RedactionGuard.ts",
+          "packages/test/src/TestAuth.ts",
+          "packages/test/src/index.ts",
+          "packages/test/test/runPluginContractTests.test.ts",
+          "spec/behaviors/25-testing-harness.md",
+          "spec/traceability.md",
+          "features/step-definitions/*testing-harness*"
+        ],
+        "tests": [
+          "packages/test/test/runPluginContractTests.test.ts — a deliberately-broken fixture plugin whose layer logs `Effect.log(Redacted.make(\"s3cr3t\"))` (and one that puts `Redacted.value(...)` into a span attribute) makes the contract suite fail with RedactionLeak; `@awthaq/password` passes. Fails today (no such check).",
+          "Wire features REQ-EA-566 (25-testing-harness.feature:181) and REQ-EA-089 step definitions to the guard."
+        ],
+        "acceptance": [
+          "BEH-EA-199 is mechanically enforced by runPluginContractTests; REQ-EA-566 is an executable scenario."
+        ],
+        "spec_refs": [
+          "BEH-EA-199",
+          "BEH-EA-198"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [
+        "MW-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "MW-001",
+      "level": "high",
+      "category": "architecture",
+      "package": "test",
+      "title": "No observability substrate: two log statements in the whole library, no tracer/logger interceptor",
+      "issue_file": ".issues/high/MW-001-matias-woloski.md",
+      "current_status": "ready-for-agent",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "Decision exists (wayfinder ticket 27, resolved) but none of it is implemented at HEAD: 0 withSpan/annotateCurrentSpan, no HttpMiddleware.tracer/logger re-export, no Metric, no Observability module, no redaction interceptor. Log sites are now three (a drop warning was added), all in core event/hook plumbing.",
+      "evidence": [
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 284,
+          "snippet": "              Effect.logError(\"auth.hook.observer.error\", { hook: key, cause }),",
+          "note": "`grep -rn withSpan|annotateCurrentSpan packages/*/src` → 0 hits; the library's only log calls are AuthEvents.ts:371 (logWarning), AuthEvents.ts:408 and HookPoint.ts:284 (logError); no HttpMiddleware.tracer/logger re-export; no Metric usage. Wayfinder ticket 27's decision is unimplemented."
+        },
+        {
+          "path": "packages/test/src/TestAuth.ts",
+          "line": 29,
+          "snippet": "// - BEH-EA-199's \"no `Redacted` value reaches a span or event\" check is\n//   already, honestly, documented by that behavior file itself as \"not\n//   mechanically verifiable today\" (no tracer/logger interceptor exists) —\n//   `runPluginContractTests` below implements only its other half\n//   (contract-hash stability).",
+          "note": ""
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "observability-substrate",
+      "fix": {
+        "summary": "Implement wayfinder ticket 27 in its stated order: HTTP re-exports, business-logic spans, field convention + metrics, then the redaction interceptor (EOTS-002).",
+        "steps": [
+          "packages/server/src/AuthHttp.ts: `export const tracer = HttpMiddleware.tracer; export const requestLogger = HttpMiddleware.logger;` (direct re-exports, per ticket 27 §1); document the recommended `HttpMiddleware.tracer(HttpMiddleware.logger(app))` composition in README/usage docs.",
+          "Spans (ticket 27 §2): `Effect.withSpan(\"awthaq.session.verify\", { attributes: { \"auth.session.id\": id } })` in Sessions.verify (both layers); `awthaq.session.issue`; `awthaq.password.verify` around the hasher.verify call in Password.signIn; `awthaq.hook.dispatch` in each HookPoint run (`{ hook: key }`); `awthaq.event.publish` in AuthEvents.publish (`{ \"auth.event\": tag }`). Never put Redacted values or tokens in attributes.",
+          "packages/core/src/Observability.ts (new): the fixed field vocabulary (`auth.event`, `auth.principal.ref`, `auth.session.id`, `auth.outcome`) as exported constants, and the metric taxonomy (`awthaq_session_issued_total`, `awthaq_session_verify_failed_total{reason}`, `awthaq_login_failed_total`, `awthaq_session_verify_duration_seconds`, plus `awthaq_event_dropped_total{tag}` from ticket 02 and `awthaq_hook_observer_error_total` from JH-002). Wire the counters at their sites.",
+          "Record the field convention in a new ADR (spec/decisions/0NN-observability-field-naming.md) per ticket 27 §3.",
+          "EOTS-002 (redaction interceptor) lands last in this workstream."
+        ],
+        "files": [
+          "packages/server/src/AuthHttp.ts",
+          "packages/core/src/Observability.ts",
+          "packages/core/src/Sessions.ts",
+          "packages/core/src/HookPoint.ts",
+          "packages/core/src/AuthEvents.ts",
+          "packages/password/src/Password.ts",
+          "spec/decisions/",
+          "README.md"
+        ],
+        "tests": [
+          "packages/core/test/Observability.test.ts — with a recording Tracer (`Tracer.make` capturing spans), `Sessions.verify` emits one `awthaq.session.verify` span with `auth.session.id` and no attribute containing the token; `Password.signIn` emits `awthaq.password.verify`.",
+          "Metric test: a failed verify increments `awthaq_session_verify_failed_total` with the right reason tag (`Metric.value`)."
+        ],
+        "acceptance": [
+          "Spans exist at the listed boundaries; the metric set is exported; AuthHttp re-exports tracer/logger; ADR recorded."
+        ],
+        "spec_refs": [
+          "BEH-EA-199",
+          "BEH-EA-104"
+        ],
+        "effort": "L"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "MAPS-007",
+      "level": "medium",
+      "category": "dx",
+      "package": "test",
+      "title": "No tracing correlation of auth context anywhere in the pipeline",
+      "issue_file": ".issues/medium/MAPS-007-microservices-auth-propagation-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "No span or annotation at the principal-resolution choke point shared by Path A/Path B and the Authentication middleware; no traceparent handling in packages/*/src.",
+      "evidence": [
+        {
+          "path": "packages/server/src/Authentication.ts",
+          "line": 205,
+          "snippet": "export const resolvePrincipal = (\n  sessions: Sessions.SessionsShape,\n  resolver: PrincipalResolverShape,\n  credential: Redacted.Redacted<string>,\n) =>\n  resolveSession(sessions, credential).pipe(\n    Effect.flatMap(({ session }) => resolver.resolve(session)),\n  );",
+          "note": "The shared choke point adds no span / annotation; no traceparent handling anywhere in packages/*/src."
+        },
+        {
+          "path": "packages/core/src/HookPoint.ts",
+          "line": 284,
+          "snippet": "              Effect.logError(\"auth.hook.observer.error\", { hook: key, cause }),",
+          "note": "`grep -rn withSpan|annotateCurrentSpan packages/*/src` → 0 hits; the library's only log calls are AuthEvents.ts:371 (logWarning), AuthEvents.ts:408 and HookPoint.ts:284 (logError); no HttpMiddleware.tracer/logger re-export; no Metric usage. Wayfinder ticket 27's decision is unimplemented."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "observability-substrate",
+      "fix": {
+        "summary": "Annotate the principal/session on the current span at the shared resolution choke point, and rely on HttpMiddleware.tracer (MW-001) for W3C traceparent propagation.",
+        "steps": [
+          "packages/server/src/Authentication.ts resolveSession/resolvePrincipal: wrap in `Effect.withSpan(\"awthaq.principal.resolve\")` and `Effect.annotateCurrentSpan({ \"auth.principal.type\": ..., \"auth.principal.ref\": ref.id, \"auth.session.id\": session.id })` on success, `auth.outcome: \"failure\"` + reason on failure (field names from MW-001's Observability module).",
+          "Also `Effect.annotateLogs` with the same keys so downstream handler logs carry them."
+        ],
+        "files": [
+          "packages/server/src/Authentication.ts",
+          "packages/server/test/Authentication.test.ts"
+        ],
+        "tests": [
+          "packages/server/test/Authentication.test.ts — with a recording Tracer, an authenticated request's span tree contains `awthaq.principal.resolve` with principal/session attributes and no credential value."
+        ],
+        "acceptance": [
+          "Every authenticated request's trace identifies principal and session."
+        ],
+        "spec_refs": [
+          "BEH-EA-199"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [
+        "MW-001"
+      ],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ETVS-004",
+      "level": "medium",
+      "category": "dx",
+      "package": "test",
+      "title": "TestAuth memory bundle incomplete; memory-Layer assembly duplicated and drifting across suites",
+      "issue_file": ".issues/medium/ETVS-004-effect-testing-vitest-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "PARTIAL",
+      "confidence": "high",
+      "rationale": "Partly addressed: MemoryPorts now includes AuthEvents, AuditLog and Hooks.HooksLive. Still open: no Verification.layerMemory / PasswordHasher, so password-style compositions re-add them through the misnamed `middleware` parameter (examples/memory-server/index.ts:84-88), and the password/server/oauth/passkey AuthHttp suites plus BDD Worlds still hand-roll their own CoreLive assemblies.",
+      "evidence": [
+        {
+          "path": "packages/test/src/TestAuth.ts",
+          "line": 94,
+          "snippet": "const MemoryPorts = Layer.mergeAll(\n  Users.layerMemory,\n  Accounts.layerMemory,\n  Sessions.layerMemory,\n  Mailer.layerMemory,\n  RateLimiter.layerPermissive,\n  RateLimits.layer,\n  SqlTransaction.layerNoop,",
+          "note": "AuthEvents/AuditLog/Hooks now provided (lines 110-118) but still no Verification.layerMemory or PasswordHasher."
+        },
+        {
+          "path": "packages/password/test/AuthHttp.test.ts",
+          "line": 62,
+          "snippet": "const CoreLive = Layer.mergeAll(\n  Users.layerMemory,\n  Accounts.layerMemory,\n  Sessions.layerMemory,\n  Verification.layerMemory,",
+          "note": "Hand-rolled assembly still duplicated (also features/step-definitions/PasswordWorld.ts:44, server/oauth/passkey AuthHttp.test.ts); examples/memory-server/index.ts:84-88 re-adds Verification+PasswordHasher via the middleware slot."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "test-harness-completeness",
+      "fix": {
+        "summary": "Complete the memory bundle, rename the second parameter, and migrate the hand-rolled suites onto TestAuth.layer.",
+        "steps": [
+          "packages/test/src/TestAuth.ts MemoryPorts: add `Verification.layerMemory` and a fast test hasher (`PasswordHasher.layerArgon2id` with low-cost test params, or a dedicated `PasswordHasher.layerTest` if one exists/is added) and `FetchHttpClient.layer` only if needed by plugins (prefer leaving HTTP client to the caller).",
+          "Rename `middleware` → `services` (it carries support layers, not only HttpApi middleware); update doc comment.",
+          "Migrate packages/password/test/AuthHttp.test.ts, packages/server/test/AuthHttp.test.ts, packages/oauth/test/AuthHttp.test.ts, packages/passkey/test/AuthHttp.test.ts, features/step-definitions/PasswordWorld.ts and SessionWorld.ts to TestAuth.layer; keep bespoke layers only where a test deliberately swaps a port (pass via `services`).",
+          "Simplify examples/memory-server/index.ts accordingly."
+        ],
+        "files": [
+          "packages/test/src/TestAuth.ts",
+          "packages/test/test/TestAuth.test.ts",
+          "packages/password/test/AuthHttp.test.ts",
+          "packages/server/test/AuthHttp.test.ts",
+          "packages/oauth/test/AuthHttp.test.ts",
+          "packages/passkey/test/AuthHttp.test.ts",
+          "features/step-definitions/PasswordWorld.ts",
+          "features/step-definitions/SessionWorld.ts",
+          "examples/memory-server/index.ts"
+        ],
+        "tests": [
+          "packages/test/test/TestAuth.test.ts — `TestAuth.layer(Auth.make([Password]), AuthenticationLive)` builds and serves sign-up/sign-in with no extra Verification/PasswordHasher layers. Fails today (missing services)."
+        ],
+        "acceptance": [
+          "One memory assembly used by all wire-level suites; `grep -l 'Verification.layerMemory' packages/*/test` only hits tests that intentionally swap it."
+        ],
+        "spec_refs": [
+          "BEH-EA-193"
+        ],
+        "effort": "M"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "RBS-007",
+      "level": "medium",
+      "category": "dx",
+      "package": "test",
+      "title": "Every canonical entry point ships the permissive limiter — out of the box there is no brute-force defense",
+      "issue_file": ".issues/medium/RBS-007-rate-limiting-brute-force-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "README quickstart and its configuration table still default to `RateLimiter.layerPermissive`; examples/memory-server inherits it via TestAuth; there is no one-line real limiter composite. Registered rules are inert out of the box, contradicting BEH-EA-110.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 216,
+          "snippet": "| `RateLimiter` | `layerPermissive` (no real limiting) | `layer` over `layerStoreMemory`, or your own `RateLimiterStore` |",
+          "note": "README quickstart (README.md:139) and TestAuth (TestAuth.ts:99) — and thus examples/memory-server — compose the permissive limiter; no one-line real-limiter composite exists (RateLimiter.ts:86 layer needs :111 layerStoreMemory)."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "canonical-starter-defaults",
+      "fix": {
+        "summary": "Ship a real in-memory limiter composite as the documented default, reserve permissive for tests, and warn when rules are registered under a permissive limiter.",
+        "steps": [
+          "packages/ports/src/RateLimiter.ts: `export const layerMemory = layer.pipe(Layer.provide(layerStoreMemory))` (no annotation; inferred).",
+          "README.md:139 quickstart and the table at :216 → default `RateLimiter.layerMemory`; mark `layerPermissive` 'tests only'.",
+          "examples/memory-server/index.ts: provide `RateLimiter.layerMemory` via the services param so it overrides TestAuth's permissive default (or give TestAuth.layer an option).",
+          "Boot-time warning: `layerPermissive` carries a marker (`permissive: true` on the shape); `RateLimits.layer`/Auth composition logs `auth.ratelimit.permissive` once at first `registered()` read when rules exist and the limiter is permissive."
+        ],
+        "files": [
+          "packages/ports/src/RateLimiter.ts",
+          "packages/core/src/RateLimits.ts",
+          "README.md",
+          "examples/memory-server/index.ts",
+          "packages/ports/test/RateLimiter.test.ts"
+        ],
+        "tests": [
+          "packages/ports/test/RateLimiter.test.ts — `layerMemory` enforces a registered limit (N+1th consume fails RateLimited); a composition with rules + layerPermissive emits the warning log once."
+        ],
+        "acceptance": [
+          "Copying the README quickstart yields real rate limiting; permissive is only used in tests."
+        ],
+        "spec_refs": [
+          "BEH-EA-110",
+          "BEH-EA-112"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    },
+    {
+      "id": "ERAS-002",
+      "level": "medium",
+      "category": "dx",
+      "package": "test",
+      "title": "Only Crypto.Crypto provider in the repo is Node's — no WebCrypto-backed layer ships",
+      "issue_file": ".issues/medium/ERAS-002-edge-runtime-auth-specialist.md",
+      "current_status": "needs-triage",
+      "verdict": "CONFIRMED",
+      "confidence": "high",
+      "rationale": "NodeCrypto.layer is still the only Crypto provider composed anywhere (TestAuth, README, examples). Nuance: Effect v4 itself ships a globalThis.crypto provider (@effect/platform-browser BrowserCrypto.layer), so the gap is that awthaq neither ships nor documents an edge-safe path, not that one cannot exist.",
+      "evidence": [
+        {
+          "path": "packages/test/src/TestAuth.ts",
+          "line": 107,
+          "snippet": ").pipe(\n  Layer.provideMerge(NodeCrypto.layer),",
+          "note": "Only Crypto provider composed anywhere in the repo (also README.md:86/106/140). Effect v4 does ship a globalThis.crypto-backed provider (../effect/packages/platform/browser/src/BrowserCrypto.ts) but nothing in awthaq uses or documents it."
+        }
+      ],
+      "fixed_by_commit": null,
+      "duplicate_of": null,
+      "duplicates": [],
+      "workstream": "canonical-starter-defaults",
+      "fix": {
+        "summary": "Ship a tiny, dependency-free WebCrypto-backed Crypto layer in @awthaq/ports and document it for edge runtimes.",
+        "steps": [
+          "packages/ports/src/WebCrypto.ts (new): `export const layer = Layer.succeed(Crypto.Crypto, Crypto.make({ randomBytes: (n) => globalThis.crypto.getRandomValues(new Uint8Array(n)), digest: (alg, data) => Effect.tryPromise({ try: () => globalThis.crypto.subtle.digest(alg, data).then((b) => new Uint8Array(b)), catch: (e) => PlatformError... }) }))` — mirrors ../effect/packages/platform/browser/src/BrowserCrypto.ts without adding a browser-platform dependency to server packages (same edge-safe/no-new-dependency posture as wayfinder ticket 35). Map DigestAlgorithm names to WebCrypto names as BrowserCrypto does.",
+          "packages/next/README.md edge-runtime recipe + main README: use `WebCrypto.layer` on edge; NodeCrypto remains fine on Node.",
+          "Run the core Sessions/Verification test suites once under WebCrypto.layer (Node ≥ 20 exposes globalThis.crypto) to prove parity."
+        ],
+        "files": [
+          "packages/ports/src/WebCrypto.ts",
+          "packages/ports/src/index.ts",
+          "packages/ports/test/WebCrypto.test.ts",
+          "README.md",
+          "packages/next/README.md"
+        ],
+        "tests": [
+          "packages/ports/test/WebCrypto.test.ts — randomBytes length/entropy smoke, SHA-256 digest equals NodeCrypto's for the same input, and `Sessions.layerMemory` issue/verify round-trip under WebCrypto.layer."
+        ],
+        "acceptance": [
+          "An edge app can compose awthaq with WebCrypto.layer and no Node built-ins; docs show it."
+        ],
+        "spec_refs": [
+          "BEH-EA-193"
+        ],
+        "effort": "S"
+      },
+      "depends_on": [],
+      "needs_decision": false,
+      "decision_options": null,
+      "recommendation": null,
+      "recommended_status": "ready-for-agent"
+    }
+  ],
+  "workstreams": [
+    {
+      "slug": "hook-registry-per-composition",
+      "title": "Per-composition hook registries with spec'd three-key tap ordering and introspection",
+      "ids": [
+        "ELC-001",
+        "GC-006",
+        "JH-003",
+        "TS-006",
+        "MW-004",
+        "PERS-003"
+      ],
+      "rationale": "All six trace to HookPoint.ts's module-scoped registry: no composition scoping, a global sequence counter, no plugin identity at tap time, hence no dependency/plugin-id ordering and nothing to introspect. The registry move (ELC-001) is what makes owner-aware ordering (JH-003) and manifest/runtime introspection (PERS-003) clean; it also restores BEH-EA-094's compile-time check.",
+      "order_hint": 1,
+      "effort": "L",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "hook-run-semantics",
+      "title": "Hook run semantics: sequential observe taps and schema-validated tap outputs",
+      "ids": [
+        "JH-002",
+        "ECF-006",
+        "ERS-005",
+        "PERS-004",
+        "JH-004",
+        "GC-009"
+      ],
+      "rationale": "Both concern what `run` does with taps now that points guard real sign-up/sign-in: observe order is discarded by unbounded concurrency, and veto/divert outputs bypass the point schema.",
+      "order_hint": 2,
+      "effort": "S",
+      "depends_on_workstreams": [
+        "hook-registry-per-composition"
+      ]
+    },
+    {
+      "slug": "core-hook-point-coverage",
+      "title": "Finish the spec'd core hook-point set (BeforeSignIn, AfterSignUp, BeforeSignUp on every creation path)",
+      "ids": [
+        "NAM-002",
+        "SCP-008",
+        "TS-007"
+      ],
+      "rationale": "Commit 3e298c8 wired four points; the remaining open parts of these findings are the same gap: sign-in cannot be vetoed, OAuth JIT creation skips BeforeSignUp, and no end-to-end example exercises the PEP seams.",
+      "order_hint": 3,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "hook-registry-per-composition"
+      ]
+    },
+    {
+      "slug": "auth-events-subscription",
+      "title": "Race-free, supervised, ergonomic AuthEvents subscriptions",
+      "ids": [
+        "ALF-007",
+        "ESS-003",
+        "ETVS-001",
+        "ECF-010",
+        "ESS-004",
+        "ESS-007",
+        "MA-009"
+      ],
+      "rationale": "All touch `AuthEvents.on`/subscription plumbing: the attach race and its sleep-based test, missing supervision, missing multi-tag/batched sugar, and the BEH-EA-097/098 spec wording left behind by the dropping fix.",
+      "order_hint": 1,
+      "effort": "M",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "auth-event-schema",
+      "title": "Schema-first, versioned, branded AuthEvent payloads",
+      "ids": [
+        "ESA-007",
+        "GC-007",
+        "IDS-006"
+      ],
+      "rationale": "Payload-shape work on the same union; doing the Schema migration first means the brand and attribution changes are authored once as schemas and the audit table gets a real codec.",
+      "order_hint": 2,
+      "effort": "L",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "auth-event-envelope",
+      "title": "Event envelope: eventId, occurredAt, correlation and trace linkage",
+      "ids": [
+        "ESA-002",
+        "ALF-006",
+        "EOTS-009"
+      ],
+      "rationale": "The durable row already has time/id; the bus event does not, and nothing correlates events to requests. One envelope stamped in publish fixes all three.",
+      "order_hint": 3,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "auth-event-schema",
+        "auth-events-subscription"
+      ]
+    },
+    {
+      "slug": "auth-event-taxonomy",
+      "title": "Missing event tags and fields (sign-in failure dimensions, recovery, session lifecycle, user deletion)",
+      "ids": [
+        "CSD-004",
+        "ARF-006",
+        "RRS-008",
+        "SCP-006"
+      ],
+      "rationale": "Each is a remaining gap in which operations publish events and with what fields; all edit the same union/actorOf switch and publisher sites.",
+      "order_hint": 4,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "auth-event-schema"
+      ]
+    },
+    {
+      "slug": "auth-event-pii-posture",
+      "title": "PII posture for events and the durable audit log",
+      "ids": [
+        "ESA-005",
+        "ALF-009"
+      ],
+      "rationale": "Raw email/free-text now lands in an append-only table with no erasure path; needs a posture decision (D1) then a pseudonymization contribution to the erasure cascade.",
+      "order_hint": 4,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "auth-event-schema"
+      ]
+    },
+    {
+      "slug": "security-signal-pipeline",
+      "title": "Opt-in SecuritySignals threshold/incident layer",
+      "ids": [
+        "CSG-008"
+      ],
+      "rationale": "Signals are published and persisted but nothing detects on them.",
+      "order_hint": 5,
+      "effort": "M",
+      "depends_on_workstreams": [
+        "auth-events-subscription",
+        "auth-event-taxonomy"
+      ]
+    },
+    {
+      "slug": "auth-event-external-delivery",
+      "title": "Cross-process delivery: outbox relay and webhooks",
+      "ids": [
+        "CWM-004",
+        "MAPS-010"
+      ],
+      "rationale": "Same missing transport seam; decision D2 picks scope. The durable audit table is the reliable outbox source.",
+      "order_hint": 6,
+      "effort": "XL",
+      "depends_on_workstreams": [
+        "auth-event-schema",
+        "auth-event-envelope"
+      ]
+    },
+    {
+      "slug": "observability-substrate",
+      "title": "Implement wayfinder ticket 27: spans, field convention, metrics, redaction interceptor",
+      "ids": [
+        "MW-001",
+        "EOTS-002",
+        "MAPS-007",
+        "EOTS-005"
+      ],
+      "rationale": "Ticket 27 decided the design (MW-001) and names the others as built on it; none of it exists at HEAD.",
+      "order_hint": 1,
+      "effort": "L",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "test-harness-completeness",
+      "title": "TestAuth memory bundle completeness and real migration determinism",
+      "ids": [
+        "SSMS-004",
+        "ETVS-005",
+        "ETVS-004"
+      ],
+      "rationale": "Both are about @awthaq/test's harness overclaiming (whole pipeline over memory; migrations applied deterministically).",
+      "order_hint": 2,
+      "effort": "M",
+      "depends_on_workstreams": []
+    },
+    {
+      "slug": "canonical-starter-defaults",
+      "title": "Production-safe defaults in README/examples (rate limiter, edge crypto)",
+      "ids": [
+        "RBS-007",
+        "ERAS-002"
+      ],
+      "rationale": "Both are about what the canonical starting templates compose: a permissive limiter and a Node-only Crypto provider.",
+      "order_hint": 2,
+      "effort": "S",
+      "depends_on_workstreams": []
+    }
+  ],
+  "decisions": [
+    {
+      "id": "D1",
+      "ids": [
+        "ESA-005",
+        "ALF-009"
+      ],
+      "title": "PII posture for event payloads and the durable audit log",
+      "options": [
+        "A. Identifiers-only payloads (drop invitation email; subscribers join via records) + pseudonymize audit rows on user erasure + document stream privilege.",
+        "B. Keep contact fields but store an HMAC digest instead of the raw value (email → digest) in both bus and audit row; no erasure hook needed for those fields.",
+        "C. Keep payloads as-is; rely on a retention sweep (ticket 30's Retention service extended to auth_audit_log) to age rows out."
+      ],
+      "recommendation": "A, plus C's retention sweep as an operator-configurable add-on (flexibility): identifiers-only is the standard event-sourcing answer and the erasure cascade already owns the records that hold the email; pseudonymizing audit rows keeps the forensic timeline (tag/time/order) intact under GDPR Art. 17. B loses utility for legitimate notification subscribers without buying much over A."
+    },
+    {
+      "id": "D2",
+      "ids": [
+        "CWM-004",
+        "MAPS-010"
+      ],
+      "title": "Scope of cross-process event delivery (docs vs outbox relay vs first-party webhooks)",
+      "options": [
+        "A. Docs only: state the single-process assumption and the in-process subscription recipe; no transport.",
+        "B. Outbox relay over auth_audit_log + app-provided EventTransport port (cross-process fan-out), no webhooks plugin yet.",
+        "C. B plus a first-party opt-in @awthaq/webhooks plugin (signed, retried, dead-lettered) scheduled as an M7 Phase-2 plugin."
+      ],
+      "recommendation": "C, staged: ship A's docs immediately, B right after the event schema/envelope workstreams (it needs eventId + a codec), and the webhooks plugin as an M7 Phase-2 plugin. Tailing the durable audit table (not the lossy dropping PubSub) is what makes delivery reliable, and it reuses what ticket 01 already built."
+    }
+  ],
+  "cross_slice_notes": [
+    "INV-EA-005/BEH-EA-094 is violated at HEAD: HookPoint `tap()` returns Layer<never> with empty RIn, yet spec/traceability.md:112 claims the TypeScript compiler enforces it. Folded into ELC-001's plan.",
+    "packages/core/src/RateLimits.ts:18-21 claims HookPoint's per-point registries are scoped to a built service/closure 'rather than a module-level global' — inaccurate until ELC-001 lands.",
+    "Wayfinder ticket 30 decided an ErasureRegistry ('not a hook'), but CSG-001/DRS-002 (ec065a7) implemented erasure as BeforeUserDelete veto taps shipped as opt-in side exports because of the module-singleton registry. The data-retention/erasure slice should reconcile; ELC-001 removes the reason for the opt-in split.",
+    "The auth_audit_log table has no retention/erasure path (ticket 01 deferred it to ticket 30, whose Retention/erasure design does not mention auth_audit_log) — see D1.",
+    "ID collision in .issues/: ESS-00N exists for both effect-schema-specialist and effect-stream-specialist; commit e3059f2's 'ESS-004' is the schema one, not this slice's stream ESS-004."
+  ]
+}
