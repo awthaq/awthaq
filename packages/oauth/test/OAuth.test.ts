@@ -264,6 +264,36 @@ describe("OAuth", () => {
     );
   });
 
+  describe("CSD-003: the callback's request context lands on the minted session", () => {
+    it.effect("records the client ip and user agent the handler passed", () =>
+      Effect.gen(function* () {
+        const oauth = yield* OAuth.OAuth;
+        const { state } = yield* oauth.authorize("acme", { callbackURL: undefined, link: undefined });
+        const outcome = yield* oauth.callback("acme", {
+          code: "auth-code",
+          state,
+          iss: undefined,
+          cookieState: state,
+          ip: "203.0.113.9",
+          userAgent: "OAuthTest/1.0",
+        });
+        assert.isDefined(outcome.session);
+        assert.deepStrictEqual(outcome.session?.session.ipAddress, Option.some("203.0.113.9"));
+        assert.deepStrictEqual(outcome.session?.session.userAgent, Option.some("OAuthTest/1.0"));
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            providers: [acme()],
+            httpRoutes: {
+              "/token": { access_token: "at-1" },
+              "/userinfo": { id: "acme-user-1", email: "ada@example.com" },
+            },
+          }),
+        ),
+      ),
+    );
+  });
+
   describe("BEH-EA-122: flow state lives server-side, in Verification", () => {
     it.effect("REQ-EA-333: a replayed callback using an already-consumed state fails", () =>
       Effect.gen(function* () {

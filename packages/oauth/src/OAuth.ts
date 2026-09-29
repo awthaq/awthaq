@@ -445,12 +445,15 @@ export const OAuthHandlers = HttpApiBuilder.group(
         // rate-limit bucket unless the composition opts into
         // `ClientAddress.layerTrustedProxy`.
         const resolvedAddress = yield* clientAddress.resolve(request);
+        const userAgent = ClientAddress.userAgentOf(request);
         const outcome = yield* oauth.callback(params.provider, {
           code: query.code,
           state: query.state,
           iss: query.iss,
           cookieState,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          // CSD-003: the browser completing the sign-in is the device to record.
+          ...(userAgent === undefined ? {} : { userAgent }),
         });
         if (outcome.session !== undefined) {
           const response = HttpServerResponse.redirect(outcome.callbackURL);
@@ -494,6 +497,8 @@ export interface OAuthShape {
        * bucket for "unknown origin" requests, never as unthrottled.
        */
       readonly ip?: string;
+      /** CSD-003: recorded, with `ip`, on the session this callback mints. */
+      readonly userAgent?: string;
     },
   ) => Effect.Effect<
     {
@@ -885,7 +890,12 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         if (point._tag === "Diverted") {
           return yield* Effect.fail(point.value);
         }
-        const issued = yield* sessions.issue({ userId: targetUserId }).pipe(Effect.orDie);
+        const issued = yield* sessions
+          .issue({
+            userId: targetUserId,
+            request: ClientAddress.sessionRequest(input.ip, input.userAgent),
+          })
+          .pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.user.signedIn",
           userId: targetUserId,

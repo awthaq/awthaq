@@ -144,6 +144,8 @@ export interface PasswordShape {
      * independently of the (attacker-chosen) email each attempt names.
      */
     readonly ip?: string;
+    /** CSD-003: recorded on the issued session, with `ip`, for the device list. */
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     | PasswordApi.WeakPassword
@@ -190,6 +192,8 @@ export interface PasswordShape {
      * as a single shared "unknown origin" bucket, never as unthrottled.
      */
     readonly ip?: string;
+    /** CSD-003: recorded on the issued session, with `ip`, for the device list. */
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     | Api.InvalidCredentials
@@ -250,6 +254,9 @@ export interface PasswordShape {
     readonly currentSessionId: Sessions.SessionId;
     readonly currentPassword: Redacted.Redacted<string>;
     readonly newPassword: Redacted.Redacted<string>;
+    /** CSD-003: the rotated session records the request it was minted for. */
+    readonly ip?: string;
+    readonly userAgent?: string;
   }) => Effect.Effect<
     IssuedSession,
     PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited
@@ -398,9 +405,11 @@ export const PasswordHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         const resolvedAddress = yield* clientAddress.resolve(request);
+        const userAgent = ClientAddress.userAgentOf(request);
         const signUpInput = {
           ...payload,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...(userAgent === undefined ? {} : { userAgent }),
         };
         // TMS-005: `conceal` answers 202 with no session for a fresh and an
         // existing address alike (ADR-EA-026).
@@ -428,9 +437,11 @@ export const PasswordHandlers = HttpApiBuilder.group(
         // directly, so a trusted-proxy-aware composition gets a real
         // client IP here too, not just for `OAuth`'s own callback.
         const resolvedAddress = yield* clientAddress.resolve(request);
+        const userAgent = ClientAddress.userAgentOf(request);
         const issued = yield* password.signIn({
           ...payload,
           ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...(userAgent === undefined ? {} : { userAgent }),
         });
         yield* HttpApiBuilder.securitySetCookie(
           Api.SessionCookie,
@@ -503,12 +514,15 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
   "password.account",
   Effect.fnUntraced(function* (handlers) {
     const password = yield* Password;
+    const clientAddress = yield* ClientAddress.ClientAddress;
 
     return handlers.handleAll({
       changePassword: Effect.fnUntraced(function* ({
         payload,
+        request,
       }: {
         payload: PasswordApi.ChangePasswordPayload;
+        request: HttpServerRequest.HttpServerRequest;
       }) {
         const principal = yield* Api.CurrentPrincipal;
         // `changePassword`'s own `Authentication` middleware already
@@ -522,11 +536,15 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
             ),
           );
         }
+        const resolvedAddress = yield* clientAddress.resolve(request);
+        const userAgent = ClientAddress.userAgentOf(request);
         const issued = yield* password.changePassword({
           userId: Users.UserId(principal.ref.id),
           currentSessionId: Sessions.SessionId(principal.sessionId),
           currentPassword: payload.currentPassword,
           newPassword: payload.newPassword,
+          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...(userAgent === undefined ? {} : { userAgent }),
         });
         yield* HttpApiBuilder.securitySetCookie(
           Api.SessionCookie,
@@ -787,7 +805,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                   credentialHash: Redacted.make(hash),
                 })
                 .pipe(Effect.orDie);
-              const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+              const issued = yield* sessions
+                .issue({
+                  userId: user.id,
+                  request: ClientAddress.sessionRequest(input.ip, input.userAgent),
+                })
+                .pipe(Effect.orDie);
               return { user, issued };
             }),
           )
@@ -935,7 +958,12 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         if (point._tag === "Diverted") {
           return yield* Effect.fail(point.value);
         }
-        const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        const issued = yield* sessions
+          .issue({
+            userId: user.id,
+            request: ClientAddress.sessionRequest(input.ip, input.userAgent),
+          })
+          .pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.user.signedIn",
           userId: user.id,
@@ -1224,7 +1252,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           reason: "passwordChanged",
         });
         const issued = yield* sessions
-          .issue({ userId: input.userId, supersedes: input.currentSessionId })
+          .issue({
+            userId: input.userId,
+            supersedes: input.currentSessionId,
+            request: ClientAddress.sessionRequest(input.ip, input.userAgent),
+          })
           .pipe(Effect.orDie);
         yield* events.publish({
           _tag: "auth.session.issued",

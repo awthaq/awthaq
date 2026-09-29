@@ -24,7 +24,7 @@
 
 import { Api, SessionContract } from "@awthaq/api";
 import { AuthEvents, AuthPlugin, Accounts, Hooks, Migrations, Sessions, Users } from "@awthaq/core";
-import { WebAuthn } from "@awthaq/ports";
+import { ClientAddress, WebAuthn } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -36,6 +36,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ChallengeStore from "./ChallengeStore.ts";
@@ -268,6 +269,8 @@ export interface PasskeyShape {
   ) => Effect.Effect<{ readonly ceremonyId: string; readonly options: unknown }>;
   readonly authenticateVerify: (
     input: PasskeyApi.AuthenticateVerifyPayload,
+    /** CSD-003: recorded on the issued session, so the device list has data. */
+    context?: { readonly ip?: string; readonly userAgent?: string },
   ) => Effect.Effect<
     IssuedSession,
     | Api.InvalidCredentials
@@ -346,6 +349,10 @@ export const PasskeyHandlers = Layer.mergeAll(
     "passkey.authenticate",
     Effect.fnUntraced(function* (handlers) {
       const passkey = yield* Passkey;
+      // CSD-003: the address port is optional here (a composition that
+      // provides none simply records no ip), so requiring it would break
+      // every existing passkey composition for a best-effort device-list field.
+      const clientAddress = yield* Effect.serviceOption(ClientAddress.ClientAddress);
       return handlers.handleAll({
         authenticateOptions: Effect.fnUntraced(function* ({
           payload,
@@ -356,10 +363,19 @@ export const PasskeyHandlers = Layer.mergeAll(
         }),
         authenticateVerify: Effect.fnUntraced(function* ({
           payload,
+          request,
         }: {
           payload: PasskeyApi.AuthenticateVerifyPayload;
+          request: HttpServerRequest.HttpServerRequest;
         }) {
-          const issued = yield* passkey.authenticateVerify(payload);
+          const resolvedAddress = Option.isSome(clientAddress)
+            ? yield* clientAddress.value.resolve(request)
+            : Option.none<string>();
+          const userAgent = ClientAddress.userAgentOf(request);
+          const issued = yield* passkey.authenticateVerify(payload, {
+            ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+            ...(userAgent === undefined ? {} : { userAgent }),
+          });
           yield* HttpApiBuilder.securitySetCookie(
             Api.SessionCookie,
             Redacted.value(issued.token),
@@ -740,7 +756,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       );
 
       const authenticateVerify: PasskeyShape["authenticateVerify"] = Effect.fnUntraced(
-        function* (input) {
+        function* (input, context) {
           const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
           if (Option.isNone(clientDataOpt)) {
             return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
@@ -829,7 +845,12 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           if (point._tag === "Diverted") {
             return yield* Effect.fail(point.value);
           }
-          const issued = yield* sessions.issue({ userId: stored.userId }).pipe(Effect.orDie);
+          const issued = yield* sessions
+            .issue({
+              userId: stored.userId,
+              request: ClientAddress.sessionRequest(context?.ip, context?.userAgent),
+            })
+            .pipe(Effect.orDie);
           yield* events.publish({
             _tag: "auth.user.signedIn",
             userId: stored.userId,

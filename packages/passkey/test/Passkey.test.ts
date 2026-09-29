@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChallengeStore from "../src/ChallengeStore.ts";
@@ -181,17 +182,23 @@ describe("Passkey", () => {
         challenge: extractChallenge(options),
         origin: ORIGIN,
       });
-      const issued = yield* passkey.authenticateVerify({
-        ceremonyId,
-        credential: {
-          id: "cred-mock-1",
-          rawId: "cred-mock-1",
-          type: "public-key",
-          response: { clientDataJSON, authenticatorData: "", signature: "" },
+      const issued = yield* passkey.authenticateVerify(
+        {
+          ceremonyId,
+          credential: {
+            id: "cred-mock-1",
+            rawId: "cred-mock-1",
+            type: "public-key",
+            response: { clientDataJSON, authenticatorData: "", signature: "" },
+          },
         },
-      });
+        // CSD-003: the request context lands on the issued session.
+        { ip: "203.0.113.9", userAgent: "PasskeyTest/1.0" },
+      );
 
       assert.strictEqual(issued.session.userId, user.id);
+      assert.deepStrictEqual(issued.session.ipAddress, Option.some("203.0.113.9"));
+      assert.deepStrictEqual(issued.session.userAgent, Option.some("PasskeyTest/1.0"));
     }).pipe(Effect.provide(TestLayer)),
   );
 

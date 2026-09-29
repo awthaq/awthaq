@@ -188,11 +188,13 @@ const post = (
   path: string,
   body: unknown,
   cookie?: string,
+  extraHeaders: Record<string, string> = {},
 ): Promise<Response> =>
   handler(
     new Request(`http://localhost${path}`, {
       method: "POST",
       headers: {
+        ...extraHeaders,
         "content-type": "application/json",
         cookie: withCsrfCookie(cookie),
         [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
@@ -616,4 +618,23 @@ describe("AuthHttp + Password (real HTTP)", () => {
       assert.isFalse(requiresAuthentication(endpoint), endpoint.identifier);
     }
   });
+
+  // CSD-003: the handler threads the request's User-Agent onto the session.
+  it.effect("CSD-003: sign-up with a User-Agent yields a session that reports it", () =>
+    Effect.gen(function* () {
+      const { handler } = HttpRouter.toWebHandler(AppLayer);
+      const response = yield* Effect.promise(() =>
+        post(
+          handler,
+          "/password/sign-up",
+          { email: "device@example.com", password: strongPassword },
+          undefined,
+          { "user-agent": "AwthaqTest/1.0" },
+        ),
+      );
+      assert.strictEqual(response.status, 200);
+      const body = (yield* Effect.promise(() => response.json())) as { userAgent: string | null };
+      assert.strictEqual(body.userAgent, "AwthaqTest/1.0");
+    }),
+  );
 });

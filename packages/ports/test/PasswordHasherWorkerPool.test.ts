@@ -15,13 +15,25 @@ const WorkersLive = NodeWorker.layer(() => new Worker(PasswordHasherWorkerPool.w
 const withEnv = (env: Record<string, string>) =>
   Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })));
 
+// Cheap KDF parameters: this suite proves interoperability, not strength, and
+// full-cost scrypt (~128 MiB per hash) times out under a loaded CI machine.
+const cheap = {
+  AUTH_ARGON2_MEMORY_KIB: "1024",
+  AUTH_SCRYPT_COST_LOG2: "12",
+};
+
 const pooled = (
   make: typeof PasswordHasherWorkerPool.layerArgon2id,
   env: Record<string, string> = { AUTH_PASSWORD_HASH_WORKER_POOL_SIZE: "2" },
-) => make.pipe(Layer.provide(WorkersLive), Layer.provide(NodeCrypto.layer), withEnv(env));
+) =>
+  make.pipe(
+    Layer.provide(WorkersLive),
+    Layer.provide(NodeCrypto.layer),
+    withEnv({ ...cheap, ...env }),
+  );
 
 const local = (make: typeof PasswordHasher.layerArgon2id) =>
-  make.pipe(Layer.provide(NodeCrypto.layer));
+  make.pipe(Layer.provide(NodeCrypto.layer), withEnv(cheap));
 
 const pw = Redacted.make("correct horse battery staple");
 

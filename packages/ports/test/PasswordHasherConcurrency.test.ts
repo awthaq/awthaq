@@ -146,6 +146,14 @@ describe("hand-encoded PHC output matches hash-wasm's own encoding", () => {
         }),
       );
       assert.strictEqual(hex, expected);
-    }).pipe(Effect.provide(PasswordHasher.layerScrypt.pipe(Layer.provide(NodeCrypto.layer)))),
+    }).pipe(
+      Effect.provide(
+        PasswordHasher.layerScrypt.pipe(
+          Layer.provide(NodeCrypto.layer),
+          // Cheap cost: this checks the encoding, not strength.
+          withEnv({ AUTH_SCRYPT_COST_LOG2: "12" }),
+        ),
+      ),
+    ),
   );
 });
