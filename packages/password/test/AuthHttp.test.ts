@@ -905,6 +905,50 @@ describe("AuthHttp + Password (real HTTP)", () => {
     }),
   );
 
+  // BEH-EA-077 (cookie-less exemption): a native client's very first sign-in has no cookie jar and no
+  // Authorization header. Unlike every other request in this file it sends no `Cookie` header at all,
+  // so the double-submit pair is not demanded; a browser holding any cookie still is asked for it.
+  it.effect("native first sign-up and sign-in with no cookies and no CSRF pair succeed", () =>
+    Effect.gen(function* () {
+      const mailer = capturingMailer();
+      const { handler } = HttpRouter.toWebHandler(buildAppLayer(mailer.layer));
+      const cookieless = (path: string, body: unknown, extra: Record<string, string> = {}) =>
+        Effect.promise(() =>
+          handler(
+            new Request(`http://localhost${path}`, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                [Api.TOKEN_DELIVERY_HEADER]: "bearer",
+                ...extra,
+              },
+              body: JSON.stringify(body),
+            }),
+          ),
+        );
+      const credentials = { email: "native@example.com", password: strongPassword };
+      const signedUp = yield* cookieless("/password/sign-up", credentials);
+      assert.strictEqual(signedUp.status, 200);
+      yield* verifyLatestSignUp(handler, mailer);
+      const signedIn = yield* cookieless("/password/sign-in", credentials);
+      assert.strictEqual(signedIn.status, 200);
+      const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+        yield* Effect.promise(() => signedIn.json()),
+      );
+      assert.isString(body.token);
+      // Login CSRF from a browser page on another site is still refused: the site check runs.
+      const crossSite = yield* cookieless("/password/sign-in", credentials, {
+        "sec-fetch-site": "cross-site",
+      });
+      assert.strictEqual(crossSite.status, 403);
+      // A browser that holds any cookie is asked for the pair (stale session cookie, no token).
+      const stale = yield* cookieless("/password/sign-in", credentials, {
+        cookie: "__Host-session=stale.secret",
+      });
+      assert.strictEqual(stale.status, 403);
+    }),
+  );
+
   it.effect("MNA-001: an unknown delivery mode answers 400 and mints no session", () =>
     Effect.gen(function* () {
       const { handler } = HttpRouter.toWebHandler(AppLayer);

@@ -28,7 +28,9 @@
 // against a contract without the `CsrfProtection` middleware, or one that
 // supplies its own `csrfClientLayer`/transport. Every mutating production
 // group *does* declare `CsrfProtection` (CSRF is on by default), so a
-// cookie-mode client needs `CsrfClientLive` below.
+// cookie-mode client needs `CsrfClientLive` below, and a cookie-less native client
+// `CsrfClientNative` (the server skips the double-submit for a request with no
+// `Cookie` header, BEH-EA-077, so its first sign-in needs no warm-up).
 import { Api, SessionContract } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -165,6 +167,19 @@ export const csrfClientLayer = (options?: CsrfClientOptions) => {
 
 export const CsrfClientLive: Layer.Layer<HttpApiMiddleware.ForClient<Api.CsrfProtection>> =
   csrfClientLayer();
+
+/**
+ * Native first sign-in (BEH-EA-077, cookie-less exemption): the client half for a program that
+ * has no cookie jar (a native app, a CLI, a server-to-server caller), so it never reads or echoes
+ * a `__Host-csrf` cookie and never retries a `CsrfRejected`. It still discharges
+ * `ForClient<CsrfProtection>` (the middleware is type-required), but the server no longer asks a
+ * request that carries no `Cookie` header at all for the double-submit pair, so the very first
+ * sign-in or sign-up needs no warm-up round trip. Pair it with `bearerTransformClient`.
+ */
+export const CsrfClientNative = csrfClientLayer({
+  readCookie: () => undefined,
+  bootstrapRetry: false,
+});
 
 // ---------------------------------------------------------------------------
 // MNA-005/PIL-005: the bearer-client contract

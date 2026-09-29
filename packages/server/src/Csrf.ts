@@ -18,6 +18,14 @@
 // policy must separately allow, so an explicitly-bearer request was never in
 // CSRF's threat model. Without this, every cookie-less bearer/native client
 // would be 403'd on sign-out/revoke/delete-user.
+//
+// Native first sign-in (spec/behaviors/10-csrf.md, BEH-EA-077 "Cookie-less exemption"): the same
+// reasoning covers a request that carries no `Cookie` header at all. It has no ambient credential
+// a forged request could ride, so the double-submit pair (which a cookie-less client can only get
+// by a warm-up round trip and a jar it may not have) is not demanded of it. The site checks still
+// run, in a stricter form, because the residual risk of a cookie-less forged request is *login*
+// CSRF, not session riding: a browser always sends `Sec-Fetch-Site` and, on a cross-origin POST,
+// `Origin`, and `cookielessSiteCheck` rejects everything but our own origin (or an allowed one).
 
 import { Api } from "@awthaq/api";
 import { SessionCookie } from "@awthaq/core";
@@ -53,6 +61,14 @@ export interface CsrfConfigShape {
    * request, with a fresh cookie on that response).
    */
   readonly maxAge?: Duration.Input;
+  /**
+   * Native first sign-in: by default an unsafe request carrying no `Cookie` header at all (and no
+   * `Authorization`) skips the double-submit pair, because it has no ambient credential to forge
+   * with; the stricter `Sec-Fetch-Site`/`Origin` check still applies. `true` demands the pair from
+   * every unsafe request, at the price of a warm-up round trip and a cookie jar for a first
+   * sign-in (a browser-only deployment that wants no exception at all).
+   */
+  readonly requireTokenWithoutCookies?: boolean;
 }
 
 export class CsrfConfig extends Context.Service<CsrfConfig, CsrfConfigShape>()(
@@ -159,6 +175,35 @@ const siteCheck = (
     return allowedOrigins.includes(origin.value);
   });
 
+/** `true` when the request carries any cookie: a blank `Cookie` header carries none. */
+const carriesCookies = (headers: Headers.Headers): boolean =>
+  Option.match(Headers.get(headers, "cookie"), {
+    onNone: () => false,
+    onSome: (value) => value.trim().length > 0,
+  });
+
+/**
+ * The site check for a request with no double-submit pair behind it (no cookies, so nothing to echo).
+ * Stricter than `siteCheck`: `same-site` (a sibling subdomain, which is not our origin) passes only
+ * with an allowed `Origin`, and a present `Origin` is compared even beside `same-origin`. Absent both
+ * headers the caller is not a browser (a native or server client), which has no ambient credential.
+ */
+const cookielessSiteCheck = (headers: Headers.Headers, allowedOrigins: ReadonlyArray<string>) => {
+  const secFetchSite = Headers.get(headers, "sec-fetch-site");
+  const origin = Headers.get(headers, "origin");
+  const originAllowed = Option.isSome(origin) && allowedOrigins.includes(origin.value);
+  if (Option.isNone(secFetchSite)) return Option.isNone(origin) || originAllowed;
+  switch (secFetchSite.value) {
+    case "same-origin":
+    case "none":
+      return true;
+    case "same-site":
+      return originAllowed;
+    default:
+      return false;
+  }
+};
+
 export const CsrfProtectionLive: Layer.Layer<
   Api.CsrfProtection,
   never,
@@ -211,6 +256,14 @@ export const CsrfProtectionLive: Layer.Layer<
 
         if (!UNSAFE_METHODS.has(request.method)) {
           return yield* httpEffect;
+        }
+
+        // Native first sign-in: nothing ambient to forge with and nothing to echo, so the pair is not
+        // demanded; the stricter site check is the whole defence (see the header comment).
+        if (config.requireTokenWithoutCookies !== true && !carriesCookies(request.headers)) {
+          return cookielessSiteCheck(request.headers, config.allowedOrigins)
+            ? yield* httpEffect
+            : yield* Effect.fail(new Api.CsrfRejected());
         }
 
         const siteOk = yield* siteCheck(request.headers, config.allowedOrigins);

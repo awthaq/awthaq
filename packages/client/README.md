@@ -48,9 +48,14 @@ custom cookie reader (a server-side caller reads its request's `Cookie` header â
 `AuthClient.readCookie` is the browser reader.
 
 Bearer-authenticated requests are exempt from CSRF on the server (there is no
-ambient browser credential to forge), so a bearer client uses the bearer transform
-below instead; the `{ csrf: false }` contract variant is still unbuilt
-(`Auth.make` has no composition-level CSRF opt-out).
+ambient browser credential to forge), and so is any unsafe request that carries no
+`Cookie` header at all (BEH-EA-077), which is what a native or CLI client's **first**
+sign-in or sign-up is: it has no cookie jar and no token yet, and it no longer needs
+a warm-up round trip. Such a client provides `AuthClient.CsrfClientNative` (it never
+reads or echoes a cookie and never retries a `CsrfRejected`) alongside the bearer
+transform below. A browser that holds any cookie is still asked for the pair, and the
+server still refuses a cross-site or foreign-`Origin` request. The `{ csrf: false }`
+contract variant is still unbuilt (`Auth.make` has no composition-level CSRF opt-out).
 
 ## Bearer (native, CLI, server-to-server) clients
 

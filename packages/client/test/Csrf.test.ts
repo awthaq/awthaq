@@ -165,6 +165,21 @@ describe("CsrfClientLive cold-start bootstrap (CDS-007)", () => {
     assert.strictEqual(requests.length, 1);
   });
 
+  it("CsrfClientNative never reads a cookie or retries: a native first call is one plain request", async () => {
+    // Even a page-global `document.cookie` (an embedded webview) is ignored by the native half.
+    setDocumentCookie(`${Api.CSRF_COOKIE_NAME}=ignored`);
+    const ok = await run(AuthClient.CsrfClientNative, noContent);
+    assert.isTrue(Exit.isSuccess(ok.exit));
+    assert.strictEqual(ok.requests.length, 1);
+    assert.isUndefined(ok.requests[0]?.headers[Api.CSRF_HEADER_NAME]);
+    const rejected = await run(AuthClient.CsrfClientNative, (_request, attempt) => {
+      if (attempt === 1) setDocumentCookie(`${Api.CSRF_COOKIE_NAME}=fresh`);
+      return csrfRejected();
+    });
+    assert.isTrue(Exit.isFailure(rejected.exit));
+    assert.strictEqual(rejected.requests.length, 1);
+  });
+
   it("csrfClientLayer takes any cookie reader, so a server-side caller can read its request's Cookie header", async () => {
     const { requests } = await run(
       AuthClient.csrfClientLayer({ readCookie: () => "from-header" }),
