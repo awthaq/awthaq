@@ -1,21 +1,21 @@
 # Resolution plan: all open audit issues
 
 > ## Execution outcome (2026-09-29)
-> **The plan has been executed** on branch `plan/resolve-audit-issues` (299 commits over `ec065a7`; nothing pushed).
-> Of 934 issue files (900 audited + 17 found during validation + 17 filed by implementing agents), **895 are `resolved`**.
-> Every one of the 497 plan-actionable issues is resolved except **MW-005** (needs a human: git remote, npm org, trusted publisher; the release
-> pipeline and a dormant canary workflow are prepared). Still open, by design:
-> - **32 wontfix candidates** (`needs-triage`, see §7): Status left untouched pending your confirmation.
-> - **PV-230** (qadi 0.8.0 already fixes the leak; awthaq still resolves `@qadi/*@0.7.0` — bump needs the registry), **PV-241**, **PV-260**,
->   **PV-261** (each needs a maintainer design call, precisely described in the issue), **PV-380** (new: `packages/sql/lib/Models.d.ts` emits
->   ~220 type errors for a consumer with `skipLibCheck: false`; in-repo builds never see it).
-> - Verified from a clean build on the final tree: `pnpm run check` exits 0 (workspace:check, typecheck incl. tests, package:smoke, lint 0/0, knip,
->   format:check, circular, check:readmes, check:error-tags, coverage with enforced thresholds, test:bdd, spec:verify:strict with the drift guard),
->   `pnpm run test:pg` (Docker Postgres 16) 502 tests. Unit tests ≈ 3,050; BDD 1,272 wired scenarios.
+> **The plan has been executed** on branch `plan/resolve-audit-issues` (nothing pushed).
+> Of 934 issue files (900 audited + 17 found during validation + 17 filed by implementing agents), **910 are `resolved`**, **23 are `wontfix`**
+> (each with a written rationale in the issue), and **1 is `ready-for-human`**: **MW-005** (needs a human: git remote, npm org, trusted publisher,
+> dropping `private` from `@awthaq/ports`; the release pipeline and a dormant canary workflow are prepared).
+> - The 32 wontfix candidates were re-triaged: the worthwhile ones were implemented (e.g. OAuth bounce page PV-016, qadi 0.8.0 bump PV-230,
+>   `Models.d.ts` declaration emit PV-380 with a smoke guard), the rest closed as wontfix.
+> - Verified from a clean build on the final tree: `pnpm run check` exits 0 (workspace:check, typecheck incl. tests, package:smoke, lint, knip,
+>   format:check, circular, check:readmes, check:error-tags, coverage with enforced thresholds, test:bdd, spec:verify:strict 30 PASS / 0 FAIL),
+>   `pnpm run test:pg` (Docker Postgres 16) 596 tests.
 > - Decisions adopted from `DECISIONS.md` are recorded as "adopted recommended option X per plan; user may revisit" in each issue comment.
 >   Behavior changes worth reviewing: audit-write failures are best-effort by default (`AuditWritePolicy`, `required` restores fail-closed);
 >   `client_secret_basic` is the OAuth token-endpoint default; passkeys registered before P08 must re-register (stored user handle);
->   CSRF cookie wire format changed and secrets must be ≥ 32 bytes; `Sessions.revoke*` require a `reason`; SAML is SP-only, IdP-initiated not offered.
+>   CSRF cookie wire format changed and secrets must be ≥ 32 bytes; cookie-less native first sign-in is exempt from CSRF
+>   (`CsrfConfig.requireTokenWithoutCookies` opts out); `Sessions.revoke*` require a `reason`; email-change confirmation revokes all sessions;
+>   SAML is SP-only, IdP-initiated not offered.
 > The sections below describe the plan as written *before* execution; per-issue outcomes are in each `.issues/*.md` **Resolved** comment.
 
 
