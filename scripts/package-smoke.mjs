@@ -1,19 +1,16 @@
-// Mirrors scripts/circular.mjs's own convention: glob.globSync returns an
-// empty array (not an ENOENT) when packages/*/package.json doesn't exist
-// yet, so this stays a harmless no-op rather than hard-failing on an
-// unmatched shell glob.
+// Per package (a stub with an honest manifest is checked too), three local,
+// credential-free checks that together catch more than a bare pack: the tarball
+// assembles (npm pack --dry-run), the package.json shape is publish-correct
+// (publint), and the published types actually resolve for TS consumers
+// (@arethetypeswrong/cli).
 //
-// Per package (including bare stub packages like cli/api-key/magic-link/
-// two-factor — metadata correctness is worth checking even for a stub),
-// three local, credential-free checks that together catch more than a
-// bare pack: the tarball assembles (npm pack --dry-run), the package.json
-// shape is publish-correct (publint), and the published types actually
-// resolve for TS consumers (@arethetypeswrong/cli). Runs after `pnpm
-// typecheck` in the `check` script chain, since typecheck's `tsc -b`
-// project references are what produce the real `lib/` output these
-// checks pack and inspect.
+// These inspect the emitted `lib/`, which `pnpm typecheck`'s `tsc -b` project
+// references produce (so this runs after it in `pnpm check`). A missing `lib/` is
+// reported once, up front, as an actionable error (MM-007) instead of as N
+// confusing publint/attw failures. Anchored at the repo root, and an empty roster
+// is a failure, not a skip (MTS-009).
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as glob from "glob";
@@ -28,8 +25,29 @@ const packageJsonPaths = glob
   .sort();
 
 if (packageJsonPaths.length === 0) {
-  console.log("package:smoke: no packages/*/package.json files yet, skipping");
-  process.exit(0);
+  console.error(`package:smoke: no packages/*/package.json files found under ${rootDir}`);
+  process.exit(1);
+}
+
+/** Every relative file an `exports` map points at (wildcard targets are skipped). */
+const exportTargets = (value) => {
+  if (typeof value === "string") return value.startsWith("./") && !value.includes("*") ? [value] : [];
+  if (value !== null && typeof value === "object") return Object.values(value).flatMap(exportTargets);
+  return [];
+};
+
+const missingBuildOutputs = packageJsonPaths.flatMap((packageJsonPath) => {
+  const pkgDir = path.dirname(packageJsonPath);
+  const manifest = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  return exportTargets(manifest.exports)
+    .filter((target) => !existsSync(path.join(pkgDir, target)))
+    .map((target) => `${path.relative(rootDir, pkgDir)}: ${target}`);
+});
+
+if (missingBuildOutputs.length > 0) {
+  console.error("package:smoke: built output is missing, run `pnpm typecheck` (or `pnpm build`) first:");
+  for (const missing of missingBuildOutputs) console.error(`  - ${missing}`);
+  process.exit(1);
 }
 
 const attwBin = path.join(rootDir, "node_modules", ".bin", "attw");

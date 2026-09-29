@@ -5,6 +5,14 @@ updates:
     schedule:
       interval: "weekly"
     groups:
+      # MM-003: the patched compiler pair (`@effect/tsgo` patches the installed
+      # `typescript` in `prepare`) must move together. Listed first so these win
+      # over the broader `@effect/*` pattern of the `effect` group below.
+      typescript-toolchain:
+        patterns:
+          - "typescript"
+          - "@effect/tsgo"
+          - "@effect/language-service"
       effect:
         patterns:
           - "effect"
