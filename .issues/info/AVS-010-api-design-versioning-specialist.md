@@ -49,3 +49,5 @@ Adopt one written rule — e.g. surrogate keys always `:singularId`, natural key
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `api-path-param-conventions`. Duplicate of `AVS-006` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/oauth/src/OAuthApi.ts:84`. Full dossier: `.plan/slices/03-oauth-flow.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `AVS-006-api-design-versioning-specialist` — closed by its fix (see that issue's Resolved comment).

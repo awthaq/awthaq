@@ -56,3 +56,5 @@ Document the trade-off explicitly, or return uniformly-shaped options (empty all
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** DUPLICATE (confidence high); workstream `passkey-enumeration-safety`. Duplicate of `TC-001` — closed by that issue's fix. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:723`. Full dossier: `.plan/slices/10-passkey-admin.md`. Status → resolved.
+
+**Resolved (2026-09-29):** Duplicate of `TC-001-tim-cappalli` — closed by its fix (see that issue's Resolved comment).

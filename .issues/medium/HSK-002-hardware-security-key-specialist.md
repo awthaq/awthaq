@@ -3,7 +3,7 @@ ID: "HSK-002"
 Title: "Attestation conveyance (\"direct\"/\"enterprise\") exists but attestation is never verified anywhere"
 Level: medium
 Category: "security"
-Status: ready-for-human
+Status: resolved
 Package: "ports"
 Source: "packages/ports/src/WebAuthn.ts:74"
 Auditor: "hardware-security-key-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `security` · `ports` · reported by **Hardware Security Key (FIDO U2F/CTAP) Specialist** (`hardware-security-key-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -51,3 +51,5 @@ Either fail closed when attestation != "none" is configured and no verification 
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `webauthn-attestation-policy`. Evidence at HEAD ec065a7: `packages/ports/src/WebAuthn.ts:73`. Fix: (Recommended option B) Surface attestation format and add an optional AAGUID/format trust policy; warn when conveyance is requested without a policy. (effort M). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/09-ports-apikey-cli.md`. Status → ready-for-human.
+
+**Resolved (2026-09-29):** Decision (2026-09-29): adopted recommended option B per plan; user may revisit. Port surfaces attestationFormat and attestationType (none|self|certificate, classified from the verified attestation object); PasskeyConfig.attestationPolicy { trustedAaguids, rejectSelfAttestation? (default true) } makes register/verify fail PasskeyAttestationRejected (new 400 error) for no attestation, self-attestation, or an unlisted AAGUID; Passkey.layer warns once at build when attestation != 'none' and no policy is set. Optional attestationRootCertificates forwarding (dossier step 3) deliberately not built: it is process-global in the library; documented in AttestationPolicy JSDoc, README and BEH-EA-135 that this is an allow-list, not MDS3. Tests: PasskeyAttestation.test.ts (none rejected, listed certificate accepted case-insensitively, unlisted rejected, self rejected/accepted, warning emitted exactly once / not with policy), PasskeyRealPort.test.ts (real packed self-attestation accepted with policy; none rejected), ports WebAuthn.test.ts (format/type surfaced). Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

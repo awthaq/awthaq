@@ -3,7 +3,7 @@ ID: "HSK-007"
 Title: "Conditional Create hardcodes residentKey:\"required\", silently excluding CTAP1-only and older-CTAP2 hardware keys"
 Level: low
 Category: "dx"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/Passkey.ts:425"
 Auditor: "hardware-security-key-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `dx` · `passkey` · reported by **Hardware Security Key (FIDO U2F/CTAP) Specialist** (`hardware-security-key-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -57,3 +57,5 @@ Document on PasskeyConditionalCreateDisabled/conditionalCreate that the conditio
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-ceremony-policy`. Evidence at HEAD ec065a7: `packages/passkey/src/Passkey.ts:628`. Fix: Document the discoverable-credential (CTAP2.1+ / platform) requirement of the conditional ceremony. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Documented the discoverable-credential (CTAP2.1+/platform) requirement and the conditionalCreate:false opt-out on PasskeyConfigShape.conditionalCreate, PasskeyApi.PasskeyConditionalCreateDisabled and the README. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).

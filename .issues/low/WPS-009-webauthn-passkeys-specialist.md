@@ -3,7 +3,7 @@ ID: "WPS-009"
 Title: "layerCookie violates ChallengeStoreShape's documented issue-replacement contract"
 Level: low
 Category: "correctness"
-Status: ready-for-agent
+Status: resolved
 Package: "passkey"
 Source: "packages/passkey/src/ChallengeStore.ts:60"
 Auditor: "webauthn-passkeys-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `correctness` · `passkey` · reported by **WebAuthn/Passkeys Implementation Specialist** (`webauthn-passkeys-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ Weaken the shape's doc to state which guarantees each backend provides (or split
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `passkey-challenge-store-hardening`. Evidence at HEAD ec065a7: `packages/passkey/src/ChallengeStore.ts:60`. Fix: State per-backend guarantees in the type and prove them with a cross-backend conformance suite. (effort S). Full dossier: `.plan/slices/10-passkey-admin.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** ChallengeStoreShape.guarantees {singleUse, replacesPriorOnIssue} (memory/sql true/true, cookie false/false); Passkey.layer logs a warning at build when singleUse is false; one shared conformance suite in ChallengeStore.test.ts runs against memory, sql and cookie asserting each property iff claimed (plus an explicit guarantees assertion). BEH-EA-132 text and README document the per-backend guarantees. Gates: typecheck clean for passkey/ports/client + tsconfig.test.json; passkey/ports/client vitest all green; test:bdd passkey features green; spec:verify:strict 19/19; oxlint no new findings (pre-existing ClientAddress bigint errors and an existing client no-useless-spread warning only).
