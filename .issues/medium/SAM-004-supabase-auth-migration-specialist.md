@@ -3,7 +3,7 @@ ID: "SAM-004"
 Title: "No home for auth.users metadata; plugin-contributed fields are spec-only"
 Level: medium
 Category: "api"
-Status: ready-for-human
+Status: resolved
 Package: "core"
 Source: "packages/core/src/AuthPlugin.ts:126"
 Auditor: "supabase-auth-migration-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `api` · `core` · reported by **Supabase Auth Migration Specialist** (`supabase-auth-migration-specialist`)
 
-Status: **ready-for-human**
+Status: **resolved**
 
 ## Summary
 
@@ -52,3 +52,5 @@ _Triage notes and discussion append here._
 **Plan validation (2026-09-29):** PARTIAL (confidence high); workstream `users-profile-surface`. Evidence at HEAD ec065a7: `packages/core/src/AuthPlugin.ts:126`. Fix: Implement the BEH-EA-040/048 user-field extension point (decision option A), decomposed into four tickets, with interim docs. (effort XL). Needs a decision first — see `.plan/DECISIONS.md`. Full dossier: `.plan/slices/01-core-sessions-users.md`. Status → ready-for-human.
 
 **Plan note (2026-09-29):** Left open by P14 after landing the interim docs only. Decision (2026-09-29): adopted recommended option A (implement the BEH-EA-040/048 user-field extension point) per plan; user may revisit. Landed in commit 4b63d9e: the interim guidance of dossier step 1 in spec/behaviors/06-domain-users-accounts.md (BEH-EA-048: application data goes in the server-only `metadata` or a plugin-prefixed side table keyed by UserId; anything a policy may rely on is never client-writable; the only client-writable profile fields are `name` and `image`). NOT started, and why: steps 2-5 are an XL cross-cutting change that lives in files other programs own — `AuthPlugin.ts` (a `userFields` option on `AuthPlugin.Service`), `Auth.ts` (the `UserFieldsOf<P>` type-level fold, P12), the migration linker's ALTER lane (`renumberMigrations`), a typed `Users.getFields/setFields`, and client type inference — and it should be planned as the four tickets the dossier names on top of the now-landed identity model (UserRecord.identity/status/image are no longer closed-shape blockers).
+
+**Resolved (2026-09-29):** P21a implemented decision A (BEH-EA-040/048) as ADR-EA-035, in the dossier's four tickets. (1) Declaration + types: AuthPlugin.Service 'userFields' option (schemas whose encoded side is one scalar; UserFields.field / serverOnly; validated at definition: InvalidDeclaration), Class.userFields + type-only '~userFields', Auth.UserFieldsOf<P> (UnionToIntersection fold, keys <plugin id>_<field>), Built.userFields / userFieldsLayer, manifest.userFields, UserFieldConflict. (2) Migration lane: Auth.make's renumberMigrations appends a generated 'ALTER TABLE users ADD COLUMN' migration per field (nullable, dialect-neutral via sql.onDialectOrElse, named NNNN_<plugin>_add_user_field_<field>, after every plugin's own; dots in plugin ids become _). Tested on SQLite and on real Postgres (pnpm run test:pg, Docker was available: packages/core/test/UserFields.test.ts is in scripts/test-pg.sh's suite list and passed). (3) Users.getFields/setFields on both layers (memory + SQL via UsersRepository.readFields/writeFields), validated as a whole, source 'client' refuses serverOnly fields (UserFieldNotWritable 403), UnknownUserField/InvalidUserField 422, announces AfterUserAttributesChanged, typed Users.typedFields(auth.userFields), UserFields.UserFieldRegistry Reference (empty default) provided by auth.userFieldsLayer / UserFields.layer (TestAuth.layer wires it). (4) Client: PATCH /user takes 'fields' (client-writable only), AccountDto.fields, UserFields.client(auth.userFields) encodes only ClientWritableKeys at the type level and decodes DTO fields. BEH-EA-040/048 as-shipped notes replace the interim guidance; ADR-EA-035 (+index, README, traceability row); changesets. Tests: core UserFields.test.ts (18: declaration/manifest/migration names/validation/types with @ts-expect-error, both Users layers, generated columns), server AuthHttp.test.ts (2), packages/test UserFields.test.ts (TestAuth end to end: declare, store, gate, typed read/write, client encode). Left (Plan note): BEH-EA-048 feature scenarios in features/02-domain/06-users-accounts.feature (features/ is P20a's; needs REQ ids and steps), Account and Session extension points (BEH-EA-048 names them; users only here), docs/plugin-authoring.md section (P19), admin UserDto.fields, and the client @awthaq/client/react generic profile typing beyond the UserFields.client helper. Note for the orchestrator: ADR-EA-035 was taken on top of 034 (P20b) - renumber if another program also claims 035.
