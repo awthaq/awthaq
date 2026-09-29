@@ -57,16 +57,19 @@ const minLengthOf = Effect.map(Password.PasswordConfig, (config) => config.minLe
 const numbers = cell("numbers", (value): value is ReadonlyArray<number> => Array.isArray(value));
 const strings = cell("strings", (value): value is ReadonlyArray<string> => Array.isArray(value));
 const gate = cell("gate", (value): value is string => typeof value === "string");
-const exitStatus = cell("exitStatus", (value): value is "success" | "failure" =>
-  value === "success" || value === "failure",
+const exitStatus = cell(
+  "exitStatus",
+  (value): value is "success" | "failure" => value === "success" || value === "failure",
 );
 const abort = cell(
   "abort",
   (value): value is { readonly tag: string; readonly code: string } =>
     isObject(value) && "tag" in value && "code" in value,
 );
-const outcome = cell("outcome", (value): value is HookPoint.DivertResult<SignUpInput, SignInOutcome> =>
-  isObject(value) && "_tag" in value,
+const outcome = cell(
+  "outcome",
+  (value): value is HookPoint.DivertResult<SignUpInput, SignInOutcome> =>
+    isObject(value) && "_tag" in value,
 );
 const claims = cell(
   "claims",
@@ -79,7 +82,10 @@ const silent = Logger.layer([]);
 const signUp = (email: string) => new SignUpInput({ email });
 
 /** A tap owner for BEH-EA-022's ordering scenario: just an id and what it depends on. */
-const owner = (id: string, dependsOn: ReadonlyArray<HookPoint.TapOwner> = []): HookPoint.TapOwner => ({
+const owner = (
+  id: string,
+  dependsOn: ReadonlyArray<HookPoint.TapOwner> = [],
+): HookPoint.TapOwner => ({
   id,
   dependsOn,
 });
@@ -90,13 +96,11 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a plugin {string} whose options are declared as {string}, a {string} with a {string}",
     function* (plugin: string, options: string, kind: string, member: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-      assert.deepEqual([plugin, options, kind, member], [
-        "Password",
-        "PasswordConfig",
-        "Context.Reference",
-        "defaultValue",
-      ]);
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual(
+        [plugin, options, kind, member],
+        ["Password", "PasswordConfig", "Context.Reference", "defaultValue"],
+      );
     },
   );
 
@@ -145,8 +149,11 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a {string} composed via {string} from tenant-specific {string} Layers",
     function* (map: string, service: string, layers: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-      assert.deepEqual([map, service, layers], ["TenantAuthConfig", "LayerMap.Service", "Password.config(...)"]);
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual(
+        [map, service, layers],
+        ["TenantAuthConfig", "LayerMap.Service", "Password.config(...)"],
+      );
     },
   );
 
@@ -185,7 +192,7 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "{string}'s declared shape requires {string} to be a number",
     function* (_reference: string, key: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(key, "minLength");
       assert.equal(typeof Password.PasswordConfig.defaultValue().minLength, "number");
     },
@@ -198,7 +205,7 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "{string}'s declared shape does not include a key {string}",
     function* (_reference: string, key: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(key, "unknownOption");
       assert.ok(!(key in Password.PasswordConfig.defaultValue()));
     },
@@ -230,20 +237,26 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
     assertTypeGate("config-wrong-type", GATES, ["@ts-expect-error", 'minLength: "twelve"']);
   });
 
-  Then("no runtime validation failure occurs at boot or at first use for this override", function* () {
-    // Composition and first read both succeeded: there is no runtime validator to fail, which is
-    // exactly why the call-site check above is the only defence.
-    assert.deepEqual(yield* take(strings), ["twelve"]);
-  });
+  Then(
+    "no runtime validation failure occurs at boot or at first use for this override",
+    function* () {
+      // Composition and first read both succeeded: there is no runtime validator to fail, which is
+      // exactly why the call-site check above is the only defence.
+      assert.deepEqual(yield* take(strings), ["twelve"]);
+    },
+  );
 
   // ---- BEH-EA-019: variants ----
 
   Given(
     "a plugin {string} exposing a static variant {string} alongside its full {string}",
     function* (plugin: string, variant: string, full: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       // Stand-in: `NotifierFixture.layerNoMail` is the variant, `.layer` the full layer.
-      assert.deepEqual([plugin, variant, full], ["Password", "Password.layerNoReset", "Password.layer"]);
+      assert.deepEqual(
+        [plugin, variant, full],
+        ["Password", "Password.layerNoReset", "Password.layer"],
+      );
       assert.ok(Layer.isLayer(NotifierFixture.layer) && Layer.isLayer(NotifierFixture.layerNoMail));
     },
   );
@@ -253,7 +266,10 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (_variant: string, make: string, _plugin: string) {
       assert.equal(make, "Auth.make");
       const built = Auth.make([NotifierNoMail]);
-      yield* put(strings, built.manifest.plugins.map((entry) => entry.id));
+      yield* put(
+        strings,
+        built.manifest.plugins.map((entry) => entry.id),
+      );
     },
   );
 
@@ -280,7 +296,10 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   When("{string} composes the tuple", function* (_call: string) {
-    yield* put(strings, Auth.make([NotifierNoMail, PasskeyFixture]).manifest.plugins.map((p) => p.id));
+    yield* put(
+      strings,
+      Auth.make([NotifierNoMail, PasskeyFixture]).manifest.plugins.map((p) => p.id),
+    );
   });
 
   Then(
@@ -300,7 +319,7 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a plugin {string} whose {string} uses the port {string}",
     function* (plugin: string, member: string, port: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.deepEqual([plugin, member, port], ["Password", "make", "PasswordHasher"]);
     },
   );
@@ -308,23 +327,29 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "{string}'s {string} type is inspected before the application provides {string}",
     function* (_plugin: string, member: string, _port: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(member, "layer");
     },
   );
 
-  Then("{string} remains in {string}'s Layer {string}", function* (port: string, _plugin: string, rin: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-    assert.equal(port, "PasswordHasher");
-    assert.equal(rin, "RIn");
-    assertTypeGate("port-stays-in-rin", GATES, ["passwordRequiresHasher", "= true"]);
-  });
+  Then(
+    "{string} remains in {string}'s Layer {string}",
+    function* (port: string, _plugin: string, rin: string) {
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.equal(port, "PasswordHasher");
+      assert.equal(rin, "RIn");
+      assertTypeGate("port-stays-in-rin", GATES, ["passwordRequiresHasher", "= true"]);
+    },
+  );
 
   Given(
     "a plugin {string} whose {string} uses the ports {string} and {string}",
     function* (plugin: string, member: string, first: string, second: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-      assert.deepEqual([plugin, member, first, second], ["Password", "make", "PasswordHasher", "Mailer"]);
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual(
+        [plugin, member, first, second],
+        ["Password", "make", "PasswordHasher", "Mailer"],
+      );
     },
   );
 
@@ -335,21 +360,21 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
     const context = yield* Effect.scoped(
       Layer.build(NotifierFixture.layer.pipe(Layer.provide(Mailer.layerMemory))),
     );
-    yield* put(gate, Option.isNone(Context.getOption(context, Mailer.Mailer)) ? "port-absent" : "port-present");
+    yield* put(
+      gate,
+      Option.isNone(Context.getOption(context, Mailer.Mailer)) ? "port-absent" : "port-present",
+    );
   });
 
-  Then(
-    "neither {string} nor {string} appears in {string}'s Layer {string}",
-    function* () {
-      assert.equal(yield* take(gate), "port-absent");
-      assertTypeGate("port-not-in-rout", GATES, ["passwordProvidesNoPort", "= true"]);
-    },
-  );
+  Then("neither {string} nor {string} appears in {string}'s Layer {string}", function* () {
+    assert.equal(yield* take(gate), "port-absent");
+    assertTypeGate("port-not-in-rout", GATES, ["passwordProvidesNoPort", "= true"]);
+  });
 
   Given(
     "two plugins {string} and {string} that both use the port {string}",
     function* (first: string, second: string, port: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.deepEqual([first, second, port], ["Password", "Passkey", "Crypto"]);
     },
   );
@@ -367,7 +392,7 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "{string} remains a single shared entry in the composed Layer's {string}",
     function* (_port: string, _rin: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assertTypeGate("shared-port-is-one-entry", GATES, ["cryptoIsTheOnlyRequirement", "= true"]);
     },
   );
@@ -428,63 +453,75 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(slot, "SubjectResolver");
   });
 
-  When("the default is compared against any plugin's explicit {string} override", function* (_slot: string) {
-    const defaultSubject = yield* Effect.flatMap(SubjectResolver.SubjectResolver, (resolver) =>
-      resolver.resolve(userPrincipal),
-    );
-    const overridden = yield* Effect.gen(function* () {
-      const resolver = yield* SubjectResolver.SubjectResolver;
-      return yield* resolver.resolve(userPrincipal);
-    }).pipe(Effect.provide(grantingResolver));
-    const rolesCovered = [...defaultSubject.roles].every((role) => overridden.roles.has(role));
-    const permissionsCovered = [...defaultSubject.permissions].every((permission) =>
-      overridden.permissions.has(permission),
-    );
-    yield* put(strings, [
-      String(defaultSubject.roles.size),
-      String(defaultSubject.permissions.size),
-      String(overridden.roles.size),
-      String(overridden.permissions.size),
-      String(rolesCovered && permissionsCovered),
-    ]);
-  });
-
-  Then(
-    "the default is at least as restrictive as any explicit override",
-    function* () {
-      const [defaultRoles, defaultPermissions, overrideRoles, overridePermissions, covered] =
-        yield* take(strings);
-      assert.equal(defaultRoles, "0");
-      assert.equal(defaultPermissions, "0");
-      // The override really does grant more, so the comparison is not vacuous.
-      assert.notEqual(overrideRoles, "0");
-      assert.notEqual(overridePermissions, "0");
-      assert.equal(covered, "true");
+  When(
+    "the default is compared against any plugin's explicit {string} override",
+    function* (_slot: string) {
+      const defaultSubject = yield* Effect.flatMap(SubjectResolver.SubjectResolver, (resolver) =>
+        resolver.resolve(userPrincipal),
+      );
+      const overridden = yield* Effect.gen(function* () {
+        const resolver = yield* SubjectResolver.SubjectResolver;
+        return yield* resolver.resolve(userPrincipal);
+      }).pipe(Effect.provide(grantingResolver));
+      const rolesCovered = [...defaultSubject.roles].every((role) => overridden.roles.has(role));
+      const permissionsCovered = [...defaultSubject.permissions].every((permission) =>
+        overridden.permissions.has(permission),
+      );
+      yield* put(strings, [
+        String(defaultSubject.roles.size),
+        String(defaultSubject.permissions.size),
+        String(overridden.roles.size),
+        String(overridden.permissions.size),
+        String(rolesCovered && permissionsCovered),
+      ]);
     },
   );
 
-  Given("a plugin {string} that overrides the {string} slot", function* (plugin: string, slot: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-    assert.deepEqual([plugin, slot], ["Roles", "SubjectResolver"]);
+  Then("the default is at least as restrictive as any explicit override", function* () {
+    const [defaultRoles, defaultPermissions, overrideRoles, overridePermissions, covered] =
+      yield* take(strings);
+    assert.equal(defaultRoles, "0");
+    assert.equal(defaultPermissions, "0");
+    // The override really does grant more, so the comparison is not vacuous.
+    assert.notEqual(overrideRoles, "0");
+    assert.notEqual(overridePermissions, "0");
+    assert.equal(covered, "true");
   });
 
-  When("{string}'s Layer is built with its {string} claim", function* (_plugin: string, registry: string) {
-    assert.equal(registry, "SlotsRegistry");
-    const claimed = yield* Effect.gen(function* () {
-      const resolver = yield* SubjectResolver.SubjectResolver;
-      const subject = yield* resolver.resolve(userPrincipal);
-      const registered = yield* Effect.flatMap(Slots.SlotsRegistry, (registry) => registry.claimed);
-      return [subject.id, ...registered.map((entry) => `${entry.slot}=${entry.owner}`)];
-    }).pipe(Effect.provide(Auth.make([RolesFixture]).layer));
-    yield* put(strings, claimed);
-  });
+  Given(
+    "a plugin {string} that overrides the {string} slot",
+    function* (plugin: string, slot: string) {
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual([plugin, slot], ["Roles", "SubjectResolver"]);
+    },
+  );
 
-  Then("{string} resolves to {string}'s implementation", function* (_slot: string, _plugin: string) {
-    const [subjectId, claim] = yield* take(strings);
-    assert.equal(subjectId, "user:u-1");
-    // The override is recorded against the overriding plugin — that is what makes it observable.
-    assert.equal(claim, `${SubjectResolver.SubjectResolver.key}=roles`);
-  });
+  When(
+    "{string}'s Layer is built with its {string} claim",
+    function* (_plugin: string, registry: string) {
+      assert.equal(registry, "SlotsRegistry");
+      const claimed = yield* Effect.gen(function* () {
+        const resolver = yield* SubjectResolver.SubjectResolver;
+        const subject = yield* resolver.resolve(userPrincipal);
+        const registered = yield* Effect.flatMap(
+          Slots.SlotsRegistry,
+          (registry) => registry.claimed,
+        );
+        return [subject.id, ...registered.map((entry) => `${entry.slot}=${entry.owner}`)];
+      }).pipe(Effect.provide(Auth.make([RolesFixture]).layer));
+      yield* put(strings, claimed);
+    },
+  );
+
+  Then(
+    "{string} resolves to {string}'s implementation",
+    function* (_slot: string, _plugin: string) {
+      const [subjectId, claim] = yield* take(strings);
+      assert.equal(subjectId, "user:u-1");
+      // The override is recorded against the overriding plugin — that is what makes it observable.
+      assert.equal(claim, `${SubjectResolver.SubjectResolver.key}=roles`);
+    },
+  );
 
   Then(
     "a second plugin also overriding {string} is thereby detectable pairwise \\(BEH-EA-012\\)",
@@ -514,54 +551,60 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a {string} hook point {string} tapped by {string}, which fails with {string} when the email does not end in {string}",
     function* (kind: string, point: string, tap: string, failure: string, suffix: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-      assert.deepEqual([kind, point, tap, failure, suffix], [
-        "veto",
-        "BeforeSignUp",
-        "CompanyEmail",
-        "HookAbort",
-        "@acme.com",
-      ]);
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual(
+        [kind, point, tap, failure, suffix],
+        ["veto", "BeforeSignUp", "CompanyEmail", "HookAbort", "@acme.com"],
+      );
       assert.equal(BeforeSignUp.kind, "veto");
     },
   );
 
-  When("{string} fires for an input whose email ends in {string}", function* (_point: string, suffix: string) {
-    const CompanyEmail = BeforeSignUp.tap((input) =>
-      input.email.endsWith("@acme.com")
-        ? Effect.succeed(input)
-        : Effect.fail(new HookPoint.HookAbort({ code: "EMAIL_DOMAIN_NOT_ALLOWED" })),
-    );
-    const failure = yield* runVeto(CompanyEmail, `x${suffix}`, () => Effect.void).pipe(Effect.flip);
-    yield* put(abort, { tag: failure._tag, code: failure.code });
-  });
+  When(
+    "{string} fires for an input whose email ends in {string}",
+    function* (_point: string, suffix: string) {
+      const CompanyEmail = BeforeSignUp.tap((input) =>
+        input.email.endsWith("@acme.com")
+          ? Effect.succeed(input)
+          : Effect.fail(new HookPoint.HookAbort({ code: "EMAIL_DOMAIN_NOT_ALLOWED" })),
+      );
+      const failure = yield* runVeto(CompanyEmail, `x${suffix}`, () => Effect.void).pipe(
+        Effect.flip,
+      );
+      yield* put(abort, { tag: failure._tag, code: failure.code });
+    },
+  );
 
-  Then("the operation is aborted with the typed {string} {string}", function* (tag: string, code: string) {
-    assert.deepEqual(yield* take(abort), { tag, code });
-  });
+  Then(
+    "the operation is aborted with the typed {string} {string}",
+    function* (tag: string, code: string) {
+      assert.deepEqual(yield* take(abort), { tag, code });
+    },
+  );
 
   Given(
     "a {string} hook point {string} tapped by a plugin that transforms the input and does not abort",
     function* (kind: string, point: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.deepEqual([kind, point], ["veto", "BeforeSignUp"]);
     },
   );
 
   When("{string} fires", function* (_point: string) {
     const laterTapSaw = yield* Ref.make("");
-    const Lowercase = BeforeSignUp.tap((input) => Effect.succeed(signUp(input.email.toLowerCase())), {
-      order: 0,
-    });
+    const Lowercase = BeforeSignUp.tap(
+      (input) => Effect.succeed(signUp(input.email.toLowerCase())),
+      {
+        order: 0,
+      },
+    );
     const Recorder = BeforeSignUp.tap(
       (input) => Ref.set(laterTapSaw, input.email).pipe(Effect.as(input)),
       { order: 1 },
     );
     const operationSaw = yield* Ref.make("");
-    yield* runVeto(
-      Layer.merge(Lowercase, Recorder),
-      "MixedCase@Example.COM",
-      (result) => Ref.set(operationSaw, result.email),
+    yield* runVeto(Layer.merge(Lowercase, Recorder), "MixedCase@Example.COM", (result) =>
+      Ref.set(operationSaw, result.email),
     );
     yield* put(strings, [yield* Ref.get(laterTapSaw), yield* Ref.get(operationSaw)]);
   });
@@ -576,9 +619,21 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Given(
     "a {string} hook point tapped by plugin {string} \\(declared order {int}\\), plugin {string} \\(declared order {int}, depends on {string}\\), and plugin {string} \\(declared order {int}\\)",
-    function* (kind: string, b: string, bOrder: number, a: string, aOrder: number, dep: string, c: string, cOrder: number) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-      assert.deepEqual([kind, b, bOrder, a, aOrder, dep, c, cOrder], ["veto", "B", 2, "A", 1, "B", "C", 1]);
+    function* (
+      kind: string,
+      b: string,
+      bOrder: number,
+      a: string,
+      aOrder: number,
+      dep: string,
+      c: string,
+      cOrder: number,
+    ) {
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual(
+        [kind, b, bOrder, a, aOrder, dep, c, cOrder],
+        ["veto", "B", 2, "A", 1, "B", "C", 1],
+      );
     },
   );
 
@@ -622,7 +677,7 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "an {string} hook point {string} tapped by {string}, which throws while sending a welcome email",
     function* (kind: string, point: string, tap: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.deepEqual([kind, point, tap], ["observe", "AfterSignIn", "Welcome"]);
       assert.equal(AfterSignIn.kind, "observe");
     },
@@ -640,7 +695,10 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
       return signedIn;
     }).pipe(
       Effect.provide(
-        Layer.merge(Welcome, Audit).pipe(Layer.provideMerge(AfterSignIn.layer), Layer.merge(silent)),
+        Layer.merge(Welcome, Audit).pipe(
+          Layer.provideMerge(AfterSignIn.layer),
+          Layer.merge(silent),
+        ),
       ),
     );
     const result = yield* Effect.exit(operation);
@@ -662,7 +720,7 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a {string} hook point tapped by a plugin that turns an ordinary sign-in into a {string} outcome",
     function* (kind: string, outcomeName: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.deepEqual([kind, outcomeName], ["divert", "TwoFactorRequired"]);
       assert.equal(SignInDivert.kind, "divert");
     },
@@ -691,22 +749,28 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(result.value.tag, name);
   });
 
-  Then("the caller is required to handle {string} for the call to type-check", function* (name: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-    assert.equal(name, "TwoFactorRequired");
-    // `run` returns the two-case `DivertResult`; a caller that leaves "Diverted" unhandled does
-    // not compile (`unhandledDivert`'s gate), one that handles both does (`handledDivert`).
-    assertTypeGate("divert-must-be-handled", GATES, ["handledDivert", "@ts-expect-error"]);
-    assert.equal(typeof unhandledDivert, "function");
-  });
+  Then(
+    "the caller is required to handle {string} for the call to type-check",
+    function* (name: string) {
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.equal(name, "TwoFactorRequired");
+      // `run` returns the two-case `DivertResult`; a caller that leaves "Diverted" unhandled does
+      // not compile (`unhandledDivert`'s gate), one that handles both does (`handledDivert`).
+      assertTypeGate("divert-must-be-handled", GATES, ["handledDivert", "@ts-expect-error"]);
+      assert.equal(typeof unhandledDivert, "function");
+    },
+  );
 
   // ---- BEH-EA-024: taps join RIn, registries aggregate and freeze ----
 
-  Given("a plugin {string} that taps the hook point {string}", function* (plugin: string, point: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-    assert.deepEqual([plugin, point], ["Invite", "BeforeUserDelete"]);
-    assert.equal(Hooks.BeforeUserDelete.kind, "veto");
-  });
+  Given(
+    "a plugin {string} that taps the hook point {string}",
+    function* (plugin: string, point: string) {
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual([plugin, point], ["Invite", "BeforeUserDelete"]);
+      assert.equal(Hooks.BeforeUserDelete.kind, "veto");
+    },
+  );
 
   When("{string}'s Layer type is inspected", function* (_plugin: string) {
     const built = Auth.make([InviteTapper]);
@@ -719,18 +783,21 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
     );
   });
 
-  Then("{string} appears in {string}'s Layer {string}", function* (point: string, _plugin: string, rin: string) {
-    assert.equal(point, "BeforeUserDelete");
-    assert.equal(rin, "RIn");
-    assertTypeGate("tap-joins-rin", GATES, ["tapPointJoinsRin", "= true"]);
-    // The declared tap is also readable statically, with no Layer built.
-    assert.deepEqual(yield* take(claims), [{ plugin: "inviteTap", order: 3 }]);
-  });
+  Then(
+    "{string} appears in {string}'s Layer {string}",
+    function* (point: string, _plugin: string, rin: string) {
+      assert.equal(point, "BeforeUserDelete");
+      assert.equal(rin, "RIn");
+      assertTypeGate("tap-joins-rin", GATES, ["tapPointJoinsRin", "= true"]);
+      // The declared tap is also readable statically, with no Layer built.
+      assert.deepEqual(yield* take(claims), [{ plugin: "inviteTap", order: 3 }]);
+    },
+  );
 
   Given(
     "a plugin {string} that taps a hook point no installed plugin's Layer provides in its ROut",
     function* (plugin: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(plugin, "Invite");
     },
   );
@@ -768,15 +835,18 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Given(
     "a registry {string} contributed to by plugin {string} \\(order {int}\\) and plugin {string} \\(order {int}, no dependency relationship\\)",
-    function* (registry: string, first: string, firstOrder: number, second: string, secondOrder: number) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-      assert.deepEqual([registry, first, firstOrder, second, secondOrder], [
-        "RateLimits",
-        "Invite",
-        10,
-        "Password",
-        5,
-      ]);
+    function* (
+      registry: string,
+      first: string,
+      firstOrder: number,
+      second: string,
+      secondOrder: number,
+    ) {
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual(
+        [registry, first, firstOrder, second, secondOrder],
+        ["RateLimits", "Invite", 10, "Password", 5],
+      );
     },
   );
 
@@ -811,10 +881,13 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Given("a registry {string} that has already been read once by the application", function* (registry: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-    assert.equal(registry, "RateLimits");
-  });
+  Given(
+    "a registry {string} that has already been read once by the application",
+    function* (registry: string) {
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.equal(registry, "RateLimits");
+    },
+  );
 
   When(
     "another plugin's Layer attempts to contribute a new rule to {string} after that first read",
@@ -830,7 +903,9 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
           const registry = Context.get(context, RateLimits.RateLimitsRegistry);
           const first = yield* registry.registered;
           // A late contribution after the first read is refused (a defect: a composition-order bug).
-          const late = yield* Effect.exit(registry.register(InviteOne, { ...invite.input, order: 1 }));
+          const late = yield* Effect.exit(
+            registry.register(InviteOne, { ...invite.input, order: 1 }),
+          );
           const second = yield* registry.registered;
           return { first, late: late._tag, second };
         }),

@@ -179,7 +179,9 @@ export const makeHost = Effect.gen(function* () {
     Effect.gen(function* () {
       if (Option.isSome(yield* Ref.get(built))) {
         return yield* Effect.die(
-          new Error("the app is already built — every tap, subscriber and limiter must be configured by a Given, before the first action"),
+          new Error(
+            "the app is already built — every tap, subscriber and limiter must be configured by a Given, before the first action",
+          ),
         );
       }
       yield* Ref.update(spec, change);

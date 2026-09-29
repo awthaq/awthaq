@@ -60,8 +60,7 @@ export const take = <A>(target: Cell<A>) => recall(target.name, target.is);
 export const isObject = (value: unknown): value is object =>
   typeof value === "object" && value !== null;
 
-const gatesSource =(file: string) =>
-  readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
+const gatesSource = (file: string) => readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
 
 /**
  * The scenarios in these features whose enforcing mechanism is the TypeScript compiler

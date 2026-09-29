@@ -143,9 +143,12 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     // A tap from a plugin that has nothing to do with the point, failing the way only a veto
     // tap's failure has meaning.
     yield* addTap(
-      Hooks.BeforeSignUp.tap(() => Effect.fail(new HookPoint.HookAbort({ code: "UNRELATED_VETO" })), {
-        owner: { id: "acme.unrelated", dependsOn: [] },
-      }),
+      Hooks.BeforeSignUp.tap(
+        () => Effect.fail(new HookPoint.HookAbort({ code: "UNRELATED_VETO" })),
+        {
+          owner: { id: "acme.unrelated", dependsOn: [] },
+        },
+      ),
     );
   });
 
@@ -226,7 +229,9 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.ok(code !== undefined, `not a HookAbort.fail expression: ${expression}`);
       yield* addTap(
         Hooks.BeforeSignUp.tap(() =>
-          Effect.fail(new HookPoint.HookAbort({ code, message: "that email domain is not allowed" })),
+          Effect.fail(
+            new HookPoint.HookAbort({ code, message: "that email domain is not allowed" }),
+          ),
         ),
       );
     },
@@ -236,13 +241,16 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* attemptSignUp("mallory@other.example");
   });
 
-  Then("the failure is a structured value carrying {string} and {string}", function* (a: string, b: string) {
-    assert.deepEqual([a, b], ["code", "message"]);
-    const outcome = yield* lastOutcome();
-    assert.ok(outcome._tag === "Failure");
-    assert.equal(outcome.code, "EMAIL_DOMAIN_NOT_ALLOWED");
-    assert.equal(outcome.message, "that email domain is not allowed");
-  });
+  Then(
+    "the failure is a structured value carrying {string} and {string}",
+    function* (a: string, b: string) {
+      assert.deepEqual([a, b], ["code", "message"]);
+      const outcome = yield* lastOutcome();
+      assert.ok(outcome._tag === "Failure");
+      assert.equal(outcome.code, "EMAIL_DOMAIN_NOT_ALLOWED");
+      assert.equal(outcome.message, "that email domain is not allowed");
+    },
+  );
 
   Then("the failure is not a generic or untyped error", function* () {
     const outcome = yield* lastOutcome();
@@ -314,7 +322,9 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.deepEqual(yield* seenBy("operation"), ["alice@acme.com"]);
     const { host } = yield* World;
     const created = yield* host.run(
-      Effect.flatMap(Users.Users, (users) => users.findByEmail("alice@acme.com")).pipe(Effect.orDie),
+      Effect.flatMap(Users.Users, (users) => users.findByEmail("alice@acme.com")).pipe(
+        Effect.orDie,
+      ),
     );
     assert.ok(Option.isSome(created));
     assert.deepEqual(Users.emailOf(created.value), Option.some("alice@acme.com"));
@@ -373,10 +383,14 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.ok(chain.indexOf("acme.normalize") < chain.indexOf("acme.audit"));
       // Flip the declared orders and the two swap: it is the order that decided it.
       assert.ok(
-        HookPoint.compareTaps({ owner: AcmeNormalize, order: PRE }, { owner: AcmeAudit, order: 0 }) < 0,
+        HookPoint.compareTaps(
+          { owner: AcmeNormalize, order: PRE },
+          { owner: AcmeAudit, order: 0 },
+        ) < 0,
       );
       assert.ok(
-        HookPoint.compareTaps({ owner: AcmeNormalize, order: 5 }, { owner: AcmeAudit, order: 0 }) > 0,
+        HookPoint.compareTaps({ owner: AcmeNormalize, order: 5 }, { owner: AcmeAudit, order: 0 }) >
+          0,
       );
     },
   );
@@ -410,12 +424,15 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(yield* userExists("dana@example.com"), true);
   });
 
-  Then("{string}'s failure does not propagate to the sign-up operation", function* (tapName: string) {
-    assert.equal(tapName, "Welcome");
-    // It did run, and did fail — and the operation is none the wiser.
-    assert.deepEqual(yield* seenBy("Welcome"), ["attempted"]);
-    assert.equal((yield* lastOutcome())._tag, "Success");
-  });
+  Then(
+    "{string}'s failure does not propagate to the sign-up operation",
+    function* (tapName: string) {
+      assert.equal(tapName, "Welcome");
+      // It did run, and did fail — and the operation is none the wiser.
+      assert.deepEqual(yield* seenBy("Welcome"), ["attempted"]);
+      assert.equal((yield* lastOutcome())._tag, "Success");
+    },
+  );
 
   Given(
     "the same {string} tap fails while handling {string}",
@@ -483,9 +500,9 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
       // ...and not a success: the sign-in did not complete — no `auth.user.signedIn` was published...
       const { host } = yield* World;
       const signedIn = yield* host.run(
-        Effect.flatMap(AuditLog.AuditLog, (log) => log.list({ eventTag: "auth.user.signedIn" })).pipe(
-          Effect.orDie,
-        ),
+        Effect.flatMap(AuditLog.AuditLog, (log) =>
+          log.list({ eventTag: "auth.user.signedIn" }),
+        ).pipe(Effect.orDie),
       );
       assert.equal(signedIn.length, 0);
       // ...whereas the same call for a user with no second factor is an ordinary success.
@@ -533,7 +550,10 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
         ).pipe(
           Effect.map(() => "success"),
           Effect.catchTag("InvalidCredentials", () => Effect.succeed("caught-as-invalid")),
-          Effect.match({ onFailure: (error) => `uncaught:${error._tag}`, onSuccess: (value) => value }),
+          Effect.match({
+            onFailure: (error) => `uncaught:${error._tag}`,
+            onSuccess: (value) => value,
+          }),
         ),
       );
       yield* note("otherTag", other);
@@ -556,9 +576,9 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.deepEqual(yield* seenBy("followUp"), ["challenge-1"]);
       const { host } = yield* World;
       const issued = yield* host.run(
-        Effect.flatMap(AuditLog.AuditLog, (log) => log.list({ eventTag: "auth.session.issued" })).pipe(
-          Effect.orDie,
-        ),
+        Effect.flatMap(AuditLog.AuditLog, (log) =>
+          log.list({ eventTag: "auth.session.issued" }),
+        ).pipe(Effect.orDie),
       );
       // Only alice's sign-up session: the two diverted sign-ins issued none.
       assert.equal(issued.length, 1);
@@ -567,11 +587,14 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   // ---- BEH-EA-095: reacting to core data only through the hook point ----
 
-  Given("{string} needs to purge its own invitations when a user is deleted", function* (plugin: string) {
-    assert.equal(plugin, "Invite");
-    // The sanctioned mechanism exists: core exposes a veto point on user deletion.
-    assert.equal(Hooks.BeforeUserDelete.kind, "veto");
-  });
+  Given(
+    "{string} needs to purge its own invitations when a user is deleted",
+    function* (plugin: string) {
+      assert.equal(plugin, "Invite");
+      // The sanctioned mechanism exists: core exposes a veto point on user deletion.
+      assert.equal(Hooks.BeforeUserDelete.kind, "veto");
+    },
+  );
 
   When(
     "{string} taps {string} to purge its own {string} rows for that user",
@@ -610,18 +633,21 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then("{string}'s reaction runs entirely through the tap on {string}", function* (plugin: string, name: string) {
-    assert.equal(plugin, "Invite");
-    assert.equal(name, "BeforeUserDelete");
-    const { invitations, userIds } = yield* World;
-    const ids = yield* Ref.get(userIds);
-    assert.deepEqual(yield* seenBy("Invite"), [ids["alice@example.com"]]);
-    // Alice's rows are gone, Bob's untouched.
-    assert.deepEqual(
-      (yield* Ref.get(invitations)).map((row) => row.id),
-      ["inv-3"],
-    );
-  });
+  Then(
+    "{string}'s reaction runs entirely through the tap on {string}",
+    function* (plugin: string, name: string) {
+      assert.equal(plugin, "Invite");
+      assert.equal(name, "BeforeUserDelete");
+      const { invitations, userIds } = yield* World;
+      const ids = yield* Ref.get(userIds);
+      assert.deepEqual(yield* seenBy("Invite"), [ids["alice@example.com"]]);
+      // Alice's rows are gone, Bob's untouched.
+      assert.deepEqual(
+        (yield* Ref.get(invitations)).map((row) => row.id),
+        ["inv-3"],
+      );
+    },
+  );
 
   Then("no foreign key or database-level cascade into a core table is required", function* () {
     // The user really is gone, and the plugin's table has no link into core: it declares no

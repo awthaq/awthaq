@@ -36,11 +36,16 @@ const splitList = (list: string) =>
     .filter((entry) => entry !== "");
 
 const expectStatus = (response: Snapshot, expected: number) =>
-  assert.equal(response.status, expected, `expected ${expected}, got ${response.status} ${response.text}`);
+  assert.equal(
+    response.status,
+    expected,
+    `expected ${expected}, got ${response.status} ${response.text}`,
+  );
 
 const stringOf = (record: Readonly<Record<string, unknown>>, key: string) => {
   const value = record[key];
-  if (typeof value !== "string") throw new Error(`expected "${key}" to be a string in ${JSON.stringify(record)}`);
+  if (typeof value !== "string")
+    throw new Error(`expected "${key}" to be a string in ${JSON.stringify(record)}`);
   return value;
 };
 
@@ -259,7 +264,10 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* withContext(
       Effect.gen(function* () {
         const organizations = yield* OrganizationRecords.OrganizationRecords;
-        yield* organizations.setSuspended(connection.organizationId, Option.some(yield* DateTime.now));
+        yield* organizations.setSuspended(
+          connection.organizationId,
+          Option.some(yield* DateTime.now),
+        );
       }).pipe(Effect.orDie),
     );
   });
@@ -277,22 +285,19 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   // ---- accounts that exist independently of any directory --------------------------------------
 
-  Given(
-    "a user {string} who signed up independently of any directory",
-    function* (email: string) {
-      const world = yield* World;
-      const id = yield* withContext(
-        Effect.gen(function* () {
-          const users = yield* Users.Users;
-          const user = yield* users
-            .create({ identity: { _tag: "Email", email }, name: email })
-            .pipe(Effect.orDie);
-          return user.id;
-        }),
-      );
-      yield* world.userIds.set(email, id);
-    },
-  );
+  Given("a user {string} who signed up independently of any directory", function* (email: string) {
+    const world = yield* World;
+    const id = yield* withContext(
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const user = yield* users
+          .create({ identity: { _tag: "Email", email }, name: email })
+          .pipe(Effect.orDie);
+        return user.id;
+      }),
+    );
+    yield* world.userIds.set(email, id);
+  });
 
   Given("a signed-in user {string}", function* (name: string) {
     const world = yield* World;
@@ -318,7 +323,9 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
         const sessions = yield* Sessions.Sessions;
         const issued = [];
         for (let i = 0; i < count; i++) {
-          issued.push((yield* sessions.issue({ userId: Users.UserId(id) }).pipe(Effect.orDie)).token);
+          issued.push(
+            (yield* sessions.issue({ userId: Users.UserId(id) }).pipe(Effect.orDie)).token,
+          );
         }
         return issued;
       }),
@@ -340,12 +347,9 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   // ---- provisioning (Givens go through the same HTTP surface as the Whens) ---------------------
 
-  Given(
-    "{string} has provisioned the user {string}",
-    function* (connection: string, name: string) {
-      expectStatus(yield* provision(connection, name), 201);
-    },
-  );
+  Given("{string} has provisioned the user {string}", function* (connection: string, name: string) {
+    expectStatus(yield* provision(connection, name), 201);
+  });
 
   Given(
     "{string} has provisioned the user {string} with externalId {string}",
@@ -401,7 +405,10 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
       const teamId = yield* withContext(
         Effect.flatMap(TeamRecords.TeamRecords, (teams) =>
           teams.createTeam({ organizationId: connection.organizationId, name }),
-        ).pipe(Effect.orDie, Effect.map((team) => team.id)),
+        ).pipe(
+          Effect.orDie,
+          Effect.map((team) => team.id),
+        ),
       );
       yield* world.groupIds.set(name, teamId);
       world.groupOrgs.set(name, connection.organizationId);
@@ -459,21 +466,24 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* send({ method: "GET", path: USERS, bearer: CREDENTIALS[credential] });
   });
 
+  When("{string} requests the user list with only her session cookie", function* (name: string) {
+    const world = yield* World;
+    yield* send({ method: "GET", path: USERS, cookie: yield* world.cookies.get(name) });
+  });
+
   When(
-    "{string} requests the user list with only her session cookie",
-    function* (name: string) {
-      const world = yield* World;
-      yield* send({ method: "GET", path: USERS, cookie: yield* world.cookies.get(name) });
+    "an unauthenticated request reads the {string} discovery document",
+    function* (document: string) {
+      yield* send({ method: "GET", path: `/scim/v2/${document}` });
     },
   );
 
-  When("an unauthenticated request reads the {string} discovery document", function* (document: string) {
-    yield* send({ method: "GET", path: `/scim/v2/${document}` });
-  });
-
-  When("{string} reads the {string} discovery document", function* (connection: string, document: string) {
-    yield* sendAs(connection, { method: "GET", path: `/scim/v2/${document}` });
-  });
+  When(
+    "{string} reads the {string} discovery document",
+    function* (connection: string, document: string) {
+      yield* sendAs(connection, { method: "GET", path: `/scim/v2/${document}` });
+    },
+  );
 
   // ---- users -----------------------------------------------------------------------------------
 
@@ -492,7 +502,8 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "{string} lists {word} with the filter {string}",
     function* (connection: string, resource: string, filter: string) {
-      if (resource !== "users" && resource !== "groups") throw new Error(`unknown resource "${resource}"`);
+      if (resource !== "users" && resource !== "groups")
+        throw new Error(`unknown resource "${resource}"`);
       yield* sendAs(connection, {
         method: "GET",
         path: `${resource === "users" ? USERS : GROUPS}?filter=${encodeURIComponent(filter)}`,
@@ -616,7 +627,8 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "{string} patches the user {string} with op {string} on path {string} to the boolean {word}",
     function* (connection: string, name: string, op: string, path: string, value: string) {
-      if (value !== "true" && value !== "false") throw new Error(`expected true or false, got ${value}`);
+      if (value !== "true" && value !== "false")
+        throw new Error(`expected true or false, got ${value}`);
       yield* patchUser(connection, name, [{ op, path, value: value === "true" }]);
     },
   );
@@ -630,13 +642,7 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   When(
     "{string} patches the user {string} with the path-less op {string} of displayName {string} and title {string}",
-    function* (
-      connection: string,
-      name: string,
-      op: string,
-      displayName: string,
-      title: string,
-    ) {
+    function* (connection: string, name: string, op: string, displayName: string, title: string) {
       yield* patchUser(connection, name, [{ op, value: { displayName, title } }]);
     },
   );
@@ -675,12 +681,18 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   When("{string} reads the group {string}", function* (connection: string, name: string) {
     const world = yield* World;
-    yield* sendAs(connection, { method: "GET", path: `${GROUPS}/${yield* world.groupIds.get(name)}` });
+    yield* sendAs(connection, {
+      method: "GET",
+      path: `${GROUPS}/${yield* world.groupIds.get(name)}`,
+    });
   });
 
   When("{string} deletes the group {string}", function* (connection: string, name: string) {
     const world = yield* World;
-    yield* sendAs(connection, { method: "DELETE", path: `${GROUPS}/${yield* world.groupIds.get(name)}` });
+    yield* sendAs(connection, {
+      method: "DELETE",
+      path: `${GROUPS}/${yield* world.groupIds.get(name)}`,
+    });
   });
 
   When(
@@ -727,7 +739,9 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "{string} patches the group {string} renaming it to {string}",
     function* (connection: string, name: string, displayName: string) {
-      yield* patchGroup(connection, name, [{ op: "replace", path: "displayName", value: displayName }]);
+      yield* patchGroup(connection, name, [
+        { op: "replace", path: "displayName", value: displayName },
+      ]);
     },
   );
 
@@ -836,7 +850,11 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "as seen by {string}, {int} groups are listed",
     function* (connection: string, count: number) {
-      const response = yield* sendAs(connection, { method: "GET", path: GROUPS }, { observe: true });
+      const response = yield* sendAs(
+        connection,
+        { method: "GET", path: GROUPS },
+        { observe: true },
+      );
       expectStatus(response, 200);
       const body = objectOf(response);
       assert.equal(body["totalResults"], count, response.text);
@@ -1086,7 +1104,10 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
       const body = objectOf(yield* lastResponse);
       for (const key of ["bulk", "sort", "etag", "changePassword"]) {
         const section = body[key];
-        assert.ok(isRecord(section) && section["supported"] === false, `${key} must report supported: false`);
+        assert.ok(
+          isRecord(section) && section["supported"] === false,
+          `${key} must report supported: false`,
+        );
       }
     },
   );
@@ -1102,12 +1123,9 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   // ---- Then: the audit log --------------------------------------------------------------------------
 
-  Then(
-    "the audit log records {int} {string} events",
-    function* (count: number, tag: string) {
-      assert.equal((yield* auditRecords(tag)).length, count);
-    },
-  );
+  Then("the audit log records {int} {string} events", function* (count: number, tag: string) {
+    assert.equal((yield* auditRecords(tag)).length, count);
+  });
 
   Then(
     "the latest {string} event names the connection {string}, its organization and the user {string}",

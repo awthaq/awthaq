@@ -5,7 +5,14 @@
 // would return a Deny decision for the caller" is *proved* by running the real evaluator against the
 // subject and resource the scenario uses.
 import { defineSteps } from "@effect-cucumber/vitest";
-import { CurrentSubject, EvaluationServicesNone, decide, isAllowed, makeSubject, permissionKey } from "@qadi/core";
+import {
+  CurrentSubject,
+  EvaluationServicesNone,
+  decide,
+  isAllowed,
+  makeSubject,
+  permissionKey,
+} from "@qadi/core";
 import type { PermissionKey } from "@qadi/core";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -79,7 +86,10 @@ export const pathASteps = defineSteps<World>(({ Given, When, Then }) => {
         }
       },
     });
-    assert.ok(found.includes(AuthorizedSubject.AuthorizedSubject.key), "group carries AuthorizedSubject");
+    assert.ok(
+      found.includes(AuthorizedSubject.AuthorizedSubject.key),
+      "group carries AuthorizedSubject",
+    );
     assert.ok(found.includes(Api.Authentication.key), "group carries Authentication");
   });
 
@@ -128,17 +138,14 @@ export const pathASteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then(
-    'the handler reads "CurrentSubject" as an already-provided environment value',
-    function* () {
-      const world = yield* World;
-      const response = yield* world.responses.get("last");
-      const user = yield* world.actors.get("user");
-      assert.equal(response.status, 200);
-      const body = JSON.parse(response.body);
-      assert.equal(body.subjectId, `user:${user.userId}`);
-    },
-  );
+  Then('the handler reads "CurrentSubject" as an already-provided environment value', function* () {
+    const world = yield* World;
+    const response = yield* world.responses.get("last");
+    const user = yield* world.actors.get("user");
+    assert.equal(response.status, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.subjectId, `user:${user.userId}`);
+  });
 
   Then('the handler performs no "SubjectResolver" call of its own', function* () {
     const world = yield* World;
@@ -296,15 +303,12 @@ export const pathASteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.ok(response.status >= 500 && response.status < 600, `got ${response.status}`);
   });
 
-  Then(
-    'the response is never mapped to "403 Forbidden" or "404 Not Found"',
-    function* () {
-      const world = yield* World;
-      const response = yield* world.responses.get("last");
-      assert.notEqual(response.status, 403);
-      assert.notEqual(response.status, 404);
-    },
-  );
+  Then('the response is never mapped to "403 Forbidden" or "404 Not Found"', function* () {
+    const world = yield* World;
+    const response = yield* world.responses.get("last");
+    assert.notEqual(response.status, 403);
+    assert.notEqual(response.status, 404);
+  });
 
   Then('it is not caught by the "AccessDenied" branch', function* () {
     const world = yield* World;
@@ -345,15 +349,12 @@ export const pathASteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then(
-    "the returned value is trimmed to exactly the fields the decision granted",
-    function* () {
-      const world = yield* World;
-      const response = yield* world.responses.get("last");
-      assert.equal(response.status, 200);
-      assert.deepEqual(Object.keys(JSON.parse(response.body)).sort(), ["id", "name"]);
-    },
-  );
+  Then("the returned value is trimmed to exactly the fields the decision granted", function* () {
+    const world = yield* World;
+    const response = yield* world.responses.get("last");
+    assert.equal(response.status, 200);
+    assert.deepEqual(Object.keys(JSON.parse(response.body)).sort(), ["id", "name"]);
+  });
 
   Given(
     `a handler pipeline using "enforceProjected", then the "AccessDenied"-to-not-found mapping, then the resolver-outage-to-defect mapping`,
@@ -418,34 +419,25 @@ export const pathASteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.deepEqual(JSON.parse(response.body), yield* outcome("allowed"));
   });
 
-  Then(
-    "items with a Deny decision are dropped before the response is produced",
-    function* () {
-      const world = yield* World;
-      const response = yield* world.responses.get("last");
-      for (const project of PROJECTS.filter((candidate) => candidate.tenant !== CALLER_TENANT)) {
-        assert.ok(!response.body.includes(project.id), `${project.id} never crosses the wire`);
-      }
-    },
-  );
+  Then("items with a Deny decision are dropped before the response is produced", function* () {
+    const world = yield* World;
+    const response = yield* world.responses.get("last");
+    for (const project of PROJECTS.filter((candidate) => candidate.tenant !== CALLER_TENANT)) {
+      assert.ok(!response.body.includes(project.id), `${project.id} never crosses the wire`);
+    }
+  });
 
-  Then(
-    "each item is decided individually against the policy as it streams",
-    function* () {
-      const world = yield* World;
-      const decisions = yield* Ref.get(world.decisions);
-      assert.equal(decisions.length, PROJECTS.length, "one evaluation per streamed item");
-    },
-  );
+  Then("each item is decided individually against the policy as it streams", function* () {
+    const world = yield* World;
+    const decisions = yield* Ref.get(world.decisions);
+    assert.equal(decisions.length, PROJECTS.length, "one evaluation per streamed item");
+  });
 
-  Then(
-    "denied items are dropped from the stream before it reaches the caller",
-    function* () {
-      const world = yield* World;
-      const response = yield* world.responses.get("last");
-      assert.deepEqual(JSON.parse(response.body), yield* outcome("allowed"));
-    },
-  );
+  Then("denied items are dropped from the stream before it reaches the caller", function* () {
+    const world = yield* World;
+    const response = yield* world.responses.get("last");
+    assert.deepEqual(JSON.parse(response.body), yield* outcome("allowed"));
+  });
 
   // ---- BEH-EA-151: guard hands the handler an unforgeable witness ----
 
@@ -463,9 +455,9 @@ export const pathASteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   When("the handler uses {string}", function* (_call: string) {
-      yield* signIn("admin", ["admin"]);
-      yield* signIn("reader", ["reader"]);
-      yield* fetchAs("admin", "/a/projects/project-42/remove");
+    yield* signIn("admin", ["admin"]);
+    yield* signIn("reader", ["reader"]);
+    yield* fetchAs("admin", "/a/projects/project-42/remove");
   });
 
   Then(
@@ -563,18 +555,15 @@ export const pathASteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then(
-    "neither route reaches qadi's evaluator through a second, ad hoc check",
-    function* () {
-      const world = yield* World;
-      const alice = yield* world.actors.get("alice");
-      // The contract endpoint gates on the middleware alone and the bare route evaluates its one
-      // declared policy once: a single evaluation in the whole application, for alice.
-      const decisions = yield* Ref.get(world.decisions);
-      assert.equal(decisions.length, 1);
-      assert.equal(decisions[0]?.subjectId, `user:${alice.userId}`);
-      assert.equal(decisions[0]?.policyTag, "AllOf");
-      assert.equal(decisions[0]?.verdict, "Allow");
-    },
-  );
+  Then("neither route reaches qadi's evaluator through a second, ad hoc check", function* () {
+    const world = yield* World;
+    const alice = yield* world.actors.get("alice");
+    // The contract endpoint gates on the middleware alone and the bare route evaluates its one
+    // declared policy once: a single evaluation in the whole application, for alice.
+    const decisions = yield* Ref.get(world.decisions);
+    assert.equal(decisions.length, 1);
+    assert.equal(decisions[0]?.subjectId, `user:${alice.userId}`);
+    assert.equal(decisions[0]?.policyTag, "AllOf");
+    assert.equal(decisions[0]?.verdict, "Allow");
+  });
 });

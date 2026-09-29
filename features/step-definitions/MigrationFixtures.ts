@@ -26,11 +26,16 @@ export class MigPassword extends AuthPlugin.Service<MigPassword, Record<string, 
     migrations: [
       {
         name: "create_password_account",
-        up: run((client) => client`CREATE TABLE password_account (id TEXT PRIMARY KEY, userId TEXT NOT NULL REFERENCES users(id))`),
+        up: run(
+          (client) =>
+            client`CREATE TABLE password_account (id TEXT PRIMARY KEY, userId TEXT NOT NULL REFERENCES users(id))`,
+        ),
       },
       {
         name: "backfill_password_account",
-        up: run((client) => client`INSERT INTO password_account (id, userId) SELECT id, id FROM users`),
+        up: run(
+          (client) => client`INSERT INTO password_account (id, userId) SELECT id, id FROM users`,
+        ),
       },
     ],
   },
@@ -46,11 +51,17 @@ export class MigOauth extends AuthPlugin.Service<MigOauth, Record<string, never>
   migrations: [
     {
       name: "create_oauth_account",
-      up: run((client) => client`CREATE TABLE oauth_account (id TEXT PRIMARY KEY, passwordAccountId TEXT REFERENCES password_account(id))`),
+      up: run(
+        (client) =>
+          client`CREATE TABLE oauth_account (id TEXT PRIMARY KEY, passwordAccountId TEXT REFERENCES password_account(id))`,
+      ),
     },
     {
       name: "backfill_oauth_account",
-      up: run((client) => client`INSERT INTO oauth_account (id, passwordAccountId) SELECT id, id FROM password_account`),
+      up: run(
+        (client) =>
+          client`INSERT INTO oauth_account (id, passwordAccountId) SELECT id, id FROM password_account`,
+      ),
     },
   ],
 }) {
@@ -73,7 +84,10 @@ export class MigTwoFactor extends AuthPlugin.Service<MigTwoFactor, Record<string
     migrations: [
       {
         name: "create_sessions2fa_secret",
-        up: run((client) => client`CREATE TABLE sessions2fa_secret (id TEXT PRIMARY KEY, accountId TEXT NOT NULL REFERENCES password_account(id))`),
+        up: run(
+          (client) =>
+            client`CREATE TABLE sessions2fa_secret (id TEXT PRIMARY KEY, accountId TEXT NOT NULL REFERENCES password_account(id))`,
+        ),
       },
     ],
   },

@@ -161,7 +161,13 @@ const dutyReason = "test/duty";
 /** Path A: `AuthorizedSubject` after `Authentication` (declared in the one order that works, YL-008). */
 const PathAGroup = HttpApiGroup.make("authz")
   .add(HttpApiEndpoint.get("whoami", "/a/whoami", { success: Whoami }))
-  .add(HttpApiEndpoint.get("project", "/a/projects/:id", { params: IdParams, success: Fields, error: NotFound }))
+  .add(
+    HttpApiEndpoint.get("project", "/a/projects/:id", {
+      params: IdParams,
+      success: Fields,
+      error: NotFound,
+    }),
+  )
   .add(
     HttpApiEndpoint.get("summary", "/a/projects/:id/summary", {
       params: IdParams,
@@ -169,13 +175,31 @@ const PathAGroup = HttpApiGroup.make("authz")
       error: NotFound,
     }),
   )
-  .add(HttpApiEndpoint.get("outage", "/a/outage/:kind", { params: KindParams, success: Ok, error: NotFound }))
+  .add(
+    HttpApiEndpoint.get("outage", "/a/outage/:kind", {
+      params: KindParams,
+      success: Ok,
+      error: NotFound,
+    }),
+  )
   .add(HttpApiEndpoint.get("list", "/a/projects", { success: Ids }))
   .add(HttpApiEndpoint.get("streamed", "/a/projects-stream", { success: Ids }))
-  .add(HttpApiEndpoint.get("remove", "/a/projects/:id/remove", { params: IdParams, success: Ok, error: NotFound }))
+  .add(
+    HttpApiEndpoint.get("remove", "/a/projects/:id/remove", {
+      params: IdParams,
+      success: Ok,
+      error: NotFound,
+    }),
+  )
   .add(HttpApiEndpoint.get("sessionId", "/a/repeated-subject", { success: Ids }))
   .add(HttpApiEndpoint.get("multi", "/a/multi-call", { success: Ids }))
-  .add(HttpApiEndpoint.get("owned", "/a/owned/:id", { params: IdParams, success: Ok, error: NotFound }))
+  .add(
+    HttpApiEndpoint.get("owned", "/a/owned/:id", {
+      params: IdParams,
+      success: Ok,
+      error: NotFound,
+    }),
+  )
   .middleware(AuthorizedSubject.AuthorizedSubject)
   .middleware(Api.Authentication);
 
@@ -184,13 +208,23 @@ const PathAGroup = HttpApiGroup.make("authz")
  * `SubjectExtractor` has to resolve the subject from the raw request (BEH-EA-153).
  */
 const readEndpoint = HttpApiEndpoint.get("read", "/b/read", { success: Ok }).pipe((e) =>
-  e.annotate(RequiredPermission, requiresPermission(e, { permission: projectRead, policy: hasPermission(projectRead) })),
+  e.annotate(
+    RequiredPermission,
+    requiresPermission(e, { permission: projectRead, policy: hasPermission(projectRead) }),
+  ),
 );
 const deleteEndpoint = HttpApiEndpoint.get("deleteIt", "/b/delete", { success: Ok }).pipe((e) =>
-  e.annotate(RequiredPermission, requiresPermission(e, { permission: projectDelete, policy: hasPermission(projectDelete) })),
+  e.annotate(
+    RequiredPermission,
+    requiresPermission(e, { permission: projectDelete, policy: hasPermission(projectDelete) }),
+  ),
 );
-const adminOnlyEndpoint = HttpApiEndpoint.get("adminOnly", "/b/admin-only", { success: Ok }).pipe((e) =>
-  e.annotate(RequiredPermission, requiresPermission(e, { permission: projectAdmin, policy: hasRole("admin") })),
+const adminOnlyEndpoint = HttpApiEndpoint.get("adminOnly", "/b/admin-only", { success: Ok }).pipe(
+  (e) =>
+    e.annotate(
+      RequiredPermission,
+      requiresPermission(e, { permission: projectAdmin, policy: hasRole("admin") }),
+    ),
 );
 const ownedEndpoint = HttpApiEndpoint.get("owned", "/b/owned", { success: Ok }).pipe((e) =>
   e.annotate(
@@ -204,7 +238,10 @@ const ownedEndpoint = HttpApiEndpoint.get("owned", "/b/owned", { success: Ok }).
 const planEndpoint = HttpApiEndpoint.get("plan", "/b/plan", { success: Ok }).pipe((e) =>
   e.annotate(
     RequiredPermission,
-    requiresPermission(e, { permission: projectRead, policy: hasAttribute(attributeName, exists()) }),
+    requiresPermission(e, {
+      permission: projectRead,
+      policy: hasAttribute(attributeName, exists()),
+    }),
   ),
 );
 const dutyEndpoint = HttpApiEndpoint.get("duty", "/b/duty", { success: Ok }).pipe((e) =>
@@ -217,7 +254,10 @@ const dutyEndpoint = HttpApiEndpoint.get("duty", "/b/duty", { success: Ok }).pip
   ),
 );
 const whoamiBEndpoint = HttpApiEndpoint.get("whoamiB", "/b/whoami", { success: Whoami }).pipe((e) =>
-  e.annotate(RequiredPermission, requiresPermission(e, { permission: projectRead, policy: hasPermission(projectRead) })),
+  e.annotate(
+    RequiredPermission,
+    requiresPermission(e, { permission: projectRead, policy: hasPermission(projectRead) }),
+  ),
 );
 const healthEndpoint = HttpApiEndpoint.get("health", "/b/health", { success: Ok }).pipe((e) =>
   e.annotate(PublicEndpoint, publicEndpoint("liveness probe, no subject exists yet")),
@@ -304,7 +344,9 @@ export const WorldLive = Layer.effect(
       subjects: makeNamedRegistry<AuthSubject>("subject"),
       apps: makeNamedRegistry<App>("app"),
       walk: makeWalkProbe(),
-      organization: yield* Ref.make<Context.Context<OrganizationFixtureServices> | undefined>(undefined),
+      organization: yield* Ref.make<Context.Context<OrganizationFixtureServices> | undefined>(
+        undefined,
+      ),
       executed: yield* Ref.make<ReadonlyArray<string>>([]),
       resolutions: yield* Ref.make(0),
       attributeLookups: yield* Ref.make<ReadonlyArray<string>>([]),
@@ -318,7 +360,9 @@ export const WorldLive = Layer.effect(
   }),
 );
 
-export const configure = Effect.fn("features.qadiBridge.configure")(function* (patch: BridgeOptions) {
+export const configure = Effect.fn("features.qadiBridge.configure")(function* (
+  patch: BridgeOptions,
+) {
   const world = yield* World;
   const { app } = world;
   if ((yield* Ref.get(app)) !== undefined) {
@@ -329,7 +373,11 @@ export const configure = Effect.fn("features.qadiBridge.configure")(function* (p
 
 // ---- the app ----
 
-export const CoreLive = Layer.mergeAll(Users.layerMemory, Accounts.layerMemory, Sessions.layerMemory).pipe(
+export const CoreLive = Layer.mergeAll(
+  Users.layerMemory,
+  Accounts.layerMemory,
+  Sessions.layerMemory,
+).pipe(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layerMemory),
   Layer.provideMerge(Hooks.HooksLive),
@@ -353,7 +401,9 @@ const evaluationPorts = (world: WorldShape, options: BridgeOptions) => {
         Ref.update(world.attributeLookups, (seen) => [...seen, attribute]).pipe(
           Effect.andThen(
             options.outage === "attribute"
-              ? Effect.fail(new AttributeResolveError({ attribute, cause: failing("attribute source down") }))
+              ? Effect.fail(
+                  new AttributeResolveError({ attribute, cause: failing("attribute source down") }),
+                )
               : Effect.succeed(attribute === attributeName ? "pro" : undefined),
           ),
         ),
@@ -381,7 +431,10 @@ const evaluationPorts = (world: WorldShape, options: BridgeOptions) => {
       hasActed: (query) =>
         options.outage === "history"
           ? Effect.fail(
-              new DecisionHistoryUnavailable({ event: query.event, cause: failing("history source down") }),
+              new DecisionHistoryUnavailable({
+                event: query.event,
+                cause: failing("history source down"),
+              }),
             )
           : Effect.succeed(notActed),
     }),
@@ -397,7 +450,9 @@ const countingResolver = (world: WorldShape) =>
       const inner = yield* SubjectResolver.SubjectResolver;
       return {
         resolve: (principal: Api.Principal) =>
-          Ref.update(world.resolutions, (n) => n + 1).pipe(Effect.andThen(inner.resolve(principal))),
+          Ref.update(world.resolutions, (n) => n + 1).pipe(
+            Effect.andThen(inner.resolve(principal)),
+          ),
       };
     }),
   );
@@ -466,7 +521,12 @@ const pathAHandlers = (world: WorldShape) =>
           if (project === undefined) return yield* notFound;
           // `enforceProjected` alone: the gate and the field trim in one call (BEH-EA-149).
           return yield* enforceProjected(canReadProjectSummary, { resource: project })(
-            Effect.succeed({ id: project.id, name: project.name, budget: project.budget, secret: project.secret }),
+            Effect.succeed({
+              id: project.id,
+              name: project.name,
+              budget: project.budget,
+              secret: project.secret,
+            }),
           );
         }).pipe(hideDenied),
       )
@@ -474,7 +534,10 @@ const pathAHandlers = (world: WorldShape) =>
         enforce(outagePolicy(params.kind))(ok(world, `outage-${params.kind}`)).pipe(hideDenied),
       )
       .handle("list", () =>
-        filter(sameTenant, PROJECTS.map((project) => ({ ...project }))).pipe(
+        filter(
+          sameTenant,
+          PROJECTS.map((project) => ({ ...project })),
+        ).pipe(
           Effect.map((allowed) => allowed.map((project) => String(project["id"]))),
           Effect.orDie,
         ),
@@ -506,9 +569,8 @@ const pathAHandlers = (world: WorldShape) =>
           // the handler loads the resource first, which annotation-only Path B never does.
           const owner = (yield* Ref.get(world.owners))[params.id];
           if (owner === undefined) return yield* notFound;
-          return yield* guard(projectRead, ownerPolicy)(
-            { id: params.id, ownerId: owner },
-            () => ok(world, `owned-${params.id}`),
+          return yield* guard(projectRead, ownerPolicy)({ id: params.id, ownerId: owner }, () =>
+            ok(world, `owned-${params.id}`),
           );
         }).pipe(hideDenied),
       )
@@ -581,9 +643,14 @@ const bareExportRoute = addGuardedRoute(
 const registryRoute = permissionRegistryRoute(projectAdmin, hasPermission(projectAdmin));
 
 /** BEH-EA-168: qadi's guarded devtools decision stream, re-authorizing an open connection every 30 seconds. */
-const decisionStream = decisionStreamRoute(projectAdmin, hasPermission(projectAdmin), Stream.never, {
-  reauth: { interval: "30 seconds" },
-});
+const decisionStream = decisionStreamRoute(
+  projectAdmin,
+  hasPermission(projectAdmin),
+  Stream.never,
+  {
+    reauth: { interval: "30 seconds" },
+  },
+);
 
 /** qadi's `DecisionSink` port: what the evaluator reports, recorded so a scenario can count evaluations (and see which policy ran). */
 const decisionLog = (world: WorldShape) =>
@@ -597,8 +664,7 @@ const decisionLog = (world: WorldShape) =>
               const line: DecisionLine = {
                 subjectId: record.subjectId,
                 policyTag: record.policy._tag,
-                verdict:
-                  record.outcome._tag === "Failed" ? "Failed" : record.outcome.decision._tag,
+                verdict: record.outcome._tag === "Failed" ? "Failed" : record.outcome.decision._tag,
                 resourceKeys: Object.keys(record.resource ?? {}).length,
               };
               return [...seen, line];
@@ -827,7 +893,10 @@ export const resolve = Effect.fn("features.qadiBridge.resolve")(function* (
   return subject;
 });
 
-export const userPrincipal = (userId: string, actingAs?: { readonly type: string; readonly id: string }) =>
+export const userPrincipal = (
+  userId: string,
+  actingAs?: { readonly type: string; readonly id: string },
+) =>
   new Api.UserPrincipal({
     ref: new Api.PrincipalRef({ type: "user", id: userId }),
     sessionId: "s-1",
@@ -857,7 +926,8 @@ export const mintActor = Effect.fn("features.qadiBridge.mintActor")(function* (
           .pipe(Effect.orDie);
         const installed = yield* Effect.serviceOption(Roles.Roles);
         if (Option.isSome(installed)) {
-          for (const roleName of roles) yield* installed.value.assign(user.id, roleName).pipe(Effect.orDie);
+          for (const roleName of roles)
+            yield* installed.value.assign(user.id, roleName).pipe(Effect.orDie);
         }
         const { token } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
         return {

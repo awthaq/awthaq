@@ -39,9 +39,7 @@ interface Seen {
 }
 
 const isSeen = (value: unknown): value is Seen =>
-  typeof value === "object" &&
-  value !== null &&
-  isBoolean(Reflect.get(value, "found"));
+  typeof value === "object" && value !== null && isBoolean(Reflect.get(value, "found"));
 
 const readSession = (cookieHeader: string) =>
   Effect.gen(function* () {
@@ -81,7 +79,9 @@ const forgedCookie = `${SESSION_COOKIE}=00000000-0000-0000-0000-000000000000.not
 const invokeAction = (cookieHeader: string) =>
   Effect.gen(function* () {
     const { runtime } = yield* World;
-    const session = yield* Effect.promise(() => getSession(headersWithCookie(cookieHeader), runtime));
+    const session = yield* Effect.promise(() =>
+      getSession(headersWithCookie(cookieHeader), runtime),
+    );
     if (session === undefined) return undefined;
     return yield* Effect.promise(() =>
       runtime.runPromise(
@@ -117,7 +117,11 @@ const aliceSubject = makeSubject({
   permissions: ["project:read", "project:delete", "project:invite"],
 });
 
-const decideFor = (subject: AuthSubject, policy: Policy, resource?: Readonly<Record<string, unknown>>) =>
+const decideFor = (
+  subject: AuthSubject,
+  policy: Policy,
+  resource?: Readonly<Record<string, unknown>>,
+) =>
   decide(policy, resource === undefined ? {} : { resource }).pipe(
     Effect.provide(Layer.mergeAll(EvaluationServicesNone, currentSubjectLayer(subject))),
   );
@@ -126,7 +130,8 @@ const isSubject = (value: unknown): value is AuthSubject =>
   typeof value === "object" && value !== null && "roles" in value && "permissions" in value;
 
 const isDecisionList = (value: unknown): value is ReadonlyArray<Decision> =>
-  Array.isArray(value) && value.every((item) => typeof item === "object" && item !== null && "_tag" in item);
+  Array.isArray(value) &&
+  value.every((item) => typeof item === "object" && item !== null && "_tag" in item);
 
 export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- BEH-EA-185: getSession verifies the cookie against the database ---------------------
@@ -147,13 +152,16 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* outcomes.set("seen", yield* readSession(cookie));
   });
 
-  Then("it returns a database-verified {string} for {string}", function* (_view: string, _name: string) {
-    const { outcomes } = yield* World;
-    const seen = yield* outcomes.getAs("seen", isSeen);
-    assert.equal(seen.found, true);
-    assert.equal(seen.userId, yield* outcomes.getAs("expectedUserId", isString));
-    assert.equal(seen.principalId, seen.userId);
-  });
+  Then(
+    "it returns a database-verified {string} for {string}",
+    function* (_view: string, _name: string) {
+      const { outcomes } = yield* World;
+      const seen = yield* outcomes.getAs("seen", isSeen);
+      assert.equal(seen.found, true);
+      assert.equal(seen.userId, yield* outcomes.getAs("expectedUserId", isString));
+      assert.equal(seen.principalId, seen.userId);
+    },
+  );
 
   Given("a session cookie that is present but does not match any live session row", function* () {
     const { outcomes } = yield* World;
@@ -199,18 +207,24 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* outcomes.set("seen", yield* readSession(cookie));
   });
 
-  Then("it calls {string} to verify the cookie against the session store", function* (_call: string) {
-    const { outcomes } = yield* World;
-    // The same cookie was a live session moments ago; only a lookup against the store can know it is not now.
-    assert.equal(yield* outcomes.getAs("liveBefore", isBoolean), true);
-    assert.equal((yield* outcomes.getAs("seen", isSeen)).found, false);
-  });
+  Then(
+    "it calls {string} to verify the cookie against the session store",
+    function* (_call: string) {
+      const { outcomes } = yield* World;
+      // The same cookie was a live session moments ago; only a lookup against the store can know it is not now.
+      assert.equal(yield* outcomes.getAs("liveBefore", isBoolean), true);
+      assert.equal((yield* outcomes.getAs("seen", isSeen)).found, false);
+    },
+  );
 
-  Then("it never treats cookie presence alone as sufficient for that authorization check", function* () {
-    const { outcomes } = yield* World;
-    assert.equal(yield* outcomes.getAs("presence", isBoolean), true);
-    assert.equal((yield* outcomes.getAs("seen", isSeen)).found, false);
-  });
+  Then(
+    "it never treats cookie presence alone as sufficient for that authorization check",
+    function* () {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("presence", isBoolean), true);
+      assert.equal((yield* outcomes.getAs("seen", isSeen)).found, false);
+    },
+  );
 
   // ---- BEH-EA-186: server-side decide produces the client seed -----------------------------
 
@@ -218,7 +232,10 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     "qadi's evaluator would return decisions for {string} and {string} against each of the page's resources",
     function* (_delete: string, _invite: string) {
       const { outcomes } = yield* World;
-      yield* outcomes.set("resources", projectsFor(3).map((entry) => entry.id));
+      yield* outcomes.set(
+        "resources",
+        projectsFor(3).map((entry) => entry.id),
+      );
     },
   );
 
@@ -234,7 +251,10 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     const flat = decisions.flat();
     yield* outcomes.set("decisions", flat);
     yield* outcomes.set("decidedCount", flat.length);
-    yield* outcomes.set("evaluationIds", flat.map((decision) => decision.evaluationId));
+    yield* outcomes.set(
+      "evaluationIds",
+      flat.map((decision) => decision.evaluationId),
+    );
   });
 
   Then("all of those decisions are computed once during that server render", function* () {
@@ -275,7 +295,10 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     // What actually crosses the RSC boundary: JSON text.
     yield* outcomes.set("wire", JSON.stringify(dehydrateDecisions(entries)));
     // The control: the same decisions with the trace explicitly opted in.
-    yield* outcomes.set("wireWithTrace", JSON.stringify(dehydrateDecisions(entries, { includeTrace: true })));
+    yield* outcomes.set(
+      "wireWithTrace",
+      JSON.stringify(dehydrateDecisions(entries, { includeTrace: true })),
+    );
   });
 
   Then("the resulting payload is plain JSON", function* () {
@@ -311,28 +334,28 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  When(
-    "{string} is called",
-    function* (call: string) {
+  When("{string} is called", function* (call: string) {
+    const { outcomes } = yield* World;
+    assert.match(call, /decide\(canReadProject/);
+    const full = projectsFor(1)[0];
+    // `policyResource(project)`: exactly the attributes the policy inspects, nothing else.
+    const policyResource = { ownerId: full?.ownerId };
+    const decision = yield* decideFor(aliceSubject, ownedByAlice, policyResource);
+    yield* outcomes.set("passedKeys", Object.keys(policyResource));
+    yield* outcomes.set("allowed", decision._tag === "Allow");
+  });
+
+  Then(
+    "the value passed to {string} contains only the attributes the policy inspects",
+    function* (_call: string) {
       const { outcomes } = yield* World;
-      assert.match(call, /decide\(canReadProject/);
-      const full = projectsFor(1)[0];
-      // `policyResource(project)`: exactly the attributes the policy inspects, nothing else.
-      const policyResource = { ownerId: full?.ownerId };
-      const decision = yield* decideFor(aliceSubject, ownedByAlice, policyResource);
-      yield* outcomes.set("passedKeys", Object.keys(policyResource));
-      yield* outcomes.set("allowed", decision._tag === "Allow");
+      assert.deepEqual(yield* outcomes.getAs("passedKeys", isStringArray), [
+        ownedByAlice._tag === "HasResourceAttribute" ? ownedByAlice.attribute : "",
+      ]);
+      // And those attributes were enough: had one been missing the decision would not allow.
+      assert.equal(yield* outcomes.getAs("allowed", isBoolean), true);
     },
   );
-
-  Then("the value passed to {string} contains only the attributes the policy inspects", function* (_call: string) {
-    const { outcomes } = yield* World;
-    assert.deepEqual(yield* outcomes.getAs("passedKeys", isStringArray), [
-      ownedByAlice._tag === "HasResourceAttribute" ? ownedByAlice.attribute : "",
-    ]);
-    // And those attributes were enough: had one been missing the decision would not allow.
-    assert.equal(yield* outcomes.getAs("allowed", isBoolean), true);
-  });
 
   Then("it does not contain the resource's full content", function* () {
     const { outcomes } = yield* World;
@@ -453,11 +476,14 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then("the page's own {string} call independently rejects the stale session", function* (_call: string) {
-    const { outcomes } = yield* World;
-    const cookie = yield* outcomes.getAs("cookie", isString);
-    assert.equal((yield* readSession(cookie)).found, false);
-  });
+  Then(
+    "the page's own {string} call independently rejects the stale session",
+    function* (_call: string) {
+      const { outcomes } = yield* World;
+      const cookie = yield* outcomes.getAs("cookie", isString);
+      assert.equal((yield* readSession(cookie)).found, false);
+    },
+  );
 
   Given("a request that has passed {string}'s cookie-presence check", function* (_proxy: string) {
     const { outcomes } = yield* World;
@@ -552,7 +578,10 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
       const raw = yield* outcomes.getAs("setCookie", isString);
       assert.match(raw, new RegExp(`^${expectedName}=`));
       const cookie = written.find((entry) => entry.name === expectedName);
-      assert.ok(cookie !== undefined, `no ${expectedName} reached the jar: ${JSON.stringify(written)}`);
+      assert.ok(
+        cookie !== undefined,
+        `no ${expectedName} reached the jar: ${JSON.stringify(written)}`,
+      );
       assert.ok(cookie.value.length > 0);
     },
   );
@@ -585,10 +614,13 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then("it instead relies on {string} to carry the header across the boundary", function* (_bridge: string) {
-    const { outcomes } = yield* World;
-    assert.ok((yield* outcomes.getAs("jarAfter", isNumber)) > 0);
-  });
+  Then(
+    "it instead relies on {string} to carry the header across the boundary",
+    function* (_bridge: string) {
+      const { outcomes } = yield* World;
+      assert.ok((yield* outcomes.getAs("jarAfter", isNumber)) > 0);
+    },
+  );
 
   // ---- BEH-EA-190: server actions re-resolve the subject per invocation --------------------
 
@@ -616,26 +648,35 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Given("a page rendered while {string} held a role granting {string}", function* (name: string, _action: string) {
-    const { outcomes, roles } = yield* World;
-    const signedIn = yield* signInAlice(`${name}@example.com`);
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
-    yield* Ref.set(roles, ["owner"]);
-    const rendered = yield* invokeAction(signedIn.cookieHeader);
-    yield* outcomes.set("renderRoles", rendered === undefined ? [] : [...rendered.roles]);
-  });
+  Given(
+    "a page rendered while {string} held a role granting {string}",
+    function* (name: string, _action: string) {
+      const { outcomes, roles } = yield* World;
+      const signedIn = yield* signInAlice(`${name}@example.com`);
+      yield* outcomes.set("cookie", signedIn.cookieHeader);
+      yield* Ref.set(roles, ["owner"]);
+      const rendered = yield* invokeAction(signedIn.cookieHeader);
+      yield* outcomes.set("renderRoles", rendered === undefined ? [] : [...rendered.roles]);
+    },
+  );
 
-  Given("{string}'s role is revoked after the page rendered, while her tab remains open", function* (_name: string) {
-    const { roles } = yield* World;
-    yield* Ref.set(roles, []);
-  });
+  Given(
+    "{string}'s role is revoked after the page rendered, while her tab remains open",
+    function* (_name: string) {
+      const { roles } = yield* World;
+      yield* Ref.set(roles, []);
+    },
+  );
 
   When(
     "{string} later triggers the {string} server action from that same open tab",
     function* (_name: string, _action: string) {
       const { outcomes } = yield* World;
       const subject = yield* invokeAction(yield* outcomes.getAs("cookie", isString));
-      yield* outcomes.set("actionRoles", subject === undefined ? ["<no subject>"] : [...subject.roles]);
+      yield* outcomes.set(
+        "actionRoles",
+        subject === undefined ? ["<no subject>"] : [...subject.roles],
+      );
     },
   );
 
@@ -649,12 +690,15 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then("it does not reuse the subject resolved during the page's initial server render", function* () {
-    const { outcomes } = yield* World;
-    const render = yield* outcomes.getAs("renderRoles", isStringArray);
-    const action = yield* outcomes.getAs("actionRoles", isStringArray);
-    assert.notDeepEqual(render, action);
-  });
+  Then(
+    "it does not reuse the subject resolved during the page's initial server render",
+    function* () {
+      const { outcomes } = yield* World;
+      const render = yield* outcomes.getAs("renderRoles", isStringArray);
+      const action = yield* outcomes.getAs("actionRoles", isStringArray);
+      assert.notDeepEqual(render, action);
+    },
+  );
 
   Given("a subject resolved once during a page's initial server render", function* () {
     const { outcomes, roles } = yield* World;
@@ -667,7 +711,10 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   When("a server action on that page is invoked afterward", function* () {
     const { outcomes } = yield* World;
-    yield* outcomes.set("actionSubject", yield* invokeAction(yield* outcomes.getAs("cookie", isString)));
+    yield* outcomes.set(
+      "actionSubject",
+      yield* invokeAction(yield* outcomes.getAs("cookie", isString)),
+    );
   });
 
   Then("it does not reuse the subject resolved during the page's initial render", function* () {
@@ -689,7 +736,9 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   const loadPage = (cookieHeader: string, resourceCount: number) =>
     Effect.gen(function* () {
       const { runtime } = yield* World;
-      const session = yield* Effect.promise(() => getSession(headersWithCookie(cookieHeader), runtime));
+      const session = yield* Effect.promise(() =>
+        getSession(headersWithCookie(cookieHeader), runtime),
+      );
       assert.ok(session !== undefined);
       return yield* Effect.promise(() =>
         runtime.runPromise(
@@ -746,7 +795,10 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
       const page = yield* loadPage(yield* outcomes.getAs("cookie", isString), 4);
       yield* outcomes.set("subjectId", page.subjectId);
       yield* outcomes.set("evaluated", page.evaluated.length);
-      yield* outcomes.set("decisionSubjects", page.evaluated.map((decision) => decision.subjectId));
+      yield* outcomes.set(
+        "decisionSubjects",
+        page.evaluated.map((decision) => decision.subjectId),
+      );
     },
   );
 
@@ -761,12 +813,15 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Given("a page that evaluates policies for {string} resources during one render", function* (_n: string) {
-    const { outcomes, roles } = yield* World;
-    const signedIn = yield* signInAlice("many@example.com");
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
-    yield* Ref.set(roles, ["member"]);
-  });
+  Given(
+    "a page that evaluates policies for {string} resources during one render",
+    function* (_n: string) {
+      const { outcomes, roles } = yield* World;
+      const signedIn = yield* signInAlice("many@example.com");
+      yield* outcomes.set("cookie", signedIn.cookieHeader);
+      yield* Ref.set(roles, ["member"]);
+    },
+  );
 
   When("that page render completes", function* () {
     const { outcomes } = yield* World;
@@ -816,10 +871,13 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then("the atoms are seeded from that payload before {string} mounts", function* (_provider: string) {
-    const { outcomes } = yield* World;
-    assert.ok((yield* outcomes.getAs("seeded", isNumber)) >= 1);
-    // Bound to the subject: the same payload seeds nothing for anyone else.
-    assert.equal(yield* outcomes.getAs("foreignSeeded", isNumber), 0);
-  });
+  Then(
+    "the atoms are seeded from that payload before {string} mounts",
+    function* (_provider: string) {
+      const { outcomes } = yield* World;
+      assert.ok((yield* outcomes.getAs("seeded", isNumber)) >= 1);
+      // Bound to the subject: the same payload seeds nothing for anyone else.
+      assert.equal(yield* outcomes.getAs("foreignSeeded", isNumber), 0);
+    },
+  );
 });

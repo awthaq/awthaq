@@ -75,7 +75,9 @@ const countRows = (table: string) =>
 
 const tableNames = Effect.gen(function* () {
   const { sql } = yield* World;
-  const rows = yield* sql<{ readonly name: string }>`SELECT name FROM sqlite_master WHERE type = 'table'`;
+  const rows = yield* sql<{
+    readonly name: string;
+  }>`SELECT name FROM sqlite_master WHERE type = 'table'`;
   return rows.map((row) => row.name);
 });
 
@@ -182,30 +184,39 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Given('an application configured with {string} relaxed to {string}', function* (_knob: string, _value: string) {
-    yield* updateConfig({
-      auth: passwordAndRoles,
-      production: true,
-      config: Layer.mergeAll(
-        goodConfig,
-        SessionCookie.config({
-          mode: SessionCookie.SecureDomain({ domain: "acme.com", sameSite: "lax" }),
-        }),
-      ),
-    });
-  });
+  Given(
+    "an application configured with {string} relaxed to {string}",
+    function* (_knob: string, _value: string) {
+      yield* updateConfig({
+        auth: passwordAndRoles,
+        production: true,
+        config: Layer.mergeAll(
+          goodConfig,
+          SessionCookie.config({
+            mode: SessionCookie.SecureDomain({ domain: "acme.com", sameSite: "lax" }),
+          }),
+        ),
+      });
+    },
+  );
 
-  Then("it reports {string} relaxed to {string} as an insecure default", function* (_knob: string, _value: string) {
-    assert.match(combined(yield* lastRun), /cookie-samesite-relaxed/);
-  });
+  Then(
+    "it reports {string} relaxed to {string} as an insecure default",
+    function* (_knob: string, _value: string) {
+      assert.match(combined(yield* lastRun), /cookie-samesite-relaxed/);
+    },
+  );
 
   Given("an application configured with a mutating endpoint without CSRF protection", function* () {
     yield* updateConfig({ auth: widgetOnly, production: true, config: undefined });
   });
 
-  Then("it reports a mutating endpoint without CSRF protection as an insecure default", function* () {
-    assert.match(combined(yield* lastRun), /csrf-missing/);
-  });
+  Then(
+    "it reports a mutating endpoint without CSRF protection as an insecure default",
+    function* () {
+      assert.match(combined(yield* lastRun), /csrf-missing/);
+    },
+  );
 
   Given("an application configured with an oversized request body limit", function* () {
     yield* updateConfig({
@@ -300,7 +311,8 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { outcomes } = yield* World;
     for (const key of ["human", "json", "configList"]) {
       const text = yield* outcomes.getAs(key, isString);
-      for (const canary of CANARIES) assert.equal(text.includes(canary), false, `${key} leaked ${canary}`);
+      for (const canary of CANARIES)
+        assert.equal(text.includes(canary), false, `${key} leaked ${canary}`);
     }
   });
 
@@ -364,9 +376,12 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Given("an installed plugin set with taps registered on the {string} hook point", function* (_point: string) {
-    yield* updateConfig({ auth: passwordAndRoles });
-  });
+  Given(
+    "an installed plugin set with taps registered on the {string} hook point",
+    function* (_point: string) {
+      yield* updateConfig({ auth: passwordAndRoles });
+    },
+  );
 
   Then(
     "it states that hook-tap chains are not printed rather than omitting them silently",
@@ -393,7 +408,10 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { outcomes } = yield* World;
       const printed = yield* outcomes.getAs("printedOrder", isStringArray);
       // The linker's own order is the manifest's plugin order (Auth.make's topological sort).
-      assert.deepEqual(printed, withOAuth.manifest.plugins.map((plugin) => plugin.id));
+      assert.deepEqual(
+        printed,
+        withOAuth.manifest.plugins.map((plugin) => plugin.id),
+      );
     },
   );
 
@@ -458,20 +476,26 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* updateConfig({ auth: passwordAndRoles });
   });
 
-  Then("it produces its listing without making any HTTP request or running any handler", function* () {
-    // The command ran with an `HttpClient` that fails on use (CliWorld.ts); it still listed the routes.
-    const result = yield* lastRun;
-    assert.equal(result.code, 0);
-    assert.ok(result.stdout.length > 5);
-  });
+  Then(
+    "it produces its listing without making any HTTP request or running any handler",
+    function* () {
+      // The command ran with an `HttpClient` that fails on use (CliWorld.ts); it still listed the routes.
+      const result = yield* lastRun;
+      assert.equal(result.code, 0);
+      assert.ok(result.stdout.length > 5);
+    },
+  );
 
   // ---- BEH-EA-204: migration status / apply -------------------------------------------------
 
-  Given("the linker's ordered, re-keyed migration record for the installed plugin set", function* () {
-    yield* updateConfig({ auth: passwordAndRoles });
-    const { outcomes } = yield* World;
-    yield* outcomes.set("linkerCount", passwordAndRoles.migrations.length);
-  });
+  Given(
+    "the linker's ordered, re-keyed migration record for the installed plugin set",
+    function* () {
+      yield* updateConfig({ auth: passwordAndRoles });
+      const { outcomes } = yield* World;
+      yield* outcomes.set("linkerCount", passwordAndRoles.migrations.length);
+    },
+  );
 
   Given(
     "the driver's {string} ledger showing some of those migrations already applied",
@@ -545,17 +569,29 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     const result = yield* lastRun;
     assert.equal(result.code, 0);
     const lines = result.stdout.filter((line) => line.startsWith("applied "));
-    const firstPlugin = lines.findIndex((line) => /awthaq_plugin_migrations|_roles_/i.test(line) || /^applied plugin/i.test(line));
+    const firstPlugin = lines.findIndex(
+      (line) => /awthaq_plugin_migrations|_roles_/i.test(line) || /^applied plugin/i.test(line),
+    );
     const firstCore = lines.findIndex((line) => /effect_sql_migrations|^applied core/i.test(line));
     assert.ok(lines.length > 0);
     if (firstPlugin >= 0 && firstCore >= 0) assert.ok(firstCore < firstPlugin);
     // The ledgers agree: ids ascend in the order they ran.
-    const core = yield* sql<{ readonly migration_id: number }>`SELECT migration_id FROM effect_sql_migrations ORDER BY rowid`;
+    const core = yield* sql<{
+      readonly migration_id: number;
+    }>`SELECT migration_id FROM effect_sql_migrations ORDER BY rowid`;
     const ids = core.map((row) => row.migration_id);
-    assert.deepEqual(ids, [...ids].sort((a, b) => a - b));
-    const plugin = yield* sql<{ readonly migration_id: number }>`SELECT migration_id FROM awthaq_plugin_migrations ORDER BY rowid`;
+    assert.deepEqual(
+      ids,
+      [...ids].sort((a, b) => a - b),
+    );
+    const plugin = yield* sql<{
+      readonly migration_id: number;
+    }>`SELECT migration_id FROM awthaq_plugin_migrations ORDER BY rowid`;
     const pluginIds = plugin.map((row) => row.migration_id);
-    assert.deepEqual(pluginIds, [...pluginIds].sort((a, b) => a - b));
+    assert.deepEqual(
+      pluginIds,
+      [...pluginIds].sort((a, b) => a - b),
+    );
   });
 
   Then("the ordered pending set is printed before any migration is applied", function* () {
@@ -575,20 +611,17 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.deepEqual(yield* tableNames, []);
   });
 
-  Given(
-    "a ledger holding an applied migration the linker's record does not contain",
-    function* () {
-      const { sql } = yield* World;
-      yield* updateConfig({ auth: passwordAndRoles });
-      yield* applyEverything;
-      yield* sql`INSERT INTO awthaq_plugin_migrations (migration_id, name) VALUES (99, '0099_gone_plugin_migration')`;
-      const { outcomes } = yield* World;
-      yield* outcomes.set("ledgerSnapshot", [
-        yield* countRows("effect_sql_migrations"),
-        yield* countRows("awthaq_plugin_migrations"),
-      ]);
-    },
-  );
+  Given("a ledger holding an applied migration the linker's record does not contain", function* () {
+    const { sql } = yield* World;
+    yield* updateConfig({ auth: passwordAndRoles });
+    yield* applyEverything;
+    yield* sql`INSERT INTO awthaq_plugin_migrations (migration_id, name) VALUES (99, '0099_gone_plugin_migration')`;
+    const { outcomes } = yield* World;
+    yield* outcomes.set("ledgerSnapshot", [
+      yield* countRows("effect_sql_migrations"),
+      yield* countRows("awthaq_plugin_migrations"),
+    ]);
+  });
 
   Then("it fails with the drift exit code", function* () {
     assert.equal((yield* lastRun).code, EXIT.ledgerDrift);
@@ -605,9 +638,12 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   // ---- BEH-EA-205: openapi ------------------------------------------------------------------
 
-  Given("an installed plugin set including {string} and {string}", function* (_first: string, _second: string) {
-    yield* updateConfig({ auth: withOAuth });
-  });
+  Given(
+    "an installed plugin set including {string} and {string}",
+    function* (_first: string, _second: string) {
+      yield* updateConfig({ auth: withOAuth });
+    },
+  );
 
   const openapiDocument = Effect.gen(function* () {
     const result = yield* lastRun;
@@ -620,9 +656,18 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     "it emits one OpenAPI document whose paths cover core's contract and both {string}'s and {string}'s contracts",
     function* (_first: string, _second: string) {
       const { paths } = yield* openapiDocument;
-      assert.ok(paths.some((path) => path.endsWith("/session")), "core's session group");
-      assert.ok(paths.some((path) => path.endsWith("/password/sign-up")), "password's contract");
-      assert.ok(paths.some((path) => path.includes("/oauth/")), "oauth's contract");
+      assert.ok(
+        paths.some((path) => path.endsWith("/session")),
+        "core's session group",
+      );
+      assert.ok(
+        paths.some((path) => path.endsWith("/password/sign-up")),
+        "password's contract",
+      );
+      assert.ok(
+        paths.some((path) => path.includes("/oauth/")),
+        "oauth's contract",
+      );
     },
   );
 
@@ -650,13 +695,19 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* () {
       const { paths } = yield* openapiDocument;
       // Both plugins' operations are in the one document it already has.
-      assert.ok(paths.some((path) => path.includes("/oauth/")) && paths.some((path) => path.includes("/password/")));
+      assert.ok(
+        paths.some((path) => path.includes("/oauth/")) &&
+          paths.some((path) => path.includes("/password/")),
+      );
     },
   );
 
-  Given("the composed {string} contract used to generate the Effect-based client", function* (_api: string) {
-    yield* updateConfig({ auth: withOAuth });
-  });
+  Given(
+    "the composed {string} contract used to generate the Effect-based client",
+    function* (_api: string) {
+      yield* updateConfig({ auth: withOAuth });
+    },
+  );
 
   Then("the emitted document is generated from that same merged contract", function* () {
     const { parsed } = yield* openapiDocument;
@@ -698,9 +749,15 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { sql } = yield* World;
       assert.equal((yield* lastRun).code, 0);
       const users = yield* sql<{ readonly email: string }>`SELECT email FROM users`;
-      assert.deepEqual(users.map((row) => row.email), ["ops@acme.com"]);
+      assert.deepEqual(
+        users.map((row) => row.email),
+        ["ops@acme.com"],
+      );
       const held = yield* sql<{ readonly role: string }>`SELECT role FROM role_assignments`;
-      assert.deepEqual(held.map((row) => row.role), ["admin"]);
+      assert.deepEqual(
+        held.map((row) => row.role),
+        ["admin"],
+      );
     },
   );
 
@@ -710,13 +767,16 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* outcomes.set("pending", ["seed", "admin", "--email", "ops@acme.com"]);
   });
 
-  Then("it does not write rows to the database directly, bypassing {string} or {string}", function* (_users: string, _roles: string) {
-    assert.equal((yield* lastRun).code, 0);
-    const tags = yield* auditTags;
-    // The rows arrived through the domain services: their own events are what carry the writes.
-    assert.ok(tags.includes("auth.roles.assigned"), tags.join(","));
-    assert.ok(tags.includes("auth.admin.seeded"), tags.join(","));
-  });
+  Then(
+    "it does not write rows to the database directly, bypassing {string} or {string}",
+    function* (_users: string, _roles: string) {
+      assert.equal((yield* lastRun).code, 0);
+      const tags = yield* auditTags;
+      // The rows arrived through the domain services: their own events are what carry the writes.
+      assert.ok(tags.includes("auth.roles.assigned"), tags.join(","));
+      assert.ok(tags.includes("auth.admin.seeded"), tags.join(","));
+    },
+  );
 
   Given("an administrative account already exists", function* () {
     yield* prepareSeed;
@@ -739,7 +799,9 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("it proceeds to create or promote the requested account", function* () {
     const { sql } = yield* World;
     assert.equal((yield* lastRun).code, 0);
-    const holders = yield* sql<{ readonly n: number }>`SELECT count(*) AS n FROM role_assignments WHERE role = 'admin'`;
+    const holders = yield* sql<{
+      readonly n: number;
+    }>`SELECT count(*) AS n FROM role_assignments WHERE role = 'admin'`;
     assert.equal(Number(holders[0]?.n), 2);
   });
 
@@ -758,13 +820,10 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(Number(users[0]?.n), 0);
   });
 
-  Then(
-    "an {string} event is published and recorded in the audit table",
-    function* (tag: string) {
-      const tags = yield* auditTags;
-      assert.ok(tags.includes(tag), `${tag} not among ${tags.join(",")}`);
-    },
-  );
+  Then("an {string} event is published and recorded in the audit table", function* (tag: string) {
+    const tags = yield* auditTags;
+    assert.ok(tags.includes(tag), `${tag} not among ${tags.join(",")}`);
+  });
 
   Given("an installed plugin set with {string}", function* (_plugin: string) {
     const { outcomes } = yield* World;
@@ -831,7 +890,9 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     const dependents: Array<string> = [];
     for (const entry of readdirSync(packagesDir)) {
       if (entry === "cli") continue;
-      const manifest: unknown = JSON.parse(readFileSync(Path.join(packagesDir, entry, "package.json"), "utf8"));
+      const manifest: unknown = JSON.parse(
+        readFileSync(Path.join(packagesDir, entry, "package.json"), "utf8"),
+      );
       for (const field of ["dependencies", "peerDependencies", "optionalDependencies"]) {
         const deps = Reflect.get(Object(manifest), field);
         if (deps !== undefined && "@awthaq/cli" in Object(deps)) dependents.push(entry);
@@ -872,7 +933,10 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { outcomes } = yield* World;
       const result = yield* lastRun;
       // It answered (doctor may report findings, exit 3, but never "unavailable")...
-      assert.ok(result.code === 0 || result.code === EXIT.doctorFindings, `exit ${result.code}: ${combined(result)}`);
+      assert.ok(
+        result.code === 0 || result.code === EXIT.doctorFindings,
+        `exit ${result.code}: ${combined(result)}`,
+      );
       assert.ok(result.stdout.length > 0);
       // ...without ever building the application Layer.
       assert.equal((yield* outcomes.getAs("counter", isCounter)).n, 0);
@@ -887,13 +951,10 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Given(
-    "an application defining {string}",
-    function* (_definition: string) {
-      const { outcomes } = yield* World;
-      yield* outcomes.set("defined", true);
-    },
-  );
+  Given("an application defining {string}", function* (_definition: string) {
+    const { outcomes } = yield* World;
+    yield* outcomes.set("defined", true);
+  });
 
   When("the module is evaluated", function* () {
     const { outcomes } = yield* World;
@@ -906,7 +967,10 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
         Organization.Organization,
         Roles.Roles,
       ]);
-      yield* outcomes.set("manifestIds", auth.manifest.plugins.map((plugin) => plugin.id));
+      yield* outcomes.set(
+        "manifestIds",
+        auth.manifest.plugins.map((plugin) => plugin.id),
+      );
       yield* updateConfig({ auth, sql: undefined, app: undefined });
     } finally {
       yield* outcomes.set("listeners", watch.started());
@@ -1098,7 +1162,11 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("each one decodes through a Schema", function* () {
     const { outcomes } = yield* World;
-    assert.deepEqual(yield* outcomes.getAs("refusals", isNumberArray), [EXIT.usage, EXIT.usage, EXIT.usage]);
+    assert.deepEqual(yield* outcomes.getAs("refusals", isNumberArray), [
+      EXIT.usage,
+      EXIT.usage,
+      EXIT.usage,
+    ]);
   });
 
   Given("the password sign-up payload's email Schema", function* () {
@@ -1107,12 +1175,21 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   When("{string} decodes its argument", function* (_command: string) {
     const { outcomes } = yield* World;
-    const samples = ["ops@acme.com", "not-an-email", "a@b", "UPPER@EXAMPLE.COM", "two words@acme.com", ""];
+    const samples = [
+      "ops@acme.com",
+      "not-an-email",
+      "a@b",
+      "UPPER@EXAMPLE.COM",
+      "two words@acme.com",
+      "",
+    ];
     const verdicts: Array<string> = [];
     for (const sample of samples) {
       const code = yield* exitCodeOf(["seed", "admin", "--email", sample]);
       // Usage (exit 2) means the CLI's Schema refused it; anything else means it was accepted and the command went on.
-      verdicts.push(`${sample}=>${code === EXIT.usage ? "rejected" : "accepted"}|${emailAccepted(sample) ? "accepted" : "rejected"}`);
+      verdicts.push(
+        `${sample}=>${code === EXIT.usage ? "rejected" : "accepted"}|${emailAccepted(sample) ? "accepted" : "rejected"}`,
+      );
     }
     yield* outcomes.set("verdicts", verdicts);
   });

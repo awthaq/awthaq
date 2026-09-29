@@ -33,7 +33,9 @@ const withCsrf = withHttpOnly.pipe(Effect.provide(AuthClient.CsrfClientLive));
 
 // BEH-EA-170: the merged contract's client really carries the marker; providing
 // `CsrfClientLive` discharges exactly that requirement.
-type CsrfIsRequired = Expect<Equal<Extract<Effect.Services<typeof clientEffect>, CsrfMarker>, CsrfMarker>>;
+type CsrfIsRequired = Expect<
+  Equal<Extract<Effect.Services<typeof clientEffect>, CsrfMarker>, CsrfMarker>
+>;
 type CsrfIsDischarged = Expect<Equal<Effect.Services<typeof withCsrf>, never>>;
 /** With everything but the CSRF layer provided, the *only* thing left unsatisfied is `ForClient<CsrfProtection>`. */
 type OnlyCsrfIsMissing = Expect<Equal<Effect.Services<typeof withHttpOnly>, CsrfMarker>>;
@@ -63,12 +65,19 @@ const widgets = HttpApiGroup.make("widgets").add(
 const before = HttpApi.make("auth").add(widgets);
 /** The same plugin after it grows one endpoint that fails with a new typed error. */
 const after = HttpApi.make("auth").add(
-  widgets.add(HttpApiEndpoint.post("create", "/widgets", { success: Schema.Void, error: [Forbidden] })),
+  widgets.add(
+    HttpApiEndpoint.post("create", "/widgets", { success: Schema.Void, error: [Forbidden] }),
+  ),
 );
 const afterAgain = HttpApi.make("auth").add(
   widgets
     .add(HttpApiEndpoint.post("create", "/widgets", { success: Schema.Void, error: [Forbidden] }))
-    .add(HttpApiEndpoint.post("throttle", "/widgets/throttle", { success: Schema.Void, error: [RateLimited] })),
+    .add(
+      HttpApiEndpoint.post("throttle", "/widgets/throttle", {
+        success: Schema.Void,
+        error: [RateLimited],
+      }),
+    ),
 );
 
 type BeforeCodes = AuthClient.ErrorCodes<typeof before>;
@@ -94,7 +103,9 @@ type MergedCodes = AuthClient.ErrorCodes<typeof mergedTuple.api>;
 type MergedHasInvalidCredentials = Expect<"InvalidCredentials" extends MergedCodes ? true : false>;
 type BeforeIsExact = Expect<Equal<BeforeCodes, "NotFound">>;
 type AfterIsExtended = Expect<Equal<AfterCodes, "NotFound" | "Forbidden">>;
-type AfterAgainIsExtended = Expect<Equal<AfterAgainCodes, "NotFound" | "Forbidden" | "RateLimitedHarness">>;
+type AfterAgainIsExtended = Expect<
+  Equal<AfterAgainCodes, "NotFound" | "Forbidden" | "RateLimitedHarness">
+>;
 
 export const mergedHasInvalidCredentials: MergedHasInvalidCredentials = true;
 export const beforeIsExact: BeforeIsExact = true;

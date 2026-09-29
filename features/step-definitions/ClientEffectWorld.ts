@@ -77,7 +77,12 @@ export interface DeclaredEndpoint {
 
 /** Every `(group, endpoint)` a contract declares — the source of truth a client's methods are compared against. */
 export const declaredEndpoints = (api: {
-  readonly groups: Readonly<Record<string, { readonly topLevel: boolean; readonly endpoints: Readonly<Record<string, unknown>> }>>;
+  readonly groups: Readonly<
+    Record<
+      string,
+      { readonly topLevel: boolean; readonly endpoints: Readonly<Record<string, unknown>> }
+    >
+  >;
 }): ReadonlyArray<DeclaredEndpoint> =>
   Object.entries(api.groups).flatMap(([group, definition]) =>
     Object.keys(definition.endpoints).map((endpoint) => ({
@@ -96,7 +101,9 @@ export const exposedMethods = (
   declared: ReadonlyArray<DeclaredEndpoint>,
 ): ReadonlyArray<DeclaredEndpoint> => {
   if (!isRecord(client)) return [];
-  const topLevelGroups = new Set(declared.filter((entry) => entry.topLevel).map((entry) => entry.group));
+  const topLevelGroups = new Set(
+    declared.filter((entry) => entry.topLevel).map((entry) => entry.group),
+  );
   const found: Array<DeclaredEndpoint> = [];
   for (const [key, value] of Object.entries(client)) {
     if (typeof value === "function") {

@@ -117,7 +117,8 @@ export const WorldLive = Layer.effect(
     return World.of({
       outcomes: yield* makeOutcomes,
       jar: {
-        set: (name, value) => Effect.runSync(Ref.update(written, (all) => [...all, { name, value }])),
+        set: (name, value) =>
+          Effect.runSync(Ref.update(written, (all) => [...all, { name, value }])),
         written,
       },
       roles,

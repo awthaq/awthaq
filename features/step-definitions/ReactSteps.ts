@@ -26,7 +26,11 @@ class AppClient extends ReactClient.makeReactClient<AppClient>()("features/React
 const AuthClientAtomSignOut = AuthClientAtom.ReactAuthClient.mutation("session", "signOut");
 
 const isRegistry = (value: unknown): value is AtomRegistry.AtomRegistry =>
-  typeof value === "object" && value !== null && "get" in value && "mount" in value && "set" in value;
+  typeof value === "object" &&
+  value !== null &&
+  "get" in value &&
+  "mount" in value &&
+  "set" in value;
 
 const session = (id: string) =>
   new SessionContract.SessionDto({
@@ -38,7 +42,8 @@ const session = (id: string) =>
     current: true,
   });
 
-const sleep = (millis: number) => Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+const sleep = (millis: number) =>
+  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
 
 /** Polls `read` (real time) until `done` holds; fails the step, naming what was awaited, after ~3s. */
 const until = <A>(what: string, read: () => A, done: (value: A) => boolean) =>
@@ -78,7 +83,11 @@ const signedInPage = (email: string) =>
       payload: { email, password: yield* redacted() },
       reactivityKeys: [ReactClient.SESSION_KEY],
     });
-    yield* until("sign-in to succeed", () => registry.get(signIn), (result) => AsyncResult.isSuccess(result));
+    yield* until(
+      "sign-in to succeed",
+      () => registry.get(signIn),
+      (result) => AsyncResult.isSuccess(result),
+    );
     const current = yield* until(
       "sessionAtom to hold the session",
       () => registry.get(AuthClientAtom.sessionAtom),
@@ -114,14 +123,11 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* outcomes.set("afterLookupStarted", registry.get(AuthClientAtom.sessionAtom));
     });
 
-  When(
-    "{string} is rendered with {string}",
-    function* (_provider: string, _initialValues: string) {
-      const { outcomes } = yield* World;
-      const name = yield* outcomes.getAs("seedName", isString);
-      yield* renderSeeded(AsyncResult.success(session(`session-of-${name}`)));
-    },
-  );
+  When("{string} is rendered with {string}", function* (_provider: string, _initialValues: string) {
+    const { outcomes } = yield* World;
+    const name = yield* outcomes.getAs("seedName", isString);
+    yield* renderSeeded(AsyncResult.success(session(`session-of-${name}`)));
+  });
 
   Then("the first client render shows {string}'s resolved session", function* (name: string) {
     const { outcomes } = yield* World;
@@ -131,10 +137,13 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(first.value.id, `session-of-${name}`);
   });
 
-  Given("{string} seeded with the server-resolved session for {string}", function* (_provider: string, name: string) {
-    const { outcomes } = yield* World;
-    yield* outcomes.set("seedName", name);
-  });
+  Given(
+    "{string} seeded with the server-resolved session for {string}",
+    function* (_provider: string, name: string) {
+      const { outcomes } = yield* World;
+      yield* outcomes.set("seedName", name);
+    },
+  );
 
   When("the page performs its first client render", function* () {
     const { outcomes } = yield* World;
@@ -199,7 +208,11 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
       const signOut = AuthClientAtomSignOut;
       registry.mount(signOut);
       registry.set(signOut, { reactivityKeys: keys });
-      yield* until("sign-out to succeed", () => registry.get(signOut), (result) => AsyncResult.isSuccess(result));
+      yield* until(
+        "sign-out to succeed",
+        () => registry.get(signOut),
+        (result) => AsyncResult.isSuccess(result),
+      );
     } else {
       const signIn = AppClient.mutation("password", "signIn");
       registry.mount(signIn);
@@ -207,7 +220,11 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
         payload: { email: "alice@example.com", password: yield* redacted() },
         reactivityKeys: keys,
       });
-      yield* until("sign-in to succeed", () => registry.get(signIn), (result) => AsyncResult.isSuccess(result));
+      yield* until(
+        "sign-in to succeed",
+        () => registry.get(signIn),
+        (result) => AsyncResult.isSuccess(result),
+      );
     }
   });
 
@@ -229,14 +246,11 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Given(
-    "{string} is declared as {string}",
-    function* (_atom: string, _declaration: string) {
-      const { outcomes } = yield* World;
-      yield* signedInPage("declared@example.com");
-      yield* outcomes.set("fetchesBefore", yield* sessionCount());
-    },
-  );
+  Given("{string} is declared as {string}", function* (_atom: string, _declaration: string) {
+    const { outcomes } = yield* World;
+    yield* signedInPage("declared@example.com");
+    yield* outcomes.set("fetchesBefore", yield* sessionCount());
+  });
 
   When("any mutation tagged with {string} completes", function* (_keys: string) {
     const { outcomes } = yield* World;
@@ -244,7 +258,11 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
     const signOut = AuthClientAtomSignOut;
     registry.mount(signOut);
     registry.set(signOut, { reactivityKeys: [ReactClient.SESSION_KEY] });
-    yield* until("sign-out to succeed", () => registry.get(signOut), (result) => AsyncResult.isSuccess(result));
+    yield* until(
+      "sign-out to succeed",
+      () => registry.get(signOut),
+      (result) => AsyncResult.isSuccess(result),
+    );
   });
 
   Then(
@@ -271,7 +289,8 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
         (subject) => subject !== undefined,
       );
       // Every notification, with the session's state at that instant: the "same render" evidence.
-      const snapshots: Array<{ readonly subjectDefined: boolean; readonly signedOut: boolean }> = [];
+      const snapshots: Array<{ readonly subjectDefined: boolean; readonly signedOut: boolean }> =
+        [];
       registry.subscribe(AuthClientAtom.subjectAtom, (subject) => {
         const current = registry.get(AuthClientAtom.sessionAtom);
         snapshots.push({
@@ -336,7 +355,10 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
         (result) => AsyncResult.isFailure(result),
       );
       const error = AsyncResult.isFailure(failed) ? AsyncResult.error(failed) : Option.none();
-      yield* outcomes.set("failureTag", Option.isSome(error) ? Reflect.get(Object(error.value), "_tag") : "none");
+      yield* outcomes.set(
+        "failureTag",
+        Option.isSome(error) ? Reflect.get(Object(error.value), "_tag") : "none",
+      );
       assert.equal(yield* outcomes.getAs("failureTag", isString), tag);
     },
   );
@@ -345,7 +367,8 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { outcomes } = yield* World;
     const tag = yield* outcomes.getAs("failureTag", isString);
     // The form branches on the failure's `_tag`, never on message text.
-    const message = tag === "InvalidCredentials" ? "Wrong email or password." : "Something went wrong.";
+    const message =
+      tag === "InvalidCredentials" ? "Wrong email or password." : "Something went wrong.";
     yield* outcomes.set("rendered", message);
     yield* outcomes.set("branchOnTag", true);
   });
@@ -364,7 +387,9 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
 
 const redactedWrong = () => Effect.succeed(Redacted.make("definitely not the password"));
 
-const isSeededResult = (value: unknown): value is AsyncResult.AsyncResult<SessionContract.SessionDto | null, unknown> =>
+const isSeededResult = (
+  value: unknown,
+): value is AsyncResult.AsyncResult<SessionContract.SessionDto | null, unknown> =>
   AsyncResult.isAsyncResult(value);
 
 const isSnapshots = (

@@ -132,7 +132,10 @@ const verificationTtlElapse = Effect.gen(function* () {
   const verification = yield* Verification.Verification;
   const issued = yield* verification.issue({ identifier: "harness:ttl", ttl: Duration.hours(1) });
   // Consuming spends the token, so the "before" side of the boundary is a separate, identical token.
-  const probe = yield* verification.issue({ identifier: "harness:ttl-probe", ttl: Duration.hours(1) });
+  const probe = yield* verification.issue({
+    identifier: "harness:ttl-probe",
+    ttl: Duration.hours(1),
+  });
   const liveNow = yield* verification.consume("harness:ttl-probe", probe.value).pipe(
     Effect.as(true),
     Effect.catch(() => Effect.succeed(false)),
@@ -178,14 +181,17 @@ const rateLimitElapse = Effect.gen(function* () {
 export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- BEH-EA-193 --------------------------------------------------------------------------
 
-  Given("a plugin tuple containing {string} and {string}", function* (plugin: string, core: string) {
-    const { outcomes } = yield* World;
-    // `Session` is core's own reserved group, folded into every composition's api (MW-002).
-    const groups = Object.keys(passwordTuple.api.groups);
-    assert.ok(groups.includes(plugin.toLowerCase()), `the tuple's api has a "${plugin}" group`);
-    assert.ok(groups.includes(core.toLowerCase()), `the tuple's api has core's "${core}" group`);
-    yield* outcomes.set("tuple", groups);
-  });
+  Given(
+    "a plugin tuple containing {string} and {string}",
+    function* (plugin: string, core: string) {
+      const { outcomes } = yield* World;
+      // `Session` is core's own reserved group, folded into every composition's api (MW-002).
+      const groups = Object.keys(passwordTuple.api.groups);
+      assert.ok(groups.includes(plugin.toLowerCase()), `the tuple's api has a "${plugin}" group`);
+      assert.ok(groups.includes(core.toLowerCase()), `the tuple's api has core's "${core}" group`);
+      yield* outcomes.set("tuple", groups);
+    },
+  );
 
   When("{string} composes the tuple", function* (_entry: string) {
     const { outcomes } = yield* World;
@@ -249,11 +255,17 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     const result = yield* Effect.gen(function* () {
       const password = yield* Password.Password;
       const users = yield* Users.Users;
-      const issued = yield* password.signUp({ email: "same-graph@example.com", password: strongPassword });
+      const issued = yield* password.signUp({
+        email: "same-graph@example.com",
+        password: strongPassword,
+      });
       const stored = yield* users.findById(issued.session.userId);
       yield* users.verifyEmail(issued.session.userId);
       const wrong = yield* password
-        .signIn({ email: "same-graph@example.com", password: Redacted.make("not the password at all") })
+        .signIn({
+          email: "same-graph@example.com",
+          password: Redacted.make("not the password at all"),
+        })
         .pipe(Effect.flip);
       return { sameUserStored: stored.id === issued.session.userId, failureTag: wrong._tag };
     }).pipe(Effect.provide(passwordApp));
@@ -261,7 +273,7 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     yield* outcomes.set("failureTag", result.failureTag);
   });
 
-  Then('the test exercises the actual plugin graph {string} produces', function* (_make: string) {
+  Then("the test exercises the actual plugin graph {string} produces", function* (_make: string) {
     const { outcomes } = yield* World;
     // `Password.Password` is only provided by `Auth.make`'s own folded layer; the user it created is
     // the one the composition's shared `Users` store holds.
@@ -303,7 +315,7 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     yield* outcomes.set("elapse", facts);
   });
 
-  Then('it advances {string} rather than waiting in real time', function* (_clock: string) {
+  Then("it advances {string} rather than waiting in real time", function* (_clock: string) {
     const { outcomes } = yield* World;
     const facts = yield* outcomes.getAs("elapse", isElapse);
     // Something really elapsed on the virtual clock, and the boundary was observed on both sides...
@@ -356,7 +368,12 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
           new Request("http://localhost/session", { headers: { cookie: signedIn.cookieHeader } }),
         );
         const body = yield* Effect.promise(() => after.json());
-        return { live, status: after.status, tag: Reflect.get(body, "_tag"), realMillis: Date.now() - realStart };
+        return {
+          live,
+          status: after.status,
+          tag: Reflect.get(body, "_tag"),
+          realMillis: Date.now() - realStart,
+        };
       }).pipe(
         Effect.provide(
           whoamiApp.pipe(
@@ -391,11 +408,14 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
 
   // ---- BEH-EA-195 --------------------------------------------------------------------------
 
-  Given("a test that only needs to override {string}'s {string} method", function* (port: string, method: string) {
-    const { outcomes } = yield* World;
-    assert.equal(port, "Mailer");
-    yield* outcomes.set("method", method);
-  });
+  Given(
+    "a test that only needs to override {string}'s {string} method",
+    function* (port: string, method: string) {
+      const { outcomes } = yield* World;
+      assert.equal(port, "Mailer");
+      yield* outcomes.set("method", method);
+    },
+  );
 
   When("the test provides its double for {string}", function* (_port: string) {
     const { outcomes } = yield* World;
@@ -408,7 +428,9 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
       yield* mailer.send({ to: "mock@example.com", template: "probe" });
       // Everything not overridden is a typed "unimplemented" defect, not a silent no-op.
       const unimplemented = yield* Effect.exit(mailer.sent);
-      return Exit.isFailure(unimplemented) ? String(unimplemented.cause) : "sent unexpectedly succeeded";
+      return Exit.isFailure(unimplemented)
+        ? String(unimplemented.cause)
+        : "sent unexpectedly succeeded";
     }).pipe(Effect.provide(double));
     yield* outcomes.set("recipients", yield* Ref.get(sentTo));
     yield* outcomes.set("unimplemented", observed);
@@ -425,14 +447,20 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     function* (_port: string) {
       const { outcomes } = yield* World;
       // The double answers exactly one method; a full hand-written replacement would have answered `sent` too.
-      assert.match(yield* outcomes.getAs("unimplemented", isString), /UnimplementedError|Unimplemented method/);
+      assert.match(
+        yield* outcomes.getAs("unimplemented", isString),
+        /UnimplementedError|Unimplemented method/,
+      );
     },
   );
 
-  Given("a test that only asserts {string} was called with the expected arguments", function* (method: string) {
-    const { outcomes } = yield* World;
-    yield* outcomes.set("method", method);
-  });
+  Given(
+    "a test that only asserts {string} was called with the expected arguments",
+    function* (method: string) {
+      const { outcomes } = yield* World;
+      yield* outcomes.set("method", method);
+    },
+  );
 
   When(
     "the test does not need {string}'s recording or inspection behavior",
@@ -440,7 +468,8 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
       const { outcomes } = yield* World;
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
       const double = Layer.mock(Mailer.Mailer)({
-        send: (message) => Ref.update(calls, (seen) => [...seen, `${message.template}:${message.to}`]),
+        send: (message) =>
+          Ref.update(calls, (seen) => [...seen, `${message.template}:${message.to}`]),
       });
       yield* Effect.gen(function* () {
         const mailer = yield* Mailer.Mailer;
@@ -450,10 +479,13 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
-  Then("the test uses {string} instead of the full memory implementation", function* (_mock: string) {
-    const { outcomes } = yield* World;
-    assert.deepEqual(yield* outcomes.getAs("calls", isStringArray), ["welcome:ada@example.com"]);
-  });
+  Then(
+    "the test uses {string} instead of the full memory implementation",
+    function* (_mock: string) {
+      const { outcomes } = yield* World;
+      assert.deepEqual(yield* outcomes.getAs("calls", isStringArray), ["welcome:ada@example.com"]);
+    },
+  );
 
   // ---- BEH-EA-197 --------------------------------------------------------------------------
 
@@ -609,12 +641,19 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     );
   });
 
-  Then("it asserts every table {string} declares carries the {string} prefix",function* (_id: string, _prefix: string) {
-    const { outcomes } = yield* World;
-    const run = yield* outcomes.getAs("run", isContractRun);
-    assert.deepEqual(run.failed, []);
-    assert.ok(run.passed.some((name) => name.includes("every declared table carries this plugin's own id prefix")));
-  });
+  Then(
+    "it asserts every table {string} declares carries the {string} prefix",
+    function* (_id: string, _prefix: string) {
+      const { outcomes } = yield* World;
+      const run = yield* outcomes.getAs("run", isContractRun);
+      assert.deepEqual(run.failed, []);
+      assert.ok(
+        run.passed.some((name) =>
+          name.includes("every declared table carries this plugin's own id prefix"),
+        ),
+      );
+    },
+  );
 
   When(
     "the contract test suite applies {string}'s migrations twice, independently",
@@ -668,11 +707,14 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     );
   });
 
-  Given("a third-party plugin {string} built outside the awthaq repository", function* (_id: string) {
-    // Built above from `@awthaq/core`'s public `AuthPlugin` shape and run through `@awthaq/test`'s
-    // public entry point only — nothing under `packages/*/src` is reached into.
-    yield* setUp({ make: invitePlugin({}), options: inviteOptions, host: [] });
-  });
+  Given(
+    "a third-party plugin {string} built outside the awthaq repository",
+    function* (_id: string) {
+      // Built above from `@awthaq/core`'s public `AuthPlugin` shape and run through `@awthaq/test`'s
+      // public entry point only — nothing under `packages/*/src` is reached into.
+      yield* setUp({ make: invitePlugin({}), options: inviteOptions, host: [] });
+    },
+  );
 
   When("its author runs {string}", function* (_call: string) {
     const { outcomes } = yield* World;
@@ -706,7 +748,9 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
         redaction: {
           app: passwordApp,
           exercise: () =>
-            leak === "log" ? Effect.log("welcome", Redacted.make("s3cr3t-welcome-token")) : Effect.void,
+            leak === "log"
+              ? Effect.log("welcome", Redacted.make("s3cr3t-welcome-token"))
+              : Effect.void,
         },
       });
       await sink.settled();
@@ -790,6 +834,8 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     const run = yield* outcomes.getAs("run", isContractRun);
     assert.deepEqual(run.failed, []);
     assert.ok(run.passed.some((name) => name.includes("no Redacted value or watched secret")));
-    assert.ok(run.passed.some((name) => name.includes("does not change the plugin's own contract")));
+    assert.ok(
+      run.passed.some((name) => name.includes("does not change the plugin's own contract")),
+    );
   });
 });

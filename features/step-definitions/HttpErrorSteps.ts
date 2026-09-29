@@ -138,9 +138,7 @@ const requestFor = (baseUrl: string, probe: (typeof PROBES)[number]) =>
     method: probe.method,
     headers: {
       ...(probe.body === undefined ? {} : { "content-type": "application/json" }),
-      ...(probe.csrf
-        ? { cookie: withCsrfCookie(), "x-csrf-token": CSRF_TEST_COOKIE_VALUE }
-        : {}),
+      ...(probe.csrf ? { cookie: withCsrfCookie(), "x-csrf-token": CSRF_TEST_COOKIE_VALUE } : {}),
     },
     ...(probe.body === undefined ? {} : { body: JSON.stringify(probe.body) }),
   });
@@ -267,18 +265,15 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then(
-    "never against {string}'s or core's contract or group id",
-    function* (_plugin: string) {
-      const provided = yield* groupsOf("invite");
-      const foreign = [
-        ...contractGroupIds(PasswordApi.PasswordApi),
-        ...contractGroupIds(builtInvite.api).filter((id) => id === "session" || id === "account"),
-      ];
-      assert.ok(foreign.length >= 3, "the foreign set must include password's and core's groups");
-      for (const id of foreign) assert.ok(!provided.has(keyOf(id)), `${id} must not be provided`);
-    },
-  );
+  Then("never against {string}'s or core's contract or group id", function* (_plugin: string) {
+    const provided = yield* groupsOf("invite");
+    const foreign = [
+      ...contractGroupIds(PasswordApi.PasswordApi),
+      ...contractGroupIds(builtInvite.api).filter((id) => id === "session" || id === "account"),
+    ];
+    assert.ok(foreign.length >= 3, "the foreign set must include password's and core's groups");
+    for (const id of foreign) assert.ok(!provided.has(keyOf(id)), `${id} must not be provided`);
+  });
 
   // ---- REQ-EA-225/226: a group's service key derives from its id alone ----
 
@@ -519,7 +514,10 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.ok(typeof before === "object" && before !== null && "paths" in before);
       assert.ok(!Object.keys(Object(before.paths)).includes("/invite/ping"));
       assert.ok(!String(yield* getOutcome("beforePage")).includes("/invite/ping"));
-      assert.notDeepEqual(passwordPaths(OpenApi.fromApi(builtPassword.api)), passwordPaths(OpenApi.fromApi(builtPasswordInvite.api)));
+      assert.notDeepEqual(
+        passwordPaths(OpenApi.fromApi(builtPassword.api)),
+        passwordPaths(OpenApi.fromApi(builtPasswordInvite.api)),
+      );
     },
   );
 
@@ -540,14 +538,11 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.sync(() => assert.equal(layer, "Routes")),
   );
 
-  When(
-    "it is served with {string} provided {string}",
-    function* (_serve: string, server: string) {
-      assert.equal(server, "NodeHttpServer.layer");
-      const answers = yield* overNodeServer(answersOver);
-      yield* setOutcome("served", answers);
-    },
-  );
+  When("it is served with {string} provided {string}", function* (_serve: string, server: string) {
+    assert.equal(server, "NodeHttpServer.layer");
+    const answers = yield* overNodeServer(answersOver);
+    yield* setOutcome("served", answers);
+  });
 
   Then("the application is served as a standalone Node server", function* () {
     const answers = yield* getOutcome("served");
@@ -559,23 +554,20 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(session.tag, "Unauthenticated");
   });
 
-  When(
-    "it is served with {string} for a Next.js or Hono host",
-    function* (_serve: string) {
-      // The very layer value `HttpRouter.serve` was given, unmodified.
-      const { handler } = HttpRouter.toWebHandler(passwordRoutes);
-      yield* setOutcome("webHandler", handler);
-      const answers = Object.fromEntries(
-        yield* Effect.forEach(PROBES, (probe) =>
-          Effect.promise(() => handler(requestFor("http://localhost", probe))).pipe(
-            Effect.flatMap(answerOf),
-            Effect.map((answer) => [probe.name, answer] as const),
-          ),
+  When("it is served with {string} for a Next.js or Hono host", function* (_serve: string) {
+    // The very layer value `HttpRouter.serve` was given, unmodified.
+    const { handler } = HttpRouter.toWebHandler(passwordRoutes);
+    yield* setOutcome("webHandler", handler);
+    const answers = Object.fromEntries(
+      yield* Effect.forEach(PROBES, (probe) =>
+        Effect.promise(() => handler(requestFor("http://localhost", probe))).pipe(
+          Effect.flatMap(answerOf),
+          Effect.map((answer) => [probe.name, answer] as const),
         ),
-      );
-      yield* setOutcome("webAnswers", answers);
-    },
-  );
+      ),
+    );
+    yield* setOutcome("webAnswers", answers);
+  });
 
   Then(
     "the host receives a {string} to {string} handler with no modification to {string} itself",
@@ -612,7 +604,9 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* () {
       const node = yield* getOutcome("nodeAnswers");
       const web = yield* getOutcome("webAnswers");
-      assert.ok(typeof node === "object" && node !== null && typeof web === "object" && web !== null);
+      assert.ok(
+        typeof node === "object" && node !== null && typeof web === "object" && web !== null,
+      );
       for (const probe of PROBES) {
         const viaNode: unknown = Reflect.get(node, probe.name);
         const viaWeb: unknown = Reflect.get(web, probe.name);
@@ -853,7 +847,10 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.ok(isAnswer(served));
     const tag = String(yield* getOutcome("errorTag"));
     assert.equal(served.tag, tag);
-    assert.equal(`${served.status} ${{ 401: "Unauthorized", 403: "Forbidden" }[served.status] ?? "?"}`, expected);
+    assert.equal(
+      `${served.status} ${{ 401: "Unauthorized", 403: "Forbidden" }[served.status] ?? "?"}`,
+      expected,
+    );
     // The status is the one the error's own `httpApiStatus` annotation declares.
     assert.equal(served.status, declaredStatus(errorClass(tag)));
   });

@@ -62,7 +62,10 @@ const currentSubject = Effect.fn("features.roles.currentSubject")(function* (nam
 const keys = (values: ReadonlySet<unknown>) => [...values].map(String).sort();
 
 /** The real evaluator's verdict for `policy` against exactly `subject`, with no ports and no role graph. */
-const verdictFor = (subject: Parameters<typeof makeSubject>[0], policy: Parameters<typeof decide>[0]) =>
+const verdictFor = (
+  subject: Parameters<typeof makeSubject>[0],
+  policy: Parameters<typeof decide>[0],
+) =>
   decide(policy, { resource: {} }).pipe(
     Effect.provideService(CurrentSubject, makeSubject(subject)),
     Effect.provide(EvaluationServicesNone),
@@ -154,15 +157,12 @@ export const rolesSubjectResolverSteps = defineSteps<World>(({ Given, When, Then
     yield* setOutcome("reason", isAllowed(verdict) ? "" : verdict.reason);
   });
 
-  Then(
-    "the Deny decision follows from the subject carrying no permissions",
-    function* () {
-      const subject = yield* currentSubject();
-      assert.equal(yield* outcome("allowed"), false);
-      assert.equal(subject.permissions.size, 0);
-      assert.match(String(yield* outcome("reason")), /permission|project/i);
-    },
-  );
+  Then("the Deny decision follows from the subject carrying no permissions", function* () {
+    const subject = yield* currentSubject();
+    assert.equal(yield* outcome("allowed"), false);
+    assert.equal(subject.permissions.size, 0);
+    assert.match(String(yield* outcome("reason")), /permission|project/i);
+  });
 
   Then(
     "no implicit {string} default is applied anywhere in awthaq's own resolution",
@@ -290,7 +290,11 @@ export const rolesSubjectResolverSteps = defineSteps<World>(({ Given, When, Then
       const subject = yield* currentSubject();
       assert.deepEqual(keys(subject.roles), ["admin", "reader"]);
       // `project:read` is not on `admin` itself: it came through `reader`, via inheritance.
-      assert.deepEqual(keys(subject.permissions), ["project:admin", "project:delete", "project:read"]);
+      assert.deepEqual(keys(subject.permissions), [
+        "project:admin",
+        "project:delete",
+        "project:read",
+      ]);
     },
   );
 
@@ -308,7 +312,11 @@ export const rolesSubjectResolverSteps = defineSteps<World>(({ Given, When, Then
         }),
       ),
     );
-    assert.deepEqual(keys(resolved.permissions), ["project:admin", "project:delete", "project:read"]);
+    assert.deepEqual(keys(resolved.permissions), [
+      "project:admin",
+      "project:delete",
+      "project:read",
+    ]);
     const again = yield* resolveIn(served, userPrincipal(alice.userId));
     assert.deepEqual(keys(again.permissions), [], "a fresh resolution sees the revocation");
   });
@@ -432,9 +440,12 @@ export const rolesSubjectResolverSteps = defineSteps<World>(({ Given, When, Then
     assert.deepEqual(keys((yield* currentSubject()).permissions), [permission]);
   });
 
-  Then("{string} contains no permission beyond {string}", function* (_field: string, permission: string) {
-    assert.deepEqual(keys((yield* currentSubject()).permissions), [permission]);
-  });
+  Then(
+    "{string} contains no permission beyond {string}",
+    function* (_field: string, permission: string) {
+      assert.deepEqual(keys((yield* currentSubject()).permissions), [permission]);
+    },
+  );
 
   Then("no additional scope is granted beyond what the key was issued with", function* () {
     const world = yield* World;
@@ -524,11 +535,17 @@ export const rolesSubjectResolverSteps = defineSteps<World>(({ Given, When, Then
     yield* setOutcome("resolverCalls", resolverCalls);
   });
 
-  Then("it reads {string} from the subject's static {string}", function* (_name: string, _where: string) {
-    // The policy was satisfied by the value already on the subject.
-    assert.equal(yield* outcome("allowed"), true);
-    assert.deepEqual((yield* currentSubject()).attributes["actingAs"], { type: "user", id: "admin-1" });
-  });
+  Then(
+    "it reads {string} from the subject's static {string}",
+    function* (_name: string, _where: string) {
+      // The policy was satisfied by the value already on the subject.
+      assert.equal(yield* outcome("allowed"), true);
+      assert.deepEqual((yield* currentSubject()).attributes["actingAs"], {
+        type: "user",
+        id: "admin-1",
+      });
+    },
+  );
 
   Then("no {string} round-trip is made to obtain it", function* (_resolver: string) {
     assert.equal(yield* outcome("resolverCalls"), 0);
@@ -612,10 +629,13 @@ export const rolesSubjectResolverSteps = defineSteps<World>(({ Given, When, Then
     yield* configure({ roles: [readerRole, adminRole] });
   });
 
-  When("{string} resolves {string} for that request", function* (_resolver: string, _principal: string) {
-    // Path B's extractor resolves the raw, credential-less request; the evaluator sees the result.
-    yield* fetchAs(undefined, "/b/read");
-  });
+  When(
+    "{string} resolves {string} for that request",
+    function* (_resolver: string, _principal: string) {
+      // Path B's extractor resolves the raw, credential-less request; the evaluator sees the result.
+      yield* fetchAs(undefined, "/b/read");
+    },
+  );
 
   Then(
     "the same {string} subject value reaches qadi's evaluator that any other qadi-fronted service would have produced",
@@ -696,21 +716,18 @@ export const rolesSubjectResolverSteps = defineSteps<World>(({ Given, When, Then
     }
   });
 
-  Then(
-    "both responses include a resolved subject with the same shape",
-    function* () {
-      const world = yield* World;
-      const shape = (label: string) =>
-        world.responses.get(label).pipe(
-          Effect.map((response) => {
-            assert.equal(response.status, 200);
-            const dto = decodeDto(JSON.parse(response.body));
-            return Object.keys(dto).sort();
-          }),
-        );
-      assert.deepEqual(yield* shape("with roles"), yield* shape("without roles"));
-    },
-  );
+  Then("both responses include a resolved subject with the same shape", function* () {
+    const world = yield* World;
+    const shape = (label: string) =>
+      world.responses.get(label).pipe(
+        Effect.map((response) => {
+          assert.equal(response.status, 200);
+          const dto = decodeDto(JSON.parse(response.body));
+          return Object.keys(dto).sort();
+        }),
+      );
+    assert.deepEqual(yield* shape("with roles"), yield* shape("without roles"));
+  });
 
   Then(
     "the client's subject derivation can rely on that field being present regardless of which plugins are installed",

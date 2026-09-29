@@ -70,7 +70,9 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(NodeCrypto.layer),
 );
 
-const OrganizationRecordsLive = OrganizationRecords.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
+const OrganizationRecordsLive = OrganizationRecords.layerMemory.pipe(
+  Layer.provide(NodeCrypto.layer),
+);
 
 export interface AppOptions {
   readonly scim?: Partial<Scim.ScimConfigShape>;
@@ -222,7 +224,9 @@ export const configureApp = Effect.fn("features.scim.configureApp")(function* (
 ) {
   const world = yield* World;
   if (yield* Ref.get(world.started)) {
-    return yield* Effect.die(new Error("configure the app before any connection or request exists"));
+    return yield* Effect.die(
+      new Error("configure the app before any connection or request exists"),
+    );
   }
   const previous = yield* Ref.get(world.options);
   const merged: AppOptions = {

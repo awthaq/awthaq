@@ -64,7 +64,11 @@ const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
 );
 
 export const ProbeApi = HttpApi.make("probe")
-  .add(HttpApiGroup.make("app").add(HttpApiEndpoint.get("who", "/app/who", { success: Who })).middleware(Api.Authentication))
+  .add(
+    HttpApiGroup.make("app")
+      .add(HttpApiEndpoint.get("who", "/app/who", { success: Who }))
+      .middleware(Api.Authentication),
+  )
   .add(
     HttpApiGroup.make("optional")
       .add(HttpApiEndpoint.get("who", "/optional/who", { success: Who }))
@@ -116,7 +120,9 @@ const buildApp = (options: AppOptions) => {
   );
 
   const ProbeHandlers = Layer.mergeAll(
-    HttpApiBuilder.group(ProbeApi, "app", (handlers) => handlers.handle("who", () => describePrincipal)),
+    HttpApiBuilder.group(ProbeApi, "app", (handlers) =>
+      handlers.handle("who", () => describePrincipal),
+    ),
     HttpApiBuilder.group(ProbeApi, "optional", (handlers) =>
       handlers.handle("who", () => describePrincipal),
     ),
@@ -217,44 +223,48 @@ const buildApp = (options: AppOptions) => {
   // Order matters: a layer that needs the middleware (the `apikey` group is behind
   // `Authentication`) must sit closer to the routes than the middleware's own layers, and
   // `RecordingHook` closest of all so it wraps whatever hook `Jwt` installs.
-  const appLayer = AuthHttp.routes(ProbeApi).pipe(
-    Layer.provide(ProbeHandlers),
-    Layer.provideMerge(RecordingHook),
-    Layer.provideMerge(ApiKey.ApiKey.layer),
-    Layer.provideMerge(Jwt.Jwt.layer),
-    // The registry sits below every layer that contributes to it.
-    Layer.provideMerge(ExtraContribution),
-    Layer.provideMerge(Authentication.CredentialResolversLive),
-    Layer.provideMerge(Layer.mergeAll(ApiKeyRecords.layerMemory, ApiKeyClientRecords.layerMemory)),
-    Layer.provideMerge(KeyRing.KeyRing.layer),
-    Layer.provideMerge(SigningKeyRecords.layerMemory),
-    Layer.provideMerge(RevocationStore.layerMemory),
-    Layer.provideMerge(SqlTransaction.layerNoop),
-    Layer.provideMerge(ReorderedLive),
-    Layer.provideMerge(TracedAuthentication),
-    Layer.provideMerge(TracedMachine),
-    Layer.provideMerge(Authentication.OptionalAuthenticationLive),
-    Layer.provide(ResolverLive),
-    // The `apikey` plugin's own management group carries `CsrfProtection`.
-    Layer.provide(CsrfProtectionLive),
-    Layer.provideMerge(SessionSettings),
-  ).pipe(
-    Layer.provideMerge(Sessions.layerMemory),
-    Layer.provideMerge(Users.layerMemory),
-    Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(AuditLog.layerMemory),
-    Layer.provideMerge(Hooks.HooksLive),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provideMerge(RateLimiter.layerPermissive),
-    Layer.provideMerge(ClientAddress.layerDirect),
-    Layer.provideMerge(NodeCrypto.layer),
-    Layer.provideMerge(TestServices),
-    Layer.provideMerge(HttpRouter.layer),
-    Layer.provideMerge(ApiKey.config({})),
-    Layer.provideMerge(
-      JwtConfig.config({ issuer: "https://issuer.test", audience: "https://api.test" }),
-    ),
-  );
+  const appLayer = AuthHttp.routes(ProbeApi)
+    .pipe(
+      Layer.provide(ProbeHandlers),
+      Layer.provideMerge(RecordingHook),
+      Layer.provideMerge(ApiKey.ApiKey.layer),
+      Layer.provideMerge(Jwt.Jwt.layer),
+      // The registry sits below every layer that contributes to it.
+      Layer.provideMerge(ExtraContribution),
+      Layer.provideMerge(Authentication.CredentialResolversLive),
+      Layer.provideMerge(
+        Layer.mergeAll(ApiKeyRecords.layerMemory, ApiKeyClientRecords.layerMemory),
+      ),
+      Layer.provideMerge(KeyRing.KeyRing.layer),
+      Layer.provideMerge(SigningKeyRecords.layerMemory),
+      Layer.provideMerge(RevocationStore.layerMemory),
+      Layer.provideMerge(SqlTransaction.layerNoop),
+      Layer.provideMerge(ReorderedLive),
+      Layer.provideMerge(TracedAuthentication),
+      Layer.provideMerge(TracedMachine),
+      Layer.provideMerge(Authentication.OptionalAuthenticationLive),
+      Layer.provide(ResolverLive),
+      // The `apikey` plugin's own management group carries `CsrfProtection`.
+      Layer.provide(CsrfProtectionLive),
+      Layer.provideMerge(SessionSettings),
+    )
+    .pipe(
+      Layer.provideMerge(Sessions.layerMemory),
+      Layer.provideMerge(Users.layerMemory),
+      Layer.provideMerge(AuthEvents.layer),
+      Layer.provideMerge(AuditLog.layerMemory),
+      Layer.provideMerge(Hooks.HooksLive),
+      Layer.provideMerge(RateLimits.layer),
+      Layer.provideMerge(RateLimiter.layerPermissive),
+      Layer.provideMerge(ClientAddress.layerDirect),
+      Layer.provideMerge(NodeCrypto.layer),
+      Layer.provideMerge(TestServices),
+      Layer.provideMerge(HttpRouter.layer),
+      Layer.provideMerge(ApiKey.config({})),
+      Layer.provideMerge(
+        JwtConfig.config({ issuer: "https://issuer.test", audience: "https://api.test" }),
+      ),
+    );
 
   const memoMap = Layer.makeMemoMapUnsafe();
   const { handler } = HttpRouter.toWebHandler(appLayer, { memoMap });
@@ -425,9 +435,7 @@ export const getActor = Effect.fn("features.authentication.getActor")(function* 
   return found;
 });
 
-export const arrange = Effect.fn("features.authentication.arrange")(function* (
-  spec: RequestSpec,
-) {
+export const arrange = Effect.fn("features.authentication.arrange")(function* (spec: RequestSpec) {
   const world = yield* World;
   yield* Ref.update(world.pending, (existing) => ({ ...existing, ...spec }));
 });

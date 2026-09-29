@@ -3,7 +3,12 @@
 // a router middleware wrote, the typed refusal an organization operation returned.
 import { Accounts, AuditLog, Sessions, Users, Verification } from "@awthaq/core";
 import { Encryption, Tenant } from "@awthaq/ports";
-import { ConnectionRecords, Organization, OrganizationConnections, OrganizationRecords } from "@awthaq/organization";
+import {
+  ConnectionRecords,
+  Organization,
+  OrganizationConnections,
+  OrganizationRecords,
+} from "@awthaq/organization";
 import { AdminTenants } from "@awthaq/admin";
 import { OAuthConnections } from "@awthaq/oauth";
 import { Models, Repositories, TenantScope } from "@awthaq/sql";
@@ -135,26 +140,24 @@ const linkAccount = Effect.fn("features.tenancy.linkAccount")(function* (
   );
 });
 
-const organizationNamed = Effect.fn("features.tenancy.organizationNamed")(function* (
-  name: string,
-) {
+const organizationNamed = Effect.fn("features.tenancy.organizationNamed")(function* (name: string) {
   const { organizationIds } = yield* World;
   return yield* organizationIds.get(name);
 });
 
-const createRecordOrganization = Effect.fn("features.tenancy.createRecordOrganization")(
-  function* (name: string) {
-    const { organizationIds } = yield* World;
-    const record = yield* organization(
-      Effect.gen(function* () {
-        const records = yield* OrganizationRecords.OrganizationRecords;
-        return yield* records.create({ name, slug: name });
-      }),
-    );
-    yield* organizationIds.set(name, record.id);
-    return record.id;
-  },
-);
+const createRecordOrganization = Effect.fn("features.tenancy.createRecordOrganization")(function* (
+  name: string,
+) {
+  const { organizationIds } = yield* World;
+  const record = yield* organization(
+    Effect.gen(function* () {
+      const records = yield* OrganizationRecords.OrganizationRecords;
+      return yield* records.create({ name, slug: name });
+    }),
+  );
+  yield* organizationIds.set(name, record.id);
+  return record.id;
+});
 
 const installGateway = (variant: GatewayVariant) =>
   Effect.gen(function* () {
@@ -345,7 +348,10 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("the ambient tenant is none", function* () {
     const { readOutside } = yield* World;
-    const read = Option.getOrThrowWith(yield* Ref.get(readOutside), () => new Error("nothing was read"));
+    const read = Option.getOrThrowWith(
+      yield* Ref.get(readOutside),
+      () => new Error("nothing was read"),
+    );
     assert.ok(Option.isNone(read));
   });
 
@@ -368,19 +374,28 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("the ambient tenant read inside is {string}", function* (tenant: string) {
     const { readInside } = yield* World;
-    const read = Option.getOrThrowWith(yield* Ref.get(readInside), () => new Error("nothing was read"));
+    const read = Option.getOrThrowWith(
+      yield* Ref.get(readInside),
+      () => new Error("nothing was read"),
+    );
     assert.deepEqual(read, Option.some(tenant));
   });
 
   Then("the ambient tenant read inside is none", function* () {
     const { readInside } = yield* World;
-    const read = Option.getOrThrowWith(yield* Ref.get(readInside), () => new Error("nothing was read"));
+    const read = Option.getOrThrowWith(
+      yield* Ref.get(readInside),
+      () => new Error("nothing was read"),
+    );
     assert.ok(Option.isNone(read));
   });
 
   Then("the ambient tenant read afterwards is none", function* () {
     const { readAfter } = yield* World;
-    const read = Option.getOrThrowWith(yield* Ref.get(readAfter), () => new Error("nothing was read"));
+    const read = Option.getOrThrowWith(
+      yield* Ref.get(readAfter),
+      () => new Error("nothing was read"),
+    );
     assert.ok(Option.isNone(read));
   });
 
@@ -388,9 +403,12 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* createUser(email, Option.none());
   });
 
-  When("a user {string} is created under the tenant {string}", function* (email: string, tenant: string) {
-    yield* createUser(email, Option.some(tenant));
-  });
+  When(
+    "a user {string} is created under the tenant {string}",
+    function* (email: string, tenant: string) {
+      yield* createUser(email, Option.some(tenant));
+    },
+  );
 
   Then("that user has no tenant", function* () {
     const { userTenant } = yield* World;
@@ -415,9 +433,14 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         const user = yield* createUser(`${label}@example.com`, Option.none());
         yield* identity(
           Effect.gen(function* () {
-              const accounts = yield* Accounts.Accounts;
-              return yield* accounts.link({ userId: user.id, providerId: "github", subject: label, issuer: "" });
-            }),
+            const accounts = yield* Accounts.Accounts;
+            return yield* accounts.link({
+              userId: user.id,
+              providerId: "github",
+              subject: label,
+              issuer: "",
+            });
+          }),
         );
         break;
       }
@@ -427,26 +450,32 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         const user = yield* createUser(`${label}@example.com`, Option.none());
         yield* identity(
           Effect.gen(function* () {
-              const sessions = yield* Sessions.Sessions;
-              return yield* sessions.issue({ userId: user.id });
-            }),
+            const sessions = yield* Sessions.Sessions;
+            return yield* sessions.issue({ userId: user.id });
+          }),
         );
         break;
       }
       case "verification_tokens":
         yield* identity(
           Effect.gen(function* () {
-              const verification = yield* Verification.Verification;
-              return yield* verification.issue({ identifier: `verify-email:${label}`, ttl: Duration.hours(1) });
-            }),
+            const verification = yield* Verification.Verification;
+            return yield* verification.issue({
+              identifier: `verify-email:${label}`,
+              ttl: Duration.hours(1),
+            });
+          }),
         );
         break;
       case "verification_reservations":
         yield* identity(
           Effect.gen(function* () {
-              const verification = yield* Verification.Verification;
-              return yield* verification.reserve({ identifier: `signup:${label}`, ttl: Duration.hours(1) });
-            }),
+            const verification = yield* Verification.Verification;
+            return yield* verification.reserve({
+              identifier: `signup:${label}`,
+              ttl: Duration.hours(1),
+            });
+          }),
         );
         break;
       default:
@@ -475,11 +504,11 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const world = yield* World;
       const row = yield* identity(
         Effect.gen(function* () {
-            const users = yield* Repositories.UsersRepository;
-            return yield* users.insert(
-              yield* M.User.insert.makeEffect({ email, name: email, tenantId: tenant }),
-            );
-          }),
+          const users = yield* Repositories.UsersRepository;
+          return yield* users.insert(
+            yield* M.User.insert.makeEffect({ email, name: email, tenantId: tenant }),
+          );
+        }),
       );
       yield* Ref.set(world.userTenant, Option.fromNullishOr(row.tenantId));
     },
@@ -523,7 +552,10 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then('the decoded payload carries no "tenantId"', function* () {
     const { decodedCreate } = yield* World;
-    const decoded = Option.getOrThrowWith(yield* Ref.get(decodedCreate), () => new Error("nothing was decoded"));
+    const decoded = Option.getOrThrowWith(
+      yield* Ref.get(decodedCreate),
+      () => new Error("nothing was decoded"),
+    );
     assert.equal(Object.hasOwn(decoded, "tenantId"), false);
     // Non-vacuity: the payload did decode, so the field was dropped rather than the decode skipped.
     assert.equal(Reflect.get(decoded, "email"), "payload@example.com");
@@ -545,9 +577,9 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     const userId = yield* lastUserId();
     const issued = yield* identity(
       Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          return yield* sessions.issue({ userId });
-        }),
+        const sessions = yield* Sessions.Sessions;
+        return yield* sessions.issue({ userId });
+      }),
     );
     yield* Ref.set(world.sessionTenant, issued.session.tenantId);
     yield* Ref.set(world.sessionToken, Option.some(issued.token));
@@ -580,18 +612,24 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
 
   // ---- BEH-EA-232: the global identity directory ----
 
-  When("{string} is looked up by email under the tenant {string}", function* (email: string, tenant: string) {
-    const { outcomes } = yield* World;
-    const found = yield* identity(
-      Tenant.withTenant(tenant)(
-        Effect.gen(function* () {
-          const users = yield* Users.Users;
-          return yield* users.findByEmail(email);
-        }),
-      ),
-    );
-    yield* outcomes.set("user-lookup", Option.match(found, { onNone: () => "none", onSome: (user) => user.id }));
-  });
+  When(
+    "{string} is looked up by email under the tenant {string}",
+    function* (email: string, tenant: string) {
+      const { outcomes } = yield* World;
+      const found = yield* identity(
+        Tenant.withTenant(tenant)(
+          Effect.gen(function* () {
+            const users = yield* Users.Users;
+            return yield* users.findByEmail(email);
+          }),
+        ),
+      );
+      yield* outcomes.set(
+        "user-lookup",
+        Option.match(found, { onNone: () => "none", onSome: (user) => user.id }),
+      );
+    },
+  );
 
   Then("the lookup finds that user", function* () {
     const { outcomes } = yield* World;
@@ -637,7 +675,10 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
           }),
         ),
       );
-      yield* outcomes.set("account-lookup", Option.match(found, { onNone: () => "none", onSome: (account) => account.userId }));
+      yield* outcomes.set(
+        "account-lookup",
+        Option.match(found, { onNone: () => "none", onSome: (account) => account.userId }),
+      );
     },
   );
 
@@ -646,20 +687,23 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(yield* outcomes.get("account-lookup"), yield* lastUserId());
   });
 
-  When("a user {string} is registered under the tenant {string}", function* (email: string, tenant: string) {
-    const { outcomes } = yield* World;
-    const tag = yield* identity(
-      outcomeTag(
-        Tenant.withTenant(tenant)(
-          Effect.gen(function* () {
-            const users = yield* Users.Users;
-            return yield* users.create({ identity: { _tag: "Email", email }, name: email });
-          }),
+  When(
+    "a user {string} is registered under the tenant {string}",
+    function* (email: string, tenant: string) {
+      const { outcomes } = yield* World;
+      const tag = yield* identity(
+        outcomeTag(
+          Tenant.withTenant(tenant)(
+            Effect.gen(function* () {
+              const users = yield* Users.Users;
+              return yield* users.create({ identity: { _tag: "Email", email }, name: email });
+            }),
+          ),
         ),
-      ),
-    );
-    yield* outcomes.set("registration", tag);
-  });
+      );
+      yield* outcomes.set("registration", tag);
+    },
+  );
 
   Then("the registration is refused because the email already exists", function* () {
     const { outcomes } = yield* World;
@@ -668,7 +712,10 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
 
   When("that session is verified under the tenant {string}", function* (tenant: string) {
     const world = yield* World;
-    const token = Option.getOrThrowWith(yield* Ref.get(world.sessionToken), () => new Error("no session was issued"));
+    const token = Option.getOrThrowWith(
+      yield* Ref.get(world.sessionToken),
+      () => new Error("no session was issued"),
+    );
     const verified = yield* identity(
       Tenant.withTenant(tenant)(
         Effect.gen(function* () {
@@ -733,9 +780,12 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* createRecordOrganization(name);
   });
 
-  Given("the organization {string} exists with a membership limit of {int}", function* (name: string, limit: number) {
-    tenantLimits.set(yield* createRecordOrganization(name), limit);
-  });
+  Given(
+    "the organization {string} exists with a membership limit of {int}",
+    function* (name: string, limit: number) {
+      tenantLimits.set(yield* createRecordOrganization(name), limit);
+    },
+  );
 
   Given("the organization {string} is suspended", function* (name: string) {
     const id = yield* organizationNamed(name);
@@ -775,9 +825,12 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* serveRequest("/whoami", undefined);
   });
 
-  When("a request naming the organization {string} reads the limit in force", function* (name: string) {
-    yield* serveRequest("/limit", yield* organizationNamed(name));
-  });
+  When(
+    "a request naming the organization {string} reads the limit in force",
+    function* (name: string) {
+      yield* serveRequest("/limit", yield* organizationNamed(name));
+    },
+  );
 
   When("a request naming no organization reads the limit in force", function* () {
     yield* serveRequest("/limit", undefined);
@@ -842,11 +895,14 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then("the connection's provider id is namespaced by the organization and the connection", function* () {
-    const { connectionIds } = yield* World;
-    const stored = yield* connectionIds.get(yield* connectionIds.current);
-    assert.equal(stored.providerId, `org:${stored.organizationId}:${stored.connectionId}`);
-  });
+  Then(
+    "the connection's provider id is namespaced by the organization and the connection",
+    function* () {
+      const { connectionIds } = yield* World;
+      const stored = yield* connectionIds.get(yield* connectionIds.current);
+      assert.equal(stored.providerId, `org:${stored.organizationId}:${stored.connectionId}`);
+    },
+  );
 
   Given("OAuth is composed with the stored connections and no static provider", function* () {
     yield* composeOAuth({ staticIds: [], resolver: "stored" });
@@ -881,9 +937,12 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* authorize(`org:other-org:${stored.connectionId}`);
   });
 
-  When("an unknown connection id of the organization {string} is authorized", function* (name: string) {
-    yield* authorize(`org:${name}:no-such-connection`);
-  });
+  When(
+    "an unknown connection id of the organization {string} is authorized",
+    function* (name: string) {
+      yield* authorize(`org:${name}:no-such-connection`);
+    },
+  );
 
   Then("the redirect names the connection's own callback path", function* () {
     const world = yield* World;
@@ -897,12 +956,18 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("the redirect names the client id of the static provider", function* () {
     const { redirects } = yield* World;
-    assert.equal(new URL(yield* redirects.get("last")).searchParams.get("client_id"), "acme-client-id");
+    assert.equal(
+      new URL(yield* redirects.get("last")).searchParams.get("client_id"),
+      "acme-client-id",
+    );
   });
 
   Then("the connection resolver was never consulted", function* () {
     const { oauthCompositions } = yield* World;
-    const composition = Option.getOrThrowWith(yield* Ref.get(oauthCompositions), () => new Error("OAuth was not composed"));
+    const composition = Option.getOrThrowWith(
+      yield* Ref.get(oauthCompositions),
+      () => new Error("OAuth was not composed"),
+    );
     assert.deepEqual(yield* Ref.get(composition.consulted), []);
   });
 
@@ -924,7 +989,10 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         world.connections,
       ).pipe(Effect.orDie);
       assert.ok(Option.isSome(row), "the connection row must exist");
-      const envelope = Option.getOrThrowWith(row.value.clientSecret, () => new Error("the secret was not stored"));
+      const envelope = Option.getOrThrowWith(
+        row.value.clientSecret,
+        () => new Error("the secret was not stored"),
+      );
       assert.ok(Encryption.looksLikeEnvelope(envelope));
       assert.equal(envelope.includes(secret), false);
     },
@@ -959,12 +1027,16 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Given("a platform administrator {string}", function* (name: string) {
-    assert.equal(name, PLATFORM_ADMIN, "the composition recognises exactly one platform administrator");
+    assert.equal(
+      name,
+      PLATFORM_ADMIN,
+      "the composition recognises exactly one platform administrator",
+    );
     yield* registerCaller(name);
   });
 
   Given(
-    'the tenant {string} configures a membership limit of {int} and the tenant {string} one of {int}',
+    "the tenant {string} configures a membership limit of {int} and the tenant {string} one of {int}",
     function* (first: string, firstLimit: number, second: string, secondLimit: number) {
       tenantLimits.set(yield* organizationNamed(first), firstLimit);
       tenantLimits.set(yield* organizationNamed(second), secondLimit);
@@ -1025,16 +1097,22 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* suspensions.set("first", yield* suspend(admin, name));
   });
 
-  Given("{string} has suspended the organization {string}", function* (admin: string, name: string) {
-    const { suspensions } = yield* World;
-    yield* suspensions.set("first", yield* suspend(admin, name));
-  });
+  Given(
+    "{string} has suspended the organization {string}",
+    function* (admin: string, name: string) {
+      const { suspensions } = yield* World;
+      yield* suspensions.set("first", yield* suspend(admin, name));
+    },
+  );
 
-  When("{string} suspends the organization {string} twice", function* (admin: string, name: string) {
-    const { suspensions } = yield* World;
-    yield* suspensions.set("first", yield* suspend(admin, name));
-    yield* suspensions.set("second", yield* suspend(admin, name));
-  });
+  When(
+    "{string} suspends the organization {string} twice",
+    function* (admin: string, name: string) {
+      const { suspensions } = yield* World;
+      yield* suspensions.set("first", yield* suspend(admin, name));
+      yield* suspensions.set("second", yield* suspend(admin, name));
+    },
+  );
 
   Then("the second suspension reports the first suspension's time", function* () {
     const { suspensions } = yield* World;
@@ -1043,17 +1121,20 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(yield* suspensions.get("second"), first);
   });
 
-  When("{string} reinstates the organization {string}", function* (adminName: string, name: string) {
-    const admin = yield* callerNamed(adminName);
-    const id = yield* organizationNamed(name);
-    const record = yield* organization(
-      Effect.gen(function* () {
-        const tenants = yield* AdminTenants.AdminTenants;
-        return yield* tenants.unsuspendOrganization(admin, id);
-      }),
-    );
-    assert.ok(Option.isNone(record.suspendedAt));
-  });
+  When(
+    "{string} reinstates the organization {string}",
+    function* (adminName: string, name: string) {
+      const admin = yield* callerNamed(adminName);
+      const id = yield* organizationNamed(name);
+      const record = yield* organization(
+        Effect.gen(function* () {
+          const tenants = yield* AdminTenants.AdminTenants;
+          return yield* tenants.unsuspendOrganization(admin, id);
+        }),
+      );
+      assert.ok(Option.isNone(record.suspendedAt));
+    },
+  );
 
   Then(
     "{string} reading the organization {string} is refused with {string}",
@@ -1122,7 +1203,10 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
           return yield* plugin.list(caller);
         }),
       );
-      assert.deepEqual(listed.map((record) => record.id), [id]);
+      assert.deepEqual(
+        listed.map((record) => record.id),
+        [id],
+      );
       assert.ok(Option.isSome(listed[0]?.suspendedAt ?? Option.none()));
     },
   );

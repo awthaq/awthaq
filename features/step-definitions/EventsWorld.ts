@@ -82,7 +82,9 @@ export const WorldLive = Layer.effect(
       probes: yield* Ref.make<Readonly<Record<string, Probe>>>({}),
       userIds: yield* Ref.make<Readonly<Record<string, string>>>({}),
       signIns: yield* Ref.make<ReadonlyArray<SignInOutcome>>([]),
-      capacity: yield* makeCell<{ readonly published: number; readonly dropped: number }>("capacity probe"),
+      capacity: yield* makeCell<{ readonly published: number; readonly dropped: number }>(
+        "capacity probe",
+      ),
       counts: yield* makeCell<{ readonly published: number; readonly handled: number }>("counts"),
       publisher: yield* makeCell<Fiber.Fiber<void, never>>("publisher fiber"),
       publisherFiberId: yield* makeCell<number>("publisher fiber id"),
@@ -98,7 +100,8 @@ export const WorldLive = Layer.effect(
 export const getProbe = Effect.fn("features.events.getProbe")(function* (name: string) {
   const { probes } = yield* World;
   const found = (yield* Ref.get(probes))[name];
-  if (found === undefined) return yield* Effect.die(new Error(`no subscriber "${name}" was set up`));
+  if (found === undefined)
+    return yield* Effect.die(new Error(`no subscriber "${name}" was set up`));
   return found;
 });
 
@@ -123,7 +126,10 @@ const handle = (probe: Probe, event: AuthEvents.Published) =>
     yield* Ref.update(probe.fibers, (existing) => [...existing, fiber]);
     if (probe.gate !== undefined) yield* Deferred.await(probe.gate);
     if (yield* Ref.get(probe.failing)) {
-      return yield* Effect.fail({ _tag: "SubscriberBoom", message: "the subscriber failed while handling an event" });
+      return yield* Effect.fail({
+        _tag: "SubscriberBoom",
+        message: "the subscriber failed while handling an event",
+      });
     }
     yield* Ref.update(probe.completed, (n) => n + 1);
   });
@@ -139,7 +145,10 @@ export const subscribe = Effect.fn("features.events.subscribe")(function* (
   options: { readonly gated?: boolean; readonly failing?: boolean } = {},
 ) {
   const { probes } = yield* World;
-  const probe = yield* makeProbe({ gated: options.gated === true, failing: options.failing === true });
+  const probe = yield* makeProbe({
+    gated: options.gated === true,
+    failing: options.failing === true,
+  });
   yield* Ref.update(probes, (existing) => ({ ...existing, [name]: probe }));
   yield* subscribeLayer(AuthEvents.on(select, (event) => handle(probe, event)));
   return probe;
@@ -228,7 +237,9 @@ export const letSubscribersRun = Effect.gen(function* () {
 });
 
 /** Publishes directly on the bus, the way a plugin's own flow would. */
-export const publish = Effect.fn("features.events.publish")(function* (event: AuthEvents.AuthEvent) {
+export const publish = Effect.fn("features.events.publish")(function* (
+  event: AuthEvents.AuthEvent,
+) {
   const { host } = yield* World;
   yield* host.run(Effect.flatMap(AuthEvents.AuthEvents, (events) => events.publish(event)));
 });

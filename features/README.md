@@ -17,11 +17,11 @@ Packages are consumed through their built `lib/`, so run `pnpm run typecheck` (w
 
 Every scenario is exactly one of:
 
-| State | How it looks | What it means |
-| ----- | ------------ | ------------- |
-| **Wired** | no `@skip` | A step definition runs it against real code; it passes or fails CI. |
-| **Pruned** | scenario-level `@skip`, with a `# @skip: <reason>` comment directly above | Wired in spirit but not observable *yet*. The reason is concrete: the unit test that covers it, or the issue that blocks it. A skipped scenario is a visible, non-blocking node in the report, never a silently absent one. |
-| **Unwired** | Feature-level `@skip @unwired` **and** an opening comment stating what blocks it | The behavior has no shipped implementation to run against (today only `28-device-authorization.feature`). Its `*.steps.test.ts` registers zero steps. |
+| State       | How it looks                                                                     | What it means                                                                                                                                                                                                               |
+| ----------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Wired**   | no `@skip`                                                                       | A step definition runs it against real code; it passes or fails CI.                                                                                                                                                         |
+| **Pruned**  | scenario-level `@skip`, with a `# @skip: <reason>` comment directly above        | Wired in spirit but not observable _yet_. The reason is concrete: the unit test that covers it, or the issue that blocks it. A skipped scenario is a visible, non-blocking node in the report, never a silently absent one. |
+| **Unwired** | Feature-level `@skip @unwired` **and** an opening comment stating what blocks it | The behavior has no shipped implementation to run against (today only `28-device-authorization.feature`). Its `*.steps.test.ts` registers zero steps.                                                                       |
 
 `@unwired` is a grep-able marker separating "never wired" from an ordinary pruned scenario; an `@unwired` Feature opens with a comment saying what blocks it (the pre-implementation banner, or a more specific note), and `spec:verify` fails if the banner is left on a Feature that is not `@unwired`. Wiring a Feature removes the tag and the comment. Each file's wiring status is tracked in [`spec/traceability.md`](../spec/traceability.md) §6, and the requirement id of every scenario in [`traceability.md`](traceability.md).
 
@@ -31,21 +31,21 @@ Every scenario is exactly one of:
 
 One `.feature` file per `spec/behaviors/NN-*.md` file that has been scenario-ised (the numbered files 01–32, plus the device-authorization exception below), grouped into 14 directories under `features/features/` that mirror the same stratification `spec/README.md` uses (foundations → contract/persistence → domain → HTTP → cross-cutting → authentication methods → authorization bridge → client integration → tooling → admin/impersonation → organization → jwt → multi-tenancy → enterprise federation):
 
-| Directory                            | Feature files                                                                              | `BEH-EA` range |
-| ------------------------------------ | ------------------------------------------------------------------------------------------ | -------------- |
-| `00-foundations/`                    | plugin-contract, plugin-composition-validate, ports-slots-hooks-registries                 | 001–024        |
-| `01-contract-and-persistence/`       | contract-stratum, persistence-stratum                                                      | 025–040        |
-| `02-domain/`                         | users-accounts, sessions, verification-tokens                                              | 041–064        |
-| `03-http-layer/`                     | authentication-middleware, csrf, http-error-mapping                                        | 065–088        |
-| `04-cross-cutting/`                  | hooks, events, rate-limiting                                                               | 089–112        |
-| `05-authentication-methods/`         | password, oauth, passkey                                                                   | 113–136        |
-| `06-roles-and-authorization-bridge/` | roles-subject-resolver, qadi-bridge-path-a, qadi-bridge-path-b, qadi-resolvers-obligations | 137–168        |
-| `07-client-integration/`             | client-effect, react, nextjs-ssr                                                           | 169–192        |
-| `08-tooling/`                        | testing-harness, cli                                                                       | 193–208        |
-| `09-admin-and-impersonation/`        | admin-impersonation                                                                        | 209–220        |
-| `10-organization/`                   | organization                                                                               | 255–262        |
-| `11-jwt/`                            | jwt                                                                                        | 263–270        |
-| `12-multi-tenancy/`                  | tenancy                                                                                    | 230–237        |
+| Directory                            | Feature files                                                                              | `BEH-EA` range   |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ | ---------------- |
+| `00-foundations/`                    | plugin-contract, plugin-composition-validate, ports-slots-hooks-registries                 | 001–024          |
+| `01-contract-and-persistence/`       | contract-stratum, persistence-stratum                                                      | 025–040          |
+| `02-domain/`                         | users-accounts, sessions, verification-tokens                                              | 041–064          |
+| `03-http-layer/`                     | authentication-middleware, csrf, http-error-mapping                                        | 065–088          |
+| `04-cross-cutting/`                  | hooks, events, rate-limiting                                                               | 089–112          |
+| `05-authentication-methods/`         | password, oauth, passkey                                                                   | 113–136          |
+| `06-roles-and-authorization-bridge/` | roles-subject-resolver, qadi-bridge-path-a, qadi-bridge-path-b, qadi-resolvers-obligations | 137–168          |
+| `07-client-integration/`             | client-effect, react, nextjs-ssr                                                           | 169–192          |
+| `08-tooling/`                        | testing-harness, cli                                                                       | 193–208          |
+| `09-admin-and-impersonation/`        | admin-impersonation                                                                        | 209–220          |
+| `10-organization/`                   | organization                                                                               | 255–262          |
+| `11-jwt/`                            | jwt                                                                                        | 263–270          |
+| `12-multi-tenancy/`                  | tenancy                                                                                    | 230–237          |
 | `13-enterprise-federation/`          | saml-sp (unwired), scim                                                                    | 238–245, 246–253 |
 
 One exception: `05-authentication-methods/28-device-authorization.feature` (`@skip @unwired`, DAG-007) specifies a plugin that has no behavior file or `BEH-EA` range yet, so its `Rule:`s are tagged `@MOD-EA-013` and trace to [`spec/models/13-device-authorization.md`](../spec/models/13-device-authorization.md); it gets `BEH-EA` ids when a milestone schedules the plugin.

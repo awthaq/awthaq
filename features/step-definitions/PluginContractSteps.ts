@@ -9,14 +9,7 @@ import assert from "node:assert/strict";
 import { Auth, type AuthPlugin } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import {
-  assertTypeGate,
-  cell,
-  isObject,
-  put,
-  take,
-  World,
-} from "./FoundationsWorld.ts";
+import { assertTypeGate, cell, isObject, put, take, World } from "./FoundationsWorld.ts";
 import {
   DependentFixture,
   fixtureConfig,
@@ -44,7 +37,10 @@ interface Requirement {
 const requiredService = cell(
   "requiredService",
   (value): value is Requirement =>
-    isObject(value) && "probe" in value && typeof value.probe === "function" && "minLength" in value,
+    isObject(value) &&
+    "probe" in value &&
+    typeof value.probe === "function" &&
+    "minLength" in value,
 );
 /** What a scenario needs to know about one `Auth.make` result, read off it once when it is composed. */
 interface Composition {
@@ -73,22 +69,22 @@ const describeComposition = (built: {
 
 const composition = cell(
   "composition",
-  (value): value is Composition => isObject(value) && "migrationNames" in value && "isLayer" in value,
+  (value): value is Composition =>
+    isObject(value) && "migrationNames" in value && "isLayer" in value,
 );
 const claim = cell(
   "claim",
   (value): value is { readonly gate: string; readonly accepted: boolean; readonly id: string } =>
     isObject(value) && "gate" in value && "accepted" in value && "id" in value,
 );
-const statics = cell(
-  "statics",
-  (value): value is ReadonlyArray<unknown> => Array.isArray(value),
+const statics = cell("statics", (value): value is ReadonlyArray<unknown> => Array.isArray(value));
+const minLengths = cell("minLengths", (value): value is ReadonlyArray<number> =>
+  Array.isArray(value),
 );
-const minLengths = cell(
-  "minLengths",
-  (value): value is ReadonlyArray<number> => Array.isArray(value),
+const evaluationsBefore = cell(
+  "evaluationsBefore",
+  (value): value is number => typeof value === "number",
 );
-const evaluationsBefore = cell("evaluationsBefore", (value): value is number => typeof value === "number");
 
 const snapshotStatics = () => [
   PasswordFixture.id,
@@ -194,7 +190,7 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
   Given(
     "a plugin {string} that depends on a plugin whose service key is {string}",
     function* (label: string, key: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(label, "TwoFactor");
       assert.equal(PasswordFixture.key, key);
       assertTypeGate("missing-dep", GATES, ["@ts-expect-error", "TwoFactorFixture"]);
@@ -207,7 +203,10 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
 
   Then("the diagnostic names the plugin {string} by id", function* (id: string) {
     const diagnostic = (yield* take(claim)).gate;
-    assert.ok(diagnostic.includes(`"${id}"`), `expected the diagnostic to name "${id}": ${diagnostic}`);
+    assert.ok(
+      diagnostic.includes(`"${id}"`),
+      `expected the diagnostic to name "${id}": ${diagnostic}`,
+    );
   });
 
   Then("the diagnostic does not merely report an opaque unsatisfied requirement", function* () {
@@ -225,10 +224,13 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
     assert.equal(PasswordFixture.apiVersion, 1);
   });
 
-  Given("{string} accepts Plugin API generation {int}", function* (_make: string, generation: number) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-    assert.equal(generation, 1);
-  });
+  Given(
+    "{string} accepts Plugin API generation {int}",
+    function* (_make: string, generation: number) {
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.equal(generation, 1);
+    },
+  );
 
   When("the plugin is passed as an argument to {string}", function* (_make: string) {
     // Runtime half: a generation-1 plugin composes. (A different generation cannot be
@@ -248,7 +250,7 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
   Given(
     "a plugin declaring an {string} other than the generation {string} accepts",
     function* (field: string, _make: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(field, "apiVersion");
       assertTypeGate("api-version-literal", GATES, ["apiVersion: 2", 'id: "future"']);
     },
@@ -296,19 +298,16 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
-  When(
-    "its {string} array declares the entry {string}",
-    function* (_field: string, table: string) {
-      const { id } = yield* take(claim);
-      assert.equal(PasswordFixture.id, id);
-      assert.ok(
-        PasswordFixture.tables.some((declared) => declared === table),
-        `"${table}" is a declared table`,
-      );
-      assert.ok(table.startsWith(`${id}_`));
-      yield* put(claim, { gate: "table-prefixed", accepted: true, id });
-    },
-  );
+  When("its {string} array declares the entry {string}", function* (_field: string, table: string) {
+    const { id } = yield* take(claim);
+    assert.equal(PasswordFixture.id, id);
+    assert.ok(
+      PasswordFixture.tables.some((declared) => declared === table),
+      `"${table}" is a declared table`,
+    );
+    assert.ok(table.startsWith(`${id}_`));
+    yield* put(claim, { gate: "table-prefixed", accepted: true, id });
+  });
 
   When(
     "its {string} array declares the bare entry {string}",
@@ -361,7 +360,7 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
   Given(
     "a plugin class {string} declaring a static {string} member",
     function* (label: string, member: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       const plugin = pluginNamed(label);
       assert.equal(member, "migrations");
       assert.ok(plugin.migrations.length > 0);
@@ -402,14 +401,17 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
-  When("{string} is configured with two different runtime configurations", function* (label: string) {
-    const plugin = pluginNamed(label);
-    yield* put(statics, snapshotStatics());
-    assert.equal(plugin, PasswordFixture);
-    const first = yield* minLengthUnder(fixtureConfig({ minLength: 8 }));
-    const second = yield* minLengthUnder(fixtureConfig({ minLength: 32 }));
-    yield* put(minLengths, [first, second]);
-  });
+  When(
+    "{string} is configured with two different runtime configurations",
+    function* (label: string) {
+      const plugin = pluginNamed(label);
+      yield* put(statics, snapshotStatics());
+      assert.equal(plugin, PasswordFixture);
+      const first = yield* minLengthUnder(fixtureConfig({ minLength: 8 }));
+      const second = yield* minLengthUnder(fixtureConfig({ minLength: 32 }));
+      yield* put(minLengths, [first, second]);
+    },
+  );
 
   Then(
     "the resolved {string} value is identical under both configurations",
@@ -430,7 +432,7 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
   Given(
     "a plugin {string} with a configuration Layer {string}",
     function* (label: string, expression: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(pluginNamed(label), PasswordFixture);
       assert.equal(expression, "Password.config(partial)");
     },
@@ -455,7 +457,7 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
   Given(
     "a plugin {string} with static {string}, {string}, {string}, and {string} members",
     function* (label: string, ...members: ReadonlyArray<string>) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(pluginNamed(label), PasswordFixture);
       assert.deepEqual(members, ["id", "apiVersion", "contract", "tables"]);
     },
@@ -485,7 +487,7 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
   Given(
     "a plugin {string} declaring {string} on its {string}",
     function* (_label: string, declaration: string, member: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(declaration, "dependsOn: [Sessions, Users]");
       assert.equal(member, "layer");
       assert.deepEqual(
@@ -509,13 +511,10 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
     ]);
   });
 
-  Given(
-    "a plugin {string} declaring {string}",
-    function* (_label: string, declaration: string) {
+  Given("a plugin {string} declaring {string}", function* (_label: string, declaration: string) {
     yield* Effect.void; // an assertion-only step: nothing to await
-      assert.equal(declaration, "dependsOn: [Sessions, Users]");
-    },
-  );
+    assert.equal(declaration, "dependsOn: [Sessions, Users]");
+  });
 
   When(
     "the linker computes migration order and a consumer composes {string}'s {string}",
@@ -542,8 +541,11 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
   Then(
     "any consumer of {string}'s {string} must satisfy {string} and {string} as a compile-time requirement",
     function* () {
-    yield* Effect.void; // an assertion-only step: nothing to await
-      assertTypeGate("dependson-joins-rin", GATES, ["extends [", "Layer.Services<typeof DependentFixture.layer>"]);
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assertTypeGate("dependson-joins-rin", GATES, [
+        "extends [",
+        "Layer.Services<typeof DependentFixture.layer>",
+      ]);
     },
   );
 });

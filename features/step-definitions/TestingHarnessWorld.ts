@@ -92,7 +92,10 @@ export const dispatch = (request: Request) =>
     const response = yield* router
       .asHttpEffect()
       .pipe(
-        Effect.provideService(HttpServerRequest.HttpServerRequest, HttpServerRequest.fromWeb(request)),
+        Effect.provideService(
+          HttpServerRequest.HttpServerRequest,
+          HttpServerRequest.fromWeb(request),
+        ),
         Effect.scoped,
       );
     return HttpServerResponse.toWeb(response);
@@ -125,7 +128,9 @@ export const recordingFramework = (sink: Recorder): TestAuth.TestFramework => ({
             sink.passed.push(name);
           },
           (error: unknown) => {
-            sink.failed.push(`${name} :: ${error instanceof Error ? error.message : String(error)}`);
+            sink.failed.push(
+              `${name} :: ${error instanceof Error ? error.message : String(error)}`,
+            );
           },
         ),
     );
@@ -208,5 +213,7 @@ export const runContractSuite = (setup: ContractSetup) =>
 export const contractSetup = Effect.gen(function* () {
   const { contractSetup: cell } = yield* World;
   const found = yield* Ref.get(cell);
-  return found === undefined ? yield* Effect.die(new Error("no plugin was set up by a Given step")) : found;
+  return found === undefined
+    ? yield* Effect.die(new Error("no plugin was set up by a Given step"))
+    : found;
 });

@@ -47,7 +47,9 @@ const ReactServices = Layer.mergeAll(
 ).pipe(Layer.provideMerge(OptionalAuthenticationLive), Layer.provide(NodeCrypto.layer));
 
 /** Password + core's session/account groups + qadi's `GET /subject`, exactly what an app's `Providers` talks to. */
-export const reactTuple = Auth.make([Password.Password], { extraGroups: [SubjectApi.SubjectGroup] });
+export const reactTuple = Auth.make([Password.Password], {
+  extraGroups: [SubjectApi.SubjectGroup],
+});
 
 const appLayer = TestAuth.layer(reactTuple, ReactServices);
 
@@ -182,4 +184,3 @@ export const requestsTo = (method: string, pathname: string) =>
     const { browser } = yield* World;
     return browser.sent.filter((entry) => entry.method === method && entry.pathname === pathname);
   });
-

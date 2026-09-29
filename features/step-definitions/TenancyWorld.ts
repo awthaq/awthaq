@@ -125,9 +125,7 @@ const buildIdentityStack = () => {
   );
   return Stores.pipe(
     Layer.provideMerge(AuthEvents.layer),
-    Layer.provideMerge(
-      AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive)),
-    ),
+    Layer.provideMerge(AuditLog.layerSql.pipe(Layer.provide(Repositories.AuditLogRepositoryLive))),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(SqlLive),
@@ -224,10 +222,7 @@ export type ConnectionServices =
   | ConnectionRecords.ConnectionRecords;
 
 const buildConnectionStack = () =>
-  Layer.mergeAll(
-    OrganizationConnections.layerStore,
-    OrganizationConnections.oauthConnections,
-  ).pipe(
+  Layer.mergeAll(OrganizationConnections.layerStore, OrganizationConnections.oauthConnections).pipe(
     Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
     Layer.provideMerge(ConnectionRecords.layerMemory),
     Layer.provideMerge(EncryptionLive),
@@ -454,7 +449,9 @@ export const WorldLive = Layer.effect(
     // service that reads the clock when it is built would otherwise be pinned to 1970.
     const scope = Scope.makeUnsafe();
     const build = <A, E>(layer: Layer.Layer<A, E>) =>
-      Effect.promise(() => Effect.runPromise(Layer.buildWithMemoMap(layer, Layer.makeMemoMapUnsafe(), scope)));
+      Effect.promise(() =>
+        Effect.runPromise(Layer.buildWithMemoMap(layer, Layer.makeMemoMapUnsafe(), scope)),
+      );
     const identity = yield* build(buildIdentityStack());
     const organizations = yield* build(buildOrganizationStack());
     const connections = yield* build(buildConnectionStack());
@@ -490,7 +487,11 @@ export const WorldLive = Layer.effect(
     const buildOAuth: WorldShape["buildOAuth"] = (providers, resolver) =>
       Effect.promise(async () => {
         const context = await Effect.runPromise(
-          Layer.buildWithMemoMap(buildOAuthLayer(providers, resolver), Layer.makeMemoMapUnsafe(), scope),
+          Layer.buildWithMemoMap(
+            buildOAuthLayer(providers, resolver),
+            Layer.makeMemoMapUnsafe(),
+            scope,
+          ),
         );
         return Context.get(context, OAuth.OAuth);
       });

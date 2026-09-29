@@ -60,7 +60,12 @@ import {
   signIn,
 } from "./QadiBridgeWorld.ts";
 
-const denialTrace: Trace = { policyTag: "HasPermission", allowed: false, children: [], obligations: [] };
+const denialTrace: Trace = {
+  policyTag: "HasPermission",
+  allowed: false,
+  children: [],
+  obligations: [],
+};
 const attributeOutage: OutageKind = "attribute";
 
 const codeOf = (label: string) => Number.parseInt(label, 10);
@@ -138,10 +143,14 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
       HttpApi.reflect(FixtureApi, {
         onGroup: () => {},
         onEndpoint: ({ group, middleware }) => {
-          if (group.identifier === "gated") for (const service of middleware) keys.push(service.key);
+          if (group.identifier === "gated")
+            for (const service of middleware) keys.push(service.key);
         },
       });
-      assert.deepEqual(keys.filter((key, index) => keys.indexOf(key) === index), [RequirePermission.key]);
+      assert.deepEqual(
+        keys.filter((key, index) => keys.indexOf(key) === index),
+        [RequirePermission.key],
+      );
       yield* setPlan({ path: "/b/read", who: reader });
     },
   );
@@ -240,7 +249,9 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
       const cases = {
         valid: yield* resolveBoth(token),
         // same session id, a secret that does not hash to the stored one
-        wrongSecret: yield* resolveBoth(`${sessionId}.${secret.slice(0, -1)}${secret.endsWith("A") ? "B" : "A"}`),
+        wrongSecret: yield* resolveBoth(
+          `${sessionId}.${secret.slice(0, -1)}${secret.endsWith("A") ? "B" : "A"}`,
+        ),
         unknownSession: yield* resolveBoth(`00000000-0000-0000-0000-000000000000.${secret}`),
         // past the absolute lifetime: the very same credential that was valid above
         expired: yield* Effect.gen(function* () {
@@ -271,10 +282,19 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
       const user = String(yield* outcome("expectedSubject"));
       // hash comparison: the right secret resolves the user, a wrong one or an unknown id resolves nobody
       assert.deepEqual(cases.valid, { viaExtractor: user, viaAuthentication: user });
-      assert.deepEqual(cases.wrongSecret, { viaExtractor: "anonymous", viaAuthentication: "anonymous" });
-      assert.deepEqual(cases.unknownSession, { viaExtractor: "anonymous", viaAuthentication: "anonymous" });
+      assert.deepEqual(cases.wrongSecret, {
+        viaExtractor: "anonymous",
+        viaAuthentication: "anonymous",
+      });
+      assert.deepEqual(cases.unknownSession, {
+        viaExtractor: "anonymous",
+        viaAuthentication: "anonymous",
+      });
       // absolute expiry: the once-valid credential is refused by both after 400 days
-      assert.deepEqual(cases.expired, { viaExtractor: "anonymous", viaAuthentication: "anonymous" });
+      assert.deepEqual(cases.expired, {
+        viaExtractor: "anonymous",
+        viaAuthentication: "anonymous",
+      });
     },
   );
 
@@ -283,7 +303,11 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* () {
       const cases = yield* casesOutcome();
       for (const [name, both] of Object.entries(cases)) {
-        assert.equal(both.viaExtractor, both.viaAuthentication, `${name}: the two resolutions agree`);
+        assert.equal(
+          both.viaExtractor,
+          both.viaAuthentication,
+          `${name}: the two resolutions agree`,
+        );
       }
     },
   );
@@ -300,31 +324,25 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Given(
-    "qadi's evaluator would return an Allow decision for that declared policy",
-    function* () {
-      const verdict = yield* decide(hasPermission(projectRead), { resource: {} }).pipe(
-        Effect.provideService(
-          CurrentSubject,
-          makeSubject({ id: "user:probe", permissions: [permissionKey(projectRead)] }),
-        ),
-        Effect.provide(EvaluationServicesNone),
-        Effect.orDie,
-      );
-      assert.ok(isAllowed(verdict));
-    },
-  );
+  Given("qadi's evaluator would return an Allow decision for that declared policy", function* () {
+    const verdict = yield* decide(hasPermission(projectRead), { resource: {} }).pipe(
+      Effect.provideService(
+        CurrentSubject,
+        makeSubject({ id: "user:probe", permissions: [permissionKey(projectRead)] }),
+      ),
+      Effect.provide(EvaluationServicesNone),
+      Effect.orDie,
+    );
+    assert.ok(isAllowed(verdict));
+  });
 
-  Then(
-    "RequirePermission evaluates exactly the policy declared in the annotation",
-    function* () {
-      const world = yield* World;
-      const decisions = yield* Ref.get(world.decisions);
-      const read = endpointAt("/b/read");
-      assert.equal(decisions.length, 1);
-      assert.equal(decisions[0]?.policyTag, Option.getOrUndefined(read.required)?.policyTag);
-    },
-  );
+  Then("RequirePermission evaluates exactly the policy declared in the annotation", function* () {
+    const world = yield* World;
+    const decisions = yield* Ref.get(world.decisions);
+    const read = endpointAt("/b/read");
+    assert.equal(decisions.length, 1);
+    assert.equal(decisions[0]?.policyTag, Option.getOrUndefined(read.required)?.policyTag);
+  });
 
   Then("the request is allowed to proceed", function* () {
     const world = yield* World;
@@ -342,18 +360,15 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* setOutcome("declaration", endpointAt("/b/read"));
   });
 
-  Then(
-    "the declared permission and policy are visible directly from the annotation",
-    function* () {
-      const world = yield* World;
-      const read = endpointAt("/b/read");
-      const required = Option.getOrUndefined(read.required);
-      assert.equal(required?.permission.resource, "project");
-      assert.equal(required?.permission.action, "read");
-      assert.equal(required?.policyTag, "HasPermission");
-      assert.deepEqual(yield* Ref.get(world.executed), [], "no handler ran to learn this");
-    },
-  );
+  Then("the declared permission and policy are visible directly from the annotation", function* () {
+    const world = yield* World;
+    const read = endpointAt("/b/read");
+    const required = Option.getOrUndefined(read.required);
+    assert.equal(required?.permission.resource, "project");
+    assert.equal(required?.permission.action, "read");
+    assert.equal(required?.policyTag, "HasPermission");
+    assert.deepEqual(yield* Ref.get(world.executed), [], "no handler ran to learn this");
+  });
 
   Given(
     "an endpoint annotated with RequiredPermission declaring one specific policy",
@@ -440,7 +455,8 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   When("{int} separate requests reach that endpoint over time", function* (count: number) {
     const statuses: Array<number> = [];
-    for (let i = 0; i < count; i++) statuses.push((yield* fetchAs(undefined, "/b/forgotten")).status);
+    for (let i = 0; i < count; i++)
+      statuses.push((yield* fetchAs(undefined, "/b/forgotten")).status);
     yield* setOutcome("statuses", statuses);
   });
 
@@ -537,7 +553,14 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
     const subjectId = makeSubjectId("user:probe");
     assert.equal(
       Reflect.get(served, "an AccessDenied decision"),
-      qadi(new AccessDenied({ subjectId, policyTag: "HasPermission", reason: "x", trace: denialTrace })),
+      qadi(
+        new AccessDenied({
+          subjectId,
+          policyTag: "HasPermission",
+          reason: "x",
+          trace: denialTrace,
+        }),
+      ),
     );
     assert.equal(
       Reflect.get(served, "an UndischargedObligation"),
@@ -673,7 +696,7 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- BEH-EA-159: choosing Path B over Path A ----
 
   Given(
-    "an endpoint whose policy needs only the caller's own subject state, such as hasRole\\(\"admin\"\\)",
+    'an endpoint whose policy needs only the caller\'s own subject state, such as hasRole\\("admin"\\)',
     function* () {
       yield* configure({ roles: [readerRole, adminRole] });
       const verdict = yield* decide(hasRole("admin"), { resource: {} }).pipe(
@@ -703,7 +726,10 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
     "it is wired through Path B's RequiredPermission annotation, with no resource loaded beforehand",
     function* () {
       const world = yield* World;
-      assert.equal(Option.getOrUndefined(endpointAt("/b/admin-only").required)?.policyTag, "HasRole");
+      assert.equal(
+        Option.getOrUndefined(endpointAt("/b/admin-only").required)?.policyTag,
+        "HasRole",
+      );
       assert.equal((yield* world.responses.get("last")).status, 200);
       const decisions = yield* Ref.get(world.decisions);
       assert.equal(decisions.length, 1);
@@ -837,14 +863,17 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then("both requests resolve {string} to the identical underlying AuthSubject", function* (name: string) {
-    const world = yield* World;
-    const actor = yield* world.actors.get(name);
-    const a = yield* outcome("pathA");
-    const b = yield* outcome("pathB");
-    assert.deepEqual(a, b);
-    assert.equal(Reflect.get(a as object, "subjectId"), `user:${actor.userId}`);
-    // and it is the fully-resolved subject (roles flattened), not merely the same id
-    assert.deepEqual(Reflect.get(a as object, "permissions"), ["project:read"]);
-  });
+  Then(
+    "both requests resolve {string} to the identical underlying AuthSubject",
+    function* (name: string) {
+      const world = yield* World;
+      const actor = yield* world.actors.get(name);
+      const a = yield* outcome("pathA");
+      const b = yield* outcome("pathB");
+      assert.deepEqual(a, b);
+      assert.equal(Reflect.get(a as object, "subjectId"), `user:${actor.userId}`);
+      // and it is the fully-resolved subject (roles flattened), not merely the same id
+      assert.deepEqual(Reflect.get(a as object, "permissions"), ["project:read"]);
+    },
+  );
 });

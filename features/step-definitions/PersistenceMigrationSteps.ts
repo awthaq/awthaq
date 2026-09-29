@@ -94,7 +94,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   Given(
     "a {string} query for a user's sessions with more rows beyond the requested limit",
     function* (query: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(query, "listByUser");
     },
   );
@@ -159,7 +159,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   Given(
     "two session rows with an identical createdAt timestamp down to the millisecond",
     function* () {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       // Arranged in the When, which needs the rows and the queries on one database.
     },
   );
@@ -259,7 +259,9 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   Then("each migration is an @effect\\/sql Migrator record keyed by its name", function* () {
     const [declared, applied, ledgerNames] = yield* take(strings);
     const declaredEntries = (declared ?? "").split(",");
-    assert.ok(declaredEntries.length > 0 && declaredEntries.every((entry) => entry.endsWith(":true")));
+    assert.ok(
+      declaredEntries.length > 0 && declaredEntries.every((entry) => entry.endsWith(":true")),
+    );
     const names = declaredEntries.map((entry) => entry.replace(/:true$/, ""));
     // The migrator applied exactly these, by id and name, and recorded them by that name.
     assert.deepEqual(
@@ -274,7 +276,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   Given(
     "an installed plugin set including {string} and {string}",
     function* (first: string, second: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.deepEqual([first, second], ["password", "oauth"]);
     },
   );
@@ -282,7 +284,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   Given(
     "an installed plugin set including {string} \\(depending on {string}\\) and {string} \\(depending on {string}\\)",
     function* (first: string, firstDependency: string, second: string, secondDependency: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.deepEqual(
         [first, firstDependency, second, secondDependency],
         ["password", "core", "oauth", "core"],
@@ -293,13 +295,11 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   Given(
     "a plugin {string} whose table has a foreign key into a table owned by {string}, and {string} declares {string} in dependsOn",
     function* (table: string, owner: string, plugin: string, dependency: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-      assert.deepEqual([table, owner, plugin, dependency], [
-        "oauth_account",
-        "password",
-        "oauth",
-        "password",
-      ]);
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual(
+        [table, owner, plugin, dependency],
+        ["oauth_account", "password", "oauth", "password"],
+      );
       assert.deepEqual(
         MigOauth.dependsOn.map((dep) => dep.id),
         ["password"],
@@ -366,7 +366,9 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
     function* (owner: string, referencing: string) {
       assert.deepEqual([owner, referencing], ["password", "oauth"]);
       const { plugin } = yield* take(ledger);
-      const created = plugin.findIndex((name) => name.endsWith("_password_create_password_account"));
+      const created = plugin.findIndex((name) =>
+        name.endsWith("_password_create_password_account"),
+      );
       const referenced = plugin.findIndex((name) => name.endsWith("_oauth_create_oauth_account"));
       assert.ok(created >= 0 && referenced > created, plugin.join(", "));
     },
@@ -377,7 +379,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   Given(
     "an application composing {string}, {string}, and {string}",
     function* (...names: ReadonlyArray<string>) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.deepEqual(names, ["Auth.make", "auth.layer", "auth.migrations"]);
     },
   );
@@ -387,11 +389,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
     // Boot: the composed layer builds and the migrations apply — with nothing but the linker's list.
     yield* Effect.scoped(Layer.build(built.layer));
     yield* migrateSqlite(built.migrations);
-    yield* put(strings, [
-      ...Object.keys(built),
-      ...Object.keys(Migrations),
-      ...Object.keys(Auth),
-    ]);
+    yield* put(strings, [...Object.keys(built), ...Object.keys(Migrations), ...Object.keys(Auth)]);
   });
 
   Then(
@@ -427,12 +425,15 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
     ]);
   });
 
-  Then("it consumes the same {string} value the runtime already produces", function* (value: string) {
-    assert.equal(value, "auth.migrations");
-    const [runtime, cli] = yield* take(strings);
-    assert.ok((runtime ?? "").length > 0);
-    assert.equal(cli, runtime);
-  });
+  Then(
+    "it consumes the same {string} value the runtime already produces",
+    function* (value: string) {
+      assert.equal(value, "auth.migrations");
+      const [runtime, cli] = yield* take(strings);
+      assert.ok((runtime ?? "").length > 0);
+      assert.equal(cli, runtime);
+    },
+  );
 
   Then("it does not require a separate migration representation from the runtime", function* () {
     // Applying the runtime's own list leaves nothing pending in the CLI's reading of it.
@@ -475,18 +476,21 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
     yield* put(strings, [...outcome.created, String(outcome.coreUnchanged)]);
   });
 
-  Then("every table a plugin created is named {string} under its own id", function* (pattern: string) {
-    assert.equal(pattern, "<plugin>_<table>");
-    const entries = (yield* take(strings)).slice(0, -1);
-    assert.ok(entries.length > 0, "the shipped plugins created tables");
-    for (const entry of entries) {
-      const [plugin, table] = entry.split("|");
-      assert.ok(
-        table?.startsWith(`${plugin}_`),
-        `${plugin} created "${table}", outside its own prefix`,
-      );
-    }
-  });
+  Then(
+    "every table a plugin created is named {string} under its own id",
+    function* (pattern: string) {
+      assert.equal(pattern, "<plugin>_<table>");
+      const entries = (yield* take(strings)).slice(0, -1);
+      assert.ok(entries.length > 0, "the shipped plugins created tables");
+      for (const entry of entries) {
+        const [plugin, table] = entry.split("|");
+        assert.ok(
+          table?.startsWith(`${plugin}_`),
+          `${plugin} created "${table}", outside its own prefix`,
+        );
+      }
+    },
+  );
 
   Then("the tables core created are unchanged", function* () {
     assert.equal((yield* take(strings)).at(-1), "true");

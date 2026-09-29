@@ -96,16 +96,26 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.ok(keys.includes("password:signin:alice@example.com"), "sign-in never called consume");
   });
 
-  Then("it does not read or write a rate-limit count directly against any backing store itself", function* () {
-    // There is no store in the composition for it to reach: the only thing it was given is the port.
-    const { host } = yield* World;
-    const context = yield* host.context;
-    assert.equal(Context.getOption(context, RateLimiter.RateLimiterStore)._tag, "None");
-  });
+  Then(
+    "it does not read or write a rate-limit count directly against any backing store itself",
+    function* () {
+      // There is no store in the composition for it to reach: the only thing it was given is the port.
+      const { host } = yield* World;
+      const context = yield* host.context;
+      assert.equal(Context.getOption(context, RateLimiter.RateLimiterStore)._tag, "None");
+    },
+  );
 
   Given(
     "a {string} configured with {string} {int} and {string} {string} for key {string}",
-    function* (name: string, limitWord: string, limit: number, windowWord: string, window: string, key: string) {
+    function* (
+      name: string,
+      limitWord: string,
+      limit: number,
+      windowWord: string,
+      window: string,
+      key: string,
+    ) {
       assert.deepEqual([name, limitWord, windowWord], ["RateLimiter", "limit", "window"]);
       const { port } = yield* World;
       yield* Ref.set(port, { limit, window: durationOf(window), key });
@@ -262,7 +272,8 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
       // The same race, the same one free slot, against the shipped limiter: exactly one caller gets it.
       const config = yield* portConfig();
       const shipped = yield* buildLimiter();
-      for (let i = 0; i < config.limit - 1; i++) assert.equal((yield* consumeOn(shipped, config))._tag, "Ok");
+      for (let i = 0; i < config.limit - 1; i++)
+        assert.equal((yield* consumeOn(shipped, config))._tag, "Ok");
       const raced = yield* Effect.all([consumeOn(shipped, config), consumeOn(shipped, config)], {
         concurrency: "unbounded",
       });
@@ -332,7 +343,9 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { statuses, host } = yield* World;
       assert.ok((yield* Ref.get(statuses)).every((status) => status < 500));
       // Not silently: the outage was logged (never its key).
-      const logged = (yield* host.logs).some((record) => record.text.includes("rate-limit store unavailable"));
+      const logged = (yield* host.logs).some((record) =>
+        record.text.includes("rate-limit store unavailable"),
+      );
       assert.ok(logged, "the outage was not logged");
     },
   );
@@ -379,7 +392,9 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     const config = yield* portConfig();
     const last = (yield* results).at(-1);
     assert.ok(last !== undefined && last._tag === "Refused");
-    assert.ok(last.retryAfterMillis > 0 && last.retryAfterMillis <= Duration.toMillis(config.window));
+    assert.ok(
+      last.retryAfterMillis > 0 && last.retryAfterMillis <= Duration.toMillis(config.window),
+    );
   });
 
   Given("the same exceeded limit", function* () {
@@ -401,7 +416,9 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { limiter } = yield* World;
     const built = yield* Ref.get(limiter);
     assert.ok(built !== undefined);
-    const exit = yield* Effect.flip(built.consume({ key: "bucket", limit: 3, window: "10 seconds" }));
+    const exit = yield* Effect.flip(
+      built.consume({ key: "bucket", limit: 3, window: "10 seconds" }),
+    );
     assert.ok(exit instanceof RateLimiter.RateLimitExceeded);
   });
 
@@ -413,7 +430,10 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
       const last = (yield* results).at(-1);
       assert.ok(last !== undefined && last._tag === "Refused");
       const seconds = Math.ceil(last.retryAfterMillis / 1000);
-      assert.ok(seconds >= 1 && seconds <= 10, `${seconds} is not a sensible wait for a 10 second window`);
+      assert.ok(
+        seconds >= 1 && seconds <= 10,
+        `${seconds} is not a sensible wait for a 10 second window`,
+      );
       assert.equal(`try again in ${seconds} seconds`, "try again in 10 seconds");
     },
   );
@@ -428,22 +448,28 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  When("{string} attempts to sign in with a wrong password more often than the rule allows", function* (name: string) {
-    for (let i = 0; i < 6; i++) yield* signInOverHttp(name, "not the right password");
-  });
+  When(
+    "{string} attempts to sign in with a wrong password more often than the rule allows",
+    function* (name: string) {
+      for (let i = 0; i < 6; i++) yield* signInOverHttp(name, "not the right password");
+    },
+  );
 
-  Then("the refused request is a 429 whose body is a RateLimited value carrying retryAfterMillis", function* () {
-    const { statuses, bodies } = yield* World;
-    const seen = yield* Ref.get(statuses);
-    // sign-up 200, five 401s (wrong password), then the sixth attempt is refused.
-    assert.deepEqual(seen, [200, 401, 401, 401, 401, 401, 429]);
-    const body = (yield* Ref.get(bodies)).at(-1);
-    assert.equal(tagOf(body), "RateLimited");
-    const retryAfter = retryAfterOf(body);
-    assert.ok(retryAfter !== undefined && retryAfter > 0);
-    // 15 minutes is the rule's window; the wait a client renders comes from that one number.
-    assert.ok(retryAfter <= 15 * 60 * 1000);
-  });
+  Then(
+    "the refused request is a 429 whose body is a RateLimited value carrying retryAfterMillis",
+    function* () {
+      const { statuses, bodies } = yield* World;
+      const seen = yield* Ref.get(statuses);
+      // sign-up 200, five 401s (wrong password), then the sixth attempt is refused.
+      assert.deepEqual(seen, [200, 401, 401, 401, 401, 401, 429]);
+      const body = (yield* Ref.get(bodies)).at(-1);
+      assert.equal(tagOf(body), "RateLimited");
+      const retryAfter = retryAfterOf(body);
+      assert.ok(retryAfter !== undefined && retryAfter > 0);
+      // 15 minutes is the rule's window; the wait a client renders comes from that one number.
+      assert.ok(retryAfter <= 15 * 60 * 1000);
+    },
+  );
 
   // ---- BEH-EA-107: a plugin may only rate-limit its own endpoints ----
 
@@ -514,7 +540,9 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
               group: "invite",
               endpoint: "signIn",
               key: (input) =>
-                typeof input === "object" && input !== null && typeof Reflect.get(input, "email") === "string"
+                typeof input === "object" &&
+                input !== null &&
+                typeof Reflect.get(input, "email") === "string"
                   ? `signin:${String(Reflect.get(input, "email"))}`
                   : "signin:unknown",
               limit: 5,
@@ -552,7 +580,9 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     const rules = yield* registeredRules;
     const byIp = rules.find(
       (rule) =>
-        rule.endpoint === "signUp" && typeof rule.key === "function" && rule.key({ ip: "203.0.113.7" }) === "password:signup:ip:203.0.113.7",
+        rule.endpoint === "signUp" &&
+        typeof rule.key === "function" &&
+        rule.key({ ip: "203.0.113.7" }) === "password:signup:ip:203.0.113.7",
     );
     assert.ok(byIp !== undefined, "no per-source sign-up rule is registered");
   });
@@ -570,7 +600,10 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { statuses } = yield* World;
     const seen = yield* Ref.get(statuses);
     assert.equal(seen.filter((status) => status === 200).length, 20);
-    assert.ok(seen.slice(20).every((status) => status === 429), "later users were not throttled with the first twenty");
+    assert.ok(
+      seen.slice(20).every((status) => status === 429),
+      "later users were not throttled with the first twenty",
+    );
   });
 
   Given(
@@ -613,14 +646,11 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   // ---- BEH-EA-109: swappable stores ----
 
-  Given(
-    "{string} is first provided with {string}",
-    function* (layerName: string, store: string) {
-      assert.deepEqual([layerName, store], ["RateLimiter.layer", "RateLimiter.layerStoreMemory"]);
-      const { port } = yield* World;
-      yield* Ref.set(port, { limit: 2, window: durationOf("10 seconds"), key: "alice" });
-    },
-  );
+  Given("{string} is first provided with {string}", function* (layerName: string, store: string) {
+    assert.deepEqual([layerName, store], ["RateLimiter.layer", "RateLimiter.layerStoreMemory"]);
+    const { port } = yield* World;
+    yield* Ref.set(port, { limit: 2, window: durationOf("10 seconds"), key: "alice" });
+  });
 
   Given("a second {string} then supplies {string}", function* (how: string, store: string) {
     assert.equal(how, "Layer.provide");
@@ -651,16 +681,19 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* Ref.set(world.compose, composeTwoLimiters(world));
   });
 
-  Then("only one implementation of {string} exists in the composed graph", function* (port: string) {
-    assert.equal(port, "RateLimiter");
-    // One service under the port's key, and it behaves as the later store alone: its limit
-    // decisions come from the alternative store's counter.
-    const outcomes = [];
-    for (let i = 0; i < 3; i++) outcomes.push((yield* consume())._tag);
-    assert.deepEqual(outcomes, ["Ok", "Ok", "Refused"]);
-    const { alternativeIncrements } = yield* World;
-    assert.equal(yield* readerOf(alternativeIncrements, "alternative store"), 3);
-  });
+  Then(
+    "only one implementation of {string} exists in the composed graph",
+    function* (port: string) {
+      assert.equal(port, "RateLimiter");
+      // One service under the port's key, and it behaves as the later store alone: its limit
+      // decisions come from the alternative store's counter.
+      const outcomes = [];
+      for (let i = 0; i < 3; i++) outcomes.push((yield* consume())._tag);
+      assert.deepEqual(outcomes, ["Ok", "Ok", "Refused"]);
+      const { alternativeIncrements } = yield* World;
+      assert.equal(yield* readerOf(alternativeIncrements, "alternative store"), 3);
+    },
+  );
 
   Then(
     "no attempt is made to combine both stores' behavior into a single implementation",
@@ -689,7 +722,9 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* () {
       const rules = yield* registeredRules;
       assert.ok(rules.some((rule) => rule.plugin === "password" && rule.endpoint === "signIn"));
-      assert.ok(rules.some((rule) => rule.plugin === "password" && rule.endpoint === "requestReset"));
+      assert.ok(
+        rules.some((rule) => rule.plugin === "password" && rule.endpoint === "requestReset"),
+      );
       // Registered is not enough: they are enforced. Sixth sign-in and sixth reset request for
       // one address are refused (five per fifteen minutes each).
       yield* signUpOverHttp("alice");
@@ -705,13 +740,16 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then("the application required no additional rate-limiting code to get that protection", function* () {
-    // The composition held nothing but the limiter port and the plugin: every rule in the
-    // registry belongs to the plugin, none to the application.
-    const rules = yield* registeredRules;
-    assert.ok(rules.length > 0);
-    assert.ok(rules.every((rule) => rule.plugin === "password"));
-  });
+  Then(
+    "the application required no additional rate-limiting code to get that protection",
+    function* () {
+      // The composition held nothing but the limiter port and the plugin: every rule in the
+      // registry belongs to the plugin, none to the application.
+      const rules = yield* registeredRules;
+      assert.ok(rules.length > 0);
+      assert.ok(rules.every((rule) => rule.plugin === "password"));
+    },
+  );
 
   // ---- BEH-EA-111: registry ordering ----
 
@@ -822,11 +860,14 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* loopSignIns(times);
   });
 
-  Then("none of the {int} attempts is rejected by {string}", function* (times: number, failure: string) {
-    assert.equal(failure, "RateLimited");
-    assert.equal(yield* getCount("attempts"), times);
-    assert.equal(yield* getCount("rejected"), 0);
-  });
+  Then(
+    "none of the {int} attempts is rejected by {string}",
+    function* (times: number, failure: string) {
+      assert.equal(failure, "RateLimited");
+      assert.equal(yield* getCount("attempts"), times);
+      assert.equal(yield* getCount("rejected"), 0);
+    },
+  );
 
   Given("a test using {string} with no rate-limiting-specific setup", function* (call: string) {
     assert.equal(call, "TestAuth.layer(plugins)");

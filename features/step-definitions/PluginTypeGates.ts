@@ -156,9 +156,8 @@ export const dependentRequiresSessionsAndUsers: [SessionsFixture | UsersFixture]
 
 // type-gate: api-layer-consistency
 declare const composed: Auth.Built<readonly [typeof PasswordFixture, typeof PasskeyFixture]>;
-type ComposedGroups = typeof composed.api extends HttpApi.HttpApi<"auth", infer Groups>
-  ? Groups
-  : never;
+type ComposedGroups =
+  typeof composed.api extends HttpApi.HttpApi<"auth", infer Groups> ? Groups : never;
 type ComposedHandlers = Extract<
   Layer.Success<typeof composed.layer>,
   HttpApiGroup.Service<"auth", string>
@@ -180,9 +179,9 @@ export const everyHandlerHasAGroup: [ComposedHandlers] extends [PluginGroupServi
 
 // type-gate: launch-needs-ports
 const portUserBuilt = () => Auth.make([PortUserFixture]);
-export const requiresExactlyBothPorts: [Layer.Services<ReturnType<typeof portUserBuilt>["layer"]>] extends [
-  Mailer.Mailer | PasswordHasher.PasswordHasher,
-]
+export const requiresExactlyBothPorts: [
+  Layer.Services<ReturnType<typeof portUserBuilt>["layer"]>,
+] extends [Mailer.Mailer | PasswordHasher.PasswordHasher]
   ? [Mailer.Mailer | PasswordHasher.PasswordHasher] extends [
       Layer.Services<ReturnType<typeof portUserBuilt>["layer"]>,
     ]

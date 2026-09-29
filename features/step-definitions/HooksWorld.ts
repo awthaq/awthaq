@@ -32,7 +32,11 @@ import { STRONG_PASSWORD } from "./shared/Harness.ts";
  */
 export const fixtureTapRuns = { count: 0 };
 
-const countingVeto = (input: { readonly email?: string | undefined; readonly name: string; readonly strategy: string }) =>
+const countingVeto = (input: {
+  readonly email?: string | undefined;
+  readonly name: string;
+  readonly strategy: string;
+}) =>
   Effect.sync(() => {
     fixtureTapRuns.count++;
     return input;
@@ -48,10 +52,13 @@ const AuditApi = HttpApi.make("auth").add(
     HttpApiEndpoint.get("ping", "/acme-audit/ping", { success: Schema.String }),
   ),
 );
-export class AcmeAudit extends AuthPlugin.Service<AcmeAudit, Record<string, never>>()("acme.audit", {
-  apiVersion: 1,
-  contract: AuditApi,
-}) {
+export class AcmeAudit extends AuthPlugin.Service<AcmeAudit, Record<string, never>>()(
+  "acme.audit",
+  {
+    apiVersion: 1,
+    contract: AuditApi,
+  },
+) {
   static readonly layer = AuthPlugin.layer(AcmeAudit, {
     make: Effect.succeed({}),
     taps: [
@@ -109,11 +116,14 @@ const InviteApi = HttpApi.make("auth").add(
   ),
 );
 /** BEH-EA-095's own example: a plugin that reacts to a user's deletion by tapping the point core exposes, over its own prefixed table. */
-export class AcmeInvite extends AuthPlugin.Service<AcmeInvite, Record<string, never>>()("acme.invite", {
-  apiVersion: 1,
-  contract: InviteApi,
-  tables: ["acme.invite_invitation"],
-}) {
+export class AcmeInvite extends AuthPlugin.Service<AcmeInvite, Record<string, never>>()(
+  "acme.invite",
+  {
+    apiVersion: 1,
+    contract: InviteApi,
+    tables: ["acme.invite_invitation"],
+  },
+) {
   static readonly layer = AuthPlugin.layer(AcmeInvite, {
     make: Effect.succeed({}),
     taps: [Hooks.BeforeUserDelete.declareTap((input) => Effect.succeed(input))],
@@ -232,9 +242,13 @@ export const WorldLive = Layer.effect(
       outcome: yield* Ref.make<SignUpOutcome | undefined>(undefined),
       seen: yield* Ref.make<Readonly<Record<string, ReadonlyArray<string>>>>({}),
       twoFactorEnabled: yield* Ref.make<ReadonlyArray<string>>([]),
-      invitations: yield* Ref.make<ReadonlyArray<{ readonly id: string; readonly userId: string }>>([]),
+      invitations: yield* Ref.make<ReadonlyArray<{ readonly id: string; readonly userId: string }>>(
+        [],
+      ),
       userIds: yield* Ref.make<Readonly<Record<string, string>>>({}),
-      manifest: yield* Ref.make<Readonly<Record<string, ReadonlyArray<ManifestEntry>>> | undefined>(undefined),
+      manifest: yield* Ref.make<Readonly<Record<string, ReadonlyArray<ManifestEntry>>> | undefined>(
+        undefined,
+      ),
     });
   }),
 );
@@ -246,10 +260,8 @@ export const addTap = Effect.fn("features.hooks.addTap")(function* (tap: Contrib
 });
 
 /** A recorder a tap closes over: a tap's handler has no requirements, so it cannot `yield* World` itself. */
-export const noteTo =
-  (seen: WorldShape["seen"]) =>
-  (who: string, what: string) =>
-    Ref.update(seen, (existing) => ({ ...existing, [who]: [...(existing[who] ?? []), what] }));
+export const noteTo = (seen: WorldShape["seen"]) => (who: string, what: string) =>
+  Ref.update(seen, (existing) => ({ ...existing, [who]: [...(existing[who] ?? []), what] }));
 
 export const seenBy = Effect.fn("features.hooks.seenBy")(function* (who: string) {
   const { seen } = yield* World;
@@ -266,7 +278,13 @@ const describeFailure = (error: { readonly _tag: string }): SignUpOutcome => {
       point: error.point,
     };
   }
-  return { _tag: "Failure", error: error._tag, code: undefined, message: undefined, point: undefined };
+  return {
+    _tag: "Failure",
+    error: error._tag,
+    code: undefined,
+    message: undefined,
+    point: undefined,
+  };
 };
 
 const emailOf = (name: string) => (name.includes("@") ? name : `${name}@example.com`);

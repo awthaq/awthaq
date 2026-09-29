@@ -99,7 +99,9 @@ const describe = (value: unknown) => (value === undefined ? "undefined" : JSON.s
 // ---- BEH-EA-163: two plugins, one attribute ----
 
 const BillingApi = HttpApi.make("auth").add(
-  HttpApiGroup.make("billing").add(HttpApiEndpoint.get("get", "/billing", { success: Schema.Void })),
+  HttpApiGroup.make("billing").add(
+    HttpApiEndpoint.get("get", "/billing", { success: Schema.Void }),
+  ),
 );
 
 /** The scenario's "hypothetical Billing plugin": a real plugin (so `Auth.make` composes it) that contributes a `plan` attribute. */
@@ -151,21 +153,18 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* Effect.void;
   });
 
-  When(
-    "it is asked to resolve an attribute it does not recognize for a subject",
-    function* () {
-      const served = yield* app();
-      const actor = yield* mintActor(served, "member");
-      const subject = `user:${actor.userId}`;
-      const unrecognized = yield* Effect.promise(() => served.run(askHealthy(subject, "plan")));
-      // a recognized attribute on the same subject, so "undefined" can be told apart from "no answer at all"
-      const recognized = yield* Effect.promise(() =>
-        served.run(askHealthy(subject, "emailVerified")),
-      );
-      yield* setOutcome("unrecognized", describe(unrecognized));
-      yield* setOutcome("recognized", describe(recognized));
-    },
-  );
+  When("it is asked to resolve an attribute it does not recognize for a subject", function* () {
+    const served = yield* app();
+    const actor = yield* mintActor(served, "member");
+    const subject = `user:${actor.userId}`;
+    const unrecognized = yield* Effect.promise(() => served.run(askHealthy(subject, "plan")));
+    // a recognized attribute on the same subject, so "undefined" can be told apart from "no answer at all"
+    const recognized = yield* Effect.promise(() =>
+      served.run(askHealthy(subject, "emailVerified")),
+    );
+    yield* setOutcome("unrecognized", describe(unrecognized));
+    yield* setOutcome("recognized", describe(recognized));
+  });
 
   Then("it returns undefined", function* () {
     assert.equal(yield* outcome("unrecognized"), "undefined");
@@ -215,13 +214,10 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then(
-    "it fails with a typed AttributeResolveError naming the attribute",
-    function* () {
-      assert.equal(yield* outcome("failureTag"), "AttributeResolveError");
-      assert.equal(yield* outcome("failureAttribute"), yield* outcome("attribute"));
-    },
-  );
+  Then("it fails with a typed AttributeResolveError naming the attribute", function* () {
+    assert.equal(yield* outcome("failureTag"), "AttributeResolveError");
+    assert.equal(yield* outcome("failureAttribute"), yield* outcome("attribute"));
+  });
 
   Then("it does not return undefined", function* () {
     assert.equal(yield* outcome("succeeded"), false);
@@ -461,7 +457,10 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
     const claimed = yield* Effect.scoped(
       Effect.gen(function* () {
         yield* Layer.build(
-          Layer.mergeAll(planResolver("organization", "org-plan"), planResolver("billing", "billing-plan")),
+          Layer.mergeAll(
+            planResolver("organization", "org-plan"),
+            planResolver("billing", "billing-plan"),
+          ),
         );
         const registry = yield* Slots.SlotsRegistry;
         return yield* registry.claimed;
@@ -476,7 +475,10 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.equal(yield* outcome("plugins"), "organization,billing");
       const claimed = String(yield* outcome("claimed"));
       for (const name of [a, b, attribute]) {
-        assert.ok(!claimed.toLowerCase().includes(name.toLowerCase()), `${name} is not a claimed slot`);
+        assert.ok(
+          !claimed.toLowerCase().includes(name.toLowerCase()),
+          `${name} is not a claimed slot`,
+        );
       }
     },
   );
@@ -755,9 +757,7 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
           );
           return Exit.isSuccess(exit)
             ? "still-allowed"
-            : Cause.findErrorOption(exit.cause).pipe(
-                Option.getOrElse(() => "defect"),
-              );
+            : Cause.findErrorOption(exit.cause).pipe(Option.getOrElse(() => "defect"));
         }),
       ),
     );

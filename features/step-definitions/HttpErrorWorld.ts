@@ -57,18 +57,17 @@ export class InvitePlugin extends AuthPlugin.Service<InvitePlugin, Record<string
 export class Teapot extends Schema.TaggedError<Teapot>()("Teapot", {}, { httpApiStatus: 418 }) {}
 
 const ErrorsApi = HttpApi.make("auth").add(
-  HttpApiGroup.make("errors")
-    .add(
-      HttpApiEndpoint.get("unauthenticated", "/errors/unauthenticated", {
-        error: [Api.Unauthenticated],
-      }),
-      HttpApiEndpoint.get("invalidCredentials", "/errors/invalid-credentials", {
-        error: [Api.InvalidCredentials],
-      }),
-      HttpApiEndpoint.get("csrfRejected", "/errors/csrf-rejected", { error: [Api.CsrfRejected] }),
-      HttpApiEndpoint.get("teapot", "/errors/teapot", { error: [Teapot] }),
-      HttpApiEndpoint.get("rateLimited", "/errors/rate-limited", { error: [Api.RateLimited] }),
-    ),
+  HttpApiGroup.make("errors").add(
+    HttpApiEndpoint.get("unauthenticated", "/errors/unauthenticated", {
+      error: [Api.Unauthenticated],
+    }),
+    HttpApiEndpoint.get("invalidCredentials", "/errors/invalid-credentials", {
+      error: [Api.InvalidCredentials],
+    }),
+    HttpApiEndpoint.get("csrfRejected", "/errors/csrf-rejected", { error: [Api.CsrfRejected] }),
+    HttpApiEndpoint.get("teapot", "/errors/teapot", { error: [Teapot] }),
+    HttpApiEndpoint.get("rateLimited", "/errors/rate-limited", { error: [Api.RateLimited] }),
+  ),
 );
 const ErrorsHandlers = HttpApiBuilder.group(ErrorsApi, "errors", (handlers) =>
   handlers
@@ -116,9 +115,7 @@ const NoBreachHttpClient = Layer.succeed(
 /** The layers that are genuinely the host's own: middleware and the outbound client. */
 export const hostServices = Layer.mergeAll(
   Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  Csrf.CsrfProtectionLive.pipe(
-    Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
-  ),
+  Csrf.CsrfProtectionLive.pipe(Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests))),
   NoBreachHttpClient,
 );
 
@@ -301,10 +298,12 @@ export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
     return World.of({
-      handlers: yield* Ref.make<
-        Readonly<Record<string, (request: Request) => Promise<Response>>>
-      >({}),
-      groups: yield* Ref.make<Readonly<Record<string, ReadonlyMap<string, ReadonlyArray<string>>>>>({}),
+      handlers: yield* Ref.make<Readonly<Record<string, (request: Request) => Promise<Response>>>>(
+        {},
+      ),
+      groups: yield* Ref.make<Readonly<Record<string, ReadonlyMap<string, ReadonlyArray<string>>>>>(
+        {},
+      ),
       passwordApp: yield* Ref.make<PasswordApp | undefined>(undefined),
       runtimeApp: yield* Ref.make<RuntimeApp | undefined>(undefined),
       outcomes: yield* Ref.make<Readonly<Record<string, unknown>>>({}),

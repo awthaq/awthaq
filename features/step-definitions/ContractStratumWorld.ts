@@ -81,8 +81,12 @@ const buildAuthProbe = () => {
   }));
   const Handlers = Layer.mergeAll(
     HttpApiBuilder.group(ProbeApi, "app", (handlers) => handlers.handle("who", () => describe)),
-    HttpApiBuilder.group(ProbeApi, "optional", (handlers) => handlers.handle("who", () => describe)),
-    HttpApiBuilder.group(ProbeApi, "reordered", (handlers) => handlers.handle("who", () => describe)),
+    HttpApiBuilder.group(ProbeApi, "optional", (handlers) =>
+      handlers.handle("who", () => describe),
+    ),
+    HttpApiBuilder.group(ProbeApi, "reordered", (handlers) =>
+      handlers.handle("who", () => describe),
+    ),
   );
   const TracedAuthentication = Layer.effect(
     Api.Authentication,

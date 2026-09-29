@@ -141,15 +141,15 @@ export class UsersFixture extends AuthPlugin.Service<UsersFixture, Record<string
   static readonly layer = AuthPlugin.layer(UsersFixture, { make: Effect.succeed({}) });
 }
 
-export class DependentFixture extends AuthPlugin.Service<
-  DependentFixture,
-  Record<string, never>
->()("dependent", {
-  apiVersion: 1,
-  contract: HttpApi.make("auth"),
-  tables: ["dependent_row"],
-  migrations: [{ name: "create_dependent_row", up: Effect.void }],
-}) {
+export class DependentFixture extends AuthPlugin.Service<DependentFixture, Record<string, never>>()(
+  "dependent",
+  {
+    apiVersion: 1,
+    contract: HttpApi.make("auth"),
+    tables: ["dependent_row"],
+    migrations: [{ name: "create_dependent_row", up: Effect.void }],
+  },
+) {
   static readonly layer = AuthPlugin.layer(DependentFixture, {
     dependsOn: [SessionsFixture, UsersFixture],
     make: Effect.gen(function* () {
@@ -301,7 +301,11 @@ export class InviteTapper extends AuthPlugin.Service<InviteTapper, Record<string
 // and a separate plugin *id*'d "login.legacy" is entitled to a top-level group of that name.
 
 export const LoginHostApi = HttpApi.make("auth")
-  .add(HttpApiGroup.make("login").add(HttpApiEndpoint.get("start", "/login", { success: Schema.String })))
+  .add(
+    HttpApiGroup.make("login").add(
+      HttpApiEndpoint.get("start", "/login", { success: Schema.String }),
+    ),
+  )
   .add(
     HttpApiGroup.make("login.legacy").add(
       HttpApiEndpoint.get("old", "/login/old", { success: Schema.String }),
@@ -427,7 +431,10 @@ export class SignUpInput extends Schema.Class<SignUpInput>("FoundationsSignUpInp
   email: Schema.String,
 }) {}
 
-export class BeforeSignUp extends HookPoint.veto<BeforeSignUp>()("foundations.beforeSignUp", SignUpInput) {}
+export class BeforeSignUp extends HookPoint.veto<BeforeSignUp>()(
+  "foundations.beforeSignUp",
+  SignUpInput,
+) {}
 
 export class AfterSignIn extends HookPoint.observe<AfterSignIn>()(
   "foundations.afterSignIn",

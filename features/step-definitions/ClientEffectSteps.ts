@@ -66,11 +66,16 @@ const session = (id: string) =>
     current: true,
   });
 
-const signInPayload = { email: "alice@example.com", password: Redacted.make("correct horse battery staple") };
+const signInPayload = {
+  email: "alice@example.com",
+  password: Redacted.make("correct horse battery staple"),
+};
 
 /** A tiny contract whose endpoint set can grow — "a plugin adds a new endpoint" (REQ-EA-478). */
 const widgetsBefore = HttpApi.make("auth").add(
-  HttpApiGroup.make("widgets").add(HttpApiEndpoint.get("list", "/widgets", { success: Schema.Void })),
+  HttpApiGroup.make("widgets").add(
+    HttpApiEndpoint.get("list", "/widgets", { success: Schema.Void }),
+  ),
 );
 const widgetsAfter = HttpApi.make("auth").add(
   HttpApiGroup.make("widgets")
@@ -93,7 +98,10 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (_name: string, plugin: string, core: string) {
       const groups = Object.keys(mergedApi.groups);
       // `Sessions` is core's own reserved `session` group (MW-002), folded into every composition.
-      assert.ok(groups.includes(plugin.toLowerCase()), `no "${plugin}" group in ${groups.join(",")}`);
+      assert.ok(
+        groups.includes(plugin.toLowerCase()),
+        `no "${plugin}" group in ${groups.join(",")}`,
+      );
       assert.ok(groups.includes(core.toLowerCase().replace(/s$/, "")), `no core session group`);
     },
   );
@@ -105,38 +113,48 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* outcomes.set("plainMethods", exposed);
   });
 
-  Then("the client exposes a method for every endpoint declared in {string}", function* (_api: string) {
-    const { outcomes } = yield* World;
-    const exposed = new Set(yield* outcomes.getAs("plainMethods", isStringArray));
-    const missing = declaredEndpoints(mergedApi).map(label).filter((entry) => !exposed.has(entry));
-    assert.deepEqual(missing, []);
-  });
+  Then(
+    "the client exposes a method for every endpoint declared in {string}",
+    function* (_api: string) {
+      const { outcomes } = yield* World;
+      const exposed = new Set(yield* outcomes.getAs("plainMethods", isStringArray));
+      const missing = declaredEndpoints(mergedApi)
+        .map(label)
+        .filter((entry) => !exposed.has(entry));
+      assert.deepEqual(missing, []);
+    },
+  );
 
   Then("no method is defined outside what {string} declares", function* (_api: string) {
     const { outcomes } = yield* World;
     const declared = new Set(declaredEndpoints(mergedApi).map(label));
-    const extra = (yield* outcomes.getAs("plainMethods", isStringArray)).filter((entry) => !declared.has(entry));
+    const extra = (yield* outcomes.getAs("plainMethods", isStringArray)).filter(
+      (entry) => !declared.has(entry),
+    );
     assert.deepEqual(extra, []);
   });
 
-  When("{string} builds the reactive client against {string}", function* (_make: string, _api: string) {
-    const { outcomes } = yield* World;
-    const registry = AtomRegistry.make();
-    // The runtime's layer is the same `HttpApiClient.make(api)` the plain client uses, behind the atom runtime.
-    const layer = registry.get(ReactiveProbe.runtime.layer);
-    const reactive = yield* Effect.gen(function* () {
-      return yield* ReactiveProbe;
-    }).pipe(Effect.provide(layer));
-    yield* outcomes.set(
-      "reactiveMethods",
-      exposedMethods(reactive, declaredEndpoints(mergedApi)).map(label),
-    );
-    const { client } = buildClient();
-    yield* outcomes.set(
-      "plainMethods",
-      exposedMethods(yield* client, declaredEndpoints(mergedApi)).map(label),
-    );
-  });
+  When(
+    "{string} builds the reactive client against {string}",
+    function* (_make: string, _api: string) {
+      const { outcomes } = yield* World;
+      const registry = AtomRegistry.make();
+      // The runtime's layer is the same `HttpApiClient.make(api)` the plain client uses, behind the atom runtime.
+      const layer = registry.get(ReactiveProbe.runtime.layer);
+      const reactive = yield* Effect.gen(function* () {
+        return yield* ReactiveProbe;
+      }).pipe(Effect.provide(layer));
+      yield* outcomes.set(
+        "reactiveMethods",
+        exposedMethods(reactive, declaredEndpoints(mergedApi)).map(label),
+      );
+      const { client } = buildClient();
+      yield* outcomes.set(
+        "plainMethods",
+        exposedMethods(yield* client, declaredEndpoints(mergedApi)).map(label),
+      );
+    },
+  );
 
   Then(
     "the reactive client exposes the same set of endpoint methods that {string} produces for {string}",
@@ -149,25 +167,36 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Given("a plugin adds a new endpoint to its {string} in {string}", function* (_group: string, _api: string) {
-    const { outcomes } = yield* World;
-    const before = declaredEndpoints(widgetsBefore).map(label);
-    const after = declaredEndpoints(widgetsAfter).map(label);
-    assert.deepEqual(after.filter((entry) => !before.includes(entry)), ["widgets.create"]);
-    yield* outcomes.set("declaredNew", "widgets.create");
-  });
+  Given(
+    "a plugin adds a new endpoint to its {string} in {string}",
+    function* (_group: string, _api: string) {
+      const { outcomes } = yield* World;
+      const before = declaredEndpoints(widgetsBefore).map(label);
+      const after = declaredEndpoints(widgetsAfter).map(label);
+      assert.deepEqual(
+        after.filter((entry) => !before.includes(entry)),
+        ["widgets.create"],
+      );
+      yield* outcomes.set("declaredNew", "widgets.create");
+    },
+  );
 
-  When("{string} rebuilds the client against the updated {string}", function* (_make: string, _api: string) {
-    const { outcomes } = yield* World;
-    const beforeClient = yield* buildWidgets(widgetsBefore);
-    const afterClient = yield* buildWidgets(widgetsAfter);
-    const beforeMethods = exposedMethods(beforeClient, declaredEndpoints(widgetsBefore)).map(label);
-    const afterMethods = exposedMethods(afterClient, declaredEndpoints(widgetsAfter)).map(label);
-    yield* outcomes.set(
-      "newMethods",
-      afterMethods.filter((entry) => !beforeMethods.includes(entry)),
-    );
-  });
+  When(
+    "{string} rebuilds the client against the updated {string}",
+    function* (_make: string, _api: string) {
+      const { outcomes } = yield* World;
+      const beforeClient = yield* buildWidgets(widgetsBefore);
+      const afterClient = yield* buildWidgets(widgetsAfter);
+      const beforeMethods = exposedMethods(beforeClient, declaredEndpoints(widgetsBefore)).map(
+        label,
+      );
+      const afterMethods = exposedMethods(afterClient, declaredEndpoints(widgetsAfter)).map(label);
+      yield* outcomes.set(
+        "newMethods",
+        afterMethods.filter((entry) => !beforeMethods.includes(entry)),
+      );
+    },
+  );
 
   Then("the client exposes a method for the new endpoint", function* () {
     const { outcomes } = yield* World;
@@ -293,15 +322,12 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(Witnesses.afterAgainIsExtended, true);
   });
 
-  Then(
-    "no separate hand-maintained list of error codes was updated to include it",
-    function* () {
-      // No runtime list of codes exists in the client module to update: every export is a function,
-      // a class, a layer or a service — never an array of tags.
-      const lists = Object.entries(AuthClient).filter(([, value]) => Array.isArray(value));
-      assert.deepEqual(lists, []);
-    },
-  );
+  Then("no separate hand-maintained list of error codes was updated to include it", function* () {
+    // No runtime list of codes exists in the client module to update: every export is a function,
+    // a class, a layer or a service — never an array of tags.
+    const lists = Object.entries(AuthClient).filter(([, value]) => Array.isArray(value));
+    assert.deepEqual(lists, []);
+  });
 
   Given(
     "an i18n {string} catalog declared as {string}",
@@ -323,10 +349,13 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   // ---- BEH-EA-173: urlBuilder --------------------------------------------------------------
 
-  Given("the merged {string} contract declares an {string} endpoint", function* (_api: string, endpoint: string) {
-    const declared = declaredEndpoints(mergedApi).map(label);
-    assert.ok(declared.includes(endpoint), `${endpoint} is not declared: ${declared.join(",")}`);
-  });
+  Given(
+    "the merged {string} contract declares an {string} endpoint",
+    function* (_api: string, endpoint: string) {
+      const declared = declaredEndpoints(mergedApi).map(label);
+      assert.ok(declared.includes(endpoint), `${endpoint} is not declared: ${declared.join(",")}`);
+    },
+  );
 
   When(
     "{string} is called with params {string} and query {string}",
@@ -337,7 +366,10 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
       const build = HttpApiClient.urlBuilder(mergedApi, { baseUrl: BASE_URL });
       yield* outcomes.set(
         "url",
-        build.oauth.authorize({ params: { provider: "google" }, query: { callbackURL: "/dashboard" } }),
+        build.oauth.authorize({
+          params: { provider: "google" },
+          query: { callbackURL: "/dashboard" },
+        }),
       );
     },
   );
@@ -374,8 +406,8 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
       }).pipe(Effect.flip);
       const { client } = buildClient();
       const built = yield* client;
-      const viaRequest = yield* Effect.suspend(
-        (): Effect.Effect<unknown, unknown> => Reflect.apply(built.oauth.authorize, undefined, [bad]),
+      const viaRequest = yield* Effect.suspend((): Effect.Effect<unknown, unknown> =>
+        Reflect.apply(built.oauth.authorize, undefined, [bad]),
       ).pipe(Effect.sandbox, Effect.flip);
       yield* outcomes.set("builderSchemaError", Schema.isSchemaError(viaBuilder.error));
       yield* outcomes.set("requestSchemaError", String(viaRequest).includes("SchemaError"));
@@ -398,15 +430,18 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  When("the {string} link is built with {string} against the contract", function* (_link: string, _builder: string) {
-    const { outcomes } = yield* World;
-    const redirect = yield* outcomes.getAs("redirect", isString);
-    const build = HttpApiClient.urlBuilder(mergedApi, { baseUrl: BASE_URL });
-    yield* outcomes.set(
-      "url",
-      build.oauth.authorize({ params: { provider: "google" }, query: { callbackURL: redirect } }),
-    );
-  });
+  When(
+    "the {string} link is built with {string} against the contract",
+    function* (_link: string, _builder: string) {
+      const { outcomes } = yield* World;
+      const redirect = yield* outcomes.getAs("redirect", isString);
+      const build = HttpApiClient.urlBuilder(mergedApi, { baseUrl: BASE_URL });
+      yield* outcomes.set(
+        "url",
+        build.oauth.authorize({ params: { provider: "google" }, query: { callbackURL: redirect } }),
+      );
+    },
+  );
 
   Then("the returned URL correctly percent-encodes those characters", function* () {
     const { outcomes } = yield* World;
@@ -460,13 +495,10 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.ok(Option.isNone(yield* sessionStore.get));
   });
 
-  When(
-    "{string} is called with a non-null {string}",
-    function* (_call: string, _arg: string) {
-      const { sessionStore } = yield* World;
-      yield* sessionStore.hydrate(session("ssr-seeded"));
-    },
-  );
+  When("{string} is called with a non-null {string}", function* (_call: string, _arg: string) {
+    const { sessionStore } = yield* World;
+    yield* sessionStore.hydrate(session("ssr-seeded"));
+  });
 
   Then("the store's current value becomes {string}", function* (_arg: string) {
     const { sessionStore } = yield* World;
@@ -503,7 +535,13 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "the hand-written portion of {string} — the session store, CSRF header injection, and the credentials\\/bearer policy",
     function* (_pkg: string) {
-      const handWritten = ["SessionStore", "SessionStoreLive", "csrfClientLayer", "CsrfClientLive", "BearerTokenStore"];
+      const handWritten = [
+        "SessionStore",
+        "SessionStoreLive",
+        "csrfClientLayer",
+        "CsrfClientLive",
+        "BearerTokenStore",
+      ];
       for (const name of handWritten) assert.ok(name in AuthClient, `${name} is not exported`);
     },
   );
@@ -623,10 +661,13 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
     );
   });
 
-  Then("it is expressed through {string}\\/{string}", function* (_transformClient: string, _transformResponse: string) {
-    const { outcomes } = yield* World;
-    assert.deepEqual(yield* outcomes.getAs("tenantHeaders", isStringArray), ["acme", "acme"]);
-  });
+  Then(
+    "it is expressed through {string}\\/{string}",
+    function* (_transformClient: string, _transformResponse: string) {
+      const { outcomes } = yield* World;
+      assert.deepEqual(yield* outcomes.getAs("tenantHeaders", isStringArray), ["acme", "acme"]);
+    },
+  );
 
   Then(
     "no generated per-endpoint method is wrapped, shadowed, or re-exported to implement it",
@@ -634,7 +675,10 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { outcomes } = yield* World;
       const declared = declaredEndpoints(mergedApi).map(label).sort();
       // The client still exposes exactly the contract's methods: none added, none replaced.
-      assert.deepEqual([...(yield* outcomes.getAs("clientMethods", isStringArray))].sort(), declared);
+      assert.deepEqual(
+        [...(yield* outcomes.getAs("clientMethods", isStringArray))].sort(),
+        declared,
+      );
       assert.ok(!Object.keys(AuthClient).some((name) => /tenant/i.test(name)));
     },
   );
@@ -702,11 +746,14 @@ export const clientEffectSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* outcomes.set("promiseTag", Reflect.get(Object(viaPromise.error), "_tag"));
   });
 
-  Then("both report the same decision, because neither is a separately implemented evaluation path", function* () {
-    const { outcomes } = yield* World;
-    assert.equal(yield* outcomes.getAs("effectTag", isString), "Unauthenticated");
-    assert.equal(yield* outcomes.getAs("promiseTag", isString), "Unauthenticated");
-  });
+  Then(
+    "both report the same decision, because neither is a separately implemented evaluation path",
+    function* () {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("effectTag", isString), "Unauthenticated");
+      assert.equal(yield* outcomes.getAs("promiseTag", isString), "Unauthenticated");
+    },
+  );
 
   Given("the Promise facade offered for non-Effect code", function* () {
     const { outcomes } = yield* World;

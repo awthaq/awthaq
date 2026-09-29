@@ -336,7 +336,9 @@ export const getOutcome = Effect.fn("features.csrf.getOutcome")(function* (key: 
 export const issueCookie = Effect.fn("features.csrf.issueCookie")(function* () {
   const observed = yield* send({ method: "GET", group: "app", headers: {} });
   if (observed.issuedToken === undefined) {
-    return yield* Effect.die(new Error("the first safe request did not issue a __Host-csrf cookie"));
+    return yield* Effect.die(
+      new Error("the first safe request did not issue a __Host-csrf cookie"),
+    );
   }
   return observed.issuedToken;
 });

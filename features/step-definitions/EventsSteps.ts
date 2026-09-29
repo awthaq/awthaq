@@ -127,16 +127,19 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* counts.set({ published: total, handled: 0 });
   });
 
-  Then("the backlog held for that subscriber is bounded by the PubSub's fixed capacity", function* () {
-    const { counts } = yield* World;
-    const lagging = yield* getProbe("lagging");
-    const handled = yield* releaseAndDrain(lagging);
-    // Released, the subscriber sees only what the bus held: at most its capacity plus the one
-    // event it was already handling — not the 3 x CAPACITY that were published.
-    assert.ok(handled <= CAPACITY + 1, `the subscriber's backlog was ${handled}`);
-    assert.ok(handled >= CAPACITY, `the bus held only ${handled} events`);
-    yield* counts.set({ ...(yield* counts.get), handled });
-  });
+  Then(
+    "the backlog held for that subscriber is bounded by the PubSub's fixed capacity",
+    function* () {
+      const { counts } = yield* World;
+      const lagging = yield* getProbe("lagging");
+      const handled = yield* releaseAndDrain(lagging);
+      // Released, the subscriber sees only what the bus held: at most its capacity plus the one
+      // event it was already handling — not the 3 x CAPACITY that were published.
+      assert.ok(handled <= CAPACITY + 1, `the subscriber's backlog was ${handled}`);
+      assert.ok(handled >= CAPACITY, `the bus held only ${handled} events`);
+      yield* counts.set({ ...(yield* counts.get), handled });
+    },
+  );
 
   Then("the publishing process's memory does not grow without bound", function* () {
     const { host, counts } = yield* World;
@@ -400,7 +403,8 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.ok(seen.length > 0, "the failing subscriber was never handed an event");
     const recorded = new Set((yield* auditRows).map((row) => row.id));
     // Every event the failing subscriber was handed is in the durable log under the same id.
-    for (const event of seen) assert.ok(recorded.has(event.eventId), `no audit row for ${event._tag}`);
+    for (const event of seen)
+      assert.ok(recorded.has(event.eventId), `no audit row for ${event._tag}`);
     assert.equal(yield* Ref.get(only.completed), 0);
     assert.ok((yield* errorLogsNamed("auth.event.observer.error")).length > 0);
   });
@@ -448,20 +452,26 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then("those fields are present, shaped exactly as the registry declares for that tag", function* () {
-    const [event] = yield* Ref.get((yield* getProbe("handler")).handled);
-    assert.ok(event !== undefined && event._tag === "auth.user.signedIn");
-    const { userId, strategy } = event;
-    assert.equal(userId, yield* userIdOf("alice"));
-    assert.equal(strategy, "password");
-    // Exactly the registry's shape: it decodes under that tag's schema, whose fields are these.
-    assert.equal(Schema.is(AuthEvents.UserSignedInEvent)({ _tag: event._tag, userId, strategy }), true);
-    assert.deepEqual(Object.keys(AuthEvents.UserSignedInEvent.fields).sort(), [
-      "_tag",
-      "strategy",
-      "userId",
-    ]);
-  });
+  Then(
+    "those fields are present, shaped exactly as the registry declares for that tag",
+    function* () {
+      const [event] = yield* Ref.get((yield* getProbe("handler")).handled);
+      assert.ok(event !== undefined && event._tag === "auth.user.signedIn");
+      const { userId, strategy } = event;
+      assert.equal(userId, yield* userIdOf("alice"));
+      assert.equal(strategy, "password");
+      // Exactly the registry's shape: it decodes under that tag's schema, whose fields are these.
+      assert.equal(
+        Schema.is(AuthEvents.UserSignedInEvent)({ _tag: event._tag, userId, strategy }),
+        true,
+      );
+      assert.deepEqual(Object.keys(AuthEvents.UserSignedInEvent.fields).sort(), [
+        "_tag",
+        "strategy",
+        "userId",
+      ]);
+    },
+  );
 
   Given("an existing subscriber filtering only on {string}", function* (tag: string) {
     yield* subscribe("existing", tagNamed(tag));
@@ -583,7 +593,10 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.equal(sugar, "AuthEvents.on");
       const { alerts } = yield* World;
       // Both tags reached one consumer through one custom predicate; the unrelated event did not.
-      assert.deepEqual(yield* Ref.get(yield* alerts.get), ["auth.token.replay", "auth.session.reuse"]);
+      assert.deepEqual(yield* Ref.get(yield* alerts.get), [
+        "auth.token.replay",
+        "auth.session.reuse",
+      ]);
     },
   );
 
@@ -680,7 +693,10 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("the log entry identifies which subscription and which event triggered it", function* () {
     const [entry] = yield* errorLogsNamed("auth.event.observer.error");
     assert.ok(entry !== undefined);
-    assert.ok(entry.text.includes('"tag":"auth.token.replay"'), "the entry does not name the event");
+    assert.ok(
+      entry.text.includes('"tag":"auth.token.replay"'),
+      "the entry does not name the event",
+    );
     assert.ok(
       entry.text.includes('"subscription":"auth.token.replay"'),
       "the entry does not name the subscription",

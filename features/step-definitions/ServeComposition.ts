@@ -9,9 +9,7 @@ import * as Layer from "effect/Layer";
 // `AuthHttp.coreHandlers` serves core's session/account groups, whose CsrfProtection and
 // Authentication middleware are the host's to provide.
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(
-    Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests),
-  ),
+  Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
   Layer.provide(NodeCrypto.layer),
 );
 

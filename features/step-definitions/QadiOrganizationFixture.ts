@@ -84,7 +84,9 @@ export const organizationFixture = (probe: WalkProbe) => {
         Effect.gen(function* () {
           yield* Ref.update(probe.consulted, (seen) => [...seen, resourceId]);
           if (yield* Ref.get(probe.failing)) {
-            return yield* Effect.fail(new LookupDown({ reason: "organization-membership lookup is down" }));
+            return yield* Effect.fail(
+              new LookupDown({ reason: "organization-membership lookup is down" }),
+            );
           }
           return Option.fromNullishOr((yield* Ref.get(probe.parents))[resourceId]);
         }),

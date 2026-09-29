@@ -97,7 +97,10 @@ const FixtureCsrfLive = Csrf.CsrfProtectionLive.pipe(
 
 /** What composing the Invite plugin came to: the rules it registered, or why it was refused. */
 export type Composition =
-  | { readonly _tag: "Composed"; readonly rules: ReadonlyArray<{ readonly plugin: string; readonly group: string }> }
+  | {
+      readonly _tag: "Composed";
+      readonly rules: ReadonlyArray<{ readonly plugin: string; readonly group: string }>;
+    }
   | { readonly _tag: "Rejected"; readonly plugin: string; readonly group: string };
 
 export const composeInvite = (group: string) =>
@@ -217,10 +220,14 @@ export const naiveLimiter = (limit: number) => {
     Effect.gen(function* () {
       const seen = yield* Ref.get(count);
       yield* Effect.yieldNow;
-      if (seen >= limit) return yield* new RateLimiter.RateLimitExceeded({ retryAfterMillis: 1000 });
+      if (seen >= limit)
+        return yield* new RateLimiter.RateLimitExceeded({ retryAfterMillis: 1000 });
       yield* Ref.set(count, seen + 1);
     });
-  return { limiter: RateLimiter.RateLimiter.of({ consume }), primeTo: (n: number) => Ref.set(count, n) };
+  return {
+    limiter: RateLimiter.RateLimiter.of({ consume }),
+    primeTo: (n: number) => Ref.set(count, n),
+  };
 };
 
 /** Counts every `consume` and records its key, delegating to nothing (a limiter that only listens). */
@@ -310,7 +317,10 @@ export const getCount = Effect.fn("features.rateLimiting.getCount")(function* (n
   return found;
 });
 
-export const setCount = Effect.fn("features.rateLimiting.setCount")(function* (name: string, value: number) {
+export const setCount = Effect.fn("features.rateLimiting.setCount")(function* (
+  name: string,
+  value: number,
+) {
   const { counts } = yield* World;
   yield* Ref.update(counts, (existing) => ({ ...existing, [name]: value }));
 });
@@ -333,7 +343,9 @@ export const durationOf = (text: string) => {
   const match = /^(\d+) (second|seconds|minute|minutes)$/.exec(text);
   if (match === null) throw new Error(`not a duration the scenarios use: "${text}"`);
   const amount = Number(match[1]);
-  return match[2]?.startsWith("minute") === true ? Duration.minutes(amount) : Duration.seconds(amount);
+  return match[2]?.startsWith("minute") === true
+    ? Duration.minutes(amount)
+    : Duration.seconds(amount);
 };
 
 /** A reader a Given stored, or a defect naming it: a Then that runs before its Given is a broken scenario. */
@@ -364,10 +376,7 @@ export const buildLimiter = Effect.fn("features.rateLimiting.buildLimiter")(func
 ) {
   const { host, limiter } = yield* World;
   const context = yield* Layer.buildWithScope(
-    RateLimiter.layer.pipe(
-      Layer.provide(store),
-      Layer.provide(RateLimiter.config(policy ?? {})),
-    ),
+    RateLimiter.layer.pipe(Layer.provide(store), Layer.provide(RateLimiter.config(policy ?? {}))),
     host.scope,
   );
   const built = Context.get(context, RateLimiter.RateLimiter);
@@ -400,9 +409,9 @@ export const consume = Effect.fn("features.rateLimiting.consume")(function* (key
 
 /** A `consume` through `limiter` with an explicit config, without touching the recorded results — for races and controls. */
 export const consumeOn = (limiter: RateLimiter.RateLimiterShape, config: PortConfig) =>
-  Effect.exit(limiter.consume({ key: config.key, limit: config.limit, window: config.window })).pipe(
-    Effect.map(asResult),
-  );
+  Effect.exit(
+    limiter.consume({ key: config.key, limit: config.limit, window: config.window }),
+  ).pipe(Effect.map(asResult));
 
 export const results = Effect.gen(function* () {
   const world = yield* World;
@@ -419,7 +428,10 @@ export const failureNamed = (name: string) => {
 
 const emailFor = (name: string) => (name.includes("@") ? name : `${name}@example.com`);
 
-export const post = Effect.fn("features.rateLimiting.post")(function* (path: string, body: unknown) {
+export const post = Effect.fn("features.rateLimiting.post")(function* (
+  path: string,
+  body: unknown,
+) {
   const { host, statuses, bodies } = yield* World;
   const response = yield* host.dispatch(yield* jsonPost(path, body));
   const parsed: unknown = yield* Effect.promise(() => response.json().catch(() => undefined));

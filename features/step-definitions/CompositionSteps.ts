@@ -62,28 +62,25 @@ interface Outcome {
 }
 
 const tuple = cell("tuple", (value): value is string => typeof value === "string");
-const outcome = cell(
-  "outcome",
-  (value): value is Outcome => isObject(value) && "kind" in value,
-);
+const outcome = cell("outcome", (value): value is Outcome => isObject(value) && "kind" in value);
 const baseline = cell(
   "baseline",
   (value): value is Composition => isObject(value) && "groupIds" in value,
 );
-const statuses = cell(
-  "statuses",
-  (value): value is ReadonlyArray<number> => Array.isArray(value),
-);
+const statuses = cell("statuses", (value): value is ReadonlyArray<number> => Array.isArray(value));
 const migrationRun = cell(
   "migrationRun",
-  (value): value is { readonly core: ReadonlyArray<string>; readonly plugin: ReadonlyArray<string> } =>
+  (
+    value,
+  ): value is { readonly core: ReadonlyArray<string>; readonly plugin: ReadonlyArray<string> } =>
     isObject(value) && "core" in value && "plugin" in value,
 );
 
 const cycle = cell("cycle", (value): value is ReadonlyArray<string> => Array.isArray(value));
 
 const thrownOf = (error: unknown) => ({
-  tag: isObject(error) && "_tag" in error && typeof error._tag === "string" ? error._tag : "unknown",
+  tag:
+    isObject(error) && "_tag" in error && typeof error._tag === "string" ? error._tag : "unknown",
   message: error instanceof Error ? error.message : String(error),
 });
 
@@ -96,7 +93,8 @@ const compose = (kind: string, run: () => Outcome): Outcome => {
 };
 
 const failureOf = (cause: unknown) => ({
-  tag: isObject(cause) && "_tag" in cause && typeof cause._tag === "string" ? cause._tag : "unknown",
+  tag:
+    isObject(cause) && "_tag" in cause && typeof cause._tag === "string" ? cause._tag : "unknown",
   text:
     isObject(cause) && "message" in cause && typeof cause.message === "string"
       ? cause.message
@@ -185,7 +183,9 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.deepEqual(products, ["api", "layer", "migrations", "manifest"]);
       for (const product of products) assert.ok(composition.keys.includes(product), product);
       // Core's own groups ride along in `api` (MW-002): "Core" is a seed, not a plugin.
-      assert.ok(composition.groupIds.includes("session") && composition.groupIds.includes("account"));
+      assert.ok(
+        composition.groupIds.includes("session") && composition.groupIds.includes("account"),
+      );
       assert.ok(composition.groupIds.includes("password"));
     },
   );
@@ -194,7 +194,9 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     const before = describeComposition(Auth.make([PasswordFixture]));
     yield* put(baseline, before);
     // Before: the added plugin's route does not exist.
-    const handler = HttpRouter.toWebHandler(TestAuth.layer(Auth.make([PasswordFixture]), services)).handler;
+    const handler = HttpRouter.toWebHandler(
+      TestAuth.layer(Auth.make([PasswordFixture]), services),
+    ).handler;
     yield* put(statuses, [yield* getStatus(handler, probePath("passkey"))]);
   });
 
@@ -228,13 +230,10 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   // ---- BEH-EA-010 ----
 
-  Given(
-    "a plugin tuple containing two plugins both declaring id {string}",
-    function* (id: string) {
-      assert.equal(id, "invite");
-      yield* put(tuple, "duplicate-id");
-    },
-  );
+  Given("a plugin tuple containing two plugins both declaring id {string}", function* (id: string) {
+    assert.equal(id, "invite");
+    yield* put(tuple, "duplicate-id");
+  });
 
   Then("composition is rejected", function* () {
     const result = yield* take(outcome);
@@ -261,7 +260,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the rejection narrows the tuple's type to a literal string naming {string} as the duplicated id",
     function* (id: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(duplicateIdDiagnostic.awthaq, `plugin id "${id}" appears more than once`);
     },
   );
@@ -296,7 +295,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the rejection names {string} as the missing dependency of {string}",
     function* (dependency: string, dependent: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(
         missingDepDiagnostic.awthaq,
         `plugin "${TwoFactorFixture.id}" depends on plugin "${PasswordFixture.id}", which is not in the list`,
@@ -325,11 +324,14 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the rejection is a literal string naming both {string} and {string}",
     function* (dependency: string, dependent: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       const message = missingDepDiagnostic.awthaq;
       assert.equal(typeof message, "string");
       assert.ok(message.includes(`"${dependency.toLowerCase()}"`), message);
-      assert.ok(message.includes(`"${dependent.charAt(0).toLowerCase()}${dependent.slice(1)}"`), message);
+      assert.ok(
+        message.includes(`"${dependent.charAt(0).toLowerCase()}${dependent.slice(1)}"`),
+        message,
+      );
     },
   );
 
@@ -350,7 +352,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the rejection names {string} as a plugin that must be listed before {string}",
     function* (dependency: string, dependent: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(dependency, "Password");
       assert.equal(dependent, "TwoFactor");
       assert.equal(
@@ -401,7 +403,10 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { failure } = yield* take(outcome);
     assert.ok(failure !== undefined);
     assert.equal(failure.tag, tag);
-    assert.ok(failure.text.includes('"roles"') && failure.text.includes('"organization"'), failure.text);
+    assert.ok(
+      failure.text.includes('"roles"') && failure.text.includes('"organization"'),
+      failure.text,
+    );
   });
 
   // ---- BEH-EA-013 ----
@@ -421,24 +426,19 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
       const groupIds = Object.keys(built.api.groups).filter(
         (id) => id !== "session" && id !== "account",
       );
-      const answered = yield* Effect.forEach(groupIds, (id) =>
-        getStatus(handler, probePath(id)),
-      );
+      const answered = yield* Effect.forEach(groupIds, (id) => getStatus(handler, probePath(id)));
       yield* put(statuses, answered);
       yield* put(outcome, { kind: "served", composition: describeComposition(built) });
     },
   );
 
-  Then(
-    "no group in {string} lacks a handler service in {string}'s {string}",
-    function* () {
-      const { composition } = yield* take(outcome);
-      assert.ok(composition !== undefined);
-      // Every plugin group has an answering handler: none was left unhandled.
-      assert.deepEqual(yield* take(statuses), [200, 200]);
-      assertTypeGate("api-layer-consistency", GATES, ["everyGroupHasAHandler", "= true"]);
-    },
-  );
+  Then("no group in {string} lacks a handler service in {string}'s {string}", function* () {
+    const { composition } = yield* take(outcome);
+    assert.ok(composition !== undefined);
+    // Every plugin group has an answering handler: none was left unhandled.
+    assert.deepEqual(yield* take(statuses), [200, 200]);
+    assertTypeGate("api-layer-consistency", GATES, ["everyGroupHasAHandler", "= true"]);
+  });
 
   When(
     "{string}'s {string} is compared against {string}'s groups",
@@ -469,7 +469,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "{string} produced by {string} with unprovided ports {string} and {string}",
     function* (_layer: string, _make: string, first: string, second: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.deepEqual([first, second], ["Mailer", "PasswordHasher"]);
     },
   );
@@ -477,7 +477,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "the application calls {string} on {string} without providing those ports",
     function* (launch: string, _layer: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(launch, "Layer.launch");
     },
   );
@@ -491,14 +491,11 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     ]);
   });
 
-  Then(
-    "the diagnostic lists {string} and {string} as unsatisfied requirements",
-    function* () {
+  Then("the diagnostic lists {string} and {string} as unsatisfied requirements", function* () {
     yield* Effect.void; // an assertion-only step: nothing to await
-      // `requiresExactlyBothPorts` is an exact-set check: the layer's RIn is Mailer | PasswordHasher.
-      assertTypeGate("launch-needs-ports", GATES, ["requiresExactlyBothPorts", "= true"]);
-    },
-  );
+    // `requiresExactlyBothPorts` is an exact-set check: the layer's RIn is Mailer | PasswordHasher.
+    assertTypeGate("launch-needs-ports", GATES, ["requiresExactlyBothPorts", "= true"]);
+  });
 
   Given(
     "an application that provides {string} to {string} and compiles successfully",
@@ -513,17 +510,17 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  When(
-    "the {string} line is removed from the application's wiring",
-    function* (_line: string) {
-      yield* put(tuple, "launch-without-mailer");
-    },
-  );
+  When("the {string} line is removed from the application's wiring", function* (_line: string) {
+    yield* put(tuple, "launch-without-mailer");
+  });
 
   Then("{string} fails to type-check", function* (launch: string) {
     yield* Effect.void; // an assertion-only step: nothing to await
     assert.equal(launch, "Layer.launch");
-    assertTypeGate("launch-names-mailer", GATES, ["@ts-expect-error", "Layer.launch(withoutMailer())"]);
+    assertTypeGate("launch-names-mailer", GATES, [
+      "@ts-expect-error",
+      "Layer.launch(withoutMailer())",
+    ]);
   });
 
   Then("the diagnostic names {string} as the unsatisfied requirement", function* (port: string) {
@@ -540,29 +537,29 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  When(
-    "the application calls {string} without providing that port",
-    function* (launch: string) {
+  When("the application calls {string} without providing that port", function* (launch: string) {
     yield* Effect.void; // an assertion-only step: nothing to await
-      assert.equal(launch, "Layer.launch");
-    },
-  );
+    assert.equal(launch, "Layer.launch");
+  });
 
   Then(
     "the diagnostic is Effect's ordinary {string} Layer diagnostic naming the unsatisfied service",
     function* (phrase: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(phrase, "is not assignable to");
       // The rejection comes from the unannotated-`never` assignment tsc reports itself, over a
       // requirement set (`Mailer | PasswordHasher`) it names.
-      assertTypeGate("launch-needs-ports", GATES, ["@ts-expect-error", "Mailer and PasswordHasher"]);
+      assertTypeGate("launch-needs-ports", GATES, [
+        "@ts-expect-error",
+        "Mailer and PasswordHasher",
+      ]);
     },
   );
 
   Then(
     "the diagnostic is not one of {string}'s curated duplicate-id, missing-dependency, or slot-conflict strings",
     function* (make: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(make, "Auth.make");
       // `Validate` has nothing to say about a missing port: it resolves to the tuple itself.
       assertTypeGate("port-diagnostic-is-effects-own", GATES, ["awthaq: string", "? false"]);
@@ -574,15 +571,18 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a plugin {string} declared with id {string} whose contract adds an {string} named {string}",
     function* (label: string, id: string, kind: string, group: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-      assert.deepEqual([label, id, kind, group], ["Invite", "acme.invite", "HttpApiGroup", "invitations"]);
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual(
+        [label, id, kind, group],
+        ["Invite", "acme.invite", "HttpApiGroup", "invitations"],
+      );
     },
   );
 
   Given(
     "a plugin {string} whose contract names a group outside its own namespace, defined in isolation from any other plugin",
     function* (label: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(label, "Invite");
     },
   );
@@ -603,18 +603,23 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "{string} can never be expressed as a value that reaches {string}",
     function* (_plugin: string, make: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(make, "Auth.make");
       // The rejected class definition is the only place the plugin could be written; the gate
       // is a bare class definition with no `Auth.make` call to reach.
-      assertTypeGate("contract-group-outside-namespace", GATES, ["AuthPlugin.Service"], ["Auth.make"]);
+      assertTypeGate(
+        "contract-group-outside-namespace",
+        GATES,
+        ["AuthPlugin.Service"],
+        ["Auth.make"],
+      );
     },
   );
 
   Then(
     "the class definition fails to type-check without composing {string} with any other plugin",
     function* (_plugin: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assertTypeGate(
         "contract-group-outside-namespace",
         GATES,
@@ -627,9 +632,14 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the failure occurs earlier than any {string}-site check over a composed tuple \\(duplicate id, missing dependency, slot conflict\\)",
     function* (make: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(make, "Auth.make");
-      assertTypeGate("contract-group-outside-namespace", GATES, ["AuthPlugin.Service"], ["Auth.make"]);
+      assertTypeGate(
+        "contract-group-outside-namespace",
+        GATES,
+        ["AuthPlugin.Service"],
+        ["Auth.make"],
+      );
     },
   );
 
@@ -638,8 +648,15 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a composed application of core plugins {string}, {string}, {string} and installed plugins {string} and {string} whose {string} graph is acyclic",
     function* (...names: ReadonlyArray<string>) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-      assert.deepEqual(names, ["Users", "Accounts", "Sessions", "Password", "Sessions2FA", "dependsOn"]);
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual(names, [
+        "Users",
+        "Accounts",
+        "Sessions",
+        "Password",
+        "Sessions2FA",
+        "dependsOn",
+      ]);
     },
   );
 
@@ -650,7 +667,10 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* put(outcome, {
       kind: "linked",
       composition: describeComposition(built),
-      built: ran.tables.includes("users") && ran.tables.includes("accounts") && ran.tables.includes("sessions"),
+      built:
+        ran.tables.includes("users") &&
+        ran.tables.includes("accounts") &&
+        ran.tables.includes("sessions"),
     });
     yield* put(migrationRun, {
       core: ran.coreRows.map((row) => row.name),
@@ -673,12 +693,15 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
-  Then("plugin migrations follow the {string} graph's topological order", function* (_graph: string) {
-    const { plugin } = yield* take(migrationRun);
-    const at = (id: string) => plugin.findIndex((name) => name.includes(`_${id}_`));
-    assert.ok(at("password") >= 0 && at("sessions2fa") >= 0);
-    assert.ok(at("password") < at("sessions2fa"), plugin.join(", "));
-  });
+  Then(
+    "plugin migrations follow the {string} graph's topological order",
+    function* (_graph: string) {
+      const { plugin } = yield* take(migrationRun);
+      const at = (id: string) => plugin.findIndex((name) => name.includes(`_${id}_`));
+      assert.ok(at("password") >= 0 && at("sessions2fa") >= 0);
+      assert.ok(at("password") < at("sessions2fa"), plugin.join(", "));
+    },
+  );
 
   Then("every migration key is rewritten {string}", function* (pattern: string) {
     assert.equal(pattern, "NNNN_<plugin>_<name>");
@@ -693,7 +716,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a plugin tuple whose {string} declarations form a cycle {string} depends on {string}, {string} depends on {string}, {string} depends on {string}",
     function* (field: string, ...edges: ReadonlyArray<string>) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(field, "dependsOn");
       assert.deepEqual(edges, ["A", "B", "B", "C", "C", "A"]);
     },
@@ -733,4 +756,3 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
 type FakeA = ReturnType<typeof fakePlugin<"A">>;
 type FakeB = ReturnType<typeof fakePlugin<"B">>;
 type FakeC = ReturnType<typeof fakePlugin<"C">>;
-

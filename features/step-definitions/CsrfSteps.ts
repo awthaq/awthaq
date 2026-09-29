@@ -54,7 +54,9 @@ const validPair = Effect.gen(function* () {
 });
 
 const middlewareKeys = (group: {
-  readonly endpoints: Readonly<Record<string, { readonly middlewares: ReadonlySet<{ readonly key: string }> }>>;
+  readonly endpoints: Readonly<
+    Record<string, { readonly middlewares: ReadonlySet<{ readonly key: string }> }>
+  >;
 }) =>
   Object.values(group.endpoints).flatMap((endpoint) =>
     [...endpoint.middlewares].map((middleware) => middleware.key),
@@ -69,14 +71,11 @@ const isRejected = (observed: Observation) =>
 export const csrfSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- REQ-EA-204..206: Sec-Fetch-Site is the primary signal ----
 
-  Given(
-    "an unsafe {string} request carrying {string}",
-    function* (method: string, header: string) {
-      yield* arrange({ method });
-      yield* validPair;
-      yield* arrange({ header: parseHeader(header) });
-    },
-  );
+  Given("an unsafe {string} request carrying {string}", function* (method: string, header: string) {
+    yield* arrange({ method });
+    yield* validPair;
+    yield* arrange({ header: parseHeader(header) });
+  });
 
   When("{string} evaluates the request", function* (middleware: string) {
     assert.equal(middleware, "CsrfProtection");
@@ -91,11 +90,17 @@ export const csrfSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("the request is rejected", function* () {
     const observed = yield* lastObservation();
-    assert.ok(isRejected(observed), `expected a CsrfRejected 403, got ${observed.status} ${observed.body}`);
+    assert.ok(
+      isRejected(observed),
+      `expected a CsrfRejected 403, got ${observed.status} ${observed.body}`,
+    );
     const request = yield* pendingRequest();
     // When the request had no site signal to decide on, the rejection is the Origin comparison's:
     // it must actually have looked at the header.
-    if (request.headers["sec-fetch-site"] === undefined && request.headers["origin"] !== undefined) {
+    if (
+      request.headers["sec-fetch-site"] === undefined &&
+      request.headers["origin"] !== undefined
+    ) {
       assert.deepEqual(observed.originChecks, [request.headers["origin"]]);
     }
   });

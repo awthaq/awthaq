@@ -109,7 +109,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
   Given(
     "a creation request for a {string} that includes an {string} field chosen by the caller",
     function* (name: string, field: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.deepEqual([name, field], ["User", "id"]);
     },
   );
@@ -144,7 +144,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
   Given(
     "an {string} entity whose {string} field is declared Model.Sensitive",
     function* (name: string, field: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(name, "Account");
       // Sensitive: a stored column of the database variant, absent from every JSON variant.
       assert.ok(field in M.Account.fields);
@@ -191,7 +191,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
   Given(
     "a handler that returns an {string} entity value directly as its response",
     function* (name: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(name, "Account");
     },
   );
@@ -329,7 +329,7 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
   Given(
     "a {string} repository built with SqlModel.makeRepository against the ambient SqlClient",
     function* (name: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
+      yield* Effect.void; // an assertion-only step: nothing to await
       assert.equal(name, "Users");
       assert.match(source("../../packages/sql/src/Repositories.ts"), /SqlModel\.makeRepository\(/);
     },

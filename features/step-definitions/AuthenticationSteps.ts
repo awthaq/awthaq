@@ -124,10 +124,13 @@ export const authenticationSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
-  Given("a signed-in user {string} with a live, unexpired session cookie", function* (name: string) {
-    const actor = yield* signIn(name);
-    yield* arrange({ cookie: actor.cookie });
-  });
+  Given(
+    "a signed-in user {string} with a live, unexpired session cookie",
+    function* (name: string) {
+      const actor = yield* signIn(name);
+      yield* arrange({ cookie: actor.cookie });
+    },
+  );
 
   Given(
     "the {string} middleware's security record declares {string} before {string}",
@@ -201,7 +204,10 @@ export const authenticationSteps = defineSteps<World>(({ Given, When, Then }) =>
     "the bearer handler is not consulted because the cookie handler already succeeded",
     function* () {
       const observed = yield* lastObservation();
-      assert.ok(!observed.attempts.includes("bearer"), `attempted: ${observed.attempts.join(", ")}`);
+      assert.ok(
+        !observed.attempts.includes("bearer"),
+        `attempted: ${observed.attempts.join(", ")}`,
+      );
     },
   );
 
@@ -243,7 +249,10 @@ export const authenticationSteps = defineSteps<World>(({ Given, When, Then }) =>
       const actor = yield* getActor(name);
       const viaBearer = yield* lastObservation();
       const viaCookie = yield* send("/app/who", { cookie: actor.cookie });
-      assert.ok(sameAnswer(viaBearer, viaCookie), "bearer and cookie must yield the same Principal");
+      assert.ok(
+        sameAnswer(viaBearer, viaCookie),
+        "bearer and cookie must yield the same Principal",
+      );
       assert.deepEqual(viaCookie.resolvedBy, ["cookie"]);
     },
   );
@@ -397,16 +406,13 @@ export const authenticationSteps = defineSteps<World>(({ Given, When, Then }) =>
     yield* setOutcome("principal", yield* resolveSessionPrincipal(actor.token));
   });
 
-  Then(
-    "a {string} value is produced for {string}",
-    function* (_kind: string, name: string) {
-      const actor = yield* getActor(name);
-      const principal = yield* getOutcome("principal");
-      assert.ok(Schema.is(Api.Principal)(principal), "must be a member of the Principal union");
-      assert.equal(principal._tag, "User");
-      assert.equal(principal.ref.id, actor.userId);
-    },
-  );
+  Then("a {string} value is produced for {string}", function* (_kind: string, name: string) {
+    const actor = yield* getActor(name);
+    const principal = yield* getOutcome("principal");
+    assert.ok(Schema.is(Api.Principal)(principal), "must be a member of the Principal union");
+    assert.equal(principal._tag, "User");
+    assert.equal(principal.ref.id, actor.userId);
+  });
 
   Given("a resolved bearer credential that identifies a service caller", function* () {
     yield* setOutcome("machine", yield* mintMachineCredentials());
@@ -464,14 +470,11 @@ export const authenticationSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
-  When(
-    "{string}'s handler runs and reads {string}",
-    function* (_name: string, service: string) {
-      assert.equal(service, "CurrentPrincipal");
-      const pending = yield* pendingRequest();
-      yield* send(String(yield* getOutcome("path")), pending);
-    },
-  );
+  When("{string}'s handler runs and reads {string}", function* (_name: string, service: string) {
+    assert.equal(service, "CurrentPrincipal");
+    const pending = yield* pendingRequest();
+    yield* send(String(yield* getOutcome("path")), pending);
+  });
 
   Then(
     "the handler receives {string}'s Principal via an ordinary service read, with no second mechanism involved",
@@ -484,29 +487,32 @@ export const authenticationSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
-  Given("a group that carries neither {string} nor {string}", function* (first: string, second: string) {
-    const carried = middlewaresOf("open");
-    assert.ok(!carried.includes(first) && !carried.includes(second), `carries: ${carried.join()}`);
-    // A live session exists, to show that even a valid credential supplies nothing here.
-    const actor = yield* signIn("open-group-visitor");
-    yield* arrange({ cookie: actor.cookie });
-  });
+  Given(
+    "a group that carries neither {string} nor {string}",
+    function* (first: string, second: string) {
+      const carried = middlewaresOf("open");
+      assert.ok(
+        !carried.includes(first) && !carried.includes(second),
+        `carries: ${carried.join()}`,
+      );
+      // A live session exists, to show that even a valid credential supplies nothing here.
+      const actor = yield* signIn("open-group-visitor");
+      yield* arrange({ cookie: actor.cookie });
+    },
+  );
 
   When("a handler in that group is built", function* () {
     const pending = yield* pendingRequest();
     yield* send("/open/who", pending);
   });
 
-  Then(
-    "{string} is not present in that handler's available context",
-    function* (service: string) {
-      assert.equal(service, "CurrentPrincipal");
-      const observed = yield* lastObservation();
-      assert.equal(observed.handlerRuns, 1);
-      assert.equal(observed.principalTag, "absent");
-      assert.deepEqual(observed.attempts, [], "no authentication middleware ran for this group");
-    },
-  );
+  Then("{string} is not present in that handler's available context", function* (service: string) {
+    assert.equal(service, "CurrentPrincipal");
+    const observed = yield* lastObservation();
+    assert.equal(observed.handlerRuns, 1);
+    assert.equal(observed.principalTag, "absent");
+    assert.deepEqual(observed.attempts, [], "no authentication middleware ran for this group");
+  });
 
   // ---- REQ-EA-199..201: different groups, different schemes ----
 
@@ -525,20 +531,17 @@ export const authenticationSteps = defineSteps<World>(({ Given, When, Then }) =>
     },
   );
 
-  Then(
-    "the request resolves to an {string} carrying the key's scopes",
-    function* (kind: string) {
-      assert.equal(kind, "ApiKeyPrincipal");
-      const machine = yield* getOutcome("machine");
-      assert.ok(isMachineCredentials(machine));
-      const observed = yield* lastObservation();
-      assert.equal(observed.status, 200);
-      assert.equal(observed.principalTag, "ApiKey");
-      assert.equal(observed.id, machine.keyId);
-      assert.deepEqual(observed.scopes, ["reports:read"]);
-      assert.deepEqual(observed.resolvedBy, ["apiKey"]);
-    },
-  );
+  Then("the request resolves to an {string} carrying the key's scopes", function* (kind: string) {
+    assert.equal(kind, "ApiKeyPrincipal");
+    const machine = yield* getOutcome("machine");
+    assert.ok(isMachineCredentials(machine));
+    const observed = yield* lastObservation();
+    assert.equal(observed.status, 200);
+    assert.equal(observed.principalTag, "ApiKey");
+    assert.equal(observed.id, machine.keyId);
+    assert.deepEqual(observed.scopes, ["reports:read"]);
+    assert.deepEqual(observed.resolvedBy, ["apiKey"]);
+  });
 
   When(
     "a signed-in user {string} requests an endpoint in the {string} group",
@@ -561,7 +564,12 @@ export const authenticationSteps = defineSteps<World>(({ Given, When, Then }) =>
 
   Given(
     "a composed contract containing group {string} under {string} and group {string} under {string}",
-    function* (machineGroup: string, machineMiddleware: string, appGroup: string, appMiddleware: string) {
+    function* (
+      machineGroup: string,
+      machineMiddleware: string,
+      appGroup: string,
+      appMiddleware: string,
+    ) {
       assert.ok(middlewaresOf(groupKey(machineGroup)).includes(machineMiddleware));
       assert.ok(middlewaresOf(groupKey(appGroup)).includes(appMiddleware));
       yield* setOutcome("machine", yield* mintMachineCredentials());
