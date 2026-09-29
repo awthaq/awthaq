@@ -4,17 +4,17 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-29 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) |
+> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-09-29): implemented as `@awthaq/saml` over the `XmlSignature` port (SFS-003): the port is generic XML-DSig (the SAML assertion reader is the plugin's), the request is bound to the browser by a state cookie, assertion ids are one-time, and linking by email is a per-connection flag |
 ---
 
-> This file describes planned behavior. No code implementing it exists yet: `@awthaq/saml` is specified, not built ([MOD-EA-010](../models/10-saml.md)). It is written first on purpose — SAML's failure modes are silent signature bypasses, so the checks and their order are fixed before an implementation can drift.
+> `@awthaq/saml` implements this ([MOD-EA-010](../models/10-saml.md)). It was written first on purpose — SAML's failure modes are silent signature bypasses, so the checks and their order were fixed before an implementation could drift — and every rule below has a negative test, including the XML signature-wrapping (XSW) corpus from the SAML security literature (`packages/saml/test/XmlSignatureNode.test.ts`). The signature step is the `XmlSignature` port (`@awthaq/ports`), implemented over the maintained `xml-crypto` library (Node adapter in `@awthaq/saml`); the plugin reads the assertion ONLY from the signed bytes that port returns.
 
-The chain runs on `POST /auth/saml/acs` and is ordered **cheap and structural checks before cryptography**, so an attacker cannot make the server spend signature-verification CPU on a payload that fails a size or shape rule. Every failure surfaces as one uniform `SamlAssertionRejected`; the specific reason is logged and published as an `AuthEvent`, never returned (no validation oracle). Steps 233–235 and 240 are also the mitigation list for the two classic SAML attack classes: XML canonicalization and signature-wrapping (XSW).
+The chain runs on `POST /auth/saml/acs` and is ordered **cheap and structural checks before cryptography**, so an attacker cannot make the server spend signature-verification CPU on a payload that fails a size or shape rule. Every failure surfaces as one uniform `SamlAssertionRejected`; the specific reason is logged and published as `auth.user.signInFailed` (reason `assertionInvalid`), never returned (no validation oracle). BEH-EA-238, 239 and 240 are also the mitigation list for the two classic SAML attack classes: XML canonicalization and signature-wrapping (XSW).
 
 ## BEH-EA-238: The SAML response is size-capped before it is parsed
 
@@ -32,13 +32,16 @@ _Previous: [BEH-EA-237](28-tenancy.md#beh-ea-237-a-suspended-organization-refuse
 ## BEH-EA-239: The document is parsed with DTDs and external entities disabled, and carries exactly one assertion
 
 ```text
-REQUIREMENT: Parsing MUST occur inside `SamlSigner.verifyResponse` with DTD
+REQUIREMENT: Parsing MUST occur inside `XmlSignature.verify` with DTD
              processing and external entity resolution disabled (a document with
-             a DOCTYPE is rejected outright: no XXE, no billion-laughs). The
-             response MUST contain exactly one `Assertion` element; zero or more
-             than one MUST be rejected before any signature work (the
-             cardinality check that removes the ambiguity signature-wrapping
-             depends on).
+             a DOCTYPE is rejected outright: no XXE, no billion-laughs), and with
+             comments and processing instructions refused (a comment inside a
+             signed value is how a verifier and a reader come to disagree about a
+             NameID). The response MUST contain exactly one `Assertion` element
+             anywhere in the document; zero or more than one MUST be rejected
+             before any signature work (the cardinality check that removes the
+             ambiguity signature-wrapping depends on), and an
+             `EncryptedAssertion` MUST be refused.
 ```
 
 Signature wrapping works by presenting a *valid* signature over one element while the application consumes another; with exactly one assertion permitted there is no "another" to consume. Encrypted assertions are out of scope until a decryption port exists and are rejected.
@@ -48,20 +51,27 @@ _Previous: [BEH-EA-238](29-saml-sp.md#beh-ea-238-the-saml-response-is-size-cappe
 ## BEH-EA-240: The signature is verified over the element that is processed, with an algorithm allow-list
 
 ```text
-REQUIREMENT: `SamlSigner.verifyResponse` MUST verify an XML-DSig signature that
+REQUIREMENT: `XmlSignature.verify` MUST verify an XML-DSig signature that
              covers the Assertion (or the Response that contains exactly that
-             one Assertion) and MUST return only data extracted from the element
-             the verified signature covers — never from a re-query of the
-             document. The `Reference` URI MUST resolve to that element by ID.
-             Canonicalization is exclusive C14N, handled inside the port. The
-             signature and digest algorithms MUST be on an allow-list (RSA-SHA256
-             or stronger; SHA-1 refused). The signing certificate MUST be in the
-             connection's `IdpTrustSet` (matched by fingerprint) and inside its
-             `notBefore`/`notAfter` window, so an IdP rotating its key can trust
-             both certificates for an overlap.
+             one Assertion) and MUST return only the canonical bytes of the
+             element the verified signature covers — never a DOM of the input
+             and never a re-query of the document; the assertion is read from
+             those bytes alone. The `Reference` URI MUST be a same-document
+             `#ID` resolving to exactly one element (an ID that occurs twice in
+             the document is refused), and the Signature MUST be that element's
+             own child. Canonicalization is exclusive C14N, handled inside the
+             port; the only transforms are enveloped-signature and exclusive
+             C14N (XSLT and XPath are refused by name). The signature and digest
+             algorithms MUST be on an allow-list (RSA-SHA256 or SHA-512; SHA-1
+             and HMAC refused). The signing certificate MUST be in the
+             connection's trust set (matched by SHA-256 fingerprint) and inside
+             its `notBefore`/`notAfter` window, so an IdP rotating its key can
+             trust both certificates for an overlap; a certificate the document
+             names in its own `KeyInfo` MUST never be used to verify and, if it
+             is not pinned, refuses the document.
 ```
 
-This is the fused parse-and-verify contract ([MOD-EA-010](../models/10-saml.md), "The `SamlSigner` port"): no unverified intermediate DOM escapes, so the wrapping class is unrepresentable rather than merely tested for. No home-grown crypto — the port's implementation is a maintained XML-DSig library, audited before adoption.
+This is the fused parse-and-verify contract ([MOD-EA-010](../models/10-saml.md), "The `XmlSignature` port"): no unverified intermediate DOM escapes, so the wrapping class is unrepresentable rather than merely tested for. No home-grown crypto — the port's implementation is `xml-crypto`, a maintained XML-DSig library evaluated before adoption ([ADR-EA-023](../decisions/023-enterprise-federation-packages.md) Decision 3); the adapter's own contribution is the policy around it (allow-lists, pinning, structure, ID uniqueness) and a pruned algorithm registry inside the library.
 
 _Previous: [BEH-EA-239](29-saml-sp.md#beh-ea-239-the-document-is-parsed-with-dtds-and-external-entities-disabled-and-carries-exactly-one-assertion) | Next: [BEH-EA-241](29-saml-sp.md#beh-ea-241-the-issuer-must-be-the-connections-identity-provider)_
 
@@ -112,11 +122,19 @@ _Previous: [BEH-EA-242](29-saml-sp.md#beh-ea-242-audience-recipient-and-destinat
 ```text
 REQUIREMENT: SP-initiated login MUST reserve the AuthnRequest id in
              `Verification` (bound to the connection, with a short TTL) before
-             redirecting. The ACS MUST require `InResponseTo` to equal a live
-             reserved id for the same connection and MUST consume it exactly once;
-             an unknown, expired, already-consumed or other-connection id MUST be
-             rejected. Unsolicited (IdP-initiated) responses MUST be refused
-             unless a connection explicitly opts in.
+             redirecting, and MUST hand the browser the request's state in a
+             `__Host-saml-request` cookie (`SameSite=None`: the IdP's POST is
+             cross-site). The ACS MUST consume that state exactly once — the
+             connection and the trust set come from it, never from the
+             document — and MUST require the assertion's `InResponseTo` to equal
+             the id it reserved; an absent cookie (an unsolicited, IdP-initiated
+             response, or a login-CSRF attempt that posts an attacker's own
+             valid response into another browser), an unknown, expired,
+             already-consumed or other-connection id MUST be rejected.
+             Unsolicited responses are refused in this build. An assertion's own
+             `ID` MUST also be accepted once (reserved in `Verification` until it
+             could no longer pass the time window): a replay under a fresh
+             request id fails.
 ```
 
 The single-consume request id is the replay defense the assertion alone cannot provide: even a perfectly valid, unexpired assertion works once, for the login that asked for it.
@@ -132,8 +150,10 @@ REQUIREMENT: After every check above passes, the account MUST be resolved by
              uses ([INV-EA-015](../invariants.md#inv-ea-015-the-provider-subject-issuer-tuple-is-unique-per-account-and-the-oauth-state--pkce-verifier-is-single-use)).
              A first sign-in MAY create the user and link it; it MUST NOT link to
              an existing account merely because an attribute carries the same
-             email unless the deployment's explicit linking policy trusts that
-             connection. The sign-in MUST go through `Users.assertCanSignIn`
+             email unless the connection's explicit `trustsEmail` policy allows
+             it AND the local account's own address is already verified. The
+             sign-in acts as the connection's organization (the tenant) and
+             MUST go through `Users.assertCanSignIn`
              ([BEH-EA-46](06-domain-users-accounts.md)) before a session is
              minted.
 ```

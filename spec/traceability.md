@@ -52,7 +52,7 @@ One row per `spec/behaviors/NN-*.md` file. The planned module column names a pla
 | [26 CLI](behaviors/26-cli.md) | 201-208, 225-229 | `@awthaq/cli/src/Cli.ts` (and one module per command) |
 | [27 Admin and Impersonation](behaviors/27-admin-impersonation.md) | 209-224 | `@awthaq/admin/src/Admin.ts` (BEH-EA-209/210/211 also extend `@awthaq/core/src/Sessions.ts` and `@awthaq/server/src/Authentication.ts`) |
 | [28 Multi-Tenancy](behaviors/28-tenancy.md) | 225-232 | `@awthaq/ports/src/Tenant.ts`, `@awthaq/sql/src/TenantScope.ts`, `@awthaq/organization/src/Organization.ts` (`tenantMiddleware`) |
-| [29 SAML Service Provider](behaviors/29-saml-sp.md) | 233-240 | `@awthaq/saml/src/Saml.ts` (planned), `@awthaq/ports/src/SamlSigner.ts` (planned port) |
+| [29 SAML Service Provider](behaviors/29-saml-sp.md) | 238-245 | `@awthaq/saml/src/Saml.ts`, `@awthaq/saml/src/XmlSignatureNode.ts`, `@awthaq/ports/src/XmlSignature.ts` |
 | [30 SCIM Provisioning](behaviors/30-scim.md) | 241-248 | `@awthaq/scim/src/Scim.ts` |
 | [31 Outbound Webhooks](behaviors/31-webhooks.md) | 255-262 | `@awthaq/webhooks/src/Webhooks.ts` (and `WebhookDelivery.ts`, `WebhookSignature.ts`), `@awthaq/ports/src/OutboundUrl.ts` |
 

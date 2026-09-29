@@ -121,7 +121,7 @@ caveat.
 | Organization (core plugin) | Planned-Phase2 | P1 | E3 (provisional — see §3's open question) | [14-organization.md](14-organization.md) |
 | Admin / Impersonation (core plugin) | Planned-Phase2 | P2 | E4 (provisional — see §3's open question) | [15-admin-impersonation.md](15-admin-impersonation.md) |
 | SSO | Planned-Phase3 | P2 | E2 | [09-sso.md](09-sso.md) |
-| SAML | Scheduled (SP only; specified, not built) | P3 | E2 | [10-saml.md](10-saml.md) |
+| SAML | Implemented (SP only; `@awthaq/saml`) | P3 | E2 | [10-saml.md](10-saml.md) |
 | OIDC Provider | Planned-Phase3 | P3 | E2, E5 | [11-oidc-provider.md](11-oidc-provider.md) |
 | SCIM | Implemented (`@awthaq/scim`) | P4 | E5 | [12-scim.md](12-scim.md) |
 | Device Authorization | Planned-Phase3 | P4 | E4 | [13-device-authorization.md](13-device-authorization.md) |

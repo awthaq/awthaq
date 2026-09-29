@@ -41,3 +41,4 @@ export * as SqlTransaction from "./SqlTransaction.ts";
 export * as Tenant from "./Tenant.ts";
 export * as WebAuthn from "./WebAuthn.ts";
 export * as WebCrypto from "./WebCrypto.ts";
+export * as XmlSignature from "./XmlSignature.ts";

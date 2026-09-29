@@ -69,7 +69,8 @@
       "@awthaq/migrate-better-auth": ["./packages/migrate-better-auth/src/index.ts"],
       "@awthaq/migrate-firebase": ["./packages/migrate-firebase/src/index.ts"],
       "@awthaq/scim": ["./packages/scim/src/index.ts"],
-      "@awthaq/webhooks": ["./packages/webhooks/src/index.ts"]
+      "@awthaq/webhooks": ["./packages/webhooks/src/index.ts"],
+      "@awthaq/saml": ["./packages/saml/src/index.ts"]
     },
     "plugins": [
       {

@@ -338,6 +338,7 @@ Expiry is a read-time rejection, so expired rows stay until something deletes th
 | Organization | `@awthaq/organization` | Multi-tenant organizations, membership, roles |
 | Admin | `@awthaq/admin` | Impersonation, session force-stop, admin session listing |
 | SCIM | `@awthaq/scim` | Inbound SCIM 2.0 provisioning: directory sync of users and groups, deactivation ends sessions |
+| SAML | `@awthaq/saml` | SAML 2.0 service provider (SP only): SP-initiated login through an organization's own IdP, hardened XML-signature verification (`XmlSignature` port over `xml-crypto`) |
 | Webhooks | `@awthaq/webhooks` | Opt-in signed outbound webhooks over the event relay: per-endpoint filters, retry/backoff/dead-letter, SSRF-safe endpoints, admin API |
 | Passkey | `@awthaq/passkey` | WebAuthn registration and authentication |
 | Jwt | `@awthaq/jwt` | JWT issuance/verification for stateless callers |

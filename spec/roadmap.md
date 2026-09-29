@@ -122,4 +122,4 @@ Drawn from `archive/PRD.md` §4 (Non-goals). The initial product will not:
 - Be a general application plugin system.
 - Be an ORM or a mail provider.
 - Implement authorization — that is qadi's responsibility, not awthaq's (see `archive/PRD.md` §5, principle 7, and [ADR-EA-009](decisions/009-authorization-delegated-to-qadi.md)).
-- Implement every enterprise protocol in v1 (an OIDC provider and device authorization are M(3) roadmap items, not v1 scope — see `archive/PRD.md` §17, Phase 3). SAML (service provider only) and SCIM (inbound) are scheduled, not deferred: user status (done) → `@awthaq/scim` (done) → `@awthaq/saml` (specified) → the `Sso` dispatcher, per [ADR-EA-023](decisions/023-enterprise-federation-packages.md).
+- Implement every enterprise protocol in v1 (an OIDC provider and device authorization are M(3) roadmap items, not v1 scope — see `archive/PRD.md` §17, Phase 3). SAML (service provider only) and SCIM (inbound) are scheduled, not deferred: user status (done) → `@awthaq/scim` (done) → `@awthaq/saml` (done) → the `Sso` dispatcher, per [ADR-EA-023](decisions/023-enterprise-federation-packages.md).
