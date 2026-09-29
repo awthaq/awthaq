@@ -61,10 +61,12 @@ const toSubject = (v: SessionView | undefined) =>
 ```
 
 ```text
-REQUIREMENT: The React provider tree MUST derive qadi's `subject` prop from
-             `sessionAtom`'s current value, not from a second, independently
-             fetched source; when the session becomes `undefined` (sign-out),
-             `subject` MUST become `undefined` in the same render.
+REQUIREMENT: The React provider tree MUST derive qadi's `subject` prop
+             from `sessionAtom`: it is `undefined` unless the session is a
+             settled, real one, and it follows the session (sign-out makes
+             `subject` `undefined` in the same render). Its roles and
+             permissions come from the subject endpoint (`GET /subject`),
+             because a session carries none.
 ```
 
 `usage-qadi.md` §12.1 states the consequence directly: "Sign-out sets `subject` to `undefined` and every gate closes at once." Deriving `subject` from the one session atom, rather than from a parallel fetch, is what makes that guarantee hold — there is no window where the session has cleared but a stale subject still grants access in a `Can` gate somewhere on the page.

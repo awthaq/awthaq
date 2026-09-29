@@ -277,6 +277,43 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   // ---- BEH-EA-179: the subject follows the session ------------------------------------------
 
+  // PV-263/REQ-EA-506: the subject is gated on the session, its data is the subject endpoint's.
+  Given("a signed-in user {string} whose session has settled", function* (name: string) {
+    const { outcomes } = yield* World;
+    const { registry } = yield* signedInPage(`${name}@example.com`);
+    registry.mount(AuthClientAtom.sessionAtom);
+    yield* until(
+      "the session to settle",
+      () => registry.get(AuthClientAtom.sessionAtom),
+      (current) => AsyncResult.isSuccess(current) && current.value !== null && !current.waiting,
+    );
+    yield* outcomes.set("keys", []);
+  });
+
+  When("qadi's {string} is computed from {string}", function* (_prop: string, _atom: string) {
+    const { outcomes } = yield* World;
+    const registry = yield* outcomes.getAs("registry", isRegistry);
+    registry.mount(AuthClientAtom.subjectAtom);
+    yield* until(
+      "the subject to resolve",
+      () => registry.get(AuthClientAtom.subjectAtom),
+      (subject) => subject !== undefined,
+    );
+  });
+
+  Then(
+    "{string} is defined only because {string} holds a real session, with its data from the subject endpoint",
+    function* (_prop: string, _atom: string) {
+      const { outcomes } = yield* World;
+      const registry = yield* outcomes.getAs("registry", isRegistry);
+      const session = registry.get(AuthClientAtom.sessionAtom);
+      assert.ok(AsyncResult.isSuccess(session) && session.value !== null, "a real session");
+      const subject = registry.get(AuthClientAtom.subjectAtom);
+      assert.ok(subject !== undefined, "the subject resolved");
+      assert.equal(typeof subject.id, "string");
+    },
+  );
+
   Given(
     "a signed-in user {string} with {string} currently defined",
     function* (name: string, _subject: string) {

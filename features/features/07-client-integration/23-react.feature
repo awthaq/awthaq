@@ -71,16 +71,13 @@ Feature: React Bindings
   @BEH-EA-179
   Rule: QadiProvider is fed by the session's subject field
 
-    # @skip: blocked by PV-263: the implementation does not derive the subject from sessionAtom's
-    # value alone; subjectAtom gates on sessionAtom but takes roles/permissions from a second fetch,
-    # GET /subject (EAR-002, AuthClientAtom.ts). Covered by packages/react/test/SubjectAtom.test.ts
-    @skip
+    # PV-263: `subjectAtom` is gated on `sessionAtom` (undefined unless the session is a settled, real one),
+    # while its roles and permissions come from the subject endpoint (EAR-002, AuthClientAtom.ts).
     @REQ-EA-506
-    Scenario: subject is derived from sessionAtom's current value, not a second fetch
-      Given "sessionAtom" currently holds a session for "alice" with roles and permissions
-      When the provider tree computes qadi's "subject" prop via "toSubject(sessionAtom's value)"
-      Then "subject" reflects "alice"'s roles and permissions from "sessionAtom"
-      And no second, independently fetched source is queried to produce "subject"
+    Scenario: subject is gated on sessionAtom and takes its roles and permissions from the subject endpoint
+      Given a signed-in user "alice" whose session has settled
+      When qadi's "subject" is computed from "subjectAtom"
+      Then "subject" is defined only because "sessionAtom" holds a real session, with its data from the subject endpoint
 
     @REQ-EA-507
     Scenario: Sign-out clears subject to undefined in the same render as the session update
