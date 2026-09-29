@@ -123,15 +123,13 @@ Feature: Sessions
       Then a newly minted session replaces "s0"
       And session "s0" no longer verifies, its row tombstoned rather than left valid
 
-    # @skip: no changeEmail capability exists in any package (no changeEmail-shaped endpoint
-    # or Users operation), so there is nothing to perform; un-skip when one ships (SMS-008)
-    @skip
+    # Rewritten to what shipped (BEH-EA-053 as-shipped): the confirmation has no session of its own to rotate, so it ends every session of the account.
     @REQ-EA-686
-    Scenario: An email change issues a new session and tombstones the superseded row
+    Scenario: An email change ends the account's sessions, because its confirmation has no session to rotate
       Given a signed-in user "alice" with session "s0"
       When "alice" performs a "email change"
-      Then a newly minted session replaces "s0"
-      And session "s0" no longer verifies, its row tombstoned rather than left valid
+      Then session "s0" no longer verifies
+      And "alice" signs in afresh under the new address
 
   # BEH-EA-054 — spec/behaviors/07-sessions.md
   @BEH-EA-054
@@ -215,36 +213,28 @@ Feature: Sessions
   @BEH-EA-056
   Rule: Session-secret verification is a constant-time comparison over a fixed-length hash
 
-    # @skip: a constant-time-comparison mechanism claim with no externally observable outcome
-    # a request/response test can tell apart from an ordinary equality check; the observable
-    # half (a tampered secret is rejected, the stored digest is not a credential) is REQ-EA-139/140
-    # and packages/core/test/Sessions.test.ts "BEH-EA-050/056: a tampered secret is rejected"
-    @skip
+    # The mechanism has no request/response signature, so it is pinned at its two ends: Sessions.ts verifies only through SecretHash.equals, which is Hmac.constantTimeEqualString.
     @REQ-EA-157
     Scenario: Verifying a presented secret compares its hash against the stored hash using a constant-time check
       Given a session issued for "alice" with secret "s3cr3t"
       When the token is presented for verification
       Then "SHA-256(presented secret)" is compared against the stored hash using a constant-time equality check
 
-    # @skip: a timing-side-channel assertion is not deterministic in CI (same category as
-    # password's REQ-EA-306/309); the comparison is the shared Hmac primitive's constant-time
-    # equality, covered by packages/core/test/Sessions.test.ts
-    @skip
+    # Work, not wall-clock time: the comparator is fed array-likes that count every element read, so "does not short-circuit" is a deterministic count rather than a timing measurement.
     @REQ-EA-158
     Scenario: Verification timing does not vary with how many leading bytes of the hash match
       Given two presented secrets whose hashes share a different number of leading matching bytes against the stored hash
       When each is presented for verification
       Then the comparison does not short-circuit on the first mismatched byte
-      And the comparison time does not vary based on how many leading bytes matched
+      And the comparison does the same work however many leading bytes matched
 
-    # @skip: an internal-mechanism claim (the operands are fixed-length digests) with no
-    # externally observable outcome; the digests are asserted fixed-length hex in REQ-EA-138
-    @skip
+    # Observed through its consequence: a comparison over raw variable-length secrets would trip on a length mismatch, so any presented length is refused the same way.
     @REQ-EA-159
     Scenario: The comparison operates over fixed-length hashes regardless of the original secret's length or content
-      Given two sessions whose secrets differ in length and content
-      When each token is presented for verification
-      Then the comparison is performed over the fixed-length "SHA-256" digests of both operands, never over the variable-length secrets themselves
+      Given a signed-in user "alice"
+      When secrets of 1, 64 and 4096 characters are presented under "alice"'s session id
+      Then each is refused as unauthenticated, never as a server error
+      And the stored digest keeps its fixed 64-hex length, so the comparison is over digests and never over the presented secrets themselves
 
   # BEH-EA-258 — spec/behaviors/07-sessions.md; see also ADR-EA-021, ADR-EA-012
   @BEH-EA-258
@@ -293,12 +283,10 @@ Feature: Sessions
       When the principal of that session is resolved
       Then the default subject holds the methods "none", the authentication time, the level "aal1" and the restricted-factor flag "false"
 
-    # @skip: minting a principal JWT is the jwt plugin's behavior, outside this World's composition;
-    # covered by packages/jwt/test/Jwt.test.ts "carries amr and auth_time for a User principal that
-    # has them" and "omits amr and auth_time when the session recorded none"
-    @skip
+    # The principal comes from a real session that recorded the methods; the token is minted by the real @awthaq/jwt (JwtSigner in SessionAssuranceSteps).
     @REQ-EA-1000
     Scenario: A principal JWT carries amr and auth_time when the session recorded them
-      Given a session that recorded "pwd,otp,mfa"
-      When a principal token is minted for it
-      Then the token carries "amr" and "auth_time"
+      Given a signed-in user "alice"
+      And a session is issued for "alice" that recorded "pwd,otp,mfa"
+      When a principal token is minted for that session
+      Then the token carries "amr" and "auth_time" of that session

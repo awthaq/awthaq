@@ -8,6 +8,8 @@ import { Authentication } from "@awthaq/server";
 import { Sessions, Users } from "@awthaq/core";
 import { AuthorizedSubject } from "@awthaq/qadi";
 import { defineSteps } from "@effect-cucumber/vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   AccessDenied,
   AttributeResolveError,
@@ -311,6 +313,56 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
       }
     },
   );
+
+  // ---- REQ-EA-430: SubjectExtractor has no session-validity logic of its own ----
+
+  const extractorSource = () =>
+    readFileSync(
+      fileURLToPath(new URL("../../packages/qadi/src/SubjectExtractor.ts", import.meta.url)),
+      "utf8",
+    );
+
+  Given("a SubjectExtractor implementation", function* () {
+    yield* Effect.void;
+    assert.ok(extractorSource().includes("SubjectExtractorLive"));
+  });
+
+  When("its session-validity logic is inspected", function* () {
+    yield* Effect.void;
+  });
+
+  Then(
+    "it contains no hash-comparison or expiry check distinct from the one Authentication's middleware uses",
+    function* () {
+      yield* Effect.void;
+      // Code only: what the header comments say about the comparison is not the comparison.
+      const code = extractorSource()
+        .split("\n")
+        .filter((line) => !line.trimStart().startsWith("//") && !line.trimStart().startsWith("*"))
+        .join("\n");
+      for (const own of [
+        /timingSafeEqual/,
+        /Hmac/,
+        /secretHash/,
+        /createHash/,
+        /absoluteExpiresAt/,
+        /idleExpiresAt/,
+        /Date\.now/,
+        /Clock\./,
+      ]) {
+        assert.doesNotMatch(code, own, `SubjectExtractor.ts carries its own ${own}`);
+      }
+    },
+  );
+
+  Then("there is only one place a session-validity bug could be fixed, not two", function* () {
+    yield* Effect.void;
+    // Every credential kind the extractor reads goes through the one shared function.
+    const code = extractorSource();
+    const calls = code.match(/Authentication\.resolvePrincipal\(/g) ?? [];
+    assert.ok(calls.length >= 2, "the cookie and impersonation credentials both go through it");
+    assert.doesNotMatch(code, /sessions\.verify\(/);
+  });
 
   // ---- BEH-EA-154: RequirePermission reads the RequiredPermission annotation ----
 

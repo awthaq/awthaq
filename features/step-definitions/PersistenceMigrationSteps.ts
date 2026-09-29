@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { Admin } from "@awthaq/admin";
 import { ApiKey } from "@awthaq/api-key";
 import { Migration } from "@awthaq/cli";
-import { Auth, Migrations } from "@awthaq/core";
+import { Auth, Migrations, UserFields } from "@awthaq/core";
 import { Jwt } from "@awthaq/jwt";
 import { Organization } from "@awthaq/organization";
 import { Passkey } from "@awthaq/passkey";
@@ -22,6 +22,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -29,8 +30,10 @@ import { assertTypeGate, cell, isObject, put, take, type World } from "./Foundat
 import { MigOauth, MigPassword, migrateSqlite } from "./MigrationFixtures.ts";
 import { insertSession, insertUser, withDatabase } from "./PersistenceStratumWorld.ts";
 import { layerEvaluations, PasswordFixture } from "./PluginFixtures.ts";
+import { Profile, fieldKey } from "./UserFieldsFixture.ts";
 
 const GATES = "PersistenceTypeGates.ts";
+const GATES_PLUGIN = "PluginTypeGates.ts";
 
 const strings = cell("strings", (value): value is ReadonlyArray<string> => Array.isArray(value));
 const numbers = cell("numbers", (value): value is ReadonlyArray<number> => Array.isArray(value));
@@ -570,5 +573,114 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
       return yield* sql<{ readonly name: string }>`SELECT name FROM pragma_table_info(${table})`;
     }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" })), Effect.scoped);
     assert.ok(!untouched.some((column) => column.name === "own_flag"));
+  });
+
+  // ---- REQ-EA-107/108: a shared table is extended only through `AuthPlugin.userFields` (SAM-004) ----
+
+  /** Core's migrations, then the composition's, on a fresh database; what `users` looks like afterwards. */
+  const usersColumnsAfter = (migrations: Migrations.Migrations) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+      const before = yield* sql<{
+        readonly name: string;
+      }>`SELECT name FROM pragma_table_info('users')`;
+      yield* Migrations.run(migrations);
+      const after = yield* sql<{
+        readonly name: string;
+        readonly type: string;
+        readonly notnull: number;
+      }>`SELECT * FROM pragma_table_info('users')`;
+      return { before: before.map((column) => column.name), after };
+    }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" })), Effect.scoped);
+
+  Given(
+    "a plugin that needs to attach a derived value to the shared {string} table",
+    function* (table: string) {
+      assert.equal(table, "users");
+      yield* Effect.void;
+    },
+  );
+
+  When(
+    "the plugin contributes that value through the declared extension point {string}",
+    function* (point: string) {
+      assert.equal(point, "AuthPlugin.userFields");
+      yield* Effect.void;
+    },
+  );
+
+  Then(
+    "the plugin's own migrations do not modify the shared {string} table",
+    function* (table: string) {
+      yield* Effect.void;
+      assert.equal(table, "users");
+      // The plugin ships no migration of its own; every migration the composition runs for it is the linker's.
+      assert.deepEqual(Profile.migrations, []);
+      const linked = Auth.make([Profile]).migrations;
+      assert.ok(linked.length > 0);
+      assert.ok(linked.every((migration) => migration.name.includes("add_user_field_")));
+    },
+  );
+
+  Then(
+    "the extension is visible only through the declared extension point: the column the linker generated, and the composition's typed user fields",
+    function* () {
+      const built = Auth.make([Profile]);
+      const { before, after } = yield* usersColumnsAfter(built.migrations);
+      const added = after.map((column) => column.name).filter((name) => !before.includes(name));
+      assert.deepEqual(added.sort(), [
+        "profile_billingTier",
+        "profile_isElevated",
+        "profile_nickname",
+      ]);
+      assert.ok(Object.keys(built.userFields).includes(fieldKey("nickname")));
+      assert.ok(built.manifest.userFields.some((entry) => entry.key === fieldKey("nickname")));
+    },
+  );
+
+  Given("a declared extension point for the shared {string} table", function* (table: string) {
+    assert.equal(table, "users");
+    yield* Effect.void;
+  });
+
+  When("a plugin contributes an extension through that point", function* () {
+    yield* Effect.void;
+  });
+
+  Then("the extension is a primitive, nullable scalar column: text, real or boolean", function* () {
+    const built = Auth.make([Profile]);
+    const { after } = yield* usersColumnsAfter(built.migrations);
+    const extension = after.filter((column) => column.name.startsWith("profile_"));
+    assert.ok(extension.length > 0);
+    for (const column of extension) {
+      assert.ok(
+        ["TEXT", "REAL", "INTEGER"].includes(column.type),
+        `${column.name}: ${column.type}`,
+      );
+      assert.equal(column.notnull, 0, `${column.name} must be nullable`);
+    }
+    assert.deepEqual(built.manifest.userFields.map((entry) => entry.kind).sort(), [
+      "boolean",
+      "text",
+      "text",
+    ]);
+  });
+
+  Then("a declaration that is not one scalar is refused when the plugin is defined", function* () {
+    yield* Effect.void;
+    assert.throws(
+      () =>
+        UserFields.describePlugin("bad", { mixed: Schema.Union([Schema.String, Schema.Number]) }),
+      (error) => error instanceof UserFields.InvalidDeclaration,
+    );
+  });
+
+  Then("it is never an unmediated ALTER TABLE from the plugin's migration code", function* () {
+    yield* Effect.void;
+    // The plugin declares data, not DDL: what alters `users` is the linker's generated migration, and
+    // a plugin's own attempt is refused by the contract suite (REQ-EA-106).
+    assert.deepEqual(Profile.migrations, []);
+    assertTypeGate("table-foreign-prefix", GATES_PLUGIN, ["@ts-expect-error"]);
   });
 });

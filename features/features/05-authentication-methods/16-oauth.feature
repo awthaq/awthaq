@@ -176,12 +176,7 @@ Feature: OAuth and OIDC
       When "okta"'s provider Layer is constructed
       Then the secret value is obtained from the environment via "Config.Redacted", inside that Layer
 
-    # @skip: a static claim about application wiring source, not a runtime behavior; the
-    # type system is the enforcement — `clientSecret` is `Config<Redacted<string>>`, so a plaintext
-    # literal does not compile (covered by the `@ts-expect-error` at packages/oauth/test/OAuth.test.ts
-    # "a secret must be a Config<Redacted>") and `Config.Redacted` reads the environment
-    # (packages/oauth/test/OAuthProviderConfig.test.ts, REQ-EA-346's unit counterpart).
-    @skip
+    # Compile-time: proven by the `// type-gate:` block in step-definitions/CompileTimeGates.ts.
     @REQ-EA-347
     Scenario: The client secret never appears as a plaintext option or plugin argument
       Given the application's plugin-wiring source code for provider "okta"

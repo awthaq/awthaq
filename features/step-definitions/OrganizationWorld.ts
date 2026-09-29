@@ -5,7 +5,16 @@
 // cross-tenant Rule asserts exactly what an attacker holding a valid session would see.
 // The World is rebuilt per scenario, so the tenants a scenario names are the only tenants
 // that exist.
-import { Accounts, AuthEvents, Erasure, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  Accounts,
+  AuditChain,
+  AuthEvents,
+  Erasure,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
+import { Admin, AdminApi, ImpersonationRecords } from "@awthaq/admin";
 import { Mailer, SqlTransaction } from "@awthaq/ports";
 import { Authentication, AuthHttp, Csrf } from "@awthaq/server";
 import {
@@ -42,6 +51,11 @@ const AuthenticationLive = Authentication.AuthenticationLive.pipe(
   Layer.provide(Authentication.PrincipalResolverLive),
 );
 
+// AR-003: the admin group sits behind `Api.AdminAuthentication`; the default just delegates.
+const AdminAuthenticationLive = Authentication.AdminAuthenticationLive.pipe(
+  Layer.provide(AuthenticationLive),
+);
+
 const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
   Layer.provide(Layer.succeed(Csrf.CsrfConfig, CsrfConfigForTests)),
   Layer.provide(NodeCrypto.layer),
@@ -55,6 +69,8 @@ type HookTaps = Layer.Layer<
 
 export interface AppOptions {
   readonly config?: Partial<Organization.OrganizationConfigShape>;
+  /** Whether the admin plugin, mounted beside this one (REQ-EA-723), lets any admin impersonate. Off by default: `AdminConfig`'s own fail-closed answer. */
+  readonly canImpersonate?: boolean;
   /** `OrganizationHooks.*.tap(...)` layers — how a scenario installs a veto or a failing observer. */
   readonly hooks?: HookTaps;
 }
@@ -71,11 +87,25 @@ const buildAppLayer = (
       Layer.provide(AuthenticationLive),
     ),
     AuthHttp.docs(OrganizationApi.OrganizationApi),
+    // The admin plugin beside this one, so an impersonated session can be opened for real.
+    AuthHttp.routes(AdminApi.AdminApi).pipe(
+      Layer.provide(Admin.Admin.layer),
+      Layer.provide(
+        Admin.config({ canImpersonate: () => Effect.succeed(options.canImpersonate === true) }),
+      ),
+      Layer.provide(AdminAuthenticationLive),
+    ),
   ).pipe(
     Layer.provide(CsrfProtectionLive),
     Layer.provideMerge(eventsLayer),
     Layer.provideMerge(Erasure.layer),
     Layer.provideMerge(OrganizationMemory.layer),
+    Layer.provideMerge(
+      ImpersonationRecords.layerMemory.pipe(
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(AuditChain.layer.pipe(Layer.provide(NodeCrypto.layer))),
+      ),
+    ),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(mailer),
     Layer.provideMerge(SqlTransaction.layerNoop),
@@ -206,6 +236,9 @@ export const configureApp = Effect.fn("features.organization.configureApp")(func
   const before = yield* Ref.get(world.options);
   const merged: AppOptions = {
     config: { ...before.config, ...options.config },
+    ...((options.canImpersonate ?? before.canImpersonate) === undefined
+      ? {}
+      : { canImpersonate: options.canImpersonate ?? before.canImpersonate }),
     ...(options.hooks !== undefined
       ? {
           hooks:

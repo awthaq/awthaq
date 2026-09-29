@@ -94,6 +94,7 @@ export const passwordlessCommonSteps = defineSteps<World>(({ Given, When, Then }
   });
 
   Then("the {string} plugin declares no table", function* (plugin: string) {
+    yield* Effect.void;
     // Both channel plugins keep their credential in core's `Verification` rows (BEH-EA-270, BEH-EA-274).
     const tables =
       plugin === "magicLink"

@@ -1,13 +1,15 @@
 // P20a (BCR-010): steps for features/features/14-mfa-passwordless/33-email-otp.feature. The
 // shared people/clock/gate steps are in PasswordlessCommonSteps.ts; what is specific here is a
 // code — minted by Verification, mailed, presented with an attempt budget behind it.
-import { Verification } from "@awthaq/core";
+import { AuditLog, AuthEvents, Verification } from "@awthaq/core";
 import { EmailOtp, EmailOtpApi } from "@awthaq/magic-link";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import {
   configureApp,
@@ -81,6 +83,57 @@ export const emailOtpSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("the value is exactly {int} decimal digits", function* (digits: number) {
     assert.match(yield* recall("value"), new RegExp(`^[0-9]{${digits}}$`));
   });
+
+  // REQ-EA-1101: a scripted crypto source (`Crypto.make` over the real SHA-256) whose first six-digit
+  // draw is the bytes 255 down to 250 and then 0 up to 5. Rejection sampling drops the six bytes at or
+  // above 250, so the code is 012345; a plain `byte % 10` would have minted 543210 from them, which is
+  // how modulo bias over-draws 0..5.
+  Given(
+    "a crypto source whose first six-digit draw is the bytes {int} down to {int} and then {int} up to {int}",
+    function* (high: number, low: number, from: number, to: number) {
+      assert.deepEqual([high, low, from, to], [255, 250, 0, 5]);
+      yield* Effect.void;
+    },
+  );
+
+  When("a 6-digit numeric value is minted from it", function* () {
+    const script = [255, 254, 253, 252, 251, 250, 0, 1, 2, 3, 4, 5];
+    const scripted = Crypto.make({
+      randomBytes: (size) =>
+        size === script.length ? Uint8Array.from(script) : new Uint8Array(size),
+      digest: (algorithm, data) =>
+        Effect.promise(
+          async () =>
+            new Uint8Array(await globalThis.crypto.subtle.digest(algorithm, new Uint8Array(data))),
+        ),
+    });
+    const value = yield* Effect.gen(function* () {
+      const verification = yield* Verification.Verification;
+      const issued = yield* verification.issue({
+        identifier: "email-otp:scripted@example.com",
+        ttl: Duration.minutes(5),
+        format: { _tag: "Numeric", digits: 6 },
+        maxAttempts: 3,
+      });
+      return Redacted.value(issued.value);
+    }).pipe(
+      Effect.provide(
+        Verification.layerMemory.pipe(
+          Layer.provide(Layer.succeed(Crypto.Crypto, scripted)),
+          Layer.provide(AuthEvents.layer.pipe(Layer.provide(AuditLog.layerMemory))),
+        ),
+      ),
+    );
+    yield* remember("scriptedValue", value);
+  });
+
+  Then(
+    "no digit was taken from a byte of 250 or more, so no digit is over-drawn by modulo bias",
+    function* () {
+      // Bytes 250..255 were refused: their residues (0..5) are not over-drawn at the 5..0 the bias would give.
+      assert.equal(yield* recall("scriptedValue"), "012345");
+    },
+  );
 
   When("Verification is asked for a numeric value of {int} digits", function* (digits: number) {
     yield* recordOutcome("issue", issueNumeric("email-otp:width@example.com", digits));
@@ -389,6 +442,7 @@ export const emailOtpSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the {string} contract exposes only {string} and {string}",
     function* (plugin: string, first: string, second: string) {
+      yield* Effect.void;
       assert.equal(plugin, "emailOtp");
       const endpoints = Object.values(EmailOtpApi.EmailOtpGroup.endpoints).map(
         (endpoint) => `${endpoint.method} ${endpoint.path}`,

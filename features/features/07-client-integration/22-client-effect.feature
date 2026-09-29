@@ -59,38 +59,11 @@ Feature: The Effect Client
       Then the gap is reported as a compile-time failure
       And no runtime request against a live server is needed to discover it as a 403 in production
 
-  # BEH-EA-171 — spec/behaviors/22-client-effect.md
-  @BEH-EA-171
-  Rule: Bearer mode is a separate contract variant
-
-    # @skip: superseded (PV-262, decision 24 / MNA-008): the { csrf: false } contract variant is retired;
-    # the bearer exemption is server-side (REQ-EA-689) and BEH-EA-171 says so
-    @skip
-    @REQ-EA-482
-    Scenario: A contract compiled with csrf false carries no CsrfProtection middleware on any group
-      Given an application compiles "NativeApi" from its plugin contracts with "{ csrf: false }"
-      When the groups of "NativeApi" are inspected
-      Then none of them carry "CsrfProtection" middleware
-
-    # @skip: superseded (PV-262): there is no NativeApi contract variant; a bearer client is built
-    # against the cookie-mode contract and the server exempts bearer requests (MNA-008). Bearer
-    # transport is covered by packages/client/test/AuthClient.test.ts
-    @skip
-    @REQ-EA-483
-    Scenario: A bearer-mode client built against that contract requires no CsrfProtection client layer
-      Given "NativeApi" compiled with "{ csrf: false }"
-      When "HttpApiClient.make" builds a bearer-mode client against "NativeApi", providing only "transformClient" for the bearer token
-      Then the client composes without any "CsrfProtection" client Layer being provided
-
-    # @skip: superseded (PV-262): the scenario's premise (a separate { csrf: false } contract to build
-    # the bearer client against) is retired; see REQ-EA-482
-    @skip
-    @REQ-EA-484
-    Scenario: A bearer client is built against the csrf-false contract rather than padding the cookie-mode contract with a no-op layer
-      Given the application's cookie-mode "AuthApi" contract, which does carry "CsrfProtection" middleware
-      When a bearer-mode client is assembled
-      Then it is built against "NativeApi", the "{ csrf: false }" variant
-      And it is not built against the cookie-mode "AuthApi" contract with a "CsrfProtection" Layer added merely to satisfy that contract's type
+  # BEH-EA-171 — spec/behaviors/22-client-effect.md. Retired (PV-262, decision 24 / MNA-008): the
+  # { csrf: false } contract variant this behavior described is not built, so its Rule has no scenarios
+  # left (REQ-EA-482..484 were removed). What shipped instead: the bearer exemption is server-side
+  # (REQ-EA-689 in 10-csrf.feature) and a bearer client attaches its token through transformClient
+  # (REQ-EA-495 below).
 
   # BEH-EA-172 — spec/behaviors/22-client-effect.md
   # Compile-time contract: the enforcing mechanism is the TypeScript

@@ -57,10 +57,12 @@
 // e.g. `users.create`, "already-typed, internal data" no longer holds for a
 // value that originates in third-party tap code.
 
+import { Defects } from "@awthaq/ports";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
@@ -225,7 +227,22 @@ export interface DivertShape<Input, Diverted> extends Registrar<DivertTap<Input,
  */
 export interface TapDeclaration<Point> {
   readonly point: string;
+  /** PV-260: the point's kind, so a harness can stand up a point of the same kind around this tap. */
+  readonly kind: "veto" | "observe" | "divert";
   readonly order: number;
+  /**
+   * PV-260: the handler exactly as the author wrote it (its identity, for a test to compare against
+   * what a point registers). `never` on the input position erases the point's own `Input` without a
+   * cast; call it through `exercise`, which checks the value against the point's input schema first.
+   */
+  readonly handler: (input: never) => Effect.Effect<unknown, unknown>;
+  /**
+   * PV-260: runs the handler against a stub `input` (validated against the point's input schema —
+   * a stub that does not match dies, it is a defect in the test) and reports how it ended, without
+   * a point's own failure semantics in between: an observe tap that tries to abort shows up as a
+   * `HookAbort` failure here, which the point itself would swallow.
+   */
+  readonly exercise: (input: unknown) => Effect.Effect<Exit.Exit<unknown, unknown>>;
   readonly install: (owner: TapOwner) => Layer.Layer<never, never, Point>;
 }
 
@@ -359,6 +376,21 @@ const dispatchSpan = <A, E, R>(key: string, effect: Effect.Effect<A, E, R>) =>
     }),
   );
 
+/** PV-260: `TapDeclaration.exercise` for one kind — guards the stub against the point's input, then runs the handler to an `Exit`. */
+const exerciseWith =
+  <Input, E>(
+    key: string,
+    isInput: (value: unknown) => value is Input,
+    handler: (input: Input) => Effect.Effect<unknown, E>,
+  ) =>
+  (value: unknown): Effect.Effect<Exit.Exit<unknown, unknown>> =>
+    isInput(value)
+      ? Effect.exit(handler(value))
+      : Defects.invalidConfiguration(
+          `${key}.exercise`,
+          `awthaq: the stub input given to a tap on hook point "${key}" does not match the point's input schema`,
+        );
+
 /**
  * BEH-EA-089/090: a hook point whose taps may amend the input or abort the
  * operation with a typed `HookAbort`, run in order, one after another
@@ -373,6 +405,7 @@ export const veto =
     const key: Key<Id> = `awthaq/hook/${id}`;
     const serviceKey = Context.Service<Self, VetoShape<Input>>()(key);
     const isInput = Schema.is(input);
+    const exercise = (handler: VetoTap<Input>) => exerciseWith(key, isInput, handler);
     const tap = (handler: VetoTap<Input>, options?: TapOptions): Layer.Layer<never, never, Self> =>
       Layer.effectDiscard(
         Effect.flatMap(serviceKey, (point) =>
@@ -384,7 +417,14 @@ export const veto =
       options?: { readonly order?: number },
     ): TapDeclaration<Self> => {
       const order = options?.order ?? 0;
-      return { point: key, order, install: (owner) => tap(handler, { order, owner }) };
+      return {
+        point: key,
+        kind: "veto",
+        order,
+        handler,
+        exercise: exercise(handler),
+        install: (owner) => tap(handler, { order, owner }),
+      };
     };
     const layer = Layer.effect(
       serviceKey,
@@ -438,10 +478,11 @@ export const observe =
   <Self>() =>
   <const Id extends string, Input>(
     id: Id,
-    _input: Schema.Schema<Input>, // types `run`'s input; an observe tap has no output to validate (JH-004)
+    input: Schema.Schema<Input>, // types `run`'s input (and checks a test's stub, PV-260); an observe tap has no output to validate (JH-004)
   ): ObserveClass<Self, Id, Input> => {
     const key: Key<Id> = `awthaq/hook/${id}`;
     const serviceKey = Context.Service<Self, ObserveShape<Input>>()(key);
+    const exercise = (handler: ObserveTap<Input>) => exerciseWith(key, Schema.is(input), handler);
     const tap = (
       handler: ObserveTap<Input>,
       options?: TapOptions,
@@ -456,7 +497,14 @@ export const observe =
       options?: { readonly order?: number },
     ): TapDeclaration<Self> => {
       const order = options?.order ?? 0;
-      return { point: key, order, install: (owner) => tap(handler, { order, owner }) };
+      return {
+        point: key,
+        kind: "observe",
+        order,
+        handler,
+        exercise: exercise(handler),
+        install: (owner) => tap(handler, { order, owner }),
+      };
     };
     const layer = Layer.effect(
       serviceKey,
@@ -517,11 +565,13 @@ export const divert =
   <Self>() =>
   <const Id extends string, Input, Diverted>(
     id: Id,
-    _input: Schema.Schema<Input>, // types `run`'s input; a divert tap returns only the outcome, which `diverted` checks (JH-004)
+    input: Schema.Schema<Input>, // types `run`'s input (and checks a test's stub, PV-260); a divert tap returns only the outcome, which `diverted` checks (JH-004)
     diverted: Schema.Schema<Diverted>,
   ): DivertClass<Self, Id, Input, Diverted> => {
     const key: Key<Id> = `awthaq/hook/${id}`;
     const serviceKey = Context.Service<Self, DivertShape<Input, Diverted>>()(key);
+    const exercise = (handler: DivertTap<Input, Diverted>) =>
+      exerciseWith(key, Schema.is(input), handler);
     const isDiverted = Schema.is(diverted);
     const tap = (
       handler: DivertTap<Input, Diverted>,
@@ -537,7 +587,14 @@ export const divert =
       options?: { readonly order?: number },
     ): TapDeclaration<Self> => {
       const order = options?.order ?? 0;
-      return { point: key, order, install: (owner) => tap(handler, { order, owner }) };
+      return {
+        point: key,
+        kind: "divert",
+        order,
+        handler,
+        exercise: exercise(handler),
+        install: (owner) => tap(handler, { order, owner }),
+      };
     };
     const continueWith = (value: Input): DivertResult<Input, Diverted> => ({
       _tag: "Continue",

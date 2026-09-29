@@ -3,7 +3,9 @@
 // resolved per-point order without building any layer — and that printed order
 // is exactly the order the runtime chain executes in (one shared comparator).
 import { assert, describe, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -23,6 +25,8 @@ const trace = (name: string, transform: (value: string) => string) => (value: st
     return transform(value);
   });
 
+const alphaHandler = trace("alpha", (value) => value.toLowerCase());
+
 const AlphaApi = HttpApi.make("auth").add(
   HttpApiGroup.make("alpha").add(
     HttpApiEndpoint.get("alpha", "/alpha", { success: Schema.String }),
@@ -38,12 +42,7 @@ class Alpha extends AuthPlugin.Service<Alpha, {}>()("alpha", {
 }) {
   static readonly layer = AuthPlugin.layer(Alpha, {
     make: Effect.succeed({}),
-    taps: [
-      Normalize.declareTap(
-        trace("alpha", (value) => value.toLowerCase()),
-        { order: 5 },
-      ),
-    ],
+    taps: [Normalize.declareTap(alphaHandler, { order: 5 })],
     handlers: HttpApiBuilder.group(AlphaApi, "alpha", (handlers) =>
       handlers.handle("alpha", () => Effect.succeed("alpha")),
     ),
@@ -80,8 +79,29 @@ describe("Auth.make manifest.hooks (BEH-EA-096)", () => {
         { plugin: "beta", order: 0 },
       ],
     });
-    assert.deepStrictEqual(Beta.taps, [{ point: "awthaq/hook/auth.test.normalize", order: 0 }]);
+    assert.deepStrictEqual(
+      Beta.taps.map(({ point, kind, order, owner }) => ({ point, kind, order, owner })),
+      [{ point: "awthaq/hook/auth.test.normalize", kind: "veto", order: 0, owner: "beta" }],
+    );
   });
+
+  // PV-260: a contract test needs the handler itself (hook point + plugin id + handler reference),
+  // not just the manifest's point/order.
+  it.effect(
+    "exposes each declared tap's handler by identity and can exercise it against a stub",
+    () =>
+      Effect.gen(function* () {
+        const [tap] = Alpha.taps;
+        assert.isDefined(tap);
+        assert.strictEqual(tap.owner, "alpha");
+        assert.strictEqual(tap.handler, alphaHandler);
+        const exit = yield* tap.exercise("ABC");
+        assert.deepStrictEqual(exit, Exit.succeed("abc"));
+        // a stub that does not match the point's input schema is a defect, not a silent pass
+        const bad = yield* Effect.exit(tap.exercise(42));
+        assert.isTrue(Exit.isFailure(bad) && Cause.hasDies(bad.cause));
+      }),
+  );
 
   it.effect(
     "the executed chain agrees with the manifest, and taps carry their plugin as owner",

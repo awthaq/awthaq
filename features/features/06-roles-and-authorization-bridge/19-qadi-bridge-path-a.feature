@@ -18,12 +18,7 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
       Then "AuthorizedSubject" reads "CurrentPrincipal" already provided by "Authentication"
       And "AuthorizedSubject" provides qadi's "CurrentSubject" to every handler in the group via "SubjectResolver"
 
-    # @skip: compile-time property: a group declaring AuthorizedSubject without Authentication
-    #   leaves CurrentPrincipal unsatisfied in the type system, so composition cannot even be
-    #   written; asserted at the type level by packages/qadi/test/AuthorizedSubject.test.ts 'the
-    #   reversed order leaves CurrentPrincipal unsatisfied' (expectTypeOf), enforced on every `pnpm
-    #   run typecheck`.
-    @skip
+    # Compile-time: proven by the `// type-gate:` blocks in step-definitions/CompileTimeGates.ts.
     @REQ-EA-406
     Scenario: A group declaring AuthorizedSubject without Authentication preceding it fails composition, not at first request
       Given an endpoint group that declares ".middleware(AuthorizedSubject)" without ".middleware(Authentication)" preceding it in the chain
@@ -43,16 +38,12 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
   @BEH-EA-146
   Rule: One call per need, not one call for everything
 
-    # @skip: handler-authoring guidance (which qadi call fits which need), not a runtime behavior;
-    #   each call named here is exercised end to end by the scenarios below (check/decide via the
-    #   evaluator Givens, enforce/guard in REQ-EA-422, enforceProjected in REQ-EA-416,
-    #   filter/filterStream in REQ-EA-419/420).
-    @skip
+    # Run rather than read: each row executes the named qadi call over a real subject and asserts the shape of what it returns, so the guidance table cannot name a call that no longer fits its need.
     @REQ-EA-408
     Scenario Outline: A handler selects the qadi call whose shape matches its need
       Given a handler with the need "<need>"
       When the handler is implemented
-      Then it uses "<call>"
+      Then it uses "<call>", whose result has the shape that need calls for
 
       Examples:
         | need                                           | call                                                     |
@@ -203,10 +194,7 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
       Then the downstream removal function receives an unforgeable witness proving the permission was granted for that resource
       And the removal cannot be invoked without that witness having been produced by "guard"
 
-    # @skip: anti-pattern statement about handler source (no boolean in place of the witness); the
-    #   witness is a branded value only guard mints (Authorized<P>), enforced by the type system,
-    #   and REQ-EA-422 asserts the removal only runs with it.
-    @skip
+    # Compile-time: the witness is a branded value only guard mints, so a boolean does not type-check where it is required (CompileTimeGates.ts).
     @REQ-EA-423
     Scenario: A handler must not thread a boolean in place of the witness
       Given a handler needing downstream proof that "project.delete" was granted for "project-42"

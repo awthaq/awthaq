@@ -131,7 +131,7 @@ const arrangeBreachFailure = (failure: BreachFailure) => {
 };
 
 /** Signs `email` up through the wire, registering the actor and, when a session was issued, its cookie. */
-const signUpActor = Effect.fn("features.password.signUpActor")(function* (
+export const signUpActor = Effect.fn("features.password.signUpActor")(function* (
   name: string,
   email: string,
   password: string,
@@ -143,7 +143,7 @@ const signUpActor = Effect.fn("features.password.signUpActor")(function* (
   return { response, cookie };
 });
 
-const signInAs = Effect.fn("features.password.signInAs")(function* (
+export const signInAs = Effect.fn("features.password.signInAs")(function* (
   email: string,
   password: string,
 ) {
@@ -151,7 +151,9 @@ const signInAs = Effect.fn("features.password.signInAs")(function* (
 });
 
 /** The reset token mailed to `email`, read from the captured mail. */
-const latestResetToken = Effect.fn("features.password.latestResetToken")(function* (email: string) {
+export const latestResetToken = Effect.fn("features.password.latestResetToken")(function* (
+  email: string,
+) {
   yield* letForkedFibersRun;
   const mail = (yield* sentMail()).findLast(
     (message) => message.template === "reset-password" && message.to === email,
@@ -242,6 +244,66 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
     );
   });
 
+  // ---- REQ-EA-306: sign-up does not wait on the mail provider, and (conceal) does not tell the two apart ----
+
+  Given("a slow-responding mail provider", function* () {
+    yield* configureApp({ slowMailer: true });
+  });
+
+  Given("the application conceals account existence on sign-up", function* () {
+    yield* configureApp({ passwordConfig: { signUpEnumeration: "conceal" } });
+  });
+
+  Given(
+    "two sign-up requests, one for an email with no existing account and one for an email that already has one",
+    function* () {
+      // The existing account: a first sign-up (answered although the provider never answers).
+      const first = yield* request("/password/sign-up", {
+        email: "existing@example.com",
+        password: STRONG_PASSWORD,
+      });
+      assert.equal(first.status, 202);
+      yield* setNote("fresh", "fresh@example.com");
+      yield* setNote("existing", "existing@example.com");
+    },
+  );
+
+  When("both requests are handled", function* () {
+    const attempt = (email: string) =>
+      Effect.gen(function* () {
+        const started = Date.now();
+        const response = yield* request("/password/sign-up", {
+          email,
+          password: STRONG_PASSWORD,
+        }).pipe(Effect.timeoutOption("5 seconds"));
+        return { response, elapsed: Date.now() - started };
+      });
+    const fresh = yield* attempt(yield* getNote("fresh"));
+    const existing = yield* attempt(yield* getNote("existing"));
+    assert.ok(fresh.response._tag === "Some", "the fresh sign-up never answered");
+    assert.ok(existing.response._tag === "Some", "the existing-address sign-up never answered");
+    yield* setLastResponse("fresh", fresh.response.value);
+    yield* setLastResponse("existing", existing.response.value);
+    yield* setNote("freshMillis", String(fresh.elapsed));
+    yield* setNote("existingMillis", String(existing.elapsed));
+  });
+
+  Then("neither response's timing varies with the mail provider's latency", function* () {
+    // The provider's latency is unbounded, and both answered within moments: it is not in the path.
+    assert.ok(Number(yield* getNote("freshMillis")) < 3000);
+    assert.ok(Number(yield* getNote("existingMillis")) < 3000);
+  });
+
+  Then("the response timing does not leak which email already had an account", function* () {
+    // Nothing else tells the two apart either: under `conceal` status and body are the same.
+    const fresh = yield* getLastResponse("fresh");
+    const existing = yield* getLastResponse("existing");
+    assert.equal(fresh.status, 202);
+    assert.equal(existing.status, 202);
+    const [a, b] = yield* Effect.promise(() => Promise.all([fresh.text(), existing.text()]));
+    assert.equal(a, b);
+  });
+
   // ---- REQ-EA-307: uniform InvalidCredentials outline ----
 
   // AH-004: the Given only arranges — it stores the attempt (and creates whatever account the
@@ -311,9 +373,48 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   When("each is handled", function* () {
     for (const key of ["unknown", "wrongPassword", "noCredential"]) {
       const attempt = yield* getActor(`three:${key}`);
+      const started = Date.now();
       yield* setLastResponse(`three:${key}`, yield* signInAs(attempt.email, attempt.password));
+      yield* setNote(`three:${key}:millis`, String(Date.now() - started));
     }
   });
+
+  // REQ-EA-309: the same three attempts, under a configured timing floor.
+  Given(
+    "the same three sign-in attempts, differing only in which of the three reasons applies",
+    function* () {
+      yield* configureApp({ passwordConfig: { signInTimingFloor: Duration.millis(250) } });
+      yield* setActor("three:unknown", {
+        email: "no-such-email@example.com",
+        password: STRONG_PASSWORD,
+        cookie: undefined,
+      });
+      yield* signUpActor("_setup", "indistinguishable@example.com", STRONG_PASSWORD);
+      yield* setActor("three:wrongPassword", {
+        email: "indistinguishable@example.com",
+        password: "definitely not it",
+        cookie: undefined,
+      });
+      yield* createUserWithoutCredential("no-credential-either@example.com");
+      yield* setActor("three:noCredential", {
+        email: "no-credential-either@example.com",
+        password: STRONG_PASSWORD,
+        cookie: undefined,
+      });
+    },
+  );
+
+  Then(
+    "the response latency does not vary in a way that would let an attacker distinguish the reasons by timing",
+    function* () {
+      // None of the three came back before the floor: the cheap reasons (no such user, no credential)
+      // are held to what the expensive one costs, so a fast answer no longer names the reason.
+      for (const key of ["unknown", "wrongPassword", "noCredential"]) {
+        const millis = Number(yield* getNote(`three:${key}:millis`));
+        assert.ok(millis >= 240, `${key} answered in ${millis}ms, before the 250ms floor`);
+      }
+    },
+  );
 
   Then("all three responses have the identical status and the identical body", function* () {
     const unknown = yield* getLastResponse("three:unknown");

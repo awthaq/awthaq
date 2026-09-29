@@ -20,13 +20,14 @@
 //   installed `@qadi/testing`/`@qadi/core`; the real equivalent is
 //   `@qadi/core`'s own `makeSubject`/`fromRoles`, and `@qadi/testing`'s
 //   `Fixtures.ts` ready-made subjects — a test imports those directly.
-// - BEH-EA-200 (hook veto/observe isolation) is directly testable via
-//   `@awthaq/core`'s `HookPoint.ts` (see `packages/core/test/HookPoint.test.ts`
-//   for veto-abort/observe-isolation/divert coverage), and every core hook
-//   point is wired into the real sign-up/sign-in flows (NAM-002). Every point's
-//   own layer (`Hooks.HooksLive`) rides in `MemoryPorts`, so a test taps a point
-//   by passing the tap in `TestAuth.layer`'s second parameter — it requires its
-//   point, which `MemoryPorts` provides.
+// - BEH-EA-200 (hook veto/observe isolation): `runPluginContractTests`' opt-in `hooks`
+//   option (PV-260) exercises each tap the plugin *declares* (`AuthPlugin.layer`'s
+//   `taps`, whose handlers `plugin.taps` exposes) against a stub input on a fresh point
+//   of the tap's own kind. Taps an application adds itself are not declared on a plugin;
+//   a test taps a point by passing the tap in `TestAuth.layer`'s second parameter — it
+//   requires its point, which `MemoryPorts` provides (every point's own layer,
+//   `Hooks.HooksLive`, rides there). The mechanism itself is covered by
+//   `packages/core/test/HookPoint.test.ts`.
 // - BEH-EA-199's "no `Redacted` value reaches a span or event" check is
 //   mechanical (EOTS-002): `RedactionGuard` installs a recording tracer and
 //   logger (and an `AuthEvents` inspector) into `TestAuth.layer`, and
@@ -66,6 +67,7 @@ import {
   AuthPlugin,
   DataExport,
   Erasure,
+  HookPoint,
   Hooks,
   Migrations,
   RateLimits,
@@ -87,6 +89,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import type * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
@@ -361,6 +364,21 @@ export interface ContractTestOptions<O, R = never> {
       guard: RedactionGuard.RedactionGuardShape,
     ) => Effect.Effect<void, unknown, R | RedactionGuard.RedactionGuard>;
   };
+  /**
+   * PV-260/BEH-EA-200: opt in to the hook-kind checks. Every tap the plugin declares is always
+   * checked to register its own handler at its own point (a plugin-owned entry in that point's
+   * resolved chain, at the declared order); for each tap whose point appears here the plugin's
+   * *actual handler* is run against the stub `input` — an observe tap must not try to abort (it
+   * must not fail with `HookAbort`) and its failure must not reach the operation it observes, a
+   * veto tap may only succeed or abort with `HookAbort`, a divert tap must not fail. `point` is
+   * the hook point class (`Hooks.AfterSignUp`), `input` a value of its input schema (a stub that
+   * does not match makes the check fail, naming the point). A `hooks` entry for a point the
+   * plugin does not tap fails too, so a typo cannot silently skip a check.
+   */
+  readonly hooks?: ReadonlyArray<{
+    readonly point: { readonly id: string };
+    readonly input: unknown;
+  }>;
 }
 
 /** `describe`/`it`/`assert` — kept as an injected shape rather than importing `@effect/vitest` directly, so this harness has no hard dependency on which test runner a third-party plugin author uses. `it`'s body may be async (the migration and redaction checks run real effects). */
@@ -442,6 +460,62 @@ const ownershipViolations = (
 };
 
 const TABLE_PREFIX_PATTERN = (id: string): RegExp => new RegExp(`^${id}_`);
+
+/**
+ * PV-260: what running a declared tap on a fresh point of its own kind shows — the point's
+ * resolved chain (does the plugin's entry sit in it), and, given a stub, how `run` ended for it
+ * (a point's own failure semantics: observe swallows a failing tap, veto surfaces `HookAbort`).
+ */
+const runOnScratchPoint = (
+  owner: AuthPlugin.Any,
+  tap: AuthPlugin.DeclaredTap,
+  stub: { readonly input: unknown } | undefined,
+) => {
+  const prefix = "awthaq/hook/";
+  const id = tap.point.startsWith(prefix) ? tap.point.slice(prefix.length) : tap.point;
+  const installed = tap.install(owner);
+  switch (tap.kind) {
+    case "veto": {
+      const point = HookPoint.veto<unknown>()(id, Schema.Unknown);
+      return Effect.gen(function* () {
+        const shape = yield* point;
+        return {
+          resolved: yield* shape.resolved,
+          run: stub === undefined ? undefined : yield* Effect.exit(shape.run(stub.input)),
+        };
+      }).pipe(Effect.provide(Layer.provideMerge(installed, point.layer)));
+    }
+    case "observe": {
+      const point = HookPoint.observe<unknown>()(id, Schema.Unknown);
+      return Effect.gen(function* () {
+        const shape = yield* point;
+        return {
+          resolved: yield* shape.resolved,
+          run: stub === undefined ? undefined : yield* Effect.exit(shape.run(stub.input)),
+        };
+      }).pipe(Effect.provide(Layer.provideMerge(installed, point.layer)));
+    }
+    case "divert": {
+      const point = HookPoint.divert<unknown>()(id, Schema.Unknown, Schema.Unknown);
+      return Effect.gen(function* () {
+        const shape = yield* point;
+        return {
+          resolved: yield* shape.resolved,
+          run: stub === undefined ? undefined : yield* Effect.exit(shape.run(stub.input)),
+        };
+      }).pipe(Effect.provide(Layer.provideMerge(installed, point.layer)));
+    }
+  }
+};
+
+/** The `HookAbort` a failed `Exit` carries, if its failure is one (a defect or another error is not an abort). */
+const abortOf = (exit: Exit.Exit<unknown, unknown>): HookPoint.HookAbort | undefined => {
+  if (Exit.isSuccess(exit)) return undefined;
+  const failure = Cause.findErrorOption(exit.cause);
+  return failure._tag === "Some" && failure.value instanceof HookPoint.HookAbort
+    ? failure.value
+    : undefined;
+};
 
 /**
  * BEH-EA-198/199: the mechanically-verifiable subset of the plugin contract
@@ -574,6 +648,106 @@ export const runPluginContractTests = <O, R = never>(
           }
         },
       );
+
+      // PV-260/BEH-EA-200: the plugin's declared taps, checked as the plugin's own handlers.
+      const stubs = config.hooks ?? [];
+      for (const stub of stubs) {
+        const point = `awthaq/hook/${stub.point.id}`;
+        framework.it(
+          `${label}: the hooks stub for "${stub.point.id}" names a tap this plugin declares`,
+          () => {
+            if (!plugin.taps?.some((tap) => tap.point === point)) {
+              framework.fail(
+                `plugin "${plugin.id}" declares no tap on hook point "${stub.point.id}", but a hooks stub was supplied for it`,
+              );
+            }
+          },
+        );
+      }
+      for (const tap of plugin.taps ?? []) {
+        const stub = stubs.find((candidate) => `awthaq/hook/${candidate.point.id}` === tap.point);
+        framework.it(
+          `${label}: the tap on "${tap.point}" registers this plugin's handler at that point`,
+          async () => {
+            const outcome = await Effect.runPromise(
+              Effect.exit(runOnScratchPoint(plugin, tap, undefined).pipe(Effect.scoped)),
+            );
+            if (Exit.isFailure(outcome)) {
+              framework.fail(
+                `the tap on "${tap.point}" could not be installed: ${Cause.pretty(outcome.cause)}`,
+              );
+              return;
+            }
+            if (
+              !outcome.value.resolved.some(
+                (entry) => entry.owner === plugin.id && entry.order === tap.order,
+              )
+            ) {
+              framework.fail(
+                `plugin "${plugin.id}"'s tap (order ${tap.order}) is not in "${tap.point}"'s resolved chain`,
+              );
+            }
+          },
+        );
+        if (stub === undefined) continue;
+        framework.it(
+          `${label}: the ${tap.kind} tap on "${tap.point}" obeys its point's kind (BEH-EA-200)`,
+          async () => {
+            // What the handler does on its own, before any point's semantics apply.
+            const direct = await Effect.runPromise(Effect.exit(tap.exercise(stub.input)));
+            if (Exit.isFailure(direct)) {
+              framework.fail(
+                `the hooks stub for "${tap.point}" does not match the point's input: ${Cause.pretty(direct.cause)}`,
+              );
+              return;
+            }
+            const ended = direct.value;
+            const abort = abortOf(ended);
+            if (tap.kind === "observe" && abort !== undefined) {
+              framework.fail(
+                `plugin "${plugin.id}"'s tap on the observe point "${tap.point}" tried to abort the operation it observes (HookAbort "${abort.code}") — only a veto point's tap may abort`,
+              );
+            }
+            if (tap.kind === "divert" && Exit.isFailure(ended)) {
+              framework.fail(
+                `plugin "${plugin.id}"'s tap on the divert point "${tap.point}" failed instead of returning Option.none()/Option.some(...): ${Cause.pretty(ended.cause)}`,
+              );
+            }
+            if (tap.kind === "veto" && Exit.isFailure(ended) && abort === undefined) {
+              framework.fail(
+                `plugin "${plugin.id}"'s tap on the veto point "${tap.point}" failed with something other than HookAbort: ${Cause.pretty(ended.cause)}`,
+              );
+            }
+            // Then through a point of the same kind: the operation must come out as the kind promises.
+            const viaPoint = await Effect.runPromise(
+              Effect.exit(runOnScratchPoint(plugin, tap, stub).pipe(Effect.scoped)),
+            );
+            if (Exit.isFailure(viaPoint)) {
+              framework.fail(
+                `the tap on "${tap.point}" could not be run: ${Cause.pretty(viaPoint.cause)}`,
+              );
+              return;
+            }
+            const run = viaPoint.value.run;
+            if (run === undefined) return;
+            if (tap.kind === "observe" && Exit.isFailure(run)) {
+              framework.fail(
+                `a failure in plugin "${plugin.id}"'s observer on "${tap.point}" reached the operation it observes: ${Cause.pretty(run.cause)}`,
+              );
+            }
+            if (tap.kind === "veto" && Exit.isFailure(run) && abortOf(run) === undefined) {
+              framework.fail(
+                `plugin "${plugin.id}"'s veto tap on "${tap.point}" ended the operation with something other than HookAbort: ${Cause.pretty(run.cause)}`,
+              );
+            }
+            if (tap.kind === "divert" && Exit.isFailure(run)) {
+              framework.fail(
+                `plugin "${plugin.id}"'s divert tap on "${tap.point}" ended the operation abnormally: ${Cause.pretty(run.cause)}`,
+              );
+            }
+          },
+        );
+      }
 
       const redaction = config.redaction;
       if (redaction !== undefined) {

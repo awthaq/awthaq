@@ -2,10 +2,11 @@
 // `change-email` token to the NEW address and changes nothing; confirming it replaces the
 // address, marks it verified and tells the old address, all in one transaction with the
 // token's consumption.
-import { AuthEvents, Users } from "@awthaq/core";
+import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
@@ -119,6 +120,43 @@ describe("BAM-009: confirm", () => {
         );
         assert.isUndefined(notice[0]?.data);
       }).pipe(Effect.scoped, Effect.provide(makeTestLayer())),
+  );
+
+  // BEH-EA-053 (REQ-EA-686): an email change is a privilege change. It is confirmed by a token that
+  // may be opened anywhere, so there is no caller session to rotate: every session of the account
+  // ends (reason `emailChanged`) and the owner signs in afresh under the new address.
+  it.effect("ends every session of the account, with reason emailChanged", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const sessions = yield* Sessions.Sessions;
+      const mailer = yield* Mailer.Mailer;
+      const events = yield* AuthEvents.AuthEvents;
+      const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+      const subscription = yield* events.subscribe;
+      yield* Effect.forkScoped(
+        subscription.pipe(Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event]))),
+        { startImmediately: true },
+      );
+      const users = yield* Users.Users;
+      // The sign-up session is the live one (sign-in would need the mailbox verified first).
+      const signedIn = yield* password.signUp({ email, password: strongPassword });
+      yield* letForkedFibersRun;
+      const user = Option.getOrThrow(yield* users.findByEmail(email));
+      assert.isTrue(Exit.isSuccess(yield* Effect.exit(sessions.verify(signedIn.token))));
+      yield* password.requestEmailChange({ userId: user.id, newEmail });
+      const token = Redacted.make(tokenOf(changeEmailMail(yield* mailer.sent)[0]));
+
+      yield* password.confirmEmailChange({ token });
+      yield* letForkedFibersRun;
+
+      const stale = yield* sessions.verify(signedIn.token).pipe(Effect.flip);
+      assert.strictEqual(stale._tag, "Sessions/NotFound");
+      assert.deepStrictEqual(yield* sessions.list(user.id), []);
+      const revoked = (yield* Ref.get(seen)).filter(
+        (event) => event._tag === "auth.session.revoked" && event.reason === "emailChanged",
+      );
+      assert.isAbove(revoked.length, 0);
+    }).pipe(Effect.scoped, Effect.provide(makeTestLayer())),
   );
 
   it.effect("the token is single-use", () =>

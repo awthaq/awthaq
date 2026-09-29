@@ -6,6 +6,7 @@ import { passwordSteps } from "../../step-definitions/PasswordSteps.ts";
 import { WorldLive } from "../../step-definitions/PasswordWorld.ts";
 import { twoFactorResetSteps } from "../../step-definitions/TwoFactorResetSteps.ts";
 import { WorldLive as TwoFactorWorldLive } from "../../step-definitions/TwoFactorWorld.ts";
+import { passwordTypeSteps } from "../../step-definitions/CompileTimeSteps.ts";
 
 // AH-007: `{passwordConfig}` and `{breachFailure}` are declared parameter types, so the feature's
 // config literals resolve by exact match instead of a bare `{string}` step dispatching on substrings.
@@ -19,4 +20,5 @@ const feature = await loadFeature(
 describeFeature(feature, Layer.mergeAll(WorldLive, TwoFactorWorldLive), ({ use }) => {
   use(passwordSteps);
   use(twoFactorResetSteps);
+  use(passwordTypeSteps);
 });

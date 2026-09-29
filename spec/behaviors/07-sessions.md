@@ -97,6 +97,8 @@ REQUIREMENT: Every sign-in and every privilege-changing operation
              can leave a tombstoned session without its successor.
 ```
 
+**As shipped for an email change (REQ-EA-686):** a password change (an authenticated request) rotates the caller's own session and revokes the others. An email change is confirmed by a mailed token (`POST /change-email/confirm`, public: the link may be opened in another browser), so the confirming request carries no session to rotate; the confirmation therefore ends **every** session of the account in the same transaction as the address change (`Sessions.revokeAll(userId, "emailChanged")`, which publishes `auth.session.revoked` with reason `emailChanged`), and the owner signs in afresh under the new address. No replacement session is minted: minting one for an unauthenticated confirmer would hand a session to whoever holds the link.
+
 `archive/design/usage-examples-v4.md` §5.3 states this directly: "A new session is issued at every sign-in and after password or email change; the old row is deleted." (Revised by RRS-003/ESR-002: the old row is now tombstoned, atomically with the new row's insertion, so a later presentation of the superseded token is detectable as reuse.) `better-auth/01-core-domain/01-entities-and-invariants.md` §2.3 documents the same rule for a related case — promoting a previously-unverified user on proof of mailbox ownership strips every pre-existing session and account, and a fresh session is minted only afterward by the caller, never by reusing whatever session happened to exist before the proof resolved.
 
 ## BEH-EA-054: Sessions expose a device list, per-device revocation, and revoke-others

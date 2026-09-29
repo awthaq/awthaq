@@ -10,9 +10,6 @@ Feature: Rate Limiting
   @BEH-EA-105
   Rule: The RateLimiter port
 
-    # @skip: blocked by @awthaq/two-factor (P15/THS-001), a placeholder package today; the same property for the shipped
-    # password plugin is asserted by REQ-EA-279 (it reaches the port only, with no store in its graph).
-    @skip
     @REQ-EA-278
     Scenario: RateLimiter is a port the application provides, not one a plugin bundles
       Given a plugin "two-factor" that needs rate limiting for its "verify" endpoint
@@ -135,9 +132,7 @@ Feature: Rate Limiting
       When "consume" derives a bucket key for a sign-in request
       Then the bucket key is the deterministic value that function computes for that request
 
-    # @skip: compile-time (the RateLimitKey type admits only the two strategies or a function); asserted by tsc via
-    # @ts-expect-error in packages/core/test/RateLimits.types.test.ts.
-    @skip
+    # Compile-time: proven by the `// type-gate:` block in step-definitions/CompileTimeGates.ts.
     @REQ-EA-292
     Scenario: A rule must not key on a caller-controlled arbitrary value without the plugin author opting in explicitly
       Given a plugin author declaring a rule using only the built-in "principal" or "ip" strategies
@@ -180,14 +175,11 @@ Feature: Rate Limiting
   @BEH-EA-110
   Rule: Built-in rules shipped by core plugins
 
-    # @skip: blocked by @awthaq/two-factor (P15/THS-001), a placeholder package today; the shipped-default-rules claim is
-    # asserted for the password plugin by REQ-EA-298.
-    @skip
     @REQ-EA-297
     Scenario: An official plugin ships a default rate-limit rule for a brute-force-prone endpoint
       Given the official "two-factor" plugin's "verify" endpoint
       When "two-factor" is installed with no application-authored rate-limit configuration
-      Then "/two-factor/verify" is rate limited to 3 attempts per 10 seconds by a rule the plugin itself ships
+      Then "/two-factor/verify" is rate limited by rules the plugin itself ships: 30 attempts per 15 minutes per source address, and a per-user failure budget
 
     @REQ-EA-298
     Scenario: An application does not have to add rate limiting itself to get a sane default on brute-force-prone endpoints

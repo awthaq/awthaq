@@ -6,7 +6,7 @@
 // proves every check passes cleanly; small deliberately-broken fixture
 // plugins each prove one specific check actually catches its violation.
 import { Password } from "@awthaq/password";
-import { Auth, AuthPlugin } from "@awthaq/core";
+import { Auth, AuthPlugin, HookPoint, Hooks } from "@awthaq/core";
 import { Authentication, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -407,5 +407,108 @@ describe("runPluginContractTests — the redaction check (EOTS-002, BEH-EA-199)"
     });
     await sink.settled();
     assert.isTrue(sink.failed.some((message) => message.includes("shorter than")));
+  });
+});
+
+// ---- PV-260 / BEH-EA-200: hook-kind checks over the plugin's declared taps ----------
+
+describe("runPluginContractTests — hook kinds (PV-260, BEH-EA-200, REQ-EA-569..572)", () => {
+  const signedUp = { userId: "u1", strategy: "password" };
+  const signUp = { name: "Ada", email: "ada@example.com", strategy: "password" };
+
+  /** A plugin the way `AuthPlugin.layer` leaves it: `taps` carry their handler and owner. */
+  const tapping = (...declarations: ReadonlyArray<HookPoint.TapDeclaration<unknown>>) =>
+    fakePlugin({ id: "tapper", taps: declarations.map((tap) => ({ ...tap, owner: "tapper" })) });
+
+  const run = async (
+    plugin: AuthPlugin.Any,
+    hooks?: ReadonlyArray<{ readonly point: { readonly id: string }; readonly input: unknown }>,
+  ) => {
+    const sink = new Recorder();
+    TestAuth.runPluginContractTests(recordingFramework(sink), () => plugin, {
+      options: [{}],
+      ...(hooks === undefined ? {} : { hooks }),
+    });
+    await sink.settled();
+    return sink;
+  };
+
+  it("REQ-EA-569/570: an observer that fails (its mailer is down) passes: the operation it observes is unaffected", async () => {
+    const sink = await run(
+      tapping(Hooks.AfterSignUp.declareTap(() => Effect.fail("mailer unavailable"))),
+      [{ point: Hooks.AfterSignUp, input: signedUp }],
+    );
+    assert.deepStrictEqual(sink.failed, []);
+    assert.isTrue(sink.passed.some((name) => name.includes("obeys its point's kind")));
+    assert.isTrue(sink.passed.some((name) => name.includes("registers this plugin's handler")));
+  });
+
+  it("REQ-EA-571: a veto tap that aborts is accepted, because the point is a veto point", async () => {
+    const sink = await run(
+      tapping(
+        Hooks.BeforeSignUp.declareTap(() =>
+          Effect.fail(new HookPoint.HookAbort({ code: "EMAIL" })),
+        ),
+      ),
+      [{ point: Hooks.BeforeSignUp, input: signUp }],
+    );
+    assert.deepStrictEqual(sink.failed, []);
+  });
+
+  it("REQ-EA-572: an observe tap that tries to abort fails the contract test", async () => {
+    const sink = await run(
+      tapping(
+        Hooks.AfterSignUp.declareTap(() => Effect.fail(new HookPoint.HookAbort({ code: "NOPE" }))),
+      ),
+      [{ point: Hooks.AfterSignUp, input: signedUp }],
+    );
+    assert.isTrue(
+      sink.failed.some(
+        (message) => message.includes("tried to abort") && message.includes("observe point"),
+      ),
+      sink.failed.join("\n"),
+    );
+  });
+
+  it("a veto tap that fails with something other than HookAbort fails", async () => {
+    const sink = await run(
+      tapping(Hooks.BeforeSignUp.declareTap(() => Effect.die(new Error("boom")))),
+      [{ point: Hooks.BeforeSignUp, input: signUp }],
+    );
+    assert.isTrue(sink.failed.some((message) => message.includes("other than HookAbort")));
+  });
+
+  it("a stub that does not match the point's input is reported, not silently passed", async () => {
+    const sink = await run(tapping(Hooks.AfterSignUp.declareTap(() => Effect.void)), [
+      { point: Hooks.AfterSignUp, input: { nope: true } },
+    ]);
+    assert.isTrue(
+      sink.failed.some((message) => message.includes("does not match the point's input")),
+    );
+  });
+
+  it("a stub for a point the plugin does not tap is reported (a typo cannot skip a check)", async () => {
+    const sink = await run(tapping(Hooks.AfterSignUp.declareTap(() => Effect.void)), [
+      { point: Hooks.BeforeSignUp, input: signUp },
+    ]);
+    assert.isTrue(sink.failed.some((message) => message.includes("declares no tap on hook point")));
+  });
+
+  it("a plugin whose declared tap is missing from its point's chain fails the registration check", async () => {
+    const declared = Hooks.AfterSignUp.declareTap(() => Effect.void);
+    // an `install` that registers nothing: the tap the plugin *declares* never runs at its point
+    const sink = await run(
+      fakePlugin({
+        id: "tapper",
+        taps: [{ ...declared, owner: "tapper", install: () => Layer.empty }],
+      }),
+    );
+    assert.isTrue(sink.failed.some((message) => message.includes("not in")));
+  });
+
+  it("without stubs only the registration check runs (the kind checks are opt-in)", async () => {
+    const sink = await run(tapping(Hooks.AfterSignUp.declareTap(() => Effect.void)));
+    assert.deepStrictEqual(sink.failed, []);
+    assert.isFalse(sink.passed.some((name) => name.includes("obeys its point's kind")));
   });
 });

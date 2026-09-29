@@ -162,6 +162,12 @@ const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
   ),
 );
 
+/** A `Mailer` whose `send` never returns (nothing is recorded): the slowest provider there can be. */
+const neverAnsweringMailer = Layer.succeed(
+  Mailer.Mailer,
+  Mailer.Mailer.of({ send: () => Effect.never, sent: Effect.succeed([]) }),
+);
+
 export interface AppOptions {
   readonly hasher?: Layer.Layer<PasswordHasher.PasswordHasher, Config.ConfigError, Crypto.Crypto>;
   readonly breachHttpClient?: Layer.Layer<HttpClient.HttpClient>;
@@ -169,6 +175,8 @@ export interface AppOptions {
   readonly passwordConfig?: Partial<Password.PasswordConfigShape>;
   /** TIR-005: `"sqlite"` runs the core stores over a real migrated SQLite database with real transactions; the default is memory. */
   readonly storage?: "memory" | "sqlite";
+  /** REQ-EA-306: a mail provider that never answers a `send`: any latency the caller sees is not the provider's. */
+  readonly slowMailer?: boolean;
 }
 
 export interface AppHandle {
@@ -198,7 +206,8 @@ export interface AppHandle {
  * `AuthEvents.test.ts`'s own `seen` `Ref` does.
  */
 const buildApp = Effect.fn("features.password.buildApp")(function* (options: AppOptions) {
-  const { layer: capturingMailer, sent } = makeCapturingMailer();
+  const { layer: capturedMailer, sent } = makeCapturingMailer();
+  const capturingMailer = options.slowMailer === true ? neverAnsweringMailer : capturedMailer;
 
   const events = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
   const fault = yield* Ref.make<Fault>("none");

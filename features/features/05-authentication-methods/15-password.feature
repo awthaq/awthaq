@@ -32,15 +32,11 @@ Feature: Password Authentication
       Then the caller receives a "SessionView" without the response waiting on the verification mail's delivery
       And the mail is dispatched as a detached, fire-and-forget effect
 
-    # @skip: a wall-clock timing side-channel is not deterministically assertable in CI; the
-    # "does not wait on mail delivery" half is proven with a never-resolving mailer by
-    # packages/password/test/Password.test.ts (TSS-001/TSS-002 tests), and the account-existence
-    # half is deliberately open under the default signUpEnumeration "reveal" (TMS-005, ADR-EA-018)
-    # — only "conceal" hides it.
-    @skip
+    # Deterministic stand-in for "timing": the mail provider never answers, yet both sign-ups answer at once. With signUpEnumeration "conceal" (ADR-EA-018) the two answers are also identical; under the default "reveal" the existing address is told 409 by design.
     @REQ-EA-306
     Scenario: Sign-up response time does not reveal whether the email address already had an account
       Given a slow-responding mail provider
+      And the application conceals account existence on sign-up
       And two sign-up requests, one for an email with no existing account and one for an email that already has one
       When both requests are handled
       Then neither response's timing varies with the mail provider's latency
@@ -69,10 +65,7 @@ Feature: Password Authentication
       Then all three responses have the identical status and the identical body
       And none of them reveals which of the three reasons applied
 
-    # @skip: wall-clock latency is not deterministically assertable in CI; the mechanism that
-    # equalises the three failure reasons (the calibrated timing floor) is covered by the
-    # "Password signIn timing floor (TSS-006)" suite in packages/password/test/Password.test.ts.
-    @skip
+    # Asserted as the floor, which is what equalises the reasons: with signInTimingFloor set, no failure (however cheap its path) returns sooner than the floor, so the cheap reasons are padded up to the expensive one. The upper bound depends on the machine and is not asserted; the floor mechanism itself is packages/password/test/Password.test.ts (TSS-006, under TestClock).
     @REQ-EA-309
     Scenario: Response latency does not vary across the three failure reasons
       Given the same three sign-in attempts, differing only in which of the three reasons applies
@@ -96,11 +89,7 @@ Feature: Password Authentication
       Then "Password" hashes and verifies passwords using "PasswordHasher.layerScrypt"
       And no change is made to "Password"'s own code to accept the substitution
 
-    # @skip: "the composition remains incomplete" is a compile-time property (an unsatisfied
-    # Layer requirement is a type error where it is composed, not a runtime outcome), so no
-    # runtime step can express it; covered by the type-level test "BEH-EA-115: Password.layer
-    # requires a PasswordHasher" in packages/password/test/Password.test.ts.
-    @skip
+    # Compile-time: proven by the `// type-gate:` blocks in step-definitions/CompileTimeGates.ts.
     @REQ-EA-312
     Scenario: Password bundles no hashing implementation of its own
       Given an application composing "Password" with no "PasswordHasher" Layer provided
@@ -245,12 +234,6 @@ Feature: Password Authentication
       When it provides "Password.config({ minLength: 16 })"
       Then the tightened policy takes effect without installing any different plugin class
 
-    # @skip: a structural claim about object identity (the plugin class's own `contract`, `tables`
-    # and `migrations` statics are constants a Layer cannot touch), so a runtime scenario could
-    # only assert a tautology; the behavior that IS runtime (the override takes effect) is
-    # REQ-EA-325, and `Password.config` is typed `Partial<PasswordConfigShape>`, which carries
-    # no contract or migration field to override.
-    @skip
     @REQ-EA-326
     Scenario: Overriding minLength does not change Password's contract, table set, or migrations
       Given "Password.config({ minLength: 16 })" is provided in place of the default "minLength: 8"

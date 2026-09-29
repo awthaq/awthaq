@@ -207,11 +207,7 @@ Feature: Organization
       When an anonymous caller sends GET "/organization" with body '-'
       Then the response is 401
 
-    # @skip: blocked by composition — it needs @awthaq/admin installed beside this plugin to open a
-    # real impersonation session, and no test composes the two yet. The impersonation session itself
-    # is covered by 27-admin-impersonation.feature (BEH-EA-209..220); what this scenario adds
-    # (organization reads resolve to the impersonated user) is not asserted anywhere today.
-    @skip
+    # @awthaq/admin is mounted beside the organization plugin in OrganizationWorld: the impersonation session is opened over the real admin route.
     @REQ-EA-723
     Scenario: An impersonating admin sees only the organizations of the user being impersonated
       Given a signed-in admin actively impersonating "bob"

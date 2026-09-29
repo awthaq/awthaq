@@ -218,31 +218,6 @@ Feature: Qadi Resolvers and Obligations
       Then the sink's own breaker trips
       And the failure is logged
 
-    # @skip: not the shipped behavior: qadi awaits DecisionSink.record (containing a failure, not
-    #   detaching it), so a slow or broken sink is not 'returned without waiting'; the breaker that
-    #   would bound it is @qadi/audit, not awthaq. See the new scenario 'A failing audit write
-    #   never changes the decision it observed'.
-    @skip
-    @REQ-EA-470
-    Scenario: A broken audit DecisionSink does not block or delay the response to the request that produced the decision
-      Given an audit DecisionSink whose underlying storage is unreachable
-      When a request produces a decision that is routed to that sink
-      Then the request's response is returned without waiting on the sink
-      And the response is not delayed by the sink's failure
-
-    # @skip: the 'audit trail is marked as degraded' clause has no shipped counterpart (awthaq's
-    #   DecisionSinkAudit has no degradation marker; that lives in @qadi/audit). The
-    #   unchanged-decision half is covered by the new scenario 'A failing audit write never changes
-    #   the decision it observed'.
-    @skip
-    @REQ-EA-471
-    Scenario: A broken audit DecisionSink does not alter the decision's answer
-      Given an audit DecisionSink whose underlying storage is unreachable
-      And qadi's evaluator would return an Allow decision for a request
-      When that request's decision is routed to the broken sink
-      Then the request still receives the Allow decision's outcome unchanged
-      And only the audit trail, not the decision, is marked as degraded
-
     @REQ-EA-697
     Scenario: A failing audit write never changes the decision it observed
       Given awthaq's DecisionSinkAudit whose durable audit write fails

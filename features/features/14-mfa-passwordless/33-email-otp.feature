@@ -36,18 +36,16 @@ Feature: Email OTP
         | 3      |
         | 11     |
 
-    # @skip: a statistical property of the digit draw (rejection sampling); covered by
-    # packages/core/test/Verification.test.ts "BCR-005: numeric digits are drawn uniformly"
-    @skip
+    # Deterministic rather than statistical: a scripted crypto source hands Verification the bytes 255..250
+    # and then 0..5. Rejection sampling drops the six bytes at or above 250 (code 012345); modulo bias would
+    # have drawn 543210 from them. The statistical counterpart is packages/core/test/Verification.test.ts (BCR-005).
     @REQ-EA-1101
-    Scenario: Digits are drawn uniformly from the crypto source
-      When many numeric values are minted
-      Then every digit occurs about equally often
+    Scenario: Digits are drawn uniformly from the crypto source, by rejection sampling
+      Given a crypto source whose first six-digit draw is the bytes 255 down to 250 and then 0 up to 5
+      When a 6-digit numeric value is minted from it
+      Then no digit was taken from a byte of 250 or more, so no digit is over-drawn by modulo bias
 
-    # @skip: compile-time property — `Verification.issue`'s input type has no field through which a
-    # caller could choose the value of a numeric row (packages/core/src/Verification.ts, IssueInput),
-    # so there is nothing to observe at runtime.
-    @skip
+    # Compile-time: proven by the `// type-gate:` block in step-definitions/CompileTimeGates.ts.
     @REQ-EA-1102
     Scenario: A caller-chosen string is never accepted as a numeric value
       When a caller tries to supply its own numeric value

@@ -290,8 +290,9 @@ def main(check=False):
         f"`.feature` file, and its scenario title. Generated mechanically by "
         f"`features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file "
         f"order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` "
-        f"§6 for the file-level summary this rolls up to. {counter} `REQ-EA-NNN` ids allocated across "
-        f"{len(ORDER)} `.feature` files.\n"
+        f"§6 for the file-level summary this rolls up to. {len(manifest)} `REQ-EA-NNN` ids allocated across "
+        f"{len(ORDER)} `.feature` files (highest issued: REQ-EA-{counter:03d}; the ids of a scenario that "
+        f"was removed are retired, never reused).\n"
     )
     out_lines.append("| REQ-EA | BEH-EA | Feature file | Scenario |")
     out_lines.append("|---|---|---|---|")

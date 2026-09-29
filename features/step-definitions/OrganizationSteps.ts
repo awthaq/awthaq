@@ -365,6 +365,50 @@ export const organizationSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* signInUser(name, { verified: false });
   });
 
+  // REQ-EA-723: `@awthaq/admin` mounted beside this plugin (OrganizationWorld) opens a real impersonation.
+  Given("a signed-in admin actively impersonating {string}", function* (target: string) {
+    const world = yield* World;
+    yield* configureApp({ canImpersonate: true });
+    const admin = yield* signInUser("admin");
+    yield* signInUser(target);
+    for (const [who, slug] of [
+      ["admin", "adminco"],
+      [target, `${target}co`],
+    ] as const) {
+      const created = yield* sendAs(who, "POST", "/organization", { name: `Org ${slug}`, slug });
+      expectStatus(created, 200, `${who} creating "${slug}"`);
+      yield* world.organizations.set(slug, stringField(objectOf(created), "id"));
+    }
+    const started = yield* sendAs(
+      "admin",
+      "POST",
+      `/admin/impersonate/${(yield* world.users.get(target)).userId}`,
+      { reason: "support ticket" },
+    );
+    expectStatus(started, 200, "the admin starting the impersonation");
+    const pair = started.headers
+      .getSetCookie()
+      .map((raw) => raw.split(";")[0] ?? "")
+      .find((cookie) => cookie.startsWith("__Host-"));
+    assert.ok(pair !== undefined, "the impersonation set no cookie");
+    // The admin's own session is still there; the impersonation cookie rides beside it.
+    yield* world.users.set("admin (impersonating)", {
+      ...admin,
+      cookie: `${admin.cookie}; ${pair}`,
+    });
+  });
+
+  When("the admin lists organizations", function* () {
+    yield* sendAs("admin (impersonating)", "GET", "/organization");
+  });
+
+  Then("only the organizations {string} belongs to are listed", function* (target: string) {
+    const world = yield* World;
+    const listed = objectsOf(yield* lastResponse).map((entry) => stringField(entry, "id"));
+    assert.deepEqual(listed, [yield* world.organizations.get(`${target}co`)]);
+    assert.ok(!listed.includes(yield* world.organizations.get("adminco")));
+  });
+
   Given("a second session {string} for {string}", function* (session: string, user: string) {
     yield* openSession(session, user);
   });

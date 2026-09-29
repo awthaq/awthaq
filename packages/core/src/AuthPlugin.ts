@@ -165,10 +165,13 @@ export const declareRateLimits = <const Group extends string>(
 export type GroupIdOf<Groups> =
   Groups extends HttpApiGroup.HttpApiGroup<infer Id, infer _Endpoints, infer _Error> ? Id : never;
 
-/** PERS-003: a statically declared tap, as far as `Auth.make`'s manifest needs it. */
-export interface DeclaredTap {
-  readonly point: string;
-  readonly order: number;
+/**
+ * PERS-003/PV-260: a statically declared tap — the manifest reads `point`/`order`; a contract test
+ * reads the rest: which plugin owns it (`owner`, the plugin id), its point's `kind`, the `handler`
+ * itself (identity), and `exercise`/`install` to run it against a point of that kind.
+ */
+export interface DeclaredTap extends HookPoint.TapDeclaration<unknown> {
+  readonly owner: string;
 }
 
 /**
@@ -537,7 +540,7 @@ export function layer<
   const taps = options.taps ?? [];
   tapsByPlugin.set(
     plugin,
-    taps.map((declaration) => ({ point: declaration.point, order: declaration.order })),
+    taps.map((declaration) => ({ ...declaration, owner: plugin.id })),
   );
   // A variant layer that names no `ports` (BEH-EA-019's second `layer` of one class) leaves the first declaration alone.
   if (options.ports !== undefined) {

@@ -99,5 +99,5 @@ An operation that is several SQL statements runs in one `sql.withTransaction` so
 3. Config as a `Context.Reference` with a default.
 4. Records service with `layerMemory` and `layerSql` (the template ships only `layerSql`; production plugins ship both).
 5. Hook points with a `.layer` each, provided once.
-6. A test that builds through `Auth.make`, runs the real migrations, exercises an endpoint over a real handler, aborts a veto, and calls `TestAuth.runPluginContractTests`.
+6. A test that builds through `Auth.make`, runs the real migrations, exercises an endpoint over a real handler, aborts a veto, and calls `TestAuth.runPluginContractTests` (pass `hooks: [{ point: Hooks.AfterSignUp, input }]` to run the plugin's declared taps against a stub input: an observe tap must not try to abort, a veto tap may only abort with `HookAbort`; BEH-EA-200).
 7. A package README stating what it ships (`pnpm check:readmes` enforces the status banner).

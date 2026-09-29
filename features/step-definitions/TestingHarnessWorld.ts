@@ -3,12 +3,21 @@
 // (`TestAuth.layer`, `TestAuth.signInAs`, `TestAuth.runPluginContractTests`) — the same seam a
 // third-party author has (REQ-EA-565) — over plugins built here, never over `@awthaq/test`'s own
 // test fixtures.
-import { Api } from "@awthaq/api";
+import { Api, SubjectContract } from "@awthaq/api";
 import { Auth, AuthPlugin } from "@awthaq/core";
 import { Password } from "@awthaq/password";
+import { AuthorizedSubject, SubjectApi, SubjectExtractor } from "@awthaq/qadi";
+import { Roles } from "@awthaq/roles";
 import { Authentication, Csrf } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { EvaluationServicesNone, hasPermission, permission, role } from "@qadi/core";
+import {
+  RequirePermission,
+  RequirePermissionLive,
+  RequiredPermission,
+  requiresPermission,
+} from "@qadi/http";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -84,6 +93,121 @@ class WhoamiPlugin extends AuthPlugin.Service<WhoamiPlugin, Record<string, never
 export const whoamiTuple = Auth.make([WhoamiPlugin]);
 
 export const whoamiApp = TestAuth.layer(whoamiTuple, HarnessServices);
+
+// ---- an HTTP-level authorization test: RequirePermission over TestAuth.signInAs (PV-261) ----
+
+const projectRead = permission("project", "read");
+const projectAdmin = permission("project", "admin");
+const memberRole = role({ name: "member", permissions: [projectRead] });
+const adminRole = role({ name: "admin", permissions: [projectAdmin], inherits: [memberRole] });
+
+const adminOnly = HttpApiEndpoint.get("adminOnly", "/admin-only", { success: Schema.String }).pipe(
+  (endpoint) =>
+    endpoint.annotate(
+      RequiredPermission,
+      requiresPermission(endpoint, {
+        permission: projectAdmin,
+        policy: hasPermission(projectAdmin),
+      }),
+    ),
+);
+
+const GatedApi = HttpApi.make("auth").add(
+  HttpApiGroup.make("harnessgated").add(adminOnly).middleware(RequirePermission),
+);
+
+class GatedPlugin extends AuthPlugin.Service<GatedPlugin, Record<string, never>>()("harnessgated", {
+  apiVersion: 1,
+  contract: GatedApi,
+  tables: [],
+}) {
+  static readonly layer = AuthPlugin.layer(GatedPlugin, {
+    make: Effect.succeed({}),
+    handlers: HttpApiBuilder.group(GatedApi, "harnessgated", (handlers) =>
+      handlers.handle("adminOnly", () => Effect.succeed("admin data")),
+    ),
+  });
+}
+
+/**
+ * The real Path B pipeline a suite merges next to `TestAuth.layer`: qadi's `RequirePermissionLive`
+ * over awthaq's `SubjectExtractorLive`, the `Roles` resolver flattening the catalog, and qadi's real
+ * evaluator (`EvaluationServicesNone`: no attribute/relationship ports, none needed by a role policy).
+ */
+const GatedServices = RequirePermissionLive.pipe(
+  Layer.provide(EvaluationServicesNone),
+  Layer.provide(SubjectExtractor.SubjectExtractorLive),
+  Layer.provide(Authentication.PrincipalResolverLive),
+  Layer.provideMerge(Roles.Roles.layer),
+  Layer.provide(Roles.config([memberRole, adminRole])),
+);
+
+// Core's own session/account groups ride in every `TestAuth.layer`, so their `Authentication`/CSRF middleware is provided too.
+export const gatedApp = TestAuth.layer(
+  Auth.make([Roles.Roles, GatedPlugin]),
+  Layer.mergeAll(GatedServices, HarnessServices),
+);
+
+// ---- qadi's GET /subject over the same harness (REQ-EA-063) ----
+
+/** `GET /subject` served next to the `Roles` resolver: what a browser's `subjectAtom` reads. */
+const SubjectServices = SubjectApi.SubjectHandlers.pipe(
+  Layer.provide(AuthorizedSubject.AuthorizedSubjectLive),
+  Layer.provideMerge(Roles.Roles.layer),
+  Layer.provide(Roles.config([memberRole, adminRole])),
+  // `GET /subject` is served behind the optional-authentication middleware.
+  Layer.provideMerge(
+    Authentication.OptionalAuthenticationLive.pipe(
+      Layer.provide(Authentication.PrincipalResolverLive),
+    ),
+  ),
+);
+
+export const subjectApp = TestAuth.layer(
+  Auth.make([Roles.Roles], { extraGroups: [SubjectApi.SubjectGroup] }),
+  Layer.mergeAll(SubjectServices, HarnessServices),
+);
+
+/** Signs in with exactly `roles` and reads the caller's own `GET /subject`, decoded as the wire `SubjectDto`. */
+export const subjectFor = (email: string, roles: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const rolesService = yield* Roles.Roles;
+    const signedIn = yield* TestAuth.signInAs({
+      email,
+      onSignedUp: (userId) =>
+        Effect.forEach(roles, (name) => rolesService.assign(userId, name), {
+          discard: true,
+        }).pipe(Effect.orDie),
+    });
+    const response = yield* dispatch(
+      new Request("http://localhost/subject", { headers: { cookie: signedIn.cookieHeader } }),
+    );
+    const body = yield* Effect.promise(() => response.json());
+    return {
+      status: response.status,
+      userId: signedIn.userId,
+      subject: yield* Schema.decodeUnknownEffect(SubjectContract.SubjectDto)(body).pipe(
+        Effect.orDie,
+      ),
+    };
+  });
+
+/** Signs in with exactly `roles` (assigned through the real `Roles` service) and requests the admin-only endpoint. */
+export const requestAdminOnlyAs = (email: string, roles: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const rolesService = yield* Roles.Roles;
+    const signedIn = yield* TestAuth.signInAs({
+      email,
+      onSignedUp: (userId) =>
+        Effect.forEach(roles, (name) => rolesService.assign(userId, name), {
+          discard: true,
+        }).pipe(Effect.orDie),
+    });
+    const response = yield* dispatch(
+      new Request("http://localhost/admin-only", { headers: { cookie: signedIn.cookieHeader } }),
+    );
+    return { status: response.status, body: yield* Effect.promise(() => response.text()) };
+  });
 
 /** Dispatches a web `Request` through the composed router of the ambient `TestAuth.layer` — no listener, no socket. */
 export const dispatch = (request: Request) =>
@@ -173,6 +297,11 @@ export interface ContractSetup {
   readonly make: (options: Readonly<Record<string, unknown>>) => AuthPlugin.Any;
   readonly options: ReadonlyArray<Readonly<Record<string, unknown>>>;
   readonly host: ReadonlyArray<AuthPlugin.Any>;
+  /** PV-260: stub inputs for the plugin's declared taps (the suite's opt-in `hooks` option). */
+  readonly hooks?: ReadonlyArray<{
+    readonly point: { readonly id: string };
+    readonly input: unknown;
+  }>;
 }
 
 export interface WorldShape {
@@ -205,6 +334,7 @@ export const runContractSuite = (setup: ContractSetup) =>
     TestAuth.runPluginContractTests(recordingFramework(sink), setup.make, {
       options: setup.options,
       host: setup.host,
+      ...(setup.hooks === undefined ? {} : { hooks: setup.hooks }),
     });
     await sink.settled();
     return { passed: sink.passed, failed: sink.failed };
