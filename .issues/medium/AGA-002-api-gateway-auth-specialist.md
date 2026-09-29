@@ -3,7 +3,7 @@ ID: "AGA-002"
 Title: "No CORS or preflight handling exists and the safe default-deny posture is undocumented"
 Level: medium
 Category: "architecture"
-Status: ready-for-agent
+Status: resolved
 Package: "server"
 Source: "packages/server/src/AuthHttp.ts:25"
 Auditor: "api-gateway-auth-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `MEDIUM` · `architecture` · `server` · reported by **API Gateway Auth Specialist** (`api-gateway-auth-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -47,3 +47,5 @@ Document the default-deny CORS posture in spec (what it protects, what a deploym
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `cors-posture`. Evidence at HEAD ec065a7: `packages/server/src/AuthHttp.ts:25`. Fix: Document the default-deny CORS posture, and ship a blessed CORS preset whose origin allowlist is the same value as CsrfConfig.allowedOrigins. (effort M). Full dossier: `.plan/slices/06-server-api.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** packages/server/src/AuthHttp.ts: new cors(options?) Layer (Layer.unwrap over Csrf.CsrfConfig): global HttpMiddleware.cors with allowedOrigins = predicate over CsrfConfig.allowedOrigins (predicate form because Effect echoes a single listed origin on every response and answers '*' for an empty list), credentials true, methods GET/POST/PATCH/DELETE, headers content-type/x-csrf-token/authorization (+extra), exposes set-auth-token (+extra), optional maxAge. Tests packages/server/test/Cors.test.ts (5: allowed preflight, disallowed no ACAO, empty allowlist opens nothing, expose header, cross-site POST w/o CSRF pair still 403; red first: AuthHttp.cors undefined). Spec: CORS-posture paragraph on BEH-EA-074 in spec/behaviors/10-csrf.md (no new BEH id, to avoid traceability renumbering); README cross-origin SPA recipe. Deviation: dossier lists Blocked by CSS-007/MNA-008 (P01); the preset does not need them, so it uses a local ROTATED_TOKEN_HEADER='set-auth-token' literal that CSS-007 should swap for the shared Api constant when it lands. Gates: typecheck (pre-existing react TS2883 only), test 854, bdd 104, spec:verify 19/19.

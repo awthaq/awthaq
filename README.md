@@ -235,6 +235,19 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 
 `Sessions.SessionConfig` (absolute/idle expiry, idle-refresh throttle) and `Password.config({...})` (breach checking, off by default) are `Context.Reference`s with defaults — override either with `Layer.succeed`/`Password.config(...)` only if the defaults documented in `packages/core/src/Sessions.ts`/`packages/password/src/Password.ts` don't fit.
 
+### Cross-origin SPAs (CORS)
+
+awthaq ships no CORS by default: a browser on another origin cannot read any response (same-origin, default-deny). To serve a separate SPA origin, merge `AuthHttp.cors()` into the same layer list as `AuthHttp.routes(...)`. Its allowlist is `CsrfConfig.allowedOrigins`, the value CSRF's `Origin` check already uses, so the two cannot drift:
+
+```ts
+const AppLayer = Layer.mergeAll(
+  AuthHttp.routes(auth.api, {}).pipe(Layer.provide(auth.layer)),
+  AuthHttp.cors(), // reads CsrfConfig.allowedOrigins, e.g. ["https://app.example.com"]
+);
+```
+
+CORS never relaxes CSRF: cross-site mutations still need the double-submit cookie and `x-csrf-token` header, which the SPA must send with `credentials: "include"`.
+
 ## Plugins
 
 | Plugin | Package | What it adds |
