@@ -78,6 +78,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `013-*.md` | ADR-EA-013 | Error Taxonomy and HTTP Status Mapping |
 | `014-*.md` | ADR-EA-014 | Session Storage Is Backend-Neutral |
 | `015-*.md` | ADR-EA-015 | Qadi Bridge Path Selection |
+| `019-*.md` | ADR-EA-019 | Encryption-at-Rest Keys Rotate by Retirement, With Lazy Re-Encryption |
 
 ### `spec/behaviors/` — twenty-six files, eight behaviors per file
 

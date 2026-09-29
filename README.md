@@ -78,9 +78,10 @@ const Migrated = Layer.effectDiscard(
 ).pipe(Layer.provide(SqlLive));
 
 // 3. Provider tokens (OAuth access/refresh tokens) are encrypted at rest;
-//    `KeyProvider.layerEnv` reads the key from `AWTHAQ_ENCRYPTION_KEY`
-//    (base64, 32 bytes) even when no OAuth plugin is installed, since the
-//    `accounts` table's encryption columns are shared, core-owned schema.
+//    `KeyProvider.layerEnv` reads the keyset from `AWTHAQ_ENCRYPTION_KEYS` /
+//    `AWTHAQ_ENCRYPTION_KEY_ID` (see "Encryption keys" below) even when no
+//    OAuth plugin is installed, since the `accounts` table's encryption
+//    columns are shared, core-owned schema.
 const EncryptionLive = Encryption.layer.pipe(
   Layer.provide(KeyProvider.layerEnv),
   Layer.provide(NodeCrypto.layer),
@@ -168,7 +169,8 @@ Run migrations and start it:
 
 ```sh
 export DATABASE_URL="postgres://user:pass@localhost:5432/awthaq"
-export AWTHAQ_ENCRYPTION_KEY="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))")"
+export AWTHAQ_ENCRYPTION_KEYS="[{\"kid\":\"k1\",\"key\":\"$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))")\"}]"
+export AWTHAQ_ENCRYPTION_KEY_ID="k1"
 node --experimental-strip-types server.ts
 ```
 
@@ -214,7 +216,13 @@ Every port below has a memory/test-friendly layer and at least one real one; the
 | `PasswordHasher` | `layerArgon2id` | `layerScrypt` |
 | `Mailer` | a one-line `console.log` stand-in | bring your own (`Mailer.Mailer.of({ send })`, any provider) |
 | `RateLimiter` | `layerPermissive` (no real limiting) | `layer` over `layerStoreMemory`, or your own `RateLimiterStore` |
-| `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEY`) | a KMS-backed `KeyProvider` (implement the port directly) |
+| `Encryption`/`KeyProvider` | `layerEnv` (`AWTHAQ_ENCRYPTION_KEYS` + `AWTHAQ_ENCRYPTION_KEY_ID`) | a KMS-backed `KeyProvider` (implement the port directly; keeps raw key bytes out of the process) |
+
+### Encryption keys
+
+`AWTHAQ_ENCRYPTION_KEYS` is a JSON array of `{ "kid", "key" }` (`key` is base64 of exactly 32 bytes, kids unique); `AWTHAQ_ENCRYPTION_KEY_ID` names the entry new ciphertext is written under and must appear in the array. Both are validated when the layer is built. An older single `AWTHAQ_ENCRYPTION_KEY` deployment migrates by wrapping its value: `[{"kid":"env","key":"<old value>"}]` with `AWTHAQ_ENCRYPTION_KEY_ID=env`.
+
+To rotate: add a new entry, point `AWTHAQ_ENCRYPTION_KEY_ID` at it, and keep the old entry. Existing ciphertext stays readable under the old key and is re-encrypted under the new one the next time it is read. Remove the old entry only once nothing written under it remains (retirement, not a timer; see `spec/decisions/019-encryption-key-rotation.md`). Raw key bytes cannot be scrubbed from a JS process; deployments that must not hold them in memory should implement `KeyProvider` over a KMS.
 
 `Sessions.SessionConfig` (absolute/idle expiry, idle-refresh throttle) and `Password.config({...})` (breach checking, off by default) are `Context.Reference`s with defaults — override either with `Layer.succeed`/`Password.config(...)` only if the defaults documented in `packages/core/src/Sessions.ts`/`packages/password/src/Password.ts` don't fit.
 

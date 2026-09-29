@@ -174,14 +174,19 @@ export const layer: Layer.Layer<
         );
         const provider = registry.get(account.providerId);
         const stored = yield* accounts.findProviderTokens(accountId).pipe(
-          Effect.catchTag(
-            "AccountNotFound",
-            () =>
+          Effect.catchTags({
+            AccountNotFound: () =>
               new OAuthTokenUnavailable({
                 accountId,
                 message: `awthaq: no such account: ${accountId}`,
               }),
-          ),
+            // SMS-002: an undecryptable stored token means re-consent, not a defect.
+            ProviderTokensUnreadable: (error) =>
+              new OAuthTokenUnavailable({
+                accountId,
+                message: `awthaq: stored provider tokens for account ${accountId} are unreadable (${error.reason}); the user must re-authorize`,
+              }),
+          }),
         );
         if (provider === undefined || Option.isNone(stored)) {
           return yield* Effect.fail(

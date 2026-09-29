@@ -3,7 +3,7 @@ ID: "SMS-007"
 Title: "Spec's model-level Redacted typing for provider tokens is not what shipped"
 Level: low
 Category: "docs"
-Status: ready-for-agent
+Status: resolved
 Package: "sql"
 Source: "packages/sql/src/Models.ts:94"
 Auditor: "secrets-management-specialist"
@@ -14,7 +14,7 @@ Audit-Date: 2026-09-19
 
 `LOW` · `docs` · `sql` · reported by **Secrets Management Specialist** (`secrets-management-specialist`)
 
-Status: **ready-for-agent**
+Status: **resolved**
 
 ## Summary
 
@@ -55,3 +55,5 @@ Either type the repository boundary in Redacted (tokens returned as Redacted<str
 _Triage notes and discussion append here._
 
 **Plan validation (2026-09-29):** CONFIRMED (confidence high); workstream `sql-encrypted-token-read-path`. Evidence at HEAD ec065a7: `spec/behaviors/05-persistence-stratum.md:45`. Fix: Amend the spec to match the real, deliberate boundary. Do not retype the repository: a `Schema.Redacted` encoded form cannot be bound as a SQL parameter (Models.ts:77-86), and core already re-wraps tokens as `Redacted` at the domain boundary (`ProviderTokenSet.accessToken: Redacted.Redacted<string>`, core Accounts.ts:85-87). (effort S). Full dossier: `.plan/slices/05-sql.md`. Status → ready-for-agent.
+
+**Resolved (2026-09-29):** Spec amended: spec/behaviors/05-persistence-stratum.md BEH-EA-034 illustration now Model.Sensitive(Schema.NullOr(Schema.String)) plus a paragraph on the deliberate plaintext-in-memory/ciphertext-on-disk/Redacted-at-seam boundary; spec/glossary.md Redacted entry qualified. spec:verify:strict passes.

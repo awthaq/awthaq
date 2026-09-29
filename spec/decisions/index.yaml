@@ -66,3 +66,7 @@ entries:
     file: "016-verification-sql-claiming.md"
     title: "Verification Reservations Are a Dedicated Table, Claimed by a Conditional Upsert"
     status: "Accepted — design; implementation deferred"
+  - id: "ADR-EA-019"
+    file: "019-encryption-key-rotation.md"
+    title: "Encryption-at-Rest Keys Rotate by Retirement, With Lazy Re-Encryption"
+    status: "Accepted — implemented"
